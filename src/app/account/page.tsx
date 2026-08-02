@@ -32,6 +32,9 @@ export default async function AccountPage({
       {error === "discord_already_linked" && (
         <p role="alert">That Discord account is already linked to another account.</p>
       )}
+      {error === "discord_denied" && (
+        <p role="alert">Discord authorization was cancelled.</p>
+      )}
       <p>
         Tier: <strong>{view.tier}</strong>
         {view.status === "cryo" && " · cryo"}
@@ -83,9 +86,11 @@ export default async function AccountPage({
                     <button type="submit">make main</button>
                   </form>
                 )}
-                <form action={unlinkAction.bind(null, c.id)} style={{ display: "inline" }}>
-                  <button type="submit">unlink</button>
-                </form>
+                {view.characters.length > 1 && (
+                  <form action={unlinkAction.bind(null, c.id)} style={{ display: "inline" }}>
+                    <button type="submit">unlink</button>
+                  </form>
+                )}
               </td>
             </tr>
           ))}

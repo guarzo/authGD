@@ -4,10 +4,9 @@ Plan 1 (Foundation & Auth) merged clean; these notes bind later plans.
 
 ## Hard precondition for Plan 2
 
-- **Advisory-lock namespacing:** `src/services/accounts.ts` uses the single-int
-  `pg_advisory_xact_lock(characterId)` global keyspace. Before Plan 2 introduces any
-  other advisory lock (outbox dispatcher, job leader election), migrate to the two-arg
-  `pg_advisory_xact_lock(namespace, id)` form everywhere.
+- **Advisory-lock namespacing:** DONE (post-review, 2026-08-02) — character locks now
+  use `pg_advisory_xact_lock(1, hashint8(characterId))`. New advisory-lock users must
+  pick a distinct class id (character locks own class 1).
 
 ## Plan 2 notes
 

@@ -61,7 +61,7 @@ From the corp CEO, verbatim intent:
 TypeScript full-stack monolith, deployed as containers on a managed container platform
 (Railway / Fly / Render); portable unchanged to a VPS with docker compose.
 
-```
+```text
 web (Next.js UI + API)  ──enqueue──▶  worker (pg-boss jobs)  ──▶  Postgres (data + queue)
         │                                    │
   EVE SSO, Discord OAuth          ESI · Wanderer API · Discord REST

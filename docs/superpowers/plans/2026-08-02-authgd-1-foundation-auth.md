@@ -721,7 +721,13 @@ export const outbox = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     dispatchedAt: timestamp("dispatched_at", { withTimezone: true }),
   },
-  (t) => [index("outbox_undispatched_idx").on(t.dispatchedAt)],
+  // partial index on id restricted to undispatched rows — matches the
+  // dispatcher's polling query and stays small as history grows
+  (t) => [
+    index("outbox_undispatched_idx")
+      .on(t.id)
+      .where(sql`${t.dispatchedAt} IS NULL`),
+  ],
 );
 
 export const oauthTransaction = pgTable("oauth_transaction", {

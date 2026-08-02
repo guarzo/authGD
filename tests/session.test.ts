@@ -26,10 +26,19 @@ describe("sessions", () => {
   it("rejects expired sessions", async () => {
     const [acc] = await ctx.db.insert(account).values({}).returning();
     const sid = await createSession(ctx.db, acc.id);
+    // ids are stored hashed, so target the row via its account instead
     await ctx.db
       .update(session)
       .set({ expiresAt: new Date(Date.now() - 1000) })
-      .where(eq(session.id, sid));
+      .where(eq(session.accountId, acc.id));
     expect(await getSessionAccount(ctx.db, sid)).toBeNull();
+  });
+
+  it("stores only a digest of the session id", async () => {
+    const [acc] = await ctx.db.insert(account).values({}).returning();
+    const sid = await createSession(ctx.db, acc.id);
+    const rows = await ctx.db.select().from(session).where(eq(session.accountId, acc.id));
+    expect(rows).toHaveLength(1);
+    expect(rows[0].id).not.toBe(sid);
   });
 });

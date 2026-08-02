@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { oauthTransaction } from "@/db/schema";
@@ -32,9 +33,12 @@ describe("oauth transactions", () => {
 
   it("rejects expired transactions", async () => {
     const tx = await createOauthTransaction(ctx.db, { intent: "login" });
+    // scope the expiry to the transaction under test only
+    const stateHash = createHash("sha256").update(tx.state).digest("base64url");
     await ctx.db
       .update(oauthTransaction)
-      .set({ expiresAt: new Date(Date.now() - 1000) });
+      .set({ expiresAt: new Date(Date.now() - 1000) })
+      .where(eq(oauthTransaction.stateHash, stateHash));
     expect(await consumeOauthTransaction(ctx.db, tx.state, ["login"])).toBeNull();
   });
 

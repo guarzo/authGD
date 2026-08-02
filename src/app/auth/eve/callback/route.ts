@@ -14,6 +14,10 @@ import { createSession } from "@/services/session";
 export async function GET(req: NextRequest) {
   const cfg = getConfig();
   const db = getDb();
+  // Provider denial (e.g. user clicked "cancel"): no code arrives, just error=
+  if (req.nextUrl.searchParams.get("error")) {
+    return NextResponse.redirect(new URL("/login?error=oauth_denied", cfg.appBaseUrl));
+  }
   const code = req.nextUrl.searchParams.get("code");
   const state = req.nextUrl.searchParams.get("state");
   if (!code || !state) return new NextResponse("missing params", { status: 400 });

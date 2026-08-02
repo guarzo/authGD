@@ -105,4 +105,11 @@ describe("getAccountView", () => {
     expect(alt.contactSyncResult).toBe("missing_label");
     expect(alt.onMapAcl).toBe(false);
   });
+
+  it("handles an account with no characters and no discord link", async () => {
+    const [acc] = await ctx.db.insert(account).values({}).returning();
+    const view = await getAccountView(ctx.db, cfg, acc.id);
+    expect(view.characters).toEqual([]);
+    expect(view.discordLinked).toBe(false);
+  });
 });

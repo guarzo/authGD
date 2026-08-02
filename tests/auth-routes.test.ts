@@ -116,9 +116,14 @@ describe("EVE auth flow", () => {
     const loginRes = await loginRoute(new NextRequest("http://localhost:3000/auth/eve/login"));
     const state = new URL(loginRes.headers.get("location")!).searchParams.get("state")!;
     const { oauthTransaction } = await import("@/db/schema");
+    const { createHash } = await import("node:crypto");
+    const { eq } = await import("drizzle-orm");
+    // expire only the transaction under test
+    const stateHash = createHash("sha256").update(state).digest("base64url");
     await ctx.db
       .update(oauthTransaction)
-      .set({ expiresAt: new Date(Date.now() - 1000) });
+      .set({ expiresAt: new Date(Date.now() - 1000) })
+      .where(eq(oauthTransaction.stateHash, stateHash));
     const res = await callbackRoute(
       new NextRequest(
         `http://localhost:3000/auth/eve/callback?code=abc&state=${encodeURIComponent(state)}`,

@@ -23,12 +23,23 @@ export interface EveCallbackCharacter {
 }
 
 /**
+ * Advisory-lock class id for character locks. Two-arg (namespaced) form so
+ * future advisory-lock users (outbox dispatcher, job leader election) cannot
+ * collide with character ids. Character ids can exceed int4, so they are
+ * reduced to a 32-bit key with hashint8 — a hash collision merely serializes
+ * two unrelated characters, which is safe.
+ */
+const CHARACTER_LOCK_CLASS = 1;
+
+/**
  * Transaction-scoped advisory lock on the character id. Unlike FOR UPDATE this
  * also serializes callers when NO row exists yet, so two concurrent first
  * logins for the same character cannot both take the insert path.
  */
 async function lockCharacterId(dbx: DbTx, characterId: number) {
-  await dbx.execute(sql`SELECT pg_advisory_xact_lock(${characterId})`);
+  await dbx.execute(
+    sql`SELECT pg_advisory_xact_lock(${CHARACTER_LOCK_CLASS}, hashint8(${characterId}))`,
+  );
 }
 
 /** Advisory lock + row lock, in that order. */
@@ -232,18 +243,32 @@ export async function linkCharacter(
   return { ok: true };
 }
 
+export type UnlinkResult =
+  | { ok: true }
+  | { ok: false; error: "not_found" | "not_owned" | "last_character" };
+
 export async function unlinkCharacter(
   dbx: DbTx,
   cfg: Config,
   actor: string,
   characterId: number,
   opts: { revokeSessions?: boolean; expectedAccountId?: string } = {},
-): Promise<void> {
+): Promise<UnlinkResult> {
   const existing = await findCharacterForUpdate(dbx, characterId);
-  if (!existing) return;
+  if (!existing) return { ok: false, error: "not_found" };
   // Re-check ownership under the lock: a caller's pre-lock SELECT can be
   // stale if a transfer-reclaim committed between its check and this lock.
-  if (opts.expectedAccountId && existing.accountId !== opts.expectedAccountId) return;
+  if (opts.expectedAccountId && existing.accountId !== opts.expectedAccountId) {
+    return { ok: false, error: "not_owned" };
+  }
+  // Never let an account unlink its final character: the account would be
+  // orphaned (a fresh SSO login with that character creates a NEW account).
+  // Transfer reclaim doesn't go through here, so this only gates unlink flows.
+  const siblings = await dbx
+    .select()
+    .from(character)
+    .where(eq(character.accountId, existing.accountId));
+  if (siblings.length <= 1) return { ok: false, error: "last_character" };
   await dbx.delete(contactSyncState).where(eq(contactSyncState.characterId, characterId));
   await dbx.delete(character).where(eq(character.id, characterId));
   await logAudit(dbx, {
@@ -262,19 +287,20 @@ export async function unlinkCharacter(
     await enqueueSync(dbx, { kind: "account", accountId: existing.accountId });
   }
   if (opts.revokeSessions) await revokeAccountSessions(dbx, existing.accountId);
+  return { ok: true };
 }
 
 export async function setMainCharacter(
   dbx: DbTx,
   accountId: string,
   characterId: number,
-): Promise<void> {
+): Promise<{ ok: true } | { ok: false; error: "not_on_account" }> {
   const rows = await dbx
     .select()
     .from(character)
     .where(and(eq(character.id, characterId), eq(character.accountId, accountId)))
     .for("update");
-  if (rows.length === 0) throw new Error("character not on account");
+  if (rows.length === 0) return { ok: false, error: "not_on_account" };
   await dbx
     .select()
     .from(account)
@@ -291,6 +317,7 @@ export async function setMainCharacter(
     details: { mainCharacterId: characterId },
   });
   await enqueueSync(dbx, { kind: "account", accountId });
+  return { ok: true };
 }
 
 export async function maybeGrantBootstrapAdmin(
@@ -320,7 +347,7 @@ export async function demoteAdmin(
   dbx: DbTx,
   actor: string,
   accountId: string,
-): Promise<{ ok: boolean; error?: "last_admin" }> {
+): Promise<{ ok: boolean; error?: "last_admin" | "not_authorized" }> {
   // Lock ALL admin rows first: two admins demoting each other serialize here,
   // and the second transaction re-counts after the first commits.
   const admins = await dbx
@@ -328,6 +355,11 @@ export async function demoteAdmin(
     .from(account)
     .where(eq(account.isAdmin, true))
     .for("update");
+  // Defense-in-depth: only "system" or a current admin may demote. Routes must
+  // still gate this, but the service refuses unauthorized actors regardless.
+  if (actor !== "system" && !admins.some((a) => a.id === actor)) {
+    return { ok: false, error: "not_authorized" };
+  }
   const otherAdmins = admins.filter((a) => a.id !== accountId);
   if (otherAdmins.length === 0) return { ok: false, error: "last_admin" };
   await dbx.update(account).set({ isAdmin: false }).where(eq(account.id, accountId));

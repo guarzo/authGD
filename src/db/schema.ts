@@ -2,7 +2,6 @@ import {
   bigint,
   boolean,
   index,
-  integer,
   jsonb,
   pgEnum,
   pgTable,
@@ -12,6 +11,7 @@ import {
   unique,
   uuid,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 export const tierEnum = pgEnum("tier", ["flygd", "blue", "green"]);
 export const accountStatusEnum = pgEnum("account_status", ["active", "cryo"]);
@@ -76,15 +76,20 @@ export const discordLink = pgTable("discord_link", {
   linkedAt: timestamp("linked_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
-export const session = pgTable("session", {
-  id: text("id").primaryKey(), // opaque random
-  accountId: uuid("account_id")
-    .notNull()
-    .references(() => account.id),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
-  lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
-});
+export const session = pgTable(
+  "session",
+  {
+    id: text("id").primaryKey(), // sha256 digest of the opaque cookie value
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => account.id),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  // supports the Plan 2 expired-session sweep
+  (t) => [index("session_expires_at_idx").on(t.expiresAt)],
+);
 
 // Historical snapshot: account reference is nullable and detaches on account
 // deletion so the consumed grant row survives forever (it must never be reusable).
@@ -111,7 +116,13 @@ export const outbox = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     dispatchedAt: timestamp("dispatched_at", { withTimezone: true }),
   },
-  (t) => [index("outbox_undispatched_idx").on(t.dispatchedAt)],
+  // partial index: only undispatched rows, ordered by id — matches the
+  // dispatcher's polling query exactly and stays tiny as history grows
+  (t) => [
+    index("outbox_undispatched_idx")
+      .on(t.id)
+      .where(sql`${t.dispatchedAt} IS NULL`),
+  ],
 );
 
 export const oauthTransaction = pgTable("oauth_transaction", {

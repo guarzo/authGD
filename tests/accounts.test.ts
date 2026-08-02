@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { loadConfig, type Config } from "@/config";
 import { account, auditLog, bootstrapAdminGrant, character, outbox, session } from "@/db/schema";
@@ -12,6 +12,7 @@ import {
   type EveCallbackCharacter,
 } from "@/services/accounts";
 import { createSession, getSessionAccount } from "@/services/session";
+import { decryptToken } from "@/lib/crypto";
 import { setupTestDb } from "./helpers/db";
 
 let ctx: Awaited<ReturnType<typeof setupTestDb>>;
@@ -52,7 +53,6 @@ beforeAll(async () => {
   } as NodeJS.ProcessEnv);
 });
 beforeEach(async () => {
-  const { sql } = await import("drizzle-orm");
   await ctx.db.execute(sql`
     TRUNCATE account, "character", discord_link, session, bootstrap_admin_grant,
       outbox, oauth_transaction, contact_sync_state, sync_run,
@@ -83,7 +83,8 @@ describe("handleEveLogin", () => {
 
     const [chr] = await ctx.db.select().from(character);
     expect(chr.tokenStatus).toBe("valid");
-    expect(chr.refreshTokenEnc).not.toBe("rt-1"); // encrypted
+    // stored encrypted, and decrypts back to the original token
+    expect(decryptToken(chr.refreshTokenEnc!, cfg.tokenEncryptionKey)).toBe("rt-1");
 
     const boxes = await ctx.db.select().from(outbox);
     expect(boxes.map((b) => b.payload)).toContainEqual({
@@ -139,14 +140,47 @@ describe("linkCharacter", () => {
 
   it("does not demote a tier_locked account on main unlink", async () => {
     const a = await login(ch());
+    // second character so the main unlink isn't blocked as last_character
+    await link(a.accountId, ch({ characterId: 90000004, characterName: "Spare" }));
     await ctx.db
       .update(account)
       .set({ tier: "blue", tierLocked: true })
       .where(eq(account.id, a.accountId));
-    await unlink("system", 90000001);
+    expect(await unlink("system", 90000001)).toEqual({ ok: true });
     const [acc] = await ctx.db.select().from(account);
     expect(acc.tier).toBe("blue");
     expect(acc.mainCharacterId).toBeNull();
+  });
+
+  it("refuses to unlink an account's last character", async () => {
+    const a = await login(ch());
+    expect(await unlink(a.accountId, 90000001)).toEqual({
+      ok: false,
+      error: "last_character",
+    });
+    const chars = await ctx.db.select().from(character);
+    expect(chars).toHaveLength(1);
+  });
+
+  it("reclaims through linkCharacter when the owner hash differs", async () => {
+    const b = await login(ch({ characterId: 90000005, ownerHash: "oh-b", characterName: "Sold" }));
+    const a = await login(ch()); // buyer's account (main 90000001)
+    const bSid = await createSession(ctx.db, b.accountId);
+
+    // buyer links the character they purchased: same id, new owner hash
+    const res = await link(
+      a.accountId,
+      ch({ characterId: 90000005, characterName: "Sold", ownerHash: "oh-1" }),
+    );
+    expect(res).toEqual({ ok: true });
+
+    const [chr] = await ctx.db.select().from(character).where(eq(character.id, 90000005));
+    expect(chr.accountId).toBe(a.accountId);
+    const [bAcc] = await ctx.db.select().from(account).where(eq(account.id, b.accountId));
+    expect(bAcc.mainCharacterId).toBeNull();
+    expect(await getSessionAccount(ctx.db, bSid)).toBeNull();
+    const audits = await ctx.db.select().from(auditLog);
+    expect(audits.some((au) => au.action === "character.reclaimed")).toBe(true);
   });
 
   it("refuses to unlink when expectedAccountId no longer matches the locked row (TOCTOU guard)", async () => {
@@ -221,7 +255,10 @@ describe("setMainCharacter", () => {
 
   it("rejects characters not on the account", async () => {
     const a = await login(ch());
-    await expect(setMain(a.accountId, 99999999)).rejects.toThrow();
+    expect(await setMain(a.accountId, 99999999)).toEqual({
+      ok: false,
+      error: "not_on_account",
+    });
   });
 });
 
@@ -285,6 +322,19 @@ describe("demoteAdmin", () => {
       ok: false,
       error: "last_admin",
     });
+  });
+
+  it("rejects a non-admin actor", async () => {
+    const a = await login(ch());
+    const b = await login(ch({ characterId: 90000002, ownerHash: "oh-2", characterName: "B" }));
+    await ctx.db.update(account).set({ isAdmin: true }).where(eq(account.id, b.accountId));
+    // a is not an admin and not "system": refused, b keeps admin
+    expect(await demote(a.accountId, b.accountId)).toEqual({
+      ok: false,
+      error: "not_authorized",
+    });
+    const [bAcc] = await ctx.db.select().from(account).where(eq(account.id, b.accountId));
+    expect(bAcc.isAdmin).toBe(true);
   });
 
   it("demotes when another admin exists", async () => {

@@ -9,6 +9,12 @@ import { consumeOauthTransaction } from "@/services/oauth-tx";
 export async function GET(req: NextRequest) {
   const cfg = getConfig();
   const db = getDb();
+  // Provider denial (user declined the authorization): error param, no code
+  if (req.nextUrl.searchParams.get("error")) {
+    return NextResponse.redirect(
+      new URL("/account?error=discord_denied", cfg.appBaseUrl),
+    );
+  }
   const code = req.nextUrl.searchParams.get("code");
   const state = req.nextUrl.searchParams.get("state");
   if (!code || !state) return new NextResponse("missing params", { status: 400 });

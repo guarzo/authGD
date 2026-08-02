@@ -33,6 +33,7 @@ export async function exchangeDiscordCode(
       code_verifier: codeVerifier,
       redirect_uri: `${cfg.appBaseUrl}/auth/discord/callback`,
     }).toString(),
+    signal: AbortSignal.timeout(10_000),
   });
   if (!res.ok) throw new Error(`discord token exchange failed (${res.status})`);
   const json = (await res.json()) as { access_token: string };
@@ -45,6 +46,7 @@ export async function fetchDiscordUser(
 ): Promise<{ id: string; username: string }> {
   const res = await fetchImpl("https://discord.com/api/users/@me", {
     headers: { authorization: `Bearer ${accessToken}` },
+    signal: AbortSignal.timeout(10_000),
   });
   if (!res.ok) throw new Error(`discord user fetch failed (${res.status})`);
   const json = (await res.json()) as { id: string; username: string };

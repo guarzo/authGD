@@ -20,7 +20,10 @@ async function requireAccount(): Promise<string> {
 
 export async function setMainAction(characterId: number): Promise<void> {
   const accountId = await requireAccount();
-  await getDb().transaction((dbtx) => setMainCharacter(dbtx, accountId, characterId));
+  const result = await getDb().transaction((dbtx) =>
+    setMainCharacter(dbtx, accountId, characterId),
+  );
+  if (!result.ok) throw new Error("character not on account");
   revalidatePath("/account");
 }
 
@@ -37,7 +40,12 @@ export async function unlinkAction(characterId: number): Promise<void> {
     if (owned.length === 0) throw new Error("not your character");
     // In-lock check in unlinkCharacter is the authority against a
     // transfer-reclaim racing between this pre-check and the row lock.
-    await unlinkCharacter(dbtx, cfg, accountId, characterId, { expectedAccountId: accountId });
+    // A last_character / not_owned rejection is a silent no-op here: the page
+    // hides the unlink control for the final character, and a reclaim race
+    // resolves itself on the revalidated render.
+    await unlinkCharacter(dbtx, cfg, accountId, characterId, {
+      expectedAccountId: accountId,
+    });
   });
   revalidatePath("/account");
 }

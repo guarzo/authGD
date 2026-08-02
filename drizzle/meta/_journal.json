@@ -15,6 +15,13 @@
       "when": 1785709823348,
       "tag": "0001_main_character_fk",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1785714307323,
+      "tag": "0002_bumpy_deathstrike",
+      "breakpoints": true
     }
   ]
 }
