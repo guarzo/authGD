@@ -199,16 +199,20 @@ export async function linkCharacter(
     await lockAccounts(dbx, [existing.accountId, accountId]);
     await reclaimCharacter(dbx, existing);
   }
-  await dbx.insert(character).values({
-    id: ch.characterId,
-    accountId,
-    ...tokenFields(cfg, ch),
-  });
+  // Lock the account row BEFORE inserting the character: the insert's FK
+  // acquires FOR KEY SHARE on the account row, and taking FOR UPDATE first
+  // avoids a KEY SHARE -> FOR UPDATE upgrade deadlock between concurrent
+  // linkCharacter calls (or setMainCharacter) targeting the same account.
   const [acc] = await dbx
     .select()
     .from(account)
     .where(eq(account.id, accountId))
     .for("update");
+  await dbx.insert(character).values({
+    id: ch.characterId,
+    accountId,
+    ...tokenFields(cfg, ch),
+  });
   if (acc && acc.mainCharacterId === null) {
     await dbx
       .update(account)

@@ -175,6 +175,21 @@ describe("concurrent first login", () => {
     expect(await ctx.db.select().from(account)).toHaveLength(1);
     expect(await ctx.db.select().from(character)).toHaveLength(1);
   });
+
+  it("two concurrent links of different new characters onto the same account both succeed", async () => {
+    const a = await login(ch());
+    const [r1, r2] = await Promise.all([
+      link(a.accountId, ch({ characterId: 90000010, characterName: "Alt1", ownerHash: "oh-1" })),
+      link(a.accountId, ch({ characterId: 90000011, characterName: "Alt2", ownerHash: "oh-1" })),
+    ]);
+    expect(r1).toEqual({ ok: true });
+    expect(r2).toEqual({ ok: true });
+    const chars = await ctx.db
+      .select()
+      .from(character)
+      .where(eq(character.accountId, a.accountId));
+    expect(chars.map((c) => c.id).sort()).toEqual([90000001, 90000010, 90000011]);
+  });
 });
 
 describe("setMainCharacter", () => {
