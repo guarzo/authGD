@@ -1877,6 +1877,8 @@ describe("linkCharacter", () => {
 describe("transaction rollback", () => {
   it("leaves no partial state when the transaction throws after linking", async () => {
     const a = await login(ch());
+    const auditCountBefore = (await ctx.db.select().from(auditLog)).length;
+    const outboxCountBefore = (await ctx.db.select().from(outbox)).length;
     await expect(
       ctx.db.transaction(async (tx) => {
         await linkCharacter(tx, cfg, a.accountId, ch({ characterId: 90000050, characterName: "Doomed" }));
@@ -1884,7 +1886,18 @@ describe("transaction rollback", () => {
       }),
     ).rejects.toThrow("boom");
     const chars = await ctx.db.select().from(character);
-    expect(chars.map((c) => c.id)).toEqual([90000001]); // no orphan character, audit, or outbox rows
+    expect(chars.map((c) => c.id)).toEqual([90000001]); // no orphan character
+    expect(await ctx.db.select().from(auditLog)).toHaveLength(auditCountBefore);
+    expect(await ctx.db.select().from(outbox)).toHaveLength(outboxCountBefore);
+  });
+});
+
+describe("concurrent first login", () => {
+  it("two simultaneous logins for one new character yield one account", async () => {
+    const results = await Promise.all([login(ch()), login(ch())]);
+    expect(results[0].accountId).toBe(results[1].accountId);
+    expect(await ctx.db.select().from(account)).toHaveLength(1);
+    expect(await ctx.db.select().from(character)).toHaveLength(1);
   });
 });
 
@@ -1909,9 +1922,7 @@ describe("re-auth side effects", () => {
   it("audits, enqueues, and downgrades status when scopes shrink", async () => {
     const a = await login(ch());
     await ctx.db.delete(outbox);
-    await handleEveLogin(
-      ctx.db,
-      cfg,
+    await login(
       ch({ refreshToken: "rt-2", scopes: ["esi-characters.read_contacts.v1"] }), // missing write scope
     );
     const [chr] = await ctx.db.select().from(character);
@@ -2003,7 +2014,7 @@ Expected: FAIL.
 `src/services/accounts.ts`:
 
 ```ts
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { Config } from "@/config";
 import type { DbTx } from "@/db";
 import { account, bootstrapAdminGrant, character, contactSyncState } from "@/db/schema";
@@ -2012,8 +2023,13 @@ import { logAudit } from "@/services/audit";
 import { enqueueSync } from "@/services/outbox";
 import { revokeAccountSessions } from "@/services/session";
 
-// LOCK ORDER (deadlock avoidance): character row(s) first, then account row(s).
-// Never lock an account before a character. demoteAdmin locks accounts only.
+// LOCK ORDER (deadlock avoidance), applied top to bottom:
+//   1. pg_advisory_xact_lock(characterId) — serializes even when no character
+//      row exists yet (two first-logins for the same character cannot race).
+//   2. character row(s) FOR UPDATE.
+//   3. account row(s) FOR UPDATE, ALWAYS in sorted-id order when more than one
+//      account is involved (opposite-direction transfers cannot deadlock).
+// demoteAdmin locks account rows only.
 export interface EveCallbackCharacter {
   characterId: number;
   characterName: string;
@@ -2022,14 +2038,31 @@ export interface EveCallbackCharacter {
   refreshToken: string;
 }
 
-/** Locks the character row: concurrent callbacks for one character serialize. */
+/**
+ * Transaction-scoped advisory lock on the character id. Unlike FOR UPDATE this
+ * also serializes callers when NO row exists yet, so two concurrent first
+ * logins for the same character cannot both take the insert path.
+ */
+async function lockCharacterId(dbx: DbTx, characterId: number) {
+  await dbx.execute(sql`SELECT pg_advisory_xact_lock(${characterId})`);
+}
+
+/** Advisory lock + row lock, in that order. */
 async function findCharacterForUpdate(dbx: DbTx, characterId: number) {
+  await lockCharacterId(dbx, characterId);
   const rows = await dbx
     .select()
     .from(character)
     .where(eq(character.id, characterId))
     .for("update");
   return rows[0];
+}
+
+/** Lock several account rows deterministically (sorted id order). */
+async function lockAccounts(dbx: DbTx, ids: string[]) {
+  for (const id of [...new Set(ids)].sort()) {
+    await dbx.select().from(account).where(eq(account.id, id)).for("update");
+  }
 }
 
 function tokenFields(cfg: Config, ch: EveCallbackCharacter) {
@@ -2178,6 +2211,8 @@ export async function linkCharacter(
     if (existing.ownerHash === ch.ownerHash) {
       return { ok: false, error: "already_linked" };
     }
+    // two accounts involved: lock both in sorted order before mutating
+    await lockAccounts(dbx, [existing.accountId, accountId]);
     await reclaimCharacter(dbx, existing);
   }
   await dbx.insert(character).values({
@@ -2781,6 +2816,42 @@ describe("linkDiscord", () => {
     expect(payloads).toContainEqual({ kind: "discord-user", discordUserId: "duid-1" });
     expect(payloads).toContainEqual({ kind: "account", accountId: a.id });
   });
+
+  it("concurrent replacements deprovision every intermediate discord user", async () => {
+    const [a] = await ctx.db.insert(account).values({}).returning();
+    await ld(a.id, "duid-0");
+    await ctx.db.delete(outbox);
+    await Promise.all([ld(a.id, "duid-A"), ld(a.id, "duid-B")]);
+    const deprovisioned = (await ctx.db.select().from(outbox))
+      .map((b) => b.payload)
+      .filter((p) => p.kind === "discord-user")
+      .map((p) => (p as { discordUserId: string }).discordUserId);
+    const [final] = await ctx.db.select().from(discordLink);
+    // duid-0 and whichever of A/B lost the race must both be deprovisioned
+    const loser = final.discordUserId === "duid-A" ? "duid-B" : "duid-A";
+    expect(deprovisioned).toContain("duid-0");
+    expect(deprovisioned).toContain(loser);
+  });
+
+  it("concurrent cross-account claims of one discord user: one wins, one conflicts", async () => {
+    const { DiscordLinkConflictError } = await import("@/services/discord-link");
+    const [a] = await ctx.db.insert(account).values({}).returning();
+    const [b] = await ctx.db.insert(account).values({}).returning();
+    const results = await Promise.allSettled([ld(a.id, "duid-X"), ld(b.id, "duid-X")]);
+    const fulfilled = results.filter((r) => r.status === "fulfilled");
+    const rejected = results.filter((r) => r.status === "rejected");
+    // either the slow one saw the committed row (already_linked) or hit 23505
+    if (rejected.length === 1) {
+      expect(
+        (rejected[0] as PromiseRejectedResult).reason,
+      ).toBeInstanceOf(DiscordLinkConflictError);
+      expect(fulfilled).toHaveLength(1);
+    } else {
+      const values = fulfilled.map((r) => (r as PromiseFulfilledResult<unknown>).value);
+      expect(values).toContainEqual({ ok: false, error: "already_linked" });
+    }
+    expect(await ctx.db.select().from(discordLink)).toHaveLength(1);
+  });
 });
 
 describe("discord callback route", () => {
@@ -2857,14 +2928,20 @@ Expected: FAIL.
 ```ts
 import { eq } from "drizzle-orm";
 import type { DbTx } from "@/db";
-import { discordLink } from "@/db/schema";
+import { account, discordLink } from "@/db/schema";
 import { logAudit } from "@/services/audit";
 import { enqueueSync } from "@/services/outbox";
 
+/** Drizzle may wrap the pg error; walk the cause chain for code 23505. */
 function isUniqueViolation(err: unknown): boolean {
-  return (
-    typeof err === "object" && err !== null && (err as { code?: string }).code === "23505"
-  );
+  let cur: unknown = err;
+  for (let depth = 0; cur && depth < 5; depth++) {
+    if (typeof cur === "object" && (cur as { code?: string }).code === "23505") {
+      return true;
+    }
+    cur = (cur as { cause?: unknown }).cause;
+  }
+  return false;
 }
 
 /**
@@ -2883,6 +2960,14 @@ export async function linkDiscord(
   accountId: string,
   discordUserId: string,
 ): Promise<{ ok: true } | { ok: false; error: "already_linked" }> {
+  // Lock the account row first: concurrent replacements for one account
+  // serialize here, so every intermediate discord user gets its deprovision
+  // event (the second replacement reads the first one's committed row).
+  await dbx
+    .select()
+    .from(account)
+    .where(eq(account.id, accountId))
+    .for("update");
   const existing = await dbx
     .select()
     .from(discordLink)
@@ -2890,8 +2975,8 @@ export async function linkDiscord(
   if (existing.length > 0 && existing[0].accountId !== accountId) {
     return { ok: false, error: "already_linked" };
   }
-  // Upsert on our own account row FIRST; the unique(discord_user_id) index is
-  // the race arbiter. Only after it succeeds do we emit side effects.
+  // Upsert on our own account row; the unique(discord_user_id) index is the
+  // cross-account race arbiter. Only after it succeeds do we emit side effects.
   const previous = await dbx
     .select()
     .from(discordLink)
