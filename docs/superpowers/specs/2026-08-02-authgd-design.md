@@ -122,8 +122,15 @@ secret; token-encryption key.
 - **Discord:** OAuth with `identify` scope only, stores the Discord user id.
   `discord_user_id` is unique — linking a Discord account already linked elsewhere fails
   with a clear error, so two accounts can never fight over one user's roles.
-- **Admins:** `is_admin` flag, bootstrapped from env character IDs, settable by other
-  admins in the UI.
+- **Admins:** `is_admin` flag on the account. Bootstrap admin character IDs (env) are a
+  **one-time initialization mechanism**: when an account first links a bootstrap
+  character, `is_admin` is set once and audit-logged — the env list is never
+  re-evaluated afterward, so a sold bootstrap character cannot grant its new owner
+  admin. Ongoing admin management happens in the UI by existing admins.
+  **Last-admin protection:** the last account with `is_admin` cannot be demoted or
+  deleted. **Session revocation:** a transfer reclaim (character unlinked from an
+  account because a new owner authenticated it) revokes all active sessions of the
+  affected account; ordinary self-service unlink does not.
 
 ## Data model
 
@@ -184,8 +191,13 @@ All jobs are idempotent diff-and-apply (desired vs actual); re-running is always
    is missing, it records `missing_label` in `contact_sync_state.last_result`, **skips
    all writes for that character**, and the UI (member page + admin list) shows the
    remediation: "create a contact label named `flygd` in-game, then re-sync." This is
-   also part of onboarding copy at token grant. When the label exists: read the
-   character's actual contacts and fully reconcile against the desired set. **Label-ownership policy (same as aa-standingssync):** the app owns
+   also part of onboarding copy at token grant. **Push targets, precisely:** every
+   character belonging to a FlyGD account whose token is `valid` and includes the
+   contacts read+write scopes (and has the label); the desired set written to a given
+   character **excludes that character itself**. When the label exists: read **all
+   pages** of the character's contacts before diffing — if any page fails, abort that
+   character's reconciliation for this run (a partial read is unsafe for destructive
+   changes) — then fully reconcile against the desired set. **Label-ownership policy (same as aa-standingssync):** the app owns
    the configured label (e.g. `flygd`) outright, and users are told so in the UI at
    token grant. Within that ownership: desired characters are added (or, if they already
    exist as personal contacts, updated to +5 and given our label — the app takes them
@@ -217,13 +229,19 @@ All jobs are idempotent diff-and-apply (desired vs actual); re-running is always
 admin, **main character selected/changed/unlinked** (enqueues an immediate
 membership evaluation for that account), admin "sync now" button.
 
-**Account creation:** a new account starts unlocked with tier computed immediately —
-the SSO callback fetches the character's affiliation inline and sets `flygd` (main in
-alliance) or `green` (not), audit-logged as `system: account created`; provisioning
-jobs are enqueued right away, so a new member doesn't wait for the next scheduled run.
+**Account creation:** conservative and never optimistic — the SSO callback creates the
+account **unlocked, tier Green, affiliation unresolved** in one transaction and
+enqueues an immediate membership evaluation for it; the account is promoted to FlyGD
+and provisioned only after a *confirmed* affiliation read (normally seconds later).
+The callback itself performs no ESI affiliation lookups, so a transient ESI failure
+can neither block login nor partially provision.
 
-**Ordering on tier change:** commit the tier flip first (single source of truth), then
-jobs 2–4 run and retry independently — one failing integration never blocks the others.
+**Ordering on tier change (uniform rule):** the state change and its downstream job
+inserts commit in **one Postgres transaction** — pg-boss stores jobs in the same
+database, so job rows are inserted via the transaction (no crash gap between "demoted"
+and "deprovision queued"). After commit, jobs 2–4 run and retry independently — one
+failing integration never blocks the others. Hourly scheduled reconciliation remains
+the backstop for anything missed.
 
 ## UI
 
@@ -265,7 +283,16 @@ jobs 2–4 run and retry independently — one failing integration never blocks 
 ## Testing
 
 - **Unit (vitest):** table-driven tests over the pure diff logic (contacts, ACL, roles)
-  and tier-transition rules (incl. `tier_locked`, cryo, rejoin).
+  and tier-transition rules (incl. `tier_locked`, cryo, rejoin), plus the error
+  classifiers (transient vs. permanent OAuth/ESI errors) and affiliation-chunk
+  bisection.
+- **Critical-path cases (unit or integration as appropriate):** OAuth transaction
+  replay and expiry rejection; transfer reclaim (owner-hash mismatch clears stale link,
+  revokes the old account's sessions); atomic null-main demotion + transactional job
+  insert; `missing_label` skip + remediation surfacing; multi-page contact reads and
+  abort-on-partial-read; scope-shortfall → `needs_reauth` → in-place re-auth;
+  post-mutation Wanderer observation freshness; bootstrap-admin one-time semantics and
+  last-admin protection.
 - **Integration:** jobs against mocked ESI/Wanderer/Discord HTTP (msw) + real Postgres
   (testcontainers or dev compose), covering the full deprovision path: main leaves →
   green → contact removals + ACL removals + role change + audit rows.
@@ -321,3 +348,15 @@ jobs 2–4 run and retry independently — one failing integration never blocks 
 - Wanderer observation persisted from a post-mutation re-read.
 - Account creation computes tier inline and provisions immediately; main
   selection/change/unlink triggers immediate membership evaluation.
+
+### From external review round 3 (2026-08-02)
+
+- Bootstrap admin = one-time grant at first link, never re-evaluated; last-admin
+  protection; transfer reclaim revokes the affected account's sessions.
+- Account creation is pessimistic: Green + unresolved affiliation, promoted only after
+  a confirmed read by the enqueued evaluation (no ESI in the callback).
+- Push targets defined precisely; self excluded from own desired set; full pagination
+  required before destructive diff.
+- Uniform transactional enqueue: state change + pg-boss job rows commit in one
+  Postgres transaction; hourly reconciliation as backstop.
+- Test plan extended to cover all round-2/3 critical paths.
