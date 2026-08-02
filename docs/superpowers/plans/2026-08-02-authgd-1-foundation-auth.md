@@ -16,7 +16,8 @@
 - Tiers are exactly `flygd | blue | green`; account statuses exactly `active | cryo`; token statuses exactly `valid | invalid | needs_reauth | missing`.
 - Refresh tokens are AES-256-GCM encrypted at rest with `TOKEN_ENCRYPTION_KEY` (32-byte base64).
 - Sessions are server-side rows; the cookie holds only an opaque id (`authgd_session`, HttpOnly, SameSite=Lax, Secure in prod). Signed-cookie-only sessions are ruled out.
-- OAuth: every flow uses single-use, expiring (10 min) `oauth_transaction` rows binding state hash + intent + initiator + PKCE verifier.
+- OAuth: every flow — EVE **and Discord** — uses single-use, expiring (10 min) `oauth_transaction` rows binding state hash + intent + initiator + PKCE verifier (S256). Callbacks check the exact expected intent and reject all others.
+- Mutations that touch character ownership or admin flags run under row locks (`SELECT … FOR UPDATE`) inside their transaction; the last-admin check is race-safe.
 - Account creation is pessimistic: new accounts are unlocked Green with unresolved affiliation; no ESI affiliation calls in any OAuth callback.
 - Every character login/link requests the full configured scope set (`EVE_SSO_SCOPES`, default `esi-characters.read_contacts.v1 esi-characters.write_contacts.v1`).
 - All identity mutations write `audit_log` rows; sync-relevant changes also write `outbox` rows in the same transaction.
@@ -588,6 +589,7 @@ import {
   serial,
   text,
   timestamp,
+  unique,
   uuid,
 } from "drizzle-orm/pg-core";
 
@@ -625,21 +627,26 @@ export const account = pgTable("account", {
   mainCharacterId: bigint("main_character_id", { mode: "number" }),
 });
 
-export const character = pgTable("character", {
-  id: bigint("id", { mode: "number" }).primaryKey(), // EVE character id
-  accountId: uuid("account_id")
-    .notNull()
-    .references(() => account.id),
-  name: text("name").notNull(),
-  corporationId: bigint("corporation_id", { mode: "number" }),
-  allianceId: bigint("alliance_id", { mode: "number" }),
-  affiliationCheckedAt: timestamp("affiliation_checked_at", { withTimezone: true }),
-  affiliationInvalid: boolean("affiliation_invalid").notNull().default(false),
-  ownerHash: text("owner_hash").notNull(),
-  refreshTokenEnc: text("refresh_token_enc"),
-  scopes: jsonb("scopes").$type<string[]>().notNull().default([]),
-  tokenStatus: tokenStatusEnum("token_status").notNull().default("missing"),
-});
+export const character = pgTable(
+  "character",
+  {
+    id: bigint("id", { mode: "number" }).primaryKey(), // EVE character id
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => account.id),
+    name: text("name").notNull(),
+    corporationId: bigint("corporation_id", { mode: "number" }),
+    allianceId: bigint("alliance_id", { mode: "number" }),
+    affiliationCheckedAt: timestamp("affiliation_checked_at", { withTimezone: true }),
+    affiliationInvalid: boolean("affiliation_invalid").notNull().default(false),
+    ownerHash: text("owner_hash").notNull(),
+    refreshTokenEnc: text("refresh_token_enc"),
+    scopes: jsonb("scopes").$type<string[]>().notNull().default([]),
+    tokenStatus: tokenStatusEnum("token_status").notNull().default("missing"),
+  },
+  // target for the composite main-character FK on account
+  (t) => [unique("character_id_account_uq").on(t.id, t.accountId)],
+);
 
 export const discordLink = pgTable("discord_link", {
   accountId: uuid("account_id")
@@ -659,12 +666,14 @@ export const session = pgTable("session", {
   lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+// Historical snapshot: account reference is nullable and detaches on account
+// deletion so the consumed grant row survives forever (it must never be reusable).
 export const bootstrapAdminGrant = pgTable("bootstrap_admin_grant", {
   characterId: bigint("character_id", { mode: "number" }).primaryKey(),
   ownerHash: text("owner_hash").notNull(),
-  accountId: uuid("account_id")
-    .notNull()
-    .references(() => account.id),
+  accountId: uuid("account_id").references(() => account.id, {
+    onDelete: "set null",
+  }),
   grantedAt: timestamp("granted_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -673,7 +682,11 @@ export const outbox = pgTable(
   {
     id: serial("id").primaryKey(),
     payload: jsonb("payload")
-      .$type<{ kind: "account"; accountId: string } | { kind: "all" }>()
+      .$type<
+        | { kind: "account"; accountId: string }
+        | { kind: "discord-user"; discordUserId: string }
+        | { kind: "all" }
+      >()
       .notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     dispatchedAt: timestamp("dispatched_at", { withTimezone: true }),
@@ -789,10 +802,50 @@ await pool.end();
 console.log("migrations applied");
 ```
 
-- [ ] **Step 4: Generate migration and run tests**
+- [ ] **Step 4: Generate migration, append the composite main-character FK, run tests**
 
-Run: `npm run db:generate && npm test -- tests/db-schema.test.ts`
-Expected: a SQL file appears in `drizzle/`; tests PASS.
+Run: `npm run db:generate`
+Expected: a SQL file appears in `drizzle/`.
+
+Then create a follow-up custom migration `drizzle/0001_main_character_fk.sql` (register it by running `npx drizzle-kit generate --custom --name main_character_fk` and pasting the SQL into the generated file):
+
+```sql
+ALTER TABLE "account"
+  ADD CONSTRAINT "account_main_character_fk"
+  FOREIGN KEY ("main_character_id", "id")
+  REFERENCES "character" ("id", "account_id")
+  DEFERRABLE INITIALLY DEFERRED;
+```
+
+Deferred so account + character + main can be written in any order within one transaction; enforcement at commit guarantees the main exists **and belongs to that account**. Services always clear `main_character_id` (no-main rule) in the same transaction that deletes a character, satisfying the constraint at commit.
+
+Run: `npm test -- tests/db-schema.test.ts`
+Expected: tests PASS — including the invariant test below (add it to `tests/db-schema.test.ts`):
+
+```ts
+  it("rejects a main character belonging to another account", async () => {
+    const [a1] = await ctx.db.insert(account).values({}).returning();
+    const [a2] = await ctx.db.insert(account).values({}).returning();
+    await ctx.db.insert(character).values({
+      id: 90000042,
+      accountId: a1.id,
+      name: "Owned by a1",
+      ownerHash: "oh",
+      scopes: [],
+      tokenStatus: "missing",
+    });
+    await expect(
+      ctx.db.transaction(async (tx) => {
+        await tx
+          .update(account)
+          .set({ mainCharacterId: 90000042 })
+          .where(eq(account.id, a2.id));
+      }),
+    ).rejects.toThrow();
+  });
+```
+
+(add `import { eq } from "drizzle-orm"` to that test file).
 
 - [ ] **Step 5: Commit**
 
@@ -1364,8 +1417,10 @@ git commit -m "feat: EVE SSO client with PKCE and JWT verification"
 - Test: `tests/outbox.test.ts`, `tests/errors.test.ts`
 
 **Interfaces:**
-- Produces: `enqueueSync(dbx: Dbx, payload: { kind: "account"; accountId: string } | { kind: "all" }): Promise<void>`; `takeUndispatched(dbx: Dbx, limit?: number): Promise<Array<{ id: number; payload: OutboxPayload }>>` and `markDispatched(dbx: Dbx, ids: number[]): Promise<void>` (consumed by Plan 2's dispatcher); `type OutboxPayload`.
-- Produces: `classifyOAuthError(oauthError: string | undefined, status: number | undefined): "permanent" | "transient"` — `invalid_grant`/`invalid_token`/`unauthorized_client` (or status 400/401 with an OAuth error body) → permanent; everything else (420/429/5xx/network/undefined) → transient. `classifyEsiStatus(status: number): "permanent" | "transient"` — 400/404 permanent; 420/429/5xx transient; other 4xx permanent.
+- Produces: `enqueueSync(dbx: Dbx, payload: OutboxPayload): Promise<void>` where `OutboxPayload = { kind: "account"; accountId } | { kind: "discord-user"; discordUserId } | { kind: "all" }` (the `discord-user` variant tells Plan 2's Discord job to strip managed roles from a user no longer linked anywhere); `takeUndispatched(dbx: Dbx, limit?: number): Promise<Array<{ id: number; payload: OutboxPayload }>>` and `markDispatched(dbx: Dbx, ids: number[]): Promise<void>` (consumed by Plan 2's dispatcher); `type OutboxPayload`.
+- Produces actionable categories, not just a binary:
+  - `type OAuthErrorClass = "permanent" | "transient"` and `classifyOAuthError(oauthError: string | undefined, status: number | undefined): OAuthErrorClass` — `invalid_grant`/`invalid_token`/`unauthorized_client`/`access_denied` → permanent; **`temporarily_unavailable` and `server_error` are transient even with a 400/status body**; unknown error strings with status 400/401 → permanent; everything else (420/429/5xx/network/undefined) → transient.
+  - `type EsiErrorClass = "needs_reauth" | "permanent" | "transient"` and `classifyEsiError(status: number, body?: { error?: string }): EsiErrorClass` — 403 whose body error mentions scope/token authorization (`/scope|token|authorization/i`) → `needs_reauth`; other 403 and 400/404 → permanent; 420/429/5xx → transient; other 4xx → permanent.
 
 - [ ] **Step 1: Write failing tests**
 
@@ -1373,11 +1428,18 @@ git commit -m "feat: EVE SSO client with PKCE and JWT verification"
 
 ```ts
 import { describe, expect, it } from "vitest";
-import { classifyEsiStatus, classifyOAuthError } from "@/core/errors";
+import { classifyEsiError, classifyOAuthError } from "@/core/errors";
 
 describe("classifyOAuthError", () => {
   it("marks invalid_grant permanent", () => {
     expect(classifyOAuthError("invalid_grant", 400)).toBe("permanent");
+  });
+  it("keeps temporarily_unavailable/server_error transient even at 400", () => {
+    expect(classifyOAuthError("temporarily_unavailable", 400)).toBe("transient");
+    expect(classifyOAuthError("server_error", 400)).toBe("transient");
+  });
+  it("marks unknown 400-error bodies permanent", () => {
+    expect(classifyOAuthError("weird_new_error", 400)).toBe("permanent");
   });
   it("marks rate limiting transient", () => {
     expect(classifyOAuthError(undefined, 429)).toBe("transient");
@@ -1390,17 +1452,24 @@ describe("classifyOAuthError", () => {
   });
 });
 
-describe("classifyEsiStatus", () => {
+describe("classifyEsiError", () => {
+  it("maps 403 missing-scope to needs_reauth", () => {
+    expect(
+      classifyEsiError(403, { error: "token is not valid for scope" }),
+    ).toBe("needs_reauth");
+  });
+  it("maps other 403 to permanent", () => {
+    expect(classifyEsiError(403, { error: "forbidden" })).toBe("permanent");
+  });
   it.each([
     [400, "permanent"],
     [404, "permanent"],
-    [403, "permanent"],
     [420, "transient"],
     [429, "transient"],
     [500, "transient"],
     [503, "transient"],
   ])("status %d → %s", (status, expected) => {
-    expect(classifyEsiStatus(status as number)).toBe(expected);
+    expect(classifyEsiError(status as number)).toBe(expected);
   });
 });
 ```
@@ -1442,26 +1511,36 @@ Expected: FAIL.
 `src/core/errors.ts`:
 
 ```ts
-export type ErrorClass = "permanent" | "transient";
+export type OAuthErrorClass = "permanent" | "transient";
+export type EsiErrorClass = "needs_reauth" | "permanent" | "transient";
 
 const PERMANENT_OAUTH_ERRORS = new Set([
   "invalid_grant",
   "invalid_token",
   "unauthorized_client",
+  "access_denied",
 ]);
+const TRANSIENT_OAUTH_ERRORS = new Set(["temporarily_unavailable", "server_error"]);
 
 export function classifyOAuthError(
   oauthError: string | undefined,
   status: number | undefined,
-): ErrorClass {
+): OAuthErrorClass {
+  if (oauthError && TRANSIENT_OAUTH_ERRORS.has(oauthError)) return "transient";
   if (oauthError && PERMANENT_OAUTH_ERRORS.has(oauthError)) return "permanent";
   if (oauthError && (status === 400 || status === 401)) return "permanent";
   return "transient";
 }
 
-export function classifyEsiStatus(status: number): ErrorClass {
+export function classifyEsiError(
+  status: number,
+  body?: { error?: string },
+): EsiErrorClass {
   if (status === 420 || status === 429) return "transient";
   if (status >= 500) return "transient";
+  if (status === 403 && body?.error && /scope|token|authorization/i.test(body.error)) {
+    return "needs_reauth";
+  }
   return "permanent";
 }
 ```
@@ -1475,6 +1554,7 @@ import { outbox } from "@/db/schema";
 
 export type OutboxPayload =
   | { kind: "account"; accountId: string }
+  | { kind: "discord-user"; discordUserId: string } // Plan 2: strip managed roles from an unlinked Discord user
   | { kind: "all" };
 
 export async function enqueueSync(dbx: Dbx, payload: OutboxPayload): Promise<void> {
@@ -1529,12 +1609,15 @@ This is the heart of Plan 1. All functions take a transaction handle and are cal
 - Consumes: `Dbx`, schema, `logAudit`, `enqueueSync`, `revokeAccountSessions`, `encryptToken`, `Config`.
 - Produces:
   - `type EveCallbackCharacter = { characterId: number; characterName: string; ownerHash: string; scopes: string[]; refreshToken: string }`
-  - `handleEveLogin(dbx, cfg: Config, ch: EveCallbackCharacter): Promise<{ accountId: string }>` — existing character + same ownerHash → refresh token/scopes in place, return its account. Existing character + different ownerHash → **transfer reclaim**: unlink from old account (apply no-main rule; revoke old account sessions), then create a new account for the character. Unknown character → create account (tier green, unlocked, audit `account.created`, outbox row) and link.
-  - `linkCharacter(dbx, cfg, accountId: string, ch: EveCallbackCharacter): Promise<{ ok: true } | { ok: false; error: "already_linked" }>` — own character → refresh in place. Linked elsewhere + same ownerHash → `already_linked` error. Linked elsewhere + different ownerHash → reclaim then link to this account. New → link (first character of the account also becomes main), audit `character.linked`, outbox row.
+  - Token status on every write is computed, never assumed: `valid` when granted scopes ⊇ `cfg.eveSso.scopes`, else `needs_reauth`.
+  - Character-ownership reads inside these functions use `SELECT … FOR UPDATE` on the character row, so concurrent callbacks for the same character serialize instead of acting on stale ownership.
+  - `handleEveLogin(dbx, cfg: Config, ch: EveCallbackCharacter): Promise<{ accountId: string }>` — existing character + same ownerHash → **re-auth in place**: refresh token/scopes, recompute token status, audit `character.reauthed`, outbox row, return its account. Existing character + different ownerHash → **transfer reclaim**: unlink from old account (apply no-main rule; revoke old account sessions), then create a new account for the character. Unknown character → create account (tier green, unlocked, audit `account.created`, outbox row) and link. Both the create path and the link path apply `maybeGrantBootstrapAdmin` internally — callers cannot forget it.
+  - `linkCharacter(dbx, cfg, accountId: string, ch: EveCallbackCharacter): Promise<{ ok: true } | { ok: false; error: "already_linked" }>` — own character → re-auth in place (audit + outbox as above). Linked elsewhere + same ownerHash → `already_linked` error. Linked elsewhere + different ownerHash → reclaim then link to this account. New → link (first character of the account also becomes main), audit `character.linked`, outbox row, then `maybeGrantBootstrapAdmin` internally.
   - `unlinkCharacter(dbx, cfg, actor: string, characterId: number, opts?: { revokeSessions?: boolean }): Promise<void>` — deletes token/link (row removed along with its `contact_sync_state`); if it was the main applies **no-main rule**: `mainCharacterId = null`, tier → green unless `tierLocked` (audit `tier.changed` with cause), outbox row; audit `character.unlinked`.
   - `setMainCharacter(dbx, accountId: string, characterId: number): Promise<void>` — validates ownership, sets main, audit `account.main_changed`, outbox row.
   - `maybeGrantBootstrapAdmin(dbx, cfg, accountId: string, ch: { characterId: number; ownerHash: string }): Promise<boolean>` — grants once per character ever (insert into `bootstrap_admin_grant` with `onConflictDoNothing`; only a successful insert grants), audit `admin.bootstrap_granted`.
-  - `demoteAdmin(dbx, actor: string, accountId: string): Promise<{ ok: boolean; error?: "last_admin" }>` — refuses when target is the only admin.
+  - `demoteAdmin(dbx, actor: string, accountId: string): Promise<{ ok: boolean; error?: "last_admin" }>` — refuses when target is the only admin. Race-safe: locks all admin rows (`FOR UPDATE`) before counting, so two admins concurrently demoting each other cannot both succeed.
+  - **Lost-last-admin recovery (documented behavior, not code):** reclaim never clears `is_admin` — a demoted-by-transfer admin account keeps its flag and can log in with any remaining character. If an admin's *only* character is reclaimed, recovery is operational: add a new character id to `BOOTSTRAP_ADMIN_CHARACTER_IDS` and have them log in fresh (new account, new one-time grant).
 
 - [ ] **Step 1: Write failing tests**
 
@@ -1681,6 +1764,20 @@ describe("linkCharacter", () => {
   });
 });
 
+describe("transaction rollback", () => {
+  it("leaves no partial state when the transaction throws after linking", async () => {
+    const a = await handleEveLogin(ctx.db, cfg, ch());
+    await expect(
+      ctx.db.transaction(async (tx) => {
+        await linkCharacter(tx, cfg, a.accountId, ch({ characterId: 90000050, characterName: "Doomed" }));
+        throw new Error("boom");
+      }),
+    ).rejects.toThrow("boom");
+    const chars = await ctx.db.select().from(character);
+    expect(chars.map((c) => c.id)).toEqual([90000001]); // no orphan character, audit, or outbox rows
+  });
+});
+
 describe("setMainCharacter", () => {
   it("sets main and writes an outbox row", async () => {
     const a = await handleEveLogin(ctx.db, cfg, ch());
@@ -1698,28 +1795,47 @@ describe("setMainCharacter", () => {
   });
 });
 
+describe("re-auth side effects", () => {
+  it("audits, enqueues, and downgrades status when scopes shrink", async () => {
+    const a = await handleEveLogin(ctx.db, cfg, ch());
+    await ctx.db.delete(outbox);
+    await handleEveLogin(
+      ctx.db,
+      cfg,
+      ch({ refreshToken: "rt-2", scopes: ["esi-characters.read_contacts.v1"] }), // missing write scope
+    );
+    const [chr] = await ctx.db.select().from(character);
+    expect(chr.tokenStatus).toBe("needs_reauth");
+    expect(await ctx.db.select().from(outbox)).toHaveLength(1);
+    const audits = await ctx.db.select().from(auditLog);
+    expect(audits.some((x) => x.action === "character.reauthed")).toBe(true);
+  });
+});
+
 describe("bootstrap admin", () => {
-  it("grants once and never re-grants after transfer", async () => {
+  it("grants on first login of a bootstrap character, never after transfer", async () => {
     const a = await handleEveLogin(ctx.db, cfg, ch({ characterId: 90000009, ownerHash: "oh-boss" }));
-    expect(
-      await maybeGrantBootstrapAdmin(ctx.db, cfg, a.accountId, {
-        characterId: 90000009,
-        ownerHash: "oh-boss",
-      }),
-    ).toBe(true);
-    const [acc] = await ctx.db.select().from(account);
-    expect(acc.isAdmin).toBe(true);
+    const [acc] = await ctx.db.select().from(account).where(eq(account.id, a.accountId));
+    expect(acc.isAdmin).toBe(true); // granted inside the service, no extra call
 
     // sold: new owner logs in → reclaim makes a new account; grant must NOT fire again
     const b = await handleEveLogin(ctx.db, cfg, ch({ characterId: 90000009, ownerHash: "oh-thief" }));
-    expect(
-      await maybeGrantBootstrapAdmin(ctx.db, cfg, b.accountId, {
-        characterId: 90000009,
-        ownerHash: "oh-thief",
-      }),
-    ).toBe(false);
     const [bAcc] = await ctx.db.select().from(account).where(eq(account.id, b.accountId));
     expect(bAcc.isAdmin).toBe(false);
+  });
+
+  it("grants when a bootstrap character is linked as an alt", async () => {
+    const a = await handleEveLogin(ctx.db, cfg, ch()); // non-bootstrap main
+    let [acc] = await ctx.db.select().from(account).where(eq(account.id, a.accountId));
+    expect(acc.isAdmin).toBe(false);
+    await linkCharacter(
+      ctx.db,
+      cfg,
+      a.accountId,
+      ch({ characterId: 90000009, ownerHash: "oh-1", characterName: "Boss Alt" }),
+    );
+    [acc] = await ctx.db.select().from(account).where(eq(account.id, a.accountId));
+    expect(acc.isAdmin).toBe(true);
   });
 
   it("ignores non-bootstrap characters", async () => {
@@ -1749,6 +1865,21 @@ describe("demoteAdmin", () => {
     await ctx.db.update(account).set({ isAdmin: true });
     expect(await demoteAdmin(ctx.db, "system", b.accountId)).toEqual({ ok: true });
   });
+
+  it("never lets two concurrent demotions remove both admins", async () => {
+    const a = await handleEveLogin(ctx.db, cfg, ch());
+    const b = await handleEveLogin(ctx.db, cfg, ch({ characterId: 90000002, ownerHash: "oh-2", characterName: "B" }));
+    await ctx.db.update(account).set({ isAdmin: true });
+
+    const [r1, r2] = await Promise.all([
+      ctx.db.transaction((tx) => demoteAdmin(tx, a.accountId, b.accountId)),
+      ctx.db.transaction((tx) => demoteAdmin(tx, b.accountId, a.accountId)),
+    ]);
+    // exactly one demotion succeeds; at least one admin always remains
+    expect([r1.ok, r2.ok].filter(Boolean)).toHaveLength(1);
+    const admins = await ctx.db.select().from(account).where(eq(account.isAdmin, true));
+    expect(admins.length).toBeGreaterThanOrEqual(1);
+  });
 });
 ```
 
@@ -1762,7 +1893,7 @@ Expected: FAIL.
 `src/services/accounts.ts`:
 
 ```ts
-import { and, eq, ne } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { Config } from "@/config";
 import type { Dbx } from "@/db";
 import { account, bootstrapAdminGrant, character, contactSyncState } from "@/db/schema";
@@ -1779,19 +1910,46 @@ export interface EveCallbackCharacter {
   refreshToken: string;
 }
 
-async function findCharacter(dbx: Dbx, characterId: number) {
-  const rows = await dbx.select().from(character).where(eq(character.id, characterId));
+/** Locks the character row: concurrent callbacks for one character serialize. */
+async function findCharacterForUpdate(dbx: Dbx, characterId: number) {
+  const rows = await dbx
+    .select()
+    .from(character)
+    .where(eq(character.id, characterId))
+    .for("update");
   return rows[0];
 }
 
 function tokenFields(cfg: Config, ch: EveCallbackCharacter) {
+  const hasAllScopes = cfg.eveSso.scopes.every((s) => ch.scopes.includes(s));
   return {
     name: ch.characterName,
     ownerHash: ch.ownerHash,
     refreshTokenEnc: encryptToken(ch.refreshToken, cfg.tokenEncryptionKey),
     scopes: ch.scopes,
-    tokenStatus: "valid" as const,
+    tokenStatus: (hasAllScopes ? "valid" : "needs_reauth") as
+      | "valid"
+      | "needs_reauth",
   };
+}
+
+/** Re-auth in place: refresh credentials + status, audit, and enqueue sync. */
+async function reauthCharacter(
+  dbx: Dbx,
+  cfg: Config,
+  accountId: string,
+  ch: EveCallbackCharacter,
+) {
+  await dbx
+    .update(character)
+    .set(tokenFields(cfg, ch))
+    .where(eq(character.id, ch.characterId));
+  await logAudit(dbx, {
+    actor: accountId,
+    action: "character.reauthed",
+    target: String(ch.characterId),
+  });
+  await enqueueSync(dbx, { kind: "account", accountId });
 }
 
 /** No-main rule: atomically clear main, demote unless locked, enqueue sync. */
@@ -1864,6 +2022,10 @@ async function createAccountWithCharacter(
     details: { mainCharacterId: ch.characterId },
   });
   await enqueueSync(dbx, { kind: "account", accountId: acc.id });
+  await maybeGrantBootstrapAdmin(dbx, cfg, acc.id, {
+    characterId: ch.characterId,
+    ownerHash: ch.ownerHash,
+  });
   return acc.id;
 }
 
@@ -1872,12 +2034,9 @@ export async function handleEveLogin(
   cfg: Config,
   ch: EveCallbackCharacter,
 ): Promise<{ accountId: string }> {
-  const existing = await findCharacter(dbx, ch.characterId);
+  const existing = await findCharacterForUpdate(dbx, ch.characterId);
   if (existing && existing.ownerHash === ch.ownerHash) {
-    await dbx
-      .update(character)
-      .set(tokenFields(cfg, ch))
-      .where(eq(character.id, ch.characterId));
+    await reauthCharacter(dbx, cfg, existing.accountId, ch);
     return { accountId: existing.accountId };
   }
   if (existing) {
@@ -1893,13 +2052,10 @@ export async function linkCharacter(
   accountId: string,
   ch: EveCallbackCharacter,
 ): Promise<{ ok: true } | { ok: false; error: "already_linked" }> {
-  const existing = await findCharacter(dbx, ch.characterId);
+  const existing = await findCharacterForUpdate(dbx, ch.characterId);
   if (existing) {
     if (existing.accountId === accountId) {
-      await dbx
-        .update(character)
-        .set(tokenFields(cfg, ch))
-        .where(eq(character.id, ch.characterId));
+      await reauthCharacter(dbx, cfg, accountId, ch);
       return { ok: true };
     }
     if (existing.ownerHash === ch.ownerHash) {
@@ -1925,6 +2081,10 @@ export async function linkCharacter(
     target: String(ch.characterId),
   });
   await enqueueSync(dbx, { kind: "account", accountId });
+  await maybeGrantBootstrapAdmin(dbx, cfg, accountId, {
+    characterId: ch.characterId,
+    ownerHash: ch.ownerHash,
+  });
   return { ok: true };
 }
 
@@ -1935,7 +2095,7 @@ export async function unlinkCharacter(
   characterId: number,
   opts: { revokeSessions?: boolean } = {},
 ): Promise<void> {
-  const existing = await findCharacter(dbx, characterId);
+  const existing = await findCharacterForUpdate(dbx, characterId);
   if (!existing) return;
   await dbx.delete(contactSyncState).where(eq(contactSyncState.characterId, characterId));
   await dbx.delete(character).where(eq(character.id, characterId));
@@ -2007,10 +2167,14 @@ export async function demoteAdmin(
   actor: string,
   accountId: string,
 ): Promise<{ ok: boolean; error?: "last_admin" }> {
-  const otherAdmins = await dbx
+  // Lock ALL admin rows first: two admins demoting each other serialize here,
+  // and the second transaction re-counts after the first commits.
+  const admins = await dbx
     .select()
     .from(account)
-    .where(and(eq(account.isAdmin, true), ne(account.id, accountId)));
+    .where(eq(account.isAdmin, true))
+    .for("update");
+  const otherAdmins = admins.filter((a) => a.id !== accountId);
   if (otherAdmins.length === 0) return { ok: false, error: "last_admin" };
   await dbx.update(account).set({ isAdmin: false }).where(eq(account.id, accountId));
   await logAudit(dbx, { actor, action: "admin.demoted", target: accountId });
@@ -2045,7 +2209,7 @@ git commit -m "feat: account service with reclaim, no-main rule, bootstrap admin
 - Produces:
   - `GET /auth/eve/login` — creates `oauth_transaction` (intent `login`), 302 to EVE authorize URL.
   - `GET /auth/eve/link` — requires session; transaction bound to session + account (intent `link-character`); 302 to authorize URL.
-  - `GET /auth/eve/callback?code&state` — consumes transaction; verifies intent binding (a `link-character` transaction is honored only when its `sessionId` still resolves to its `accountId`); exchanges code with PKCE verifier; verifies JWT; inside one `db.transaction()` calls `handleEveLogin` (+ `maybeGrantBootstrapAdmin`) or `linkCharacter`; on login sets the session cookie; redirects to `/account` (or `/account?error=already_linked`).
+  - `GET /auth/eve/callback?code&state` — consumes transaction; verifies intent binding (a `link-character` transaction is honored only when its `sessionId` still resolves to its `accountId`); exchanges code with PKCE verifier; verifies JWT; requires the exact expected intent (`login` or `link-character`; anything else → 400); inside one `db.transaction()` calls `handleEveLogin` or `linkCharacter` (bootstrap admin is internal to those); on login sets the session cookie; redirects to `/account` (or `/account?error=already_linked`).
   - `src/lib/request-session.ts`: `getRequestAccount(req: NextRequest): Promise<{ accountId: string; sessionId: string } | null>` reading the session cookie.
 - Note: route handlers are exported as `GET` functions taking `NextRequest`; tests call them directly (no server) with `NextRequest` objects and mocked `fetch` (msw node server) for the token endpoint, plus a locally-signed JWT and injected JWKS via a test seam: `verifyEveAccessToken` accepts `getKey` — the callback route reads an optional `globalThis.__eveJwksForTest` (typed in `src/lib/esi/sso.ts` as exported `let testJwksOverride: JWTVerifyGetKey | undefined` with setter `setTestJwksOverride()`), used only in tests.
 
@@ -2153,6 +2317,74 @@ describe("EVE auth flow", () => {
       new NextRequest("http://localhost:3000/auth/eve/callback?code=abc&state=bogus"),
     );
     expect(res.status).toBe(400);
+
+    // full replay: consume once successfully, then reuse the same state
+    const loginRes = await loginRoute(new NextRequest("http://localhost:3000/auth/eve/login"));
+    const state = new URL(loginRes.headers.get("location")!).searchParams.get("state")!;
+    const jwt = await signToken(90000011, "oh-11");
+    msw.use(
+      http.post("https://login.eveonline.com/v2/oauth/token", () =>
+        HttpResponse.json({ access_token: jwt, refresh_token: "rt" }),
+      ),
+    );
+    const url = `http://localhost:3000/auth/eve/callback?code=abc&state=${encodeURIComponent(state)}`;
+    expect((await callbackRoute(new NextRequest(url))).status).toBe(307);
+    expect((await callbackRoute(new NextRequest(url))).status).toBe(400);
+  });
+
+  it("rejects an expired state", async () => {
+    const loginRes = await loginRoute(new NextRequest("http://localhost:3000/auth/eve/login"));
+    const state = new URL(loginRes.headers.get("location")!).searchParams.get("state")!;
+    const { oauthTransaction } = await import("@/db/schema");
+    await ctx.db
+      .update(oauthTransaction)
+      .set({ expiresAt: new Date(Date.now() - 1000) });
+    const res = await callbackRoute(
+      new NextRequest(
+        `http://localhost:3000/auth/eve/callback?code=abc&state=${encodeURIComponent(state)}`,
+      ),
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects a link-character transaction without its initiating session", async () => {
+    // craft a link transaction directly, then hit the callback with no cookie
+    const { createOauthTransaction } = await import("@/services/oauth-tx");
+    const [acc] = await ctx.db.insert(account).values({}).returning();
+    const tx = await createOauthTransaction(ctx.db, {
+      intent: "link-character",
+      sessionId: "some-session",
+      accountId: acc.id,
+    });
+    const jwt = await signToken(90000012, "oh-12");
+    msw.use(
+      http.post("https://login.eveonline.com/v2/oauth/token", () =>
+        HttpResponse.json({ access_token: jwt, refresh_token: "rt" }),
+      ),
+    );
+    const res = await callbackRoute(
+      new NextRequest(
+        `http://localhost:3000/auth/eve/callback?code=abc&state=${encodeURIComponent(tx.state)}`,
+      ),
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it("rejects a link-discord transaction presented to the EVE callback", async () => {
+    const { createOauthTransaction } = await import("@/services/oauth-tx");
+    const tx = await createOauthTransaction(ctx.db, { intent: "link-discord" });
+    const jwt = await signToken(90000013, "oh-13");
+    msw.use(
+      http.post("https://login.eveonline.com/v2/oauth/token", () =>
+        HttpResponse.json({ access_token: jwt, refresh_token: "rt" }),
+      ),
+    );
+    const res = await callbackRoute(
+      new NextRequest(
+        `http://localhost:3000/auth/eve/callback?code=abc&state=${encodeURIComponent(tx.state)}`,
+      ),
+    );
+    expect(res.status).toBe(400);
   });
 });
 ```
@@ -2245,7 +2477,6 @@ import { getRequestAccount } from "@/lib/request-session";
 import {
   handleEveLogin,
   linkCharacter,
-  maybeGrantBootstrapAdmin,
   type EveCallbackCharacter,
 } from "@/services/accounts";
 import { consumeOauthTransaction } from "@/services/oauth-tx";
@@ -2286,15 +2517,13 @@ export async function GET(req: NextRequest) {
     return NextResponse.redirect(new URL(dest, cfg.appBaseUrl));
   }
 
-  // login intent
-  const { accountId } = await db.transaction(async (dbtx) => {
-    const r = await handleEveLogin(dbtx, cfg, ch);
-    await maybeGrantBootstrapAdmin(dbtx, cfg, r.accountId, {
-      characterId: ch.characterId,
-      ownerHash: ch.ownerHash,
-    });
-    return r;
-  });
+  if (tx.intent !== "login") {
+    // e.g. a link-discord transaction replayed against the EVE callback
+    return new NextResponse("unexpected intent", { status: 400 });
+  }
+  const { accountId } = await db.transaction((dbtx) =>
+    handleEveLogin(dbtx, cfg, ch),
+  );
   const sid = await createSession(db, accountId);
   const res = NextResponse.redirect(new URL("/account", cfg.appBaseUrl));
   res.cookies.set(cfg.sessionCookieName, sid, {
@@ -2356,11 +2585,11 @@ git commit -m "feat: EVE SSO login/link/callback routes and login page"
 **Interfaces:**
 - Consumes: oauth-tx service, session, config.
 - Produces:
-  - `buildDiscordAuthorizeUrl(cfg: Config, state: string): string` — `https://discord.com/oauth2/authorize` with `client_id`, `response_type=code`, `redirect_uri=${appBaseUrl}/auth/discord/callback`, `scope=identify`, `state`. (No PKCE — Discord confidential client uses client secret; state still mandatory.)
-  - `exchangeDiscordCode(cfg, code, fetchImpl?): Promise<{ accessToken: string }>` — POST `https://discord.com/api/oauth2/token`.
+  - `buildDiscordAuthorizeUrl(cfg: Config, state: string, codeChallenge: string): string` — `https://discord.com/oauth2/authorize` with `client_id`, `response_type=code`, `redirect_uri=${appBaseUrl}/auth/discord/callback`, `scope=identify`, `state`, `code_challenge`, `code_challenge_method=S256`. PKCE is used on Discord exactly as on EVE (confidential clients may still use PKCE; the global constraint applies to every flow).
+  - `exchangeDiscordCode(cfg, code, codeVerifier, fetchImpl?): Promise<{ accessToken: string }>` — POST `https://discord.com/api/oauth2/token` including `code_verifier`.
   - `fetchDiscordUser(accessToken: string, fetchImpl?): Promise<{ id: string; username: string }>` — GET `https://discord.com/api/users/@me`.
-  - `linkDiscord(dbx, accountId: string, discordUserId: string): Promise<{ ok: true } | { ok: false; error: "already_linked" }>` — unique-violation → `already_linked`; re-linking the same account replaces its own row; audit `discord.linked`; outbox row.
-  - Routes `GET /auth/discord/link` (requires session; intent `link-discord`) and `GET /auth/discord/callback` (consume tx, session must match, exchange, fetch user, call `linkDiscord`, redirect to `/account` or `/account?error=discord_already_linked`).
+  - `linkDiscord(dbx, accountId: string, discordUserId: string): Promise<{ ok: true } | { ok: false; error: "already_linked" }>` — linked to another account → `already_linked` (and the insert catches Postgres unique-violation `23505` from races, mapping it to the same result). Re-linking the same account replaces its own row **and enqueues `{ kind: "discord-user", discordUserId: <old id> }`** so Plan 2 strips the old user's managed roles; audit `discord.linked` (+ `discord.unlinked` for the replaced id); outbox `account` row for the new link.
+  - Routes `GET /auth/discord/link` (requires session; intent `link-discord`; PKCE) and `GET /auth/discord/callback` (consume tx — exact intent required, session must match, exchange with verifier, fetch user, call `linkDiscord`, redirect to `/account` or `/account?error=discord_already_linked`).
 
 - [ ] **Step 1: Write failing test**
 
@@ -2372,6 +2601,11 @@ import { sql } from "drizzle-orm";
 import { account, discordLink, outbox } from "@/db/schema";
 import { linkDiscord } from "@/services/discord-link";
 import { setupTestDb } from "./helpers/db";
+
+// Route tests below load config lazily via getConfig(): set the same
+// process.env block used at the top of tests/auth-routes.test.ts BEFORE the
+// imports above (copy it verbatim, including DATABASE_URL pointing at
+// TEST_DATABASE_URL).
 
 let ctx: Awaited<ReturnType<typeof setupTestDb>>;
 beforeAll(async () => {
@@ -2399,13 +2633,78 @@ describe("linkDiscord", () => {
     });
   });
 
-  it("lets an account replace its own link", async () => {
+  it("replacing its own link deprovisions the old discord user", async () => {
     const [a] = await ctx.db.insert(account).values({}).returning();
     await linkDiscord(ctx.db, a.id, "duid-1");
+    await ctx.db.delete(outbox);
     expect(await linkDiscord(ctx.db, a.id, "duid-2")).toEqual({ ok: true });
     const rows = await ctx.db.select().from(discordLink);
     expect(rows).toHaveLength(1);
     expect(rows[0].discordUserId).toBe("duid-2");
+    const payloads = (await ctx.db.select().from(outbox)).map((b) => b.payload);
+    expect(payloads).toContainEqual({ kind: "discord-user", discordUserId: "duid-1" });
+    expect(payloads).toContainEqual({ kind: "account", accountId: a.id });
+  });
+});
+
+describe("discord callback route", () => {
+  // Route-level coverage: state binding, session binding, and success path.
+  it("links via the callback when session matches the transaction", async () => {
+    const { GET: discordCallback } = await import("@/app/auth/discord/callback/route");
+    const { createOauthTransaction } = await import("@/services/oauth-tx");
+    const { createSession } = await import("@/services/session");
+    const { NextRequest } = await import("next/server");
+    const { http, HttpResponse } = await import("msw");
+    const { setupServer } = await import("msw/node");
+
+    const msw = setupServer(
+      http.post("https://discord.com/api/oauth2/token", async ({ request }) => {
+        const body = new URLSearchParams(await request.text());
+        expect(body.get("code_verifier")).toBeTruthy();
+        return HttpResponse.json({ access_token: "dt" });
+      }),
+      http.get("https://discord.com/api/users/@me", () =>
+        HttpResponse.json({ id: "duid-route", username: "user" }),
+      ),
+    );
+    msw.listen({ onUnhandledRequest: "error" });
+    try {
+      const [acc] = await ctx.db.insert(account).values({}).returning();
+      const sid = await createSession(ctx.db, acc.id);
+      const tx = await createOauthTransaction(ctx.db, {
+        intent: "link-discord",
+        sessionId: sid,
+        accountId: acc.id,
+      });
+      const req = new NextRequest(
+        `http://localhost:3000/auth/discord/callback?code=c&state=${encodeURIComponent(tx.state)}`,
+        { headers: { cookie: `authgd_session=${sid}` } },
+      );
+      const res = await discordCallback(req);
+      expect(res.status).toBe(307);
+      const rows = await ctx.db.select().from(discordLink);
+      expect(rows[0]?.discordUserId).toBe("duid-route");
+    } finally {
+      msw.close();
+    }
+  });
+
+  it("rejects the callback without the initiating session", async () => {
+    const { GET: discordCallback } = await import("@/app/auth/discord/callback/route");
+    const { createOauthTransaction } = await import("@/services/oauth-tx");
+    const { NextRequest } = await import("next/server");
+    const [acc] = await ctx.db.insert(account).values({}).returning();
+    const tx = await createOauthTransaction(ctx.db, {
+      intent: "link-discord",
+      sessionId: "sid-x",
+      accountId: acc.id,
+    });
+    const res = await discordCallback(
+      new NextRequest(
+        `http://localhost:3000/auth/discord/callback?code=c&state=${encodeURIComponent(tx.state)}`,
+      ),
+    );
+    expect(res.status).toBe(403);
   });
 });
 ```
@@ -2426,6 +2725,12 @@ import { discordLink } from "@/db/schema";
 import { logAudit } from "@/services/audit";
 import { enqueueSync } from "@/services/outbox";
 
+function isUniqueViolation(err: unknown): boolean {
+  return (
+    typeof err === "object" && err !== null && (err as { code?: string }).code === "23505"
+  );
+}
+
 export async function linkDiscord(
   dbx: Dbx,
   accountId: string,
@@ -2438,8 +2743,33 @@ export async function linkDiscord(
   if (existing.length > 0 && existing[0].accountId !== accountId) {
     return { ok: false, error: "already_linked" };
   }
-  await dbx.delete(discordLink).where(eq(discordLink.accountId, accountId));
-  await dbx.insert(discordLink).values({ accountId, discordUserId });
+  // replacing our own previous link deprovisions the old Discord user
+  const previous = await dbx
+    .select()
+    .from(discordLink)
+    .where(eq(discordLink.accountId, accountId));
+  if (previous.length > 0 && previous[0].discordUserId !== discordUserId) {
+    await dbx.delete(discordLink).where(eq(discordLink.accountId, accountId));
+    await logAudit(dbx, {
+      actor: accountId,
+      action: "discord.unlinked",
+      target: previous[0].discordUserId,
+      details: { reason: "replaced" },
+    });
+    await enqueueSync(dbx, {
+      kind: "discord-user",
+      discordUserId: previous[0].discordUserId,
+    });
+  }
+  try {
+    await dbx
+      .insert(discordLink)
+      .values({ accountId, discordUserId })
+      .onConflictDoNothing({ target: discordLink.accountId });
+  } catch (err) {
+    if (isUniqueViolation(err)) return { ok: false, error: "already_linked" };
+    throw err;
+  }
   await logAudit(dbx, {
     actor: accountId,
     action: "discord.linked",
@@ -2455,19 +2785,26 @@ export async function linkDiscord(
 ```ts
 import type { Config } from "@/config";
 
-export function buildDiscordAuthorizeUrl(cfg: Config, state: string): string {
+export function buildDiscordAuthorizeUrl(
+  cfg: Config,
+  state: string,
+  codeChallenge: string,
+): string {
   const url = new URL("https://discord.com/oauth2/authorize");
   url.searchParams.set("client_id", cfg.discord.clientId);
   url.searchParams.set("response_type", "code");
   url.searchParams.set("redirect_uri", `${cfg.appBaseUrl}/auth/discord/callback`);
   url.searchParams.set("scope", "identify");
   url.searchParams.set("state", state);
+  url.searchParams.set("code_challenge", codeChallenge);
+  url.searchParams.set("code_challenge_method", "S256");
   return url.toString();
 }
 
 export async function exchangeDiscordCode(
   cfg: Config,
   code: string,
+  codeVerifier: string,
   fetchImpl: typeof fetch = fetch,
 ): Promise<{ accessToken: string }> {
   const res = await fetchImpl("https://discord.com/api/oauth2/token", {
@@ -2478,6 +2815,7 @@ export async function exchangeDiscordCode(
       client_secret: cfg.discord.clientSecret,
       grant_type: "authorization_code",
       code,
+      code_verifier: codeVerifier,
       redirect_uri: `${cfg.appBaseUrl}/auth/discord/callback`,
     }).toString(),
   });
@@ -2518,7 +2856,9 @@ export async function GET(req: NextRequest) {
     sessionId: sess.sessionId,
     accountId: sess.accountId,
   });
-  return NextResponse.redirect(buildDiscordAuthorizeUrl(cfg, tx.state));
+  return NextResponse.redirect(
+    buildDiscordAuthorizeUrl(cfg, tx.state, tx.codeChallenge),
+  );
 }
 ```
 
@@ -2550,7 +2890,7 @@ export async function GET(req: NextRequest) {
       status: 403,
     });
   }
-  const { accessToken } = await exchangeDiscordCode(cfg, code);
+  const { accessToken } = await exchangeDiscordCode(cfg, code, tx.pkceVerifier);
   const user = await fetchDiscordUser(accessToken);
   const result = await db.transaction((dbtx) =>
     linkDiscord(dbtx, sess.accountId, user.id),
@@ -2993,5 +3333,5 @@ git commit -m "chore: plan 1 verification fixes"
 
 ## Not in this plan (Plans 2 and 3)
 
-- **Plan 2 — Sync Engine:** worker entry (pg-boss start, schedules), outbox dispatcher consuming `takeUndispatched`/`markDispatched`, ESI client with error-limit throttling, affiliation refresh (chunk + bisect via `classifyEsiStatus`), membership verification job + tier transitions, contact push (labels, pagination, label-ownership reconciliation, `missing_label`), Wanderer ACL sync (+ post-mutation observation), Discord role sync (+ config validation), token health job (uses `refreshEveToken` + `classifyOAuthError`), `sync_run` recording, ops webhook.
+- **Plan 2 — Sync Engine:** worker entry (pg-boss start, schedules), outbox dispatcher consuming `takeUndispatched`/`markDispatched`, ESI client with error-limit throttling, affiliation refresh (chunk + bisect via `classifyEsiError`), membership verification job + tier transitions, contact push (labels, pagination, label-ownership reconciliation, `missing_label`, `needs_reauth` per-job scope gating), Wanderer ACL sync (+ post-mutation observation), Discord role sync (+ config validation, `discord-user` deprovision payloads), token health job (uses `refreshEveToken` + `classifyOAuthError`), `sync_run` recording, ops webhook.
 - **Plan 3 — Admin UI & Ops:** admin accounts page (tier/lock controls, cryo + notes, sort/filter, map + last-login columns), audit log page, sync status page with "sync now", admin management (uses `demoteAdmin`), Dockerfile + deploy config, Playwright smoke tests.
