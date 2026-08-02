@@ -1,0 +1,41 @@
+"use server";
+
+import { and, eq } from "drizzle-orm";
+import { revalidatePath } from "next/cache";
+import { cookies } from "next/headers";
+import { getConfig } from "@/config";
+import { getDb } from "@/db";
+import { character } from "@/db/schema";
+import { setMainCharacter, unlinkCharacter } from "@/services/accounts";
+import { getSessionAccount } from "@/services/session";
+
+async function requireAccount(): Promise<string> {
+  const cfg = getConfig();
+  const sid = (await cookies()).get(cfg.sessionCookieName)?.value;
+  if (!sid) throw new Error("not signed in");
+  const sess = await getSessionAccount(getDb(), sid);
+  if (!sess) throw new Error("not signed in");
+  return sess.accountId;
+}
+
+export async function setMainAction(characterId: number): Promise<void> {
+  const accountId = await requireAccount();
+  await getDb().transaction((dbtx) => setMainCharacter(dbtx, accountId, characterId));
+  revalidatePath("/account");
+}
+
+export async function unlinkAction(characterId: number): Promise<void> {
+  const accountId = await requireAccount();
+  const db = getDb();
+  const cfg = getConfig();
+  await db.transaction(async (dbtx) => {
+    // members may only unlink their own characters
+    const owned = await dbtx
+      .select()
+      .from(character)
+      .where(and(eq(character.id, characterId), eq(character.accountId, accountId)));
+    if (owned.length === 0) throw new Error("not your character");
+    await unlinkCharacter(dbtx, cfg, accountId, characterId);
+  });
+  revalidatePath("/account");
+}
