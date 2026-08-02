@@ -75,7 +75,12 @@ web (Next.js UI + API)  ──enqueue──▶  worker (pg-boss jobs)  ──▶
   exponential backoff, job history in Postgres. No Redis.
 - **Integrations are outbound REST only.** Discord uses a bot token over REST for role
   changes — no gateway connection, no bot process. Wanderer uses the map API key.
-- **Stack choices:** Drizzle ORM; `arctic`/`openid-client` for OAuth. Sessions are
+- **Stack choices:** Drizzle ORM. OAuth is implemented directly with `jose` + fetch
+  (deviation approved 2026-08-02, replacing the originally named `arctic`/
+  `openid-client`: EVE SSO needs custom JWT claim handling and our durable
+  `oauth_transaction` state machine regardless; the remaining protocol surface — two
+  authorize URLs and two token POSTs — is smaller than the libraries' integration
+  surface, and arctic has no EVE provider). Sessions are
   **server-side**: a `session` table (opaque random id, account, created/expires/
   last-seen) referenced by an HTTP-only cookie holding only the opaque id — so
   revocation (transfer reclaim, admin action) is a row delete that takes effect on the

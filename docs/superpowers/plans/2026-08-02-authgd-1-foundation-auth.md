@@ -17,7 +17,9 @@
 - Refresh tokens are AES-256-GCM encrypted at rest with `TOKEN_ENCRYPTION_KEY` (32-byte base64).
 - Sessions are server-side rows; the cookie holds only an opaque id (`authgd_session`, HttpOnly, SameSite=Lax, Secure in prod). Signed-cookie-only sessions are ruled out.
 - OAuth: every flow — EVE **and Discord** — uses single-use, expiring (10 min) `oauth_transaction` rows binding state hash + intent + initiator + PKCE verifier (S256). Callbacks check the exact expected intent and reject all others.
-- Mutations that touch character ownership or admin flags run under row locks (`SELECT … FOR UPDATE`) inside their transaction; the last-admin check is race-safe.
+- **Identity mutations are transaction-only:** `src/db` exports `DbTx` (the transaction handle type) alongside `Dbx = Db | DbTx`. Every mutating function in `accounts.ts` / `discord-link.ts` takes `DbTx`, so the compiler rejects calls outside `db.transaction()` — required both for `FOR UPDATE` locks to mean anything and for the deferred main-character FK to be checked at commit. Tests wrap service calls in `ctx.db.transaction(...)` via small helpers.
+- **Lock order (deadlock avoidance), documented in `accounts.ts`:** character row(s) first, then account row(s); never the reverse. `demoteAdmin` locks only account rows.
+- **Design deviation from spec (approved):** the spec named `arctic`/`openid-client` for OAuth; the plan implements both flows directly with `jose` + fetch instead. Rationale: EVE SSO needs custom JWT claim handling (`sub`/`owner`/`scp`) and our durable `oauth_transaction` state machine regardless; the remaining protocol surface (two token POSTs, two authorize URLs) is smaller than the integration surface of the libraries, and arctic has no EVE provider. Recorded in the spec's decision log.
 - Account creation is pessimistic: new accounts are unlocked Green with unresolved affiliation; no ESI affiliation calls in any OAuth callback.
 - Every character login/link requests the full configured scope set (`EVE_SSO_SCOPES`, default `esi-characters.read_contacts.v1 esi-characters.write_contacts.v1`).
 - All identity mutations write `audit_log` rows; sync-relevant changes also write `outbox` rows in the same transaction.
@@ -324,6 +326,15 @@ describe("loadConfig", () => {
     const { DATABASE_URL: _omitted, ...rest } = validEnv;
     expect(() => loadConfig(rest as NodeJS.ProcessEnv)).toThrow();
   });
+
+  it("rejects malformed or duplicate bootstrap admin ids", () => {
+    expect(() =>
+      loadConfig({ ...validEnv, BOOTSTRAP_ADMIN_CHARACTER_IDS: "123,abc" }),
+    ).toThrow(/BOOTSTRAP_ADMIN_CHARACTER_IDS/);
+    expect(() =>
+      loadConfig({ ...validEnv, BOOTSTRAP_ADMIN_CHARACTER_IDS: "123,123" }),
+    ).toThrow(/duplicates/);
+  });
 });
 ```
 
@@ -377,7 +388,29 @@ const envSchema = z.object({
     }),
   APP_BASE_URL: z.string().url(),
   ALLIANCE_ID: z.coerce.number().int().positive(),
-  BOOTSTRAP_ADMIN_CHARACTER_IDS: z.string().default(""),
+  // Also the last-admin recovery mechanism: malformed values must fail startup.
+  BOOTSTRAP_ADMIN_CHARACTER_IDS: z
+    .string()
+    .default("")
+    .transform((raw, ctx) => {
+      const parts = raw.split(",").map((s) => s.trim()).filter(Boolean);
+      const ids = parts.map(Number);
+      if (parts.some((p) => !/^\d+$/.test(p))) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `BOOTSTRAP_ADMIN_CHARACTER_IDS must be comma-separated numeric ids, got: ${raw}`,
+        });
+        return z.NEVER;
+      }
+      if (new Set(ids).size !== ids.length) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "BOOTSTRAP_ADMIN_CHARACTER_IDS contains duplicates",
+        });
+        return z.NEVER;
+      }
+      return ids;
+    }),
   EVE_SSO_CLIENT_ID: z.string().min(1),
   EVE_SSO_CLIENT_SECRET: z.string().min(1),
   EVE_SSO_SCOPES: z.string().min(1),
@@ -408,10 +441,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     tokenEncryptionKey: Buffer.from(e.TOKEN_ENCRYPTION_KEY, "base64"),
     appBaseUrl: e.APP_BASE_URL,
     allianceId: e.ALLIANCE_ID,
-    bootstrapAdminCharacterIds: e.BOOTSTRAP_ADMIN_CHARACTER_IDS.split(",")
-      .map((s) => s.trim())
-      .filter(Boolean)
-      .map(Number),
+    bootstrapAdminCharacterIds: e.BOOTSTRAP_ADMIN_CHARACTER_IDS,
     eveSso: {
       clientId: e.EVE_SSO_CLIENT_ID,
       clientSecret: e.EVE_SSO_CLIENT_SECRET,
@@ -490,7 +520,7 @@ git commit -m "feat: env config loader and AES-256-GCM token crypto"
 - Test: `tests/db-schema.test.ts`
 
 **Interfaces:**
-- Produces: Drizzle tables `account`, `character`, `discordLink`, `session`, `bootstrapAdminGrant`, `outbox`, `oauthTransaction`, `contactSyncState`, `syncRun`, `wandererAclObservation`, `auditLog` (exact columns below); `createDb(url): { db, pool }`; `type Db = ReturnType<typeof createDb>["db"]`; `type Dbx = Db | Parameters<Parameters<Db["transaction"]>[0]>[0]` (transaction handle alias exported as `Dbx`); test helper `setupTestDb(): Promise<{ db, pool, cleanup }>` that migrates `TEST_DATABASE_URL` and truncates all tables.
+- Produces: Drizzle tables `account`, `character`, `discordLink`, `session`, `bootstrapAdminGrant`, `outbox`, `oauthTransaction`, `contactSyncState`, `syncRun`, `wandererAclObservation`, `auditLog` (exact columns below); `createDb(url): { db, pool }`; `type Db = ReturnType<typeof createDb>["db"]`; `type DbTx` (transaction handle — required by identity mutations) and `type Dbx = Db | DbTx` (reads / independent writes); test helper `setupTestDb(): Promise<{ db, pool, cleanup }>` that migrates `TEST_DATABASE_URL` and truncates all tables.
 
 - [ ] **Step 1: Write failing test**
 
@@ -758,7 +788,10 @@ export function createDb(url: string) {
 }
 
 export type Db = ReturnType<typeof createDb>["db"];
-export type Dbx = Db | Parameters<Parameters<Db["transaction"]>[0]>[0];
+/** A live transaction handle. Identity mutations REQUIRE this (locks + deferred FK). */
+export type DbTx = Parameters<Parameters<Db["transaction"]>[0]>[0];
+/** Either a pool client or a transaction — fine for reads and independent writes. */
+export type Dbx = Db | DbTx;
 
 let cached: ReturnType<typeof createDb> | undefined;
 export function getDb(): Db {
@@ -1008,7 +1041,7 @@ git commit -m "feat: audit log helper and server-side sessions"
 
 **Interfaces:**
 - Consumes: `Dbx`, `oauthTransaction` table.
-- Produces: `createOauthTransaction(dbx, input: { intent: "login" | "link-character" | "link-discord"; sessionId?: string; accountId?: string }): Promise<{ state: string; codeVerifier: string; codeChallenge: string }>` — state is random, stored only as SHA-256 hash; expiry 10 min; PKCE verifier stored, S256 challenge returned. `consumeOauthTransaction(dbx, state: string): Promise<{ intent; sessionId: string | null; accountId: string | null; pkceVerifier: string } | null>` — single-use (sets `consumed_at` atomically), null when unknown/expired/already consumed.
+- Produces: `createOauthTransaction(dbx, input: { intent: "login" | "link-character" | "link-discord"; sessionId?: string; accountId?: string }): Promise<{ state: string; codeVerifier: string; codeChallenge: string }>` — state is random, stored only as SHA-256 hash; expiry 10 min; PKCE verifier stored, S256 challenge returned. `consumeOauthTransaction(dbx, state: string, expectedIntents: Array<"login" | "link-character" | "link-discord">): Promise<{ intent; sessionId: string | null; accountId: string | null; pkceVerifier: string } | null>` — single-use (sets `consumed_at` atomically), null when unknown/expired/already consumed **or when the intent is not in `expectedIntents`** — the intent filter is part of the UPDATE's WHERE clause, so a transaction presented to the wrong callback is rejected *without being consumed* and remains usable by its real callback.
 
 - [ ] **Step 1: Write failing test**
 
@@ -1032,19 +1065,19 @@ describe("oauth transactions", () => {
     const tx = await createOauthTransaction(ctx.db, { intent: "login" });
     expect(tx.codeChallenge).not.toBe(tx.codeVerifier);
 
-    const consumed = await consumeOauthTransaction(ctx.db, tx.state);
+    const consumed = await consumeOauthTransaction(ctx.db, tx.state, ["login"]);
     expect(consumed?.intent).toBe("login");
     expect(consumed?.pkceVerifier).toBe(tx.codeVerifier);
 
     // replay rejected
-    expect(await consumeOauthTransaction(ctx.db, tx.state)).toBeNull();
+    expect(await consumeOauthTransaction(ctx.db, tx.state, ["login"])).toBeNull();
   });
 
   it("does not store raw state", async () => {
     const tx = await createOauthTransaction(ctx.db, { intent: "login" });
     const rows = await ctx.db.select().from(oauthTransaction);
     expect(rows.some((r) => r.stateHash === tx.state)).toBe(false);
-    await consumeOauthTransaction(ctx.db, tx.state);
+    await consumeOauthTransaction(ctx.db, tx.state, ["login"]);
   });
 
   it("rejects expired transactions", async () => {
@@ -1052,11 +1085,20 @@ describe("oauth transactions", () => {
     await ctx.db
       .update(oauthTransaction)
       .set({ expiresAt: new Date(Date.now() - 1000) });
-    expect(await consumeOauthTransaction(ctx.db, tx.state)).toBeNull();
+    expect(await consumeOauthTransaction(ctx.db, tx.state, ["login"])).toBeNull();
   });
 
   it("rejects unknown state", async () => {
-    expect(await consumeOauthTransaction(ctx.db, "nope")).toBeNull();
+    expect(await consumeOauthTransaction(ctx.db, "nope", ["login"])).toBeNull();
+  });
+
+  it("leaves the transaction unconsumed when the intent does not match", async () => {
+    const tx = await createOauthTransaction(ctx.db, { intent: "link-discord" });
+    expect(await consumeOauthTransaction(ctx.db, tx.state, ["login"])).toBeNull();
+    // still consumable by the right callback
+    expect(
+      await consumeOauthTransaction(ctx.db, tx.state, ["link-discord"]),
+    ).not.toBeNull();
   });
 });
 ```
@@ -1072,7 +1114,7 @@ Expected: FAIL.
 
 ```ts
 import { createHash, randomBytes } from "node:crypto";
-import { and, eq, gt, isNull } from "drizzle-orm";
+import { and, eq, gt, inArray, isNull } from "drizzle-orm";
 import type { Dbx } from "@/db";
 import { oauthTransaction } from "@/db/schema";
 
@@ -1102,13 +1144,18 @@ export async function createOauthTransaction(
   return { state, codeVerifier, codeChallenge: sha256b64u(codeVerifier) };
 }
 
-export async function consumeOauthTransaction(dbx: Dbx, state: string) {
+export async function consumeOauthTransaction(
+  dbx: Dbx,
+  state: string,
+  expectedIntents: Array<"login" | "link-character" | "link-discord">,
+) {
   const rows = await dbx
     .update(oauthTransaction)
     .set({ consumedAt: new Date() })
     .where(
       and(
         eq(oauthTransaction.stateHash, sha256b64u(state)),
+        inArray(oauthTransaction.intent, expectedIntents),
         isNull(oauthTransaction.consumedAt),
         gt(oauthTransaction.expiresAt, new Date()),
       ),
@@ -1262,6 +1309,31 @@ describe("verifyEveAccessToken", () => {
       scopes: ["esi-characters.read_contacts.v1"],
     });
   });
+
+  it("fails closed on missing owner claim", async () => {
+    const { publicKey, privateKey } = await generateKeyPair("RS256");
+    const jwks = createLocalJWKSet({ keys: [{ ...(await exportJWK(publicKey)), alg: "RS256" }] });
+    const token = await new SignJWT({ name: "Pilot One" }) // no owner
+      .setProtectedHeader({ alg: "RS256" })
+      .setIssuer("https://login.eveonline.com")
+      .setAudience("EVE Online")
+      .setSubject("CHARACTER:EVE:90000001")
+      .setExpirationTime("5m")
+      .sign(privateKey);
+    await expect(verifyEveAccessToken(token, jwks)).rejects.toThrow(/owner/);
+  });
+});
+
+describe("token response validation", () => {
+  it("fails closed when the token response omits tokens", async () => {
+    const fetchImpl = (async () =>
+      new Response(JSON.stringify({ access_token: "at" }), {
+        status: 200,
+      })) as typeof fetch; // refresh_token missing
+    await expect(exchangeEveCode(cfg, "c", "v", fetchImpl)).rejects.toThrow(
+      /missing tokens/,
+    );
+  });
 });
 ```
 
@@ -1333,14 +1405,25 @@ async function tokenRequest(
     },
     body: body.toString(),
   });
-  const json = (await res.json().catch(() => ({}))) as Record<string, string>;
+  const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
   if (!res.ok) {
     throw new EveSsoError(`EVE SSO token request failed (${res.status})`, {
-      oauthError: json.error,
+      oauthError: typeof json.error === "string" ? json.error : undefined,
       status: res.status,
     });
   }
-  return { accessToken: json.access_token, refreshToken: json.refresh_token };
+  // fail closed: these values feed ownership logic and token storage
+  const accessToken = json.access_token;
+  const refreshToken = json.refresh_token;
+  if (
+    typeof accessToken !== "string" ||
+    accessToken.length === 0 ||
+    typeof refreshToken !== "string" ||
+    refreshToken.length === 0
+  ) {
+    throw new EveSsoError("EVE SSO token response missing tokens");
+  }
+  return { accessToken, refreshToken };
 }
 
 export function exchangeEveCode(
@@ -1386,12 +1469,27 @@ export async function verifyEveAccessToken(
   const sub = String(payload.sub ?? "");
   const match = /^CHARACTER:EVE:(\d+)$/.exec(sub);
   if (!match) throw new EveSsoError(`unexpected subject: ${sub}`);
-  const scp = payload.scp;
+  // fail closed: ownerHash drives transfer reclaim — never coerce missing claims
+  const { name, owner, scp } = payload as {
+    name?: unknown;
+    owner?: unknown;
+    scp?: unknown;
+  };
+  if (typeof name !== "string" || name.length === 0) {
+    throw new EveSsoError("EVE JWT missing name claim");
+  }
+  if (typeof owner !== "string" || owner.length === 0) {
+    throw new EveSsoError("EVE JWT missing owner claim");
+  }
   return {
     characterId: Number(match[1]),
-    characterName: String(payload.name),
-    ownerHash: String(payload.owner),
-    scopes: Array.isArray(scp) ? scp.map(String) : scp ? [String(scp)] : [],
+    characterName: name,
+    ownerHash: owner,
+    scopes: Array.isArray(scp)
+      ? scp.map(String)
+      : typeof scp === "string"
+        ? [scp]
+        : [],
   };
 }
 ```
@@ -1599,7 +1697,7 @@ git commit -m "feat: outbox writer and transient/permanent error classification"
 
 ### Task 8: Account service — creation, linking, reclaim, no-main rule, bootstrap admin
 
-This is the heart of Plan 1. All functions take a transaction handle and are called inside `db.transaction()` by routes.
+This is the heart of Plan 1. **Every function here takes `DbTx` (not `Dbx`)** and must be called inside `db.transaction()` — the deferred main-character FK and all `FOR UPDATE` locks only work there, and the compiler enforces it. Lock order everywhere: character row(s) first, then account row(s).
 
 **Files:**
 - Create: `src/services/accounts.ts`
@@ -1687,9 +1785,21 @@ beforeEach(async () => {
 });
 afterAll(() => ctx.cleanup());
 
+// Identity mutations require a transaction (DbTx); these helpers wrap each call.
+const login = (c: EveCallbackCharacter) =>
+  ctx.db.transaction((tx) => handleEveLogin(tx, cfg, c));
+const link = (accountId: string, c: EveCallbackCharacter) =>
+  ctx.db.transaction((tx) => linkCharacter(tx, cfg, accountId, c));
+const unlink = (actor: string, characterId: number) =>
+  ctx.db.transaction((tx) => unlinkCharacter(tx, cfg, actor, characterId));
+const setMain = (accountId: string, characterId: number) =>
+  ctx.db.transaction((tx) => setMainCharacter(tx, accountId, characterId));
+const demote = (actor: string, accountId: string) =>
+  ctx.db.transaction((tx) => demoteAdmin(tx, actor, accountId));
+
 describe("handleEveLogin", () => {
   it("creates a pessimistic green account with outbox + audit", async () => {
-    const { accountId } = await handleEveLogin(ctx.db, cfg, ch());
+    const { accountId } = await login(ch());
     const [acc] = await ctx.db.select().from(account).where(eq(account.id, accountId));
     expect(acc.tier).toBe("green");
     expect(acc.tierLocked).toBe(false);
@@ -1709,14 +1819,14 @@ describe("handleEveLogin", () => {
   });
 
   it("logs into the existing account on re-auth with same owner", async () => {
-    const first = await handleEveLogin(ctx.db, cfg, ch());
-    const again = await handleEveLogin(ctx.db, cfg, ch({ refreshToken: "rt-2" }));
+    const first = await login(ch());
+    const again = await login(ch({ refreshToken: "rt-2" }));
     expect(again.accountId).toBe(first.accountId);
     expect((await ctx.db.select().from(account))).toHaveLength(1);
   });
 
   it("reclaims a sold character: unlinks, demotes old account, revokes its sessions", async () => {
-    const old = await handleEveLogin(ctx.db, cfg, ch());
+    const old = await login(ch());
     // make old account flygd so we can observe demotion
     await ctx.db
       .update(account)
@@ -1724,7 +1834,7 @@ describe("handleEveLogin", () => {
       .where(eq(account.id, old.accountId));
     const sid = await createSession(ctx.db, old.accountId);
 
-    const bought = await handleEveLogin(ctx.db, cfg, ch({ ownerHash: "oh-NEW" }));
+    const bought = await login(ch({ ownerHash: "oh-NEW" }));
     expect(bought.accountId).not.toBe(old.accountId);
 
     const [oldAcc] = await ctx.db.select().from(account).where(eq(account.id, old.accountId));
@@ -1740,24 +1850,24 @@ describe("handleEveLogin", () => {
 
 describe("linkCharacter", () => {
   it("links an alt and rejects double-link with same owner", async () => {
-    const a = await handleEveLogin(ctx.db, cfg, ch());
-    const b = await handleEveLogin(ctx.db, cfg, ch({ characterId: 90000002, ownerHash: "oh-2", characterName: "Other" }));
+    const a = await login(ch());
+    const b = await login(ch({ characterId: 90000002, ownerHash: "oh-2", characterName: "Other" }));
 
     const alt = ch({ characterId: 90000003, characterName: "Alt", ownerHash: "oh-1" });
-    expect(await linkCharacter(ctx.db, cfg, a.accountId, alt)).toEqual({ ok: true });
+    expect(await link(a.accountId, alt)).toEqual({ ok: true });
 
     // same character, same owner, other account → rejected
-    const res = await linkCharacter(ctx.db, cfg, b.accountId, alt);
+    const res = await link(b.accountId, alt);
     expect(res).toEqual({ ok: false, error: "already_linked" });
   });
 
   it("does not demote a tier_locked account on main unlink", async () => {
-    const a = await handleEveLogin(ctx.db, cfg, ch());
+    const a = await login(ch());
     await ctx.db
       .update(account)
       .set({ tier: "blue", tierLocked: true })
       .where(eq(account.id, a.accountId));
-    await unlinkCharacter(ctx.db, cfg, "system", 90000001);
+    await unlink("system", 90000001);
     const [acc] = await ctx.db.select().from(account);
     expect(acc.tier).toBe("blue");
     expect(acc.mainCharacterId).toBeNull();
@@ -1766,7 +1876,7 @@ describe("linkCharacter", () => {
 
 describe("transaction rollback", () => {
   it("leaves no partial state when the transaction throws after linking", async () => {
-    const a = await handleEveLogin(ctx.db, cfg, ch());
+    const a = await login(ch());
     await expect(
       ctx.db.transaction(async (tx) => {
         await linkCharacter(tx, cfg, a.accountId, ch({ characterId: 90000050, characterName: "Doomed" }));
@@ -1780,24 +1890,24 @@ describe("transaction rollback", () => {
 
 describe("setMainCharacter", () => {
   it("sets main and writes an outbox row", async () => {
-    const a = await handleEveLogin(ctx.db, cfg, ch());
-    await linkCharacter(ctx.db, cfg, a.accountId, ch({ characterId: 90000003, characterName: "Alt" }));
+    const a = await login(ch());
+    await link(a.accountId, ch({ characterId: 90000003, characterName: "Alt" }));
     await ctx.db.delete(outbox);
-    await setMainCharacter(ctx.db, a.accountId, 90000003);
+    await setMain(a.accountId, 90000003);
     const [acc] = await ctx.db.select().from(account);
     expect(acc.mainCharacterId).toBe(90000003);
     expect(await ctx.db.select().from(outbox)).toHaveLength(1);
   });
 
   it("rejects characters not on the account", async () => {
-    const a = await handleEveLogin(ctx.db, cfg, ch());
-    await expect(setMainCharacter(ctx.db, a.accountId, 99999999)).rejects.toThrow();
+    const a = await login(ch());
+    await expect(setMain(a.accountId, 99999999)).rejects.toThrow();
   });
 });
 
 describe("re-auth side effects", () => {
   it("audits, enqueues, and downgrades status when scopes shrink", async () => {
-    const a = await handleEveLogin(ctx.db, cfg, ch());
+    const a = await login(ch());
     await ctx.db.delete(outbox);
     await handleEveLogin(
       ctx.db,
@@ -1814,23 +1924,21 @@ describe("re-auth side effects", () => {
 
 describe("bootstrap admin", () => {
   it("grants on first login of a bootstrap character, never after transfer", async () => {
-    const a = await handleEveLogin(ctx.db, cfg, ch({ characterId: 90000009, ownerHash: "oh-boss" }));
+    const a = await login(ch({ characterId: 90000009, ownerHash: "oh-boss" }));
     const [acc] = await ctx.db.select().from(account).where(eq(account.id, a.accountId));
     expect(acc.isAdmin).toBe(true); // granted inside the service, no extra call
 
     // sold: new owner logs in → reclaim makes a new account; grant must NOT fire again
-    const b = await handleEveLogin(ctx.db, cfg, ch({ characterId: 90000009, ownerHash: "oh-thief" }));
+    const b = await login(ch({ characterId: 90000009, ownerHash: "oh-thief" }));
     const [bAcc] = await ctx.db.select().from(account).where(eq(account.id, b.accountId));
     expect(bAcc.isAdmin).toBe(false);
   });
 
   it("grants when a bootstrap character is linked as an alt", async () => {
-    const a = await handleEveLogin(ctx.db, cfg, ch()); // non-bootstrap main
+    const a = await login(ch()); // non-bootstrap main
     let [acc] = await ctx.db.select().from(account).where(eq(account.id, a.accountId));
     expect(acc.isAdmin).toBe(false);
-    await linkCharacter(
-      ctx.db,
-      cfg,
+    await link(
       a.accountId,
       ch({ characterId: 90000009, ownerHash: "oh-1", characterName: "Boss Alt" }),
     );
@@ -1839,36 +1947,38 @@ describe("bootstrap admin", () => {
   });
 
   it("ignores non-bootstrap characters", async () => {
-    const a = await handleEveLogin(ctx.db, cfg, ch());
+    const a = await login(ch());
     expect(
-      await maybeGrantBootstrapAdmin(ctx.db, cfg, a.accountId, {
-        characterId: 90000001,
-        ownerHash: "oh-1",
-      }),
+      await ctx.db.transaction((tx) =>
+        maybeGrantBootstrapAdmin(tx, cfg, a.accountId, {
+          characterId: 90000001,
+          ownerHash: "oh-1",
+        }),
+      ),
     ).toBe(false);
   });
 });
 
 describe("demoteAdmin", () => {
   it("refuses to demote the last admin", async () => {
-    const a = await handleEveLogin(ctx.db, cfg, ch());
+    const a = await login(ch());
     await ctx.db.update(account).set({ isAdmin: true }).where(eq(account.id, a.accountId));
-    expect(await demoteAdmin(ctx.db, "system", a.accountId)).toEqual({
+    expect(await demote("system", a.accountId)).toEqual({
       ok: false,
       error: "last_admin",
     });
   });
 
   it("demotes when another admin exists", async () => {
-    const a = await handleEveLogin(ctx.db, cfg, ch());
-    const b = await handleEveLogin(ctx.db, cfg, ch({ characterId: 90000002, ownerHash: "oh-2", characterName: "B" }));
+    const a = await login(ch());
+    const b = await login(ch({ characterId: 90000002, ownerHash: "oh-2", characterName: "B" }));
     await ctx.db.update(account).set({ isAdmin: true });
-    expect(await demoteAdmin(ctx.db, "system", b.accountId)).toEqual({ ok: true });
+    expect(await demote("system", b.accountId)).toEqual({ ok: true });
   });
 
   it("never lets two concurrent demotions remove both admins", async () => {
-    const a = await handleEveLogin(ctx.db, cfg, ch());
-    const b = await handleEveLogin(ctx.db, cfg, ch({ characterId: 90000002, ownerHash: "oh-2", characterName: "B" }));
+    const a = await login(ch());
+    const b = await login(ch({ characterId: 90000002, ownerHash: "oh-2", characterName: "B" }));
     await ctx.db.update(account).set({ isAdmin: true });
 
     const [r1, r2] = await Promise.all([
@@ -1895,13 +2005,15 @@ Expected: FAIL.
 ```ts
 import { and, eq } from "drizzle-orm";
 import type { Config } from "@/config";
-import type { Dbx } from "@/db";
+import type { DbTx } from "@/db";
 import { account, bootstrapAdminGrant, character, contactSyncState } from "@/db/schema";
 import { encryptToken } from "@/lib/crypto";
 import { logAudit } from "@/services/audit";
 import { enqueueSync } from "@/services/outbox";
 import { revokeAccountSessions } from "@/services/session";
 
+// LOCK ORDER (deadlock avoidance): character row(s) first, then account row(s).
+// Never lock an account before a character. demoteAdmin locks accounts only.
 export interface EveCallbackCharacter {
   characterId: number;
   characterName: string;
@@ -1911,7 +2023,7 @@ export interface EveCallbackCharacter {
 }
 
 /** Locks the character row: concurrent callbacks for one character serialize. */
-async function findCharacterForUpdate(dbx: Dbx, characterId: number) {
+async function findCharacterForUpdate(dbx: DbTx, characterId: number) {
   const rows = await dbx
     .select()
     .from(character)
@@ -1935,7 +2047,7 @@ function tokenFields(cfg: Config, ch: EveCallbackCharacter) {
 
 /** Re-auth in place: refresh credentials + status, audit, and enqueue sync. */
 async function reauthCharacter(
-  dbx: Dbx,
+  dbx: DbTx,
   cfg: Config,
   accountId: string,
   ch: EveCallbackCharacter,
@@ -1953,8 +2065,12 @@ async function reauthCharacter(
 }
 
 /** No-main rule: atomically clear main, demote unless locked, enqueue sync. */
-async function applyNoMainRule(dbx: Dbx, accountId: string, cause: string) {
-  const [acc] = await dbx.select().from(account).where(eq(account.id, accountId));
+async function applyNoMainRule(dbx: DbTx, accountId: string, cause: string) {
+  const [acc] = await dbx
+    .select()
+    .from(account)
+    .where(eq(account.id, accountId))
+    .for("update");
   if (!acc) return;
   const demote = !acc.tierLocked && acc.tier !== "green";
   await dbx
@@ -1978,13 +2094,14 @@ async function applyNoMainRule(dbx: Dbx, accountId: string, cause: string) {
 }
 
 async function reclaimCharacter(
-  dbx: Dbx,
+  dbx: DbTx,
   existing: { id: number; accountId: string },
 ) {
   const [oldAcc] = await dbx
     .select()
     .from(account)
-    .where(eq(account.id, existing.accountId));
+    .where(eq(account.id, existing.accountId))
+    .for("update");
   await dbx.delete(contactSyncState).where(eq(contactSyncState.characterId, existing.id));
   await dbx.delete(character).where(eq(character.id, existing.id));
   await logAudit(dbx, {
@@ -2002,7 +2119,7 @@ async function reclaimCharacter(
 }
 
 async function createAccountWithCharacter(
-  dbx: Dbx,
+  dbx: DbTx,
   cfg: Config,
   ch: EveCallbackCharacter,
 ): Promise<string> {
@@ -2030,7 +2147,7 @@ async function createAccountWithCharacter(
 }
 
 export async function handleEveLogin(
-  dbx: Dbx,
+  dbx: DbTx,
   cfg: Config,
   ch: EveCallbackCharacter,
 ): Promise<{ accountId: string }> {
@@ -2047,7 +2164,7 @@ export async function handleEveLogin(
 }
 
 export async function linkCharacter(
-  dbx: Dbx,
+  dbx: DbTx,
   cfg: Config,
   accountId: string,
   ch: EveCallbackCharacter,
@@ -2068,7 +2185,11 @@ export async function linkCharacter(
     accountId,
     ...tokenFields(cfg, ch),
   });
-  const [acc] = await dbx.select().from(account).where(eq(account.id, accountId));
+  const [acc] = await dbx
+    .select()
+    .from(account)
+    .where(eq(account.id, accountId))
+    .for("update");
   if (acc && acc.mainCharacterId === null) {
     await dbx
       .update(account)
@@ -2089,7 +2210,7 @@ export async function linkCharacter(
 }
 
 export async function unlinkCharacter(
-  dbx: Dbx,
+  dbx: DbTx,
   cfg: Config,
   actor: string,
   characterId: number,
@@ -2107,7 +2228,8 @@ export async function unlinkCharacter(
   const [acc] = await dbx
     .select()
     .from(account)
-    .where(eq(account.id, existing.accountId));
+    .where(eq(account.id, existing.accountId))
+    .for("update");
   if (acc?.mainCharacterId === characterId) {
     await applyNoMainRule(dbx, existing.accountId, "main unlinked");
   } else {
@@ -2117,15 +2239,21 @@ export async function unlinkCharacter(
 }
 
 export async function setMainCharacter(
-  dbx: Dbx,
+  dbx: DbTx,
   accountId: string,
   characterId: number,
 ): Promise<void> {
   const rows = await dbx
     .select()
     .from(character)
-    .where(and(eq(character.id, characterId), eq(character.accountId, accountId)));
+    .where(and(eq(character.id, characterId), eq(character.accountId, accountId)))
+    .for("update");
   if (rows.length === 0) throw new Error("character not on account");
+  await dbx
+    .select()
+    .from(account)
+    .where(eq(account.id, accountId))
+    .for("update");
   await dbx
     .update(account)
     .set({ mainCharacterId: characterId })
@@ -2140,7 +2268,7 @@ export async function setMainCharacter(
 }
 
 export async function maybeGrantBootstrapAdmin(
-  dbx: Dbx,
+  dbx: DbTx,
   cfg: Config,
   accountId: string,
   ch: { characterId: number; ownerHash: string },
@@ -2163,7 +2291,7 @@ export async function maybeGrantBootstrapAdmin(
 }
 
 export async function demoteAdmin(
-  dbx: Dbx,
+  dbx: DbTx,
   actor: string,
   accountId: string,
 ): Promise<{ ok: boolean; error?: "last_admin" }> {
@@ -2370,21 +2498,22 @@ describe("EVE auth flow", () => {
     expect(res.status).toBe(403);
   });
 
-  it("rejects a link-discord transaction presented to the EVE callback", async () => {
-    const { createOauthTransaction } = await import("@/services/oauth-tx");
-    const tx = await createOauthTransaction(ctx.db, { intent: "link-discord" });
-    const jwt = await signToken(90000013, "oh-13");
-    msw.use(
-      http.post("https://login.eveonline.com/v2/oauth/token", () =>
-        HttpResponse.json({ access_token: jwt, refresh_token: "rt" }),
-      ),
+  it("rejects a link-discord transaction presented to the EVE callback without consuming it", async () => {
+    const { createOauthTransaction, consumeOauthTransaction } = await import(
+      "@/services/oauth-tx"
     );
+    const tx = await createOauthTransaction(ctx.db, { intent: "link-discord" });
+    // no token-endpoint mock needed: rejection happens before any EVE call
     const res = await callbackRoute(
       new NextRequest(
         `http://localhost:3000/auth/eve/callback?code=abc&state=${encodeURIComponent(tx.state)}`,
       ),
     );
     expect(res.status).toBe(400);
+    // the transaction survives for its rightful callback
+    expect(
+      await consumeOauthTransaction(ctx.db, tx.state, ["link-discord"]),
+    ).not.toBeNull();
   });
 });
 ```
@@ -2489,8 +2618,20 @@ export async function GET(req: NextRequest) {
   const state = req.nextUrl.searchParams.get("state");
   if (!code || !state) return new NextResponse("missing params", { status: 400 });
 
-  const tx = await consumeOauthTransaction(db, state);
+  // Only EVE intents are consumable here; a link-discord transaction is
+  // rejected WITHOUT being consumed. All binding checks run before any EVE call.
+  const tx = await consumeOauthTransaction(db, state, ["login", "link-character"]);
   if (!tx) return new NextResponse("invalid or expired state", { status: 400 });
+
+  const sess = await getRequestAccount(req);
+  if (
+    tx.intent === "link-character" &&
+    (!sess || sess.sessionId !== tx.sessionId || sess.accountId !== tx.accountId)
+  ) {
+    return new NextResponse("link transaction not valid for this session", {
+      status: 403,
+    });
+  }
 
   const tokens = await exchangeEveCode(cfg, code, tx.pkceVerifier);
   const identity = await verifyEveAccessToken(tokens.accessToken);
@@ -2503,24 +2644,13 @@ export async function GET(req: NextRequest) {
   };
 
   if (tx.intent === "link-character") {
-    // intent binding: the initiating session must still resolve to the same account
-    const sess = await getRequestAccount(req);
-    if (!sess || sess.sessionId !== tx.sessionId || sess.accountId !== tx.accountId) {
-      return new NextResponse("link transaction not valid for this session", {
-        status: 403,
-      });
-    }
     const result = await db.transaction((dbtx) =>
-      linkCharacter(dbtx, cfg, sess.accountId, ch),
+      linkCharacter(dbtx, cfg, sess!.accountId, ch),
     );
     const dest = result.ok ? "/account" : "/account?error=already_linked";
     return NextResponse.redirect(new URL(dest, cfg.appBaseUrl));
   }
 
-  if (tx.intent !== "login") {
-    // e.g. a link-discord transaction replayed against the EVE callback
-    return new NextResponse("unexpected intent", { status: 400 });
-  }
   const { accountId } = await db.transaction((dbtx) =>
     handleEveLogin(dbtx, cfg, ch),
   );
@@ -2588,7 +2718,7 @@ git commit -m "feat: EVE SSO login/link/callback routes and login page"
   - `buildDiscordAuthorizeUrl(cfg: Config, state: string, codeChallenge: string): string` — `https://discord.com/oauth2/authorize` with `client_id`, `response_type=code`, `redirect_uri=${appBaseUrl}/auth/discord/callback`, `scope=identify`, `state`, `code_challenge`, `code_challenge_method=S256`. PKCE is used on Discord exactly as on EVE (confidential clients may still use PKCE; the global constraint applies to every flow).
   - `exchangeDiscordCode(cfg, code, codeVerifier, fetchImpl?): Promise<{ accessToken: string }>` — POST `https://discord.com/api/oauth2/token` including `code_verifier`.
   - `fetchDiscordUser(accessToken: string, fetchImpl?): Promise<{ id: string; username: string }>` — GET `https://discord.com/api/users/@me`.
-  - `linkDiscord(dbx, accountId: string, discordUserId: string): Promise<{ ok: true } | { ok: false; error: "already_linked" }>` — linked to another account → `already_linked` (and the insert catches Postgres unique-violation `23505` from races, mapping it to the same result). Re-linking the same account replaces its own row **and enqueues `{ kind: "discord-user", discordUserId: <old id> }`** so Plan 2 strips the old user's managed roles; audit `discord.linked` (+ `discord.unlinked` for the replaced id); outbox `account` row for the new link.
+  - `linkDiscord(dbx: DbTx, accountId: string, discordUserId: string): Promise<{ ok: true } | { ok: false; error: "already_linked" }>` — linked to another account → `already_linked`. The upsert on the account's own row runs **before** any side effects; a concurrent-race unique violation (`23505`) throws typed `DiscordLinkConflictError` **through the transaction** so the old-link deletion and deprovision event roll back — the route catches it outside `db.transaction()` and maps it to `already_linked`. A successful replacement audits `discord.unlinked` + enqueues `{ kind: "discord-user", discordUserId: <old id> }` (Plan 2 strips the old user's managed roles), then audits `discord.linked` + enqueues the `account` row.
   - Routes `GET /auth/discord/link` (requires session; intent `link-discord`; PKCE) and `GET /auth/discord/callback` (consume tx — exact intent required, session must match, exchange with verifier, fetch user, call `linkDiscord`, redirect to `/account` or `/account?error=discord_already_linked`).
 
 - [ ] **Step 1: Write failing test**
@@ -2601,6 +2731,8 @@ import { sql } from "drizzle-orm";
 import { account, discordLink, outbox } from "@/db/schema";
 import { linkDiscord } from "@/services/discord-link";
 import { setupTestDb } from "./helpers/db";
+
+// linkDiscord requires a DbTx; wrap every call in a transaction.
 
 // Route tests below load config lazily via getConfig(): set the same
 // process.env block used at the top of tests/auth-routes.test.ts BEFORE the
@@ -2616,18 +2748,22 @@ beforeEach(() =>
 );
 afterAll(() => ctx.cleanup());
 
+// helper: run linkDiscord in a transaction (DbTx required)
+const ld = (accountId: string, discordUserId: string) =>
+  ctx.db.transaction((tx) => linkDiscord(tx, accountId, discordUserId));
+
 describe("linkDiscord", () => {
   it("links and writes outbox", async () => {
     const [a] = await ctx.db.insert(account).values({}).returning();
-    expect(await linkDiscord(ctx.db, a.id, "duid-1")).toEqual({ ok: true });
+    expect(await ld(a.id, "duid-1")).toEqual({ ok: true });
     expect(await ctx.db.select().from(outbox)).toHaveLength(1);
   });
 
   it("rejects a discord user linked to another account", async () => {
     const [a] = await ctx.db.insert(account).values({}).returning();
     const [b] = await ctx.db.insert(account).values({}).returning();
-    await linkDiscord(ctx.db, a.id, "duid-1");
-    expect(await linkDiscord(ctx.db, b.id, "duid-1")).toEqual({
+    await ld(a.id, "duid-1");
+    expect(await ld(b.id, "duid-1")).toEqual({
       ok: false,
       error: "already_linked",
     });
@@ -2635,9 +2771,9 @@ describe("linkDiscord", () => {
 
   it("replacing its own link deprovisions the old discord user", async () => {
     const [a] = await ctx.db.insert(account).values({}).returning();
-    await linkDiscord(ctx.db, a.id, "duid-1");
+    await ld(a.id, "duid-1");
     await ctx.db.delete(outbox);
-    expect(await linkDiscord(ctx.db, a.id, "duid-2")).toEqual({ ok: true });
+    expect(await ld(a.id, "duid-2")).toEqual({ ok: true });
     const rows = await ctx.db.select().from(discordLink);
     expect(rows).toHaveLength(1);
     expect(rows[0].discordUserId).toBe("duid-2");
@@ -2720,7 +2856,7 @@ Expected: FAIL.
 
 ```ts
 import { eq } from "drizzle-orm";
-import type { Dbx } from "@/db";
+import type { DbTx } from "@/db";
 import { discordLink } from "@/db/schema";
 import { logAudit } from "@/services/audit";
 import { enqueueSync } from "@/services/outbox";
@@ -2731,8 +2867,19 @@ function isUniqueViolation(err: unknown): boolean {
   );
 }
 
+/**
+ * Thrown THROUGH the transaction so a concurrent uniqueness race rolls back
+ * everything (including any old-link deletion + deprovision event). Callers
+ * catch it OUTSIDE db.transaction() and map it to `already_linked`.
+ */
+export class DiscordLinkConflictError extends Error {
+  constructor() {
+    super("discord user already linked to another account");
+  }
+}
+
 export async function linkDiscord(
-  dbx: Dbx,
+  dbx: DbTx,
   accountId: string,
   discordUserId: string,
 ): Promise<{ ok: true } | { ok: false; error: "already_linked" }> {
@@ -2743,32 +2890,37 @@ export async function linkDiscord(
   if (existing.length > 0 && existing[0].accountId !== accountId) {
     return { ok: false, error: "already_linked" };
   }
-  // replacing our own previous link deprovisions the old Discord user
+  // Upsert on our own account row FIRST; the unique(discord_user_id) index is
+  // the race arbiter. Only after it succeeds do we emit side effects.
   const previous = await dbx
     .select()
     .from(discordLink)
     .where(eq(discordLink.accountId, accountId));
-  if (previous.length > 0 && previous[0].discordUserId !== discordUserId) {
-    await dbx.delete(discordLink).where(eq(discordLink.accountId, accountId));
-    await logAudit(dbx, {
-      actor: accountId,
-      action: "discord.unlinked",
-      target: previous[0].discordUserId,
-      details: { reason: "replaced" },
-    });
-    await enqueueSync(dbx, {
-      kind: "discord-user",
-      discordUserId: previous[0].discordUserId,
-    });
-  }
+  const previousUserId =
+    previous.length > 0 && previous[0].discordUserId !== discordUserId
+      ? previous[0].discordUserId
+      : null;
   try {
     await dbx
       .insert(discordLink)
       .values({ accountId, discordUserId })
-      .onConflictDoNothing({ target: discordLink.accountId });
+      .onConflictDoUpdate({
+        target: discordLink.accountId,
+        set: { discordUserId, linkedAt: new Date() },
+      });
   } catch (err) {
-    if (isUniqueViolation(err)) return { ok: false, error: "already_linked" };
+    // concurrent claim of the same discord user: abort the whole transaction
+    if (isUniqueViolation(err)) throw new DiscordLinkConflictError();
     throw err;
+  }
+  if (previousUserId) {
+    await logAudit(dbx, {
+      actor: accountId,
+      action: "discord.unlinked",
+      target: previousUserId,
+      details: { reason: "replaced" },
+    });
+    await enqueueSync(dbx, { kind: "discord-user", discordUserId: previousUserId });
   }
   await logAudit(dbx, {
     actor: accountId,
@@ -2870,7 +3022,7 @@ import { getConfig } from "@/config";
 import { getDb } from "@/db";
 import { exchangeDiscordCode, fetchDiscordUser } from "@/lib/discord/oauth";
 import { getRequestAccount } from "@/lib/request-session";
-import { linkDiscord } from "@/services/discord-link";
+import { DiscordLinkConflictError, linkDiscord } from "@/services/discord-link";
 import { consumeOauthTransaction } from "@/services/oauth-tx";
 
 export async function GET(req: NextRequest) {
@@ -2880,8 +3032,8 @@ export async function GET(req: NextRequest) {
   const state = req.nextUrl.searchParams.get("state");
   if (!code || !state) return new NextResponse("missing params", { status: 400 });
 
-  const tx = await consumeOauthTransaction(db, state);
-  if (!tx || tx.intent !== "link-discord") {
+  const tx = await consumeOauthTransaction(db, state, ["link-discord"]);
+  if (!tx) {
     return new NextResponse("invalid or expired state", { status: 400 });
   }
   const sess = await getRequestAccount(req);
@@ -2892,10 +3044,17 @@ export async function GET(req: NextRequest) {
   }
   const { accessToken } = await exchangeDiscordCode(cfg, code, tx.pkceVerifier);
   const user = await fetchDiscordUser(accessToken);
-  const result = await db.transaction((dbtx) =>
-    linkDiscord(dbtx, sess.accountId, user.id),
-  );
-  const dest = result.ok ? "/account" : "/account?error=discord_already_linked";
+  let ok: boolean;
+  try {
+    const result = await db.transaction((dbtx) =>
+      linkDiscord(dbtx, sess.accountId, user.id),
+    );
+    ok = result.ok;
+  } catch (err) {
+    if (err instanceof DiscordLinkConflictError) ok = false;
+    else throw err;
+  }
+  const dest = ok ? "/account" : "/account?error=discord_already_linked";
   return NextResponse.redirect(new URL(dest, cfg.appBaseUrl));
 }
 ```
