@@ -91,23 +91,34 @@ secret; token-encryption key.
   (changeable later). "Add character" runs the same SSO flow while logged in and links
   the new character. **Every character login requests the full configured scope set**
   (contacts read/write + any configured extras) — req. 4.
-- **OAuth hardening:** both EVE SSO and Discord flows use `state` (server-side record
-  bound to the session and to the intent: `login` vs `link-character` vs `link-discord`)
-  plus PKCE. A callback is only honored for the account and intent that initiated it.
-- **Conflict semantics:** a character already linked to another account cannot be linked
-  again — the flow fails with a clear error; moving a character between accounts is an
-  admin action (audit-logged). Re-authing a character already on *your own* account
-  simply refreshes its token/scopes in place.
+- **OAuth hardening:** both EVE SSO and Discord flows use `state` plus PKCE, backed by
+  an **`oauth_transaction`** row: single-use, expiring (~10 min) record of state hash,
+  intent (`login` / `link-character` / `link-discord`), initiating session/account, and
+  PKCE verifier. Durable in Postgres, so it survives restarts and multiple web
+  replicas. A callback is only honored against a live, unconsumed transaction matching
+  its account and intent.
+- **Conflict semantics & transfer reclaim:** when an SSO callback returns a character
+  linked to a *different* account, compare the callback's `owner_hash` to the stored
+  one **before** rejecting. Same hash → same owner, reject with "already linked"
+  (moving a character between your own accounts is an admin action, audit-logged).
+  Different hash → the character was sold: atomically unlink the stale link (applying
+  the no-main rule below if it was that account's main), then proceed with the new
+  owner's login/link. Re-authing a character already on *your own* account simply
+  refreshes its token/scopes in place.
 - **Scope evolution:** the configured scope set carries a version. The token health job
   flags characters whose granted scopes no longer cover the required set
   (`token_status: needs_reauth`); the account page shows a one-click "re-auth" per
   character that reruns SSO and updates the link in place — no unlink/re-add ever.
 - **Ownership transfer** (rare; minimal policy): SSO `owner_hash` is stored; a mismatch
-  on re-auth or token refresh invalidates the token and unlinks the character,
-  audit-logged. If it was the main, `main_character_id` becomes null, which fails the
-  membership test — the next membership run demotes the account to Green and the admin
-  list shows "no main"; the user (still able to log in with any remaining character, or
-  fresh SSO) picks a new main. No further special-casing.
+  detected on re-auth, on the reclaim path above, or on token refresh (where the
+  provider returns one) invalidates the token and unlinks the character, audit-logged.
+- **No-main rule (atomic):** whenever an account's main is unlinked (transfer, reclaim,
+  admin action), the same transaction sets `main_character_id = null` and — unless
+  `tier_locked` — tier to `green`, audit-logs the cause, and enqueues the deprovision
+  jobs. The membership job *skips* null-main accounts (it only transitions on a
+  confirmed affiliation read of a main). Admin list shows "no main"; the user logs in
+  with any remaining character (or fresh SSO) and picks a new main. An account with
+  zero characters simply stays Green until an admin deletes it.
 - **Discord:** OAuth with `identify` scope only, stores the Discord user id.
   `discord_user_id` is unique — linking a Discord account already linked elsewhere fails
   with a clear error, so two accounts can never fight over one user's roles.
@@ -128,6 +139,9 @@ Postgres via Drizzle. pg-boss adds its own job tables (job history = sync-run lo
   biomassed; excluded from affiliation batches), `owner_hash`, `refresh_token` (encrypted at
   rest), `scopes`, `token_status` (`valid|invalid|needs_reauth|missing`).
 - **discord_link** — `account_id`, `discord_user_id` (**unique**).
+- **oauth_transaction** — single-use, expiring OAuth state: `id`, `state_hash`,
+  `intent`, `session_id`/`account_id`, `pkce_verifier`, `created_at`, `expires_at`,
+  `consumed_at`.
 - **contact_sync_state** — `character_id`, `last_synced_at`, `last_result` (per
   push-target character).
 - **sync_run** — application-level ledger, one row per job execution: `job_type`,
@@ -154,15 +168,24 @@ All jobs are idempotent diff-and-apply (desired vs actual); re-running is always
 1. **Membership verification — every 30 min; the anchor.** Bulk-refresh all characters'
    corp/alliance via public ESI `/characters/affiliation` (no tokens). The endpoint is
    all-or-nothing per batch (one invalid/biomassed id fails the whole call), so: submit
-   in chunks (≤500 ids); on a failed chunk, bisect to isolate the bad ids and mark those
-   characters `affiliation_invalid` (surfaced in admin, excluded from future batches).
+   in chunks (≤500 ids); **only on a deterministic invalid-request response (400)**,
+   bisect the chunk to isolate the bad ids and mark those characters
+   `affiliation_invalid` (surfaced in admin, excluded from future batches; rechecked
+   weekly and via an admin recheck button, since flags can be wrong or characters can
+   be restored). Transient failures (420 rate-limit, 5xx, network) are never bisected
+   or flagged — the batch just retries.
    Then per account (skipping `tier_locked`): main left alliance & `flygd` → `green`;
    main in alliance & `green` → `flygd`. **An account transitions only if its main's
    affiliation was confirmed in this run** — unresolved mains are left untouched. Each
    change is audit-logged and enqueues jobs 2–4.
-2. **Contact push — hourly + on-demand.** For each character of a FlyGD account with a
-   valid `write_contacts` token: read its actual contacts and fully reconcile against
-   the desired set. **Label-ownership policy (same as aa-standingssync):** the app owns
+2. **Contact push — hourly + on-demand.** ESI cannot *create* contact labels — labels
+   must be made in-game, and the API only lists them. So, per push-target character,
+   the job first reads the character's labels; if the configured label (e.g. `flygd`)
+   is missing, it records `missing_label` in `contact_sync_state.last_result`, **skips
+   all writes for that character**, and the UI (member page + admin list) shows the
+   remediation: "create a contact label named `flygd` in-game, then re-sync." This is
+   also part of onboarding copy at token grant. When the label exists: read the
+   character's actual contacts and fully reconcile against the desired set. **Label-ownership policy (same as aa-standingssync):** the app owns
    the configured label (e.g. `flygd`) outright, and users are told so in the UI at
    token grant. Within that ownership: desired characters are added (or, if they already
    exist as personal contacts, updated to +5 and given our label — the app takes them
@@ -172,23 +195,32 @@ All jobs are idempotent diff-and-apply (desired vs actual); re-running is always
    state — no hash short-circuit — so manual in-game edits are repaired within the hour;
    duplicate on-demand triggers are coalesced via pg-boss singleton keys instead. This
    is both provisioning and automatic removal (req. 3).
-3. **Wanderer ACL sync — hourly + on-demand.** Read the ACL via Wanderer API (persisting
-   the read into `wanderer_acl_observation`), diff against desired, add/remove members.
+3. **Wanderer ACL sync — hourly + on-demand.** Read the ACL via Wanderer API, diff
+   against desired, add/remove members, then **re-read the ACL after any mutation (or
+   partial failure) and persist that post-change read** into
+   `wanderer_acl_observation` — the UI never shows pre-mutation state.
    **`admin`-role entries are never removed; `manager`-role entries are removed like
    anyone else** when not in the desired set. Every run reconciles from the live read,
    so manual ACL edits drift back within the hour.
 4. **Discord role sync — hourly + on-demand.** For each Discord-linked account: ensure
    exactly the role matching its tier among the three managed role IDs (add the right
    one, remove the other two); other roles untouched. User not in guild → log and skip.
-5. **Token health — daily.** Refresh stale tokens; failures mark `token_status:
-   invalid` (surfaced to the member and on the admin list). Also compares each
+5. **Token health — daily.** Refresh stale tokens; **permanent OAuth failures only**
+   (`invalid_grant`, revocation) mark `token_status: invalid` (surfaced to the member
+   and on the admin list); transient failures retry silently. Also compares each
    character's granted scopes against the current required scope set and marks
    shortfalls `needs_reauth` (one-click re-auth in place — see Auth flows).
    `owner_hash` mismatch unlinks the character and audit-logs it (see Ownership
    transfer policy).
 
 **On-demand triggers:** character linked/unlinked, Discord linked, tier changed by
-admin, admin "sync now" button.
+admin, **main character selected/changed/unlinked** (enqueues an immediate
+membership evaluation for that account), admin "sync now" button.
+
+**Account creation:** a new account starts unlocked with tier computed immediately —
+the SSO callback fetches the character's affiliation inline and sets `flygd` (main in
+alliance) or `green` (not), audit-logged as `system: account created`; provisioning
+jobs are enqueued right away, so a new member doesn't wait for the next scheduled run.
 
 **Ordering on tier change:** commit the tier flip first (single source of truth), then
 jobs 2–4 run and retry independently — one failing integration never blocks the others.
@@ -213,8 +245,13 @@ jobs 2–4 run and retry independently — one failing integration never blocks 
 ## Error handling
 
 - **ESI etiquette:** honor `X-ESI-Error-Limit-Remain/Reset`; the shared ESI client
-  pauses near the limit. Token 4xx → mark character invalid and continue; never blocks
-  the rest of a sync.
+  pauses near the limit.
+- **Retryable vs. permanent classification everywhere:** a character is marked
+  `token_status: invalid` only on permanent OAuth errors (`invalid_grant`,
+  revoked/consent-withdrawn); 420/429/5xx/network errors are transient and retry
+  without changing state; missing-scope responses map to `needs_reauth`, not
+  `invalid`. A permanently failed token never blocks the rest of a sync — mark and
+  continue.
 - **Retries:** pg-boss exponential backoff (~5 tries over ~30 min) on every job.
 - **Partial-failure isolation:** contact push is per-character; results recorded in
   `contact_sync_state.last_result`.
@@ -269,3 +306,18 @@ jobs 2–4 run and retry independently — one failing integration never blocks 
   confirmed read of the main.
 - Tier state machine defined: any manual set locks; "return to auto" unlocks.
 - Scope set versioned; shortfall ⇒ `needs_reauth` with in-place re-auth.
+
+### From external review round 2 (2026-08-02)
+
+- Contact labels cannot be created via ESI: `missing_label` state + skip writes +
+  in-UI remediation ("create the `flygd` label in-game").
+- No-main handling made atomic (unlink ⇒ green + deprovision in one transaction);
+  membership job skips null-main accounts.
+- Transfer reclaim: owner-hash comparison precedes the "already linked" rejection, so
+  a sold character's stale link clears on the new owner's first login.
+- Error classification: bisect only on deterministic 400s; token `invalid` only on
+  permanent OAuth errors; `affiliation_invalid` rechecked weekly/on demand.
+- `oauth_transaction` table added (durable single-use state + PKCE across replicas).
+- Wanderer observation persisted from a post-mutation re-read.
+- Account creation computes tier inline and provisions immediately; main
+  selection/change/unlink triggers immediate membership evaluation.
