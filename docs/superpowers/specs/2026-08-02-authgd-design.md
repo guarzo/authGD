@@ -1,7 +1,7 @@
 # authGD — Design Spec
 
 **Date:** 2026-08-02
-**Status:** Revised after external review — pending re-approval
+**Status:** Approved (after 4 external review rounds), pre-implementation
 
 ## Purpose
 
