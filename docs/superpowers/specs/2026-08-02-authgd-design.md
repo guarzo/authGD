@@ -75,8 +75,12 @@ web (Next.js UI + API)  ──enqueue──▶  worker (pg-boss jobs)  ──▶
   exponential backoff, job history in Postgres. No Redis.
 - **Integrations are outbound REST only.** Discord uses a bot token over REST for role
   changes — no gateway connection, no bot process. Wanderer uses the map API key.
-- **Stack choices:** Drizzle ORM; `arctic`/`openid-client` for OAuth; signed HTTP-only
-  cookie sessions.
+- **Stack choices:** Drizzle ORM; `arctic`/`openid-client` for OAuth. Sessions are
+  **server-side**: a `session` table (opaque random id, account, created/expires/
+  last-seen) referenced by an HTTP-only cookie holding only the opaque id — so
+  revocation (transfer reclaim, admin action) is a row delete that takes effect on the
+  next request. Signed-cookie-only sessions are explicitly ruled out because they
+  cannot be revoked.
 
 ### Configuration (env)
 
@@ -123,10 +127,12 @@ secret; token-encryption key.
   `discord_user_id` is unique — linking a Discord account already linked elsewhere fails
   with a clear error, so two accounts can never fight over one user's roles.
 - **Admins:** `is_admin` flag on the account. Bootstrap admin character IDs (env) are a
-  **one-time initialization mechanism**: when an account first links a bootstrap
-  character, `is_admin` is set once and audit-logged — the env list is never
-  re-evaluated afterward, so a sold bootstrap character cannot grant its new owner
-  admin. Ongoing admin management happens in the UI by existing admins.
+  **one-time, consumable grant**: the first time an account links a bootstrap
+  character, a `bootstrap_admin_grant` row is written (character id — unique —, the
+  granting `owner_hash`, account, timestamp) and `is_admin` is set, audit-logged. A
+  character with an existing grant row can never grant again — so a sold bootstrap
+  character conveys nothing to its purchaser, even through the reclaim path. Ongoing
+  admin management happens in the UI by existing admins.
   **Last-admin protection:** the last account with `is_admin` cannot be demoted or
   deleted. **Session revocation:** a transfer reclaim (character unlinked from an
   account because a new owner authenticated it) revokes all active sessions of the
@@ -146,6 +152,12 @@ Postgres via Drizzle. pg-boss adds its own job tables (job history = sync-run lo
   biomassed; excluded from affiliation batches), `owner_hash`, `refresh_token` (encrypted at
   rest), `scopes`, `token_status` (`valid|invalid|needs_reauth|missing`).
 - **discord_link** — `account_id`, `discord_user_id` (**unique**).
+- **session** — server-side sessions: `id` (opaque random), `account_id`,
+  `created_at`, `expires_at`, `last_seen_at`. Cookie stores only the id.
+- **bootstrap_admin_grant** — consumed bootstrap grants: `character_id` (**unique**),
+  `owner_hash`, `account_id`, `granted_at`.
+- **outbox** — transactional job triggers: `id`, `payload`, `created_at`,
+  `dispatched_at`.
 - **oauth_transaction** — single-use, expiring OAuth state: `id`, `state_hash`,
   `intent`, `session_id`/`account_id`, `pkce_verifier`, `created_at`, `expires_at`,
   `consumed_at`.
@@ -192,8 +204,12 @@ All jobs are idempotent diff-and-apply (desired vs actual); re-running is always
    all writes for that character**, and the UI (member page + admin list) shows the
    remediation: "create a contact label named `flygd` in-game, then re-sync." This is
    also part of onboarding copy at token grant. **Push targets, precisely:** every
-   character belonging to a FlyGD account whose token is `valid` and includes the
-   contacts read+write scopes (and has the label); the desired set written to a given
+   character belonging to a FlyGD account whose token is usable for **this job** —
+   not revoked/invalid and granted the contacts read+write scopes (and has the label).
+   `needs_reauth` is a *warning about incomplete capability*, never a global blocker:
+   a token missing some newly added unrelated scope still syncs contacts if the
+   contact scopes are granted. Every job gates on token validity plus *its own*
+   required scopes; the desired set written to a given
    character **excludes that character itself**. When the label exists: read **all
    pages** of the character's contacts before diffing — if any page fails, abort that
    character's reconciliation for this run (a partial read is unsafe for destructive
@@ -214,7 +230,12 @@ All jobs are idempotent diff-and-apply (desired vs actual); re-running is always
    **`admin`-role entries are never removed; `manager`-role entries are removed like
    anyone else** when not in the desired set. Every run reconciles from the live read,
    so manual ACL edits drift back within the hour.
-4. **Discord role sync — hourly + on-demand.** For each Discord-linked account: ensure
+4. **Discord role sync — hourly + on-demand.** Each run begins with a **config
+   validation**: the three managed role IDs are distinct and exist in the configured
+   guild, and the bot has Manage Roles with its highest role above all managed roles.
+   Validation failure is classified *permanent-config*, not retryable: the run aborts
+   with `sync_run.status = failed` + a clear error on the admin sync page and ops
+   webhook, instead of retry-looping. For each Discord-linked account: ensure
    exactly the role matching its tier among the three managed role IDs (add the right
    one, remove the other two); other roles untouched. User not in guild → log and skip.
 5. **Token health — daily.** Refresh stale tokens; **permanent OAuth failures only**
@@ -236,12 +257,15 @@ and provisioned only after a *confirmed* affiliation read (normally seconds late
 The callback itself performs no ESI affiliation lookups, so a transient ESI failure
 can neither block login nor partially provision.
 
-**Ordering on tier change (uniform rule):** the state change and its downstream job
-inserts commit in **one Postgres transaction** — pg-boss stores jobs in the same
-database, so job rows are inserted via the transaction (no crash gap between "demoted"
-and "deprovision queued"). After commit, jobs 2–4 run and retry independently — one
-failing integration never blocks the others. Hourly scheduled reconciliation remains
-the backstop for anything missed.
+**Ordering on tier change (uniform rule):** the state change and its trigger commit in
+**one Postgres transaction** via an application **outbox** table: the transaction
+writes the state change plus an outbox row ("sync account X"); a dispatcher in the
+worker polls the outbox and enqueues the corresponding pg-boss jobs, marking rows
+dispatched. pg-boss internal tables are never written directly (unsupported coupling);
+if the selected pg-boss version offers a supported caller-owned-transaction API, the
+outbox may be replaced by it during implementation. After dispatch, jobs 2–4 run and
+retry independently — one failing integration never blocks the others. Hourly
+scheduled reconciliation remains the backstop for anything missed.
 
 ## UI
 
@@ -360,3 +384,16 @@ the backstop for anything missed.
 - Uniform transactional enqueue: state change + pg-boss job rows commit in one
   Postgres transaction; hourly reconciliation as backstop.
 - Test plan extended to cover all round-2/3 critical paths.
+
+### From external review round 4 (2026-08-02)
+
+- Bootstrap admin grants persisted as consumed (`bootstrap_admin_grant`, unique per
+  character, owner_hash recorded) — un-regrantable after transfer.
+- Sessions moved server-side (opaque-id cookie + `session` table) so revocation is
+  real.
+- Transactional enqueue via application outbox + worker dispatcher; pg-boss internals
+  never written directly (may swap for a supported caller-owned-tx API if the chosen
+  version has one).
+- Per-job scope gating: `needs_reauth` is a capability warning, not a global blocker.
+- Discord role sync validates config (distinct roles, guild membership, Manage Roles +
+  hierarchy) and fails permanent-config instead of retry-looping.
