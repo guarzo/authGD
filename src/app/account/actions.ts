@@ -35,7 +35,9 @@ export async function unlinkAction(characterId: number): Promise<void> {
       .from(character)
       .where(and(eq(character.id, characterId), eq(character.accountId, accountId)));
     if (owned.length === 0) throw new Error("not your character");
-    await unlinkCharacter(dbtx, cfg, accountId, characterId);
+    // In-lock check in unlinkCharacter is the authority against a
+    // transfer-reclaim racing between this pre-check and the row lock.
+    await unlinkCharacter(dbtx, cfg, accountId, characterId, { expectedAccountId: accountId });
   });
   revalidatePath("/account");
 }

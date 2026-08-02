@@ -237,10 +237,13 @@ export async function unlinkCharacter(
   cfg: Config,
   actor: string,
   characterId: number,
-  opts: { revokeSessions?: boolean } = {},
+  opts: { revokeSessions?: boolean; expectedAccountId?: string } = {},
 ): Promise<void> {
   const existing = await findCharacterForUpdate(dbx, characterId);
   if (!existing) return;
+  // Re-check ownership under the lock: a caller's pre-lock SELECT can be
+  // stale if a transfer-reclaim committed between its check and this lock.
+  if (opts.expectedAccountId && existing.accountId !== opts.expectedAccountId) return;
   await dbx.delete(contactSyncState).where(eq(contactSyncState.characterId, characterId));
   await dbx.delete(character).where(eq(character.id, characterId));
   await logAudit(dbx, {

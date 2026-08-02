@@ -148,6 +148,22 @@ describe("linkCharacter", () => {
     expect(acc.tier).toBe("blue");
     expect(acc.mainCharacterId).toBeNull();
   });
+
+  it("refuses to unlink when expectedAccountId no longer matches the locked row (TOCTOU guard)", async () => {
+    const a = await login(ch());
+    const b = await login(ch({ characterId: 90000002, ownerHash: "oh-2", characterName: "Other" }));
+
+    // Simulate a stale pre-lock check: caller believed the character still
+    // belonged to account b, but under the lock it now belongs to a.
+    await ctx.db.transaction((tx) =>
+      unlinkCharacter(tx, cfg, b.accountId, 90000001, { expectedAccountId: b.accountId }),
+    );
+
+    const [chr] = await ctx.db.select().from(character).where(eq(character.id, 90000001));
+    expect(chr.accountId).toBe(a.accountId);
+    const audits = await ctx.db.select().from(auditLog);
+    expect(audits.some((au) => au.action === "character.unlinked")).toBe(false);
+  });
 });
 
 describe("transaction rollback", () => {
