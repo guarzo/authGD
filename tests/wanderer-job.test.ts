@@ -120,7 +120,7 @@ describe("runWandererJob", () => {
     const w = fakeWanderer([{ characterId: 2, role: "member" }], {
       permanentFirstReadFailure: true,
     });
-    const webhook = vi.fn(async () => new Response("", { status: 200 }));
+    const webhook = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }));
     const result = await runWandererJob({
       db: ctx.db,
       cfg,
@@ -133,7 +133,7 @@ describe("runWandererJob", () => {
     expect(result.status).toBe("failed");
     expect(result.retry).toBeUndefined();
     expect(webhook).toHaveBeenCalledOnce();
-    const [, init] = webhook.mock.calls[0] as [string, RequestInit];
+    const [, init] = webhook.mock.calls[0];
     expect(JSON.parse(init.body as string).content).toContain("wanderer");
   });
 

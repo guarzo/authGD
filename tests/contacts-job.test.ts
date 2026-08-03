@@ -217,7 +217,7 @@ describe("runContactsJob", () => {
     };
     const result = await runContactsJob({ db: ctx.db, cfg, esi: failingEsi, fetchImpl: okToken });
     expect(result.status).toBe("partial");
-    expect(result.counts.failed).toBeGreaterThan(0);
+    expect(result.counts?.failed).toBeGreaterThan(0);
     // the add failed permanently, but the delete still ran
     expect(calls.deletes).toContainEqual({ characterId: 1, ids: [99] });
     expect((await lastResult(1))?.lastResult).toBe("sync_failed");
