@@ -239,3 +239,38 @@ describe("runContactsJob", () => {
     expect(rows[0].tokenStatus).toBe("needs_reauth");
   });
 });
+
+describe("needs_reauth CAS (F5)", () => {
+  it("marks needs_reauth when the token blob is unchanged", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
+    const esi: ContactsEsi = {
+      ...fakeEsi({ labels: { 1: [{ labelId: 7, labelName: "flygd" }] } }).esi,
+      getAllContacts: async () => {
+        throw new EsiError("missing scope", 403, "needs_reauth");
+      },
+    };
+    await runContactsJob({ db: ctx.db, cfg, esi, fetchImpl: okToken });
+    const [ch] = await ctx.db.select().from(character).where(eq(character.id, 1));
+    expect(ch.tokenStatus).toBe("needs_reauth");
+  });
+
+  it("does NOT downgrade a row whose token rotated underneath the job", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
+    const esi: ContactsEsi = {
+      ...fakeEsi({ labels: { 1: [{ labelId: 7, labelName: "flygd" }] } }).esi,
+      getAllContacts: async () => {
+        // concurrent re-auth: someone else stored a fresh blob mid-flight
+        await ctx.db
+          .update(character)
+          .set({ refreshTokenEnc: "someone-elses-blob", tokenStatus: "valid" })
+          .where(eq(character.id, 1));
+        throw new EsiError("missing scope", 403, "needs_reauth");
+      },
+    };
+    await runContactsJob({ db: ctx.db, cfg, esi, fetchImpl: okToken });
+    const [ch] = await ctx.db.select().from(character).where(eq(character.id, 1));
+    expect(ch.tokenStatus).toBe("valid"); // stale decision discarded
+  });
+});

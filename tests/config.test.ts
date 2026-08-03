@@ -24,6 +24,7 @@ const validEnv = {
   WANDERER_ACL_ID: "acl-1",
   STANDINGS_LABEL: "flygd",
   STANDINGS_VALUE: "5",
+  ESI_CONTACT: "ops@example.com",
 } as unknown as NodeJS.ProcessEnv;
 
 describe("loadConfig", () => {

@@ -54,6 +54,8 @@ export interface EsiClientOptions {
   sleep?: (ms: number) => Promise<void>;
   /** Pause when the remaining ESI error budget is at or below this. */
   errorBudgetFloor?: number;
+  /** CCP asks every ESI consumer to identify itself with contact info. */
+  userAgent?: string;
 }
 
 export function createEsiClient(opts: EsiClientOptions = {}) {
@@ -98,6 +100,7 @@ export function createEsiClient(opts: EsiClientOptions = {}) {
       ...(init.headers as Record<string, string> | undefined),
     };
     if (init.accessToken) headers.authorization = `Bearer ${init.accessToken}`;
+    if (opts.userAgent) headers["user-agent"] = opts.userAgent;
     const res = await fetchImpl(`${ESI_BASE}${path}`, {
       ...init,
       headers,

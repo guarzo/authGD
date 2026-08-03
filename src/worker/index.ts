@@ -24,7 +24,7 @@ async function main(): Promise<void> {
   const handlers = buildJobHandlers({
     db,
     cfg,
-    esi: createEsiClient(),
+    esi: createEsiClient({ userAgent: `authgd/0.1.0 (${cfg.esiContact})` }),
     wanderer: createWandererClient(cfg),
     discord: createDiscordClient(cfg),
   });

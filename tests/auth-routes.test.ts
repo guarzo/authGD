@@ -26,6 +26,7 @@ process.env.WANDERER_BASE_URL = "https://w.example";
 process.env.WANDERER_API_KEY = "k";
 process.env.WANDERER_MAP_SLUG = "m";
 process.env.WANDERER_ACL_ID = "a";
+process.env.ESI_CONTACT = "ops@example.com";
 
 const { GET: loginRoute } = await import("@/app/auth/eve/login/route");
 const { GET: callbackRoute } = await import("@/app/auth/eve/callback/route");

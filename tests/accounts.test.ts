@@ -52,6 +52,7 @@ beforeAll(async () => {
     WANDERER_API_KEY: "k",
     WANDERER_MAP_SLUG: "m",
     WANDERER_ACL_ID: "a",
+    ESI_CONTACT: "ops@example.com",
   } as NodeJS.ProcessEnv);
 });
 beforeEach(() => truncateAll(ctx.db));
