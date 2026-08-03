@@ -213,13 +213,15 @@ export default async function AdminAuditPage({
           <span className="filter-form__label">Target</span>
           <input className="field" name="target" defaultValue={params.target ?? ""} />
         </label>
-        <div className="filter-form__actions">
-          <Submit className="btn btn--primary">Filter</Submit>
-          {filtered && (
-            <a className="btn btn--quiet" href="/admin/audit">
-              clear
-            </a>
-          )}
+        <div className="filter-form__cell filter-form__cell--actions">
+          <div className="filter-form__actions">
+            <Submit className="btn btn--primary">Filter</Submit>
+            {filtered && (
+              <a className="btn btn--quiet" href="/admin/audit">
+                clear
+              </a>
+            )}
+          </div>
         </div>
       </form>
 
@@ -235,9 +237,17 @@ export default async function AdminAuditPage({
       <Scroller label="Audit entries">
         <table className="log log--audit">
           <colgroup>
-            <col style={{ width: "10rem" }} />
+            {/* Sized to the widest value each column can actually hold, in mono
+                at --t-data plus the 2 x --s-4 cell padding. Under
+                `table-layout: fixed` an undersized column doesn't shrink its
+                content, it lets a `nowrap` cell paint straight over its
+                neighbour: the timestamp (19ch ~= 162px) needed 194px and had
+                160, and the longest action (`character.affiliation_invalid`,
+                29ch ~= 247px) needed 279px and had 168. Both were bleeding into
+                the column to their right. */}
+            <col style={{ width: "12.25rem" }} />
             <col style={{ width: "9rem" }} />
-            <col style={{ width: "10.5rem" }} />
+            <col style={{ width: "17.5rem" }} />
             <col style={{ width: "9rem" }} />
             <col />
           </colgroup>
@@ -261,15 +271,21 @@ export default async function AdminAuditPage({
                   <td>
                     <ActorCell r={r} />
                   </td>
-                  <td className="mono nowrap">
-                    {dot === -1 ? (
-                      r.action
-                    ) : (
-                      <>
-                        <span className="dim">{r.action.slice(0, dot + 1)}</span>
-                        {r.action.slice(dot + 1)}
-                      </>
-                    )}
+                  <td className="mono">
+                    {/* Sized to fit the current action vocabulary, but bounded
+                        anyway: a longer action name added later truncates with
+                        the full value in `title`, the way actor and target
+                        already do, rather than painting over the next column. */}
+                    <span className="ellipsis-cell" title={r.action}>
+                      {dot === -1 ? (
+                        r.action
+                      ) : (
+                        <>
+                          <span className="dim">{r.action.slice(0, dot + 1)}</span>
+                          {r.action.slice(dot + 1)}
+                        </>
+                      )}
+                    </span>
                   </td>
                   <td>
                     <TargetCell r={r} />

@@ -117,3 +117,105 @@ test("no spurious horizontal overflow at desktop width, even with unresolved ids
   const height = await rows.first().evaluate((el) => el.getBoundingClientRect().height);
   expect(height).toBeLessThan(60);
 });
+
+/**
+ * `table-layout: fixed` sizes a column but does not clip it: a `nowrap` value
+ * wider than its column paints straight over the column to its right. Both
+ * mono columns were undersized and doing exactly that -- the timestamp ran
+ * into ACTOR ("22:19:24Gustav Oswaldo") and the action ran into TARGET. Widths
+ * are therefore a correctness property here, not taste, and the longest value
+ * each column can hold is the case that has to be measured.
+ */
+test("mono columns fit their widest value instead of painting over the next one", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+
+  await db.insert(auditLog).values([
+    // The longest action name in the vocabulary, next to the longest actor and
+    // target a row can carry.
+    {
+      actor: "edfe996e-9497-4dc2-9afa-8e4bd0955daa",
+      action: "character.affiliation_invalid",
+      target: "90000000000000000",
+      details: { reason: "not-in-alliance" },
+    },
+    { actor: "system", action: "discord.role_changed", target: admin.id, details: null },
+  ]);
+
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/admin/audit");
+  await expect(page.locator("tbody tr")).toHaveCount(2);
+
+  // Cells inside an overflow-hidden box (the `.ellipsis-cell` spans) are
+  // clipped by construction, so only the unclipped ones can collide. A Range
+  // rect reports the untruncated width and would flag intended truncation.
+  const overlaps = await page.evaluate(() => {
+    const bad: string[] = [];
+    const clipped = (td: Element) =>
+      [...td.querySelectorAll("*")].some(
+        (el) => getComputedStyle(el).overflowX !== "visible",
+      );
+    for (const tr of document.querySelectorAll("tbody tr")) {
+      const cells = [...tr.querySelectorAll("td")];
+      for (let i = 0; i < cells.length - 1; i++) {
+        if (clipped(cells[i])) continue;
+        const range = document.createRange();
+        range.selectNodeContents(cells[i]);
+        const ink = range.getBoundingClientRect();
+        const next = cells[i + 1].getBoundingClientRect();
+        if (ink.width > 0 && ink.right > next.left + 0.5) {
+          bad.push(`col ${i}: "${cells[i].textContent?.trim()}"`);
+        }
+      }
+    }
+    return bad;
+  });
+  expect(overlaps).toEqual([]);
+
+  // The action is the column an admin scans, so it must fit rather than
+  // ellipsise: the truncation on that cell is a backstop for a longer name
+  // added later, not the normal rendering of a name that exists today.
+  const truncated = await page.evaluate(() =>
+    [...document.querySelectorAll("tbody tr")]
+      .map((tr) => tr.querySelectorAll("td")[2].querySelector("span"))
+      .filter((s): s is HTMLElement => !!s && s.scrollWidth > s.clientWidth)
+      .map((s) => s.textContent),
+  );
+  expect(truncated).toEqual([]);
+});
+
+/**
+ * One filter cell carries a hint and its siblings do not. Bottom-aligning the
+ * row made that cell's extra height push its own label and input a full row
+ * above the others, so the three fields read as three different rows.
+ */
+test("filter labels, fields, and submit each sit on one line", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/admin/audit");
+
+  const tops = await page.evaluate(() => {
+    const y = (sel: string) =>
+      [...document.querySelectorAll(sel)].map((el) =>
+        Math.round(el.getBoundingClientRect().top),
+      );
+    return {
+      labels: y(".filter-form__label"),
+      fields: y(".filter-form .field"),
+      submit: y(".filter-form__actions .btn"),
+    };
+  });
+
+  expect(tops.labels).toHaveLength(3);
+  expect(new Set(tops.labels).size).toBe(1);
+  expect(new Set(tops.fields).size).toBe(1);
+  // The submit button belongs on the field line, not the label line.
+  expect(Math.abs(tops.submit[0] - tops.fields[0])).toBeLessThanOrEqual(1);
+});
