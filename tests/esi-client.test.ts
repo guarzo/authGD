@@ -126,8 +126,9 @@ describe("contacts", () => {
 
   it("fails closed on a missing or malformed X-Pages header", async () => {
     server.use(
-      http.get(`${BASE}/characters/90000001/contacts/`, () =>
-        HttpResponse.json([]), // no X-Pages header at all
+      http.get(
+        `${BASE}/characters/90000001/contacts/`,
+        () => HttpResponse.json([]), // no X-Pages header at all
       ),
     );
     const esi = createEsiClient();
@@ -202,7 +203,11 @@ describe("contacts", () => {
       }),
     );
     const esi = createEsiClient();
-    await esi.deleteContacts(90000001, "at", Array.from({ length: 45 }, (_, i) => i + 1));
+    await esi.deleteContacts(
+      90000001,
+      "at",
+      Array.from({ length: 45 }, (_, i) => i + 1),
+    );
     expect(deletes).toHaveLength(3);
     expect(deletes[0].split(",")).toHaveLength(20);
     expect(deletes[2].split(",")).toHaveLength(5);

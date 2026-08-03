@@ -15,10 +15,7 @@ export async function runPurgeJob(deps: { db: Db }): Promise<JobResult> {
     const oauth = await db
       .delete(oauthTransaction)
       .where(
-        or(
-          isNotNull(oauthTransaction.consumedAt),
-          lt(oauthTransaction.expiresAt, now),
-        ),
+        or(isNotNull(oauthTransaction.consumedAt), lt(oauthTransaction.expiresAt, now)),
       );
     const outboxRows = await db
       .delete(outbox)

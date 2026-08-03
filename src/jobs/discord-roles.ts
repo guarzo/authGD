@@ -57,6 +57,7 @@ export async function runDiscordRolesJob(
         .from(discordLink)
         .where(eq(discordLink.discordUserId, opts.discordUserId));
       if (links.length > 0) {
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- load-bearing: see the note on the final return in this function.
         return { status: "ok", counts: { skipped: 1 } as Record<string, number> };
       }
       let member;
@@ -64,6 +65,7 @@ export async function runDiscordRolesJob(
       try {
         member = await discord.getGuildMember(opts.discordUserId);
         if (!member) {
+          // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- load-bearing: see the note on the final return in this function.
           return { status: "ok", counts: { notInGuild: 1 } as Record<string, number> };
         }
         remove = stripManagedRoles(cfg.discord.roleIds, member.roles);
@@ -96,11 +98,19 @@ export async function runDiscordRolesJob(
         await enqueueSync(db, { kind: "account", accountId: relinked[0].accountId });
         return {
           status: "ok",
+          // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- load-bearing: see the note on the final return in this function.
           counts: { removed: remove.length, relinkResync: 1 } as Record<string, number>,
         };
       }
       return {
         status: "ok",
+        // These four `as Record<string, number>` assertions are load-bearing.
+        // Without them the branches infer distinct object shapes, and their
+        // union carries optional-undefined members (`notInGuild?: undefined`,
+        // `relinkResync?: undefined`, ...) that fail the index signature on
+        // JobResult["counts"]. The rule evaluates each assertion in isolation
+        // and cannot see the widening, so it reports a false positive.
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- load-bearing: see above.
         counts: { removed: remove.length } as Record<string, number>,
       };
     }

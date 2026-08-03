@@ -5,8 +5,7 @@ import { logAudit } from "@/services/audit";
 import { enqueueSync } from "@/services/outbox";
 
 export type AdminMutationResult =
-  | { ok: true }
-  | { ok: false; error: "not_authorized" | "not_found" };
+  { ok: true } | { ok: false; error: "not_authorized" | "not_found" };
 
 /** Defense in depth: routes gate too, but services refuse unauthorized actors. */
 async function isAuthorized(dbx: DbTx, actor: string): Promise<boolean> {

@@ -3,7 +3,6 @@ import { createLocalJWKSet } from "jose";
 import { describe, expect, it } from "vitest";
 import { loadConfig } from "@/config";
 import {
-  EveSsoError,
   buildEveAuthorizeUrl,
   exchangeEveCode,
   verifyEveAccessToken,
@@ -29,7 +28,7 @@ const cfg = loadConfig({
   WANDERER_API_KEY: "k",
   WANDERER_ACL_ID: "a",
   ESI_CONTACT: "ops@example.com",
-} as NodeJS.ProcessEnv);
+});
 
 describe("buildEveAuthorizeUrl", () => {
   it("contains all required params", () => {
@@ -57,10 +56,10 @@ describe("exchangeEveCode", () => {
       expect(body.get("grant_type")).toBe("authorization_code");
       expect(body.get("code")).toBe("the-code");
       expect(body.get("code_verifier")).toBe("the-verifier");
-      return new Response(
-        JSON.stringify({ access_token: "at", refresh_token: "rt" }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
+      return new Response(JSON.stringify({ access_token: "at", refresh_token: "rt" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
     }) as typeof fetch;
     const r = await exchangeEveCode(cfg, "the-code", "the-verifier", fetchImpl);
     expect(r).toEqual({ accessToken: "at", refreshToken: "rt" });
@@ -71,16 +70,18 @@ describe("exchangeEveCode", () => {
       new Response(JSON.stringify({ error: "invalid_grant" }), {
         status: 400,
       })) as typeof fetch;
-    await expect(
-      exchangeEveCode(cfg, "c", "v", fetchImpl),
-    ).rejects.toMatchObject({ oauthError: "invalid_grant" });
+    await expect(exchangeEveCode(cfg, "c", "v", fetchImpl)).rejects.toMatchObject({
+      oauthError: "invalid_grant",
+    });
   });
 });
 
 describe("verifyEveAccessToken", () => {
   it("verifies a signed token and extracts identity", async () => {
     const { publicKey, privateKey } = await generateKeyPair("RS256");
-    const jwks = createLocalJWKSet({ keys: [{ ...(await exportJWK(publicKey)), alg: "RS256" }] });
+    const jwks = createLocalJWKSet({
+      keys: [{ ...(await exportJWK(publicKey)), alg: "RS256" }],
+    });
     const token = await new SignJWT({
       name: "Pilot One",
       owner: "owner-hash-1",
@@ -104,7 +105,9 @@ describe("verifyEveAccessToken", () => {
 
   it("fails closed on missing owner claim", async () => {
     const { publicKey, privateKey } = await generateKeyPair("RS256");
-    const jwks = createLocalJWKSet({ keys: [{ ...(await exportJWK(publicKey)), alg: "RS256" }] });
+    const jwks = createLocalJWKSet({
+      keys: [{ ...(await exportJWK(publicKey)), alg: "RS256" }],
+    });
     const token = await new SignJWT({ name: "Pilot One" }) // no owner
       .setProtectedHeader({ alg: "RS256" })
       .setIssuer("https://login.eveonline.com")

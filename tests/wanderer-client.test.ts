@@ -27,7 +27,12 @@ describe("createWandererClient", () => {
           { id: "m1", name: "Pilot A", eve_character_id: "90000001", role: "admin" },
           { id: "m2", name: "Pilot B", eve_character_id: "90000002", role: "viewer" },
           { id: "m3", name: "Some Corp", eve_corporation_id: "98000001", role: "viewer" },
-          { id: "m4", name: "Some Alliance", eve_alliance_id: "99000009", role: "blocked" },
+          {
+            id: "m4",
+            name: "Some Alliance",
+            eve_alliance_id: "99000009",
+            role: "blocked",
+          },
         ]);
       }),
     );
@@ -65,7 +70,9 @@ describe("createWandererClient", () => {
       ),
     );
     // assert the safe-integer validation itself fired, on the character-id path
-    const err = await createWandererClient(cfg).getAclMembers().catch((e: unknown) => e);
+    const err = await createWandererClient(cfg)
+      .getAclMembers()
+      .catch((e: unknown) => e);
     expect(String(err)).toMatch(/positive safe integer/);
     expect(String(err)).toMatch(/eve_character_id/);
   });
@@ -75,9 +82,7 @@ describe("createWandererClient", () => {
     await expect(createWandererClient(cfg).getAclMembers()).rejects.toThrow();
     server.use(
       http.get(ACL, () =>
-        aclResponse([
-          { eve_character_id: "1", eve_corporation_id: "2", role: "viewer" },
-        ]),
+        aclResponse([{ eve_character_id: "1", eve_corporation_id: "2", role: "viewer" }]),
       ),
     );
     await expect(createWandererClient(cfg).getAclMembers()).rejects.toThrow();
@@ -102,12 +107,16 @@ describe("createWandererClient", () => {
 
   it("classifies 5xx as transient and 403 as permanent", async () => {
     server.use(http.get(ACL, () => HttpResponse.json({}, { status: 502 })));
-    let err = await createWandererClient(cfg).getAclMembers().catch((e: unknown) => e);
+    let err = await createWandererClient(cfg)
+      .getAclMembers()
+      .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(WandererError);
     expect((err as WandererError).transient).toBe(true);
 
     server.use(http.get(ACL, () => HttpResponse.json({}, { status: 403 })));
-    err = await createWandererClient(cfg).getAclMembers().catch((e: unknown) => e);
+    err = await createWandererClient(cfg)
+      .getAclMembers()
+      .catch((e: unknown) => e);
     expect((err as WandererError).transient).toBe(false);
   });
 
@@ -118,7 +127,12 @@ describe("createWandererClient", () => {
       http.post(MEMBERS, async ({ request }) => {
         posts.push(await request.json());
         return HttpResponse.json({
-          data: { id: "uuid", name: "Resolved Server-Side", role: "member", eve_character_id: "90000003" },
+          data: {
+            id: "uuid",
+            name: "Resolved Server-Side",
+            role: "member",
+            eve_character_id: "90000003",
+          },
         });
       }),
       http.delete(`${MEMBERS}/:id`, ({ params }) => {
@@ -142,6 +156,8 @@ describe("createWandererClient", () => {
         ),
       ),
     );
-    await expect(createWandererClient(cfg).removeAclMember(90000005)).resolves.toBeUndefined();
+    await expect(
+      createWandererClient(cfg).removeAclMember(90000005),
+    ).resolves.toBeUndefined();
   });
 });

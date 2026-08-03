@@ -35,11 +35,7 @@ export async function linkDiscord(
   // Lock the account row first: concurrent replacements for one account
   // serialize here, so every intermediate discord user gets its deprovision
   // event (the second replacement reads the first one's committed row).
-  await dbx
-    .select()
-    .from(account)
-    .where(eq(account.id, accountId))
-    .for("update");
+  await dbx.select().from(account).where(eq(account.id, accountId)).for("update");
   const existing = await dbx
     .select()
     .from(discordLink)

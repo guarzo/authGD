@@ -35,20 +35,31 @@ export default async function AdminAccountsPage({
   searchParams,
 }: {
   searchParams: Promise<{
-    tier?: string; status?: string; sort?: string; dir?: string; error?: string;
+    tier?: string;
+    status?: string;
+    sort?: string;
+    dir?: string;
+    error?: string;
   }>;
 }) {
   const ctx = await getAdminContext();
   if (!ctx) redirect("/login");
   const params = await searchParams;
-  const sort = (SORTS.some((s) => s.key === params.sort) ? params.sort : "name") as AdminListSort;
+  const sort = (
+    SORTS.some((s) => s.key === params.sort) ? params.sort : "name"
+  ) as AdminListSort;
   const dir = params.dir === "desc" ? "desc" : "asc";
   const tier = TIERS.includes(params.tier as (typeof TIERS)[number])
     ? (params.tier as (typeof TIERS)[number])
     : undefined;
   const status =
     params.status === "cryo" || params.status === "active" ? params.status : undefined;
-  const rows = await getAdminAccountsList(getDb(), getConfig(), { tier, status, sort, dir });
+  const rows = await getAdminAccountsList(getDb(), getConfig(), {
+    tier,
+    status,
+    sort,
+    dir,
+  });
 
   const qs = (over: Record<string, string | undefined>) => {
     const p = new URLSearchParams();
@@ -61,9 +72,7 @@ export default async function AdminAccountsPage({
   return (
     <main>
       <h1>Accounts</h1>
-      {params.error === "last_admin" && (
-        <p role="alert">Cannot demote the last admin.</p>
-      )}
+      {params.error === "last_admin" && <p role="alert">Cannot demote the last admin.</p>}
       <p>
         Filter tier: <a href={qs({ tier: undefined })}>all</a>{" "}
         {TIERS.map((t) => (
@@ -72,7 +81,9 @@ export default async function AdminAccountsPage({
           </a>
         ))}
         · Status: <a href={qs({ status: undefined })}>all</a>{" "}
-        <a href={qs({ status: "cryo" })}>{status === "cryo" ? <strong>cryo</strong> : "cryo"}</a>{" "}
+        <a href={qs({ status: "cryo" })}>
+          {status === "cryo" ? <strong>cryo</strong> : "cryo"}
+        </a>{" "}
         <a href={qs({ status: "active" })}>
           {status === "active" ? <strong>active</strong> : "active"}
         </a>
@@ -82,7 +93,12 @@ export default async function AdminAccountsPage({
           <tr>
             {SORTS.map((s) => (
               <th key={s.key} style={{ textAlign: "left" }}>
-                <a href={qs({ sort: s.key, dir: sort === s.key && dir === "asc" ? "desc" : "asc" })}>
+                <a
+                  href={qs({
+                    sort: s.key,
+                    dir: sort === s.key && dir === "asc" ? "desc" : "asc",
+                  })}
+                >
                   {s.label}
                   {sort === s.key ? (dir === "asc" ? " ↑" : " ↓") : ""}
                 </a>
@@ -143,14 +159,21 @@ function AccountRow({ r }: { r: AdminAccountRow }) {
         </div>
         <div>
           {(["flygd", "blue", "green"] as const).map((t) => (
-            <form key={t} action={setTierAction.bind(null, r.accountId, t)} style={{ display: "inline" }}>
+            <form
+              key={t}
+              action={setTierAction.bind(null, r.accountId, t)}
+              style={{ display: "inline" }}
+            >
               <button type="submit" disabled={r.tierLocked && r.tier === t}>
                 {t}
               </button>
             </form>
           ))}
           {r.tierLocked && (
-            <form action={returnToAutoAction.bind(null, r.accountId)} style={{ display: "inline" }}>
+            <form
+              action={returnToAutoAction.bind(null, r.accountId)}
+              style={{ display: "inline" }}
+            >
               <button type="submit">auto</button>
             </form>
           )}
@@ -159,11 +182,17 @@ function AccountRow({ r }: { r: AdminAccountRow }) {
       <td>
         {r.status}
         {r.status === "cryo" && (
-          <div style={{ fontSize: "0.8em", opacity: 0.8 }}>since {fmt(r.statusChangedAt)}</div>
+          <div style={{ fontSize: "0.8em", opacity: 0.8 }}>
+            since {fmt(r.statusChangedAt)}
+          </div>
         )}
         {r.statusNote && <div style={{ fontSize: "0.8em" }}>{r.statusNote}</div>}
         <form
-          action={setStatusAction.bind(null, r.accountId, r.status === "cryo" ? "active" : "cryo")}
+          action={setStatusAction.bind(
+            null,
+            r.accountId,
+            r.status === "cryo" ? "active" : "cryo",
+          )}
         >
           <button type="submit">{r.status === "cryo" ? "wake" : "cryo"}</button>
         </form>

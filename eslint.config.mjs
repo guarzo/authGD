@@ -18,6 +18,11 @@ export default tseslint.config(
       "test-results/**",
       "playwright-report/**",
       ".claude/**",
+      // Written by `next build`/`next dev`, gitignored. Its triple-slash
+      // reference trips @typescript-eslint/triple-slash-reference, so a clean
+      // checkout lints clean but any machine that has built does not — CI very
+      // much included.
+      "next-env.d.ts",
     ],
   },
 
@@ -41,6 +46,34 @@ export default tseslint.config(
     // rather than widening tsconfig to cover tooling.
     files: ["**/*.mjs", "**/*.js"],
     ...tseslint.configs.disableTypeChecked,
+  },
+
+  // Rule adjustments that encode conventions this codebase already follows,
+  // rather than asking the codebase to change to suit the defaults.
+  // Scoped to TS: `only-throw-error` is type-aware, and re-enabling it
+  // unscoped would undo the disableTypeChecked block above for *.mjs.
+  {
+    files: ["**/*.{ts,tsx}"],
+    rules: {
+      // `_req`, `_url`, `_init` — the leading underscore is already the
+      // established "deliberately unused" marker here.
+      "@typescript-eslint/no-unused-vars": [
+        "error",
+        {
+          argsIgnorePattern: "^_",
+          varsIgnorePattern: "^_",
+          caughtErrorsIgnorePattern: "^_",
+        },
+      ],
+      // NOTE: @typescript-eslint/no-unnecessary-type-assertion stays ENABLED.
+      // It has five known false positives in src/, each suppressed inline at
+      // the call site with the reason. Do not blanket-disable it here: outside
+      // those five spots it correctly catches redundant assertions (it found 16
+      // real ones in tests/). Be aware that its autofix is not trustworthy in
+      // this codebase — where a value is returned into a wider declared type,
+      // the assertion is load-bearing and removing it breaks `tsc`. Always run
+      // `npm run typecheck` after `npm run lint:fix`.
+    },
   },
 
   // The Next plugin ships eslintrc-shaped configs (`plugins` is an array), so
@@ -72,6 +105,15 @@ export default tseslint.config(
     rules: {
       "@typescript-eslint/no-non-null-assertion": "off",
       "@typescript-eslint/no-explicit-any": "off",
+      // Test doubles are declared `async` to match the real interface they
+      // stand in for, even when the body has nothing to await. 85 of these,
+      // none in src/ — the rule keeps its full value where it matters.
+      "@typescript-eslint/require-await": "off",
+      // Fixtures and JSON payloads are legitimately `any` in tests.
+      "@typescript-eslint/no-unsafe-assignment": "off",
+      "@typescript-eslint/no-unsafe-member-access": "off",
+      // Assertion messages stringify loosely-typed fixture values on purpose.
+      "@typescript-eslint/no-base-to-string": "off",
     },
   },
 

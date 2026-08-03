@@ -45,7 +45,8 @@ export default async function AccountPage({
         {view.status === "cryo" && " · cryo"}
       </p>
       <p>
-        Discord: {view.discordLinked ? "linked" : <a href="/auth/discord/link">Link Discord</a>}
+        Discord:{" "}
+        {view.discordLinked ? "linked" : <a href="/auth/discord/link">Link Discord</a>}
       </p>
       <h2>Characters</h2>
       <table>
@@ -87,12 +88,18 @@ export default async function AccountPage({
               <td>{c.onMapAcl ? "✓" : "✗"}</td>
               <td>
                 {!c.isMain && (
-                  <form action={setMainAction.bind(null, c.id)} style={{ display: "inline" }}>
+                  <form
+                    action={setMainAction.bind(null, c.id)}
+                    style={{ display: "inline" }}
+                  >
                     <button type="submit">make main</button>
                   </form>
                 )}
                 {view.characters.length > 1 && (
-                  <form action={unlinkAction.bind(null, c.id)} style={{ display: "inline" }}>
+                  <form
+                    action={unlinkAction.bind(null, c.id)}
+                    style={{ display: "inline" }}
+                  >
                     <button type="submit">unlink</button>
                   </form>
                 )}
@@ -106,8 +113,8 @@ export default async function AccountPage({
       </p>
       <p style={{ fontSize: "0.85em", opacity: 0.8 }}>
         authGD owns the <code>{cfg.standings.label}</code> contact label on your
-        characters: contacts under that label are managed automatically and may be
-        added, changed, or removed.
+        characters: contacts under that label are managed automatically and may be added,
+        changed, or removed.
       </p>
     </main>
   );

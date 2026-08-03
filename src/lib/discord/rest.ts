@@ -95,8 +95,7 @@ export function createDiscordClient(cfg: Config, fetchImpl: typeof fetch = fetch
       const res = await rawRequest(path);
       if (res.status === 404) {
         const body = (await res.json().catch(() => undefined)) as
-          | { code?: number }
-          | undefined;
+          { code?: number } | undefined;
         if (body?.code === 10007) return null;
         throw new DiscordApiError(
           `discord GET ${path} failed (404${body?.code !== undefined ? `, code ${body.code}` : ", malformed body"})`,

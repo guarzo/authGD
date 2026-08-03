@@ -41,7 +41,10 @@ export async function getAccountView(
   const [links, syncStates, aclObs] = await Promise.all([
     dbx.select().from(discordLink).where(eq(discordLink.accountId, accountId)),
     ids.length
-      ? dbx.select().from(contactSyncState).where(inArray(contactSyncState.characterId, ids))
+      ? dbx
+          .select()
+          .from(contactSyncState)
+          .where(inArray(contactSyncState.characterId, ids))
       : Promise.resolve([]),
     ids.length
       ? dbx

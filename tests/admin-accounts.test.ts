@@ -32,7 +32,9 @@ describe("setTierManual", () => {
   it("sets tier, locks, stamps changed-by, audits, and enqueues sync in one tx", async () => {
     const admin = await seedAdmin();
     const target = await seedAccount(ctx.db, { tier: "flygd" });
-    const r = await ctx.db.transaction((tx) => setTierManual(tx, admin.id, target.id, "blue"));
+    const r = await ctx.db.transaction((tx) =>
+      setTierManual(tx, admin.id, target.id, "blue"),
+    );
     expect(r).toEqual({ ok: true });
     const after = await getAcc(target.id);
     expect(after.tier).toBe("blue");
@@ -66,7 +68,9 @@ describe("setTierManual", () => {
   it("rejects non-admin actors", async () => {
     const nobody = await seedAccount(ctx.db);
     const target = await seedAccount(ctx.db);
-    const r = await ctx.db.transaction((tx) => setTierManual(tx, nobody.id, target.id, "blue"));
+    const r = await ctx.db.transaction((tx) =>
+      setTierManual(tx, nobody.id, target.id, "blue"),
+    );
     expect(r).toEqual({ ok: false, error: "not_authorized" });
   });
 });
@@ -125,7 +129,9 @@ describe("setAccountStatus / setStatusNote", () => {
   it("note is trimmed, empty clears to null, audited, NO outbox row", async () => {
     const admin = await seedAdmin();
     const target = await seedAccount(ctx.db);
-    await ctx.db.transaction((tx) => setStatusNote(tx, admin.id, target.id, "  back in Oct  "));
+    await ctx.db.transaction((tx) =>
+      setStatusNote(tx, admin.id, target.id, "  back in Oct  "),
+    );
     expect((await getAcc(target.id)).statusNote).toBe("back in Oct");
     expect((await lastAudit()).action).toBe("status.note_changed");
     await ctx.db.transaction((tx) => setStatusNote(tx, admin.id, target.id, "   "));

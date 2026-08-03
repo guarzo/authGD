@@ -37,7 +37,7 @@ beforeAll(async () => {
     WANDERER_API_KEY: "k",
     WANDERER_ACL_ID: "a",
     ESI_CONTACT: "ops@example.com",
-  } as NodeJS.ProcessEnv);
+  });
 });
 beforeEach(() =>
   ctx.db.execute(sql`
@@ -64,10 +64,7 @@ describe("getAccountView", () => {
           accountId: row.id,
           name: "Main",
           ownerHash: "o1",
-          scopes: [
-            "esi-characters.read_contacts.v1",
-            "esi-characters.write_contacts.v1",
-          ],
+          scopes: ["esi-characters.read_contacts.v1", "esi-characters.write_contacts.v1"],
           tokenStatus: "valid",
         },
         {
@@ -119,21 +116,40 @@ describe("getAdminAccountsList", () => {
   async function seedTrio() {
     // A: flygd, main "Alpha" + alt, on map, discord linked
     const a = await seedAccount(ctx.db, { tier: "flygd", discordUserId: "111" });
-    await seedCharacter(ctx.db, cfg, { id: 1, accountId: a.id, main: true, name: "Alpha" });
+    await seedCharacter(ctx.db, cfg, {
+      id: 1,
+      accountId: a.id,
+      main: true,
+      name: "Alpha",
+    });
     await seedCharacter(ctx.db, cfg, { id: 2, accountId: a.id, name: "Alpha Alt" });
     await ctx.db.insert(wandererAclObservation).values({
-      characterId: 1, role: "viewer", observedAt: new Date("2026-08-01T00:00:00Z"),
+      characterId: 1,
+      role: "viewer",
+      observedAt: new Date("2026-08-01T00:00:00Z"),
     });
     // B: green + cryo, main "Beta"
     const b = await seedAccount(ctx.db, { tier: "green" });
-    await seedCharacter(ctx.db, cfg, { id: 3, accountId: b.id, main: true, name: "Beta" });
-    await ctx.db.update(account)
+    await seedCharacter(ctx.db, cfg, {
+      id: 3,
+      accountId: b.id,
+      main: true,
+      name: "Beta",
+    });
+    await ctx.db
+      .update(account)
       .set({ status: "cryo", statusChangedAt: new Date(), statusNote: "afk" })
       .where(eq(account.id, b.id));
     // C: locked blue, set by A, main "Gamma"
     const c = await seedAccount(ctx.db, { tier: "blue", tierLocked: true });
-    await seedCharacter(ctx.db, cfg, { id: 4, accountId: c.id, main: true, name: "Gamma" });
-    await ctx.db.update(account)
+    await seedCharacter(ctx.db, cfg, {
+      id: 4,
+      accountId: c.id,
+      main: true,
+      name: "Gamma",
+    });
+    await ctx.db
+      .update(account)
       .set({ tierChangedAt: new Date("2026-07-01T00:00:00Z"), tierChangedBy: a.id })
       .where(eq(account.id, c.id));
     return { a, b, c };
@@ -161,7 +177,10 @@ describe("getAdminAccountsList", () => {
     const rows = await getAdminAccountsList(ctx.db, cfg);
     expect(rows.map((r) => r.mainName)).toEqual(["Alpha", "Beta", "Gamma", null]);
     expect(rows[3].accountId).toBe(noMain.id);
-    const descRows = await getAdminAccountsList(ctx.db, cfg, { sort: "name", dir: "desc" });
+    const descRows = await getAdminAccountsList(ctx.db, cfg, {
+      sort: "name",
+      dir: "desc",
+    });
     expect(descRows.map((r) => r.mainName)).toEqual(["Gamma", "Beta", "Alpha", null]);
   });
 
@@ -178,7 +197,8 @@ describe("getAdminAccountsList", () => {
     const byTier = await getAdminAccountsList(ctx.db, cfg, { sort: "tier" });
     expect(byTier.map((r) => r.tier)).toEqual(["flygd", "blue", "green"]);
     const byDate = await getAdminAccountsList(ctx.db, cfg, {
-      sort: "tierChangedAt", dir: "desc",
+      sort: "tierChangedAt",
+      dir: "desc",
     });
     // C is the only account with tierChangedAt; nulls sort last regardless of dir
     expect(byDate[0].tier).toBe("blue");
@@ -188,7 +208,10 @@ describe("getAdminAccountsList", () => {
     const a = await seedAccount(ctx.db, { tier: "flygd" });
     await seedCharacter(ctx.db, cfg, { id: 10, accountId: a.id, main: true, name: "T1" });
     await seedCharacter(ctx.db, cfg, { id: 11, accountId: a.id, name: "T2" });
-    await ctx.db.update(character).set({ tokenStatus: "invalid" }).where(eq(character.id, 11));
+    await ctx.db
+      .update(character)
+      .set({ tokenStatus: "invalid" })
+      .where(eq(character.id, 11));
     // Pin the disjoint counters: a character explicitly flagged needs_reauth,
     // and a separate character that's "valid" but missing required scopes —
     // both must land in needsReauth, not healthy, without double-counting.

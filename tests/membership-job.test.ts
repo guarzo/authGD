@@ -36,9 +36,11 @@ describe("runMembershipJob", () => {
   it("promotes green → flygd on a confirmed main in alliance, transactionally with the outbox row", async () => {
     const acc = await seedAccount(ctx.db, { tier: "green" });
     await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
-    const result = await runMembershipJob(
-      { db: ctx.db, cfg, esi: esiWith({ 1: 99000001 }) },
-    );
+    const result = await runMembershipJob({
+      db: ctx.db,
+      cfg,
+      esi: esiWith({ 1: 99000001 }),
+    });
     expect(result.status).toBe("ok");
     expect(result.counts).toMatchObject({ promoted: 1, demoted: 0 });
     const after = await getAccount(acc.id);
@@ -50,9 +52,9 @@ describe("runMembershipJob", () => {
       accountId: acc.id,
     });
     const audits = await ctx.db.select().from(auditLog);
-    expect(
-      audits.some((a) => a.action === "tier.changed" && a.target === acc.id),
-    ).toBe(true);
+    expect(audits.some((a) => a.action === "tier.changed" && a.target === acc.id)).toBe(
+      true,
+    );
   });
 
   it("demotes flygd → green when the main left the alliance", async () => {
@@ -84,9 +86,9 @@ describe("runMembershipJob", () => {
         throw new EsiError("esi down", 503, "transient");
       },
     };
-    await expect(
-      runMembershipJob({ db: ctx.db, cfg, esi }),
-    ).rejects.toBeInstanceOf(JobRetryError);
+    await expect(runMembershipJob({ db: ctx.db, cfg, esi })).rejects.toBeInstanceOf(
+      JobRetryError,
+    );
     expect((await getAccount(acc.id)).tier).toBe("flygd"); // an ESI outage can never mass-demote
   });
 
@@ -97,7 +99,11 @@ describe("runMembershipJob", () => {
     const esi = {
       postAffiliation: async (ids: number[]): Promise<Affiliation[]> => {
         if (ids.includes(7)) throw new EsiError("bad id", 400, "permanent");
-        return ids.map((id) => ({ characterId: id, corporationId: 1, allianceId: 99000001 }));
+        return ids.map((id) => ({
+          characterId: id,
+          corporationId: 1,
+          allianceId: 99000001,
+        }));
       },
     };
     const result = await runMembershipJob({ db: ctx.db, cfg, esi });
@@ -111,7 +117,11 @@ describe("runMembershipJob", () => {
 
   it("excludes flagged characters unless recheckInvalid is set", async () => {
     const acc = await seedAccount(ctx.db);
-    await seedCharacter(ctx.db, cfg, { id: 8, accountId: acc.id, affiliationInvalid: true });
+    await seedCharacter(ctx.db, cfg, {
+      id: 8,
+      accountId: acc.id,
+      affiliationInvalid: true,
+    });
     const seen: number[][] = [];
     const esi = {
       postAffiliation: async (ids: number[]): Promise<Affiliation[]> => {
@@ -142,7 +152,10 @@ describe("runMembershipJob", () => {
   });
 
   it("labels recheck runs membership-recheck in sync_run (F7)", async () => {
-    await runMembershipJob({ db: ctx.db, cfg, esi: esiWith({}) }, { recheckInvalid: true });
+    await runMembershipJob(
+      { db: ctx.db, cfg, esi: esiWith({}) },
+      { recheckInvalid: true },
+    );
     await runMembershipJob({ db: ctx.db, cfg, esi: esiWith({}) });
     const runs = await ctx.db.select().from(syncRun).orderBy(desc(syncRun.id));
     expect(runs.map((r) => r.jobType)).toEqual(["membership", "membership-recheck"]);
@@ -162,7 +175,11 @@ describe("runMembershipJob", () => {
         if (calls === 1) {
           await runMembershipJob({ db: ctx.db, cfg, esi: esiWith({ 1: 99000001 }) });
         }
-        return ids.map((id) => ({ characterId: id, corporationId: 1000, allianceId: null }));
+        return ids.map((id) => ({
+          characterId: id,
+          corporationId: 1000,
+          allianceId: null,
+        }));
       },
     };
     const result = await runMembershipJob({ db: ctx.db, cfg, esi });

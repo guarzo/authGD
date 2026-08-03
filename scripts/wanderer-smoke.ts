@@ -60,6 +60,7 @@ async function main() {
         await wanderer.removeAclMember(characterId);
         const afterCleanup = await wanderer.getAclMembers();
         if (afterCleanup.some((m) => m.characterId === characterId)) {
+          // eslint-disable-next-line no-unsafe-finally -- this throw is caught by the enclosing try/catch *inside* the finally block, so it never escapes and cannot mask the original error. The rule is lexical and cannot see that.
           throw new Error("cleanup removeAclMember did not take effect on re-read");
         }
         console.error(`cleanup: removed ${characterId} from the ACL after a failure`);

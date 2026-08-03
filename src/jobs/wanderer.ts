@@ -2,7 +2,11 @@ import type { Config } from "@/config";
 import type { Db } from "@/db";
 import { wandererAclObservation } from "@/db/schema";
 import { diffAcl } from "@/core/acl-diff";
-import { ACL_GRANT_ROLE, WandererError, type WandererClient } from "@/lib/wanderer/client";
+import {
+  ACL_GRANT_ROLE,
+  WandererError,
+  type WandererClient,
+} from "@/lib/wanderer/client";
 import { postOpsWebhook } from "@/lib/ops-webhook";
 import { logAudit } from "@/services/audit";
 import { getFlygdCharacters } from "@/services/desired";
@@ -57,7 +61,11 @@ export async function runWandererJob(deps: {
       try {
         await wanderer.addAclMember(id);
         added++;
-        await logAudit(db, { actor: "system", action: "wanderer.added", target: String(id) });
+        await logAudit(db, {
+          actor: "system",
+          action: "wanderer.added",
+          target: String(id),
+        });
       } catch (err) {
         anyTransient ||= isTransient(err);
         errors.push(`add ${id}: ${err instanceof Error ? err.message : String(err)}`);
@@ -67,7 +75,11 @@ export async function runWandererJob(deps: {
       try {
         await wanderer.removeAclMember(id);
         removed++;
-        await logAudit(db, { actor: "system", action: "wanderer.removed", target: String(id) });
+        await logAudit(db, {
+          actor: "system",
+          action: "wanderer.removed",
+          target: String(id),
+        });
       } catch (err) {
         anyTransient ||= isTransient(err);
         errors.push(`remove ${id}: ${err instanceof Error ? err.message : String(err)}`);
@@ -79,7 +91,11 @@ export async function runWandererJob(deps: {
       try {
         await wanderer.updateAclMemberRole(id, ACL_GRANT_ROLE);
         unblocked++;
-        await logAudit(db, { actor: "system", action: "wanderer.unblocked", target: String(id) });
+        await logAudit(db, {
+          actor: "system",
+          action: "wanderer.unblocked",
+          target: String(id),
+        });
       } catch (err) {
         anyTransient ||= isTransient(err);
         errors.push(`unblock ${id}: ${err instanceof Error ? err.message : String(err)}`);
@@ -103,9 +119,11 @@ export async function runWandererJob(deps: {
       await db.transaction(async (tx) => {
         await tx.delete(wandererAclObservation);
         if (rows.length > 0) {
-          await tx.insert(wandererAclObservation).values(
-            rows.map((m) => ({ characterId: m.characterId, role: m.role, observedAt })),
-          );
+          await tx
+            .insert(wandererAclObservation)
+            .values(
+              rows.map((m) => ({ characterId: m.characterId, role: m.role, observedAt })),
+            );
         }
       });
     }
@@ -121,7 +139,10 @@ export async function runWandererJob(deps: {
     if (errors.length > 0 || observed === null) {
       return {
         status: "partial",
-        errorSummary: [...errors, ...(observed === null ? ["post-mutation re-read failed"] : [])]
+        errorSummary: [
+          ...errors,
+          ...(observed === null ? ["post-mutation re-read failed"] : []),
+        ]
           .slice(0, 5)
           .join("; "),
         counts,

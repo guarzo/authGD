@@ -19,10 +19,10 @@ afterAll(() => ctx.cleanup());
 beforeEach(() => truncateAll(ctx.db));
 
 const okToken = (async () =>
-  new Response(
-    JSON.stringify({ access_token: "at", refresh_token: "rt2" }),
-    { status: 200, headers: { "content-type": "application/json" } },
-  )) as typeof fetch;
+  new Response(JSON.stringify({ access_token: "at", refresh_token: "rt2" }), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  })) as typeof fetch;
 
 type Calls = {
   adds: Array<{ characterId: number; ids: number[]; labelIds: number[] }>;
@@ -113,14 +113,29 @@ describe("runContactsJob", () => {
     const result = await runContactsJob({ db: ctx.db, cfg, esi, fetchImpl: okToken });
     expect(result.status).toBe("ok");
     // character 1's desired set excludes itself: {2, 3}
-    expect(calls.edits).toContainEqual({ characterId: 1, ids: [2], labelIds: [5, LABEL_ID] });
+    expect(calls.edits).toContainEqual({
+      characterId: 1,
+      ids: [2],
+      labelIds: [5, LABEL_ID],
+    });
     expect(calls.deletes).toContainEqual({ characterId: 1, ids: [99] });
     expect(calls.adds.filter((c) => c.characterId === 1)).toEqual([]);
     // characters 2 and 3 each get the other two added — order-independent,
     // since getFlygdCharacters carries no ORDER BY guarantee.
-    const sortedAdds = calls.adds.map((c) => ({ ...c, ids: [...c.ids].sort((a, b) => a - b) }));
-    expect(sortedAdds).toContainEqual({ characterId: 2, ids: [1, 3], labelIds: [LABEL_ID] });
-    expect(sortedAdds).toContainEqual({ characterId: 3, ids: [1, 2], labelIds: [LABEL_ID] });
+    const sortedAdds = calls.adds.map((c) => ({
+      ...c,
+      ids: [...c.ids].sort((a, b) => a - b),
+    }));
+    expect(sortedAdds).toContainEqual({
+      characterId: 2,
+      ids: [1, 3],
+      labelIds: [LABEL_ID],
+    });
+    expect(sortedAdds).toContainEqual({
+      characterId: 3,
+      ids: [1, 2],
+      labelIds: [LABEL_ID],
+    });
     expect((await lastResult(1))?.lastResult).toBe("ok");
     expect((await lastResult(1))?.lastSyncedAt).not.toBeNull();
   });
@@ -156,7 +171,11 @@ describe("runContactsJob", () => {
   it("skips non-pushable characters but keeps them in the desired set", async () => {
     const acc = await seedAccount(ctx.db, { tier: "flygd" });
     await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
-    await seedCharacter(ctx.db, cfg, { id: 2, accountId: acc.id, tokenStatus: "invalid" });
+    await seedCharacter(ctx.db, cfg, {
+      id: 2,
+      accountId: acc.id,
+      tokenStatus: "invalid",
+    });
     const { esi, calls } = fakeEsi({});
     const result = await runContactsJob({ db: ctx.db, cfg, esi, fetchImpl: okToken });
     expect(result.status).toBe("ok");
@@ -211,7 +230,12 @@ describe("runContactsJob", () => {
         throw new EsiError("invalid contact id", 400, "permanent");
       },
     };
-    const result = await runContactsJob({ db: ctx.db, cfg, esi: failingEsi, fetchImpl: okToken });
+    const result = await runContactsJob({
+      db: ctx.db,
+      cfg,
+      esi: failingEsi,
+      fetchImpl: okToken,
+    });
     expect(result.status).toBe("partial");
     expect(result.counts?.failed).toBeGreaterThan(0);
     // the add failed permanently, but the delete still ran

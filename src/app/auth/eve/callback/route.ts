@@ -55,9 +55,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.redirect(new URL(dest, cfg.appBaseUrl));
   }
 
-  const { accountId } = await db.transaction((dbtx) =>
-    handleEveLogin(dbtx, cfg, ch),
-  );
+  const { accountId } = await db.transaction((dbtx) => handleEveLogin(dbtx, cfg, ch));
   const sid = await createSession(db, accountId);
   const res = NextResponse.redirect(new URL("/account", cfg.appBaseUrl));
   res.cookies.set(cfg.sessionCookieName, sid, {
