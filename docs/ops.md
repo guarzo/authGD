@@ -40,7 +40,7 @@ against YOUR live instance once, at first deploy, with a throwaway character
 id (any EVE character id not already on the ACL):
 
 ```bash
-fly ssh console -C "npm run smoke:wanderer -- <characterId>"
+fly ssh console -C "sh -c 'cd /app && npm run smoke:wanderer -- <characterId>'"
 ```
 
 PASS = read/add/remove all work. The script refuses to run against a

@@ -19,6 +19,7 @@ COPY --from=build /app/.next/standalone ./web
 COPY --from=build /app/.next/static ./web/.next/static
 # Worker + release migrate run from source via tsx (prod dependency).
 COPY src ./src
+COPY scripts ./scripts
 COPY drizzle ./drizzle
 COPY tsconfig.json next.config.ts ./
 ENV HOSTNAME=0.0.0.0 PORT=3000

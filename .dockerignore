@@ -8,3 +8,5 @@ e2e
 tmp
 docker-compose.dev.yml
 *.md
+.env
+.env*.local

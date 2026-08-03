@@ -60,7 +60,7 @@ describe("runDiscordRolesJob", () => {
   it("config validation failure is permanent: failed run, webhook, NO retry", async () => {
     const badRoles = validGuildRoles.filter((r) => r.id !== "11"); // blue missing
     const d = fakeDiscord({}, badRoles);
-    const webhook = vi.fn(async () => new Response("", { status: 204 }));
+    const webhook = vi.fn(async () => new Response(null, { status: 204 }));
     const result = await runDiscordRolesJob({
       db: ctx.db,
       cfg,
@@ -85,7 +85,7 @@ describe("runDiscordRolesJob", () => {
         });
       },
     };
-    const webhook = vi.fn(async () => new Response("", { status: 204 }));
+    const webhook = vi.fn(async () => new Response(null, { status: 204 }));
     // returned, not thrown: a bad bot token must not retry-loop
     const result = await runDiscordRolesJob({
       db: ctx.db,
