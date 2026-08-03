@@ -82,47 +82,51 @@ export default async function AdminAccountsPage({
 
       <RuleHead>Filter</RuleHead>
       <div className="filters">
-        <span className="filters__label">Tier</span>
-        <a
-          className="btn btn--quiet"
-          href={qs({ tier: undefined })}
-          aria-current={!tier ? "true" : undefined}
-        >
-          all
-        </a>
-        {TIERS.map((t) => (
+        <div className="filters__group" role="group" aria-label="Filter by tier">
+          <span className="filters__label">Tier</span>
           <a
-            key={t}
             className="btn btn--quiet"
-            href={qs({ tier: t })}
-            aria-current={tier === t ? "true" : undefined}
+            href={qs({ tier: undefined })}
+            aria-current={!tier ? "true" : undefined}
           >
-            {t}
+            all
           </a>
-        ))}
+          {TIERS.map((t) => (
+            <a
+              key={t}
+              className="btn btn--quiet"
+              href={qs({ tier: t })}
+              aria-current={tier === t ? "true" : undefined}
+            >
+              {t}
+            </a>
+          ))}
+        </div>
         <span className="filters__sep" aria-hidden="true" />
-        <span className="filters__label">Status</span>
-        <a
-          className="btn btn--quiet"
-          href={qs({ status: undefined })}
-          aria-current={!status ? "true" : undefined}
-        >
-          all
-        </a>
-        <a
-          className="btn btn--quiet"
-          href={qs({ status: "cryo" })}
-          aria-current={status === "cryo" ? "true" : undefined}
-        >
-          cryo
-        </a>
-        <a
-          className="btn btn--quiet"
-          href={qs({ status: "active" })}
-          aria-current={status === "active" ? "true" : undefined}
-        >
-          active
-        </a>
+        <div className="filters__group" role="group" aria-label="Filter by status">
+          <span className="filters__label">Status</span>
+          <a
+            className="btn btn--quiet"
+            href={qs({ status: undefined })}
+            aria-current={!status ? "true" : undefined}
+          >
+            all
+          </a>
+          <a
+            className="btn btn--quiet"
+            href={qs({ status: "cryo" })}
+            aria-current={status === "cryo" ? "true" : undefined}
+          >
+            cryo
+          </a>
+          <a
+            className="btn btn--quiet"
+            href={qs({ status: "active" })}
+            aria-current={status === "active" ? "true" : undefined}
+          >
+            active
+          </a>
+        </div>
       </div>
 
       <RuleHead>{rows.length === 1 ? "1 account" : `${rows.length} accounts`}</RuleHead>
@@ -301,12 +305,15 @@ function AccountRow({ r }: { r: AdminAccountRow }) {
       </td>
 
       <td>
-        {r.mapCount > 0 ? (
-          <Status tone="ok">
+        {/* Every character of a flygd account is meant to be on the map ACL, so
+            a partial count is a gap to chase, not a healthy state. Non-flygd
+            accounts have none by design, which is the "off" case. */}
+        {r.mapCount === 0 ? (
+          <Status tone="off">off</Status>
+        ) : (
+          <Status tone={r.mapCount === tokens.total ? "ok" : "warn"}>
             {r.mapCount}/{tokens.total}
           </Status>
-        ) : (
-          <Status tone="off">off</Status>
         )}
       </td>
 

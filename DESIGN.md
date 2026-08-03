@@ -149,9 +149,11 @@ Ratio 1.25 minimum between adjacent steps, with a hard jump at display sizes.
 Artwork by **Faoble**, used with permission and not covered by the repository's MIT
 licence.
 
-- `public/brand/seal.png` — the Zoo Landers / Flygd seal (navy, gold, cream). The
-  identity mark. Used small in the header and large on login.
-- `public/brand/lander.png` — line-art rendering of the lander. Used once, very low
+- `public/brand/seal.webp` — the Zoo Landers / Flygd seal (navy, gold, cream). The
+  identity mark, used large on login.
+- `public/brand/seal-sm.webp` — the same seal at header size, so the mark in the
+  site header is not a 400px image scaled down to 34px.
+- `public/brand/lander.webp` — line-art rendering of the lander. Used once, very low
   opacity, as the login field's ground.
 
 ## Focus and states
@@ -159,4 +161,8 @@ licence.
 - Global focus ring: `2px` solid `--gold` at `2px` offset, on every interactive
   element, never removed. Against both `--void` and `--hull` it clears 3:1.
 - Disabled controls drop to 45% opacity and keep their text legible at 3:1.
-- Hit targets are at least 40px in the primary axis on touch.
+- Hit targets: `36px` for standalone controls (`.btn`), `28px` for the in-row
+  controls of the admin tables (`.btn--micro`). Both clear the `24px` WCAG 2.5.8
+  (AA) minimum. The tables carry a control set on every row and cannot reach the
+  `44px` AAA target without growing past a screenful, so density wins there and
+  nowhere else.

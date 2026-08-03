@@ -31,17 +31,27 @@ export function SiteHeader({ items, current }: { items: NavItem[]; current?: str
 /**
  * A typed label with a hairline running to the container edge. `aside` sits
  * between the label and the rule, for a status the label alone can't carry.
+ * Pass `as` when the label titles a real section, so assistive navigation gets
+ * a heading rather than an anonymous span.
  */
-export function RuleHead({ children, aside }: { children: ReactNode; aside?: ReactNode }) {
+export function RuleHead({
+  children,
+  aside,
+  as: As = "span",
+}: {
+  children: ReactNode;
+  aside?: ReactNode;
+  as?: "span" | "h2" | "h3";
+}) {
   return (
     <div className="rule-head">
-      <span>{children}</span>
+      <As className="rule-head__label">{children}</As>
       {aside && <span className="rule-head__aside">{aside}</span>}
     </div>
   );
 }
 
-type Tone = "ok" | "warn" | "bad" | "off" | "neutral";
+export type Tone = "ok" | "warn" | "bad" | "off" | "neutral";
 
 /**
  * Machine state. The glyph and the word both carry the meaning, so colour is
@@ -53,8 +63,10 @@ export function Status({ tone = "neutral", children }: { tone?: Tone; children: 
 
 export function Tier({ tier, locked }: { tier: string; locked?: boolean }) {
   const known = tier === "flygd" || tier === "blue" || tier === "green";
+  // An unknown tier is a data problem, not a blue member: give it a neutral
+  // badge rather than borrowing another tier's colour and asserting a lie.
   return (
-    <span className={known ? `tier tier--${tier}` : "tier tier--blue"}>
+    <span className={known ? `tier tier--${tier}` : "tier tier--unknown"}>
       {tier}
       {locked && (
         <>
@@ -63,6 +75,23 @@ export function Tier({ tier, locked }: { tier: string; locked?: boolean }) {
         </>
       )}
     </span>
+  );
+}
+
+/**
+ * A JSON payload in a table cell. The collapsed line is truncated to keep the
+ * readable columns on screen, but the full value has to stay reachable: role
+ * IDs and trailing failure counters live at the end of these blobs, and a
+ * CSS-only ellipsis would put them out of reach for good.
+ */
+export function Json({ value }: { value: unknown }) {
+  return (
+    <details className="json">
+      <summary>
+        <span className="json__peek">{JSON.stringify(value)}</span>
+      </summary>
+      <pre className="json__full">{JSON.stringify(value, null, 2)}</pre>
+    </details>
   );
 }
 

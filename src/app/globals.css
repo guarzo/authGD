@@ -270,14 +270,25 @@ a:hover {
   margin: var(--s-7) 0 var(--s-4);
 }
 
-.rule-head > :first-child {
+.rule-head__label {
   font-family: var(--font-mono), ui-monospace, monospace;
   font-size: var(--t-label);
   font-weight: 600;
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--ink-faint);
-  flex-shrink: 0;
+  /* Allowed to shrink and break: at 320px or high zoom a long job name plus a
+     status aside would otherwise force the whole page to scroll sideways. */
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Headings borrow the label's type; nothing else about them should inherit the
+   browser's h2 sizing or margins. */
+h2.rule-head__label,
+h3.rule-head__label {
+  margin: 0;
+  line-height: 1.4;
 }
 
 .rule-head::after {
@@ -291,7 +302,8 @@ a:hover {
   display: flex;
   align-items: center;
   gap: var(--s-3);
-  flex-shrink: 0;
+  flex-wrap: wrap;
+  min-width: 0;
 }
 
 /* --- Definition rows ---------------------------------------------------- */
@@ -404,10 +416,22 @@ a:hover {
   max-width: 24ch;
 }
 
-/* Raw JSON payloads in the audit and sync tables. Dimmed and capped so a fat
-   details blob can't push the readable columns off screen. */
+/* Raw JSON payloads in the audit and sync tables. The collapsed line is capped
+   so a fat blob can't push the readable columns off screen; opening it shows
+   the whole value, because the interesting part (role IDs, trailing failure
+   counters) is usually past the truncation point. The peek is a span inside the
+   summary so it can truncate: the summary itself is the flex row that carries
+   the +/- marker from the shared disclosure styling. */
 .json {
-  display: inline-block;
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 0.75rem;
+}
+
+/* Declared on the span rather than the summary: the shared `.log summary` rule
+   sets a brighter colour and heavier weight, and a value declared here beats
+   what would otherwise be inherited from it, whatever the specificity. */
+.json__peek {
+  display: block;
   /* min() rather than a flat 34ch: in the fixed-layout sync table the column is
      narrower than 34ch, and a cap wider than the cell spills the JSON over the
      next column instead of truncating it. */
@@ -415,10 +439,20 @@ a:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  vertical-align: bottom;
-  font-family: var(--font-mono), ui-monospace, monospace;
-  font-size: 0.75rem;
   color: var(--ink-faint);
+  font-weight: 400;
+}
+
+.json__full {
+  margin: var(--s-2) 0 0;
+  padding: var(--s-2) var(--s-3);
+  max-width: 40ch;
+  overflow-x: auto;
+  background: var(--void);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  color: var(--ink-dim);
+  white-space: pre;
 }
 
 .portrait {
@@ -542,6 +576,12 @@ a:hover {
   --tone: var(--tier-green);
 }
 
+/* A tier the UI doesn't recognise. Neutral on purpose: better to read as
+   unknown data than to borrow a real tier's colour. */
+.tier--unknown {
+  --tone: var(--ink-faint);
+}
+
 /* --- Buttons ------------------------------------------------------------ */
 
 .btn {
@@ -646,15 +686,16 @@ a:hover {
 
 .btn-group {
   display: inline-flex;
-  gap: 1px;
+  gap: 2px;
 }
 
-/* In-row controls. A table with a control set on every row cannot afford the
-   full 36px target without the rows growing past a screenful, so these trade
-   down to a denser size that still clears the 24px AAA minimum. */
+/* In-row controls. A table with a control set on every row cannot carry the
+   44px AAA target without the rows growing past a screenful, so these trade
+   down to 28px: comfortably over the 24px WCAG 2.5.8 (AA) minimum, with a 2px
+   gap in .btn-group so adjacent tier buttons are not a single smear. */
 .btn--micro {
-  min-height: 1.5rem;
-  padding: 0.1rem var(--s-2);
+  min-height: 1.75rem;
+  padding: 0.2rem var(--s-2);
   font-size: 0.6875rem;
   letter-spacing: 0.08em;
 }
@@ -688,6 +729,13 @@ a:hover {
   gap: var(--s-2);
   align-items: center;
   margin-bottom: var(--s-4);
+}
+
+.filters__group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  align-items: center;
 }
 
 .filters__label {

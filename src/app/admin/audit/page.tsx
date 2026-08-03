@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import { getDb } from "@/db";
 import { getAdminContext } from "@/lib/admin-guard";
 import { AUDIT_PAGE_SIZE, queryAuditLog } from "@/services/audit";
-import { RuleHead, Scroller } from "@/app/_components/ui";
+import { RuleHead, Json, Scroller } from "@/app/_components/ui";
 
 export const dynamic = "force-dynamic";
 
@@ -111,7 +111,7 @@ export default async function AdminAuditPage({
                   <td className="mono">{r.target}</td>
                   <td>
                     {r.details ? (
-                      <code className="json">{JSON.stringify(r.details)}</code>
+                      <Json value={r.details} />
                     ) : (
                       <span className="dim">&mdash;</span>
                     )}

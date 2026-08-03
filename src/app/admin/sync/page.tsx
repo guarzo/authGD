@@ -1,9 +1,12 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { getDb } from "@/db";
+import type { syncRunStatusEnum } from "@/db/schema";
 import { getAdminContext } from "@/lib/admin-guard";
 import { getSyncStatus } from "@/services/sync-status";
-import { RuleHead, Scroller, Status } from "@/app/_components/ui";
+import { Json, RuleHead, Scroller, Status, type Tone } from "@/app/_components/ui";
+import { formatAgo } from "@/app/_components/format-ago";
+import { RelativeTime } from "@/app/_components/relative-time";
 import { recheckInvalidAction, syncAllAction } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -16,23 +19,25 @@ function fmt(d: Date | null): string {
   return d ? d.toISOString().replace("T", " ").slice(0, 19) : "…";
 }
 
-/** "3m ago" style, coarse on purpose: the point is freshness, not precision. */
-function ago(d: Date | null, now: number): string {
-  if (!d) return "running";
-  const s = Math.max(0, Math.round((now - d.getTime()) / 1000));
-  if (s < 90) return `${s}s ago`;
-  const m = Math.round(s / 60);
-  if (m < 90) return `${m}m ago`;
-  const h = Math.round(m / 60);
-  if (h < 48) return `${h}h ago`;
-  return `${Math.round(h / 24)}d ago`;
-}
+/**
+ * Typed against the enum rather than string, so adding a status to the schema
+ * is a compile error here instead of a silently grey badge. "partial" means
+ * some of the job's work failed, which is a warning an admin must see, not an
+ * inactive state.
+ */
+type SyncRunStatus = (typeof syncRunStatusEnum.enumValues)[number];
 
-function tone(status: string | null): "ok" | "warn" | "bad" | "off" {
-  if (status === "failed") return "bad";
-  if (status === "ok" || status === "success") return "ok";
-  if (status === null) return "warn";
-  return "off";
+function tone(status: SyncRunStatus | null): Tone {
+  switch (status) {
+    case "ok":
+      return "ok";
+    case "partial":
+      return "warn";
+    case "failed":
+      return "bad";
+    case null:
+      return "warn"; // still running
+  }
 }
 
 export default async function AdminSyncPage() {
@@ -72,16 +77,17 @@ export default async function AdminSyncPage() {
 
       {groups.map((g) => {
         const latest = g.runs[0];
+        const latestAt = latest ? (latest.finishedAt ?? latest.startedAt) : null;
+        const latestIso = latestAt ? latestAt.toISOString() : null;
         return (
           <section key={g.jobType}>
             <RuleHead
+              as="h2"
               aside={
                 latest && (
                   <>
                     <Status tone={tone(latest.status)}>{latest.status ?? "running"}</Status>
-                    <span className="dim mono">
-                      {ago(latest.finishedAt ?? latest.startedAt, now)}
-                    </span>
+                    <RelativeTime iso={latestIso} initial={formatAgo(latestIso, now)} />
                   </>
                 )
               }
@@ -120,7 +126,7 @@ export default async function AdminSyncPage() {
                       </td>
                       <td>
                         {r.counts ? (
-                          <code className="json">{JSON.stringify(r.counts)}</code>
+                          <Json value={r.counts} />
                         ) : (
                           <span className="dim">&mdash;</span>
                         )}
