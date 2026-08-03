@@ -1,0 +1,130 @@
+# Dependency automation.
+#
+# Grouping rule that governs everything below: a dependency lands in the FIRST
+# group whose patterns it matches, so the specific groups are ordered before the
+# catch-all. Anything matching no group gets its own PR.
+#
+# The shape this produces on purpose:
+#   * things that MUST move together are grouped (React, Drizzle)
+#   * tooling churn is batched, because CI is the thing that judges it
+#   * majors of the load-bearing runtime deps fall through to individual PRs,
+#     because those are the ones worth reading a changelog for
+#
+# `applies-to` is left unset everywhere, which means version updates only.
+# Security updates stay ungrouped and arrive as soon as an advisory lands —
+# batching those onto a weekly schedule is exactly the wrong trade.
+version: 2
+
+updates:
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    # Matches the conventional-commit prefixes already used in this repo's
+    # history. `include: scope` renders chore(deps) / chore(deps-dev).
+    commit-message:
+      prefix: chore
+      prefix-development: chore
+      include: scope
+
+    ignore:
+      # @types/node majors track NODE majors, and this repo pins the Node major
+      # in three files that scripts/check-node-version.sh forces to agree. A
+      # @types/node v24 bump on a Node 22 runtime is the bad case: the types
+      # describe APIs the runtime does not have, so `npm run typecheck` PASSES
+      # and the failure lands at execution instead. Majors here belong to the
+      # deliberate Node bump; minors and patches still flow normally.
+      - dependency-name: "@types/node"
+        update-types:
+          - version-update:semver-major
+
+    groups:
+      # Next 15 requires React 19; the @types packages track the runtime
+      # versions. Bumping any one of these alone produces a build that fails on
+      # a type mismatch, so they move as a unit — majors included.
+      react:
+        patterns:
+          - react
+          - react-dom
+          - "@types/react"
+          - "@types/react-dom"
+
+      # drizzle-kit generates the migrations that drizzle-orm reads. A version
+      # skew between them shows up as a malformed migration at release time,
+      # which is fly.toml's release_command — the worst place to find it.
+      drizzle:
+        patterns:
+          - drizzle-orm
+          - drizzle-kit
+
+      # One PR for the whole lint/format toolchain. These break loudly and
+      # immediately in CI's `static` job, and a plugin bumped out of step with
+      # its eslint core is the usual cause — so grouping them is both less noise
+      # and a better signal.
+      linting:
+        patterns:
+          - eslint
+          - "@eslint/*"
+          - typescript-eslint
+          - eslint-config-prettier
+          - "@next/eslint-plugin-next"
+          - prettier
+
+      # Same argument: the test job either passes or it does not, and reading
+      # three separate PRs to learn that adds nothing.
+      testing:
+        patterns:
+          - vitest
+          - "@playwright/test"
+          - msw
+
+      # @types/node and @types/pg. The React types are already claimed above by
+      # first-match, so they do not appear here.
+      types:
+        patterns:
+          - "@types/*"
+
+      # Catch-all, deliberately restricted to minor and patch. Everything not
+      # named above — next, zod, pg, pg-boss, jose, tsx, typescript — batches
+      # here for low-risk bumps, and its MAJORS match no group at all and so
+      # arrive as individual PRs. That is the point: a Next or zod major is a
+      # read-the-changelog change, and zod schemas are this app's config source
+      # of truth.
+      minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      # Every action here is first-party actions/* and they bump majors in step
+      # (checkout, setup-node, cache, upload-artifact). One PR, one CI run.
+      actions:
+        patterns:
+          - "*"
+
+# Deliberately NOT configured: package-ecosystem: docker.
+#
+# The Dockerfile pins the floating tag `node:22-alpine`, not a digest, so the
+# only update Dependabot could ever propose is a MAJOR tag change to
+# node:24-alpine — and it would edit the Dockerfile alone. scripts/check-node-version.sh
+# requires the Dockerfile, .nvmrc and package.json `engines` to agree, so such a
+# PR fails CI by construction and can never be merged as-is. A Node bump here is
+# a deliberate four-file change; automating one third of it produces only noise.
+# Patch rebuilds of node:22-alpine are picked up by `docker build` anyway.
