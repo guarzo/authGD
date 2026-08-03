@@ -96,7 +96,10 @@ function parseField(raw: string, index: number): Set<number> {
   const out = new Set<number>();
 
   for (const part of raw.split(",")) {
-    const [spec, stepRaw] = part.split("/");
+    const [spec, stepRaw, ...extra] = part.split("/");
+    // "*/5/2" would otherwise parse as "*/5" with the tail silently dropped,
+    // which is the one failure mode this whole module exists to avoid.
+    if (extra.length > 0) throw new Error(`unsupported cron step "${part}"`);
     if (stepRaw !== undefined && !/^\d+$/.test(stepRaw)) {
       throw new Error(`unsupported cron step "${part}"`);
     }

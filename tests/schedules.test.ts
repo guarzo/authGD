@@ -65,6 +65,10 @@ describe("parseCron", () => {
     expect(() => parseCron("0 4 * * SUN")).toThrow(/unsupported/);
     expect(() => parseCron("@daily")).toThrow(/5-field/);
     expect(() => parseCron("*/0 * * * *")).toThrow(/non-zero/);
+    // A second slash is not a nested step: it used to parse as "*/5" with the
+    // tail dropped, which is exactly the quiet wrong answer this module exists
+    // to avoid.
+    expect(() => parseCron("*/5/2 * * * *")).toThrow(/unsupported cron step/);
   });
 
   it("expands the grammar it does implement", () => {
@@ -134,6 +138,18 @@ describe("nextOccurrence", () => {
     expect(iso(nextOccurrence("0 3 * * *", at("2026-10-25T02:00:00Z")))).toBe(
       "2026-10-25T03:00:00Z",
     );
+  });
+
+  it("intersects day-of-month and day-of-week rather than unioning them", () => {
+    // Deliberately NOT Vixie cron's union rule (see the module doc). From
+    // Monday the 3rd, "0 0 8,10 * 1" has a decoy: the 8th is a Saturday, which
+    // matches day-of-month only and is what a union would fire on. The 10th is
+    // the Monday that matches both. If this ever returns the 8th, the module
+    // has silently switched to the standard reading.
+    const next = nextOccurrence("0 0 8,10 * 1", at("2026-08-03T12:00:00Z"));
+    expect(iso(next)).toBe("2026-08-10T00:00:00Z");
+    expect(next!.getUTCDay()).toBe(1);
+    expect(next!.getUTCDate()).toBe(10);
   });
 
   it("returns null rather than looping forever on an unsatisfiable date", () => {

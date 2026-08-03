@@ -140,9 +140,14 @@ describe("getPushStatus", () => {
   it("takes the newest run per job, keeping the three independent", async () => {
     await run("contacts", "ok", new Date("2026-08-03T10:05:30Z"));
     await run("contacts", "ok", new Date("2026-08-03T11:05:30Z"));
+    // Inserted last, so highest id, but finished EARLIER than the row above.
+    // That makes id order and finished_at order disagree, which is the only
+    // way to pin "newest by serial id, never max(finished_at)": a run whose
+    // clock lagged is still the most recent thing the worker did.
+    await run("contacts", "ok", new Date("2026-08-03T10:35:30Z"));
     await run("wanderer", "ok", new Date("2026-08-03T11:10:30Z"));
     const pushes = await getPushStatus(ctx.db, new Date("2026-08-03T12:07:00Z"));
-    expect(pushes.standings.lastPushedAt).toEqual(new Date("2026-08-03T11:05:30Z"));
+    expect(pushes.standings.lastPushedAt).toEqual(new Date("2026-08-03T10:35:30Z"));
     expect(pushes.map.lastPushedAt).toEqual(new Date("2026-08-03T11:10:30Z"));
     expect(pushes.discord.lastPushedAt).toBeNull(); // never ran, unaffected
   });

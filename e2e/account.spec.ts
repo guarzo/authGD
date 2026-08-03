@@ -153,11 +153,27 @@ test("last pushed reports per surface, with an unlinked Discord called out", asy
 
   const pushed = page.locator("dl.facts").last();
   await expect(page.getByRole("heading", { name: "Last pushed" })).toBeVisible();
-  await expect(pushed).toContainText("12m ago");
-  await expect(pushed).toContainText("not yet run"); // map: scheduled, never run
-  await expect(pushed).toContainText("not linked"); // discord: nothing to push
-  // The cadence is knowable even for the surfaces that have never run.
-  await expect(pushed.getByText(/^next \d\d:\d\d$/).first()).toBeVisible();
+
+  // Scoped per row: a container-wide toContainText would pass even if the three
+  // states landed on the wrong surfaces.
+  const row = (label: string) => pushed.locator(`dt:text-is("${label}") + dd`);
+  // JOB_CRON: contacts is hourly :05, wanderer hourly :10. Asserting the
+  // minute proves the row reads its own job's cadence, not just any cadence.
+  await expect(row("Standings")).toContainText("12m ago");
+  await expect(row("Standings")).toContainText(/next \d\d:05$/);
+  await expect(row("Map")).toContainText("not yet run"); // scheduled, never run
+  await expect(row("Map")).toContainText(/next \d\d:10$/);
+  // Nothing to push, so no cadence either: a different state from "not run".
+  await expect(row("Discord")).toContainText("not linked");
+  await expect(row("Discord")).not.toContainText("next");
+
+  // The "next" column lines up across rows despite the states differing in
+  // width, which is the whole point of reserving a column for them.
+  const nextEdges = await pushed
+    .locator(".push__next")
+    .evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().left)));
+  expect(nextEdges).toHaveLength(2);
+  expect(nextEdges[0]).toBe(nextEdges[1]);
 });
 
 test("last pushed is omitted entirely before any character is linked", async ({

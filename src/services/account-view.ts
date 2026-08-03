@@ -56,6 +56,23 @@ export interface PushStatus {
  * does not, so a broken job visibly stops advancing rather than reporting
  * freshness it did not deliver.
  */
+
+/**
+ * `JOB_CRON` is keyed by string, so a rename there is not a type error here.
+ * A missing or unsupported cadence degrades to "we don't know when" — the null
+ * `PushStatus.nextCheckAt` already renders as an absent "next" — rather than
+ * throwing and taking the whole account page down over a decoration.
+ */
+function nextCheck(jobType: string, now: Date): Date | null {
+  const cron = JOB_CRON[jobType];
+  if (!cron) return null;
+  try {
+    return nextOccurrence(cron, now);
+  } catch {
+    return null;
+  }
+}
+
 export async function getPushStatus(
   dbx: Dbx,
   now: Date = new Date(),
@@ -81,7 +98,7 @@ export async function getPushStatus(
         .limit(1);
       const status: PushStatus = {
         lastPushedAt: row?.finishedAt ?? null,
-        nextCheckAt: nextOccurrence(JOB_CRON[jobType], now),
+        nextCheckAt: nextCheck(jobType, now),
       };
       return [kind, status] as const;
     }),
