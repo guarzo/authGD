@@ -368,7 +368,55 @@ resolve), the discord-roles job gets 401 from the real Discord API, and the
 contacts job skips every character because dry-run refuses the token refresh. A
 worker that boots cleanly and then logs failing jobs is working as designed.
 
-Logging in without EVE SSO needs a seeded session — see the dev seed script.
+### Logging in without EVE SSO
+
+EVE SSO rejects the fake client id, so the way to browse as a real account —
+including an admin — is to seed one and paste its session cookie.
+
+```bash
+npm run db:seed              # safe to re-run; upserts
+npm run db:seed -- --reset   # TRUNCATE everything first, for a clean slate
+```
+
+It seeds six accounts covering every tier, an admin, alts, and the `cryo` and
+`tier_locked` states the admin pages need something to render. For each it
+prints a cookie:
+
+```text
+admin   Admin Prime        (flygd, admin, 2 alt(s))
+  authgd_session=Ux7...redacted...
+
+blue    Blue Pilot         (blue)
+  authgd_session=Qa2...redacted...
+```
+
+To use one:
+
+1. Open devtools on the app → **Application** → **Cookies** → the origin you are
+   actually browsing (`http://localhost:3000` by default).
+2. Add a cookie whose **name** is your `SESSION_COOKIE_NAME` (default
+   `authgd_session`) and whose **value** is the printed string.
+3. **Path `/`.** Reload.
+
+Set it on the origin you browse, not on whatever `APP_BASE_URL` happens to say.
+Those differ once you point `APP_BASE_URL` at an https tunnel — and over https
+the cookie also needs the `Secure` attribute, or the browser will not send it.
+The app sets `Secure` automatically for its own cookies when `APP_BASE_URL`
+starts with `https` (`src/app/auth/eve/callback/route.ts`), but a cookie you
+create by hand is yours to configure.
+
+Two behaviors worth knowing:
+
+- **Re-running revokes the previous run's sessions.** Cookies printed earlier
+  stop working; you get a fresh set. That keeps sessions from accumulating and
+  makes the output authoritative.
+- **The script refuses a non-local `DATABASE_URL`.** Both paths write rows —
+  `--reset` destructively, the default by adding fixture accounts — and a dev
+  seed has no legitimate remote use. `ALLOW_REMOTE_SEED=1` overrides it
+  deliberately.
+
+Character ids come from a reserved `91_000_0xx` block, chosen to sit clear of
+the `90_000_0xx` ids the e2e suite generates, so the two can never collide.
 
 ### Expected noise
 
