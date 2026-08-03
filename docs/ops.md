@@ -211,14 +211,30 @@ runs.
 `SYNC_MODE` must be set **before** the deploy that introduces it, not with it:
 
 ```bash
-fly secrets set SYNC_MODE=live     # triggers its own rolling restart
+fly secrets set --stage SYNC_MODE=live   # stored; applied by the next deploy
 fly deploy
 ```
 
-There is no automatic rollback if you forget. `fly.toml` defines no health
-checks, and only the worker validates config at startup — it crash-loops, while
-`web` boots normally and returns 500 on every request (`getConfig()` is lazy).
-The release command still succeeds, because migrations never read config.
+`--stage` avoids restarting the current machines for a value the running code
+does not yet read. Plain `fly secrets set` also works — it just triggers its own
+rolling restart first.
+
+**A missing `SYNC_MODE` is not caught by anything, including the health check.**
+Per component:
+
+| Component | Behavior | Why |
+|---|---|---|
+| Release command | **succeeds** | `src/db/migrate.ts` reads `DATABASE_URL` directly, never `getConfig()` |
+| `worker` | **crash-loops** | `getConfig()` runs at `src/worker/index.ts` startup |
+| `web` | **boots, then 500s on every page** | `getConfig()` is lazily cached (`src/config.ts`) and every caller is inside a route handler or page |
+| `/api/health` | **returns 200 — healthy** | it never calls `getConfig()`: `getDb()` reads `process.env.DATABASE_URL` directly (`src/db/index.ts`) and `checkLiveness` only runs `select 1` |
+
+That last row is the trap. `fly.toml` *does* define an `http_service` check on
+`/api/health`, and that check genuinely gates deploys — but only on database
+reachability. A config error leaves it reporting healthy while every real page
+is broken, so the machine stays in rotation and the deploy is never gated.
+
+Setting the secret first is the safety net. There is no automatic one.
 
 ### What SYNC_MODE does NOT protect
 
@@ -262,7 +278,10 @@ least one never-used id in reserve, or check
 
 Requires **Node 22.9+** (the floor for `--env-file-if-exists`, which
 `npm run worker`, `npm run db:migrate`, and `npm run smoke:wanderer` use to load
-`.env`) and Docker. `npm install` enforces it via `engines` + `.npmrc`.
+`.env`) and Docker. `npm install` enforces it via `engines` + `.npmrc`, and
+`nvm use` picks it up from `.nvmrc`. The three pins (`Dockerfile`, `.nvmrc`,
+`package.json` `engines`) must agree on the major — `scripts/check-node-version.sh`
+fails CI if a bump misses one.
 
 ### From a fresh clone
 
