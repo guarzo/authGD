@@ -1,13 +1,110 @@
-import { eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, or } from "drizzle-orm";
 import type { Config } from "@/config";
+import { JOB_CRON, nextOccurrence } from "@/core/schedules";
 import type { Dbx } from "@/db";
 import {
   account,
   character,
   contactSyncState,
   discordLink,
+  syncRun,
   wandererAclObservation,
 } from "@/db/schema";
+
+/**
+ * The three things authGD pushes on a member's behalf, and the job that pushes
+ * each one.
+ *
+ * Sourced from `sync_run` rather than from per-character state, which reads
+ * like the more precise choice and is not:
+ *
+ * - `contact_sync_state` is keyed by the FLYGD character whose contact list is
+ *   written (src/jobs/contacts.ts). A blue or green member is the *content* of
+ *   that push, never a target, so their rows are structurally absent — a
+ *   per-character aggregate would tell most of the corp "never run" forever.
+ * - `wanderer_acl_observation` is a delete-and-replace snapshot of current ACL
+ *   membership. A character legitimately off the ACL has no row, which is
+ *   indistinguishable from a job that has not run.
+ * - `audit_log` records role *changes*. A member whose roles have been correct
+ *   for a month has no recent entry, and "last changed" is not "last checked".
+ *
+ * The job's own completion is the honest answer to "when did this last get
+ * pushed", and it is true for every member regardless of tier.
+ *
+ * The cadence is not restated here: `JOB_CRON` is keyed by the same job type,
+ * so the "next check" the member reads is the expression the worker registers
+ * with pg-boss rather than a second copy that can rot.
+ */
+const PUSH_JOBS = {
+  standings: "contacts",
+  map: "wanderer",
+  discord: "discord-roles",
+} as const;
+
+export type PushKind = keyof typeof PUSH_JOBS;
+
+export interface PushStatus {
+  /** Completion of the newest run that pushed something. Null = never yet. */
+  lastPushedAt: Date | null;
+  /** Next scheduled fire, or null if the cadence is unresolvable. */
+  nextCheckAt: Date | null;
+}
+
+/**
+ * "partial" counts as pushed: some members were written even though others
+ * failed, and claiming nothing happened would be the larger lie. "failed"
+ * does not, so a broken job visibly stops advancing rather than reporting
+ * freshness it did not deliver.
+ */
+
+/**
+ * `JOB_CRON` is keyed by string, so a rename there is not a type error here.
+ * A missing or unsupported cadence degrades to "we don't know when" — the null
+ * `PushStatus.nextCheckAt` already renders as an absent "next" — rather than
+ * throwing and taking the whole account page down over a decoration.
+ */
+function nextCheck(jobType: string, now: Date): Date | null {
+  const cron = JOB_CRON[jobType];
+  if (!cron) return null;
+  try {
+    return nextOccurrence(cron, now);
+  } catch {
+    return null;
+  }
+}
+
+export async function getPushStatus(
+  dbx: Dbx,
+  now: Date = new Date(),
+): Promise<Record<PushKind, PushStatus>> {
+  const entries = Object.entries(PUSH_JOBS) as Array<
+    [PushKind, (typeof PUSH_JOBS)[PushKind]]
+  >;
+  const results = await Promise.all(
+    entries.map(async ([kind, jobType]) => {
+      // Newest by serial id, matching the (job_type, id desc) index and the
+      // reasoning in services/health.ts — never max(finished_at).
+      const [row] = await dbx
+        .select({ finishedAt: syncRun.finishedAt })
+        .from(syncRun)
+        .where(
+          and(
+            eq(syncRun.jobType, jobType),
+            isNotNull(syncRun.finishedAt),
+            or(eq(syncRun.status, "ok"), eq(syncRun.status, "partial")),
+          ),
+        )
+        .orderBy(desc(syncRun.id))
+        .limit(1);
+      const status: PushStatus = {
+        lastPushedAt: row?.finishedAt ?? null,
+        nextCheckAt: nextCheck(jobType, now),
+      };
+      return [kind, status] as const;
+    }),
+  );
+  return Object.fromEntries(results) as Record<PushKind, PushStatus>;
+}
 
 export interface AccountView {
   tier: "flygd" | "blue" | "green";
@@ -24,6 +121,7 @@ export interface AccountView {
     contactSyncResult: string | null;
     onMapAcl: boolean;
   }>;
+  pushes: Record<PushKind, PushStatus>;
 }
 
 export async function getAccountView(
@@ -38,7 +136,7 @@ export async function getAccountView(
     .from(character)
     .where(eq(character.accountId, accountId));
   const ids = chars.map((c) => c.id);
-  const [links, syncStates, aclObs] = await Promise.all([
+  const [links, syncStates, aclObs, pushes] = await Promise.all([
     dbx.select().from(discordLink).where(eq(discordLink.accountId, accountId)),
     ids.length
       ? dbx
@@ -52,6 +150,7 @@ export async function getAccountView(
           .from(wandererAclObservation)
           .where(inArray(wandererAclObservation.characterId, ids))
       : Promise.resolve([]),
+    getPushStatus(dbx),
   ]);
   const syncByChar = new Map(syncStates.map((s) => [s.characterId, s]));
   const aclSet = new Set(aclObs.map((o) => o.characterId));
@@ -72,6 +171,7 @@ export async function getAccountView(
       contactSyncResult: syncByChar.get(c.id)?.lastResult ?? null,
       onMapAcl: aclSet.has(c.id),
     })),
+    pushes,
   };
 }
 

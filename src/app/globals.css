@@ -1438,6 +1438,55 @@ h3.rule-head__label {
   max-width: var(--measure);
 }
 
+/* --- Last pushed -------------------------------------------------------- */
+
+.push {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--s-1) var(--s-4);
+  margin: 0;
+}
+
+/* Reserves one column for the state so "next HH:mm" lands on the same vertical
+   in every row, without a second grid or a subgrid fallback.
+
+   Not in ch: ch resolves against each element's own font-size, and .st renders
+   at --t-label while the relative time renders at body size, so the same ch
+   count buys two different widths and the column does not line up. rem is the
+   only unit here that means the same thing to both.
+
+   7rem clears the longest state ("not yet run", ~97px with the mono stack) with
+   room for font-fallback drift. A min-width rather than a fixed basis on
+   purpose: a state that somehow outgrows it loses the alignment instead of
+   being clipped. The e2e spec asserts the two edges match, so this number
+   cannot rot silently. */
+.push > time,
+.push > .st {
+  min-width: 7rem;
+}
+
+.push__next {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: var(--t-label);
+  letter-spacing: 0.08em;
+  color: var(--ink-faint);
+}
+
+/* The closing beat: the lander, drawn at the size it was cut for. Nothing
+   below it, so the page ends on the artwork rather than on a control. */
+.closing {
+  margin: var(--s-8) 0 0;
+}
+
+/* The global reset makes images block-level, so centring is a margin, not a
+   text-align — the latter silently does nothing here. */
+.closing img {
+  width: min(560px, 100%);
+  height: auto;
+  margin-inline: auto;
+}
+
 .skip {
   position: absolute;
   left: -9999px;

@@ -6,9 +6,14 @@ import {
   character,
   contactSyncState,
   discordLink,
+  syncRun,
   wandererAclObservation,
 } from "@/db/schema";
-import { getAccountView, getAdminAccountsList } from "@/services/account-view";
+import {
+  getAccountView,
+  getAdminAccountsList,
+  getPushStatus,
+} from "@/services/account-view";
 import { seedAccount, seedCharacter } from "./helpers/seed";
 import { setupTestDb } from "./helpers/db";
 
@@ -43,7 +48,7 @@ beforeAll(async () => {
 beforeEach(() =>
   ctx.db.execute(sql`
     TRUNCATE account, "character", discord_link, contact_sync_state,
-      wanderer_acl_observation RESTART IDENTITY CASCADE
+      wanderer_acl_observation, sync_run RESTART IDENTITY CASCADE
   `),
 );
 afterAll(() => ctx.cleanup());
@@ -110,6 +115,52 @@ describe("getAccountView", () => {
     const view = await getAccountView(ctx.db, cfg, acc.id);
     expect(view.characters).toEqual([]);
     expect(view.discordLinked).toBe(false);
+  });
+});
+
+describe("getPushStatus", () => {
+  const run = (
+    jobType: string,
+    status: "ok" | "partial" | "failed" | null,
+    finishedAt: Date | null,
+  ) => ctx.db.insert(syncRun).values({ jobType, status, finishedAt });
+
+  it("reports never-run as null, and still answers when the next check is", async () => {
+    const pushes = await getPushStatus(ctx.db, new Date("2026-08-03T12:07:00Z"));
+    expect(pushes.standings.lastPushedAt).toBeNull();
+    expect(pushes.map.lastPushedAt).toBeNull();
+    expect(pushes.discord.lastPushedAt).toBeNull();
+    // The cadence is knowable even when nothing has run yet, which is what
+    // makes a first-boot account page reassuring rather than blank.
+    expect(pushes.standings.nextCheckAt?.toISOString()).toBe("2026-08-03T13:05:00.000Z");
+    expect(pushes.map.nextCheckAt?.toISOString()).toBe("2026-08-03T12:10:00.000Z");
+    expect(pushes.discord.nextCheckAt?.toISOString()).toBe("2026-08-03T12:15:00.000Z");
+  });
+
+  it("takes the newest run per job, keeping the three independent", async () => {
+    await run("contacts", "ok", new Date("2026-08-03T10:05:30Z"));
+    await run("contacts", "ok", new Date("2026-08-03T11:05:30Z"));
+    // Inserted last, so highest id, but finished EARLIER than the row above.
+    // That makes id order and finished_at order disagree, which is the only
+    // way to pin "newest by serial id, never max(finished_at)": a run whose
+    // clock lagged is still the most recent thing the worker did.
+    await run("contacts", "ok", new Date("2026-08-03T10:35:30Z"));
+    await run("wanderer", "ok", new Date("2026-08-03T11:10:30Z"));
+    const pushes = await getPushStatus(ctx.db, new Date("2026-08-03T12:07:00Z"));
+    expect(pushes.standings.lastPushedAt).toEqual(new Date("2026-08-03T10:35:30Z"));
+    expect(pushes.map.lastPushedAt).toEqual(new Date("2026-08-03T11:10:30Z"));
+    expect(pushes.discord.lastPushedAt).toBeNull(); // never ran, unaffected
+  });
+
+  it("counts partial as pushed but never failed or still-running", async () => {
+    // Something was written for some members: claiming nothing happened would
+    // be the larger lie.
+    await run("contacts", "partial", new Date("2026-08-03T10:05:30Z"));
+    // A failed run and an in-flight run must not advance the clock past it.
+    await run("contacts", "failed", new Date("2026-08-03T11:05:30Z"));
+    await run("contacts", null, null);
+    const pushes = await getPushStatus(ctx.db, new Date("2026-08-03T12:07:00Z"));
+    expect(pushes.standings.lastPushedAt).toEqual(new Date("2026-08-03T10:05:30Z"));
   });
 });
 
