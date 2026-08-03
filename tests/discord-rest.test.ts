@@ -55,10 +55,36 @@ describe("createDiscordClient", () => {
   it("returns null for a 404 guild member (user not in guild)", async () => {
     server.use(
       http.get(`${API}/guilds/9000/members/u1`, () =>
-        HttpResponse.json({ message: "Unknown Member" }, { status: 404 }),
+        HttpResponse.json({ message: "Unknown Member", code: 10007 }, { status: 404 }),
       ),
     );
     expect(await createDiscordClient(cfg).getGuildMember("u1")).toBeNull();
+  });
+
+  it("treats 404 Unknown Guild (10004) as a permanent error, not 'left the guild'", async () => {
+    server.use(
+      http.get(`${API}/guilds/9000/members/u1`, () =>
+        HttpResponse.json({ message: "Unknown Guild", code: 10004 }, { status: 404 }),
+      ),
+    );
+    const err = await createDiscordClient(cfg)
+      .getGuildMember("u1")
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(DiscordApiError);
+    expect((err as DiscordApiError).transient).toBe(false);
+  });
+
+  it("treats a malformed 404 body as a permanent error", async () => {
+    server.use(
+      http.get(`${API}/guilds/9000/members/u1`, () =>
+        new HttpResponse("<html>gateway</html>", { status: 404 }),
+      ),
+    );
+    const err = await createDiscordClient(cfg)
+      .getGuildMember("u1")
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(DiscordApiError);
+    expect((err as DiscordApiError).transient).toBe(false);
   });
 
   it("classifies 429 as transient", async () => {
