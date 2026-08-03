@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { OpsWebhookError, postOpsWebhook, postOpsWebhookOrThrow } from "@/lib/ops-webhook";
+import {
+  OpsWebhookError,
+  postOpsWebhook,
+  postOpsWebhookOrThrow,
+} from "@/lib/ops-webhook";
 import { testConfig } from "./helpers/config";
 
 describe("postOpsWebhook", () => {
@@ -46,17 +50,17 @@ describe("postOpsWebhookOrThrow", () => {
 
   it("THROWS on HTTP failure so the dead-letter job retries", async () => {
     const fetchImpl = (async () => new Response("nope", { status: 500 })) as typeof fetch;
-    await expect(postOpsWebhookOrThrow(testConfig(), "x", fetchImpl)).rejects.toBeInstanceOf(
-      OpsWebhookError,
-    );
+    await expect(
+      postOpsWebhookOrThrow(testConfig(), "x", fetchImpl),
+    ).rejects.toBeInstanceOf(OpsWebhookError);
   });
 
   it("THROWS on network failure", async () => {
     const fetchImpl = (async () => {
       throw new Error("down");
     }) as typeof fetch;
-    await expect(postOpsWebhookOrThrow(testConfig(), "x", fetchImpl)).rejects.toBeInstanceOf(
-      OpsWebhookError,
-    );
+    await expect(
+      postOpsWebhookOrThrow(testConfig(), "x", fetchImpl),
+    ).rejects.toBeInstanceOf(OpsWebhookError);
   });
 });

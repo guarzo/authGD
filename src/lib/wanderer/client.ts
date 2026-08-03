@@ -59,7 +59,6 @@ export type WandererAclMember = { characterId: number | null; role: AclRole };
  */
 export const ACL_GRANT_ROLE = "member" satisfies AclRole;
 
-
 export function createWandererClient(cfg: Config, fetchImpl: typeof fetch = fetch) {
   const base = cfg.wanderer.baseUrl.replace(/\/$/, "");
   const aclPath = `/api/acls/${cfg.wanderer.aclId}`;

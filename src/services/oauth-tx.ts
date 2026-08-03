@@ -5,8 +5,7 @@ import { oauthTransaction } from "@/db/schema";
 
 const TTL_MS = 10 * 60 * 1000;
 
-const sha256b64u = (s: string) =>
-  createHash("sha256").update(s).digest("base64url");
+const sha256b64u = (s: string) => createHash("sha256").update(s).digest("base64url");
 
 export async function createOauthTransaction(
   dbx: Dbx,

@@ -118,8 +118,7 @@ export function createEsiClient(opts: EsiClientOptions = {}) {
     }
     if (!res.ok) {
       const body = (await res.json().catch(() => undefined)) as
-        | { error?: string }
-        | undefined;
+        { error?: string } | undefined;
       throw new EsiError(
         `ESI ${init.method ?? "GET"} ${path} failed (${res.status}${body?.error ? `: ${body.error}` : ""})`,
         res.status,
@@ -195,10 +194,9 @@ export function createEsiClient(opts: EsiClientOptions = {}) {
       first.status,
     ).slice();
     for (let page = 2; page <= pages; page++) {
-      const res = await request(
-        `/characters/${characterId}/contacts/?page=${page}`,
-        { accessToken },
-      );
+      const res = await request(`/characters/${characterId}/contacts/?page=${page}`, {
+        accessToken,
+      });
       raw.push(
         ...safeParse(
           contactsSchema,

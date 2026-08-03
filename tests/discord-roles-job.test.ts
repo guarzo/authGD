@@ -23,7 +23,10 @@ const validGuildRoles = [
   { id: "bot-role", name: "Bot", position: 9, permissions: MANAGE_ROLES },
 ];
 
-function fakeDiscord(members: Record<string, string[] | null>, guildRoles = validGuildRoles) {
+function fakeDiscord(
+  members: Record<string, string[] | null>,
+  guildRoles = validGuildRoles,
+) {
   const added: Array<[string, string]> = [];
   const removed: Array<[string, string]> = [];
   const client: DiscordClient = {

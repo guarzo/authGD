@@ -19,14 +19,18 @@ export async function setTierAction(
   tier: "flygd" | "blue" | "green",
 ): Promise<void> {
   const { accountId: actor } = await requireAdminAction();
-  const result = await getDb().transaction((tx) => setTierManual(tx, actor, accountId, tier));
+  const result = await getDb().transaction((tx) =>
+    setTierManual(tx, actor, accountId, tier),
+  );
   if (!result.ok) throw new Error(result.error);
   revalidatePath("/admin/accounts");
 }
 
 export async function returnToAutoAction(accountId: string): Promise<void> {
   const { accountId: actor } = await requireAdminAction();
-  const result = await getDb().transaction((tx) => returnTierToAuto(tx, actor, accountId));
+  const result = await getDb().transaction((tx) =>
+    returnTierToAuto(tx, actor, accountId),
+  );
   if (!result.ok) throw new Error(result.error);
   revalidatePath("/admin/accounts");
 }
@@ -43,7 +47,10 @@ export async function setStatusAction(
   revalidatePath("/admin/accounts");
 }
 
-export async function saveNoteAction(accountId: string, formData: FormData): Promise<void> {
+export async function saveNoteAction(
+  accountId: string,
+  formData: FormData,
+): Promise<void> {
   const { accountId: actor } = await requireAdminAction();
   const raw = formData.get("note");
   // FormData.get() is string | File | null. A File would stringify to
@@ -51,7 +58,9 @@ export async function saveNoteAction(accountId: string, formData: FormData): Pro
   // log, so treat anything that isn't a string as empty.
   const note = typeof raw === "string" ? raw : "";
 
-  const result = await getDb().transaction((tx) => setStatusNote(tx, actor, accountId, note));
+  const result = await getDb().transaction((tx) =>
+    setStatusNote(tx, actor, accountId, note),
+  );
   if (!result.ok) throw new Error(result.error);
   revalidatePath("/admin/accounts");
 }

@@ -1,7 +1,11 @@
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { account, session } from "@/db/schema";
-import { createSession, getSessionAccount, revokeAccountSessions } from "@/services/session";
+import {
+  createSession,
+  getSessionAccount,
+  revokeAccountSessions,
+} from "@/services/session";
 import { setupTestDb } from "./helpers/db";
 
 let ctx: Awaited<ReturnType<typeof setupTestDb>>;

@@ -19,7 +19,10 @@ test("non-admins are redirected away from /admin", async ({ page, context }) => 
   await expect(page).toHaveURL(/\/login/);
 });
 
-test("admin list sorts by name and by tier, and filters cryo", async ({ page, context }) => {
+test("admin list sorts by name and by tier, and filters cryo", async ({
+  page,
+  context,
+}) => {
   const admin = await seedWorld();
   await context.addCookies([await sessionCookieFor(db, admin.id)]);
   await page.goto("/admin/accounts");
@@ -31,7 +34,10 @@ test("admin list sorts by name and by tier, and filters cryo", async ({ page, co
   await expect(mains).toHaveText(["Azzy"]);
 });
 
-test("tier controls: manual set locks; return-to-auto unlocks", async ({ page, context }) => {
+test("tier controls: manual set locks; return-to-auto unlocks", async ({
+  page,
+  context,
+}) => {
   const admin = await seedWorld();
   await context.addCookies([await sessionCookieFor(db, admin.id)]);
   await page.goto("/admin/accounts");

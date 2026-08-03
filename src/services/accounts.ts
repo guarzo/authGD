@@ -67,9 +67,7 @@ function tokenFields(cfg: Config, ch: EveCallbackCharacter) {
     ownerHash: ch.ownerHash,
     refreshTokenEnc: encryptToken(ch.refreshToken, cfg.tokenEncryptionKey),
     scopes: ch.scopes,
-    tokenStatus: (hasAllScopes ? "valid" : "needs_reauth") as
-      | "valid"
-      | "needs_reauth",
+    tokenStatus: (hasAllScopes ? "valid" : "needs_reauth") as "valid" | "needs_reauth",
   };
 }
 
@@ -121,10 +119,7 @@ async function applyNoMainRule(dbx: DbTx, accountId: string, cause: string) {
   await enqueueSync(dbx, { kind: "account", accountId });
 }
 
-async function reclaimCharacter(
-  dbx: DbTx,
-  existing: { id: number; accountId: string },
-) {
+async function reclaimCharacter(dbx: DbTx, existing: { id: number; accountId: string }) {
   const [oldAcc] = await dbx
     .select()
     .from(account)
@@ -244,8 +239,7 @@ export async function linkCharacter(
 }
 
 export type UnlinkResult =
-  | { ok: true }
-  | { ok: false; error: "not_found" | "not_owned" | "last_character" };
+  { ok: true } | { ok: false; error: "not_found" | "not_owned" | "last_character" };
 
 export async function unlinkCharacter(
   dbx: DbTx,
@@ -301,11 +295,7 @@ export async function setMainCharacter(
     .where(and(eq(character.id, characterId), eq(character.accountId, accountId)))
     .for("update");
   if (rows.length === 0) return { ok: false, error: "not_on_account" };
-  await dbx
-    .select()
-    .from(account)
-    .where(eq(account.id, accountId))
-    .for("update");
+  await dbx.select().from(account).where(eq(account.id, accountId)).for("update");
   await dbx
     .update(account)
     .set({ mainCharacterId: characterId })

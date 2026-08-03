@@ -8,7 +8,12 @@ export const dynamic = "force-dynamic";
 export default async function AdminAuditPage({
   searchParams,
 }: {
-  searchParams: Promise<{ actor?: string; action?: string; target?: string; before?: string }>;
+  searchParams: Promise<{
+    actor?: string;
+    action?: string;
+    target?: string;
+    before?: string;
+  }>;
 }) {
   const ctx = await getAdminContext();
   if (!ctx) redirect("/login");
@@ -29,7 +34,11 @@ export default async function AdminAuditPage({
       <h1>Audit log</h1>
       <form method="get" style={{ marginBottom: "1rem" }}>
         <input name="actor" placeholder="actor" defaultValue={params.actor ?? ""} />{" "}
-        <input name="action" placeholder="action prefix (tier.)" defaultValue={params.action ?? ""} />{" "}
+        <input
+          name="action"
+          placeholder="action prefix (tier.)"
+          defaultValue={params.action ?? ""}
+        />{" "}
         <input name="target" placeholder="target" defaultValue={params.target ?? ""} />{" "}
         <button type="submit">Filter</button> <a href="/admin/audit">clear</a>
       </form>
@@ -58,7 +67,9 @@ export default async function AdminAuditPage({
         </tbody>
       </table>
       {rows.length === AUDIT_PAGE_SIZE && (
-        <p><a href={`/admin/audit?${older.toString()}`}>Older →</a></p>
+        <p>
+          <a href={`/admin/audit?${older.toString()}`}>Older →</a>
+        </p>
       )}
     </main>
   );

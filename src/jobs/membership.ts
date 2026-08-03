@@ -83,7 +83,9 @@ export async function runMembershipJob(
     // the DATABASE clock: "short" queues allow two overlapping runs, and a
     // slower, older run must never beat a newer one just by finishing last
     // (a post-ESI `new Date()` would give the older run the LATER stamp).
-    const tokenResult = await db.execute<{ now: Date }>(sql`select clock_timestamp() as now`);
+    const tokenResult = await db.execute<{ now: Date }>(
+      sql`select clock_timestamp() as now`,
+    );
     // node-postgres returns raw driver rows as strings for this query shape;
     // normalize to a real Date so drizzle's timestamp bind params work.
     const checkedAt = new Date(tokenResult.rows[0].now);

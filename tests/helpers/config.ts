@@ -9,8 +9,7 @@ export function testConfig(overrides: Partial<NodeJS.ProcessEnv> = {}): Config {
     BOOTSTRAP_ADMIN_CHARACTER_IDS: "",
     EVE_SSO_CLIENT_ID: "client-id",
     EVE_SSO_CLIENT_SECRET: "client-secret",
-    EVE_SSO_SCOPES:
-      "esi-characters.read_contacts.v1 esi-characters.write_contacts.v1",
+    EVE_SSO_SCOPES: "esi-characters.read_contacts.v1 esi-characters.write_contacts.v1",
     EVE_SCOPE_SET_VERSION: "1",
     DISCORD_CLIENT_ID: "d-cid",
     DISCORD_CLIENT_SECRET: "d-sec",

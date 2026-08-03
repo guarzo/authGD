@@ -24,15 +24,18 @@ beforeEach(() => truncateAll(ctx.db));
 type Member = WandererAclMember;
 
 /** Fake Wanderer with a mutable member list and scriptable failures. */
-function fakeWanderer(initial: Member[], opts: {
-  failFirstRead?: boolean;
-  /** Initial read failure is permanent (e.g. rotated API key), not transient. */
-  permanentFirstReadFailure?: boolean;
-  failReRead?: boolean;
-  failRemoveOf?: number;
-  /** When set with failRemoveOf, the remove failure is permanent (transient: false). */
-  permanentRemoveFailure?: boolean;
-} = {}) {
+function fakeWanderer(
+  initial: Member[],
+  opts: {
+    failFirstRead?: boolean;
+    /** Initial read failure is permanent (e.g. rotated API key), not transient. */
+    permanentFirstReadFailure?: boolean;
+    failReRead?: boolean;
+    failRemoveOf?: number;
+    /** When set with failRemoveOf, the remove failure is permanent (transient: false). */
+    permanentRemoveFailure?: boolean;
+  } = {},
+) {
   let members = [...initial];
   let reads = 0;
   const client: WandererClient = {
@@ -114,7 +117,9 @@ describe("runWandererJob", () => {
     const w = fakeWanderer([{ characterId: 2, role: "member" }], {
       permanentFirstReadFailure: true,
     });
-    const webhook = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }));
+    const webhook = vi.fn(
+      async (_url: string, _init: RequestInit) => new Response("", { status: 200 }),
+    );
     const result = await runWandererJob({
       db: ctx.db,
       cfg,

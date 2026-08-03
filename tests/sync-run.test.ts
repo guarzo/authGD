@@ -11,11 +11,7 @@ beforeAll(async () => {
 afterAll(() => ctx.cleanup());
 
 async function latestRun() {
-  const rows = await ctx.db
-    .select()
-    .from(syncRun)
-    .orderBy(desc(syncRun.id))
-    .limit(1);
+  const rows = await ctx.db.select().from(syncRun).orderBy(desc(syncRun.id)).limit(1);
   return rows[0];
 }
 

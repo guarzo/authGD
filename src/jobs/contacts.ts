@@ -28,7 +28,11 @@ export function canPushContacts(
 
 export type ContactsEsi = Pick<
   EsiClient,
-  "getContactLabels" | "getAllContacts" | "addContacts" | "editContacts" | "deleteContacts"
+  | "getContactLabels"
+  | "getAllContacts"
+  | "addContacts"
+  | "editContacts"
+  | "deleteContacts"
 >;
 
 async function recordResult(
@@ -56,7 +60,14 @@ export async function runContactsJob(deps: {
   return runJob(db, "contacts", async () => {
     const flygd = await getFlygdCharacters(db);
     const desiredAll = flygd.map((c) => c.characterId);
-    const counts = { targets: 0, added: 0, updated: 0, removed: 0, skipped: 0, failed: 0 };
+    const counts = {
+      targets: 0,
+      added: 0,
+      updated: 0,
+      removed: 0,
+      skipped: 0,
+      failed: 0,
+    };
     let transientFailures = 0;
     const errors: string[] = [];
 

@@ -40,9 +40,9 @@ describe("loadConfig", () => {
   });
 
   it("rejects a short encryption key", () => {
-    expect(() =>
-      loadConfig({ ...validEnv, TOKEN_ENCRYPTION_KEY: "c2hvcnQ=" }),
-    ).toThrow(/TOKEN_ENCRYPTION_KEY/);
+    expect(() => loadConfig({ ...validEnv, TOKEN_ENCRYPTION_KEY: "c2hvcnQ=" })).toThrow(
+      /TOKEN_ENCRYPTION_KEY/,
+    );
   });
 
   it("rejects missing required vars", () => {

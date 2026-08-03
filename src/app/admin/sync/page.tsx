@@ -46,7 +46,11 @@ export default async function AdminSyncPage() {
                   <td>{fmt(r.startedAt)}</td>
                   <td>{fmt(r.finishedAt)}</td>
                   <td>
-                    {r.status === "failed" ? <strong>failed</strong> : (r.status ?? "running")}
+                    {r.status === "failed" ? (
+                      <strong>failed</strong>
+                    ) : (
+                      (r.status ?? "running")
+                    )}
                   </td>
                   <td>
                     <code>{r.counts ? JSON.stringify(r.counts) : ""}</code>

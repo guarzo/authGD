@@ -11,12 +11,18 @@ afterAll(() => ctx.cleanup());
 describe("outbox", () => {
   it("enqueues, takes, and marks dispatched", async () => {
     await enqueueSync(ctx.db, { kind: "all" });
-    await enqueueSync(ctx.db, { kind: "account", accountId: "00000000-0000-0000-0000-000000000001" });
+    await enqueueSync(ctx.db, {
+      kind: "account",
+      accountId: "00000000-0000-0000-0000-000000000001",
+    });
 
     const taken = await takeUndispatched(ctx.db);
     expect(taken).toHaveLength(2);
 
-    await markDispatched(ctx.db, taken.map((t) => t.id));
+    await markDispatched(
+      ctx.db,
+      taken.map((t) => t.id),
+    );
     expect(await takeUndispatched(ctx.db)).toHaveLength(0);
   });
 });

@@ -25,9 +25,9 @@ describe("classifyOAuthError", () => {
 
 describe("classifyEsiError", () => {
   it("maps 403 missing-scope to needs_reauth", () => {
-    expect(
-      classifyEsiError(403, { error: "token is not valid for scope" }),
-    ).toBe("needs_reauth");
+    expect(classifyEsiError(403, { error: "token is not valid for scope" })).toBe(
+      "needs_reauth",
+    );
   });
   it("maps other 403 to permanent", () => {
     expect(classifyEsiError(403, { error: "forbidden" })).toBe("permanent");
