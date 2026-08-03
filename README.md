@@ -4,9 +4,8 @@
 
 # authGD
 
-A modern, minimal replacement for the Alliance Auth stack, built for a single
-~20-member EVE Online corporation. It does only what the corp actually uses —
-no plugin ecosystem, no admin sprawl.
+A modern, minimal replacement for the Alliance Auth stack, built for a small EVE Online corporation. 
+It does only what the corp actually uses — no plugin ecosystem, no admin sprawl.
 
 - **EVE SSO login** — the first character login creates the account and becomes the
   main. Every character login requests the full configured scope set, so nobody ever
