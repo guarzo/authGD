@@ -39,8 +39,10 @@ monitor signup) become `docs/runbooks.md` in a separate pass.
 ### Endpoints
 
 **`GET /api/health`** — liveness. Runs `select 1`. Returns 200
-`{"ok":true,"db":"ok"}`, or 503 if the query throws. `dynamic =
-"force-dynamic"`; never cached.
+`{"ok":true,"db":"ok"}`, or 503 if the query throws. Both routes set
+`dynamic = "force-dynamic"` and send `Cache-Control: no-store`: a health check
+cached anywhere between the monitor and the app reports the past, which is
+worse than no check at all.
 
 **`GET /api/health/sync`** — worker freshness. Returns 200 if the newest
 `sync_run` row is younger than 90 minutes, else 503 with
@@ -54,9 +56,13 @@ Three decisions:
   the 30-minute `membership` schedule. Not configurable — a second knob that
   can drift from `queues.ts` buys nothing here.
 - **The query is `order by id desc limit 1`**, not `max(started_at)`. The
-  serial primary key gives an O(1) lookup; `max(started_at)` has no supporting
-  index and would seq-scan a table growing ~122 rows/day. Since `started_at`
-  defaults to insert time, id order and time order agree.
+  serial primary key makes this index-backed and effectively constant at this
+  scale; `max(started_at)` has no supporting index and would seq-scan a table
+  growing ~122 rows/day. Since `started_at` defaults to insert time, id order
+  and insertion order agree closely enough for a staleness check — this is not
+  a formal timestamp ordering guarantee under concurrent inserts, and does not
+  need to be: the two orders can only disagree by the width of a race, far
+  below a 90-minute threshold.
 - **Zero rows returns 503.** "The worker has never run" is exactly the failure
   this endpoint exists to catch. Accepted consequence: a brand-new deploy
   reads red for up to 30 minutes, until the first `membership` tick.
@@ -80,23 +86,56 @@ The worker runs `npx tsx src/worker/index.ts`, transpiling at runtime, so it
 carries more memory risk than the compiled web server; both are raised rather
 than only one, to keep the groups uniform.
 
-Add an HTTP check on `/api/health` for the `web` process only.
-`/api/health/sync` is deliberately never wired to Fly: a stalled worker must
-not trigger web-machine restarts that cannot fix it.
+Add an HTTP check on `/api/health` for the `web` process only. A failing
+`[[http_service.checks]]` check takes that Machine out of the load balancer's
+rotation and gates deployment health; it does not restart the Machine.
+`/api/health/sync` is deliberately never wired to it regardless: a stalled
+worker would pull healthy web Machines out of rotation, taking the site down in
+response to a fault that has nothing to do with serving pages, and could stall
+a deploy that was never unhealthy.
 
 `web=2` is a `fly scale count` operation, not a `fly.toml` field, so it belongs
 in the runbook. It closes the deploy gap caused by `web=1`. `worker=1` and
 single-node Postgres are retained deliberately: the Wanderer reconcile is
 destructive, and HA Postgres adds real operational weight to an unmanaged
-`postgres-flex` cluster. Connection math at `web=2`: 3 processes × pool max 5 =
-15, plus pg-boss's own pool — well within a 1GB flex node's limit.
+`postgres-flex` cluster.
+
+Connection budget at `web=2`, which must be checked against the cluster rather
+than assumed:
+
+| Source | Connections |
+|---|---|
+| web pools (2 machines × `max` 5) | 10 |
+| worker `createDb` pool | 5 |
+| worker pg-boss pool (`src/worker/index.ts:19`) | 5 |
+| **steady state** | **20** |
+| release command (`src/db/migrate.ts`, capped at 1) | +1 |
+| rolling replacement overlap, worst case (one web + one worker in flight) | +15 |
+| **deploy peak, worst case** | **~36** |
+
+The release command is capped at a single connection deliberately and its
+comment already anticipates holding it while web and worker pools are live. The
+deploy-peak figure assumes every replacement overlaps simultaneously, which is
+pessimistic for Fly's default rolling strategy but is the number to size
+against. **Before scaling to `web=2`, run `SHOW max_connections` on the
+production cluster and confirm headroom above ~36**, accounting for the
+superuser-reserved connections. If headroom is short, the lever is lowering the
+per-pool `max` in `src/db/index.ts:12`, not skipping the check.
 
 ### Removing `EVE_SCOPE_SET_VERSION`
 
 Delete from `src/config.ts` (both the schema entry and the `scopeSetVersion`
 field), `.env.example`, the `docs/ops.md` environment table, and the
-first-deploy `fly secrets set` block. `tests/config.test.ts` and
-`tests/helpers/config.ts` reference it and must be updated.
+first-deploy `fly secrets set` block. Three test-support files set it and must
+be updated: `tests/config.test.ts:13`, `tests/helpers/config.ts:14`, and
+`playwright.config.ts:17`.
+
+The authoritative design also states the contradiction and must be corrected:
+`docs/superpowers/specs/2026-08-02-authgd-design.md:117` opens with "the
+configured scope set carries a version" and then correctly describes the
+mechanism that actually exists — the token health job flagging characters whose
+granted scopes no longer cover the required set. Strike the version clause and
+keep the rest of the sentence, which was accurate all along.
 
 The variable documents behavior the code does not implement, which is worse
 than absent. The real re-auth lever is `EVE_SSO_SCOPES`, and that is what the
@@ -112,12 +151,29 @@ decisions with their reasoning, so they are chosen rather than inherited.
 
 ## Verification
 
-- Pure unit tests for the freshness function: fresh, stale, and no-rows.
-- Route-handler tests against the test database, following the
-  `tests/auth-routes.test.ts` pattern: `/api/health/sync` returns 503 with an
-  empty `sync_run`, and 200 after inserting a recent row.
-- `/api/health` returns 200 against the test database.
-- Existing suite, lint, typecheck, and build.
+Unit tests over the pure freshness function: fresh, stale, no-rows, and the
+exact 90-minute boundary (defining whether the boundary itself is fresh, so the
+comparison operator is pinned by a test rather than by accident).
+
+Route-handler tests against the test database, following the
+`tests/auth-routes.test.ts` pattern:
+
+- `/api/health` returns 200 with `{"ok":true,"db":"ok"}`.
+- `/api/health` returns 503 when the database is unreachable — injected by
+  pointing the handler at a closed or bad-credential pool, not by asserting the
+  happy path and assuming the failure branch works.
+- `/api/health/sync` returns 503 with an empty `sync_run`, and the response
+  body carries the documented no-row shape.
+- `/api/health/sync` returns 503 with a row older than the threshold, and
+  `newestRunAgeSec` reflects it.
+- `/api/health/sync` returns 200 after inserting a recent row.
+- Both routes send no-store cache headers and are not statically rendered, so a
+  cached 200 cannot mask an outage.
+
+Then the existing suite, lint, typecheck, and build.
+
+Post-deploy, before scaling to `web=2`: `SHOW max_connections` on the
+production cluster, checked against the ~36 worst-case deploy peak above.
 
 ## Out of scope
 
