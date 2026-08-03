@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { getConfig } from "@/config";
 import { getDb } from "@/db";
@@ -7,6 +8,7 @@ import {
   type AdminAccountRow,
   type AdminListSort,
 } from "@/services/account-view";
+import { RuleHead, Scroller, Status, Tier } from "@/app/_components/ui";
 import {
   demoteAdminAction,
   promoteAdminAction,
@@ -18,6 +20,10 @@ import {
 } from "./actions";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = {
+  title: "Accounts",
+};
 
 const SORTS: Array<{ key: AdminListSort; label: string }> = [
   { key: "name", label: "Name" },
@@ -59,67 +65,139 @@ export default async function AdminAccountsPage({
   };
 
   return (
-    <main>
-      <h1>Accounts</h1>
+    <main className="page">
+      <div className="page__head">
+        <h1>Accounts</h1>
+        <p className="page__lede">
+          One row per account. Tier and cryo are set here; everything else is what the
+          sync jobs last observed.
+        </p>
+      </div>
+
       {params.error === "last_admin" && (
-        <p role="alert">Cannot demote the last admin.</p>
+        <p className="notice notice--bad" data-glyph="!" role="alert">
+          Cannot demote the last admin.
+        </p>
       )}
-      <p>
-        Filter tier: <a href={qs({ tier: undefined })}>all</a>{" "}
+
+      <RuleHead>Filter</RuleHead>
+      <div className="filters">
+        <span className="filters__label">Tier</span>
+        <a
+          className="btn btn--quiet"
+          href={qs({ tier: undefined })}
+          aria-current={!tier ? "true" : undefined}
+        >
+          all
+        </a>
         {TIERS.map((t) => (
-          <a key={t} href={qs({ tier: t })} style={{ marginRight: 8 }}>
-            {tier === t ? <strong>{t}</strong> : t}
+          <a
+            key={t}
+            className="btn btn--quiet"
+            href={qs({ tier: t })}
+            aria-current={tier === t ? "true" : undefined}
+          >
+            {t}
           </a>
         ))}
-        · Status: <a href={qs({ status: undefined })}>all</a>{" "}
-        <a href={qs({ status: "cryo" })}>{status === "cryo" ? <strong>cryo</strong> : "cryo"}</a>{" "}
-        <a href={qs({ status: "active" })}>
-          {status === "active" ? <strong>active</strong> : "active"}
+        <span className="filters__sep" aria-hidden="true" />
+        <span className="filters__label">Status</span>
+        <a
+          className="btn btn--quiet"
+          href={qs({ status: undefined })}
+          aria-current={!status ? "true" : undefined}
+        >
+          all
         </a>
-      </p>
-      <table style={{ borderCollapse: "collapse", width: "100%" }}>
-        <thead>
-          <tr>
-            {SORTS.map((s) => (
-              <th key={s.key} style={{ textAlign: "left" }}>
-                <a href={qs({ sort: s.key, dir: sort === s.key && dir === "asc" ? "desc" : "asc" })}>
-                  {s.label}
-                  {sort === s.key ? (dir === "asc" ? " ↑" : " ↓") : ""}
-                </a>
+        <a
+          className="btn btn--quiet"
+          href={qs({ status: "cryo" })}
+          aria-current={status === "cryo" ? "true" : undefined}
+        >
+          cryo
+        </a>
+        <a
+          className="btn btn--quiet"
+          href={qs({ status: "active" })}
+          aria-current={status === "active" ? "true" : undefined}
+        >
+          active
+        </a>
+      </div>
+
+      <RuleHead>{rows.length === 1 ? "1 account" : `${rows.length} accounts`}</RuleHead>
+      <Scroller label="Accounts">
+        <table className="log log--dense">
+          <thead>
+            <tr>
+              {SORTS.map((s) => (
+                <th
+                  key={s.key}
+                  aria-sort={
+                    sort === s.key ? (dir === "asc" ? "ascending" : "descending") : "none"
+                  }
+                >
+                  {/* The arrow is aria-hidden because aria-sort on the header
+                      already carries the state; it keeps the link's accessible
+                      name stable at just the column label. */}
+                  <a
+                    href={qs({ sort: s.key, dir: sort === s.key && dir === "asc" ? "desc" : "asc" })}
+                  >
+                    {s.label}
+                    {sort === s.key && (
+                      <span aria-hidden="true"> {dir === "asc" ? "↑" : "↓"}</span>
+                    )}
+                  </a>
+                </th>
+              ))}
+              <th>Tokens</th>
+              <th>Discord</th>
+              <th>Map</th>
+              <th>Last login</th>
+              <th>Admin</th>
+              <th>
+                <span className="visually-hidden">Actions</span>
               </th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <AccountRow key={r.accountId} r={r} />
             ))}
-            <th>Tokens</th>
-            <th>Discord</th>
-            <th>Map</th>
-            <th>Last login</th>
-            <th>Admin</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r) => (
-            <AccountRow key={r.accountId} r={r} />
-          ))}
-        </tbody>
-      </table>
+            {rows.length === 0 && (
+              <tr>
+                <td className="log__empty" colSpan={10}>
+                  No accounts match this filter.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </Scroller>
     </main>
   );
 }
 
 function AccountRow({ r }: { r: AdminAccountRow }) {
+  const tokens = r.tokenSummary;
+  const tokenTone =
+    tokens.dead > 0 ? "bad" : tokens.needsReauth > 0 ? "warn" : tokens.total === 0 ? "off" : "ok";
+
   return (
-    <tr style={{ borderTop: "1px solid #ccc", verticalAlign: "top" }}>
+    <tr>
       <td>
         <details>
           <summary>
             {r.mainName ?? <em>no main</em>}
             {r.characters.length > 1 && ` (+${r.characters.length - 1})`}
           </summary>
-          <ul style={{ margin: "0.25rem 0" }}>
+          <ul className="crew">
             {r.characters.map((c) => (
               <li key={c.id}>
-                {c.name}
-                {c.isMain && " (main)"} — token: {c.tokenStatus}
+                <b>{c.name}</b>
+                {c.isMain && " (main)"}
+                {" — token: "}
+                {c.tokenStatus}
                 {c.needsReauthForScopes && " (scope shortfall)"}
                 {c.affiliationInvalid && " · affiliation invalid"}
                 {c.contactSyncResult && ` · contacts: ${c.contactSyncResult}`}
@@ -128,69 +206,133 @@ function AccountRow({ r }: { r: AdminAccountRow }) {
               </li>
             ))}
           </ul>
-          <form action={saveNoteAction.bind(null, r.accountId)}>
-            <input name="note" defaultValue={r.statusNote ?? ""} placeholder="notes" />
-            <button type="submit">save note</button>
+          <form action={saveNoteAction.bind(null, r.accountId)} className="note-form">
+            <input
+              className="field"
+              name="note"
+              defaultValue={r.statusNote ?? ""}
+              placeholder="notes"
+              aria-label={`Note for ${r.mainName ?? "account"}`}
+            />
+            <button type="submit" className="btn btn--quiet btn--micro">
+              save note
+            </button>
           </form>
         </details>
       </td>
+
       <td>
-        {r.tier}
-        {r.tierLocked && " 🔒"}
-        <div style={{ fontSize: "0.8em", opacity: 0.8 }}>
-          {fmt(r.tierChangedAt)}
-          {r.tierChangedByName && ` by ${r.tierChangedByName}`}
-        </div>
-        <div>
-          {(["flygd", "blue", "green"] as const).map((t) => (
-            <form key={t} action={setTierAction.bind(null, r.accountId, t)} style={{ display: "inline" }}>
-              <button type="submit" disabled={r.tierLocked && r.tier === t}>
-                {t}
-              </button>
-            </form>
-          ))}
-          {r.tierLocked && (
-            <form action={returnToAutoAction.bind(null, r.accountId)} style={{ display: "inline" }}>
-              <button type="submit">auto</button>
-            </form>
+        <div className="stack">
+          <Tier tier={r.tier} locked={r.tierLocked} />
+          <div className="btn-group">
+            {TIERS.map((t) => (
+              <form
+                key={t}
+                action={setTierAction.bind(null, r.accountId, t)}
+                className="inline-form"
+              >
+                <button
+                  type="submit"
+                  className="btn btn--quiet btn--micro"
+                  disabled={r.tierLocked && r.tier === t}
+                  aria-pressed={r.tier === t}
+                >
+                  {t}
+                </button>
+              </form>
+            ))}
+            {r.tierLocked && (
+              <form action={returnToAutoAction.bind(null, r.accountId)} className="inline-form">
+                <button type="submit" className="btn btn--quiet btn--micro">
+                  auto
+                </button>
+              </form>
+            )}
+          </div>
+          {r.tierChangedByName && (
+            <span className="dim mono">by {r.tierChangedByName}</span>
           )}
         </div>
       </td>
+
       <td>
-        {r.status}
-        {r.status === "cryo" && (
-          <div style={{ fontSize: "0.8em", opacity: 0.8 }}>since {fmt(r.statusChangedAt)}</div>
+        <div className="stack">
+          <div className="btn-row btn-row--tight">
+            {r.status === "cryo" ? (
+              <Status tone="warn">cryo</Status>
+            ) : (
+              <Status tone="off">active</Status>
+            )}
+            <form
+              action={setStatusAction.bind(
+                null,
+                r.accountId,
+                r.status === "cryo" ? "active" : "cryo",
+              )}
+            >
+              <button type="submit" className="btn btn--quiet btn--micro">
+                {r.status === "cryo" ? "wake" : "cryo"}
+              </button>
+            </form>
+          </div>
+          {r.status === "cryo" && (
+            <span className="dim mono nowrap">since {fmt(r.statusChangedAt)}</span>
+          )}
+          {r.statusNote && <span className="dim note">{r.statusNote}</span>}
+        </div>
+      </td>
+
+      <td className="mono">{fmt(r.tierChangedAt)}</td>
+
+      <td>
+        <div className="stack">
+          <Status tone={tokenTone}>
+            {tokens.healthy}/{tokens.total} ok
+          </Status>
+          {tokens.needsReauth > 0 && (
+            <span className="dim mono">{tokens.needsReauth} re-auth</span>
+          )}
+          {tokens.dead > 0 && <span className="dim mono">{tokens.dead} dead</span>}
+        </div>
+      </td>
+
+      <td>
+        {r.discordLinked ? <Status tone="ok">linked</Status> : <Status tone="off">none</Status>}
+      </td>
+
+      <td>
+        {r.mapCount > 0 ? (
+          <Status tone="ok">
+            {r.mapCount}/{tokens.total}
+          </Status>
+        ) : (
+          <Status tone="off">off</Status>
         )}
-        {r.statusNote && <div style={{ fontSize: "0.8em" }}>{r.statusNote}</div>}
-        <form
-          action={setStatusAction.bind(null, r.accountId, r.status === "cryo" ? "active" : "cryo")}
-        >
-          <button type="submit">{r.status === "cryo" ? "wake" : "cryo"}</button>
-        </form>
       </td>
-      <td>{fmt(r.tierChangedAt)}</td>
-      <td>
-        {r.tokenSummary.healthy}/{r.tokenSummary.total} ok
-        {r.tokenSummary.needsReauth > 0 && ` · ${r.tokenSummary.needsReauth} re-auth`}
-        {r.tokenSummary.dead > 0 && ` · ${r.tokenSummary.dead} dead`}
-      </td>
-      <td>{r.discordLinked ? "✓" : "✗"}</td>
-      <td>{r.mapCount > 0 ? `${r.mapCount}/${r.tokenSummary.total}` : "✗"}</td>
-      <td>{fmt(r.lastLoginAt)}</td>
+
+      <td className="mono">{fmt(r.lastLoginAt)}</td>
+
       <td>
         {r.isAdmin ? (
           <form action={demoteAdminAction.bind(null, r.accountId)}>
-            <button type="submit">revoke ✓</button>
+            <button type="submit" className="btn btn--quiet btn--micro btn--danger">
+              revoke
+            </button>
           </form>
         ) : (
           <form action={promoteAdminAction.bind(null, r.accountId)}>
-            <button type="submit">grant</button>
+            <button type="submit" className="btn btn--quiet btn--micro">
+              grant
+            </button>
           </form>
         )}
       </td>
+
       <td>
         <form action={syncAccountAction.bind(null, r.accountId)}>
-          <button type="submit">sync now</button>
+          <button type="submit" className="btn btn--quiet btn--micro nowrap">
+            sync now
+          </button>
         </form>
       </td>
     </tr>

@@ -1,0 +1,1062 @@
+/* ==========================================================================
+   Zoo Landers / authGD — flight operations at night.
+   A ruled, typed, mission-documentation system. Structure comes from
+   hairlines and type, not from boxes and shadows. See DESIGN.md.
+   ========================================================================== */
+
+/* --- Tokens ------------------------------------------------------------- */
+
+:root {
+  /* Ground and structure. Every neutral is tinted toward the patch navy. */
+  --void: oklch(0.17 0.035 264);
+  --hull: oklch(0.22 0.04 264);
+  --hull-hi: oklch(0.27 0.042 264);
+  --rule: oklch(0.36 0.035 264);
+  /* Lightness fixed by WCAG 1.4.11: clears 3:1 on void, hull and hull-hi,
+     so a control's edge is identifiable on every ground it can sit on. */
+  --rule-strong: oklch(0.56 0.05 264);
+
+  /* Ink. Warm cream, tinted toward the patch gold. */
+  --ink: oklch(0.94 0.012 85);
+  --ink-dim: oklch(0.78 0.015 85);
+  --ink-faint: oklch(0.66 0.02 264);
+
+  /* Signal. Gold is identity; the three signals are semantic, never decor. */
+  --gold: oklch(0.83 0.155 88);
+  --gold-dim: oklch(0.72 0.14 84);
+  --signal-ok: oklch(0.76 0.13 158);
+  --signal-warn: oklch(0.8 0.15 70);
+  --signal-bad: oklch(0.68 0.19 25);
+
+  /* Tiers separate by lightness as well as hue, so they survive
+     deuteranopia and protanopia. Always paired with the name in text. */
+  --tier-flygd: oklch(0.83 0.155 88);
+  --tier-blue: oklch(0.72 0.13 245);
+  --tier-green: oklch(0.76 0.13 158);
+
+  /* Space: 4 8 12 16 24 32 48 64 96. Rhythm comes from varying the step. */
+  --s-1: 0.25rem;
+  --s-2: 0.5rem;
+  --s-3: 0.75rem;
+  --s-4: 1rem;
+  --s-5: 1.5rem;
+  --s-6: 2rem;
+  --s-7: 3rem;
+  --s-8: 4rem;
+  --s-9: 6rem;
+
+  --t-display: clamp(2.5rem, 6vw, 4rem);
+  --t-h1: clamp(1.75rem, 3vw, 2.25rem);
+  --t-h2: 1.375rem;
+  --t-body: 0.9375rem;
+  --t-data: 0.875rem;
+  --t-label: 0.6875rem;
+
+  --radius: 2px;
+  --measure: 68ch;
+
+  --ease: cubic-bezier(0.22, 1, 0.36, 1); /* ease-out-quint */
+  --dur-color: 140ms;
+  --dur-move: 220ms;
+}
+
+/* --- Reset -------------------------------------------------------------- */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+* {
+  margin: 0;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  min-height: 100dvh;
+  background: var(--void);
+  color: var(--ink);
+  font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+  font-size: var(--t-body);
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+img,
+svg {
+  display: block;
+  max-width: 100%;
+}
+
+input,
+button,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+h1,
+h2,
+h3 {
+  font-weight: 700;
+  line-height: 1.12;
+  text-wrap: balance;
+}
+
+h1 {
+  font-size: var(--t-h1);
+  letter-spacing: -0.02em;
+}
+
+h2 {
+  font-size: var(--t-h2);
+  letter-spacing: -0.01em;
+}
+
+p {
+  text-wrap: pretty;
+}
+
+code {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 0.9em;
+}
+
+a {
+  color: var(--ink);
+  text-decoration-color: var(--rule-strong);
+  text-underline-offset: 0.2em;
+  transition: color var(--dur-color) var(--ease),
+    text-decoration-color var(--dur-color) var(--ease);
+}
+
+a:hover {
+  color: var(--gold);
+  text-decoration-color: var(--gold);
+}
+
+/* Never removed. Gold clears 3:1 against every ground in the system. */
+:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+  border-radius: 1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* --- Shell -------------------------------------------------------------- */
+
+.shell {
+  display: flex;
+  align-items: center;
+  gap: var(--s-5);
+  padding: var(--s-3) var(--s-5);
+  border-bottom: 1px solid var(--rule);
+  background: var(--hull);
+  flex-wrap: wrap;
+}
+
+.shell__mark {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  text-decoration: none;
+  color: var(--ink);
+  flex-shrink: 0;
+}
+
+.shell__mark img {
+  width: 34px;
+  height: 34px;
+}
+
+.shell__wordmark {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.05;
+}
+
+.shell__wordmark b {
+  font-size: 0.9375rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.shell__wordmark span {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 0.5625rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.shell__nav {
+  display: flex;
+  align-items: center;
+  gap: var(--s-1);
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+
+.shell__nav a {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: var(--t-label);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  text-decoration: none;
+  color: var(--ink-dim);
+  padding: var(--s-2) var(--s-3);
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  transition: color var(--dur-color) var(--ease),
+    background-color var(--dur-color) var(--ease);
+}
+
+.shell__nav a:hover {
+  color: var(--ink);
+  background: var(--hull-hi);
+}
+
+.shell__nav a[aria-current="page"] {
+  color: var(--gold);
+  border-color: var(--rule-strong);
+}
+
+.page {
+  max-width: 78rem;
+  margin: 0 auto;
+  padding: var(--s-7) var(--s-5) var(--s-9);
+}
+
+/* Wide enough for the six-column crew manifest to sit inside the measure
+   without scrolling on a laptop. Prose is capped separately, so this only
+   affects the table and the rules. */
+.page--narrow {
+  max-width: 60rem;
+}
+
+.page__head {
+  margin-bottom: var(--s-6);
+}
+
+.page__lede {
+  max-width: var(--measure);
+  color: var(--ink-dim);
+  margin-top: var(--s-2);
+}
+
+/* --- Section header ----------------------------------------------------- */
+/* The signature component: a typed label, then a hairline to the edge. */
+
+.rule-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  margin: var(--s-7) 0 var(--s-4);
+}
+
+.rule-head > :first-child {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: var(--t-label);
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  flex-shrink: 0;
+}
+
+.rule-head::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--rule);
+}
+
+.rule-head__aside {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  flex-shrink: 0;
+}
+
+/* --- Definition rows ---------------------------------------------------- */
+/* Label/value pairs read as a printed form, not as stat cards. */
+
+.facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--s-3) var(--s-5);
+  align-items: baseline;
+}
+
+.facts dt {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: var(--t-label);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.facts dd {
+  margin: 0;
+}
+
+/* --- Tables ------------------------------------------------------------- */
+
+.scroller {
+  /* Not decoration: .visually-hidden is position:absolute, and without a
+     positioned ancestor its containing block is the viewport, so a hidden
+     label inside a 1200px-wide table escapes this scroll box and stretches
+     the whole document. Containing it here is what keeps mobile at 390px. */
+  position: relative;
+  overflow-x: auto;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+}
+
+.scroller:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+}
+
+.log {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--t-data);
+}
+
+.log th {
+  text-align: left;
+  vertical-align: bottom;
+  background: var(--hull);
+  padding: var(--s-3) var(--s-4);
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: var(--t-label);
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  white-space: nowrap;
+  border-bottom: 1px solid var(--rule-strong);
+}
+
+.log th a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.log th a:hover {
+  color: var(--gold);
+}
+
+.log td {
+  padding: var(--s-3) var(--s-4);
+  border-top: 1px solid var(--rule);
+  vertical-align: top;
+  color: var(--ink-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.log tbody tr {
+  transition: background-color var(--dur-color) var(--ease);
+}
+
+.log tbody tr:hover {
+  background: color-mix(in oklab, var(--hull-hi) 55%, transparent);
+}
+
+.log__empty {
+  padding: var(--s-6) var(--s-4);
+  text-align: center;
+  color: var(--ink-faint);
+}
+
+/* Data that should read as machine output. */
+.mono {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.nowrap {
+  white-space: nowrap;
+}
+
+/* Free-text admin note in a table cell: give it a readable width of its own so
+   it doesn't squeeze into a two-word-per-line column. */
+.note {
+  display: block;
+  min-width: 12ch;
+  max-width: 24ch;
+}
+
+/* Raw JSON payloads in the audit and sync tables. Dimmed and capped so a fat
+   details blob can't push the readable columns off screen. */
+.json {
+  display: inline-block;
+  /* min() rather than a flat 34ch: in the fixed-layout sync table the column is
+     narrower than 34ch, and a cap wider than the cell spills the JSON over the
+     next column instead of truncating it. */
+  max-width: min(34ch, 100%);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 0.75rem;
+  color: var(--ink-faint);
+}
+
+.portrait {
+  display: block;
+  width: 32px;
+  height: 32px;
+  /* The global `img { max-width: 100% }` reset would let a narrow table cell
+     squeeze the portrait to a sliver, so opt this one out. */
+  max-width: none;
+  min-width: 32px;
+  /* The EVE image server is a third party; if a portrait 404s or is slow the
+     box must still hold its square, not collapse to the broken-icon size. */
+  object-fit: cover;
+  flex-shrink: 0;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--hull);
+}
+
+.char {
+  color: var(--ink);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.char__main {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: var(--t-label);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--gold);
+}
+
+.dim {
+  color: var(--ink-faint);
+  font-size: 0.8125rem;
+}
+
+/* Error summaries in the sync table. This lands on a <td>, so it must not set
+   display or a max-width: either one drops the cell out of the row box and
+   leaves a tall gap under the table. The colgroup governs the width. */
+.detail {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 0.75rem;
+  color: var(--ink-faint);
+  overflow-wrap: anywhere;
+}
+
+/* --- Status token ------------------------------------------------------- */
+/* Colour only when the state is actionable. Glyph carries meaning too. */
+
+.st {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: var(--t-label);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  white-space: nowrap;
+}
+
+.st::before {
+  content: "";
+  width: 0.5em;
+  height: 0.5em;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+.st--ok {
+  color: var(--signal-ok);
+}
+
+.st--warn {
+  color: var(--signal-warn);
+}
+
+.st--bad {
+  color: var(--signal-bad);
+}
+
+.st--off {
+  color: var(--ink-faint);
+}
+
+.st--off::before {
+  background: transparent;
+  border: 1px solid currentColor;
+}
+
+/* --- Tier badge --------------------------------------------------------- */
+
+.tier {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
+  padding: 0.15em 0.5em;
+  border: 1px solid var(--tone);
+  border-radius: var(--radius);
+  background: color-mix(in oklab, var(--tone) 14%, transparent);
+  color: var(--tone);
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: var(--t-label);
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.tier--flygd {
+  --tone: var(--tier-flygd);
+}
+
+.tier--blue {
+  --tone: var(--tier-blue);
+}
+
+.tier--green {
+  --tone: var(--tier-green);
+}
+
+/* --- Buttons ------------------------------------------------------------ */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-2);
+  min-height: 2.25rem;
+  padding: var(--s-2) var(--s-4);
+  background: var(--hull-hi);
+  color: var(--ink);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius);
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: var(--t-label);
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background-color var(--dur-color) var(--ease),
+    border-color var(--dur-color) var(--ease), color var(--dur-color) var(--ease);
+}
+
+.btn:hover:not(:disabled) {
+  border-color: var(--gold-dim);
+  color: var(--gold);
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.btn--primary {
+  background: var(--gold);
+  border-color: var(--gold);
+  color: var(--void);
+}
+
+.btn--primary:hover:not(:disabled) {
+  background: var(--gold-dim);
+  border-color: var(--gold-dim);
+  color: var(--void);
+}
+
+/* Text-only until hovered. For the many inline row actions. */
+.btn--quiet {
+  background: transparent;
+  border-color: transparent;
+  color: var(--ink-faint);
+  min-height: 1.875rem;
+  padding: var(--s-1) var(--s-2);
+}
+
+.btn--quiet:hover:not(:disabled) {
+  background: var(--hull-hi);
+  border-color: var(--rule-strong);
+  color: var(--ink);
+}
+
+.btn--danger {
+  color: var(--signal-bad);
+  border-color: color-mix(in oklab, var(--signal-bad) 45%, var(--rule-strong));
+}
+
+.btn--danger:hover:not(:disabled) {
+  color: var(--signal-bad);
+  border-color: var(--signal-bad);
+  background: color-mix(in oklab, var(--signal-bad) 12%, transparent);
+}
+
+/* Pressed-in look for the active choice in a segmented set. Links can't be
+   aria-pressed, so filter links use aria-current and share the treatment. */
+.btn[aria-pressed="true"],
+.btn[aria-current="true"] {
+  background: var(--gold);
+  border-color: var(--gold);
+  color: var(--void);
+}
+
+.btn[aria-pressed="true"]:hover:not(:disabled),
+.btn[aria-current="true"]:hover {
+  background: var(--gold-dim);
+  border-color: var(--gold-dim);
+  color: var(--void);
+}
+
+.btn-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  align-items: center;
+}
+
+/* Row actions sit in the narrowest column in the table, and the browser will
+   happily squeeze them into a vertical stack. Keep them on one line. */
+.btn-row--tight {
+  flex-wrap: nowrap;
+  white-space: nowrap;
+}
+
+.btn-group {
+  display: inline-flex;
+  gap: 1px;
+}
+
+/* In-row controls. A table with a control set on every row cannot afford the
+   full 36px target without the rows growing past a screenful, so these trade
+   down to a denser size that still clears the 24px AAA minimum. */
+.btn--micro {
+  min-height: 1.5rem;
+  padding: 0.1rem var(--s-2);
+  font-size: 0.6875rem;
+  letter-spacing: 0.08em;
+}
+
+/* --- Fields ------------------------------------------------------------- */
+
+.field {
+  min-height: 2.25rem;
+  padding: var(--s-2) var(--s-3);
+  background: var(--void);
+  color: var(--ink);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius);
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: var(--t-data);
+  transition: border-color var(--dur-color) var(--ease);
+}
+
+.field::placeholder {
+  color: var(--ink-faint);
+  opacity: 1;
+}
+
+.field:hover {
+  border-color: var(--gold-dim);
+}
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  align-items: center;
+  margin-bottom: var(--s-4);
+}
+
+.filters__label {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: var(--t-label);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin-right: var(--s-1);
+}
+
+/* A ruled gap between the two filter groups, so they read as two questions
+   rather than one long row of choices. */
+.filters__sep {
+  width: 1px;
+  align-self: stretch;
+  background: var(--rule);
+  margin: 0 var(--s-2);
+}
+
+.note-form {
+  display: flex;
+  gap: var(--s-2);
+  margin-top: var(--s-3);
+  align-items: center;
+}
+
+.note-form .field {
+  flex: 1;
+  min-width: 12rem;
+}
+
+/* The audit filter: labelled inputs on one line, wrapping to a stack on
+   narrow screens. Placeholders alone would vanish once a value is typed. */
+.filter-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3);
+  align-items: flex-end;
+  margin-bottom: var(--s-5);
+}
+
+.filter-form__cell {
+  display: grid;
+  gap: var(--s-1);
+}
+
+.filter-form__label {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: var(--t-label);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.filter-form__actions {
+  display: flex;
+  gap: var(--s-2);
+  align-items: center;
+}
+
+.pager {
+  margin-top: var(--s-5);
+}
+
+/* --- Notices ------------------------------------------------------------ */
+/* Full border, never a side stripe. */
+
+.notice {
+  display: flex;
+  gap: var(--s-3);
+  padding: var(--s-3) var(--s-4);
+  margin-bottom: var(--s-5);
+  border: 1px solid var(--tone, var(--rule-strong));
+  border-radius: var(--radius);
+  background: color-mix(in oklab, var(--tone, var(--rule-strong)) 12%, transparent);
+  color: var(--ink);
+  font-size: var(--t-data);
+  text-align: left;
+  max-width: var(--measure);
+}
+
+.notice::before {
+  content: attr(data-glyph);
+  font-family: var(--font-mono), ui-monospace, monospace;
+  color: var(--tone, var(--ink-faint));
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.notice--bad {
+  --tone: var(--signal-bad);
+}
+
+.notice--warn {
+  --tone: var(--signal-warn);
+}
+
+/* --- Login -------------------------------------------------------------- */
+
+.launch {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: var(--s-6) var(--s-4);
+  position: relative;
+  overflow: hidden;
+}
+
+/* The lander, keyed to a single ink and held far back. */
+.launch::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: url("/brand/lander.webp") center 62% / min(1000px, 150%) no-repeat;
+  opacity: 0.07;
+  pointer-events: none;
+}
+
+.launch__panel {
+  position: relative;
+  width: min(30rem, 100%);
+  padding: var(--s-7) var(--s-6) var(--s-6);
+  background: color-mix(in oklab, var(--hull) 88%, transparent);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius);
+  text-align: center;
+}
+
+/* Print registration marks. Used once in the system, on purpose. */
+.launch__panel::before,
+.launch__panel::after {
+  content: "";
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--gold-dim);
+  opacity: 0.75;
+}
+
+.launch__panel::before {
+  top: -1px;
+  left: -1px;
+  border-right: 0;
+  border-bottom: 0;
+}
+
+.launch__panel::after {
+  bottom: -1px;
+  right: -1px;
+  border-left: 0;
+  border-top: 0;
+}
+
+.launch__seal {
+  width: 180px;
+  height: 180px;
+  margin: 0 auto var(--s-5);
+  animation: seal-settle 620ms var(--ease) both;
+}
+
+@keyframes seal-settle {
+  from {
+    opacity: 0;
+    transform: scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.launch__title {
+  font-size: 1.5rem;
+  letter-spacing: 0.02em;
+}
+
+.launch__motto {
+  margin-top: var(--s-2);
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: var(--t-label);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  line-height: 1.7;
+}
+
+.launch__action {
+  display: block;
+  margin-top: var(--s-6);
+}
+
+.launch__action img {
+  margin: 0 auto;
+}
+
+.launch__foot {
+  margin-top: var(--s-6);
+  padding-top: var(--s-4);
+  border-top: 1px solid var(--rule);
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 0.625rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+/* --- Disclosure --------------------------------------------------------- */
+
+.log summary {
+  cursor: pointer;
+  color: var(--ink);
+  font-weight: 600;
+  list-style: none;
+  display: flex;
+  /* flex-start, not center: a long character name wraps to two lines and a
+     vertically centred marker then floats away from the first line. */
+  align-items: flex-start;
+  gap: var(--s-2);
+}
+
+.log summary::-webkit-details-marker {
+  display: none;
+}
+
+.log summary::before {
+  content: "+";
+  font-family: var(--font-mono), ui-monospace, monospace;
+  color: var(--ink-faint);
+  width: 1ch;
+}
+
+.log details[open] > summary::before {
+  content: "\2212"; /* minus */
+}
+
+.log summary:hover {
+  color: var(--gold);
+}
+
+.crew {
+  margin: var(--s-3) 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: var(--s-2);
+}
+
+.crew li {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 0.75rem;
+  color: var(--ink-faint);
+  padding-left: var(--s-3);
+  border-top: 1px solid var(--rule);
+  padding-top: var(--s-2);
+}
+
+.crew b {
+  color: var(--ink-dim);
+  font-weight: 600;
+}
+
+/* --- Utility ------------------------------------------------------------ */
+
+.inline-form {
+  display: inline;
+}
+
+.stack {
+  display: grid;
+  gap: var(--s-2);
+  /* Grid stretches items by default, which would blow a tier badge or status
+     token out to the full width of its table cell. */
+  justify-items: start;
+}
+
+.footnote {
+  margin-top: var(--s-7);
+  padding-top: var(--s-4);
+  border-top: 1px solid var(--rule);
+  max-width: var(--measure);
+  font-size: 0.8125rem;
+  color: var(--ink-faint);
+}
+
+.skip {
+  position: absolute;
+  left: -9999px;
+}
+
+.skip:focus {
+  position: fixed;
+  left: var(--s-4);
+  top: var(--s-4);
+  z-index: 10;
+  padding: var(--s-2) var(--s-4);
+  background: var(--gold);
+  color: var(--void);
+  border-radius: var(--radius);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* --- Narrow ------------------------------------------------------------- */
+
+@media (max-width: 40rem) {
+  .page {
+    padding: var(--s-5) var(--s-4) var(--s-8);
+  }
+
+  .shell {
+    padding: var(--s-3) var(--s-4);
+    gap: var(--s-3);
+  }
+
+  .shell__nav {
+    width: 100%;
+    margin-left: 0;
+    border-top: 1px solid var(--rule);
+    padding-top: var(--s-2);
+  }
+
+  .facts {
+    grid-template-columns: 1fr;
+    gap: var(--s-1) 0;
+  }
+
+  /* Narrow enough that the two filter groups always wrap anyway. Turn the
+     divider into the thing that forces the break, so it stops dangling as a
+     stray hairline at the end of the first line. */
+  .filters__sep {
+    flex-basis: 100%;
+    width: auto;
+    height: 0;
+    margin: 0;
+    background: none;
+  }
+
+  .facts dd {
+    margin-bottom: var(--s-3);
+  }
+
+  .launch__seal {
+    width: 132px;
+    height: 132px;
+  }
+
+  .launch__panel {
+    padding: var(--s-6) var(--s-4) var(--s-5);
+  }
+}
+
+/* Ten columns of state per row: the standard cell padding pushes the accounts
+   table past the container and clips the last action. Tighten it rather than
+   drop a column, since every column here answers a real admin question. */
+.log--dense th,
+.log--dense td {
+  padding: var(--s-2) var(--s-3);
+}
+
+/* Sync run tables: fixed layout so the per-job sections share one grid. */
+.log--runs {
+  table-layout: fixed;
+  min-width: 60rem;
+}

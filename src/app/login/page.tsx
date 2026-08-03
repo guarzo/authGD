@@ -1,3 +1,9 @@
+import type { Metadata } from "next";
+
+export const metadata: Metadata = {
+  title: "Sign in",
+};
+
 export default async function LoginPage({
   searchParams,
 }: {
@@ -5,18 +11,36 @@ export default async function LoginPage({
 }) {
   const { error } = await searchParams;
   return (
-    <main style={{ maxWidth: 480, margin: "10vh auto", textAlign: "center" }}>
-      <h1>authGD</h1>
-      <p>Corporation auth for FlyGD.</p>
-      {error === "oauth_denied" && (
-        <p role="alert">EVE login was cancelled. Try again when ready.</p>
-      )}
-      <a href="/auth/eve/login">
+    <main className="launch">
+      <div className="launch__panel">
         <img
-          src="https://web.ccpgamescdn.com/eveonlineassets/developers/eve-sso-login-black-large.png"
-          alt="Log in with EVE Online"
+          className="launch__seal"
+          src="/brand/seal.webp"
+          alt="Zoo Landers mission seal"
+          width={180}
+          height={180}
         />
-      </a>
+        <h1 className="launch__title">Zoo Landers</h1>
+        <p className="launch__motto">
+          Center for kids
+          <br />
+          who can&rsquo;t fly good
+        </p>
+        {error === "oauth_denied" && (
+          <p className="notice notice--bad" data-glyph="!" role="alert">
+            EVE login was cancelled. Try again when ready.
+          </p>
+        )}
+        <a className="launch__action" href="/auth/eve/login">
+          <img
+            src="https://web.ccpgamescdn.com/eveonlineassets/developers/eve-sso-login-black-large.png"
+            alt="Log in with EVE Online"
+            width={270}
+            height={45}
+          />
+        </a>
+        <p className="launch__foot">Est. MMXXV · [FLYGD]</p>
+      </div>
     </main>
   );
 }
