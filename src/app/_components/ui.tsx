@@ -6,6 +6,11 @@ export type NavItem = { href: string; label: string; key: string };
  * The ruled header bar. `current` is passed in rather than read from a hook so
  * this stays a server component — every page that renders it is already
  * force-dynamic and knows its own route.
+ *
+ * The `.shell__bar` wrapper is what carries the layout: the bar's ground and
+ * bottom hairline stay full-bleed, while the contents sit on the same measure
+ * as `.page`, so the seal and the nav land on the content column's verticals
+ * instead of the viewport's.
  */
 export function SiteHeader({ items, current }: { items: NavItem[]; current?: string }) {
   return (
@@ -13,24 +18,26 @@ export function SiteHeader({ items, current }: { items: NavItem[]; current?: str
       <a className="skip" href="#main">
         Skip to content
       </a>
-      <a className="shell__mark" href="/account">
-        <img src="/brand/seal-sm.webp" alt="" width={34} height={34} />
-        <span className="shell__wordmark">
-          <b>Zoo Landers</b>
-          <span>Flight Ops</span>
-        </span>
-      </a>
-      <nav className="shell__nav" aria-label="Main">
-        {items.map((i) => (
-          <a
-            key={i.key}
-            href={i.href}
-            aria-current={i.key === current ? "page" : undefined}
-          >
-            {i.label}
-          </a>
-        ))}
-      </nav>
+      <div className="shell__bar">
+        <a className="shell__mark" href="/account">
+          <img src="/brand/seal-sm.webp" alt="" width={34} height={34} />
+          <span className="shell__wordmark">
+            <b>Zoo Landers</b>
+            <span>Flight Ops</span>
+          </span>
+        </a>
+        <nav className="shell__nav" aria-label="Main">
+          {items.map((i) => (
+            <a
+              key={i.key}
+              href={i.href}
+              aria-current={i.key === current ? "page" : undefined}
+            >
+              {i.label}
+            </a>
+          ))}
+        </nav>
+      </div>
     </header>
   );
 }

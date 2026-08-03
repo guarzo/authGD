@@ -207,9 +207,11 @@ export default async function AccountPage({
         </p>
 
         <p className="footnote">
-          authGD owns the <code>{cfg.standings.label}</code> contact label on your
-          characters: contacts under that label are managed automatically and may be
-          added, changed, or removed.
+          <span>
+            authGD owns the <code>{cfg.standings.label}</code> contact label on your
+            characters: contacts under that label are managed automatically and may be
+            added, changed, or removed.
+          </span>
         </p>
       </main>
     </>
