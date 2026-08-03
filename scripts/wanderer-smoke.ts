@@ -17,6 +17,10 @@ async function main() {
     process.exit(2);
   }
   const characterId = Number(arg);
+  if (!Number.isSafeInteger(characterId) || characterId <= 0) {
+    console.error("character id must be a positive safe integer");
+    process.exit(2);
+  }
   const cfg = loadConfig();
   const wanderer = createWandererClient(cfg);
 
@@ -54,6 +58,10 @@ async function main() {
     if (!removed) {
       try {
         await wanderer.removeAclMember(characterId);
+        const afterCleanup = await wanderer.getAclMembers();
+        if (afterCleanup.some((m) => m.characterId === characterId)) {
+          throw new Error("cleanup removeAclMember did not take effect on re-read");
+        }
         console.error(`cleanup: removed ${characterId} from the ACL after a failure`);
       } catch (cleanupErr) {
         console.error(

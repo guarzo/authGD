@@ -71,6 +71,16 @@ describe("setTierManual", () => {
   });
 });
 
+describe("setAccountStatus not_found", () => {
+  it("returns not_found for a missing target account", async () => {
+    const admin = await seedAdmin();
+    const r = await ctx.db.transaction((tx) =>
+      setAccountStatus(tx, admin.id, "00000000-0000-0000-0000-000000000000", "cryo"),
+    );
+    expect(r).toEqual({ ok: false, error: "not_found" });
+  });
+});
+
 describe("returnTierToAuto", () => {
   it("clears the lock only — tier and changed-at untouched — audits, enqueues", async () => {
     const admin = await seedAdmin();

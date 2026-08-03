@@ -22,6 +22,8 @@ COPY src ./src
 COPY scripts ./scripts
 COPY drizzle ./drizzle
 COPY tsconfig.json next.config.ts ./
+RUN addgroup -S authgd && adduser -S authgd -G authgd && chown -R authgd:authgd /app
+USER authgd
 ENV HOSTNAME=0.0.0.0 PORT=3000
 EXPOSE 3000
 CMD ["node", "web/server.js"]

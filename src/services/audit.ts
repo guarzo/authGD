@@ -2,6 +2,8 @@ import type { Dbx } from "@/db";
 import { auditLog } from "@/db/schema";
 import { and, desc, eq, like, lt } from "drizzle-orm";
 
+export const AUDIT_PAGE_SIZE = 100;
+
 export async function logAudit(
   dbx: Dbx,
   entry: {
@@ -34,7 +36,7 @@ export async function queryAuditLog(
   }
   if (filters.target) conds.push(eq(auditLog.target, filters.target));
   if (filters.beforeId !== undefined) conds.push(lt(auditLog.id, filters.beforeId));
-  const limit = Math.min(filters.limit ?? 100, 100);
+  const limit = Math.min(filters.limit ?? AUDIT_PAGE_SIZE, AUDIT_PAGE_SIZE);
   return dbx
     .select()
     .from(auditLog)

@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { getDb } from "@/db";
 import { getAdminContext } from "@/lib/admin-guard";
-import { queryAuditLog } from "@/services/audit";
+import { AUDIT_PAGE_SIZE, queryAuditLog } from "@/services/audit";
 
 export const dynamic = "force-dynamic";
 
@@ -57,7 +57,9 @@ export default async function AdminAuditPage({
           ))}
         </tbody>
       </table>
-      {rows.length === 100 && <p><a href={`/admin/audit?${older.toString()}`}>Older →</a></p>}
+      {rows.length === AUDIT_PAGE_SIZE && (
+        <p><a href={`/admin/audit?${older.toString()}`}>Older →</a></p>
+      )}
     </main>
   );
 }

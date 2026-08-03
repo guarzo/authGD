@@ -134,10 +134,11 @@ export async function getAdminAccountsList(
   const linked = new Set(links.map((l) => l.accountId));
   const syncByChar = new Map(syncStates.map((s) => [s.characterId, s]));
   const obsByChar = new Map(aclObs.map((o) => [o.characterId, o]));
+  const nameById = new Map(chars.map((c) => [c.id, c.name]));
   const mainNameOf = new Map(
     accounts.map((a) => [
       a.id,
-      chars.find((c) => c.id === a.mainCharacterId)?.name ?? null,
+      a.mainCharacterId === null ? null : (nameById.get(a.mainCharacterId) ?? null),
     ]),
   );
 

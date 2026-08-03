@@ -190,7 +190,23 @@ describe("getAdminAccountsList", () => {
     await seedCharacter(ctx.db, cfg, { id: 10, accountId: a.id, main: true, name: "T1" });
     await seedCharacter(ctx.db, cfg, { id: 11, accountId: a.id, name: "T2" });
     await ctx.db.update(character).set({ tokenStatus: "invalid" }).where(eq(character.id, 11));
+    // Pin the disjoint counters: a character explicitly flagged needs_reauth,
+    // and a separate character that's "valid" but missing required scopes —
+    // both must land in needsReauth, not healthy, without double-counting.
+    await seedCharacter(ctx.db, cfg, {
+      id: 12,
+      accountId: a.id,
+      name: "T3",
+      tokenStatus: "needs_reauth",
+    });
+    await seedCharacter(ctx.db, cfg, {
+      id: 13,
+      accountId: a.id,
+      name: "T4",
+      tokenStatus: "valid",
+      scopes: [],
+    });
     const [row] = await getAdminAccountsList(ctx.db, cfg);
-    expect(row.tokenSummary).toEqual({ total: 2, healthy: 1, needsReauth: 0, dead: 1 });
+    expect(row.tokenSummary).toEqual({ total: 4, healthy: 1, needsReauth: 2, dead: 1 });
   });
 });

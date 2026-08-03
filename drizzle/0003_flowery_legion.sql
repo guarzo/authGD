@@ -1,0 +1,1 @@
+CREATE INDEX "sync_run_job_type_id_idx" ON "sync_run" USING btree ("job_type","id" DESC NULLS LAST);

@@ -45,4 +45,12 @@ describe("queryAuditLog", () => {
     expect(older.map((r) => r.id)).toEqual(all.slice(1).map((r) => r.id));
     expect(await queryAuditLog(ctx.db, { limit: 1 })).toHaveLength(1);
   });
+
+  it("hard-caps the limit at 100 even when more rows exist and a higher limit is requested", async () => {
+    for (let i = 0; i < 101; i++) {
+      await logAudit(ctx.db, { actor: "system", action: "bulk.seed", target: `row-${i}` });
+    }
+    const rows = await queryAuditLog(ctx.db, { limit: 101 });
+    expect(rows).toHaveLength(100);
+  });
 });

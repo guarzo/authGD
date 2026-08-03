@@ -401,4 +401,12 @@ describe("promoteAdmin", () => {
     );
     expect(result).toEqual({ ok: false, error: "not_found" });
   });
+
+  it("lets the system actor promote when no admin exists yet", async () => {
+    const target = await seedAccount(ctx.db);
+    const result = await ctx.db.transaction((tx) => promoteAdmin(tx, "system", target.id));
+    expect(result).toEqual({ ok: true });
+    const [after] = await ctx.db.select().from(account).where(eq(account.id, target.id));
+    expect(after.isAdmin).toBe(true);
+  });
 });
