@@ -65,7 +65,7 @@ export default async function AccountPage({
 
   return (
     <>
-      <SiteHeader items={nav} current="account" />
+      <SiteHeader items={nav} current="account" measure="narrow" />
       <main id="main" tabIndex={-1} className="page page--narrow">
         <div className="page__head">
           <h1>Your account</h1>
@@ -207,9 +207,11 @@ export default async function AccountPage({
         </p>
 
         <p className="footnote">
-          authGD owns the <code>{cfg.standings.label}</code> contact label on your
-          characters: contacts under that label are managed automatically and may be
-          added, changed, or removed.
+          <span>
+            authGD owns the <code>{cfg.standings.label}</code> contact label on your
+            characters: contacts under that label are managed automatically and may be
+            added, changed, or removed.
+          </span>
         </p>
       </main>
     </>
