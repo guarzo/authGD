@@ -45,8 +45,17 @@ cached anywhere between the monitor and the app reports the past, which is
 worse than no check at all.
 
 **`GET /api/health/sync`** — worker freshness. Returns 200 if the newest
-`sync_run` row is younger than 90 minutes, else 503 with
-`{"ok":false,"newestRunAgeSec":…,"newestJobType":…}`.
+`sync_run` row is **not older than** 90 minutes (comparison is `<=`, so a run
+landing exactly on the threshold reads as fresh), else 503. Body:
+`{"ok":boolean,"db":"ok"|"error","newestRunAgeSec":number|null,"newestJobType":string|null}`.
+
+If Postgres is unreachable, this endpoint returns 503 with `"db":"error"` and
+null fields rather than letting the query throw into an undocumented 500. Both
+endpoints carry the `db` field so a 503 here distinguishes a stalled worker from
+a dead database without a second request.
+
+Detection is not instantaneous: a dead worker surfaces up to 90 minutes after
+its last run, plus the monitor's own poll interval.
 
 Both are public. Neither body contains secrets, account data, or counts.
 
@@ -160,8 +169,10 @@ Route-handler tests against the test database, following the
 
 - `/api/health` returns 200 with `{"ok":true,"db":"ok"}`.
 - `/api/health` returns 503 when the database is unreachable — injected by
-  pointing the handler at a closed or bad-credential pool, not by asserting the
-  happy path and assuming the failure branch works.
+  mocking `@/db` so the query throws, not by asserting the happy path and
+  assuming the failure branch works.
+- `/api/health/sync` returns 503 with `"db":"error"` when the database is
+  unreachable, rather than an undocumented 500.
 - `/api/health/sync` returns 503 with an empty `sync_run`, and the response
   body carries the documented no-row shape.
 - `/api/health/sync` returns 503 with a row older than the threshold, and

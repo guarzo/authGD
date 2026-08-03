@@ -96,8 +96,10 @@ Create `src/core/health.ts`:
  * The most frequent job (membership) runs every 30 minutes
  * (src/worker/queues.ts). 90 minutes is three missed ticks: long enough that a
  * slow run or a single retry never pages, short enough that a dead worker is
- * caught within the hour. Deliberately a constant and not an environment
- * variable — a second knob would drift from the schedules in queues.ts.
+ * caught within about 90 minutes plus the monitor's own poll interval.
+ * Comparison is <=, so a run landing exactly on the threshold reads as fresh.
+ * Deliberately a constant and not an environment variable — a second knob would
+ * drift from the schedules in queues.ts.
  */
 export const STALE_AFTER_MS = 90 * 60 * 1000;
 
@@ -256,21 +258,29 @@ git commit -m "feat: health service queries for liveness and newest sync run"
 
 **Interfaces:**
 - Consumes: `evaluateFreshness`, `STALE_AFTER_MS` (Task 1); `checkLiveness`, `newestSyncRun` (Task 2); `getDb` from `@/db`.
-- Produces: `GET` handlers at `/api/health` and `/api/health/sync`. Response bodies are exactly `{"ok":true,"db":"ok"}` / `{"ok":false,"db":"error"}` and `{"ok":boolean,"newestRunAgeSec":number|null,"newestJobType":string|null}`.
+- Produces: `GET` handlers at `/api/health` and `/api/health/sync`. Response bodies are exactly `{"ok":boolean,"db":"ok"|"error"}` and `{"ok":boolean,"db":"ok"|"error","newestRunAgeSec":number|null,"newestJobType":string|null}`.
 
-Two test files because `vi.mock` is hoisted per file: the database-down case needs `@/db` mocked, and the other cases need it real.
+`newestSyncRun` throws when Postgres is unreachable. The sync route catches it and returns a documented 503 with `db:"error"` — an uncaught throw would surface as a 500 that no part of the monitoring contract describes. Both routes therefore carry a `db` field, so a monitor can tell "worker is behind" from "database is gone" without a second request.
+
+Two test files because `vi.mock` is hoisted per file: the database-down cases need `@/db` mocked to fail, and the others need it real.
 
 - [ ] **Step 1: Write the failing tests**
 
 Create `tests/health-routes.test.ts`:
 
 ```ts
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Db } from "@/db";
 import { syncRun } from "@/db/schema";
-import { setupTestDb, truncateAll, TEST_URL } from "./helpers/db";
+import { setupTestDb, truncateAll } from "./helpers/db";
 
-// Route modules resolve the database lazily via getDb(); set env before import.
-process.env.DATABASE_URL = TEST_URL;
+// The routes call getDb(), which would build a SECOND pool that nothing closes.
+// Point it at the test pool instead so teardown actually tears everything down.
+let testDb: Db;
+vi.mock("@/db", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/db")>();
+  return { ...actual, getDb: () => testDb };
+});
 
 const { GET: healthRoute } = await import("@/app/api/health/route");
 const { GET: syncRoute } = await import("@/app/api/health/sync/route");
@@ -279,6 +289,7 @@ let ctx: Awaited<ReturnType<typeof setupTestDb>>;
 
 beforeAll(async () => {
   ctx = await setupTestDb();
+  testDb = ctx.db;
 });
 afterAll(async () => {
   await ctx.cleanup();
@@ -302,6 +313,7 @@ describe("GET /api/health/sync", () => {
     expect(res.status).toBe(503);
     expect(await res.json()).toEqual({
       ok: false,
+      db: "ok",
       newestRunAgeSec: null,
       newestJobType: null,
     });
@@ -313,6 +325,7 @@ describe("GET /api/health/sync", () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.ok).toBe(true);
+    expect(body.db).toBe("ok");
     expect(body.newestJobType).toBe("membership");
     expect(body.newestRunAgeSec).toBeLessThan(60);
   });
@@ -352,23 +365,40 @@ Create `tests/health-routes-db-down.test.ts`:
 ```ts
 import { describe, expect, it, vi } from "vitest";
 
-// The whole point of this file: exercise the 503 branch instead of assuming it.
+// The whole point of this file: exercise the database-failure branches instead
+// of assuming they work. Both routes must degrade to 503, never to an
+// undocumented 500.
 vi.mock("@/db", () => ({
   getDb: () => ({
     execute: async () => {
+      throw new Error("connection refused");
+    },
+    select: () => {
       throw new Error("connection refused");
     },
   }),
 }));
 
 const { GET: healthRoute } = await import("@/app/api/health/route");
+const { GET: syncRoute } = await import("@/app/api/health/sync/route");
 
-describe("GET /api/health with the database down", () => {
-  it("returns 503", async () => {
+describe("health routes with the database down", () => {
+  it("GET /api/health returns 503", async () => {
     const res = await healthRoute();
     expect(res.status).toBe(503);
     expect(await res.json()).toEqual({ ok: false, db: "error" });
     expect(res.headers.get("cache-control")).toContain("no-store");
+  });
+
+  it("GET /api/health/sync returns 503 with db:error, not a 500", async () => {
+    const res = await syncRoute();
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({
+      ok: false,
+      db: "error",
+      newestRunAgeSec: null,
+      newestJobType: null,
+    });
   });
 });
 ```
@@ -423,10 +453,25 @@ const NO_STORE = { "Cache-Control": "no-store" };
  * unhealthy. It exists for the external uptime monitor.
  */
 export async function GET() {
-  const newest = await newestSyncRun(getDb());
+  let newest: Awaited<ReturnType<typeof newestSyncRun>>;
+  try {
+    newest = await newestSyncRun(getDb());
+  } catch {
+    // An unreachable database is a 503 with db:"error", never an undocumented
+    // 500: the monitor must be able to tell a dead worker from a dead database.
+    return NextResponse.json(
+      { ok: false, db: "error", newestRunAgeSec: null, newestJobType: null },
+      { status: 503, headers: NO_STORE },
+    );
+  }
   const { fresh, ageSec } = evaluateFreshness(newest?.startedAt ?? null, new Date());
   return NextResponse.json(
-    { ok: fresh, newestRunAgeSec: ageSec, newestJobType: newest?.jobType ?? null },
+    {
+      ok: fresh,
+      db: "ok",
+      newestRunAgeSec: ageSec,
+      newestJobType: newest?.jobType ?? null,
+    },
     { status: fresh ? 200 : 503, headers: NO_STORE },
   );
 }
@@ -435,7 +480,7 @@ export async function GET() {
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `npx vitest run tests/health-routes.test.ts tests/health-routes-db-down.test.ts`
-Expected: PASS, 7 tests.
+Expected: PASS, 8 tests.
 
 - [ ] **Step 5: Run the full suite, typecheck, and build**
 
@@ -609,7 +654,11 @@ Two public endpoints, deliberately separate:
 | Endpoint | 200 means | 503 means |
 |---|---|---|
 | `/api/health` | this web machine serves and Postgres answers | the process is up but the database is unreachable |
-| `/api/health/sync` | a sync job ran within the last 90 minutes | the worker is dead, wedged, or has never run |
+| `/api/health/sync` | a sync job ran within the last 90 minutes | the worker is dead, wedged, or has never run — or, with `"db":"error"`, the database is unreachable |
+
+Both responses carry a `db` field (`"ok"` or `"error"`), so a 503 from
+`/api/health/sync` distinguishes a stalled worker from a dead database without a
+second request.
 
 Only `/api/health` is wired into `fly.toml`. A failing Fly check removes the
 machine from the load balancer and gates deploys, so pointing it at worker
@@ -622,14 +671,20 @@ down; that is the entire reason the external check exists.
 Notes:
 
 - A `failed` run still counts as fresh. The endpoint measures whether the worker
-  is alive, not whether jobs succeed — job failures belong to `/admin/sync` and
-  the ops webhook. Folding them in would let one permanent config error hold the
-  check red forever and train you to ignore it.
+  is alive, not whether jobs succeed. Job outcomes belong to `/admin/sync`; the
+  ops webhook is narrower still, firing only on exhausted retries
+  (`src/worker/index.ts`), permanent Wanderer read failures
+  (`src/jobs/wanderer.ts`), and Discord role configuration errors
+  (`src/jobs/discord-roles.ts`) — every other failure appears only in
+  `/admin/sync`. Folding job outcomes into this endpoint would let one permanent
+  config error hold the check red forever and train you to ignore it.
 - A brand-new deploy reads 503 on `/api/health/sync` until the first `membership`
   tick, up to 30 minutes. This is intended: "never ran" is a real failure.
-- The 90-minute threshold is a constant in `src/core/health.ts`. If you change a
-  schedule in `src/worker/queues.ts` to something slower than 90 minutes for the
-  most frequent job, change it there too.
+- Detection is not instant. A dead worker surfaces up to 90 minutes after its
+  last run, plus your monitor's poll interval.
+- The 90-minute threshold is a constant in `src/core/health.ts`, compared with
+  `<=`. If you change a schedule in `src/worker/queues.ts` to something slower
+  than 90 minutes for the most frequent job, change it there too.
 
 ## Sizing and redundancy — decisions, not defaults
 
@@ -645,10 +700,18 @@ Notes:
 - **Single-node Postgres, deliberately.** HA adds real operational weight to an
   unmanaged `postgres-flex` cluster you already patch yourself.
 
-**Before scaling to `web=2`, check connection headroom:**
+**Before scaling to `web=2`, check connection headroom.** `fly postgres connect`
+opens an interactive psql session; there is no flag for passing SQL (`-c` is the
+config-file path):
 
 ```bash
-fly postgres connect -a <pg-app> -c 'SHOW max_connections'
+fly postgres connect -a <pg-app>
+```
+
+Then at the prompt:
+
+```sql
+SHOW max_connections;
 ```
 
 | Source | Connections |
