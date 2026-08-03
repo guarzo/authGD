@@ -81,6 +81,20 @@ describe("loadConfig", () => {
       ).toBe("https://auth.example");
     });
 
+    // A query or fragment defeats a naive trailing-slash strip: rstrip("/")
+    // leaves `https://host/app/?tenant=1` untouched, and concatenation then
+    // produces `.../app/?tenant=1/auth/eve/callback`.
+    it("drops a query string or fragment", () => {
+      expect(
+        loadConfig({ ...validEnv, APP_BASE_URL: "https://auth.example/app/?tenant=1" })
+          .appBaseUrl,
+      ).toBe("https://auth.example/app");
+      expect(
+        loadConfig({ ...validEnv, APP_BASE_URL: "https://auth.example/#frag" })
+          .appBaseUrl,
+      ).toBe("https://auth.example");
+    });
+
     it("keeps a path prefix, stripping only the trailing slash", () => {
       expect(
         loadConfig({ ...validEnv, APP_BASE_URL: "https://auth.example/app/" }).appBaseUrl,
