@@ -936,13 +936,19 @@ h3.rule-head__label {
   display: flex;
   flex-wrap: wrap;
   gap: var(--s-3);
-  align-items: flex-end;
+  /* Top, not bottom. Only one cell carries a hint, and bottom-alignment made
+     that cell's extra height push its own input a row-height above its
+     siblings' — the label and the field both floated out of line. Aligning at
+     the top puts every label on one line and every field on the next, and
+     leaves the hint hanging below where it belongs. */
+  align-items: flex-start;
   margin-bottom: var(--s-5);
 }
 
 .filter-form__cell {
   display: grid;
   gap: var(--s-1);
+  align-content: start;
 }
 
 .filter-form__label {
@@ -957,6 +963,18 @@ h3.rule-head__label {
   display: flex;
   gap: var(--s-2);
   align-items: center;
+}
+
+/* The submit button belongs on the field row, not the label row. An empty
+   first row, sized by the same label type its siblings use, is what puts it
+   there — so it tracks --t-label instead of a hardcoded offset that drifts the
+   moment the label scale changes. The rem is a fallback for engines without
+   `lh`. */
+.filter-form__cell--actions::before {
+  content: "";
+  font-size: var(--t-label);
+  block-size: 1.1rem;
+  block-size: 1lh;
 }
 
 /* Static example text under the action-prefix input. A placeholder would
