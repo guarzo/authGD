@@ -33,4 +33,14 @@ describe("getFlygdCharacters", () => {
     expect(rows.map((r) => r.characterId).sort((a, b) => a - b)).toEqual([1, 2]);
     expect(rows[0]).toMatchObject({ accountId: flygd.id, tokenStatus: "valid" });
   });
+
+  it("excludes affiliation_invalid characters — they can't be contact targets or ACL members", async () => {
+    const flygd = await seedAccount(ctx.db, { tier: "flygd" });
+    await seedCharacter(ctx.db, cfg, { id: 1, accountId: flygd.id, main: true });
+    await seedCharacter(ctx.db, cfg, {
+      id: 2, accountId: flygd.id, affiliationInvalid: true,
+    });
+    const rows = await getFlygdCharacters(ctx.db);
+    expect(rows.map((r) => r.characterId)).toEqual([1]);
+  });
 });

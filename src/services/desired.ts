@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { Dbx } from "@/db";
 import { account, character } from "@/db/schema";
 
@@ -14,6 +14,10 @@ export type FlygdCharacter = {
 /**
  * The derived desired set: every character of every FlyGD account (spec: Data
  * model → Derived). Green/Blue accounts simply fall out; nothing is deleted.
+ * A character with affiliation_invalid (biomassed/deleted at CCP) is excluded:
+ * it can't be a valid contact target or ACL member, and ESI rejects it —
+ * leaving it in would permanently poison every downstream sync that shares
+ * this desired set.
  */
 export async function getFlygdCharacters(dbx: Dbx): Promise<FlygdCharacter[]> {
   return dbx
@@ -27,5 +31,5 @@ export async function getFlygdCharacters(dbx: Dbx): Promise<FlygdCharacter[]> {
     })
     .from(character)
     .innerJoin(account, eq(character.accountId, account.id))
-    .where(eq(account.tier, "flygd"));
+    .where(and(eq(account.tier, "flygd"), eq(character.affiliationInvalid, false)));
 }

@@ -116,39 +116,54 @@ export async function runContactsJob(deps: {
           labelId: label.labelId,
           contacts,
         });
-        if (diff.add.length > 0) {
-          await esi.addContacts(
-            target.characterId,
-            token.accessToken,
-            diff.add,
-            cfg.standings.value,
-            [label.labelId],
-          );
+        // Add/edit failures (e.g. ESI 400-rejecting a since-biomassed desired
+        // id) must not block removal: removals are tried separately below,
+        // regardless of whether this step failed.
+        let stepErr: unknown = null;
+        try {
+          if (diff.add.length > 0) {
+            await esi.addContacts(
+              target.characterId,
+              token.accessToken,
+              diff.add,
+              cfg.standings.value,
+              [label.labelId],
+            );
+          }
+          // Group takeovers by their preserved label set — PUT replaces
+          // label_ids wholesale, so each distinct union is its own call.
+          const groups = new Map<string, { labelIds: number[]; ids: number[] }>();
+          for (const u of diff.update) {
+            const key = u.labelIds.join(",");
+            const g = groups.get(key) ?? { labelIds: u.labelIds, ids: [] };
+            g.ids.push(u.contactId);
+            groups.set(key, g);
+          }
+          for (const g of groups.values()) {
+            await esi.editContacts(
+              target.characterId,
+              token.accessToken,
+              g.ids,
+              cfg.standings.value,
+              g.labelIds,
+            );
+          }
+          counts.added += diff.add.length;
+          counts.updated += diff.update.length;
+        } catch (err) {
+          stepErr = err;
         }
-        // Group takeovers by their preserved label set — PUT replaces
-        // label_ids wholesale, so each distinct union is its own call.
-        const groups = new Map<string, { labelIds: number[]; ids: number[] }>();
-        for (const u of diff.update) {
-          const key = u.labelIds.join(",");
-          const g = groups.get(key) ?? { labelIds: u.labelIds, ids: [] };
-          g.ids.push(u.contactId);
-          groups.set(key, g);
+
+        try {
+          if (diff.remove.length > 0) {
+            await esi.deleteContacts(target.characterId, token.accessToken, diff.remove);
+          }
+          counts.removed += diff.remove.length;
+        } catch (err) {
+          stepErr ??= err; // report the add/edit failure first if both failed
         }
-        for (const g of groups.values()) {
-          await esi.editContacts(
-            target.characterId,
-            token.accessToken,
-            g.ids,
-            cfg.standings.value,
-            g.labelIds,
-          );
-        }
-        if (diff.remove.length > 0) {
-          await esi.deleteContacts(target.characterId, token.accessToken, diff.remove);
-        }
-        counts.added += diff.add.length;
-        counts.updated += diff.update.length;
-        counts.removed += diff.remove.length;
+
+        if (stepErr) throw stepErr;
         await recordResult(db, target.characterId, "ok", true);
       } catch (err) {
         const needsReauth = err instanceof EsiError && err.kind === "needs_reauth";

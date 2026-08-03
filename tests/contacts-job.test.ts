@@ -200,6 +200,29 @@ describe("runContactsJob", () => {
     expect(calls.adds).toContainEqual({ characterId: 1, ids: [2], labelIds: [LABEL_ID] });
   });
 
+  it("still deletes stale contacts when addContacts permanently fails on another id", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
+    await seedCharacter(ctx.db, cfg, { id: 2, accountId: acc.id });
+    const { esi, calls } = fakeEsi({
+      contacts: {
+        1: [labeled(99)], // ours, no longer desired → delete
+      },
+    });
+    const failingEsi: ContactsEsi = {
+      ...esi,
+      addContacts: async () => {
+        throw new EsiError("invalid contact id", 400, "permanent");
+      },
+    };
+    const result = await runContactsJob({ db: ctx.db, cfg, esi: failingEsi, fetchImpl: okToken });
+    expect(result.status).toBe("partial");
+    expect(result.counts.failed).toBeGreaterThan(0);
+    // the add failed permanently, but the delete still ran
+    expect(calls.deletes).toContainEqual({ characterId: 1, ids: [99] });
+    expect((await lastResult(1))?.lastResult).toBe("sync_failed");
+  });
+
   it("marks the character needs_reauth when ESI rejects the scope", async () => {
     const acc = await seedAccount(ctx.db, { tier: "flygd" });
     await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
