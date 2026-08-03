@@ -63,8 +63,8 @@ what is true. Never exclaims. Never apologizes twice.
 - **Generic dark SaaS.** Rounded card grid on `#0a0a0a`, violet-to-blue gradients,
   glassmorphism, a hero metric with a big number and a small label.
 - **Cartoon-forward UI.** The artwork is beloved and must not be diluted by
-  restating it in every button and border. It appears deliberately, at full
-  strength, in a few places.
+  restating it in every button and border. It appears deliberately, in a few
+  places.
 
 ## Design Principles
 
@@ -78,8 +78,11 @@ what is true. Never exclaims. Never apologizes twice.
 4. **Nothing reads as punishment.** Green tier, cryo status, and a dead token are
    ordinary states, not failures. Reserve alarm colour for things the user can and
    should fix.
-5. **Earn the artwork.** Faoble's illustrations appear at full size and full quality
-   or not at all. No cropping into decoration, no tinting into wallpaper.
+5. **Earn the artwork.** Faoble's illustrations are shown properly or not at all:
+   full quality, from an asset cut for the size it is drawn at, never a large file
+   scaled down or a fragment cropped out for decoration. The login ground is the
+   deliberate exception, where the lander is held far enough back to be texture
+   rather than picture.
 
 ## Accessibility & Inclusion
 
