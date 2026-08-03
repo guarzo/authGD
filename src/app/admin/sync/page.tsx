@@ -213,14 +213,26 @@ export default async function AdminSyncPage({
                                   </span>
                                 )}
                               </td>
-                              {!r.counts ? (
-                                // Two different absences: a run still in
-                                // flight has not reported yet, a finished one
-                                // that recorded nothing never will. The failed
-                                // runs are the second kind, and an ellipsis
-                                // there reads as "still working".
+                              {!r.counts || cols.length === 0 ? (
+                                // Three absences that read differently: a run
+                                // still in flight has not reported yet, a
+                                // finished one that recorded nothing never
+                                // will, and a recorded all-zero result is a
+                                // real answer. cols is empty only when no run
+                                // in the window moved a counter, so there is
+                                // one header cell to span.
                                 <td colSpan={span} className="dim">
-                                  {r.finishedAt ? <>&mdash;</> : <>&hellip;</>}
+                                  {!r.counts ? (
+                                    r.finishedAt ? (
+                                      <>&mdash;</>
+                                    ) : (
+                                      <>&hellip;</>
+                                    )
+                                  ) : isNoChange(r.counts) ? (
+                                    "no change"
+                                  ) : (
+                                    <>&mdash;</>
+                                  )}
                                 </td>
                               ) : isNoChange(r.counts) ? (
                                 <td colSpan={span} className="dim">

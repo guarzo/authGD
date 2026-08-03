@@ -84,4 +84,10 @@ describe("formatDuration", () => {
     expect(formatDuration(null, t(0))).toBeNull();
     expect(formatDuration(t(500), t(0))).toBeNull();
   });
+
+  it("does not let a rounded remainder carry past its own unit", () => {
+    expect(formatDuration(t(0), t(59_600))).toBe("1m 0s");
+    expect(formatDuration(t(0), t(359_600))).toBe("6m 0s");
+    expect(formatDuration(t(0), t(3_599_600))).toBe("1h 0m");
+  });
 });

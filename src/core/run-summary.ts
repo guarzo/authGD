@@ -106,9 +106,13 @@ export function formatDuration(
   if (!Number.isFinite(ms) || ms < 0) return null;
   if (ms < 1000) return `${ms}ms`;
   const s = ms / 1000;
-  if (s < 60) return `${s < 10 ? s.toFixed(1) : Math.round(s)}s`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ${Math.round(s - m * 60)}s`;
+  if (s < 10) return `${s.toFixed(1)}s`;
+  // Round to whole seconds once, then decompose. Rounding each part separately
+  // lets the remainder carry past its own unit — 5m 59.6s came out as "5m 60s".
+  const total = Math.round(s);
+  if (total < 60) return `${total}s`;
+  const m = Math.floor(total / 60);
+  if (m < 60) return `${m}m ${total % 60}s`;
   const h = Math.floor(m / 60);
-  return `${h}h ${m - h * 60}m`;
+  return `${h}h ${m % 60}m`;
 }
