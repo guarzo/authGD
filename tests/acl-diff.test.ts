@@ -36,10 +36,22 @@ describe("diffAcl", () => {
           { characterId: 2, role: "manager" }, // elevated → preserved
           { characterId: 3, role: "viewer" }, // normal → preserved
           { characterId: 4, role: "admin" }, // elevated → preserved
-          { characterId: 5, role: "blocked" }, // blocked AND undesired → removed
+          { characterId: 5, role: "member" }, // undesired, normal role → removed
         ],
       }),
     ).toEqual({ add: [], remove: [5], unblock: [1] });
+  });
+
+  it("NEVER removes blocked entries, even when undesired — removal would un-ban them", () => {
+    expect(
+      diffAcl({
+        desiredIds: [],
+        members: [
+          { characterId: 5, role: "blocked" },
+          { characterId: 6, role: "member" },
+        ],
+      }),
+    ).toEqual({ add: [], remove: [6], unblock: [] });
   });
 
   it("is a no-op when converged", () => {
