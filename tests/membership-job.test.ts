@@ -1,6 +1,6 @@
-import { eq } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { account, auditLog, character, outbox } from "@/db/schema";
+import { account, auditLog, character, outbox, syncRun } from "@/db/schema";
 import { runMembershipJob } from "@/jobs/membership";
 import { EsiError, type Affiliation } from "@/lib/esi/client";
 import { JobRetryError } from "@/services/sync-run";
@@ -139,5 +139,12 @@ describe("runMembershipJob", () => {
     );
     expect((await getAccount(a1.id)).tier).toBe("flygd");
     expect((await getAccount(a2.id)).tier).toBe("green"); // untouched
+  });
+
+  it("labels recheck runs membership-recheck in sync_run (F7)", async () => {
+    await runMembershipJob({ db: ctx.db, cfg, esi: esiWith({}) }, { recheckInvalid: true });
+    await runMembershipJob({ db: ctx.db, cfg, esi: esiWith({}) });
+    const runs = await ctx.db.select().from(syncRun).orderBy(desc(syncRun.id));
+    expect(runs.map((r) => r.jobType)).toEqual(["membership", "membership-recheck"]);
   });
 });

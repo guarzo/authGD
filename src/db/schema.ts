@@ -110,6 +110,7 @@ export const outbox = pgTable(
       .$type<
         | { kind: "account"; accountId: string }
         | { kind: "discord-user"; discordUserId: string }
+        | { kind: "membership-recheck" }
         | { kind: "all" }
       >()
       .notNull(),

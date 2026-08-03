@@ -14,7 +14,10 @@ export async function runMembershipJob(
   opts: { accountId?: string; recheckInvalid?: boolean } = {},
 ): Promise<JobResult> {
   const { db, cfg, esi } = deps;
-  return runJob(db, "membership", async () => {
+  // F7: recheck runs get their own sync_run label so the admin sync page can
+  // distinguish the weekly/on-demand invalid-affiliation recheck from the anchor.
+  const jobType = opts.recheckInvalid ? "membership-recheck" : "membership";
+  return runJob(db, jobType, async () => {
     const chars = await db
       .select({
         id: character.id,

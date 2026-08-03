@@ -50,6 +50,14 @@ export function planDispatch(
           singletonKey: `roles:user:${payload.discordUserId}`,
         },
       ];
+    case "membership-recheck":
+      return [
+        {
+          queue: QUEUES.membershipRecheck,
+          data: { jobType: QUEUES.membershipRecheck },
+          singletonKey: "membership-recheck:all",
+        },
+      ];
     case "all":
       return [
         {
