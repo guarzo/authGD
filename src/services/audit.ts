@@ -1,6 +1,6 @@
 import type { Dbx } from "@/db";
 import { account, auditLog, character, discordLink } from "@/db/schema";
-import { and, desc, eq, inArray, like, lt } from "drizzle-orm";
+import { and, desc, eq, inArray, like, lt, sql } from "drizzle-orm";
 
 export const AUDIT_PAGE_SIZE = 100;
 
@@ -190,6 +190,108 @@ export async function resolveAuditIdentities(
 
     return { ...r, actorName, actorKind, targetName, targetKind };
   });
+}
+
+/**
+ * The two literal, non-id values the audit log stores: `system` as an actor
+ * (every job writes it) and `all` as the broadcast target of `sync.requested`
+ * / `sync.recheck_requested`. Both must bypass name resolution or filtering by
+ * them regresses -- a grep of every logAudit call site confirms these are the
+ * complete set.
+ */
+const RESERVED_FILTER_LITERALS = new Set(["system", "all"]);
+
+export type FilterResolution =
+  | { kind: "raw"; ids: string[] }
+  | { kind: "name"; name: string; ids: string[]; accountCount: number }
+  | { kind: "none"; name: string };
+
+/**
+ * Inverts `resolveAuditIdentities` for the filter box: turns what an admin
+ * sees ("Zed") back into the raw ids the audit log actually stores.
+ *
+ * A raw id costs nothing -- UUIDs, bare digit strings and the two reserved
+ * literals short-circuit with zero queries, which is what keeps pasting an id
+ * working. Everything else is a name, resolved along the same three display
+ * paths `resolveAuditIdentities` renders:
+ *
+ *   actor  -> accounts whose main character carries the name (actor is only
+ *             ever an account uuid or "system", so nothing else can match)
+ *   target -> those accounts, PLUS every character carrying the name, PLUS the
+ *             discord ids linked to those accounts, because one person's
+ *             target rows are spread across all three identifier forms and a
+ *             filter that pinned one would silently hide the others
+ *
+ * Deliberately NOT called from inside queryAuditLog: that function receives
+ * raw ids only, so a caller passing a non-uuid raw actor (as
+ * tests/audit-query.test.ts does) can never have it reinterpreted as a name.
+ */
+export async function resolveFilterIdentity(
+  dbx: Dbx,
+  field: "actor" | "target",
+  value: string,
+): Promise<FilterResolution> {
+  if (
+    RESERVED_FILTER_LITERALS.has(value) ||
+    UUID_RE.test(value) ||
+    DIGITS_RE.test(value)
+  ) {
+    return { kind: "raw", ids: [value] };
+  }
+
+  // 1. every character carrying the name (case-insensitive), with its owner
+  const chars = await dbx
+    .select({ id: character.id, accountId: character.accountId })
+    .from(character)
+    .where(sql`lower(${character.name}) = lower(${value})`);
+  if (chars.length === 0) return { kind: "none", name: value };
+
+  const characterIds = chars.map((c) => c.id);
+
+  // 2. the accounts that *display* the name, i.e. whose main is one of those
+  const mains = await dbx
+    .select({ id: account.id })
+    .from(account)
+    .where(inArray(account.mainCharacterId, characterIds));
+  const displayAccountIds = mains.map((a) => a.id);
+
+  if (field === "actor") {
+    // An alt's name can never appear in the actor column, so its owning
+    // account neither contributes rows nor counts toward ambiguity.
+    if (displayAccountIds.length === 0) return { kind: "none", name: value };
+    return {
+      kind: "name",
+      name: value,
+      ids: displayAccountIds,
+      accountCount: displayAccountIds.length,
+    };
+  }
+
+  // 3. discord ids of the displaying accounts (this one IS index-backed --
+  //    discord_link.account_id is that table's primary key)
+  const links = displayAccountIds.length
+    ? await dbx
+        .select({ discordUserId: discordLink.discordUserId })
+        .from(discordLink)
+        .where(inArray(discordLink.accountId, displayAccountIds))
+    : [];
+
+  const ids = [
+    ...displayAccountIds,
+    ...characterIds.map(String),
+    ...links.map((l) => l.discordUserId),
+  ];
+  if (ids.length === 0) return { kind: "none", name: value };
+
+  // Matched character ids are in the union, so their owning accounts are
+  // surfaced too and must count -- otherwise two same-named alts on two
+  // accounts widen the results while the page reports no ambiguity.
+  const accountCount = new Set([
+    ...displayAccountIds,
+    ...chars.map((c) => c.accountId),
+  ]).size;
+
+  return { kind: "name", name: value, ids, accountCount };
 }
 
 export async function queryAuditLog(
