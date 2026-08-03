@@ -466,6 +466,40 @@ docker exec <pg-container> psql -U authgd -d postgres \
 TEST_DATABASE_URL=postgres://authgd:authgd@localhost:5433/authgd_test_mine npm test
 ```
 
+#### `npm run test:e2e` isolates itself
+
+The e2e suite is the exception: it needs none of the above. `e2e/env.ts` hashes
+the worktree's absolute path into a dev-server port and a database port, and
+`e2e/provision.ts` starts a Postgres container named `authgd-e2e-<worktree>` on
+that port before the dev server boots. Both `playwright.config.ts` and
+`e2e/helpers.ts` read the resulting URL from that one module, so the server and
+the seeding code cannot end up pointed at different databases.
+
+Concurrent worktrees therefore each get their own port and their own database,
+and `npm run test:e2e` remains the only command you need.
+
+```bash
+npm run test:e2e          # provisions on first run, reuses afterwards
+npm run test:e2e:clean    # remove this worktree's container when you're done
+```
+
+The container is kept between runs on purpose — a throwaway one would pay for
+`initdb` plus a full migration every time, and would strand any reused dev
+server against a database that no longer exists. Nothing reclaims it
+automatically, so `test:e2e:clean` is the tidy-up.
+
+Two overrides exist, both optional:
+
+| Variable | Effect |
+|---|---|
+| `TEST_DATABASE_URL` | Use this database and skip provisioning entirely. |
+| `E2E_PORT` / `E2E_DB_PORT` | Pin a port, e.g. after a hash collision. |
+
+If something that is not this worktree's own dev server already holds the port,
+the run **aborts** rather than attaching to it. Attaching is what used to make a
+sibling worktree's server answer your tests and return a green suite that never
+touched your branch.
+
 ### What works on fakes, and what needs real credentials
 
 | Works with `.env.example` as-is | Needs real credentials |
