@@ -14,7 +14,7 @@ fly postgres attach <pg-app>    # sets DATABASE_URL
 fly secrets set \
   SESSION_COOKIE_NAME=authgd_session \
   TOKEN_ENCRYPTION_KEY=<base64 of 32 random bytes> \
-  APP_BASE_URL=https://<app>.fly.dev \
+  APP_BASE_URL=https://<public-hostname> \
   ALLIANCE_ID=... \
   BOOTSTRAP_ADMIN_CHARACTER_IDS=... \
   EVE_SSO_CLIENT_ID=... EVE_SSO_CLIENT_SECRET=... \
@@ -28,6 +28,11 @@ fly secrets set \
   SYNC_MODE=live
 fly deploy
 ```
+
+Set `APP_BASE_URL` to the hostname you intend to keep. If a custom domain is
+coming, use it from the start rather than the `<app>.fly.dev` default: OAuth
+redirect URIs derive from this value, so changing it later means re-registering
+the callback URLs with both EVE SSO and Discord.
 
 Deploy at `web=1`. Scaling to `web=2` comes after the connection-headroom
 check below — two web machines double the pool count against one small
@@ -319,11 +324,18 @@ the starting:
 ### The external poll is a stopgap
 
 `.github/workflows/uptime.yml` curls `/api/health/sync` every 15 minutes. It
-needs a repository variable:
+needs a repository variable, set to the app's **public** URL — the custom
+domain, not `authgd.fly.dev`. Both hostnames answer, but only the custom domain
+exercises the DNS record and the certificate users actually depend on, so a
+probe of the `.fly.dev` name would stay green through an expired cert:
 
 ```bash
-gh variable set APP_BASE_URL --body https://authgd.fly.dev
+gh variable set APP_BASE_URL --body https://authgd.zoolanders.space
 ```
+
+This is the same value as the app's own `APP_BASE_URL` secret, but the two are
+unrelated storage: the secret is what OAuth redirect URIs derive from
+(`src/config.ts`), while the variable is only the probe target.
 
 It probes only that one URL, not both: a 200 from `/api/health/sync` already
 proves the web process served a request and Postgres answered, and its `db`
