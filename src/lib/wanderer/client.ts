@@ -20,7 +20,11 @@ export class WandererError extends Error {
   }
 }
 
-const eveIdSchema = z.union([z.string().regex(/^\d+$/), z.number().int()]);
+const eveIdSchema = z
+  .union([z.string().regex(/^\d+$/), z.number().int()])
+  .refine((v) => Number.isSafeInteger(Number(v)) && Number(v) > 0, {
+    message: "EVE id must be a positive safe integer",
+  });
 const roleSchema = z.enum(["admin", "manager", "member", "viewer", "blocked"]);
 // Strict on both axes, fail closed: an unknown role spelling could cost an
 // entry its admin protection, and a member with zero/multiple external ids

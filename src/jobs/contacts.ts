@@ -134,8 +134,9 @@ export async function runContactsJob(deps: {
           // label_ids wholesale, so each distinct union is its own call.
           const groups = new Map<string, { labelIds: number[]; ids: number[] }>();
           for (const u of diff.update) {
-            const key = u.labelIds.join(",");
-            const g = groups.get(key) ?? { labelIds: u.labelIds, ids: [] };
+            const sortedLabelIds = [...u.labelIds].sort((a, b) => a - b);
+            const key = sortedLabelIds.join(",");
+            const g = groups.get(key) ?? { labelIds: sortedLabelIds, ids: [] };
             g.ids.push(u.contactId);
             groups.set(key, g);
           }

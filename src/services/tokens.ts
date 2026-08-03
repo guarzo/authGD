@@ -23,11 +23,11 @@ export type AccessTokenResult =
  * guard wins. A miss means the row changed underneath us (rotation, re-auth,
  * or transfer reclaim): the stale decision is discarded.
  */
-async function invalidateIfUnchanged(
+export async function invalidateTokenIfUnchanged(
   db: Db,
   characterId: number,
   expectedEnc: string,
-  reason: string,
+  audit: { action: string; details?: Record<string, unknown> },
 ): Promise<boolean> {
   return db.transaction(async (tx) => {
     const rows = await tx
@@ -40,9 +40,9 @@ async function invalidateIfUnchanged(
     if (rows.length === 0) return false;
     await logAudit(tx, {
       actor: "system",
-      action: "token.invalidated",
+      action: audit.action,
       target: String(characterId),
-      details: { reason },
+      details: audit.details,
     });
     return true;
   });
@@ -66,7 +66,10 @@ export async function getFreshAccessToken(
   try {
     refreshToken = decryptToken(ch.refreshTokenEnc, cfg.tokenEncryptionKey);
   } catch {
-    const applied = await invalidateIfUnchanged(db, ch.id, ch.refreshTokenEnc, "malformed_token_blob");
+    const applied = await invalidateTokenIfUnchanged(db, ch.id, ch.refreshTokenEnc, {
+      action: "token.invalidated",
+      details: { reason: "malformed_token_blob" },
+    });
     return applied
       ? { ok: false, reason: "invalid", detail: "malformed_token_blob" }
       : { ok: false, reason: "transient", detail: "concurrent rotation" };
@@ -97,12 +100,10 @@ export async function getFreshAccessToken(
       // invalid_grant on the OLD blob says nothing about a token another job
       // rotated in the meantime — the conditional update discards the stale
       // decision atomically (no separate read-then-write window).
-      const applied = await invalidateIfUnchanged(
-        db,
-        ch.id,
-        ch.refreshTokenEnc,
-        err.oauthError ?? `status_${err.status}`,
-      );
+      const applied = await invalidateTokenIfUnchanged(db, ch.id, ch.refreshTokenEnc, {
+        action: "token.invalidated",
+        details: { reason: err.oauthError ?? `status_${err.status}` },
+      });
       return applied
         ? { ok: false, reason: "invalid", detail: err.oauthError }
         : { ok: false, reason: "transient", detail: "concurrent rotation" };

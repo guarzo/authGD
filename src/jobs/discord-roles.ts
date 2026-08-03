@@ -37,6 +37,7 @@ export async function runDiscordRolesJob(
           managed: cfg.discord.roleIds,
           guildRoles,
           botRoleIds: botMember.roles,
+          everyoneRoleId: cfg.discord.guildId,
         })
       : ({ ok: false, error: "bot is not a member of the configured guild" } as const);
     if (!validation.ok) {
@@ -58,13 +59,23 @@ export async function runDiscordRolesJob(
       if (links.length > 0) {
         return { status: "ok", counts: { skipped: 1 } as Record<string, number> };
       }
-      const member = await discord.getGuildMember(opts.discordUserId);
-      if (!member) {
-        return { status: "ok", counts: { notInGuild: 1 } as Record<string, number> };
-      }
-      const remove = stripManagedRoles(cfg.discord.roleIds, member.roles);
-      for (const roleId of remove) {
-        await discord.removeMemberRole(opts.discordUserId, roleId);
+      let member;
+      let remove: string[];
+      try {
+        member = await discord.getGuildMember(opts.discordUserId);
+        if (!member) {
+          return { status: "ok", counts: { notInGuild: 1 } as Record<string, number> };
+        }
+        remove = stripManagedRoles(cfg.discord.roleIds, member.roles);
+        for (const roleId of remove) {
+          await discord.removeMemberRole(opts.discordUserId, roleId);
+        }
+      } catch (err) {
+        if (err instanceof DiscordApiError && !err.transient) {
+          const msg = `discord role strip failed for ${opts.discordUserId}: ${err.message}`;
+          return { status: "failed", errorSummary: msg };
+        }
+        throw err;
       }
       if (remove.length > 0) {
         await logAudit(db, {

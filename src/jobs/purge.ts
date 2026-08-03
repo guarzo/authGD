@@ -11,10 +11,7 @@ export async function runPurgeJob(deps: { db: Db }): Promise<JobResult> {
   const { db } = deps;
   return runJob(db, "purge", async () => {
     const now = new Date();
-    const sessions = await db
-      .delete(session)
-      .where(lt(session.expiresAt, now))
-      .returning({ id: session.id });
+    const sessions = await db.delete(session).where(lt(session.expiresAt, now));
     const oauth = await db
       .delete(oauthTransaction)
       .where(
@@ -22,23 +19,21 @@ export async function runPurgeJob(deps: { db: Db }): Promise<JobResult> {
           isNotNull(oauthTransaction.consumedAt),
           lt(oauthTransaction.expiresAt, now),
         ),
-      )
-      .returning({ id: oauthTransaction.id });
+      );
     const outboxRows = await db
       .delete(outbox)
       .where(
         and(
           isNotNull(outbox.dispatchedAt),
-          lt(outbox.createdAt, new Date(Date.now() - OUTBOX_RETENTION_MS)),
+          lt(outbox.dispatchedAt, new Date(now.getTime() - OUTBOX_RETENTION_MS)),
         ),
-      )
-      .returning({ id: outbox.id });
+      );
     return {
       status: "ok",
       counts: {
-        sessions: sessions.length,
-        oauthTransactions: oauth.length,
-        outbox: outboxRows.length,
+        sessions: sessions.rowCount ?? 0,
+        oauthTransactions: oauth.rowCount ?? 0,
+        outbox: outboxRows.rowCount ?? 0,
       },
     };
   });

@@ -105,8 +105,14 @@ export function createEsiClient(opts: EsiClientOptions = {}) {
     });
     const remainHeader = res.headers.get("x-esi-error-limit-remain");
     const resetHeader = res.headers.get("x-esi-error-limit-reset");
-    if (remainHeader !== null) remain = Number(remainHeader);
-    if (resetHeader !== null) resetAt = now() + Number(resetHeader) * 1000;
+    if (remainHeader !== null) {
+      const parsed = Number(remainHeader);
+      if (Number.isFinite(parsed)) remain = parsed;
+    }
+    if (resetHeader !== null) {
+      const parsed = Number(resetHeader);
+      if (Number.isFinite(parsed)) resetAt = now() + parsed * 1000;
+    }
     if (!res.ok) {
       const body = (await res.json().catch(() => undefined)) as
         | { error?: string }

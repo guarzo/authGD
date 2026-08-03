@@ -32,10 +32,23 @@ const ADMINISTRATOR = 1n << 3n;
  * bot has Manage Roles (or Administrator); bot's highest role sits ABOVE
  * every managed role. Failure is permanent-config — no retry loop.
  */
+/** Malformed permissions strings must never grant access — treat as zero. */
+function parsePermissions(permissions: string): bigint {
+  try {
+    const n = BigInt(permissions);
+    return n < 0n ? 0n : n;
+  } catch {
+    return 0n;
+  }
+}
+
 export function validateRoleConfig(input: {
   managed: ManagedRoleIds;
   guildRoles: Array<{ id: string; position: number; permissions: string }>;
   botRoleIds: string[];
+  /** Discord omits @everyone (id === guild id) from member role arrays; when
+   * provided, its guild role is folded into the bot's permission union. */
+  everyoneRoleId?: string;
 }): { ok: true } | { ok: false; error: string } {
   const ids = [input.managed.flygd, input.managed.blue, input.managed.green];
   if (new Set(ids).size !== 3) {
@@ -46,12 +59,15 @@ export function validateRoleConfig(input: {
   if (missing.length > 0) {
     return { ok: false, error: `managed roles missing from guild: ${missing.join(", ")}` };
   }
-  const botRoles = input.botRoleIds.flatMap((id) => {
+  const botRoleIds = input.everyoneRoleId
+    ? [...new Set([...input.botRoleIds, input.everyoneRoleId])]
+    : input.botRoleIds;
+  const botRoles = botRoleIds.flatMap((id) => {
     const role = byId.get(id);
     return role ? [role] : [];
   });
   const canManage = botRoles.some(
-    (r) => (BigInt(r.permissions) & (MANAGE_ROLES | ADMINISTRATOR)) !== 0n,
+    (r) => (parsePermissions(r.permissions) & (MANAGE_ROLES | ADMINISTRATOR)) !== 0n,
   );
   if (!canManage) return { ok: false, error: "bot lacks Manage Roles" };
   const botTop = botRoles.reduce((max, r) => Math.max(max, r.position), -1);

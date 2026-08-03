@@ -6,7 +6,7 @@ import { EveSsoError, verifyEveAccessToken } from "@/lib/esi/sso";
 import { reclaimTransferredCharacter } from "@/services/accounts";
 import { logAudit } from "@/services/audit";
 import { runJob, type JobResult } from "@/services/sync-run";
-import { getFreshAccessToken } from "@/services/tokens";
+import { getFreshAccessToken, invalidateTokenIfUnchanged } from "@/services/tokens";
 
 export async function runTokenHealthJob(deps: {
   db: Db;
@@ -40,22 +40,9 @@ export async function runTokenHealthJob(deps: {
         identity = await verifyEveAccessToken(token.accessToken);
       } catch (err) {
         if (err instanceof EveSsoError) {
-          const applied = await db.transaction(async (tx) => {
-            const rows = await tx
-              .update(character)
-              .set({ tokenStatus: "invalid" })
-              .where(
-                and(eq(character.id, ch.id), eq(character.refreshTokenEnc, token.tokenEnc)),
-              )
-              .returning({ id: character.id });
-            if (rows.length === 0) return false;
-            await logAudit(tx, {
-              actor: "system",
-              action: "token.verify_failed",
-              target: String(ch.id),
-              details: { error: err.message },
-            });
-            return true;
+          const applied = await invalidateTokenIfUnchanged(db, ch.id, token.tokenEnc, {
+            action: "token.verify_failed",
+            details: { error: err.message },
           });
           if (applied) counts.invalid++;
           else transientFailures++;
@@ -69,22 +56,9 @@ export async function runTokenHealthJob(deps: {
         // Fail closed: a token whose subject is another character must never
         // vouch for this row. Guard on the blob our CAS just stored so a
         // concurrent re-auth/reclaim discards this stale decision.
-        const applied = await db.transaction(async (tx) => {
-          const rows = await tx
-            .update(character)
-            .set({ tokenStatus: "invalid" })
-            .where(
-              and(eq(character.id, ch.id), eq(character.refreshTokenEnc, token.tokenEnc)),
-            )
-            .returning({ id: character.id });
-          if (rows.length === 0) return false;
-          await logAudit(tx, {
-            actor: "system",
-            action: "token.subject_mismatch",
-            target: String(ch.id),
-            details: { subjectCharacterId: identity.characterId },
-          });
-          return true;
+        const applied = await invalidateTokenIfUnchanged(db, ch.id, token.tokenEnc, {
+          action: "token.subject_mismatch",
+          details: { subjectCharacterId: identity.characterId },
         });
         if (applied) counts.invalid++;
         else transientFailures++;

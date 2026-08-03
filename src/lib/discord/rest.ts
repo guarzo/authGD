@@ -22,6 +22,17 @@ const roleSchema = z.object({
 const memberSchema = z.object({ roles: z.array(z.string()) });
 const userSchema = z.object({ id: z.string() });
 
+/** Malformed bodies are deterministic — fail closed as permanent, never retry-loop. */
+function safeParse<T>(schema: z.ZodSchema<T>, data: unknown, method: string, path: string): T {
+  try {
+    return schema.parse(data);
+  } catch {
+    throw new DiscordApiError(`discord ${method} ${path}: malformed response body`, {
+      transient: false,
+    });
+  }
+}
+
 export function createDiscordClient(cfg: Config, fetchImpl: typeof fetch = fetch) {
   async function rawRequest(path: string, init: RequestInit = {}): Promise<Response> {
     try {
@@ -60,12 +71,14 @@ export function createDiscordClient(cfg: Config, fetchImpl: typeof fetch = fetch
 
   return {
     async getGuildRoles() {
-      const res = await request(`/guilds/${guild}/roles`);
-      return z.array(roleSchema).parse(await res.json());
+      const path = `/guilds/${guild}/roles`;
+      const res = await request(path);
+      return safeParse(z.array(roleSchema), await res.json(), "GET", path);
     },
     async getBotUserId(): Promise<string> {
-      const res = await request("/users/@me");
-      return userSchema.parse(await res.json()).id;
+      const path = "/users/@me";
+      const res = await request(path);
+      return safeParse(userSchema, await res.json(), "GET", path).id;
     },
     /** null when the user is not in the guild (404). */
     async getGuildMember(userId: string): Promise<{ roles: string[] } | null> {
@@ -73,7 +86,7 @@ export function createDiscordClient(cfg: Config, fetchImpl: typeof fetch = fetch
       const res = await rawRequest(path);
       if (res.status === 404) return null;
       assertOk(res, "GET", path);
-      return memberSchema.parse(await res.json());
+      return safeParse(memberSchema, await res.json(), "GET", path);
     },
     async addMemberRole(userId: string, roleId: string): Promise<void> {
       await request(`/guilds/${guild}/members/${userId}/roles/${roleId}`, {
