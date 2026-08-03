@@ -67,6 +67,24 @@ export function createEsiClient(opts: EsiClientOptions = {}) {
   let remain = Number.POSITIVE_INFINITY;
   let resetAt = 0; // epoch ms
 
+  function safeParse<T>(
+    schema: z.ZodSchema<T>,
+    data: unknown,
+    method: string,
+    path: string,
+    status: number,
+  ): T {
+    try {
+      return schema.parse(data);
+    } catch {
+      throw new EsiError(
+        `ESI ${method} ${path}: malformed response body`,
+        status,
+        "permanent",
+      );
+    }
+  }
+
   async function request(
     path: string,
     init: RequestInit & { accessToken?: string } = {},
@@ -112,7 +130,13 @@ export function createEsiClient(opts: EsiClientOptions = {}) {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(ids),
     });
-    return affiliationSchema.parse(await res.json()).map((a) => ({
+    return safeParse(
+      affiliationSchema,
+      await res.json(),
+      "POST",
+      "/characters/affiliation/",
+      res.status,
+    ).map((a) => ({
       characterId: a.character_id,
       corporationId: a.corporation_id,
       allianceId: a.alliance_id ?? null,
@@ -126,9 +150,13 @@ export function createEsiClient(opts: EsiClientOptions = {}) {
     const res = await request(`/characters/${characterId}/contacts/labels/`, {
       accessToken,
     });
-    return labelsSchema
-      .parse(await res.json())
-      .map((l) => ({ labelId: l.label_id, labelName: l.label_name }));
+    return safeParse(
+      labelsSchema,
+      await res.json(),
+      "GET",
+      `/characters/${characterId}/contacts/labels/`,
+      res.status,
+    ).map((l) => ({ labelId: l.label_id, labelName: l.label_name }));
   }
 
   /** Reads ALL pages; any page failure rejects the whole call. */
@@ -150,13 +178,27 @@ export function createEsiClient(opts: EsiClientOptions = {}) {
         "transient",
       );
     }
-    const raw = contactsSchema.parse(await first.json()).slice();
+    const raw = safeParse(
+      contactsSchema,
+      await first.json(),
+      "GET",
+      `/characters/${characterId}/contacts/?page=1`,
+      first.status,
+    ).slice();
     for (let page = 2; page <= pages; page++) {
       const res = await request(
         `/characters/${characterId}/contacts/?page=${page}`,
         { accessToken },
       );
-      raw.push(...contactsSchema.parse(await res.json()));
+      raw.push(
+        ...safeParse(
+          contactsSchema,
+          await res.json(),
+          "GET",
+          `/characters/${characterId}/contacts/?page=${page}`,
+          res.status,
+        ),
+      );
     }
     return raw.map((c) => ({
       contactId: c.contact_id,

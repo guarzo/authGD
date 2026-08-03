@@ -63,7 +63,9 @@ describe("postAffiliation", () => {
       ),
     );
     const esi = createEsiClient();
-    await expect(esi.postAffiliation([1])).rejects.toThrow();
+    const err = await esi.postAffiliation([1]).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(EsiError);
+    expect((err as EsiError).kind).toBe("permanent");
   });
 });
 
@@ -151,6 +153,20 @@ describe("contacts", () => {
     );
     const esi = createEsiClient();
     await expect(esi.getAllContacts(90000001, "at")).rejects.toBeInstanceOf(EsiError);
+  });
+
+  it("fails closed on malformed contact data", async () => {
+    server.use(
+      http.get(`${BASE}/characters/90000001/contacts/`, () =>
+        HttpResponse.json([{ contact_id: "not-a-number", contact_type: "character" }], {
+          headers: { "X-Pages": "1" },
+        }),
+      ),
+    );
+    const esi = createEsiClient();
+    const err = await esi.getAllContacts(90000001, "at").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(EsiError);
+    expect((err as EsiError).kind).toBe("permanent");
   });
 
   it("sends the bearer token and label/standing params on writes, chunked at 100", async () => {
