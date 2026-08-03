@@ -1,0 +1,92 @@
+name: Dependabot auto-merge
+
+# Turns on GitHub's native auto-merge for the Dependabot PRs whose risk the
+# grouping in .github/dependabot.yml has already bounded. This workflow does NOT
+# merge anything itself — it flips the auto-merge flag, and GitHub merges only
+# once every REQUIRED status check on main passes.
+#
+# That word "required" is load-bearing. Auto-merge waits on required checks
+# only; a check that is green-but-optional is not waited for, and a branch with
+# no required checks at all merges the moment the flag is set. If the ruleset on
+# main ever drops its required-checks rule, this workflow silently becomes
+# "merge every dependency bump on sight". Treat the two as one unit.
+#
+# Prerequisites, both outside this file:
+#   1. Settings > General > Pull Requests > "Allow auto-merge" enabled.
+#      Without it `gh pr merge --auto` errors and this job goes red.
+#   2. A ruleset on main requiring the CI checks, with enforcement active.
+
+on: pull_request
+
+jobs:
+  auto-merge:
+    name: Enable auto-merge
+    # The repository guard keeps this from running in forks, where the actor
+    # check alone could be satisfied by a branch named to impersonate the bot.
+    if: github.actor == 'dependabot[bot]' && github.repository == 'guarzo/authGD'
+    runs-on: ubuntu-latest
+    # Scoped to the job rather than the workflow: this is the only job that
+    # needs a write token, and a job added later should have to ask for it
+    # rather than inherit it. Workflows triggered by Dependabot PRs get a
+    # read-only token by default; these two scopes are what `gh pr merge
+    # --auto` needs. Nothing here checks out the PR's code or runs its
+    # dependencies.
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      # Pinned to a commit rather than the `v3` moving tag, which is the one
+      # place this repo departs from ci.yml's major-tag convention. The reason
+      # is the token above: a moving tag repointed at hostile code would run it
+      # with `contents: write` on this repository. `v3` and `v3.1.0` resolve to
+      # this same commit today, so the pin costs nothing now — Dependabot keeps
+      # SHA pins current the same way it keeps tags current.
+      - id: meta
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+
+      # Gate on the group name, not on the semver level. Every group named here
+      # is restricted to minor and patch by its own `update-types` in
+      # dependabot.yml, so the group name already carries the semver claim.
+      #
+      # That restriction is what makes this list safe, and it was not always
+      # there: `linting` and `testing` originally grouped majors too, on the
+      # theory that a bad bump fails loudly in the very CI jobs that gate this
+      # merge. An eslint 9 -> 10 and a vitest 3 -> 4 both arrived green, which
+      # is the counterexample — a major that passes CI is the worst case for
+      # auto-merge, because passing says nothing about whether rule or test
+      # semantics moved. If a group is ever added here, check its update-types
+      # first.
+      #
+      # `update-type` would be the obvious alternative to gating on the name,
+      # but it is documented as "the highest semver change being made by this
+      # PR" with no stated behaviour for grouped PRs — so the group name is the
+      # claim that is actually specified.
+      #
+      # Deliberately absent: `react` and `drizzle` (coordinated majors; a
+      # drizzle-orm/drizzle-kit skew surfaces at fly.toml's release_command,
+      # which is the worst place to find it) and every ungrouped PR — the
+      # individual-PR tier is next, zod, pg, pg-boss, jose, tsx and typescript
+      # majors, which are read-the-changelog changes. Security updates are
+      # ungrouped by design and land here too: they should be merged fast, but
+      # by a human who has read the advisory.
+      #
+      # Also absent, and least obviously: `actions`. That group edits the
+      # workflow files themselves — including this one, since its own pinned
+      # action matches the group's `*` pattern. Every other group is gated by
+      # CI in a meaningful sense: if the bump is bad, a job fails. An action
+      # bump is different. CI runs UNDER the configuration being changed, and
+      # a green run says only that the new action version did not break the
+      # build — not that it is the code its author published. Automating the
+      # merge of new third-party code into the trusted path, using a token that
+      # can write to the default branch, is the one bump worth reading. There
+      # are only a handful a year.
+      - name: Enable auto-merge for bounded-risk groups
+        if: >-
+          contains(
+            fromJSON('["minor-and-patch", "linting", "testing", "types"]'),
+            steps.meta.outputs.dependency-group
+          )
+        run: gh pr merge --auto --squash "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ github.token }}

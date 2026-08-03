@@ -54,6 +54,11 @@
 
   --radius: 2px;
   --measure: 68ch;
+  /* The two content-column measures. Each is shared by a .page variant and its
+     matching .shell__bar variant, so the header and the page under it cannot
+     drift apart — the alignment is structural rather than matching literals. */
+  --measure-page: 78rem;
+  --measure-page-narrow: 60rem;
 
   --ease: cubic-bezier(0.22, 1, 0.36, 1); /* ease-out-quint */
   --dur-color: 140ms;
@@ -162,14 +167,36 @@ a:hover {
 
 /* --- Shell -------------------------------------------------------------- */
 
+/* The bar is full-bleed: the ground and the bottom hairline run edge to edge,
+   because the shell is the frame the page sits in, not a thing inside it. */
 .shell {
+  border-bottom: 1px solid var(--rule);
+  background: var(--hull);
+}
+
+/* Only the contents are measured, and they track the measure of the page under
+   them, so the seal and the nav land on the H1's verticals on every route.
+   The cost is that the header shifts by half the difference between the two
+   measures when an admin crosses between /account and /admin/*. That was the
+   accepted trade: a member only ever sees /account, so for almost everyone the
+   frame is fixed, and admins get alignment on all four screens instead of on
+   three. */
+.shell__bar {
   display: flex;
   align-items: center;
   gap: var(--s-5);
-  padding: var(--s-3) var(--s-5);
-  border-bottom: 1px solid var(--rule);
-  background: var(--hull);
   flex-wrap: wrap;
+  max-width: var(--measure-page);
+  margin: 0 auto;
+  /* Matches .page's horizontal padding, so the seal's left edge and the nav's
+     right edge land on the same verticals as the page H1 and the tables. */
+  padding: var(--s-3) var(--s-5);
+}
+
+/* Pairs with .page--narrow. Set by the page rather than derived from the DOM:
+   see the SiteHeader comment in _components/ui.tsx. */
+.shell__bar--narrow {
+  max-width: var(--measure-page-narrow);
 }
 
 .shell__mark {
@@ -179,6 +206,20 @@ a:hover {
   text-decoration: none;
   color: var(--ink);
   flex-shrink: 0;
+}
+
+/* The mark is a link, so it takes the system's gold link hover — but the
+   global `a:hover` only reaches the wordmark's first line, because the second
+   line sets --ink-faint on itself and wins by specificity. That left half the
+   mark flipping and half sitting still. Declare both lines here so the mark
+   responds as one object. Hover is transient and pointer-only, so this is not
+   a standing use of gold competing with the active nav tab. */
+.shell__mark:hover b {
+  color: var(--gold);
+}
+
+.shell__mark:hover .shell__wordmark span {
+  color: var(--gold-dim);
 }
 
 .shell__mark img {
@@ -215,6 +256,7 @@ a:hover {
 }
 
 .shell__nav a {
+  position: relative;
   font-family: var(--font-mono), ui-monospace, monospace;
   font-size: var(--t-label);
   letter-spacing: 0.12em;
@@ -222,7 +264,6 @@ a:hover {
   text-decoration: none;
   color: var(--ink-dim);
   padding: var(--s-2) var(--s-3);
-  border: 1px solid transparent;
   border-radius: var(--radius);
   transition:
     color var(--dur-color) var(--ease),
@@ -234,13 +275,32 @@ a:hover {
   background: var(--hull-hi);
 }
 
+/* The active tab used to be a gold outlined box. It was the only bordered
+   element in the header, so it read as a button and competed with the page's
+   one primary action — and DESIGN.md rations gold to one primary action per
+   view plus the mark. A hairline under the label is the system's own
+   structural device (it is what .rule-head is built from) and spends 1px of
+   gold instead of a whole outline. The attribute selector outranks
+   .shell__nav a:hover, so the active tab stays gold when hovered. */
 .shell__nav a[aria-current="page"] {
   color: var(--gold);
-  border-color: var(--rule-strong);
+}
+
+/* Inset to the item's padding so the rule underlines the label rather than the
+   hit area. Sits on the pseudo-element, not on a border, so it cannot shift
+   the item's box or interfere with the global focus ring. */
+.shell__nav a[aria-current="page"]::after {
+  content: "";
+  position: absolute;
+  left: var(--s-3);
+  right: var(--s-3);
+  bottom: var(--s-1);
+  height: 1px;
+  background: var(--gold);
 }
 
 .page {
-  max-width: 78rem;
+  max-width: var(--measure-page);
   margin: 0 auto;
   padding: var(--s-7) var(--s-5) var(--s-9);
 }
@@ -249,7 +309,7 @@ a:hover {
    without scrolling on a laptop. Prose is capped separately, so this only
    affects the table and the rules. */
 .page--narrow {
-  max-width: 60rem;
+  max-width: var(--measure-page-narrow);
 }
 
 .page__head {
@@ -413,6 +473,12 @@ h3.rule-head__label {
   color: var(--ink-faint);
 }
 
+/* Shrink-to-content in an auto-layout table. Applied to every column except the
+   one that should absorb the leftover width. */
+.log__col--fit {
+  width: 1%;
+}
+
 /* Data that should read as machine output. */
 .mono {
   font-family: var(--font-mono), ui-monospace, monospace;
@@ -421,14 +487,6 @@ h3.rule-head__label {
 
 .nowrap {
   white-space: nowrap;
-}
-
-/* Free-text admin note in a table cell: give it a readable width of its own so
-   it doesn't squeeze into a two-word-per-line column. */
-.note {
-  display: block;
-  min-width: 12ch;
-  max-width: 24ch;
 }
 
 /* Raw JSON payloads in the audit and sync tables. The collapsed line is capped
@@ -517,7 +575,15 @@ h3.rule-head__label {
 }
 
 /* --- Status token ------------------------------------------------------- */
-/* Colour only when the state is actionable. Glyph carries meaning too. */
+/* Colour only when the state is actionable. Glyph carries meaning too.
+
+   The leading dot is also the system's value/control tell. Every *value* in the
+   admin tables — status token, tier badge — opens with this dot and is set in
+   its own hue; every *control* is a neutral box (--hull-hi ground, --rule-strong
+   border, cream text) and never carries one. That single mark is what stays
+   legible when forty rows are on screen and the eye is looking for the one row
+   whose tier is wrong: the tier column reads as a column of coloured, dotted
+   words with no boxes in it at all. */
 
 .st {
   display: inline-flex;
@@ -577,6 +643,18 @@ h3.rule-head__label {
   font-weight: 600;
   letter-spacing: 0.1em;
   text-transform: uppercase;
+}
+
+/* The same dot the status token wears, for the same reason: it marks this as a
+   value. Without it the badge is a tinted, bordered, mono-uppercase rectangle —
+   which is also a fair description of a button. */
+.tier::before {
+  content: "";
+  width: 0.5em;
+  height: 0.5em;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
 }
 
 .tier--flygd {
@@ -641,8 +719,8 @@ h3.rule-head__label {
 
 .btn:disabled {
   /* Measured: --ink-faint at 45% over --void was 2.15:1, below the 3:1 DESIGN.md
-     promises for disabled text. 65% measures 3.24:1 for the worst case
-     (.btn--quiet disabled, the locked-tier button). */
+     promises for disabled text. 65% measures 3.24:1 for the worst case, which is
+     a disabled .btn--quiet (transparent ground, --ink-faint text) over --void. */
   opacity: 0.65;
   cursor: not-allowed;
 }
@@ -1070,6 +1148,46 @@ h3.rule-head__label {
   font-weight: 600;
 }
 
+/* The row drawer. Everything that acts on the account lives here, so the
+   collapsed row is one line of values and the table can be scanned. Groups are
+   laid out in a wrapping row rather than a stack: at three or four groups a
+   stack pushes the note field a screenful below the row it belongs to. */
+.drawer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-4) var(--s-6);
+  align-items: start;
+  margin-top: var(--s-3);
+  padding-top: var(--s-3);
+  border-top: 1px solid var(--rule);
+}
+
+.drawer__group {
+  display: grid;
+  gap: var(--s-2);
+  justify-items: start;
+}
+
+/* The crew list is the one group that wants the full width. Its own top margin
+   is redundant here — the group's grid gap already separates it from the
+   label — and doubles up with the first row's hairline. */
+.drawer__group:has(> .crew) {
+  flex: 1 1 100%;
+}
+
+.drawer .crew {
+  margin-top: 0;
+}
+
+.drawer__label {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: var(--t-label);
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
 /* --- Utility ------------------------------------------------------------ */
 
 .inline-form {
@@ -1095,13 +1213,21 @@ h3.rule-head__label {
   color: var(--ink-faint);
 }
 
+/* The hairline runs the full width of the content column, so it terminates on
+   the same vertical as the crew-manifest table above it — every rule in a
+   given column ends on one edge. The prose is capped separately, on the inner
+   span, because 68ch is a reading limit and not a structural one. */
 .footnote {
   margin-top: var(--s-7);
   padding-top: var(--s-4);
   border-top: 1px solid var(--rule);
-  max-width: var(--measure);
   font-size: 0.8125rem;
   color: var(--ink-faint);
+}
+
+.footnote > span {
+  display: block;
+  max-width: var(--measure);
 }
 
 .skip {
@@ -1136,7 +1262,9 @@ h3.rule-head__label {
     padding: var(--s-5) var(--s-4) var(--s-8);
   }
 
-  .shell {
+  /* Tracks .page's narrow padding, so the seal stays on the content vertical
+     at 390px too. */
+  .shell__bar {
     padding: var(--s-3) var(--s-4);
     gap: var(--s-3);
   }

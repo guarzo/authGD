@@ -14,7 +14,7 @@ fly postgres attach <pg-app>    # sets DATABASE_URL
 fly secrets set \
   SESSION_COOKIE_NAME=authgd_session \
   TOKEN_ENCRYPTION_KEY=<base64 of 32 random bytes> \
-  APP_BASE_URL=https://<app>.fly.dev \
+  APP_BASE_URL=https://<public-hostname> \
   ALLIANCE_ID=... \
   BOOTSTRAP_ADMIN_CHARACTER_IDS=... \
   EVE_SSO_CLIENT_ID=... EVE_SSO_CLIENT_SECRET=... \
@@ -28,6 +28,11 @@ fly secrets set \
   SYNC_MODE=live
 fly deploy
 ```
+
+Set `APP_BASE_URL` to the hostname you intend to keep. If a custom domain is
+coming, use it from the start rather than the `<app>.fly.dev` default: OAuth
+redirect URIs derive from this value, so changing it later means re-registering
+the callback URLs with both EVE SSO and Discord.
 
 Deploy at `web=1`. Scaling to `web=2` comes after the connection-headroom
 check below — two web machines double the pool count against one small
@@ -319,11 +324,18 @@ the starting:
 ### The external poll is a stopgap
 
 `.github/workflows/uptime.yml` curls `/api/health/sync` every 15 minutes. It
-needs a repository variable:
+needs a repository variable, set to the app's **public** URL — the custom
+domain, not `authgd.fly.dev`. Both hostnames answer, but only the custom domain
+exercises the DNS record and the certificate users actually depend on, so a
+probe of the `.fly.dev` name would stay green through an expired cert:
 
 ```bash
-gh variable set APP_BASE_URL --body https://authgd.fly.dev
+gh variable set APP_BASE_URL --body https://authgd.zoolanders.space
 ```
+
+This is the same value as the app's own `APP_BASE_URL` secret, but the two are
+unrelated storage: the secret is what OAuth redirect URIs derive from
+(`src/config.ts`), while the variable is only the probe target.
 
 It probes only that one URL, not both: a 200 from `/api/health/sync` already
 proves the web process served a request and Postgres answered, and its `db`
@@ -378,9 +390,8 @@ least one never-used id in reserve, or check
 
 ## Local development
 
-Requires **Node 22.9+** (the floor for `--env-file-if-exists`, which
-`npm run worker`, `npm run db:migrate`, and `npm run smoke:wanderer` use to load
-`.env`) and Docker. `npm install` enforces it via `engines` + `.npmrc`, and
+Requires **Node 24+** (Active LTS; the Dockerfile ships `node:24-alpine`) and
+Docker. `npm install` enforces it via `engines` + `.npmrc`, and
 `nvm use` picks it up from `.nvmrc`. The three pins (`Dockerfile`, `.nvmrc`,
 `package.json` `engines`) must agree on the major — `scripts/check-node-version.sh`
 fails CI if a bump misses one.
@@ -553,14 +564,13 @@ your working `.env` stays untouched and switching back is deleting one file.
 APP_BASE_URL=https://your-stable-domain.ngrok-free.app
 ```
 
-**No trailing slash.** The value is string-concatenated, not URL-joined, and
-`z.string().url()` accepts a trailing slash happily — so it fails much later, as
-an unexplained redirect-URI mismatch:
-
-```text
-APP_BASE_URL=https://x.ngrok.app   →  https://x.ngrok.app/auth/eve/callback
-APP_BASE_URL=https://x.ngrok.app/  →  https://x.ngrok.app//auth/eve/callback   ✗
-```
+A trailing slash is harmless — `src/config.ts` strips it. That matters because
+the two OAuth `redirect_uri` values are string-concatenated rather than
+URL-joined, so an unnormalised `https://x.ngrok.app/` would yield
+`https://x.ngrok.app//auth/eve/callback`, which no longer matches the URI
+registered in the developer portal. `z.string().url()` accepts the slash, so
+before normalisation this surfaced only as an unexplained redirect mismatch at
+login. Write it without the slash anyway — that is the form you register below.
 
 #### 3. Register the redirect URIs
 
@@ -665,8 +675,9 @@ precedence over `--env-file` anyway. But it does mean changes to the `worker`
 npm script do not reach production.
 
 `npm run db:migrate` **is** the release command (`fly.toml`), so it does carry
-the flags into the deploy path. That makes the Node 22.9 floor load-bearing in
-production: below it, `node` rejects `--env-file-if-exists` outright and every
-deploy fails. The Dockerfile copies `.npmrc` before `npm ci` in both stages so
-`engine-strict` turns that into a **build** failure instead of a release-time
-one.
+the flags into the deploy path. That is what makes the Node floor load-bearing
+in production rather than a developer convenience: below Node 22.9 `node`
+rejects `--env-file-if-exists` outright and every deploy fails. The floor now
+sits at 24 to track Active LTS, well clear of that, but the Dockerfile copies
+`.npmrc` before `npm ci` in both stages so `engine-strict` turns any regression
+below the floor into a **build** failure instead of a release-time one.

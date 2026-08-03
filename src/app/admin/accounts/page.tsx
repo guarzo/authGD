@@ -9,6 +9,7 @@ import {
   type AdminListSort,
 } from "@/services/account-view";
 import { RuleHead, Scroller, Status, Tier } from "@/app/_components/ui";
+import { RowDisclosure } from "@/app/_components/row-disclosure";
 import { Submit } from "@/app/_components/submit";
 import {
   demoteAdminAction,
@@ -106,7 +107,7 @@ export default async function AdminAccountsPage({
         <div className="filters__group" role="group" aria-label="Filter by tier">
           <span className="filters__label">Tier</span>
           <a
-            className="btn btn--quiet"
+            className="btn"
             href={qs({ tier: undefined })}
             aria-current={!tier ? "true" : undefined}
           >
@@ -115,7 +116,7 @@ export default async function AdminAccountsPage({
           {TIERS.map((t) => (
             <a
               key={t}
-              className="btn btn--quiet"
+              className="btn"
               href={qs({ tier: t })}
               aria-current={tier === t ? "true" : undefined}
             >
@@ -127,21 +128,21 @@ export default async function AdminAccountsPage({
         <div className="filters__group" role="group" aria-label="Filter by status">
           <span className="filters__label">Status</span>
           <a
-            className="btn btn--quiet"
+            className="btn"
             href={qs({ status: undefined })}
             aria-current={!status ? "true" : undefined}
           >
             all
           </a>
           <a
-            className="btn btn--quiet"
+            className="btn"
             href={qs({ status: "cryo" })}
             aria-current={status === "cryo" ? "true" : undefined}
           >
             cryo
           </a>
           <a
-            className="btn btn--quiet"
+            className="btn"
             href={qs({ status: "active" })}
             aria-current={status === "active" ? "true" : undefined}
           >
@@ -155,6 +156,15 @@ export default async function AdminAccountsPage({
       </RuleHead>
       <Scroller label="Accounts">
         <table className="log log--dense">
+          {/* The scanning anchor gets the surplus. Every other column holds a
+              single badge, date, or button pair, so `width: 1%` collapses it to
+              its own content and hands the leftover width to Name. Before the
+              tier controls moved into the drawer, Tier was the widest column in
+              the table purely because it carried a stack of buttons. */}
+          <colgroup>
+            <col />
+            <col className="log__col--fit" span={9} />
+          </colgroup>
           <thead>
             <tr>
               {SORTS.map((s) => (
@@ -185,9 +195,7 @@ export default async function AdminAccountsPage({
               <th>Map</th>
               <th>Last login</th>
               <th>Admin</th>
-              <th>
-                <span className="visually-hidden">Actions</span>
-              </th>
+              <th>Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -230,81 +238,68 @@ function AccountRow({
   return (
     <tr>
       <td>
-        <details>
-          <summary>
-            {r.mainName ?? <em>no main</em>}
-            {r.characters.length > 1 && ` (+${r.characters.length - 1})`}
-          </summary>
-          <ul className="crew">
-            {r.characters.map((c) => (
-              <li key={c.id}>
-                <b>{c.name}</b>
-                {c.isMain && " (main)"}
-                {" — token: "}
-                {c.tokenStatus}
-                {c.needsReauthForScopes && " (scope shortfall)"}
-                {c.affiliationInvalid && " · affiliation invalid"}
-                {c.contactSyncResult && ` · contacts: ${c.contactSyncResult}`}
-                {c.mapObservedAt &&
-                  ` · on map (observed ${c.mapObservedAt.toISOString().slice(0, 16)}Z)`}
-              </li>
-            ))}
-          </ul>
-          <form action={saveNoteAction.bind(null, r.accountId)} className="note-form">
-            <input
-              className="field"
-              name="note"
-              defaultValue={r.statusNote ?? ""}
-              placeholder="notes"
-              aria-label={`Note for ${r.mainName ?? "account"}`}
-            />
-            <Submit className="btn btn--quiet btn--micro">save note</Submit>
-          </form>
-        </details>
-      </td>
+        <RowDisclosure
+          label={r.mainName ?? "Account with no main"}
+          summary={
+            <>
+              {r.mainName ?? <em>no main</em>}
+              {r.characters.length > 1 && ` (+${r.characters.length - 1})`}
+            </>
+          }
+        >
+          <section className="drawer__group">
+            <span className="drawer__label">Crew</span>
+            <ul className="crew">
+              {r.characters.map((c) => (
+                <li key={c.id}>
+                  <b>{c.name}</b>
+                  {c.isMain && " (main)"}
+                  {" — token: "}
+                  {c.tokenStatus}
+                  {c.needsReauthForScopes && " (scope shortfall)"}
+                  {c.affiliationInvalid && " · affiliation invalid"}
+                  {c.contactSyncResult && ` · contacts: ${c.contactSyncResult}`}
+                  {c.mapObservedAt &&
+                    ` · on map (observed ${c.mapObservedAt.toISOString().slice(0, 16)}Z)`}
+                </li>
+              ))}
+            </ul>
+          </section>
 
-      <td>
-        <div className="stack">
-          <Tier tier={r.tier} locked={r.tierLocked} />
-          <div className="btn-group">
-            {TIERS.map((t) => (
-              <form
-                key={t}
-                action={setTierAction.bind(null, r.accountId, t)}
-                className="inline-form"
-              >
-                <Submit
-                  className="btn btn--quiet btn--micro"
-                  disabled={r.tierLocked && r.tier === t}
-                  aria-pressed={r.tier === t}
+          <section className="drawer__group">
+            <span className="drawer__label">Set tier</span>
+            <div className="btn-group">
+              {TIERS.map((t) => (
+                <form
+                  key={t}
+                  action={setTierAction.bind(null, r.accountId, t)}
+                  className="inline-form"
                 >
-                  {t}
-                </Submit>
-              </form>
-            ))}
-            {r.tierLocked && (
-              <form
-                action={returnToAutoAction.bind(null, r.accountId)}
-                className="inline-form"
-              >
-                <Submit className="btn btn--quiet btn--micro">auto</Submit>
-              </form>
+                  <Submit
+                    className="btn btn--micro"
+                    disabled={r.tierLocked && r.tier === t}
+                    aria-pressed={r.tier === t}
+                  >
+                    {t}
+                  </Submit>
+                </form>
+              ))}
+              {r.tierLocked && (
+                <form
+                  action={returnToAutoAction.bind(null, r.accountId)}
+                  className="inline-form"
+                >
+                  <Submit className="btn btn--micro">auto</Submit>
+                </form>
+              )}
+            </div>
+            {r.tierChangedByName && (
+              <span className="dim mono">set by {r.tierChangedByName}</span>
             )}
-          </div>
-          {r.tierChangedByName && (
-            <span className="dim mono">by {r.tierChangedByName}</span>
-          )}
-        </div>
-      </td>
+          </section>
 
-      <td>
-        <div className="stack">
-          <div className="btn-row btn-row--tight">
-            {r.status === "cryo" ? (
-              <Status tone="warn">cryo</Status>
-            ) : (
-              <Status tone="off">active</Status>
-            )}
+          <section className="drawer__group">
+            <span className="drawer__label">Cryo</span>
             <form
               action={setStatusAction.bind(
                 null,
@@ -312,19 +307,44 @@ function AccountRow({
                 r.status === "cryo" ? "active" : "cryo",
               )}
             >
-              <Submit className="btn btn--quiet btn--micro">
-                {r.status === "cryo" ? "wake" : "cryo"}
+              <Submit className="btn btn--micro">
+                {r.status === "cryo" ? "wake" : "freeze"}
               </Submit>
             </form>
-          </div>
-          {r.status === "cryo" && (
-            <span className="dim mono nowrap">since {fmt(r.statusChangedAt)}</span>
-          )}
-          {r.statusNote && <span className="dim note">{r.statusNote}</span>}
-        </div>
+            {r.status === "cryo" && (
+              <span className="dim mono nowrap">since {fmt(r.statusChangedAt)}</span>
+            )}
+          </section>
+
+          <section className="drawer__group">
+            <span className="drawer__label">Note</span>
+            <form action={saveNoteAction.bind(null, r.accountId)} className="note-form">
+              <input
+                className="field"
+                name="note"
+                defaultValue={r.statusNote ?? ""}
+                placeholder="notes"
+                aria-label={`Note for ${r.mainName ?? "account"}`}
+              />
+              <Submit className="btn btn--micro">save note</Submit>
+            </form>
+          </section>
+        </RowDisclosure>
       </td>
 
-      <td className="mono">{fmt(r.tierChangedAt)}</td>
+      <td>
+        <Tier tier={r.tier} locked={r.tierLocked} />
+      </td>
+
+      <td>
+        {r.status === "cryo" ? (
+          <Status tone="warn">cryo</Status>
+        ) : (
+          <Status tone="off">active</Status>
+        )}
+      </td>
+
+      <td className="mono nowrap">{fmt(r.tierChangedAt)}</td>
 
       <td>
         <div className="stack">
@@ -332,9 +352,9 @@ function AccountRow({
             {tokens.healthy}/{tokens.total} ok
           </Status>
           {tokens.needsReauth > 0 && (
-            <span className="dim mono">{tokens.needsReauth} re-auth</span>
+            <span className="dim mono nowrap">{tokens.needsReauth} re-auth</span>
           )}
-          {tokens.dead > 0 && <span className="dim mono">{tokens.dead} dead</span>}
+          {tokens.dead > 0 && <span className="dim mono nowrap">{tokens.dead} dead</span>}
         </div>
       </td>
 
@@ -359,24 +379,28 @@ function AccountRow({
         )}
       </td>
 
-      <td className="mono">{fmt(r.lastLoginAt)}</td>
+      <td className="mono nowrap">{fmt(r.lastLoginAt)}</td>
 
-      <td>
-        {r.isAdmin ? (
-          <form action={demoteAdminAction.bind(null, r.accountId)}>
-            <Submit className="btn btn--quiet btn--micro btn--danger">revoke</Submit>
-          </form>
-        ) : (
-          <form action={promoteAdminAction.bind(null, r.accountId)}>
-            <Submit className="btn btn--quiet btn--micro">grant</Submit>
-          </form>
-        )}
-      </td>
+      <td>{r.isAdmin ? <Status>admin</Status> : <Status tone="off">member</Status>}</td>
 
+      {/* One grade, one group. Revoke and sync now are both row actions; before,
+          revoke was a bordered danger button and sync now was bare text, which
+          read as one button with a broken half rather than two peers. */}
       <td>
-        <form action={syncAccountAction.bind(null, r.accountId, syncQueuedHref)}>
-          <Submit className="btn btn--quiet btn--micro nowrap">sync now</Submit>
-        </form>
+        <div className="btn-row btn-row--tight">
+          {r.isAdmin ? (
+            <form action={demoteAdminAction.bind(null, r.accountId)}>
+              <Submit className="btn btn--micro btn--danger">revoke</Submit>
+            </form>
+          ) : (
+            <form action={promoteAdminAction.bind(null, r.accountId)}>
+              <Submit className="btn btn--micro">grant</Submit>
+            </form>
+          )}
+          <form action={syncAccountAction.bind(null, r.accountId, syncQueuedHref)}>
+            <Submit className="btn btn--micro nowrap">sync now</Submit>
+          </form>
+        </div>
       </td>
     </tr>
   );
