@@ -1,10 +1,9 @@
 import { NextRequest } from "next/server";
-import { SignJWT, createLocalJWKSet, exportJWK, generateKeyPair } from "jose";
+import { SignJWT, exportJWK, generateKeyPair } from "jose";
 import { http, HttpResponse } from "msw";
 import { setupServer } from "msw/node";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { account, character } from "@/db/schema";
-import { setTestJwksOverride } from "@/lib/esi/sso";
 import { setupTestDb, TEST_URL } from "./helpers/db";
 
 // Route modules read config + db lazily via getConfig()/getDb(); set env first.
@@ -33,10 +32,14 @@ const { GET: callbackRoute } = await import("@/app/auth/eve/callback/route");
 
 let ctx: Awaited<ReturnType<typeof setupTestDb>>;
 let signToken: (characterId: number, owner: string) => Promise<string>;
+let jwk: Record<string, unknown>;
 
 const msw = setupServer(
   http.post("https://login.eveonline.com/v2/oauth/token", () =>
     HttpResponse.json({ access_token: "SET_PER_TEST", refresh_token: "rt" }),
+  ),
+  http.get("https://login.eveonline.com/oauth/jwks", () =>
+    HttpResponse.json({ keys: [jwk] }),
   ),
 );
 
@@ -44,9 +47,7 @@ beforeAll(async () => {
   ctx = await setupTestDb();
   msw.listen({ onUnhandledRequest: "error" });
   const { publicKey, privateKey } = await generateKeyPair("RS256");
-  setTestJwksOverride(
-    createLocalJWKSet({ keys: [{ ...(await exportJWK(publicKey)), alg: "RS256" }] }),
-  );
+  jwk = { ...(await exportJWK(publicKey)), alg: "RS256" };
   signToken = (characterId, owner) =>
     new SignJWT({ name: `Char ${characterId}`, owner, scp: ["esi-characters.read_contacts.v1"] })
       .setProtectedHeader({ alg: "RS256" })

@@ -1,4 +1,5 @@
 import { and, eq } from "drizzle-orm";
+import type { JWTVerifyGetKey } from "jose";
 import type { Config } from "@/config";
 import type { Db } from "@/db";
 import { character } from "@/db/schema";
@@ -12,6 +13,7 @@ export async function runTokenHealthJob(deps: {
   db: Db;
   cfg: Config;
   fetchImpl?: typeof fetch;
+  jwks?: JWTVerifyGetKey;
 }): Promise<JobResult> {
   const { db, cfg } = deps;
   return runJob(db, "token-health", async () => {
@@ -37,7 +39,7 @@ export async function runTokenHealthJob(deps: {
       // retries without permanently invalidating anything.
       let identity;
       try {
-        identity = await verifyEveAccessToken(token.accessToken);
+        identity = await verifyEveAccessToken(token.accessToken, deps.jwks);
       } catch (err) {
         if (err instanceof EveSsoError) {
           const applied = await invalidateTokenIfUnchanged(db, ch.id, token.tokenEnc, {
