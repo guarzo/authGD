@@ -373,9 +373,22 @@ h3.rule-head__label {
 
 .facts {
   display: grid;
-  grid-template-columns: max-content 1fr;
-  gap: var(--s-3) var(--s-5);
+  /* Fixed rather than max-content: the values have to share one vertical, and
+     a max-content label column re-flows every value the moment one label
+     changes length. 6rem clears the longest label at --t-label plus tracking
+     with room to spare. */
+  grid-template-columns: 6rem 1fr;
+  gap: var(--s-5);
   align-items: baseline;
+}
+
+/* The row carrying the page's headline fact. Lays its badge and any qualifier
+   (cryo) on one line rather than relying on a text space between them. */
+.facts__lead {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  flex-wrap: wrap;
 }
 
 .facts dt {
@@ -662,6 +675,17 @@ h3.rule-head__label {
   --tone: var(--ink-faint);
 }
 
+/* The account page's tier is the single most consequential fact on the screen,
+   and at --t-label it read as exactly as important as the Discord boolean
+   beneath it. Size carries the hierarchy: the badge already owns its tier's
+   hue, so scaling it buys the emphasis without spending more of the gold
+   DESIGN.md rations. */
+.tier--lead {
+  font-size: var(--t-data);
+  padding: 0.3em 0.65em;
+  letter-spacing: 0.12em;
+}
+
 /* --- Buttons ------------------------------------------------------------ */
 
 .btn {
@@ -739,6 +763,31 @@ h3.rule-head__label {
   background: color-mix(in oklab, var(--signal-bad) 12%, transparent);
 }
 
+/* A destructive action a member should almost never take. Full .btn--danger
+   made it the most saturated thing on the account page, permanently, which
+   reads as a warning against an ordinary choice — PRODUCT.md principle 4.
+   So it sits at the quiet grade at rest and takes the red only once the
+   pointer is on its row or it holds keyboard focus. The label is fully legible
+   in --ink-faint without the colour, so nothing here is gated on hover: touch
+   and keyboard users get the same reachable, visible control. */
+.btn--danger-quiet {
+  color: var(--ink-faint);
+}
+
+.log tbody tr:hover .btn--danger-quiet {
+  color: var(--signal-bad);
+}
+
+/* Specificity has to clear the row-hover rule above, which would otherwise win
+   on the cell the pointer is actually inside. */
+.log tbody tr:hover .btn--danger-quiet:hover:not(:disabled),
+.btn--danger-quiet:hover:not(:disabled),
+.btn--danger-quiet:focus-visible {
+  color: var(--signal-bad);
+  border-color: var(--signal-bad);
+  background: color-mix(in oklab, var(--signal-bad) 12%, transparent);
+}
+
 /* Pressed-in look for the active choice in a segmented set. Links can't be
    aria-pressed, so filter links use aria-current and share the treatment.
    Not gold: DESIGN.md rations gold to four sanctioned uses, and this state
@@ -775,6 +824,14 @@ h3.rule-head__label {
 .btn-row--tight {
   flex-wrap: nowrap;
   white-space: nowrap;
+}
+
+/* Pushes row actions to the trailing edge of their cell so the last control
+   lands on one vertical whether or not the row also carries the optional one.
+   Left-aligned, the main character's lone UNLINK sat ~90px inboard of every
+   other row's, and the column stopped reading as a column. */
+.btn-row--end {
+  justify-content: flex-end;
 }
 
 .btn-group {
@@ -1143,6 +1200,17 @@ h3.rule-head__label {
   /* Grid stretches items by default, which would blow a tier badge or status
      token out to the full width of its table cell. */
   justify-items: start;
+}
+
+/* A standing explanation belonging to a table rather than to the page. Sits
+   between the section rule and the table it describes, so it reads as a caption
+   on the manifest — unlike .footnote, which is a page-foot device and carries a
+   rule of its own that would fight the table's own header rule. */
+.table-note {
+  max-width: var(--measure);
+  margin-bottom: var(--s-4);
+  font-size: 0.8125rem;
+  color: var(--ink-faint);
 }
 
 /* The hairline runs the full width of the content column, so it terminates on
