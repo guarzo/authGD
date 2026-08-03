@@ -343,6 +343,35 @@ export async function maybeGrantBootstrapAdmin(
   return true;
 }
 
+/**
+ * Transfer reclaim for background detection (token health): unlike
+ * unlinkCharacter there is NO last-character guard — that guard exists only
+ * for ordinary unlink flows, while a sold character always leaves its old
+ * account, which may legitimately end with zero characters (spec: it stays
+ * Green until an admin deletes it). Locks, deletes the link, applies the
+ * no-main rule (demotion unless tier_locked + outbox enqueue), and revokes
+ * the account's sessions.
+ */
+export async function reclaimTransferredCharacter(
+  dbx: DbTx,
+  characterId: number,
+  expected: { accountId: string; ownerHash: string },
+): Promise<{ ok: true } | { ok: false; error: "not_found" | "changed" }> {
+  const existing = await findCharacterForUpdate(dbx, characterId);
+  if (!existing) return { ok: false, error: "not_found" };
+  // Stale-decision guard: re-verify under the lock. If the row already
+  // changed hands (the new owner's login reclaimed it, or a re-auth updated
+  // the owner hash), this caller's decision is based on dead data.
+  if (
+    existing.accountId !== expected.accountId ||
+    existing.ownerHash !== expected.ownerHash
+  ) {
+    return { ok: false, error: "changed" };
+  }
+  await reclaimCharacter(dbx, existing);
+  return { ok: true };
+}
+
 export async function demoteAdmin(
   dbx: DbTx,
   actor: string,
