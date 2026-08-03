@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { resolveFilterIdentity } from "@/services/audit";
+import { logAudit, queryAuditLog, resolveFilterIdentity } from "@/services/audit";
 import { setupTestDb, truncateAll } from "./helpers/db";
 import { testConfig } from "./helpers/config";
 import { seedAccount, seedCharacter } from "./helpers/seed";
@@ -154,5 +154,68 @@ describe("resolveFilterIdentity", () => {
     expect(t.calls).toBeLessThanOrEqual(3);
     const a = await countQueries(() => resolveFilterIdentity(ctx.db, "actor", "Zed"));
     expect(a.calls).toBeLessThanOrEqual(2);
+  });
+});
+
+describe("queryAuditLog id-array filters", () => {
+  it("matches a single id with equality, as before", async () => {
+    await logAudit(ctx.db, { actor: "system", action: "tier.changed", target: "all" });
+    await logAudit(ctx.db, { actor: "admin-1", action: "tier.changed", target: "42" });
+    const rows = await queryAuditLog(ctx.db, { actorIds: ["admin-1"] });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].actor).toBe("admin-1");
+  });
+
+  it("matches any of several ids", async () => {
+    await logAudit(ctx.db, { actor: "system", action: "tier.changed", target: "a" });
+    await logAudit(ctx.db, { actor: "admin-1", action: "tier.changed", target: "b" });
+    await logAudit(ctx.db, { actor: "admin-2", action: "tier.changed", target: "c" });
+    const rows = await queryAuditLog(ctx.db, { actorIds: ["admin-1", "admin-2"] });
+    expect(rows.map((r) => r.actor).sort()).toEqual(["admin-1", "admin-2"]);
+  });
+
+  it("returns nothing, and issues no query, for an empty id list", async () => {
+    await logAudit(ctx.db, { actor: "system", action: "tier.changed", target: "all" });
+    const { result, calls } = await countQueries(() =>
+      queryAuditLog(ctx.db, { actorIds: [] }),
+    );
+    expect(result).toEqual([]);
+    expect(calls).toBe(0);
+  });
+
+  it("unions target ids across identifier forms", async () => {
+    const acc = await seedAccount(ctx.db, { discordUserId: "555555555555555555" });
+    await seedCharacter(ctx.db, cfg, { id: 90001, accountId: acc.id, name: "Zed", main: true });
+    await logAudit(ctx.db, { actor: "system", action: "tier.changed", target: acc.id });
+    await logAudit(ctx.db, { actor: "system", action: "character.linked", target: "90001" });
+    await logAudit(ctx.db, {
+      actor: "system", action: "discord.role_changed", target: "555555555555555555",
+    });
+    await logAudit(ctx.db, { actor: "system", action: "tier.changed", target: "someone-else" });
+
+    const res = await resolveFilterIdentity(ctx.db, "target", "Zed");
+    const rows = await queryAuditLog(ctx.db, {
+      targetIds: res.kind === "none" ? [] : res.ids,
+    });
+    expect(rows).toHaveLength(3);
+    expect(rows.map((r) => r.action).sort()).toEqual([
+      "character.linked", "discord.role_changed", "tier.changed",
+    ]);
+  });
+
+  it("keeps beforeId keyset paging working under a union filter", async () => {
+    const acc = await seedAccount(ctx.db);
+    await seedCharacter(ctx.db, cfg, { id: 90001, accountId: acc.id, name: "Zed", main: true });
+    for (let i = 0; i < 3; i++) {
+      await logAudit(ctx.db, { actor: "system", action: "tier.changed", target: acc.id });
+      await logAudit(ctx.db, { actor: "system", action: "character.linked", target: "90001" });
+    }
+    const res = await resolveFilterIdentity(ctx.db, "target", "Zed");
+    const ids = res.kind === "none" ? [] : res.ids;
+    const all = await queryAuditLog(ctx.db, { targetIds: ids });
+    expect(all).toHaveLength(6);
+    const older = await queryAuditLog(ctx.db, { targetIds: ids, beforeId: all[0].id });
+    expect(older).toHaveLength(5);
+    expect(older.every((r) => r.id < all[0].id)).toBe(true);
   });
 });

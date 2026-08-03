@@ -197,7 +197,9 @@ export async function resolveAuditIdentities(
  * (every job writes it) and `all` as the broadcast target of `sync.requested`
  * / `sync.recheck_requested`. Both must bypass name resolution or filtering by
  * them regresses -- a grep of every logAudit call site confirms these are the
- * complete set.
+ * complete set. Checked below without regard to `field` (intentional): a raw
+ * hit is always safe even where a literal is never actually stored, e.g.
+ * `("target","system")` or `("actor","all")`.
  */
 const RESERVED_FILTER_LITERALS = new Set(["system", "all"]);
 
@@ -297,22 +299,42 @@ export async function resolveFilterIdentity(
 export async function queryAuditLog(
   dbx: Dbx,
   filters: {
-    actor?: string;
+    /** Raw actor ids. Exactly one -> equality; several -> any-of; empty -> no
+     * rows. Names are resolved by resolveFilterIdentity BEFORE this call, so a
+     * non-uuid raw actor can never be mistaken for one. */
+    actorIds?: string[];
     action?: string; // prefix match, e.g. "tier."
-    target?: string;
+    /** Raw target ids; one person spans several (see resolveFilterIdentity). */
+    targetIds?: string[];
     beforeId?: number;
     limit?: number;
   } = {},
 ): Promise<ResolvedAuditRow[]> {
+  // An empty list is "resolved to nothing", not "unfiltered" -- short-circuit
+  // rather than let it degrade into a full scan.
+  if (filters.actorIds?.length === 0 || filters.targetIds?.length === 0) return [];
+
   const conds = [];
-  if (filters.actor) conds.push(eq(auditLog.actor, filters.actor));
+  if (filters.actorIds) {
+    conds.push(
+      filters.actorIds.length === 1
+        ? eq(auditLog.actor, filters.actorIds[0])
+        : inArray(auditLog.actor, filters.actorIds),
+    );
+  }
   if (filters.action) {
     // The filter is a LITERAL prefix; % and _ are LIKE wildcards, so escape
     // them (and backslash, Postgres's default escape character).
     const prefix = filters.action.replace(/[\\%_]/g, (c) => `\\${c}`);
     conds.push(like(auditLog.action, `${prefix}%`));
   }
-  if (filters.target) conds.push(eq(auditLog.target, filters.target));
+  if (filters.targetIds) {
+    conds.push(
+      filters.targetIds.length === 1
+        ? eq(auditLog.target, filters.targetIds[0])
+        : inArray(auditLog.target, filters.targetIds),
+    );
+  }
   if (filters.beforeId !== undefined) conds.push(lt(auditLog.id, filters.beforeId));
   const limit = Math.min(filters.limit ?? AUDIT_PAGE_SIZE, AUDIT_PAGE_SIZE);
   const rows = await dbx
