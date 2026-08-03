@@ -1,0 +1,17 @@
+# Generated, vendored, or build output.
+node_modules/
+.next/
+drizzle/
+tmp/
+public/
+test-results/
+playwright-report/
+package-lock.json
+.claude/
+
+# Markdown is excluded deliberately. Prettier's only change to the docs here is
+# padding table cells to a uniform width — 1920 lines of churn across 6 files,
+# producing tables that are markedly harder to hand-edit than the compact ones
+# already written. The prose itself is untouched (proseWrap defaults to
+# "preserve"), so there is nothing to gain.
+*.md
