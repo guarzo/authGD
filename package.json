@@ -15,6 +15,7 @@
     "test:watch": "vitest",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx --env-file-if-exists=.env --env-file-if-exists=.env.local src/db/migrate.ts",
+    "db:seed": "tsx --env-file-if-exists=.env --env-file-if-exists=.env.local scripts/seed-dev.ts",
     "smoke:wanderer": "tsx --env-file-if-exists=.env --env-file-if-exists=.env.local scripts/wanderer-smoke.ts",
     "typecheck": "tsc --noEmit",
     "test:e2e": "playwright test",
