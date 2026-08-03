@@ -2,7 +2,6 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import * as schema from "@/db/schema";
-import { createDb } from "@/db";
 import { syncRun } from "@/db/schema";
 import { checkLiveness, newestSyncRun } from "@/services/health";
 import { setupTestDb, truncateAll } from "./helpers/db";
@@ -29,6 +28,10 @@ describe("checkLiveness", () => {
   it(
     "is false when Postgres is unreachable",
     async () => {
+      // Built directly rather than via createDb: that helper takes no
+      // connectionTimeoutMillis, so an unreachable host would sit on the OS
+      // TCP timeout (~130s) instead of failing in a second. Construction
+      // otherwise mirrors createDb — same Pool + drizzle(schema) pairing.
       const badPool = new Pool({
         connectionString: "postgres://nobody:nobody@127.0.0.1:1/none",
         connectionTimeoutMillis: 1000,
