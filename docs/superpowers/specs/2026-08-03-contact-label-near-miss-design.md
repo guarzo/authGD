@@ -119,9 +119,9 @@ identically and a trailing-space member would again see two strings that look
 the same. The quotes delimit the value so a leading or trailing space is
 visible against them.
 
-`contactsNoteApplies` (line 38) must gain `label_mismatch` to its exclusion
-list. It currently excludes only `"ok"` and `"missing_label"`, so a new code
-would show the generic column note *and* the bespoke message.
+`contactsNoteApplies` (`src/app/account/page.tsx:39`) must gain `label_mismatch`
+to its exclusion list. It currently excludes only `"ok"` and `"missing_label"`,
+so a new code would show the generic column note *and* the bespoke message.
 
 Label names are member-authored free text. React escapes on render, so there is
 no injection concern; the value is displayed, never interpolated into markup.
@@ -135,8 +135,9 @@ fielding a report sees the offending string without opening a database session:
 ### Data flow
 
 `contactSyncResult` already flows through `getAccountView` and
-`AdminCharacterRow` (`src/services/account-view.ts:72,157`). `contactSyncDetail`
-is added alongside it in both, read from the same `syncByChar` map.
+`AdminCharacterRow` (`src/services/account-view.ts:186,272`).
+`contactSyncDetail` is added alongside it in both, read from the same
+`syncByChar` map.
 
 ## Testing
 
