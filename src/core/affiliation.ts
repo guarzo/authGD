@@ -30,8 +30,12 @@ async function resolveChunk(
   if (ids.length === 0) return;
   try {
     const rows = await post(ids);
+    const requested = new Set(ids);
     const returned = new Set<number>();
     for (const r of rows) {
+      // Never trust unrequested or duplicate ids: a malformed response must
+      // not mutate arbitrary character rows (first row wins on duplicates).
+      if (!requested.has(r.characterId) || returned.has(r.characterId)) continue;
       returned.add(r.characterId);
       out.resolved.set(r.characterId, {
         corporationId: r.corporationId,

@@ -1,5 +1,7 @@
+import { sql } from "drizzle-orm";
 import PgBoss from "pg-boss";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createDb } from "@/db";
 import { QUEUES, createQueues, scheduleJobs } from "@/worker/queues";
 import { TEST_URL } from "./helpers/db";
 
@@ -41,5 +43,38 @@ describe("worker queues", () => {
     expect(byName.get(QUEUES.wanderer)?.options).toMatchObject({
       singletonKey: "wanderer:all",
     });
+  });
+
+  it("repairs stale queue settings on startup (createQueue alone is ON CONFLICT DO NOTHING)", async () => {
+    // pg-boss's Queue type requires name even on updateQueue
+    await boss.updateQueue(QUEUES.contacts, {
+      name: QUEUES.contacts,
+      policy: "standard",
+      retryLimit: 1,
+      retryDelay: 1,
+      retryBackoff: false,
+    });
+    await createQueues(boss);
+    const q = await boss.getQueue(QUEUES.contacts);
+    expect(q?.policy).toBe("short");
+    expect(q?.retryLimit).toBe(5);
+    expect(q?.deadLetter).toBe(QUEUES.deadLetter);
+  });
+
+  it("refuses to start when the DLQ itself has a dead-letter target (uncleanable)", async () => {
+    // Set the one misconfiguration updateQueue cannot repair…
+    await boss.updateQueue(QUEUES.deadLetter, {
+      name: QUEUES.deadLetter,
+      deadLetter: QUEUES.contacts,
+    });
+    try {
+      await expect(createQueues(boss)).rejects.toThrow(/dead-letter target/);
+    } finally {
+      // …and clear it with the documented manual fix so later tests (and
+      // reruns against the persistent test DB) start clean.
+      const { db, pool } = createDb(TEST_URL);
+      await db.execute(sql`UPDATE pgboss.queue SET dead_letter = NULL WHERE name = ${QUEUES.deadLetter}`);
+      await pool.end();
+    }
   });
 });

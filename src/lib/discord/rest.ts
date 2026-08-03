@@ -87,11 +87,22 @@ export function createDiscordClient(cfg: Config, fetchImpl: typeof fetch = fetch
       const res = await request(path);
       return (await parseBody(userSchema, res, "GET", path)).id;
     },
-    /** null when the user is not in the guild (404). */
+    /** null ONLY for Discord code 10007 (Unknown Member — user not in guild).
+     * Any other 404 (10004 Unknown Guild = bad config, malformed body) is a
+     * permanent error: the role job must fail loudly, not skip everyone. */
     async getGuildMember(userId: string): Promise<{ roles: string[] } | null> {
       const path = `/guilds/${guild}/members/${userId}`;
       const res = await rawRequest(path);
-      if (res.status === 404) return null;
+      if (res.status === 404) {
+        const body = (await res.json().catch(() => undefined)) as
+          | { code?: number }
+          | undefined;
+        if (body?.code === 10007) return null;
+        throw new DiscordApiError(
+          `discord GET ${path} failed (404${body?.code !== undefined ? `, code ${body.code}` : ", malformed body"})`,
+          { status: 404, transient: false },
+        );
+      }
       assertOk(res, "GET", path);
       return parseBody(memberSchema, res, "GET", path);
     },

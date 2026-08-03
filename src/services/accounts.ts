@@ -1,4 +1,4 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 import type { Config } from "@/config";
 import type { DbTx } from "@/db";
 import { account, bootstrapAdminGrant, character, contactSyncState } from "@/db/schema";
@@ -383,6 +383,7 @@ export async function demoteAdmin(
     .select()
     .from(account)
     .where(eq(account.isAdmin, true))
+    .orderBy(asc(account.id))
     .for("update");
   // Defense-in-depth: only "system" or a current admin may demote. Routes must
   // still gate this, but the service refuses unauthorized actors regardless.
@@ -393,5 +394,34 @@ export async function demoteAdmin(
   if (otherAdmins.length === 0) return { ok: false, error: "last_admin" };
   await dbx.update(account).set({ isAdmin: false }).where(eq(account.id, accountId));
   await logAudit(dbx, { actor, action: "admin.demoted", target: accountId });
+  return { ok: true };
+}
+
+export async function promoteAdmin(
+  dbx: DbTx,
+  actor: string,
+  accountId: string,
+): Promise<{ ok: boolean; error?: "not_authorized" | "not_found" }> {
+  // Same lock order as demoteAdmin: the sorted admin set first, so concurrent
+  // promote/demote serialize on it, then the (non-admin) target row.
+  const admins = await dbx
+    .select()
+    .from(account)
+    .where(eq(account.isAdmin, true))
+    .orderBy(asc(account.id))
+    .for("update");
+  if (actor !== "system" && !admins.some((a) => a.id === actor)) {
+    return { ok: false, error: "not_authorized" };
+  }
+  const [target] = await dbx
+    .select()
+    .from(account)
+    .where(eq(account.id, accountId))
+    .for("update");
+  if (!target) return { ok: false, error: "not_found" };
+  if (!target.isAdmin) {
+    await dbx.update(account).set({ isAdmin: true }).where(eq(account.id, accountId));
+    await logAudit(dbx, { actor, action: "admin.promoted", target: accountId });
+  }
   return { ok: true };
 }

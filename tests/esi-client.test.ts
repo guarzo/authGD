@@ -220,3 +220,18 @@ describe("contacts", () => {
     ]);
   });
 });
+
+describe("User-Agent (F6)", () => {
+  it("sends the configured User-Agent on every request", async () => {
+    let ua: string | null = null;
+    server.use(
+      http.post(`${BASE}/characters/affiliation/`, ({ request }) => {
+        ua = request.headers.get("user-agent");
+        return HttpResponse.json([]);
+      }),
+    );
+    const esi = createEsiClient({ userAgent: "authgd/0.1.0 (ops@example.com)" });
+    await esi.postAffiliation([1]);
+    expect(ua).toBe("authgd/0.1.0 (ops@example.com)");
+  });
+});

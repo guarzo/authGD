@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { Config } from "@/config";
 import type { Db, Dbx } from "@/db";
 import { character, contactSyncState } from "@/db/schema";
@@ -171,10 +171,17 @@ export async function runContactsJob(deps: {
         const transient = err instanceof EsiError ? err.kind === "transient" : true;
         if (needsReauth) {
           counts.failed++;
+          // CAS on the blob our refresh just stored (F5): if the row rotated
+          // or was reclaimed since, this stale decision must not touch it.
           await db
             .update(character)
             .set({ tokenStatus: "needs_reauth" })
-            .where(eq(character.id, target.characterId));
+            .where(
+              and(
+                eq(character.id, target.characterId),
+                eq(character.refreshTokenEnc, token.tokenEnc),
+              ),
+            );
           await recordResult(db, target.characterId, "needs_reauth", false);
         } else {
           if (transient) transientFailures++;

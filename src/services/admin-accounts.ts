@@ -1,0 +1,113 @@
+import { eq } from "drizzle-orm";
+import type { DbTx } from "@/db";
+import { account } from "@/db/schema";
+import { logAudit } from "@/services/audit";
+import { enqueueSync } from "@/services/outbox";
+
+export type AdminMutationResult =
+  | { ok: true }
+  | { ok: false; error: "not_authorized" | "not_found" };
+
+/** Defense in depth: routes gate too, but services refuse unauthorized actors. */
+async function isAuthorized(dbx: DbTx, actor: string): Promise<boolean> {
+  if (actor === "system") return true;
+  const [a] = await dbx.select().from(account).where(eq(account.id, actor));
+  return a?.isAdmin === true;
+}
+
+async function lockTarget(dbx: DbTx, accountId: string) {
+  const rows = await dbx
+    .select()
+    .from(account)
+    .where(eq(account.id, accountId))
+    .for("update");
+  return rows[0];
+}
+
+/**
+ * Spec tier state machine: ANY manual set (flygd, blue, or green) locks the
+ * account — the membership job never touches locked accounts. Change + audit
+ * + outbox commit in one transaction (the caller supplies the DbTx).
+ */
+export async function setTierManual(
+  dbx: DbTx,
+  actor: string,
+  accountId: string,
+  tier: "flygd" | "blue" | "green",
+): Promise<AdminMutationResult> {
+  if (!(await isAuthorized(dbx, actor))) return { ok: false, error: "not_authorized" };
+  const acc = await lockTarget(dbx, accountId);
+  if (!acc) return { ok: false, error: "not_found" };
+  if (acc.tier === tier && acc.tierLocked) return { ok: true };
+  await dbx
+    .update(account)
+    .set({ tier, tierLocked: true, tierChangedAt: new Date(), tierChangedBy: actor })
+    .where(eq(account.id, accountId));
+  await logAudit(dbx, {
+    actor,
+    action: "tier.changed",
+    target: accountId,
+    details: { to: tier, locked: true, cause: "manual" },
+  });
+  await enqueueSync(dbx, { kind: "account", accountId });
+  return { ok: true };
+}
+
+/**
+ * Clears the lock ONLY. The tier itself is stamped by the next membership run
+ * (enqueued here), keeping "system decided" provenance in tier_changed_by.
+ */
+export async function returnTierToAuto(
+  dbx: DbTx,
+  actor: string,
+  accountId: string,
+): Promise<AdminMutationResult> {
+  if (!(await isAuthorized(dbx, actor))) return { ok: false, error: "not_authorized" };
+  const acc = await lockTarget(dbx, accountId);
+  if (!acc) return { ok: false, error: "not_found" };
+  if (!acc.tierLocked) return { ok: true };
+  await dbx.update(account).set({ tierLocked: false }).where(eq(account.id, accountId));
+  await logAudit(dbx, { actor, action: "tier.unlocked", target: accountId });
+  await enqueueSync(dbx, { kind: "account", accountId });
+  return { ok: true };
+}
+
+export async function setAccountStatus(
+  dbx: DbTx,
+  actor: string,
+  accountId: string,
+  status: "active" | "cryo",
+): Promise<AdminMutationResult> {
+  if (!(await isAuthorized(dbx, actor))) return { ok: false, error: "not_authorized" };
+  const acc = await lockTarget(dbx, accountId);
+  if (!acc) return { ok: false, error: "not_found" };
+  if (acc.status === status) return { ok: true };
+  await dbx
+    .update(account)
+    .set({ status, statusChangedAt: new Date() })
+    .where(eq(account.id, accountId));
+  await logAudit(dbx, {
+    actor,
+    action: "status.changed",
+    target: accountId,
+    details: { to: status },
+  });
+  await enqueueSync(dbx, { kind: "account", accountId });
+  return { ok: true };
+}
+
+export async function setStatusNote(
+  dbx: DbTx,
+  actor: string,
+  accountId: string,
+  note: string,
+): Promise<AdminMutationResult> {
+  if (!(await isAuthorized(dbx, actor))) return { ok: false, error: "not_authorized" };
+  const acc = await lockTarget(dbx, accountId);
+  if (!acc) return { ok: false, error: "not_found" };
+  const value = note.trim() || null;
+  if (acc.statusNote === value) return { ok: true };
+  await dbx.update(account).set({ statusNote: value }).where(eq(account.id, accountId));
+  await logAudit(dbx, { actor, action: "status.note_changed", target: accountId });
+  return { ok: true };
+}

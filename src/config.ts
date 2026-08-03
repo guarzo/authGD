@@ -51,6 +51,8 @@ const envSchema = z.object({
   WANDERER_ACL_ID: z.string().min(1),
   STANDINGS_LABEL: z.string().min(1).default("flygd"),
   STANDINGS_VALUE: z.coerce.number().min(-10).max(10).default(5),
+  // CCP requires ESI consumers to send identifying contact info (F6).
+  ESI_CONTACT: z.string().min(1),
 });
 
 export type Config = ReturnType<typeof loadConfig>;
@@ -89,6 +91,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
       aclId: e.WANDERER_ACL_ID,
     },
     standings: { label: e.STANDINGS_LABEL, value: e.STANDINGS_VALUE },
+    esiContact: e.ESI_CONTACT,
   };
 }
 

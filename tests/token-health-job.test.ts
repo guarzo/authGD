@@ -15,7 +15,6 @@ import {
 } from "vitest";
 import { account, auditLog, character, outbox, session } from "@/db/schema";
 import { runTokenHealthJob } from "@/jobs/token-health";
-import { setTestJwksOverride } from "@/lib/esi/sso";
 import { reclaimTransferredCharacter } from "@/services/accounts";
 import { JobRetryError } from "@/services/sync-run";
 import { createSession } from "@/services/session";
@@ -27,16 +26,14 @@ const cfg = testConfig();
 
 let ctx: Awaited<ReturnType<typeof setupTestDb>>;
 let privateKey: CryptoKey;
+let jwks: ReturnType<typeof createLocalJWKSet>;
 beforeAll(async () => {
   ctx = await setupTestDb();
   const pair = await generateKeyPair("RS256");
   privateKey = pair.privateKey;
-  setTestJwksOverride(
-    createLocalJWKSet({ keys: [{ ...(await exportJWK(pair.publicKey)), alg: "RS256" }] }),
-  );
+  jwks = createLocalJWKSet({ keys: [{ ...(await exportJWK(pair.publicKey)), alg: "RS256" }] });
 });
 afterAll(() => ctx.cleanup());
-afterAll(() => setTestJwksOverride(undefined));
 beforeEach(() => truncateAll(ctx.db));
 
 async function signAccessToken(opts: {
@@ -99,7 +96,7 @@ describe("runTokenHealthJob", () => {
       characterId: 1, ownerHash: "oh-1", scopes: [...cfg.eveSso.scopes],
     });
     const result = await runTokenHealthJob({
-      db: ctx.db, cfg, fetchImpl: refreshFetchFor({ rt1: at }),
+      db: ctx.db, cfg, jwks, fetchImpl: refreshFetchFor({ rt1: at }),
     });
     expect(result.status).toBe("ok");
     expect(result.counts).toMatchObject({ refreshed: 1 });
@@ -115,7 +112,7 @@ describe("runTokenHealthJob", () => {
       characterId: 1, ownerHash: "oh-1",
       scopes: ["esi-characters.read_contacts.v1"], // write scope missing
     });
-    await runTokenHealthJob({ db: ctx.db, cfg, fetchImpl: refreshFetchFor({ rt1: at }) });
+    await runTokenHealthJob({ db: ctx.db, cfg, jwks, fetchImpl: refreshFetchFor({ rt1: at }) });
     const ch = await getChar(1);
     expect(ch.tokenStatus).toBe("needs_reauth");
     expect(ch.scopes).toEqual(["esi-characters.read_contacts.v1"]);
@@ -129,7 +126,7 @@ describe("runTokenHealthJob", () => {
       id: 1, accountId: acc.id, main: true, refreshToken: "revoked", ownerHash: "oh-1",
     });
     const result = await runTokenHealthJob({
-      db: ctx.db, cfg, fetchImpl: refreshFetchFor({}), // every refresh → invalid_grant
+      db: ctx.db, cfg, jwks, fetchImpl: refreshFetchFor({}), // every refresh → invalid_grant
     });
     expect(result.counts).toMatchObject({ invalid: 1 });
     expect((await getChar(1)).tokenStatus).toBe("invalid");
@@ -145,7 +142,7 @@ describe("runTokenHealthJob", () => {
         status: 503,
       })) as typeof fetch;
     await expect(
-      runTokenHealthJob({ db: ctx.db, cfg, fetchImpl }),
+      runTokenHealthJob({ db: ctx.db, cfg, jwks, fetchImpl }),
     ).rejects.toBeInstanceOf(JobRetryError);
     expect((await getChar(1)).tokenStatus).toBe("valid");
   });
@@ -163,7 +160,7 @@ describe("runTokenHealthJob", () => {
       characterId: 1, ownerHash: "oh-NEW", scopes: [...cfg.eveSso.scopes],
     });
     const result = await runTokenHealthJob({
-      db: ctx.db, cfg, fetchImpl: refreshFetchFor({ rt1: at }),
+      db: ctx.db, cfg, jwks, fetchImpl: refreshFetchFor({ rt1: at }),
     });
     expect(result.counts).toMatchObject({ unlinked: 1 });
     expect(await getChar(1)).toBeUndefined(); // reclaimed
@@ -192,7 +189,7 @@ describe("runTokenHealthJob", () => {
       characterId: 1, ownerHash: "oh-NEW", scopes: [...cfg.eveSso.scopes],
     });
     const result = await runTokenHealthJob({
-      db: ctx.db, cfg, fetchImpl: refreshFetchFor({ rt1: at }),
+      db: ctx.db, cfg, jwks, fetchImpl: refreshFetchFor({ rt1: at }),
     });
     expect(result.counts).toMatchObject({ unlinked: 1 });
     expect(await getChar(1)).toBeUndefined(); // gone — no last-character guard here
@@ -213,7 +210,7 @@ describe("runTokenHealthJob", () => {
       characterId: 2, ownerHash: "oh-1", scopes: [...cfg.eveSso.scopes],
     });
     const result = await runTokenHealthJob({
-      db: ctx.db, cfg, fetchImpl: refreshFetchFor({ rt1: at }),
+      db: ctx.db, cfg, jwks, fetchImpl: refreshFetchFor({ rt1: at }),
     });
     expect(result.counts).toMatchObject({ invalid: 1, unlinked: 0 });
     const ch = await getChar(1);
@@ -238,7 +235,7 @@ describe("runTokenHealthJob", () => {
       characterId: 2, ownerHash: "oh-2", scopes: [...cfg.eveSso.scopes],
     });
     const result = await runTokenHealthJob({
-      db: ctx.db, cfg, fetchImpl: refreshFetchFor({ rt1: badAt, rt2: goodAt }),
+      db: ctx.db, cfg, jwks, fetchImpl: refreshFetchFor({ rt1: badAt, rt2: goodAt }),
     });
     expect(result.status).toBe("ok");
     expect(result.counts).toMatchObject({ invalid: 1, refreshed: 1 });
@@ -264,7 +261,7 @@ describe("runTokenHealthJob", () => {
       .setExpirationTime("5m")
       .sign(otherPair.privateKey);
     await expect(
-      runTokenHealthJob({ db: ctx.db, cfg, fetchImpl: refreshFetchFor({ rt1: at }) }),
+      runTokenHealthJob({ db: ctx.db, cfg, jwks, fetchImpl: refreshFetchFor({ rt1: at }) }),
     ).rejects.toBeInstanceOf(JobRetryError);
     expect((await getChar(1)).tokenStatus).toBe("valid"); // unchanged
   });

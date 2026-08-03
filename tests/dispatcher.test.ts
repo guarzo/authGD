@@ -60,6 +60,17 @@ describe("planDispatch", () => {
       "wanderer",
     ]);
   });
+
+  it("maps membership-recheck to the recheck queue with its global singleton key", () => {
+    const plan = planDispatch({ kind: "membership-recheck" });
+    expect(plan).toEqual([
+      {
+        queue: "membership-recheck",
+        data: { jobType: "membership-recheck" },
+        singletonKey: "membership-recheck:all",
+      },
+    ]);
+  });
 });
 
 describe("dispatchOutbox", () => {

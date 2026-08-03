@@ -114,7 +114,7 @@ export async function verifyEveAccessToken(
   getKey?: JWTVerifyGetKey,
 ): Promise<EveIdentity> {
   remoteJwks ??= createRemoteJWKSet(new URL(JWKS_URL));
-  const { payload } = await jwtVerify(accessToken, getKey ?? testJwksOverride ?? remoteJwks, {
+  const { payload } = await jwtVerify(accessToken, getKey ?? remoteJwks, {
     issuer: ISSUER,
     audience: AUDIENCE,
   });
@@ -145,7 +145,3 @@ export async function verifyEveAccessToken(
   };
 }
 
-export let testJwksOverride: JWTVerifyGetKey | undefined;
-export function setTestJwksOverride(getKey: JWTVerifyGetKey | undefined) {
-  testJwksOverride = getKey;
-}

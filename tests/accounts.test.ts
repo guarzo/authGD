@@ -7,6 +7,7 @@ import {
   handleEveLogin,
   linkCharacter,
   maybeGrantBootstrapAdmin,
+  promoteAdmin,
   setMainCharacter,
   unlinkCharacter,
   type EveCallbackCharacter,
@@ -14,6 +15,7 @@ import {
 import { createSession, getSessionAccount } from "@/services/session";
 import { decryptToken } from "@/lib/crypto";
 import { setupTestDb, truncateAll } from "./helpers/db";
+import { seedAccount } from "./helpers/seed";
 
 let ctx: Awaited<ReturnType<typeof setupTestDb>>;
 let cfg: Config;
@@ -50,6 +52,7 @@ beforeAll(async () => {
     WANDERER_API_KEY: "k",
     WANDERER_MAP_SLUG: "m",
     WANDERER_ACL_ID: "a",
+    ESI_CONTACT: "ops@example.com",
   } as NodeJS.ProcessEnv);
 });
 beforeEach(() => truncateAll(ctx.db));
@@ -351,5 +354,59 @@ describe("demoteAdmin", () => {
     expect([r1.ok, r2.ok].filter(Boolean)).toHaveLength(1);
     const admins = await ctx.db.select().from(account).where(eq(account.isAdmin, true));
     expect(admins.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("promoteAdmin", () => {
+  it("lets an admin grant is_admin, audit-logged", async () => {
+    const admin = await seedAccount(ctx.db);
+    await ctx.db.update(account).set({ isAdmin: true }).where(eq(account.id, admin.id));
+    const target = await seedAccount(ctx.db);
+    const result = await ctx.db.transaction((tx) => promoteAdmin(tx, admin.id, target.id));
+    expect(result).toEqual({ ok: true });
+    const [after] = await ctx.db.select().from(account).where(eq(account.id, target.id));
+    expect(after.isAdmin).toBe(true);
+    const rows = await ctx.db
+      .select()
+      .from(auditLog)
+      .where(eq(auditLog.action, "admin.promoted"));
+    expect(rows).toHaveLength(1);
+    expect(rows[0].actor).toBe(admin.id);
+    expect(rows[0].target).toBe(target.id);
+  });
+
+  it("rejects a non-admin actor", async () => {
+    const nobody = await seedAccount(ctx.db);
+    const target = await seedAccount(ctx.db);
+    const result = await ctx.db.transaction((tx) => promoteAdmin(tx, nobody.id, target.id));
+    expect(result).toEqual({ ok: false, error: "not_authorized" });
+  });
+
+  it("is idempotent for an already-admin target (no duplicate audit)", async () => {
+    const admin = await seedAccount(ctx.db);
+    await ctx.db.update(account).set({ isAdmin: true }).where(eq(account.id, admin.id));
+    await ctx.db.transaction((tx) => promoteAdmin(tx, admin.id, admin.id));
+    const rows = await ctx.db
+      .select()
+      .from(auditLog)
+      .where(eq(auditLog.action, "admin.promoted"));
+    expect(rows).toHaveLength(0);
+  });
+
+  it("returns not_found for a missing target", async () => {
+    const admin = await seedAccount(ctx.db);
+    await ctx.db.update(account).set({ isAdmin: true }).where(eq(account.id, admin.id));
+    const result = await ctx.db.transaction((tx) =>
+      promoteAdmin(tx, admin.id, "00000000-0000-0000-0000-000000000000"),
+    );
+    expect(result).toEqual({ ok: false, error: "not_found" });
+  });
+
+  it("lets the system actor promote when no admin exists yet", async () => {
+    const target = await seedAccount(ctx.db);
+    const result = await ctx.db.transaction((tx) => promoteAdmin(tx, "system", target.id));
+    expect(result).toEqual({ ok: true });
+    const [after] = await ctx.db.select().from(account).where(eq(account.id, target.id));
+    expect(after.isAdmin).toBe(true);
   });
 });

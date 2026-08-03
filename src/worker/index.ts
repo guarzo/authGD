@@ -4,7 +4,7 @@ import { getConfig } from "@/config";
 import { createDb } from "@/db";
 import { createDiscordClient } from "@/lib/discord/rest";
 import { createEsiClient } from "@/lib/esi/client";
-import { postOpsWebhook } from "@/lib/ops-webhook";
+import { postOpsWebhookOrThrow } from "@/lib/ops-webhook";
 import { createWandererClient } from "@/lib/wanderer/client";
 import { startDispatcher } from "@/worker/dispatcher";
 import { buildJobHandlers } from "@/worker/handlers";
@@ -24,7 +24,7 @@ async function main(): Promise<void> {
   const handlers = buildJobHandlers({
     db,
     cfg,
-    esi: createEsiClient(),
+    esi: createEsiClient({ userAgent: `authgd/0.1.0 (${cfg.esiContact})` }),
     wanderer: createWandererClient(cfg),
     discord: createDiscordClient(cfg),
   });
@@ -36,19 +36,23 @@ async function main(): Promise<void> {
   }
 
   // Ops alerting (spec: Error handling): a job landing here exhausted its
-  // retries — post to the optional Discord ops webhook. Guarded so a
-  // malformed dead-letter payload or a failed webhook post can neither crash
-  // the worker nor silently vanish.
+  // retries — post to the optional Discord ops webhook. Only the payload
+  // parse is caught (a malformed payload is permanent); webhook failures
+  // throw so pg-boss retries the alert instead of silently losing it.
   await boss.work(QUEUES.deadLetter, async ([job]) => {
+    let data: z.infer<typeof deadLetterSchema>;
     try {
-      const data = deadLetterSchema.parse(job.data);
-      await postOpsWebhook(
-        cfg,
-        `authGD: job \`${data?.jobType ?? "unknown"}\` failed after final retry.`,
-      );
+      data = deadLetterSchema.parse(job.data);
     } catch (err) {
-      console.error("dead-letter handler failed", err);
+      // Malformed payload is permanent — log locally and complete the job.
+      console.error("dead-letter payload malformed", err);
+      return;
     }
+    // Throws on failure → pg-boss retries the alert (queue has RETRY options).
+    await postOpsWebhookOrThrow(
+      cfg,
+      `authGD: job \`${data?.jobType ?? "unknown"}\` failed after final retry.`,
+    );
   });
 
   await scheduleJobs(boss);

@@ -1,0 +1,24 @@
+# authGD — one image, two process groups + release-time migrations.
+app = "authgd"
+primary_region = "iad"
+
+[build]
+
+[deploy]
+  release_command = "npm run db:migrate"
+
+[processes]
+  web = "node web/server.js"
+  worker = "npx tsx src/worker/index.ts"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["web"]
+
+[env]
+  HOSTNAME = "0.0.0.0"
+  PORT = "3000"

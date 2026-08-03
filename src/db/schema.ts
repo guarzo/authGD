@@ -110,6 +110,7 @@ export const outbox = pgTable(
       .$type<
         | { kind: "account"; accountId: string }
         | { kind: "discord-user"; discordUserId: string }
+        | { kind: "membership-recheck" }
         | { kind: "all" }
       >()
       .notNull(),
@@ -145,15 +146,19 @@ export const contactSyncState = pgTable("contact_sync_state", {
   lastResult: text("last_result"),
 });
 
-export const syncRun = pgTable("sync_run", {
-  id: serial("id").primaryKey(),
-  jobType: text("job_type").notNull(),
-  startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
-  finishedAt: timestamp("finished_at", { withTimezone: true }),
-  status: syncRunStatusEnum("status"),
-  errorSummary: text("error_summary"),
-  counts: jsonb("counts").$type<Record<string, number>>(),
-});
+export const syncRun = pgTable(
+  "sync_run",
+  {
+    id: serial("id").primaryKey(),
+    jobType: text("job_type").notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+    status: syncRunStatusEnum("status"),
+    errorSummary: text("error_summary"),
+    counts: jsonb("counts").$type<Record<string, number>>(),
+  },
+  (t) => [index("sync_run_job_type_id_idx").on(t.jobType, t.id.desc())],
+);
 
 export const wandererAclObservation = pgTable("wanderer_acl_observation", {
   characterId: bigint("character_id", { mode: "number" }).primaryKey(),

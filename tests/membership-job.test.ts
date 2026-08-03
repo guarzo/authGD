@@ -1,7 +1,7 @@
-import { eq } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { account, auditLog, character, outbox } from "@/db/schema";
-import { runMembershipJob } from "@/jobs/membership";
+import { account, auditLog, character, outbox, syncRun } from "@/db/schema";
+import { applyTierTransition, runMembershipJob } from "@/jobs/membership";
 import { EsiError, type Affiliation } from "@/lib/esi/client";
 import { JobRetryError } from "@/services/sync-run";
 import { setupTestDb, truncateAll } from "./helpers/db";
@@ -139,5 +139,109 @@ describe("runMembershipJob", () => {
     );
     expect((await getAccount(a1.id)).tier).toBe("flygd");
     expect((await getAccount(a2.id)).tier).toBe("green"); // untouched
+  });
+
+  it("labels recheck runs membership-recheck in sync_run (F7)", async () => {
+    await runMembershipJob({ db: ctx.db, cfg, esi: esiWith({}) }, { recheckInvalid: true });
+    await runMembershipJob({ db: ctx.db, cfg, esi: esiWith({}) });
+    const runs = await ctx.db.select().from(syncRun).orderBy(desc(syncRun.id));
+    expect(runs.map((r) => r.jobType)).toEqual(["membership", "membership-recheck"]);
+  });
+
+  it("a slower OLDER run cannot overwrite a newer overlapping run or transition on it", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
+    // GENUINELY overlapping runs: the newer run executes entirely inside the
+    // older run's external ESI phase — i.e. after the older run captured its
+    // ordering token — then the older run comes back with stale
+    // "left alliance" data and finishes last.
+    let calls = 0;
+    const esi = {
+      postAffiliation: async (ids: number[]): Promise<Affiliation[]> => {
+        calls++;
+        if (calls === 1) {
+          await runMembershipJob({ db: ctx.db, cfg, esi: esiWith({ 1: 99000001 }) });
+        }
+        return ids.map((id) => ({ characterId: id, corporationId: 1000, allianceId: null }));
+      },
+    };
+    const result = await runMembershipJob({ db: ctx.db, cfg, esi });
+    const [ch] = await ctx.db.select().from(character).where(eq(character.id, 1));
+    expect(ch.allianceId).toBe(99000001); // the newer (inner) run's write survives
+    const after = await getAccount(acc.id);
+    expect(after.tier).toBe("flygd"); // no demotion from the stale outer read
+    expect(result.counts).toMatchObject({ demoted: 0, stale: 1 });
+  });
+
+  it("a losing invalid-flag write is neither flagged nor audited, and counts stale", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
+    // Same overlap shape: a newer run confirms the character VALID while the
+    // older run's ESI phase is in flight; the older run then 400-bisects the
+    // id to "invalid" and must lose.
+    let calls = 0;
+    const esi = {
+      postAffiliation: async (): Promise<Affiliation[]> => {
+        calls++;
+        if (calls === 1) {
+          await runMembershipJob({ db: ctx.db, cfg, esi: esiWith({ 1: 99000001 }) });
+        }
+        throw new EsiError("bad id", 400, "permanent");
+      },
+    };
+    const result = await runMembershipJob({ db: ctx.db, cfg, esi });
+    const [ch] = await ctx.db.select().from(character).where(eq(character.id, 1));
+    expect(ch.affiliationInvalid).toBe(false); // losing flag write discarded
+    const audits = await ctx.db
+      .select()
+      .from(auditLog)
+      .where(eq(auditLog.action, "character.affiliation_invalid"));
+    expect(audits).toHaveLength(0);
+    expect(result.counts).toMatchObject({ stale: 1 });
+  });
+
+  it("applyTierTransition refuses when the run's write was superseded before the transaction", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
+    const myToken = new Date("2026-08-03T10:00:00Z");
+    const newerToken = new Date("2026-08-03T10:00:01Z");
+    // this run's CAS won at myToken…
+    await ctx.db
+      .update(character)
+      .set({ affiliationCheckedAt: myToken, allianceId: null })
+      .where(eq(character.id, 1));
+    // …then a newer run superseded it before our tier transaction ran
+    await ctx.db
+      .update(character)
+      .set({ affiliationCheckedAt: newerToken, allianceId: 99000001 })
+      .where(eq(character.id, 1));
+    const applied = await applyTierTransition(ctx.db, {
+      accountId: acc.id,
+      mainCharacterId: 1,
+      next: "green",
+      checkedAt: myToken,
+    });
+    expect(applied).toBe(false);
+    expect((await getAccount(acc.id)).tier).toBe("flygd");
+    expect(await ctx.db.select().from(outbox)).toHaveLength(0); // nothing enqueued
+  });
+
+  it("applyTierTransition applies when its write is still the latest", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
+    const myToken = new Date("2026-08-03T10:00:00Z");
+    await ctx.db
+      .update(character)
+      .set({ affiliationCheckedAt: myToken, allianceId: null })
+      .where(eq(character.id, 1));
+    const applied = await applyTierTransition(ctx.db, {
+      accountId: acc.id,
+      mainCharacterId: 1,
+      next: "green",
+      checkedAt: myToken,
+    });
+    expect(applied).toBe(true);
+    expect((await getAccount(acc.id)).tier).toBe("green");
+    expect(await ctx.db.select().from(outbox)).toHaveLength(1);
   });
 });

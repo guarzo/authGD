@@ -1,0 +1,11 @@
+node_modules
+.next
+.git
+.claude
+docs
+tests
+e2e
+tmp
+docker-compose.dev.yml
+*.md
+.env*
