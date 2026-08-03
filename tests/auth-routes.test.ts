@@ -23,7 +23,6 @@ process.env.DISCORD_ROLE_ID_BLUE = "11";
 process.env.DISCORD_ROLE_ID_GREEN = "12";
 process.env.WANDERER_BASE_URL = "https://w.example";
 process.env.WANDERER_API_KEY = "k";
-process.env.WANDERER_MAP_SLUG = "m";
 process.env.WANDERER_ACL_ID = "a";
 process.env.ESI_CONTACT = "ops@example.com";
 

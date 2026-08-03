@@ -2,8 +2,15 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import * as schema from "./schema";
 
-export function createDb(url: string) {
-  const pool = new Pool({ connectionString: url });
+/**
+ * `max` is capped deliberately. node-postgres defaults to 10 per pool, and this
+ * app opens three of them against one small Postgres — web, worker, and pg-boss
+ * — so the default allows ~30 backends at 10-25MB RSS each. That exhausted a
+ * 256MB database machine on the first production deploy and crashlooped the
+ * worker. Members number in the tens, not thousands; 5 is ample.
+ */
+export function createDb(url: string, max = 5) {
+  const pool = new Pool({ connectionString: url, max });
   const db = drizzle(pool, { schema });
   return { db, pool };
 }

@@ -47,7 +47,6 @@ const envSchema = z.object({
   DISCORD_OPS_WEBHOOK_URL: z.string().url().optional().or(z.literal("")),
   WANDERER_BASE_URL: z.string().url(),
   WANDERER_API_KEY: z.string().min(1),
-  WANDERER_MAP_SLUG: z.string().min(1),
   WANDERER_ACL_ID: z.string().min(1),
   STANDINGS_LABEL: z.string().min(1).default("flygd"),
   STANDINGS_VALUE: z.coerce.number().min(-10).max(10).default(5),
@@ -87,7 +86,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     wanderer: {
       baseUrl: e.WANDERER_BASE_URL,
       apiKey: e.WANDERER_API_KEY,
-      mapSlug: e.WANDERER_MAP_SLUG,
       aclId: e.WANDERER_ACL_ID,
     },
     standings: { label: e.STANDINGS_LABEL, value: e.STANDINGS_VALUE },
