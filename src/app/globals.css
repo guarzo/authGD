@@ -485,7 +485,7 @@ h3.rule-head__label {
   font-size: var(--t-label);
   font-weight: 600;
   letter-spacing: 0.08em;
-  color: var(--gold);
+  color: var(--ink-dim);
 }
 
 .dim {
@@ -616,7 +616,10 @@ h3.rule-head__label {
 }
 
 .btn:disabled {
-  opacity: 0.45;
+  /* Measured: --ink-faint at 45% over --void was 2.15:1, below the 3:1 DESIGN.md
+     promises for disabled text. 65% measures 3.24:1 for the worst case
+     (.btn--quiet disabled, the locked-tier button). */
+  opacity: 0.65;
   cursor: not-allowed;
 }
 
@@ -659,19 +662,27 @@ h3.rule-head__label {
 }
 
 /* Pressed-in look for the active choice in a segmented set. Links can't be
-   aria-pressed, so filter links use aria-current and share the treatment. */
+   aria-pressed, so filter links use aria-current and share the treatment.
+   Not gold: DESIGN.md rations gold to four sanctioned uses, and this state
+   fires on every selected filter chip plus one tier button per table row, far
+   too often to spend the emphasis colour. The raised ground plus the strong
+   border is what reads as "selected" against the transparent, borderless
+   .btn--quiet default. The border is --ink-dim rather than --rule-strong
+   because --rule-strong is exactly what .btn--quiet:hover uses: sharing it
+   would make a hovered unselected chip identical to a selected one at rest. */
 .btn[aria-pressed="true"],
 .btn[aria-current="true"] {
-  background: var(--gold);
-  border-color: var(--gold);
-  color: var(--void);
+  background: var(--hull-hi);
+  border-color: var(--ink-dim);
+  color: var(--ink);
 }
 
+/* Selected chips take the ordinary .btn hover, but need the higher specificity
+   to outrank .btn--quiet:hover, which would otherwise win on source order. */
 .btn[aria-pressed="true"]:hover:not(:disabled),
 .btn[aria-current="true"]:hover {
-  background: var(--gold-dim);
   border-color: var(--gold-dim);
-  color: var(--void);
+  color: var(--gold);
 }
 
 .btn-row {

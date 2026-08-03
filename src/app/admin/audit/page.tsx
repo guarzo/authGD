@@ -4,6 +4,7 @@ import { getDb } from "@/db";
 import { getAdminContext } from "@/lib/admin-guard";
 import { AUDIT_PAGE_SIZE, queryAuditLog } from "@/services/audit";
 import { RuleHead, Json, Scroller } from "@/app/_components/ui";
+import { Submit } from "@/app/_components/submit";
 
 export const dynamic = "force-dynamic";
 
@@ -38,7 +39,7 @@ export default async function AdminAuditPage({
   const filtered = Boolean(params.actor || params.action || params.target);
 
   return (
-    <main className="page">
+    <main id="main" className="page">
       <div className="page__head">
         <h1>Audit log</h1>
         <p className="page__lede">
@@ -47,7 +48,7 @@ export default async function AdminAuditPage({
         </p>
       </div>
 
-      <RuleHead>Filter</RuleHead>
+      <RuleHead as="h2">Filter</RuleHead>
       <form method="get" className="filter-form">
         <label className="filter-form__cell">
           <span className="filter-form__label">Actor</span>
@@ -67,9 +68,7 @@ export default async function AdminAuditPage({
           <input className="field" name="target" defaultValue={params.target ?? ""} />
         </label>
         <div className="filter-form__actions">
-          <button type="submit" className="btn btn--primary">
-            Filter
-          </button>
+          <Submit className="btn btn--primary">Filter</Submit>
           {filtered && (
             <a className="btn btn--quiet" href="/admin/audit">
               clear
@@ -78,7 +77,7 @@ export default async function AdminAuditPage({
         </div>
       </form>
 
-      <RuleHead>
+      <RuleHead as="h2">
         {rows.length === 0
           ? "No entries"
           : `${rows.length}${rows.length === AUDIT_PAGE_SIZE ? "+" : ""} entries`}

@@ -48,3 +48,24 @@ test("tier controls: manual set locks; return-to-auto unlocks", async ({
   await zedRow.getByRole("button", { name: "auto" }).click();
   await expect(zedRow.getByText("🔒")).not.toBeVisible();
 });
+
+// Regression guard for a critique claim that saving a note collapses the
+// crew-manifest <details> because revalidatePath re-renders the row. React
+// does not control the `open` attribute imperatively, so the existing DOM
+// node (and its open state) may survive the re-render undisturbed; this test
+// records the actual observed behaviour rather than the claim.
+test("saving a note keeps the crew manifest open and persists the note", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedWorld();
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.goto("/admin/accounts");
+  const zedRow = page.locator("tbody tr", { hasText: "Zed" });
+  await zedRow.locator("summary").click();
+  await expect(zedRow.locator("details")).toHaveJSProperty("open", true);
+  await zedRow.getByPlaceholder("notes").fill("watch this one");
+  await zedRow.getByRole("button", { name: "save note" }).click();
+  await expect(zedRow.getByPlaceholder("notes")).toHaveValue("watch this one");
+  await expect(zedRow.locator("details")).toHaveJSProperty("open", true);
+});

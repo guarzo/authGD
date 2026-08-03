@@ -5,6 +5,7 @@ import type { syncRunStatusEnum } from "@/db/schema";
 import { getAdminContext } from "@/lib/admin-guard";
 import { getSyncStatus } from "@/services/sync-status";
 import { Json, RuleHead, Scroller, Status, type Tone } from "@/app/_components/ui";
+import { Submit } from "@/app/_components/submit";
 import { formatAgo } from "@/app/_components/format-ago";
 import { RelativeTime } from "@/app/_components/relative-time";
 import { recheckInvalidAction, syncAllAction } from "./actions";
@@ -23,7 +24,9 @@ function fmt(d: Date | null): string {
  * Typed against the enum rather than string, so adding a status to the schema
  * is a compile error here instead of a silently grey badge. "partial" means
  * some of the job's work failed, which is a warning an admin must see, not an
- * inactive state.
+ * inactive state. A null status is a job still running: not a failure and not
+ * inactive either, so it stays neutral rather than borrowing the warn colour
+ * PRODUCT.md reserves for things the admin can and should fix.
  */
 type SyncRunStatus = (typeof syncRunStatusEnum.enumValues)[number];
 
@@ -36,18 +39,23 @@ function tone(status: SyncRunStatus | null): Tone {
     case "failed":
       return "bad";
     case null:
-      return "warn"; // still running
+      return "neutral"; // still running
   }
 }
 
-export default async function AdminSyncPage() {
+export default async function AdminSyncPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ queued?: string }>;
+}) {
   const ctx = await getAdminContext();
   if (!ctx) redirect("/login");
+  const { queued } = await searchParams;
   const groups = await getSyncStatus(getDb());
   const now = Date.now();
 
   return (
-    <main className="page">
+    <main id="main" className="page">
       <div className="page__head">
         <h1>Sync</h1>
         <p className="page__lede">
@@ -56,16 +64,23 @@ export default async function AdminSyncPage() {
         </p>
       </div>
 
+      {queued === "all" && (
+        <p className="notice" data-glyph="·">
+          Sync queued for every account. The worker picks it up within a few seconds.
+        </p>
+      )}
+      {queued === "recheck" && (
+        <p className="notice" data-glyph="·">
+          Affiliation recheck queued. The worker picks it up within a few seconds.
+        </p>
+      )}
+
       <div className="btn-row">
         <form action={syncAllAction}>
-          <button type="submit" className="btn btn--primary">
-            Sync everything now
-          </button>
+          <Submit className="btn btn--primary">Sync everything now</Submit>
         </form>
         <form action={recheckInvalidAction}>
-          <button type="submit" className="btn">
-            Recheck invalid affiliations
-          </button>
+          <Submit className="btn">Recheck invalid affiliations</Submit>
         </form>
       </div>
 

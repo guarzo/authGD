@@ -160,7 +160,10 @@ licence.
 
 - Global focus ring: `2px` solid `--gold` at `2px` offset, on every interactive
   element, never removed. Against both `--void` and `--hull` it clears 3:1.
-- Disabled controls drop to 45% opacity and keep their text legible at 3:1.
+- The skip link is invisible until focused, then takes the `--gold` ground and
+  `--void` text of a primary action. It is a focus surface rather than a fifth
+  standing use of gold: nothing sees it unless it is the focused control.
+- Disabled controls drop to 65% opacity and keep their text legible at 3:1.
 - Hit targets: `36px` for standalone controls (`.btn`), `28px` for the in-row
   controls of the admin tables (`.btn--micro`). Both clear the `24px` WCAG 2.5.8
   (AA) minimum. The tables carry a control set on every row and cannot reach the
