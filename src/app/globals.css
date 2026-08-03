@@ -463,6 +463,27 @@ h3.rule-head__label {
   transition: background-color var(--dur-color) var(--ease);
 }
 
+/* The accounts row mixes controls of very different box heights in one line:
+   a bare `.st` status badge (~14px), a bordered `.tier` badge (~19px), plain
+   `.mono` text, and a `.btn--micro` (28px, the tallest thing in the row). Top
+   alignment pins all of them to the same edge, so their optical centers drift
+   apart across the row and it reads ragged rather than as one line. Middle
+   alignment is safe here — unlike `.log--audit`, this table's cells are all
+   short, single-purpose values, never the multi-line blobs top alignment
+   exists for. */
+.log--dense td {
+  vertical-align: middle;
+}
+
+/* ...except once a row's `<details>` is open: the Name cell then holds the
+   whole expanded drawer, and centering would float every other cell's badges
+   and buttons down to the middle of that tall row instead of leaving them
+   where the collapsed row had them. Top-align the whole row in that state, the
+   same as every other table. */
+.log--dense tbody tr:has(details[open]) td {
+  vertical-align: top;
+}
+
 .log tbody tr:hover {
   background: color-mix(in oklab, var(--hull-hi) 55%, transparent);
 }
