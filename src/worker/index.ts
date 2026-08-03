@@ -135,8 +135,15 @@ const BOOT_TIMEOUT_MS = 60_000;
  * there is no validated Config available. That means doing by hand the two
  * things getConfig() would have done — find the webhook URL, and honour
  * dry-run so a developer's laptop never pages the real ops channel.
+ *
+ * `safeSummary` is for callers that constructed the error themselves and know
+ * its text is safe to publish. Arbitrary error text is NEVER forwarded: a
+ * driver-level failure can carry a connection string, a hostname, or a
+ * credential in its message, and this channel is a chat room with a wider
+ * audience than `fly logs`. Zod is the one exception — it reports variable
+ * names, which are exactly what an operator needs and contain no values.
  */
-async function alertBootFailure(err: unknown): Promise<void> {
+async function alertBootFailure(err: unknown, safeSummary?: string): Promise<void> {
   const url = process.env.DISCORD_OPS_WEBHOOK_URL;
   if (!url) return;
   if (process.env.SYNC_MODE === "dry-run") return;
@@ -151,9 +158,8 @@ async function alertBootFailure(err: unknown): Promise<void> {
         ]
           .sort()
           .join(", ")}`
-      : err instanceof Error
-        ? err.message
-        : String(err);
+      : (safeSummary ??
+        "startup failed before the worker could take jobs — full error in `fly logs`");
   try {
     await postOpsWebhookUrl(
       url,
@@ -166,20 +172,21 @@ async function alertBootFailure(err: unknown): Promise<void> {
 }
 
 /** Alert (best-effort) and exit non-zero so Fly's restart policy engages. */
-function failBoot(err: unknown): void {
+function failBoot(err: unknown, safeSummary?: string): void {
+  // The COMPLETE error goes here regardless of what the webhook is allowed to
+  // say — stderr is the authoritative record, `fly logs` the place to read it.
   console.error("worker failed to start", err);
   // Await the alert before exiting — process.exit() would abort the in-flight
   // POST. Failure to alert must not mask the original failure, so the exit code
   // is 1 either way (alertBootFailure never rejects).
-  void alertBootFailure(err).finally(() => process.exit(1));
+  void alertBootFailure(err, safeSummary).finally(() => process.exit(1));
 }
 
 const bootTimer = setTimeout(() => {
-  failBoot(
-    new Error(
-      `worker boot did not complete within ${BOOT_TIMEOUT_MS / 1000}s — most likely the database is unreachable (pg-boss retries forever without failing)`,
-    ),
-  );
+  // Self-authored message, so it is safe to publish — and it is the most
+  // actionable alert this file can send, naming the likeliest cause.
+  const summary = `worker boot did not complete within ${BOOT_TIMEOUT_MS / 1000}s — most likely the database is unreachable (pg-boss retries forever without failing)`;
+  failBoot(new Error(summary), summary);
 }, BOOT_TIMEOUT_MS);
 
 main()

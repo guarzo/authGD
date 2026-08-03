@@ -11,7 +11,7 @@ type ReadyBody = {
   status: "ok" | "error";
   config: "ok" | "error";
   database: "ok" | "error" | "skipped";
-  worker: WorkerLiveness | { status: "skipped" };
+  worker: WorkerLiveness | { status: "skipped" | "error" };
   invalid?: string[];
 };
 
@@ -58,16 +58,32 @@ export async function GET(): Promise<NextResponse> {
     return NextResponse.json(body, { status: 503 });
   }
 
+  let db;
   try {
-    const db = getDb();
+    db = getDb();
     await db.execute(sql`select 1`);
     body.database = "ok";
-    body.worker = await getWorkerLiveness(db);
-    if (body.worker.status !== "ok") body.status = "error";
   } catch (err) {
     console.error("readyz: database unreachable", err);
     body.status = "error";
     body.database = "error";
+    // No connection, so the worker query cannot run either. Leave it "skipped"
+    // rather than reporting the worker dead on the strength of a DB outage.
+    return NextResponse.json(body, { status: 503 });
+  }
+
+  // Separate failure domain from the connectivity probe above. A query that
+  // errors here (missing table mid-migration, permissions, a statement
+  // timeout) is a worker-check failure, not proof the database is unreachable
+  // — `select 1` just succeeded. Conflating them would have /readyz blame the
+  // database for a bug in this query.
+  try {
+    body.worker = await getWorkerLiveness(db);
+    if (body.worker.status !== "ok") body.status = "error";
+  } catch (err) {
+    console.error("readyz: worker liveness query failed", err);
+    body.status = "error";
+    body.worker = { status: "error" };
   }
 
   return NextResponse.json(body, { status: body.status === "ok" ? 200 : 503 });

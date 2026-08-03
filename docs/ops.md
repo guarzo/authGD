@@ -256,12 +256,25 @@ them.
 | Asserts | this process has valid config | config + Postgres reachable + worker alive |
 | Touches the DB | no | yes |
 | Checked by Fly | yes, every 30s | **no** |
-| Can restart a machine | yes | no |
+| Effect of failing | removed from proxy routing | none automatic |
 | Polled externally | no | yes, `.github/workflows/uptime.yml` |
 
-`/readyz` is kept out of `fly.toml` on purpose. Restarting a web machine cannot
-fix a dead worker or an unreachable database, so wiring it to restarts would
-convert a Postgres blip into a restart storm across every web machine at once.
+**A failing Fly service check does not restart anything.** The machine is marked
+unhealthy and the proxy stops routing to it; the process keeps running exactly
+as it was, and recovery is manual (`fly machine restart <id>`). Restart policy
+covers unexpected *exits*, which is a separate mechanism.
+
+So for `web`, `/healthz` converts "boots fine, 500s on every request because
+`getConfig()` is lazy" into "visibly unhealthy and out of rotation". That is a
+diagnosis improvement, not self-healing — with a single web machine the app
+serves proxy errors until someone intervenes. If you want a misconfigured `web`
+to crash instead of linger, `node web/server.js` would have to call
+`getConfig()` eagerly at startup and exit non-zero; it currently does not.
+
+`/readyz` is kept out of `fly.toml` on purpose. It reports database and worker
+health — neither of which a web machine can fix — so marking every web machine
+unhealthy over a shared dependency would pull the whole app out of routing at
+once, turning a Postgres blip into a total outage.
 
 Both are unauthenticated, because Fly's checker sends no credentials. They return
 the **names** of failing env vars and never their values; the full error goes to
@@ -328,8 +341,18 @@ will be killed mid-boot.
 
 `[[restart]]` in `fly.toml` now states `policy = "on-failure"`, `retries = 10`
 explicitly. That was already the default; writing it down makes the ceiling
-visible. **Exceeding it is a permanent stop** — Fly will not try again, and
-path 1 above is the only thing that will tell you.
+visible. It governs unexpected process **exits**, not health check results.
+
+Exhausting the 10 retries leaves the Machine **stopped**, not permanently dead —
+`stopped` is a recoverable state and it can be started again. What differs by
+process group is who does the starting:
+
+- **web** — `auto_start_machines = true`, so Fly Proxy can wake a stopped
+  machine on the next inbound request.
+- **worker** — behind no proxy and receiving no requests, so nothing will ever
+  wake it. It stays stopped until you run `fly machine start` or hit the API.
+  This is the case that bit us, and path 1 above is the only thing that will
+  tell you it happened.
 
 ### The external poll is a stopgap
 

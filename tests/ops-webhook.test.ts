@@ -40,6 +40,18 @@ describe("postOpsWebhookUrl", () => {
       postOpsWebhookUrl("https://hook.example/x", "x", fetchImpl),
     ).rejects.toBeInstanceOf(OpsWebhookError);
   });
+
+  it("wraps a network-level rejection in OpsWebhookError", async () => {
+    // The catch path around fetchImpl: a rejected fetch (DNS failure, refused
+    // connection, AbortSignal timeout) must surface as OpsWebhookError like an
+    // HTTP failure does, so callers need only handle the one type.
+    const fetchImpl = (async () => {
+      throw new Error("network down");
+    }) as typeof fetch;
+    await expect(
+      postOpsWebhookUrl("https://hook.example/x", "x", fetchImpl),
+    ).rejects.toBeInstanceOf(OpsWebhookError);
+  });
 });
 
 describe("postOpsWebhook", () => {

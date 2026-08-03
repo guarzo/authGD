@@ -51,10 +51,14 @@ jobs:
             exit 1
           fi
           body=$(mktemp)
-          # --max-time bounds the whole request; two retries absorb a single
-          # deploy restart without reporting an outage.
+          # --max-time bounds each individual attempt; --retry-max-time bounds
+          # the retry window overall, so a wedged endpoint cannot stretch this
+          # step out indefinitely. --retry-connrefused is the one that matters
+          # during a deploy: without it curl does not retry a refused
+          # connection, which is exactly what a restarting machine returns.
           code=$(curl --silent --show-error --location \
-            --retry 2 --retry-delay 10 --max-time 20 \
+            --retry 2 --retry-delay 10 --retry-connrefused --retry-max-time 60 \
+            --max-time 20 \
             --output "$body" --write-out '%{http_code}' \
             "${APP_BASE_URL%/}/readyz") || code="000"
           echo "HTTP $code"
