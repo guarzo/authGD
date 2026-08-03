@@ -54,8 +54,11 @@ machine from the load balancer and gates deploys, so pointing it at worker
 freshness would take the site down over a fault that has nothing to do with
 serving pages.
 
-Point an external uptime monitor at **both** URLs. Fly cannot tell you it is
-down; that is the entire reason the external check exists.
+Something outside Fly has to poll these; Fly cannot tell you it is down, which
+is the entire reason the external check exists. `.github/workflows/uptime.yml`
+does it today as a stopgap — see [The external poll is a
+stopgap](#the-external-poll-is-a-stopgap) for what it covers and what it does
+not.
 
 `/api/health` depends on Postgres, and the Fly check above has no
 consecutive-failure threshold, so a single blip — including a planned
@@ -236,11 +239,110 @@ is broken, so the machine stays in rotation and the deploy is never gated.
 
 Setting the secret first is the safety net. There is no automatic one.
 
+The `worker` still crash-loops on bad config, but it is no longer silent: it
+posts to `DISCORD_OPS_WEBHOOK_URL` naming the invalid variables before it
+exits (see [Worker boot failures](#worker-boot-failures)).
+
 ### What SYNC_MODE does NOT protect
 
 **The database.** The purge job deletes rows directly, and the guard only covers
 outbound HTTP. Never put a production `DATABASE_URL` in a local `.env` — no
 setting in this app will save you from that.
+
+## Worker boot failures
+
+`## Monitoring` above covers the two endpoints and what they assert. This
+section is the other half of the same problem: the worker process group has no
+HTTP listener, so `/api/health/sync` can only notice it is gone *after* the
+90-minute freshness threshold expires. Everything below is about the window
+before that, and about the worker telling you itself.
+
+### How a dead worker reaches you
+
+Three independent paths, because the incident that prompted this defeated
+having only one.
+
+1. **Boot failure** — the worker posts to `DISCORD_OPS_WEBHOOK_URL` before
+   exiting. Previously impossible: the only webhook caller in that process was
+   the dead-letter handler, registered *after* `boss.start()`, so a worker dying
+   at boot could never reach it. This path reads `process.env` directly rather
+   than `getConfig()`, precisely because invalid config is the common cause.
+   Suppressed when `SYNC_MODE=dry-run`, so a laptop never pages ops.
+2. **Job failure after retries** — the dead-letter handler, unchanged.
+3. **Silent death** (OOM-killed, wedged, restarts exhausted) — nothing inside
+   the process can report this, so `/api/health/sync` going stale is the only
+   signal, and something outside Fly has to be looking at it.
+
+Only ZodError detail is forwarded to Discord, because it names *variables* and
+never values. Any other error sends a fixed summary and the full text goes to
+stderr — a driver-level failure can carry a connection string or a credential
+in its message, and the webhook is a chat room with a wider audience than
+`fly logs`.
+
+### The 60-second boot watchdog
+
+`BOOT_TIMEOUT_MS` in `src/worker/index.ts` exits the process if startup has not
+completed in 60 seconds. This is not belt-and-braces — it covers a failure mode
+path 1 alone could not:
+
+> With **valid config but an unreachable database**, `pg-boss.start()` retries
+> forever. It neither resolves nor rejects, so the worker sits past its startup
+> banner indefinitely. Fly sees a live process and never restarts it,
+> `main().catch()` never runs, and no alert is sent. Verified by pointing
+> `DATABASE_URL` at a dead port: the process ran until killed, silently.
+
+With the watchdog it exits 1 after 60s, which both engages the restart policy
+and fires the boot-failure webhook.
+
+If you ever add slow work to `main()` — a large backfill, a warm-up query —
+raise this constant or move that work behind `boss.work()`, or a healthy worker
+will be killed mid-boot.
+
+### The restart ceiling, and why the worker stays down
+
+`[[restart]]` in `fly.toml` states `policy = "on-failure"`, `retries = 10`
+explicitly. That was already the default; writing it down makes the ceiling
+reviewable. It governs unexpected process **exits** — not health check results,
+which never restart anything.
+
+Exhausting the 10 retries leaves the Machine **stopped**, not permanently dead;
+`stopped` is recoverable and it can be started again. What differs is who does
+the starting:
+
+- **web** — `auto_start_machines = true`, so Fly Proxy wakes a stopped machine
+  on the next inbound request.
+- **worker** — behind no proxy and receiving no requests, so nothing will ever
+  wake it. It stays stopped until you run `fly machine start` or hit the API.
+  This is the case that bit us, and path 1 above is the only thing that will
+  tell you it happened as it happens.
+
+### The external poll is a stopgap
+
+`.github/workflows/uptime.yml` curls `/api/health/sync` every 15 minutes. It
+needs a repository variable:
+
+```bash
+gh variable set APP_BASE_URL --body https://authgd.fly.dev
+```
+
+It probes only that one URL, not both: a 200 from `/api/health/sync` already
+proves the web process served a request and Postgres answered, and its `db`
+field distinguishes a stale worker from an unreachable database. A separate
+`/api/health` probe would add no information.
+
+**It does not cover config validity.** Neither endpoint calls `getConfig()`, so
+a `web` machine deployed with a missing secret answers 200 on both while every
+real page 500s — the trap described under *Deploying this change*. Closing that
+would mean either validating config in `/api/health` (which then pulls machines
+out of rotation on a config error) or having `node web/server.js` call
+`getConfig()` eagerly and refuse to start. Neither is done today.
+
+Do not mistake this workflow for real alerting. GitHub cron is best-effort and
+routinely runs 5-15 minutes late or skips runs entirely; scheduled workflows are
+disabled after 60 days of repository inactivity; and if Actions is down the
+check is down silently. A failed run notifies whoever's notification settings
+happen to cover it, which is not a paging guarantee. Replace it with an uptime
+service that actually pages — keep the endpoint, delete the workflow.
 
 ## Contact label — use a dedicated one
 

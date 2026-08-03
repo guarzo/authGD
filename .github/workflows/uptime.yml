@@ -1,0 +1,70 @@
+# STOPGAP — external readiness poll.
+#
+# /api/health/sync reports database reachability and worker freshness, and its
+# own docstring says it exists for an external monitor — but nothing was
+# actually looking at it. This does that from GitHub's schedulers so
+# there is *some* external eye on the deployment today, without adding a paid
+# monitoring dependency.
+#
+# Its limits, stated plainly, because they matter:
+#   * GitHub cron is best-effort and routinely runs 5-15 minutes late, and can
+#     skip runs entirely when the Actions queue is busy. Do not read a missing
+#     run as "healthy".
+#   * Scheduled workflows are disabled automatically after 60 days without
+#     repository activity.
+#   * If GitHub Actions is down, so is this check, silently.
+#
+# Any of those alone disqualifies it as real alerting. Replace it with an uptime
+# service that pages (Better Stack, Healthchecks.io, Fly's own Sentry
+# integration) once you have one; keep the endpoint, drop this file.
+name: Uptime
+
+on:
+  schedule:
+    # Every 15 minutes, offset off the hour — the top of the hour is the
+    # busiest slot on GitHub's shared scheduler and the most likely to be
+    # delayed. The worker staleness threshold is 90 minutes, so even with
+    # several skipped runs a genuine outage is still caught well within it.
+    - cron: "7,22,37,52 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: uptime
+  cancel-in-progress: false
+
+jobs:
+  sync-freshness:
+    name: Probe /api/health/sync
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe
+        env:
+          # Repository variable, not a secret — the endpoint is public and
+          # returns no values. Set it with: gh variable set APP_BASE_URL
+          APP_BASE_URL: ${{ vars.APP_BASE_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${APP_BASE_URL}" ]; then
+            echo "APP_BASE_URL repository variable is not set; nothing to probe." >&2
+            exit 1
+          fi
+          body=$(mktemp)
+          # --max-time bounds each individual attempt; --retry-max-time bounds
+          # the retry window overall, so a wedged endpoint cannot stretch this
+          # step out indefinitely. --retry-connrefused is the one that matters
+          # during a deploy: without it curl does not retry a refused
+          # connection, which is exactly what a restarting machine returns.
+          code=$(curl --silent --show-error --location \
+            --retry 2 --retry-delay 10 --retry-connrefused --retry-max-time 60 \
+            --max-time 20 \
+            --output "$body" --write-out '%{http_code}' \
+            "${APP_BASE_URL%/}/api/health/sync") || code="000"
+          echo "HTTP $code"
+          cat "$body"
+          if [ "$code" != "200" ]; then
+            echo "::error::/api/health/sync returned $code — see body above" >&2
+            exit 1
+          fi

@@ -19,6 +19,22 @@ primary_region = "iad"
   min_machines_running = 1
   processes = ["web"]
 
+# Restart policy, stated explicitly rather than inherited. Governs unexpected
+# process *exits* — NOT health check results. A failing check below only stops
+# the proxy routing to the machine; it never restarts or replaces it, and
+# recovery from that state is manual (`fly machine restart`).
+#
+# `on-failure` with retries=10 is already the Fly default, but leaving it
+# implicit is what made the original incident invisible: the worker burned all
+# ten restarts and then stopped, and nothing in this file recorded that a limit
+# even existed. Writing it down makes the ceiling reviewable — and makes clear
+# that exceeding it leaves the machine stopped, with the boot-failure webhook
+# in src/worker/index.ts the only thing that will tell you.
+[[restart]]
+  policy = "on-failure"
+  retries = 10
+  processes = ["web", "worker"]
+
 [env]
   HOSTNAME = "0.0.0.0"
   PORT = "3000"
