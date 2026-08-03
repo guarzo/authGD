@@ -74,8 +74,8 @@ docker compose -f docker-compose.dev.yml up -d
 # 2. Install dependencies
 npm install
 
-# 3. Configure — copy the example env and fill it in.
-#    See docs/ops.md for what each variable means.
+# 3. Configure — the example is a complete set of working fakes and needs
+#    no editing to get a browsable app.
 cp .env.example .env
 
 # 4. Run migrations
@@ -97,8 +97,21 @@ Run the test suite (needs the dev Postgres from step 1 running):
 npm test
 ```
 
-Other useful scripts: `npm run build`, `npm run typecheck`, `npm run test:watch`, and
-`npm run db:generate` to author a new migration after changing the Drizzle schema.
+`.env.example` ships `SYNC_MODE=dry-run`, so the sync jobs cannot change anything
+in EVE, Discord, or Wanderer. On the fake values the app itself, the migrations,
+and both test suites work. The Wanderer, Discord-roles, and contacts sync jobs
+are **expected to fail or skip** — the fake hosts and tokens are not real, and
+that is what a correctly-configured dev worker looks like. EVE SSO login and
+Discord linking need real credentials.
+
+**[`docs/ops.md` → Local development](docs/ops.md#local-development) is the
+canonical guide** — why `npm test` cannot touch your dev database, what works on
+fakes and what does not, running tests alongside another checkout, and the
+tunnelled-OAuth setup.
+
+Other useful scripts: `npm run build`, `npm run typecheck`, `npm run lint`,
+`npm run test:watch`, and `npm run db:generate` to author a new migration after
+changing the Drizzle schema.
 
 ## Documentation
 

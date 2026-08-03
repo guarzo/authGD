@@ -260,10 +260,153 @@ least one never-used id in reserve, or check
 
 ## Local development
 
+Requires **Node 22.9+** (the floor for `--env-file-if-exists`, which
+`npm run worker`, `npm run db:migrate`, and `npm run smoke:wanderer` use to load
+`.env`) and Docker. `npm install` enforces it via `engines` + `.npmrc`.
+
+### From a fresh clone
+
 ```bash
-docker compose -f docker-compose.dev.yml up -d   # Postgres on :5433
-npm run db:migrate && npm run dev                # web
-npm run worker                                   # worker (second terminal)
-npm test                                         # vitest (needs the compose DB)
-npm run test:e2e                                 # Playwright (Task 12; not concurrently with npm test)
+docker compose -f docker-compose.dev.yml up -d   # Postgres 16 on :5433
+npm install
+cp .env.example .env                             # working fakes; boots as-is
+npm run db:migrate
+npm run dev                                      # web → http://localhost:3000
 ```
+
+`npm run dev` holds the terminal. Start the worker in a second one:
+
+```bash
+npm run worker
+```
+
+No editing is required to get a browsable app: **every value in `.env.example`
+is a working fake**, and `SYNC_MODE=dry-run` means every outbound *sync*
+mutation is a logged no-op — no in-game contacts deleted, no Wanderer ACL
+reconciled, no Discord roles changed, no EVE refresh token rotated.
+
+**`SYNC_MODE` does not cover the OAuth flows, deliberately.** Login and
+character-link exchange a fresh authorization code for new credentials; they
+invalidate nothing, and guarding them would make local OAuth testing
+impossible. So if you put **real** EVE or Discord client credentials in
+`.env`, those flows will contact the real providers and can mint real tokens
+or create a real Discord link — dry-run will not stop them. It stops the sync
+jobs from changing anything, not the app from authenticating.
+
+The worker prints its mode and targets on startup — check it before trusting
+that a terminal is safe:
+
+```text
+authGD worker: SYNC_MODE=dry-run — outbound writes are SUPPRESSED
+  target: wanderer=https://wanderer.example acl=dev-acl-id
+  target: discord guild=9000
+  target: standings label=authgd value=5
+```
+
+### `npm test` cannot touch your dev database
+
+This is not obvious, and it stops people running the tests.
+
+`docker-compose.dev.yml` starts **one** Postgres hosting **two** databases:
+
+| Database | Used by | Destructive operations |
+|---|---|---|
+| `authgd` | `npm run dev`, `npm run worker`, `npm run db:migrate` | none automatic |
+| `authgd_test` | `npm test`, `npm run test:e2e` | `TRUNCATE` between every test |
+
+`authgd_test` is created by `scripts/init-test-db.sql` at container init. The
+test helpers connect to it explicitly (`tests/helpers/db.ts`,
+`playwright.config.ts`), so the `TRUNCATE ... CASCADE` the suites run between
+tests physically cannot reach `authgd`. Run the tests freely.
+
+**Never run `npm test` and `npm run test:e2e` at the same time.** They share
+`authgd_test`, and Playwright is pinned to `workers: 1` for the same reason.
+Symptoms of a collision are rows vanishing mid-test — assertion failures like
+`expected [] to deeply equal [1, 2]` that move around between runs.
+
+The same applies across git worktrees: two checkouts running `npm test`
+simultaneously fight over the same database. If you need to run tests while
+another checkout is using it, point yours somewhere private:
+
+```bash
+docker exec <pg-container> psql -U authgd -d postgres \
+  -c "CREATE DATABASE authgd_test_mine OWNER authgd;"
+TEST_DATABASE_URL=postgres://authgd:authgd@localhost:5433/authgd_test_mine npm test
+```
+
+### What works on fakes, and what needs real credentials
+
+| Works with `.env.example` as-is | Needs real credentials |
+|---|---|
+| Browsing the app; every page renders | **EVE SSO login** — the fake client id is rejected by CCP |
+| `npm run db:migrate`, `npm test`, `npm run test:e2e` | **Discord account linking** |
+| `npm run typecheck`, `lint`, `format` | Any sync that actually changes something |
+| Worker boots, queues are created, schedules registered | `npm run smoke:wanderer` (also requires `SYNC_MODE=live`) |
+
+**Expect the sync jobs to fail on fakes, and that is correct.** With fake hosts
+and tokens: the wanderer job's ACL read fails DNS (`wanderer.example` does not
+resolve), the discord-roles job gets 401 from the real Discord API, and the
+contacts job skips every character because dry-run refuses the token refresh. A
+worker that boots cleanly and then logs failing jobs is working as designed.
+
+Logging in without EVE SSO needs a seeded session — see the dev seed script.
+
+### Expected noise
+
+`--env-file-if-exists` prints one line per missing file, and `tsx` re-execs
+node, so a missing `.env.local` produces this **twice**:
+
+```text
+.env.local not found. Continuing without it.
+```
+
+It is informational, not an error.
+
+### Port 5433 is already allocated
+
+```text
+Bind for 0.0.0.0:5433 failed: port is already allocated
+```
+
+Something else already holds the port — often another checkout of this repo
+running the same compose file under a different project name, in which case you
+can just use it. **Do not assume that, though: verify before reusing.** Whatever
+holds 5433 becomes your dev database, so pointing at the wrong one silently
+gives you someone else's data.
+
+Find the container, then check all three of these:
+
+```bash
+docker ps --filter publish=5433 --format '{{.Names}}\t{{.Image}}\t{{.Labels}}'
+```
+
+1. **Image** is `postgres:16-alpine` — a different major version will fail or
+   behave differently under the same migrations.
+2. **Compose project** is a checkout of this repo, not an unrelated service that
+   happens to use 5433 (`com.docker.compose.project` in the labels).
+3. **The `authgd_test` database exists** — it is created only by
+   `scripts/init-test-db.sql` at *first* container init, so a Postgres started
+   any other way will not have it and the test suites will fail:
+
+   ```bash
+   docker exec <container> psql -U authgd -lqt | cut -d'|' -f1 | grep -w authgd_test
+   ```
+
+If any of those don't hold, stop that container or change the host port rather
+than reusing it.
+
+### Note for deployers
+
+`fly.toml` runs the worker as `npx tsx src/worker/index.ts` directly, **not**
+`npm run worker`, so it does not inherit the `--env-file` flags. That is
+deliberate and safe: `.dockerignore` excludes `.env*`, so no env file exists in
+the image, and Fly secrets arrive as real environment variables — which take
+precedence over `--env-file` anyway. But it does mean changes to the `worker`
+npm script do not reach production.
+
+`npm run db:migrate` **is** the release command (`fly.toml`), so it does carry
+the flags into the deploy path. That makes the Node 22.9 floor load-bearing in
+production: below it, `node` rejects `--env-file-if-exists` outright and every
+deploy fails. The Dockerfile copies `.npmrc` before `npm ci` in both stages so
+`engine-strict` turns that into a **build** failure instead of a release-time
+one.

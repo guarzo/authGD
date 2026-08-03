@@ -1,7 +1,12 @@
 # syntax=docker/dockerfile:1
 FROM node:22-alpine AS deps
 WORKDIR /app
-COPY package.json package-lock.json ./
+# .npmrc carries engine-strict=true, so `npm ci` FAILS here rather than warning
+# if the base image ever drops below the engines floor (node >=22.9). That floor
+# is load-bearing in production: `npm run db:migrate` is fly.toml's
+# release_command and passes --env-file-if-exists, which older node rejects
+# outright with `node: bad option`. Fail at build, not at deploy.
+COPY package.json package-lock.json .npmrc ./
 RUN npm ci
 
 FROM deps AS build
@@ -12,7 +17,7 @@ RUN npm run build
 FROM node:22-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
-COPY package.json package-lock.json ./
+COPY package.json package-lock.json .npmrc ./
 RUN npm ci --omit=dev
 # Web process: the self-contained standalone server.
 COPY --from=build /app/.next/standalone ./web
