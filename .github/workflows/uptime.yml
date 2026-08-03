@@ -1,7 +1,8 @@
 # STOPGAP — external readiness poll.
 #
-# /readyz reports config, database and worker liveness, but something outside
-# the app has to actually LOOK at it. This does that from GitHub's schedulers so
+# /api/health/sync reports database reachability and worker freshness, and its
+# own docstring says it exists for an external monitor — but nothing was
+# actually looking at it. This does that from GitHub's schedulers so
 # there is *some* external eye on the deployment today, without adding a paid
 # monitoring dependency.
 #
@@ -35,14 +36,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  readyz:
-    name: Probe /readyz
+  sync-freshness:
+    name: Probe /api/health/sync
     runs-on: ubuntu-latest
     steps:
       - name: Probe
         env:
-          # Repository variable, not a secret — /readyz is public and returns
-          # no values. Set it with: gh variable set APP_BASE_URL
+          # Repository variable, not a secret — the endpoint is public and
+          # returns no values. Set it with: gh variable set APP_BASE_URL
           APP_BASE_URL: ${{ vars.APP_BASE_URL }}
         run: |
           set -euo pipefail
@@ -60,10 +61,10 @@ jobs:
             --retry 2 --retry-delay 10 --retry-connrefused --retry-max-time 60 \
             --max-time 20 \
             --output "$body" --write-out '%{http_code}' \
-            "${APP_BASE_URL%/}/readyz") || code="000"
+            "${APP_BASE_URL%/}/api/health/sync") || code="000"
           echo "HTTP $code"
           cat "$body"
           if [ "$code" != "200" ]; then
-            echo "::error::readyz returned $code — see body above" >&2
+            echo "::error::/api/health/sync returned $code — see body above" >&2
             exit 1
           fi

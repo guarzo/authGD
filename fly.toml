@@ -19,34 +19,10 @@ primary_region = "iad"
   min_machines_running = 1
   processes = ["web"]
 
-  # Liveness only — /healthz asserts valid config and nothing else.
-  #
-  # A failing service check does NOT restart or replace the machine; it is
-  # marked unhealthy and the proxy stops routing to it, and that is all. It
-  # does not self-heal. With one web machine that means the app serves proxy
-  # errors instead of 500s from a miswired process — louder and easier to
-  # attribute, but recovery is still manual (`fly machine restart`).
-  # [[restart]] below governs unexpected *exits*, which is a different thing.
-  #
-  # /readyz is NOT checked here on purpose: it reports database and worker
-  # health, neither of which a web machine can fix, and marking every web
-  # machine unhealthy over a shared dependency would take the whole app out of
-  # routing at once. /readyz is polled externally (.github/workflows/uptime.yml).
-  #
-  # force_https is on but Fly's checker speaks plain HTTP to internal_port and
-  # does NOT follow redirects, so the header below stops Next from 301-ing the
-  # check into a failure.
-  [[http_service.checks]]
-    interval = "30s"
-    timeout = "5s"
-    grace_period = "10s"
-    method = "GET"
-    path = "/healthz"
-    [http_service.checks.headers]
-      X-Forwarded-Proto = "https"
-
 # Restart policy, stated explicitly rather than inherited. Governs unexpected
-# process exits — NOT health check results.
+# process *exits* — NOT health check results. A failing check below only stops
+# the proxy routing to the machine; it never restarts or replaces it, and
+# recovery from that state is manual (`fly machine restart`).
 #
 # `on-failure` with retries=10 is already the Fly default, but leaving it
 # implicit is what made the original incident invisible: the worker burned all
