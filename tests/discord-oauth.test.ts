@@ -20,12 +20,16 @@ describe("exchangeDiscordCode", () => {
 
   it("fails closed on a malformed token response", async () => {
     const fetchImpl = (async () => jsonResponse({ nope: true })) as typeof fetch;
-    await expect(exchangeDiscordCode(cfg, "c", "v", fetchImpl)).rejects.toThrow(/malformed/);
+    await expect(exchangeDiscordCode(cfg, "c", "v", fetchImpl)).rejects.toThrow(
+      /malformed/,
+    );
   });
 
   it("fails closed on an empty access_token", async () => {
     const fetchImpl = (async () => jsonResponse({ access_token: "" })) as typeof fetch;
-    await expect(exchangeDiscordCode(cfg, "c", "v", fetchImpl)).rejects.toThrow(/malformed/);
+    await expect(exchangeDiscordCode(cfg, "c", "v", fetchImpl)).rejects.toThrow(
+      /malformed/,
+    );
   });
 });
 

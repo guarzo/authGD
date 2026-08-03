@@ -23,6 +23,7 @@ const validEnv = {
   STANDINGS_LABEL: "flygd",
   STANDINGS_VALUE: "5",
   ESI_CONTACT: "ops@example.com",
+  SYNC_MODE: "live",
 } as unknown as NodeJS.ProcessEnv;
 
 describe("loadConfig", () => {
@@ -39,14 +40,14 @@ describe("loadConfig", () => {
   });
 
   it("rejects a short encryption key", () => {
-    expect(() =>
-      loadConfig({ ...validEnv, TOKEN_ENCRYPTION_KEY: "c2hvcnQ=" }),
-    ).toThrow(/TOKEN_ENCRYPTION_KEY/);
+    expect(() => loadConfig({ ...validEnv, TOKEN_ENCRYPTION_KEY: "c2hvcnQ=" })).toThrow(
+      /TOKEN_ENCRYPTION_KEY/,
+    );
   });
 
   it("rejects missing required vars", () => {
     const { DATABASE_URL: _omitted, ...rest } = validEnv;
-    expect(() => loadConfig(rest as NodeJS.ProcessEnv)).toThrow();
+    expect(() => loadConfig(rest)).toThrow();
   });
 
   it("rejects malformed or duplicate bootstrap admin ids", () => {

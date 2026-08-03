@@ -5,6 +5,7 @@ import { account, discordLink } from "@/db/schema";
 import { diffRoles, stripManagedRoles, validateRoleConfig } from "@/core/role-diff";
 import { DiscordApiError, type DiscordClient } from "@/lib/discord/rest";
 import { postOpsWebhook } from "@/lib/ops-webhook";
+import { isDryRun } from "@/lib/sync-mode";
 import { logAudit } from "@/services/audit";
 import { enqueueSync } from "@/services/outbox";
 import { runJob, type JobResult } from "@/services/sync-run";
@@ -14,6 +15,13 @@ export async function runDiscordRolesJob(
   opts: { accountId?: string; discordUserId?: string } = {},
 ): Promise<JobResult> {
   const { db, cfg, discord } = deps;
+  // In dry-run the client's role methods return normally without issuing a
+  // request, so this job cannot distinguish a suppressed write from a real one.
+  // Audit rows would therefore record role changes that never happened, and
+  // audit_log is the record an operator trusts when reconstructing what the
+  // system did to someone's account. Suppress the rows and rename the counters
+  // so neither can be mistaken for an applied change (spec D6).
+  const dry = isDryRun(cfg);
   return runJob(db, "discord-roles", async () => {
     // Config validation FIRST, every run. A validation failure is
     // permanent-config: alert immediately and do NOT retry-loop. The same goes
@@ -57,6 +65,7 @@ export async function runDiscordRolesJob(
         .from(discordLink)
         .where(eq(discordLink.discordUserId, opts.discordUserId));
       if (links.length > 0) {
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- load-bearing: see the note on the final return in this function.
         return { status: "ok", counts: { skipped: 1 } as Record<string, number> };
       }
       let member;
@@ -64,6 +73,7 @@ export async function runDiscordRolesJob(
       try {
         member = await discord.getGuildMember(opts.discordUserId);
         if (!member) {
+          // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- load-bearing: see the note on the final return in this function.
           return { status: "ok", counts: { notInGuild: 1 } as Record<string, number> };
         }
         remove = stripManagedRoles(cfg.discord.roleIds, member.roles);
@@ -77,7 +87,7 @@ export async function runDiscordRolesJob(
         }
         throw err;
       }
-      if (remove.length > 0) {
+      if (remove.length > 0 && !dry) {
         await logAudit(db, {
           actor: "system",
           action: "discord.role_changed",
@@ -92,16 +102,28 @@ export async function runDiscordRolesJob(
         .select()
         .from(discordLink)
         .where(eq(discordLink.discordUserId, opts.discordUserId));
+      const removedKey = dry ? "wouldRemove" : "removed";
       if (relinked.length > 0) {
         await enqueueSync(db, { kind: "account", accountId: relinked[0].accountId });
         return {
           status: "ok",
-          counts: { removed: remove.length, relinkResync: 1 } as Record<string, number>,
+          // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- load-bearing: see the note on the final return in this function.
+          counts: { [removedKey]: remove.length, relinkResync: 1 } as Record<
+            string,
+            number
+          >,
         };
       }
       return {
         status: "ok",
-        counts: { removed: remove.length } as Record<string, number>,
+        // These four `as Record<string, number>` assertions are load-bearing.
+        // Without them the branches infer distinct object shapes, and their
+        // union carries optional-undefined members (`notInGuild?: undefined`,
+        // `relinkResync?: undefined`, ...) that fail the index signature on
+        // JobResult["counts"]. The rule evaluates each assertion in isolation
+        // and cannot see the widening, so it reports a false positive.
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- load-bearing: see above.
+        counts: { [removedKey]: remove.length } as Record<string, number>,
       };
     }
 
@@ -138,12 +160,14 @@ export async function runDiscordRolesJob(
         }
         if (diff.add.length + diff.remove.length > 0) {
           counts.changed++;
-          await logAudit(db, {
-            actor: "system",
-            action: "discord.role_changed",
-            target: row.discordUserId,
-            details: { added: diff.add, removed: diff.remove, tier: row.tier },
-          });
+          if (!dry) {
+            await logAudit(db, {
+              actor: "system",
+              action: "discord.role_changed",
+              target: row.discordUserId,
+              details: { added: diff.add, removed: diff.remove, tier: row.tier },
+            });
+          }
         }
       } catch (err) {
         if (err instanceof DiscordApiError && !err.transient) counts.failed++;
@@ -154,14 +178,20 @@ export async function runDiscordRolesJob(
       }
     }
 
+    // Rename the applied-change counter in dry-run so a reader of sync_run
+    // cannot mistake a suppressed run for an effective one (spec D6).
+    const { changed, ...rest } = counts;
+    const reported: Record<string, number> = dry
+      ? { wouldChangeRoles: changed, ...rest }
+      : counts;
     if (transientFailures > 0 || counts.failed > 0) {
       return {
         status: "partial",
         errorSummary: errors.slice(0, 5).join("; "),
-        counts,
+        counts: reported,
         retry: transientFailures > 0,
       };
     }
-    return { status: "ok", counts };
+    return { status: "ok", counts: reported };
   });
 }

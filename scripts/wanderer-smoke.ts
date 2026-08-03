@@ -22,6 +22,17 @@ async function main() {
     process.exit(2);
   }
   const cfg = loadConfig();
+  // This script's whole purpose is to prove the LIVE contract, so dry-run makes
+  // it meaningless. Without this check it fails anyway — the suppressed add is
+  // invisible on re-read — but with the misleading message "ADD not visible on
+  // re-read", which reads like a broken Wanderer instead of a mode mismatch.
+  if (cfg.syncMode === "dry-run") {
+    console.error(
+      "SYNC_MODE=dry-run suppresses ACL writes, so this smoke check cannot " +
+        "verify anything. Re-run with SYNC_MODE=live.",
+    );
+    process.exit(2);
+  }
   const wanderer = createWandererClient(cfg);
 
   const before = await wanderer.getAclMembers();
@@ -60,6 +71,7 @@ async function main() {
         await wanderer.removeAclMember(characterId);
         const afterCleanup = await wanderer.getAclMembers();
         if (afterCleanup.some((m) => m.characterId === characterId)) {
+          // eslint-disable-next-line no-unsafe-finally -- this throw is caught by the enclosing try/catch *inside* the finally block, so it never escapes and cannot mask the original error. The rule is lexical and cannot see that.
           throw new Error("cleanup removeAclMember did not take effect on re-read");
         }
         console.error(`cleanup: removed ${characterId} from the ACL after a failure`);

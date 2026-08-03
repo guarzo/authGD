@@ -23,6 +23,7 @@ process.env.WANDERER_BASE_URL = "https://w.example";
 process.env.WANDERER_API_KEY = "k";
 process.env.WANDERER_ACL_ID = "a";
 process.env.ESI_CONTACT = "ops@example.com";
+process.env.SYNC_MODE = "live";
 
 // linkDiscord requires a DbTx; wrap every call in a transaction.
 
@@ -94,9 +95,7 @@ describe("linkDiscord", () => {
     const rejected = results.filter((r) => r.status === "rejected");
     // either the slow one saw the committed row (already_linked) or hit 23505
     if (rejected.length === 1) {
-      expect(
-        (rejected[0] as PromiseRejectedResult).reason,
-      ).toBeInstanceOf(DiscordLinkConflictError);
+      expect(rejected[0].reason).toBeInstanceOf(DiscordLinkConflictError);
       expect(fulfilled).toHaveLength(1);
     } else {
       const values = fulfilled.map((r) => (r as PromiseFulfilledResult<unknown>).value);

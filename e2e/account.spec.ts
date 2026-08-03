@@ -19,8 +19,15 @@ test("unauthenticated /account redirects to login", async ({ page }) => {
   await expect(page).toHaveURL(/\/login/);
 });
 
-test("account page shows characters, main marker, and tier", async ({ page, context }) => {
-  const acc = await seedMember(db, { name: "Pilot Prime", tier: "flygd", alts: ["Pilot Alt"] });
+test("account page shows characters, main marker, and tier", async ({
+  page,
+  context,
+}) => {
+  const acc = await seedMember(db, {
+    name: "Pilot Prime",
+    tier: "flygd",
+    alts: ["Pilot Alt"],
+  });
   await context.addCookies([await sessionCookieFor(db, acc.id)]);
   await page.goto("/account");
   await expect(page.getByRole("heading", { name: "Your account" })).toBeVisible();
@@ -28,6 +35,7 @@ test("account page shows characters, main marker, and tier", async ({ page, cont
   await expect(page.getByText("(main)")).toBeVisible();
   await expect(page.getByText("Pilot Alt")).toBeVisible();
   // "flygd" also happens to be STANDINGS_LABEL in the e2e env, which the page
-  // renders separately in a footer <code> tag — scope to the tier paragraph.
-  await expect(page.getByText("Tier:", { exact: false })).toContainText("flygd");
+  // renders separately in a footer <code> tag, and again in the tier badge —
+  // so scope to the tier field rather than matching the bare word.
+  await expect(page.locator("[data-field='tier']")).toContainText("flygd");
 });

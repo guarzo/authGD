@@ -20,10 +20,10 @@ afterAll(() => ctx.cleanup());
 beforeEach(() => truncateAll(ctx.db));
 
 const okToken = (async () =>
-  new Response(
-    JSON.stringify({ access_token: "at", refresh_token: "rt2" }),
-    { status: 200, headers: { "content-type": "application/json" } },
-  )) as typeof fetch;
+  new Response(JSON.stringify({ access_token: "at", refresh_token: "rt2" }), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  })) as typeof fetch;
 
 it("main leaves alliance → green → contacts removed, ACL removed, role changed, audited", async () => {
   // leaver: flygd account with main (10) + alt (11), discord-linked
@@ -49,8 +49,18 @@ it("main leaves alliance → green → contacts removed, ACL removed, role chang
     getAllContacts: async (characterId) =>
       characterId === 20
         ? [
-            { contactId: 10, contactType: "character", standing: 5, labelIds: [LABEL_ID] },
-            { contactId: 11, contactType: "character", standing: 5, labelIds: [LABEL_ID] },
+            {
+              contactId: 10,
+              contactType: "character",
+              standing: 5,
+              labelIds: [LABEL_ID],
+            },
+            {
+              contactId: 11,
+              contactType: "character",
+              standing: 5,
+              labelIds: [LABEL_ID],
+            },
           ]
         : [],
     addContacts: async (_c, _at, ids) => {
@@ -83,7 +93,10 @@ it("main leaves alliance → green → contacts removed, ACL removed, role chang
 
   // Discord: both users currently carry the FlyGD role.
   const MANAGE_ROLES = String(1 << 28);
-  const roleOps = { added: [] as Array<[string, string]>, removed: [] as Array<[string, string]> };
+  const roleOps = {
+    added: [] as Array<[string, string]>,
+    removed: [] as Array<[string, string]>,
+  };
   const memberRoles: Record<string, string[]> = {
     "u-leaver": ["10"],
     "u-stayer": ["10"],

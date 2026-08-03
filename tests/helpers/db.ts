@@ -3,8 +3,7 @@ import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { createDb, type Db } from "@/db";
 
 export const TEST_URL =
-  process.env.TEST_DATABASE_URL ??
-  "postgres://authgd:authgd@localhost:5433/authgd_test";
+  process.env.TEST_DATABASE_URL ?? "postgres://authgd:authgd@localhost:5433/authgd_test";
 
 /** Shared 11-table TRUNCATE used between tests to reset carry-over state. */
 export async function truncateAll(db: Db): Promise<void> {

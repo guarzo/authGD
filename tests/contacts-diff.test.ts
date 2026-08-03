@@ -11,7 +11,12 @@ const contact = (
 
 describe("diffContacts", () => {
   it("adds desired ids that are absent", () => {
-    const d = diffContacts({ desiredIds: [1, 2], standing: 5, labelId: LABEL, contacts: [] });
+    const d = diffContacts({
+      desiredIds: [1, 2],
+      standing: 5,
+      labelId: LABEL,
+      contacts: [],
+    });
     expect(d).toEqual({ add: [1, 2], update: [], remove: [] });
   });
 

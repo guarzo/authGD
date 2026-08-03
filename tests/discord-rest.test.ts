@@ -33,21 +33,27 @@ describe("createDiscordClient", () => {
         HttpResponse.json([{ id: "10", position: "not-a-number" }]),
       ),
     );
-    const err = await createDiscordClient(cfg).getGuildRoles().catch((e: unknown) => e);
+    const err = await createDiscordClient(cfg)
+      .getGuildRoles()
+      .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(DiscordApiError);
     expect((err as DiscordApiError).transient).toBe(false);
   });
 
   it("classifies a non-JSON body as a permanent DiscordApiError too", async () => {
     server.use(
-      http.get(`${API}/guilds/9000/roles`, () =>
-        new HttpResponse("<html>gateway</html>", {
-          status: 200,
-          headers: { "content-type": "text/html" },
-        }),
+      http.get(
+        `${API}/guilds/9000/roles`,
+        () =>
+          new HttpResponse("<html>gateway</html>", {
+            status: 200,
+            headers: { "content-type": "text/html" },
+          }),
       ),
     );
-    const err = await createDiscordClient(cfg).getGuildRoles().catch((e: unknown) => e);
+    const err = await createDiscordClient(cfg)
+      .getGuildRoles()
+      .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(DiscordApiError);
     expect((err as DiscordApiError).transient).toBe(false);
   });
@@ -76,8 +82,9 @@ describe("createDiscordClient", () => {
 
   it("treats a malformed 404 body as a permanent error", async () => {
     server.use(
-      http.get(`${API}/guilds/9000/members/u1`, () =>
-        new HttpResponse("<html>gateway</html>", { status: 404 }),
+      http.get(
+        `${API}/guilds/9000/members/u1`,
+        () => new HttpResponse("<html>gateway</html>", { status: 404 }),
       ),
     );
     const err = await createDiscordClient(cfg)
@@ -93,7 +100,9 @@ describe("createDiscordClient", () => {
         HttpResponse.json({}, { status: 429 }),
       ),
     );
-    const err = await createDiscordClient(cfg).getGuildMember("u1").catch((e: unknown) => e);
+    const err = await createDiscordClient(cfg)
+      .getGuildMember("u1")
+      .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(DiscordApiError);
     expect((err as DiscordApiError).transient).toBe(true);
   });
@@ -117,9 +126,7 @@ describe("createDiscordClient", () => {
   });
 
   it("resolves the bot user id", async () => {
-    server.use(
-      http.get(`${API}/users/@me`, () => HttpResponse.json({ id: "bot-user" })),
-    );
+    server.use(http.get(`${API}/users/@me`, () => HttpResponse.json({ id: "bot-user" })));
     expect(await createDiscordClient(cfg).getBotUserId()).toBe("bot-user");
   });
 });

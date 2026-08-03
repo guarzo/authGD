@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { loadConfig, type Config } from "@/config";
-import { account, auditLog, bootstrapAdminGrant, character, outbox, session } from "@/db/schema";
+import { account, auditLog, character, outbox } from "@/db/schema";
 import {
   demoteAdmin,
   handleEveLogin,
@@ -52,7 +52,8 @@ beforeAll(async () => {
     WANDERER_API_KEY: "k",
     WANDERER_ACL_ID: "a",
     ESI_CONTACT: "ops@example.com",
-  } as NodeJS.ProcessEnv);
+    SYNC_MODE: "live",
+  });
 });
 beforeEach(() => truncateAll(ctx.db));
 afterAll(() => ctx.cleanup());
@@ -95,7 +96,7 @@ describe("handleEveLogin", () => {
     const first = await login(ch());
     const again = await login(ch({ refreshToken: "rt-2" }));
     expect(again.accountId).toBe(first.accountId);
-    expect((await ctx.db.select().from(account))).toHaveLength(1);
+    expect(await ctx.db.select().from(account)).toHaveLength(1);
   });
 
   it("reclaims a sold character: unlinks, demotes old account, revokes its sessions", async () => {
@@ -110,7 +111,10 @@ describe("handleEveLogin", () => {
     const bought = await login(ch({ ownerHash: "oh-NEW" }));
     expect(bought.accountId).not.toBe(old.accountId);
 
-    const [oldAcc] = await ctx.db.select().from(account).where(eq(account.id, old.accountId));
+    const [oldAcc] = await ctx.db
+      .select()
+      .from(account)
+      .where(eq(account.id, old.accountId));
     expect(oldAcc.mainCharacterId).toBeNull();
     expect(oldAcc.tier).toBe("green");
     expect(await getSessionAccount(ctx.db, sid)).toBeNull();
@@ -124,7 +128,9 @@ describe("handleEveLogin", () => {
 describe("linkCharacter", () => {
   it("links an alt and rejects double-link with same owner", async () => {
     const a = await login(ch());
-    const b = await login(ch({ characterId: 90000002, ownerHash: "oh-2", characterName: "Other" }));
+    const b = await login(
+      ch({ characterId: 90000002, ownerHash: "oh-2", characterName: "Other" }),
+    );
 
     const alt = ch({ characterId: 90000003, characterName: "Alt", ownerHash: "oh-1" });
     expect(await link(a.accountId, alt)).toEqual({ ok: true });
@@ -159,7 +165,9 @@ describe("linkCharacter", () => {
   });
 
   it("reclaims through linkCharacter when the owner hash differs", async () => {
-    const b = await login(ch({ characterId: 90000005, ownerHash: "oh-b", characterName: "Sold" }));
+    const b = await login(
+      ch({ characterId: 90000005, ownerHash: "oh-b", characterName: "Sold" }),
+    );
     const a = await login(ch()); // buyer's account (main 90000001)
     const bSid = await createSession(ctx.db, b.accountId);
 
@@ -181,7 +189,9 @@ describe("linkCharacter", () => {
 
   it("refuses to unlink when expectedAccountId no longer matches the locked row (TOCTOU guard)", async () => {
     const a = await login(ch());
-    const b = await login(ch({ characterId: 90000002, ownerHash: "oh-2", characterName: "Other" }));
+    const b = await login(
+      ch({ characterId: 90000002, ownerHash: "oh-2", characterName: "Other" }),
+    );
 
     // Simulate a stale pre-lock check: caller believed the character still
     // belonged to account b, but under the lock it now belongs to a.
@@ -203,7 +213,12 @@ describe("transaction rollback", () => {
     const outboxCountBefore = (await ctx.db.select().from(outbox)).length;
     await expect(
       ctx.db.transaction(async (tx) => {
-        await linkCharacter(tx, cfg, a.accountId, ch({ characterId: 90000050, characterName: "Doomed" }));
+        await linkCharacter(
+          tx,
+          cfg,
+          a.accountId,
+          ch({ characterId: 90000050, characterName: "Doomed" }),
+        );
         throw new Error("boom");
       }),
     ).rejects.toThrow("boom");
@@ -225,8 +240,14 @@ describe("concurrent first login", () => {
   it("two concurrent links of different new characters onto the same account both succeed", async () => {
     const a = await login(ch());
     const [r1, r2] = await Promise.all([
-      link(a.accountId, ch({ characterId: 90000010, characterName: "Alt1", ownerHash: "oh-1" })),
-      link(a.accountId, ch({ characterId: 90000011, characterName: "Alt2", ownerHash: "oh-1" })),
+      link(
+        a.accountId,
+        ch({ characterId: 90000010, characterName: "Alt1", ownerHash: "oh-1" }),
+      ),
+      link(
+        a.accountId,
+        ch({ characterId: 90000011, characterName: "Alt2", ownerHash: "oh-1" }),
+      ),
     ]);
     expect(r1).toEqual({ ok: true });
     expect(r2).toEqual({ ok: true });
@@ -260,7 +281,7 @@ describe("setMainCharacter", () => {
 
 describe("re-auth side effects", () => {
   it("audits, enqueues, and downgrades status when scopes shrink", async () => {
-    const a = await login(ch());
+    await login(ch());
     await ctx.db.delete(outbox);
     await login(
       ch({ refreshToken: "rt-2", scopes: ["esi-characters.read_contacts.v1"] }), // missing write scope
@@ -313,7 +334,10 @@ describe("bootstrap admin", () => {
 describe("demoteAdmin", () => {
   it("refuses to demote the last admin", async () => {
     const a = await login(ch());
-    await ctx.db.update(account).set({ isAdmin: true }).where(eq(account.id, a.accountId));
+    await ctx.db
+      .update(account)
+      .set({ isAdmin: true })
+      .where(eq(account.id, a.accountId));
     expect(await demote("system", a.accountId)).toEqual({
       ok: false,
       error: "last_admin",
@@ -322,8 +346,13 @@ describe("demoteAdmin", () => {
 
   it("rejects a non-admin actor", async () => {
     const a = await login(ch());
-    const b = await login(ch({ characterId: 90000002, ownerHash: "oh-2", characterName: "B" }));
-    await ctx.db.update(account).set({ isAdmin: true }).where(eq(account.id, b.accountId));
+    const b = await login(
+      ch({ characterId: 90000002, ownerHash: "oh-2", characterName: "B" }),
+    );
+    await ctx.db
+      .update(account)
+      .set({ isAdmin: true })
+      .where(eq(account.id, b.accountId));
     // a is not an admin and not "system": refused, b keeps admin
     expect(await demote(a.accountId, b.accountId)).toEqual({
       ok: false,
@@ -334,15 +363,19 @@ describe("demoteAdmin", () => {
   });
 
   it("demotes when another admin exists", async () => {
-    const a = await login(ch());
-    const b = await login(ch({ characterId: 90000002, ownerHash: "oh-2", characterName: "B" }));
+    await login(ch());
+    const b = await login(
+      ch({ characterId: 90000002, ownerHash: "oh-2", characterName: "B" }),
+    );
     await ctx.db.update(account).set({ isAdmin: true });
     expect(await demote("system", b.accountId)).toEqual({ ok: true });
   });
 
   it("never lets two concurrent demotions remove both admins", async () => {
     const a = await login(ch());
-    const b = await login(ch({ characterId: 90000002, ownerHash: "oh-2", characterName: "B" }));
+    const b = await login(
+      ch({ characterId: 90000002, ownerHash: "oh-2", characterName: "B" }),
+    );
     await ctx.db.update(account).set({ isAdmin: true });
 
     const [r1, r2] = await Promise.all([
@@ -361,7 +394,9 @@ describe("promoteAdmin", () => {
     const admin = await seedAccount(ctx.db);
     await ctx.db.update(account).set({ isAdmin: true }).where(eq(account.id, admin.id));
     const target = await seedAccount(ctx.db);
-    const result = await ctx.db.transaction((tx) => promoteAdmin(tx, admin.id, target.id));
+    const result = await ctx.db.transaction((tx) =>
+      promoteAdmin(tx, admin.id, target.id),
+    );
     expect(result).toEqual({ ok: true });
     const [after] = await ctx.db.select().from(account).where(eq(account.id, target.id));
     expect(after.isAdmin).toBe(true);
@@ -377,7 +412,9 @@ describe("promoteAdmin", () => {
   it("rejects a non-admin actor", async () => {
     const nobody = await seedAccount(ctx.db);
     const target = await seedAccount(ctx.db);
-    const result = await ctx.db.transaction((tx) => promoteAdmin(tx, nobody.id, target.id));
+    const result = await ctx.db.transaction((tx) =>
+      promoteAdmin(tx, nobody.id, target.id),
+    );
     expect(result).toEqual({ ok: false, error: "not_authorized" });
   });
 
@@ -403,7 +440,9 @@ describe("promoteAdmin", () => {
 
   it("lets the system actor promote when no admin exists yet", async () => {
     const target = await seedAccount(ctx.db);
-    const result = await ctx.db.transaction((tx) => promoteAdmin(tx, "system", target.id));
+    const result = await ctx.db.transaction((tx) =>
+      promoteAdmin(tx, "system", target.id),
+    );
     expect(result).toEqual({ ok: true });
     const [after] = await ctx.db.select().from(account).where(eq(account.id, target.id));
     expect(after.isAdmin).toBe(true);

@@ -5,6 +5,7 @@ import { character } from "@/db/schema";
 import { classifyOAuthError } from "@/core/errors";
 import { decryptToken, encryptToken } from "@/lib/crypto";
 import { EveSsoError, refreshEveToken } from "@/lib/esi/sso";
+import { isDryRun, logSuppressedWrite } from "@/lib/sync-mode";
 import { logAudit } from "@/services/audit";
 
 export type CharacterTokenRow = {
@@ -15,7 +16,11 @@ export type CharacterTokenRow = {
 
 export type AccessTokenResult =
   | { ok: true; accessToken: string; tokenEnc: string }
-  | { ok: false; reason: "no_token" | "invalid" | "transient"; detail?: string };
+  | {
+      ok: false;
+      reason: "no_token" | "invalid" | "transient" | "dry_run";
+      detail?: string;
+    };
 
 /**
  * Marks the token invalid ONLY if the stored blob is still the one this
@@ -59,8 +64,26 @@ export async function getFreshAccessToken(
   ch: CharacterTokenRow,
   fetchImpl: typeof fetch = fetch,
 ): Promise<AccessTokenResult> {
-  if (!ch.refreshTokenEnc || ch.tokenStatus === "invalid" || ch.tokenStatus === "missing") {
+  if (
+    !ch.refreshTokenEnc ||
+    ch.tokenStatus === "invalid" ||
+    ch.tokenStatus === "missing"
+  ) {
     return { ok: false, reason: "no_token" };
+  }
+  // Dry-run guard (spec D4). EVE SSO ROTATES the refresh token on every use,
+  // so refreshing against production credentials silently invalidates the
+  // stored copy — destruction disguised as a read. Refusing before the call is
+  // the only safe option: refreshing without persisting would invalidate the
+  // token AND discard its replacement.
+  //
+  // Accepted cost: dry-run cannot obtain an access token, so the contacts job
+  // cannot read contacts and therefore cannot preview its diff. The Wanderer
+  // and Discord jobs are unaffected — they authenticate with the ACL key and
+  // the bot token, not per-character EVE tokens.
+  if (isDryRun(cfg)) {
+    logSuppressedWrite("eve-sso", `refresh token for character ${ch.id}`);
+    return { ok: false, reason: "dry_run" };
   }
   let refreshToken: string;
   try {

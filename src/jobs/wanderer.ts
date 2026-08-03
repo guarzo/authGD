@@ -2,8 +2,13 @@ import type { Config } from "@/config";
 import type { Db } from "@/db";
 import { wandererAclObservation } from "@/db/schema";
 import { diffAcl } from "@/core/acl-diff";
-import { ACL_GRANT_ROLE, WandererError, type WandererClient } from "@/lib/wanderer/client";
+import {
+  ACL_GRANT_ROLE,
+  WandererError,
+  type WandererClient,
+} from "@/lib/wanderer/client";
 import { postOpsWebhook } from "@/lib/ops-webhook";
+import { isDryRun } from "@/lib/sync-mode";
 import { logAudit } from "@/services/audit";
 import { getFlygdCharacters } from "@/services/desired";
 import { runJob, type JobResult } from "@/services/sync-run";
@@ -53,11 +58,24 @@ export async function runWandererJob(deps: {
     let anyTransient = false;
     let added = 0;
     let removed = 0;
+    // In dry-run the client methods return normally without issuing a request,
+    // so this job cannot tell a suppressed write from a real one. Writing audit
+    // rows here would fabricate a permanent record of mutations that never
+    // happened — audit_log is what an operator reconstructs an incident from.
+    // Suppress the rows, and report under would* keys so the counts cannot be
+    // mistaken for applied changes either (spec D6).
+    const dry = isDryRun(cfg);
     for (const id of diff.add) {
       try {
         await wanderer.addAclMember(id);
         added++;
-        await logAudit(db, { actor: "system", action: "wanderer.added", target: String(id) });
+        if (!dry) {
+          await logAudit(db, {
+            actor: "system",
+            action: "wanderer.added",
+            target: String(id),
+          });
+        }
       } catch (err) {
         anyTransient ||= isTransient(err);
         errors.push(`add ${id}: ${err instanceof Error ? err.message : String(err)}`);
@@ -67,7 +85,13 @@ export async function runWandererJob(deps: {
       try {
         await wanderer.removeAclMember(id);
         removed++;
-        await logAudit(db, { actor: "system", action: "wanderer.removed", target: String(id) });
+        if (!dry) {
+          await logAudit(db, {
+            actor: "system",
+            action: "wanderer.removed",
+            target: String(id),
+          });
+        }
       } catch (err) {
         anyTransient ||= isTransient(err);
         errors.push(`remove ${id}: ${err instanceof Error ? err.message : String(err)}`);
@@ -79,7 +103,13 @@ export async function runWandererJob(deps: {
       try {
         await wanderer.updateAclMemberRole(id, ACL_GRANT_ROLE);
         unblocked++;
-        await logAudit(db, { actor: "system", action: "wanderer.unblocked", target: String(id) });
+        if (!dry) {
+          await logAudit(db, {
+            actor: "system",
+            action: "wanderer.unblocked",
+            target: String(id),
+          });
+        }
       } catch (err) {
         anyTransient ||= isTransient(err);
         errors.push(`unblock ${id}: ${err instanceof Error ? err.message : String(err)}`);
@@ -103,17 +133,19 @@ export async function runWandererJob(deps: {
       await db.transaction(async (tx) => {
         await tx.delete(wandererAclObservation);
         if (rows.length > 0) {
-          await tx.insert(wandererAclObservation).values(
-            rows.map((m) => ({ characterId: m.characterId, role: m.role, observedAt })),
-          );
+          await tx
+            .insert(wandererAclObservation)
+            .values(
+              rows.map((m) => ({ characterId: m.characterId, role: m.role, observedAt })),
+            );
         }
       });
     }
 
     const counts = {
-      added,
-      removed,
-      unblocked,
+      ...(dry
+        ? { wouldAdd: added, wouldRemove: removed, wouldUnblock: unblocked }
+        : { added, removed, unblocked }),
       addFailed: diff.add.length - added,
       removeFailed: diff.remove.length - removed,
       unblockFailed: diff.unblock.length - unblocked,
@@ -121,7 +153,10 @@ export async function runWandererJob(deps: {
     if (errors.length > 0 || observed === null) {
       return {
         status: "partial",
-        errorSummary: [...errors, ...(observed === null ? ["post-mutation re-read failed"] : [])]
+        errorSummary: [
+          ...errors,
+          ...(observed === null ? ["post-mutation re-read failed"] : []),
+        ]
           .slice(0, 5)
           .join("; "),
         counts,

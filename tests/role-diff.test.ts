@@ -34,9 +34,9 @@ describe("validateRoleConfig", () => {
   ];
 
   it("accepts a valid config", () => {
-    expect(
-      validateRoleConfig({ managed, guildRoles, botRoleIds: ["bot-role"] }),
-    ).toEqual({ ok: true });
+    expect(validateRoleConfig({ managed, guildRoles, botRoleIds: ["bot-role"] })).toEqual(
+      { ok: true },
+    );
   });
   it("rejects duplicate managed role ids", () => {
     const r = validateRoleConfig({
@@ -62,7 +62,10 @@ describe("validateRoleConfig", () => {
       ),
       botRoleIds: ["bot-role"],
     });
-    expect(r).toMatchObject({ ok: false, error: expect.stringContaining("Manage Roles") });
+    expect(r).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("Manage Roles"),
+    });
   });
   it("accepts Administrator in place of Manage Roles", () => {
     const r = validateRoleConfig({
@@ -105,6 +108,9 @@ describe("validateRoleConfig", () => {
       ),
       botRoleIds: ["bot-role"],
     });
-    expect(r).toMatchObject({ ok: false, error: expect.stringContaining("Manage Roles") });
+    expect(r).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("Manage Roles"),
+    });
   });
 });

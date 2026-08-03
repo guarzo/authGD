@@ -3,11 +3,9 @@ import { z } from "zod";
 const envSchema = z.object({
   DATABASE_URL: z.string().min(1),
   SESSION_COOKIE_NAME: z.string().default("authgd_session"),
-  TOKEN_ENCRYPTION_KEY: z
-    .string()
-    .refine((s) => Buffer.from(s, "base64").length === 32, {
-      message: "TOKEN_ENCRYPTION_KEY must be base64 of exactly 32 bytes",
-    }),
+  TOKEN_ENCRYPTION_KEY: z.string().refine((s) => Buffer.from(s, "base64").length === 32, {
+    message: "TOKEN_ENCRYPTION_KEY must be base64 of exactly 32 bytes",
+  }),
   APP_BASE_URL: z.string().url(),
   ALLIANCE_ID: z.coerce.number().int().positive(),
   // Also the last-admin recovery mechanism: malformed values must fail startup.
@@ -15,7 +13,10 @@ const envSchema = z.object({
     .string()
     .default("")
     .transform((raw, ctx) => {
-      const parts = raw.split(",").map((s) => s.trim()).filter(Boolean);
+      const parts = raw
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
       const ids = parts.map(Number);
       if (parts.some((p) => !/^\d+$/.test(p))) {
         ctx.addIssue({
@@ -49,11 +50,20 @@ const envSchema = z.object({
   WANDERER_ACL_ID: z.string().min(1),
   // Matched against the in-game contact label by exact string equality
   // (src/jobs/contacts.ts), so the case here must match the label as typed in
-  // the client — the default mirrors the label FlyGD actually uses.
-  STANDINGS_LABEL: z.string().min(1).default("FLYGD"),
+  // the client. The app OWNS this label and deletes anything under it that
+  // isn't a member, so the default names the app rather than the corp: point
+  // it at a label created for authGD, never one humans also curate.
+  STANDINGS_LABEL: z.string().min(1).default("authgd"),
   STANDINGS_VALUE: z.coerce.number().min(-10).max(10).default(5),
   // CCP requires ESI consumers to send identifying contact info (F6).
   ESI_CONTACT: z.string().min(1),
+  // REQUIRED with no default, deliberately: every other arrangement has a
+  // silent failure mode. Defaulting to "dry-run" would let a missing
+  // production secret turn sync into an unnoticed no-op; defaulting to "live"
+  // would make the destructive configuration the one you get by forgetting.
+  // Requiring it means both environments state intent. See
+  // docs/superpowers/specs/2026-08-03-local-dev-setup.md (D1).
+  SYNC_MODE: z.enum(["live", "dry-run"]),
 });
 
 export type Config = ReturnType<typeof loadConfig>;
@@ -91,6 +101,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     },
     standings: { label: e.STANDINGS_LABEL, value: e.STANDINGS_VALUE },
     esiContact: e.ESI_CONTACT,
+    syncMode: e.SYNC_MODE,
   };
 }
 

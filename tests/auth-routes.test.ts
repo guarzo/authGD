@@ -25,6 +25,7 @@ process.env.WANDERER_BASE_URL = "https://w.example";
 process.env.WANDERER_API_KEY = "k";
 process.env.WANDERER_ACL_ID = "a";
 process.env.ESI_CONTACT = "ops@example.com";
+process.env.SYNC_MODE = "live";
 
 const { GET: loginRoute } = await import("@/app/auth/eve/login/route");
 const { GET: callbackRoute } = await import("@/app/auth/eve/callback/route");
@@ -48,7 +49,11 @@ beforeAll(async () => {
   const { publicKey, privateKey } = await generateKeyPair("RS256");
   jwk = { ...(await exportJWK(publicKey)), alg: "RS256" };
   signToken = (characterId, owner) =>
-    new SignJWT({ name: `Char ${characterId}`, owner, scp: ["esi-characters.read_contacts.v1"] })
+    new SignJWT({
+      name: `Char ${characterId}`,
+      owner,
+      scp: ["esi-characters.read_contacts.v1"],
+    })
       .setProtectedHeader({ alg: "RS256" })
       .setIssuer("https://login.eveonline.com")
       .setAudience("EVE Online")
@@ -63,7 +68,9 @@ afterAll(async () => {
 
 describe("EVE auth flow", () => {
   it("login → redirect → callback creates account and sets session cookie", async () => {
-    const loginRes = await loginRoute(new NextRequest("http://localhost:3000/auth/eve/login"));
+    const loginRes = await loginRoute(
+      new NextRequest("http://localhost:3000/auth/eve/login"),
+    );
     expect(loginRes.status).toBe(307);
     const authorize = new URL(loginRes.headers.get("location")!);
     const state = authorize.searchParams.get("state")!;
@@ -98,7 +105,9 @@ describe("EVE auth flow", () => {
     expect(res.status).toBe(400);
 
     // full replay: consume once successfully, then reuse the same state
-    const loginRes = await loginRoute(new NextRequest("http://localhost:3000/auth/eve/login"));
+    const loginRes = await loginRoute(
+      new NextRequest("http://localhost:3000/auth/eve/login"),
+    );
     const state = new URL(loginRes.headers.get("location")!).searchParams.get("state")!;
     const jwt = await signToken(90000011, "oh-11");
     msw.use(
@@ -112,7 +121,9 @@ describe("EVE auth flow", () => {
   });
 
   it("rejects an expired state", async () => {
-    const loginRes = await loginRoute(new NextRequest("http://localhost:3000/auth/eve/login"));
+    const loginRes = await loginRoute(
+      new NextRequest("http://localhost:3000/auth/eve/login"),
+    );
     const state = new URL(loginRes.headers.get("location")!).searchParams.get("state")!;
     const { oauthTransaction } = await import("@/db/schema");
     const { createHash } = await import("node:crypto");
@@ -155,9 +166,8 @@ describe("EVE auth flow", () => {
   });
 
   it("rejects a link-discord transaction presented to the EVE callback without consuming it", async () => {
-    const { createOauthTransaction, consumeOauthTransaction } = await import(
-      "@/services/oauth-tx"
-    );
+    const { createOauthTransaction, consumeOauthTransaction } =
+      await import("@/services/oauth-tx");
     const tx = await createOauthTransaction(ctx.db, { intent: "link-discord" });
     // no token-endpoint mock needed: rejection happens before any EVE call
     const res = await callbackRoute(

@@ -31,7 +31,9 @@ describe("getFlygdCharacters", () => {
     const flygd = await seedAccount(ctx.db, { tier: "flygd" });
     await seedCharacter(ctx.db, cfg, { id: 1, accountId: flygd.id, main: true });
     await seedCharacter(ctx.db, cfg, {
-      id: 2, accountId: flygd.id, affiliationInvalid: true,
+      id: 2,
+      accountId: flygd.id,
+      affiliationInvalid: true,
     });
     const rows = await getFlygdCharacters(ctx.db);
     expect(rows.map((r) => r.characterId)).toEqual([1]);

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { Config } from "@/config";
+import { isDryRun, logSuppressedWrite } from "@/lib/sync-mode";
 
 // Wanderer ACL API — contract confirmed 2026-08-02 against wanderer source
 // (access_list_api_controller.ex / access_list_member_api_controller.ex):
@@ -59,7 +60,6 @@ export type WandererAclMember = { characterId: number | null; role: AclRole };
  */
 export const ACL_GRANT_ROLE = "member" satisfies AclRole;
 
-
 export function createWandererClient(cfg: Config, fetchImpl: typeof fetch = fetch) {
   const base = cfg.wanderer.baseUrl.replace(/\/$/, "");
   const aclPath = `/api/acls/${cfg.wanderer.aclId}`;
@@ -106,7 +106,13 @@ export function createWandererClient(cfg: Config, fetchImpl: typeof fetch = fetc
         role: m.role,
       }));
     },
+    // The three mutating methods below are dry-run guarded. Reads are not:
+    // getAclMembers must return real state so the diff is meaningful.
     async addAclMember(characterId: number): Promise<void> {
+      if (isDryRun(cfg)) {
+        logSuppressedWrite("wanderer", `add ${characterId} to acl ${cfg.wanderer.aclId}`);
+        return;
+      }
       // name is resolved server-side.
       await request(membersPath, {
         method: "POST",
@@ -116,6 +122,10 @@ export function createWandererClient(cfg: Config, fetchImpl: typeof fetch = fetc
       });
     },
     async updateAclMemberRole(characterId: number, role: AclRole): Promise<void> {
+      if (isDryRun(cfg)) {
+        logSuppressedWrite("wanderer", `set ${characterId} role=${role}`);
+        return;
+      }
       // keyed by EVE id, not the member row's UUID
       await request(`${membersPath}/${characterId}`, {
         method: "PUT",
@@ -123,6 +133,13 @@ export function createWandererClient(cfg: Config, fetchImpl: typeof fetch = fetc
       });
     },
     async removeAclMember(characterId: number): Promise<void> {
+      if (isDryRun(cfg)) {
+        logSuppressedWrite(
+          "wanderer",
+          `remove ${characterId} from acl ${cfg.wanderer.aclId}`,
+        );
+        return;
+      }
       const path = `${membersPath}/${characterId}`;
       const res = await rawRequest(path, { method: "DELETE" });
       if (res.status === 404) return; // already not a member — idempotent

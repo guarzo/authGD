@@ -39,9 +39,7 @@ describe("schema", () => {
       .insert(discordLink)
       .values({ accountId: a1.id, discordUserId: "duid-1" });
     await expect(
-      ctx.db
-        .insert(discordLink)
-        .values({ accountId: a2.id, discordUserId: "duid-1" }),
+      ctx.db.insert(discordLink).values({ accountId: a2.id, discordUserId: "duid-1" }),
     ).rejects.toThrow();
   });
 

@@ -40,7 +40,9 @@ describe("getFreshAccessToken", () => {
     const r = await getFreshAccessToken(ctx.db, cfg, ch, fetchImpl);
     expect(r).toMatchObject({ ok: true, accessToken: "new-at" });
     const updated = await getChar(90000001);
-    expect(decryptToken(updated.refreshTokenEnc as string, cfg.tokenEncryptionKey)).toBe("new-rt");
+    expect(decryptToken(updated.refreshTokenEnc as string, cfg.tokenEncryptionKey)).toBe(
+      "new-rt",
+    );
     // tokenEnc is exactly what is now stored — callers guard follow-up writes on it
     expect(r).toMatchObject({ tokenEnc: updated.refreshTokenEnc });
   });
@@ -75,16 +77,19 @@ describe("getFreshAccessToken", () => {
       ctx.db,
       cfg,
       { ...ch, refreshTokenEnc: "not.a.blob" },
-      (async () => tokenJson({})) as typeof fetch,
+      async () => tokenJson({}),
     );
-    expect(r).toMatchObject({ ok: false, reason: "invalid", detail: "malformed_token_blob" });
+    expect(r).toMatchObject({
+      ok: false,
+      reason: "invalid",
+      detail: "malformed_token_blob",
+    });
     expect((await getChar(90000001)).tokenStatus).toBe("invalid");
   });
 
   it("returns no_token for missing or already-invalid tokens", async () => {
     const ch = await seed({ refreshToken: null, tokenStatus: "missing" });
-    const r = await getFreshAccessToken(ctx.db, cfg, ch, (async () =>
-      tokenJson({})) as typeof fetch);
+    const r = await getFreshAccessToken(ctx.db, cfg, ch, async () => tokenJson({}));
     expect(r).toEqual({ ok: false, reason: "no_token" });
   });
 
@@ -104,7 +109,9 @@ describe("getFreshAccessToken", () => {
     expect(r).toMatchObject({ ok: false, reason: "transient" });
     const after = await getChar(90000001);
     // the first writer's stored refresh token wins
-    expect(decryptToken(after.refreshTokenEnc as string, cfg.tokenEncryptionKey)).toBe("current-rt");
+    expect(decryptToken(after.refreshTokenEnc as string, cfg.tokenEncryptionKey)).toBe(
+      "current-rt",
+    );
   });
 
   it("skips invalidation when the blob rotated during a failed refresh", async () => {
