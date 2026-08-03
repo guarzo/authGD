@@ -142,11 +142,18 @@ is correct: no account row displays an alt's name.
 **`accountCount` counts distinct accounts the filter can surface**, not
 accounts displaying the name. Those differ, and the difference is the whole
 point of the metric. Query 1 already returns each matching character's
-`account_id`, so the count is the union of *accounts whose main displays the
-name* and *accounts owning a matched character* — computed from data already in
-hand, at no extra query. Counting only the former would let two same-named alts
-on two different accounts widen the results while the page reported no
-ambiguity at all, which is precisely the failure this warning exists to catch.
+`account_id`, so the count is computed from data already in hand, at no extra
+query. It is field-aware, because the two fields surface different rows:
+
+- **actor** — accounts whose main displays the name. An alt's name can never
+  appear in the actor column, so counting its owning account would overstate.
+- **target** — those accounts *plus* the accounts owning a matched character,
+  since matched character ids are in the target union and those rows belong to
+  the owning account.
+
+Counting only accounts-displaying-the-name would let two same-named alts on two
+different accounts widen the results while the page reported no ambiguity at
+all, which is precisely the failure this warning exists to catch.
 
 The heading therefore reads `matches 2 accounts` rather than the
 `2 people named Zed` of the approved mock. "People" was the wrong noun once
