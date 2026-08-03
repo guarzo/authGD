@@ -15,3 +15,13 @@ package-lock.json
 # already written. The prose itself is untouched (proseWrap defaults to
 # "preserve"), so there is nothing to gain.
 *.md
+
+# Rewritten by `next dev` on every start — including the dev server Playwright
+# boots for the e2e suite. Next reserializes it with one array element per line,
+# which prettier --check rejects, so the file arrives unformatted through no
+# action of the person running the tests. Formatting it back is not a fix: the
+# next dev run undoes it. Committing Next's version is not one either, because
+# Next also flips "jsx" from "preserve" to "react-jsx", which changes what the
+# compiler does. Excluding it is the only option that does not churn, and there
+# is nothing to gain from formatting a file no one hand-edits.
+tsconfig.json
