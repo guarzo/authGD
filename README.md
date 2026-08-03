@@ -113,6 +113,15 @@ Other useful scripts: `npm run build`, `npm run typecheck`, `npm run test:watch`
 Built in phases: foundation and auth, then the sync engine, then the admin UI and ops
 tooling. See the plans linked above for what each phase covers.
 
----
+## License
 
-Branding assets in `docs/assets/` and `public/` are Zoo Landers corporation artwork.
+[MIT](LICENSE) for the source code.
+
+The Zoo Landers corporation artwork in `docs/assets/` and `public/` is **not**
+covered by the MIT license — it remains corp property and is used here with
+permission.
+
+EVE Online and all related logos and images are trademarks or registered trademarks
+of CCP hf. authGD is a third-party tool, not affiliated with or endorsed by CCP hf.
+See [LICENSE](LICENSE) for the full notice.
+
