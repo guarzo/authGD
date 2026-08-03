@@ -400,6 +400,12 @@ h3.rule-head__label {
   color: var(--ink-faint);
 }
 
+/* Shrink-to-content in an auto-layout table. Applied to every column except the
+   one that should absorb the leftover width. */
+.log__col--fit {
+  width: 1%;
+}
+
 /* Data that should read as machine output. */
 .mono {
   font-family: var(--font-mono), ui-monospace, monospace;
@@ -408,14 +414,6 @@ h3.rule-head__label {
 
 .nowrap {
   white-space: nowrap;
-}
-
-/* Free-text admin note in a table cell: give it a readable width of its own so
-   it doesn't squeeze into a two-word-per-line column. */
-.note {
-  display: block;
-  min-width: 12ch;
-  max-width: 24ch;
 }
 
 /* Raw JSON payloads in the audit and sync tables. The collapsed line is capped
@@ -504,7 +502,15 @@ h3.rule-head__label {
 }
 
 /* --- Status token ------------------------------------------------------- */
-/* Colour only when the state is actionable. Glyph carries meaning too. */
+/* Colour only when the state is actionable. Glyph carries meaning too.
+
+   The leading dot is also the system's value/control tell. Every *value* in the
+   admin tables — status token, tier badge — opens with this dot and is set in
+   its own hue; every *control* is a neutral box (--hull-hi ground, --rule-strong
+   border, cream text) and never carries one. That single mark is what stays
+   legible when forty rows are on screen and the eye is looking for the one row
+   whose tier is wrong: the tier column reads as a column of coloured, dotted
+   words with no boxes in it at all. */
 
 .st {
   display: inline-flex;
@@ -566,6 +572,18 @@ h3.rule-head__label {
   text-transform: uppercase;
 }
 
+/* The same dot the status token wears, for the same reason: it marks this as a
+   value. Without it the badge is a tinted, bordered, mono-uppercase rectangle —
+   which is also a fair description of a button. */
+.tier::before {
+  content: "";
+  width: 0.5em;
+  height: 0.5em;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+
 .tier--flygd {
   --tone: var(--tier-flygd);
 }
@@ -617,8 +635,8 @@ h3.rule-head__label {
 
 .btn:disabled {
   /* Measured: --ink-faint at 45% over --void was 2.15:1, below the 3:1 DESIGN.md
-     promises for disabled text. 65% measures 3.24:1 for the worst case
-     (.btn--quiet disabled, the locked-tier button). */
+     promises for disabled text. 65% measures 3.24:1 for the worst case, which is
+     a disabled .btn--quiet (transparent ground, --ink-faint text) over --void. */
   opacity: 0.65;
   cursor: not-allowed;
 }
@@ -1011,6 +1029,46 @@ h3.rule-head__label {
 .crew b {
   color: var(--ink-dim);
   font-weight: 600;
+}
+
+/* The row drawer. Everything that acts on the account lives here, so the
+   collapsed row is one line of values and the table can be scanned. Groups are
+   laid out in a wrapping row rather than a stack: at three or four groups a
+   stack pushes the note field a screenful below the row it belongs to. */
+.drawer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-4) var(--s-6);
+  align-items: start;
+  margin-top: var(--s-3);
+  padding-top: var(--s-3);
+  border-top: 1px solid var(--rule);
+}
+
+.drawer__group {
+  display: grid;
+  gap: var(--s-2);
+  justify-items: start;
+}
+
+/* The crew list is the one group that wants the full width. Its own top margin
+   is redundant here — the group's grid gap already separates it from the
+   label — and doubles up with the first row's hairline. */
+.drawer__group:has(> .crew) {
+  flex: 1 1 100%;
+}
+
+.drawer .crew {
+  margin-top: 0;
+}
+
+.drawer__label {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: var(--t-label);
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
 }
 
 /* --- Utility ------------------------------------------------------------ */
