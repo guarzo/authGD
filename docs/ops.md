@@ -19,7 +19,6 @@ fly secrets set \
   BOOTSTRAP_ADMIN_CHARACTER_IDS=... \
   EVE_SSO_CLIENT_ID=... EVE_SSO_CLIENT_SECRET=... \
   EVE_SSO_SCOPES="esi-characters.read_contacts.v1 esi-characters.write_contacts.v1" \
-  EVE_SCOPE_SET_VERSION=1 \
   DISCORD_CLIENT_ID=... DISCORD_CLIENT_SECRET=... DISCORD_BOT_TOKEN=... \
   DISCORD_GUILD_ID=... DISCORD_ROLE_ID_FLYGD=... DISCORD_ROLE_ID_BLUE=... \
   DISCORD_ROLE_ID_GREEN=... DISCORD_OPS_WEBHOOK_URL=... \
@@ -58,7 +57,6 @@ character already on the ACL.
 | `BOOTSTRAP_ADMIN_CHARACTER_IDS` | no | comma-separated; see recovery caveat below |
 | `EVE_SSO_CLIENT_ID` / `EVE_SSO_CLIENT_SECRET` | yes | EVE application credentials |
 | `EVE_SSO_SCOPES` | yes | space-separated full scope set requested at every login |
-| `EVE_SCOPE_SET_VERSION` | no (default 1) | bump when scopes change ⇒ members flagged needs_reauth |
 | `DISCORD_CLIENT_ID` / `DISCORD_CLIENT_SECRET` | yes | Discord OAuth (identify only) |
 | `DISCORD_BOT_TOKEN` | yes | bot with Manage Roles above the three managed roles |
 | `DISCORD_GUILD_ID` | yes | the guild whose roles are managed |

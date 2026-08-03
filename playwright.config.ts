@@ -14,7 +14,6 @@ const env = {
   EVE_SSO_CLIENT_ID: "cid",
   EVE_SSO_CLIENT_SECRET: "sec",
   EVE_SSO_SCOPES: "esi-characters.read_contacts.v1 esi-characters.write_contacts.v1",
-  EVE_SCOPE_SET_VERSION: "1",
   DISCORD_CLIENT_ID: "d-cid",
   DISCORD_CLIENT_SECRET: "d-sec",
   DISCORD_BOT_TOKEN: "bot",
