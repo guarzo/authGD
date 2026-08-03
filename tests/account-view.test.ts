@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { loadConfig, type Config } from "@/config";
 import {
   account,
@@ -8,7 +8,8 @@ import {
   discordLink,
   wandererAclObservation,
 } from "@/db/schema";
-import { getAccountView } from "@/services/account-view";
+import { getAccountView, getAdminAccountsList } from "@/services/account-view";
+import { seedAccount, seedCharacter } from "./helpers/seed";
 import { setupTestDb } from "./helpers/db";
 
 let ctx: Awaited<ReturnType<typeof setupTestDb>>;
@@ -111,5 +112,84 @@ describe("getAccountView", () => {
     const view = await getAccountView(ctx.db, cfg, acc.id);
     expect(view.characters).toEqual([]);
     expect(view.discordLinked).toBe(false);
+  });
+});
+
+describe("getAdminAccountsList", () => {
+  async function seedTrio() {
+    // A: flygd, main "Alpha" + alt, on map, discord linked
+    const a = await seedAccount(ctx.db, { tier: "flygd", discordUserId: "111" });
+    await seedCharacter(ctx.db, cfg, { id: 1, accountId: a.id, main: true, name: "Alpha" });
+    await seedCharacter(ctx.db, cfg, { id: 2, accountId: a.id, name: "Alpha Alt" });
+    await ctx.db.insert(wandererAclObservation).values({
+      characterId: 1, role: "viewer", observedAt: new Date("2026-08-01T00:00:00Z"),
+    });
+    // B: green + cryo, main "Beta"
+    const b = await seedAccount(ctx.db, { tier: "green" });
+    await seedCharacter(ctx.db, cfg, { id: 3, accountId: b.id, main: true, name: "Beta" });
+    await ctx.db.update(account)
+      .set({ status: "cryo", statusChangedAt: new Date(), statusNote: "afk" })
+      .where(eq(account.id, b.id));
+    // C: locked blue, set by A, main "Gamma"
+    const c = await seedAccount(ctx.db, { tier: "blue", tierLocked: true });
+    await seedCharacter(ctx.db, cfg, { id: 4, accountId: c.id, main: true, name: "Gamma" });
+    await ctx.db.update(account)
+      .set({ tierChangedAt: new Date("2026-07-01T00:00:00Z"), tierChangedBy: a.id })
+      .where(eq(account.id, c.id));
+    return { a, b, c };
+  }
+
+  it("assembles rows: map from observations, discord, lock, resolved changed-by", async () => {
+    const { a, c } = await seedTrio();
+    const rows = await getAdminAccountsList(ctx.db, cfg);
+    const rowA = rows.find((r) => r.accountId === a.id)!;
+    expect(rowA.mainName).toBe("Alpha");
+    expect(rowA.discordLinked).toBe(true);
+    expect(rowA.mapCount).toBe(1);
+    expect(rowA.characters.find((ch) => ch.id === 1)?.mapObservedAt).toEqual(
+      new Date("2026-08-01T00:00:00Z"),
+    );
+    expect(rowA.characters.find((ch) => ch.id === 2)?.mapObservedAt).toBeNull();
+    const rowC = rows.find((r) => r.accountId === c.id)!;
+    expect(rowC.tierLocked).toBe(true);
+    expect(rowC.tierChangedByName).toBe("Alpha"); // resolved to actor's main
+  });
+
+  it("defaults to name sort with no-main accounts last — in BOTH directions", async () => {
+    await seedTrio();
+    const noMain = await seedAccount(ctx.db, { tier: "green" }); // zero characters
+    const rows = await getAdminAccountsList(ctx.db, cfg);
+    expect(rows.map((r) => r.mainName)).toEqual(["Alpha", "Beta", "Gamma", null]);
+    expect(rows[3].accountId).toBe(noMain.id);
+    const descRows = await getAdminAccountsList(ctx.db, cfg, { sort: "name", dir: "desc" });
+    expect(descRows.map((r) => r.mainName)).toEqual(["Gamma", "Beta", "Alpha", null]);
+  });
+
+  it("filters by tier and by cryo status", async () => {
+    const { a, b } = await seedTrio();
+    const flygd = await getAdminAccountsList(ctx.db, cfg, { tier: "flygd" });
+    expect(flygd.map((r) => r.accountId)).toEqual([a.id]);
+    const cryo = await getAdminAccountsList(ctx.db, cfg, { status: "cryo" });
+    expect(cryo.map((r) => r.accountId)).toEqual([b.id]);
+  });
+
+  it("sorts by tier rank and by tier-change date desc", async () => {
+    await seedTrio();
+    const byTier = await getAdminAccountsList(ctx.db, cfg, { sort: "tier" });
+    expect(byTier.map((r) => r.tier)).toEqual(["flygd", "blue", "green"]);
+    const byDate = await getAdminAccountsList(ctx.db, cfg, {
+      sort: "tierChangedAt", dir: "desc",
+    });
+    // C is the only account with tierChangedAt; nulls sort last regardless of dir
+    expect(byDate[0].tier).toBe("blue");
+  });
+
+  it("summarizes token health", async () => {
+    const a = await seedAccount(ctx.db, { tier: "flygd" });
+    await seedCharacter(ctx.db, cfg, { id: 10, accountId: a.id, main: true, name: "T1" });
+    await seedCharacter(ctx.db, cfg, { id: 11, accountId: a.id, name: "T2" });
+    await ctx.db.update(character).set({ tokenStatus: "invalid" }).where(eq(character.id, 11));
+    const [row] = await getAdminAccountsList(ctx.db, cfg);
+    expect(row.tokenSummary).toEqual({ total: 2, healthy: 1, needsReauth: 0, dead: 1 });
   });
 });
