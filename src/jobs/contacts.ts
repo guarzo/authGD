@@ -99,7 +99,14 @@ export async function runContactsJob(deps: {
         deps.fetchImpl,
       );
       if (!token.ok) {
-        if (token.reason === "transient") {
+        if (token.reason === "dry_run") {
+          // The guard refused the refresh, so there is no access token and no
+          // way to read contacts — this character is skipped, not failed, and
+          // MUST NOT be recorded as synced (spec D4).
+          counts.targets--;
+          counts.skipped++;
+          await recordResult(db, target.characterId, "dry_run", false);
+        } else if (token.reason === "transient") {
           transientFailures++;
           await recordResult(db, target.characterId, "token_refresh_failed", false);
         } else {

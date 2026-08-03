@@ -23,6 +23,7 @@ process.env.WANDERER_BASE_URL = "https://w.example";
 process.env.WANDERER_API_KEY = "k";
 process.env.WANDERER_ACL_ID = "a";
 process.env.ESI_CONTACT = "ops@example.com";
+process.env.SYNC_MODE = "live";
 
 // linkDiscord requires a DbTx; wrap every call in a transaction.
 

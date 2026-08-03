@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isDryRun, logSuppressedWrite } from "@/lib/sync-mode";
 import { chunk } from "@/core/chunk";
 import { classifyEsiError, type EsiErrorClass } from "@/core/errors";
 
@@ -56,6 +57,12 @@ export interface EsiClientOptions {
   errorBudgetFloor?: number;
   /** CCP asks every ESI consumer to identify itself with contact info. */
   userAgent?: string;
+  /**
+   * Dry-run guard. Unlike the Discord and Wanderer factories this one takes no
+   * Config, so the mode arrives here instead. Defaults to "live" so existing
+   * callers and tests keep their behavior; the worker passes cfg.syncMode.
+   */
+  syncMode?: "live" | "dry-run";
 }
 
 export function createEsiClient(opts: EsiClientOptions = {}) {
@@ -64,6 +71,7 @@ export function createEsiClient(opts: EsiClientOptions = {}) {
   const sleep =
     opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const floor = opts.errorBudgetFloor ?? 5;
+  const dryRun = isDryRun({ syncMode: opts.syncMode ?? "live" });
 
   // ESI etiquette: honor X-ESI-Error-Limit-Remain/Reset across all calls.
   let remain = Number.POSITIVE_INFINITY;
@@ -229,6 +237,14 @@ export function createEsiClient(opts: EsiClientOptions = {}) {
     standing: number,
     labelIds: number[],
   ): Promise<void> {
+    if (dryRun) {
+      logSuppressedWrite(
+        "esi",
+        `${method} ${contactIds.length} contact(s) for character ${characterId} ` +
+          `standing=${standing} labels=[${labelIds.join(",")}]`,
+      );
+      return;
+    }
     for (const ids of chunk(contactIds, WRITE_CHUNK)) {
       await request(
         `/characters/${characterId}/contacts/?${contactWriteParams(standing, labelIds)}`,
@@ -265,6 +281,14 @@ export function createEsiClient(opts: EsiClientOptions = {}) {
       accessToken: string,
       contactIds: number[],
     ): Promise<void> => {
+      if (dryRun) {
+        logSuppressedWrite(
+          "esi",
+          `DELETE ${contactIds.length} contact(s) for character ${characterId}: ` +
+            `[${contactIds.join(",")}]`,
+        );
+        return;
+      }
       for (const ids of chunk(contactIds, DELETE_CHUNK)) {
         await request(
           `/characters/${characterId}/contacts/?contact_ids=${ids.join(",")}`,

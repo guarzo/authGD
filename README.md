@@ -65,7 +65,7 @@ row — so revoking one is a row delete that takes effect on the next request.
 
 ## Quickstart (local development)
 
-Requires Node.js 22+ and Docker.
+Requires Node.js 22.9+ and Docker.
 
 ```bash
 # 1. Start Postgres 16 (published on host port 5433 to stay out of a local 5432's way)
