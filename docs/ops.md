@@ -236,11 +236,116 @@ is broken, so the machine stays in rotation and the deploy is never gated.
 
 Setting the secret first is the safety net. There is no automatic one.
 
+The `worker` still crash-loops on bad config, but it is no longer silent: it
+posts to `DISCORD_OPS_WEBHOOK_URL` naming the invalid variables before it
+exits (see [Worker boot failures](#worker-boot-failures)).
+
 ### What SYNC_MODE does NOT protect
 
 **The database.** The purge job deletes rows directly, and the guard only covers
 outbound HTTP. Never put a production `DATABASE_URL` in a local `.env` — no
 setting in this app will save you from that.
+
+## Health checks and worker liveness
+
+Two endpoints, deliberately different in what they assert and in what acts on
+them.
+
+| | `/healthz` | `/readyz` |
+|---|---|---|
+| Asserts | this process has valid config | config + Postgres reachable + worker alive |
+| Touches the DB | no | yes |
+| Checked by Fly | yes, every 30s | **no** |
+| Can restart a machine | yes | no |
+| Polled externally | no | yes, `.github/workflows/uptime.yml` |
+
+`/readyz` is kept out of `fly.toml` on purpose. Restarting a web machine cannot
+fix a dead worker or an unreachable database, so wiring it to restarts would
+convert a Postgres blip into a restart storm across every web machine at once.
+
+Both are unauthenticated, because Fly's checker sends no credentials. They return
+the **names** of failing env vars and never their values; the full error goes to
+stderr, readable with `fly logs`.
+
+### How the worker is checked at all
+
+The `worker` process group has no HTTP listener, so nothing can probe it
+directly. `/readyz` infers liveness from the `sync_run` table instead: `runJob`
+writes one row per execution, so the newest row's age is a proxy for "the worker
+is up, can reach Postgres, and is completing work". Threshold is 90 minutes
+(`WORKER_STALE_AFTER_MS` in `src/services/worker-health.ts`) — the shortest
+schedule is membership every 30 minutes, so two consecutive runs may be missed
+before it reports stale.
+
+What it does **not** assert: that the queue is being *drained*. A worker slowly
+losing ground against a growing backlog still writes rows and still reports
+healthy. Backlog depth is not monitored.
+
+Two consequences worth knowing:
+
+- **A freshly migrated database reports `unknown` and returns 503** until the
+  first scheduled job lands, at most 30 minutes after the worker starts. This is
+  intended — fail-safe beats fail-silent — but expect one alert on a brand new
+  environment.
+- **Changing a cron in `src/worker/queues.ts` can invalidate the threshold.** If
+  you lengthen the shortest schedule past 45 minutes, raise
+  `WORKER_STALE_AFTER_MS` with it or `/readyz` will flap.
+
+### How a dead worker reaches you
+
+Three independent paths, because the failure that prompted all of this defeated
+having only one:
+
+1. **Boot failure** — the worker posts to `DISCORD_OPS_WEBHOOK_URL` before
+   exiting. Previously impossible: the only webhook caller in that process is
+   the dead-letter handler, registered *after* `boss.start()`, so a worker dying
+   at boot could never reach it. This path reads `process.env` directly rather
+   than `getConfig()`, precisely because invalid config is the common cause.
+   Suppressed when `SYNC_MODE=dry-run`, so a laptop never pages ops.
+2. **Job failure after retries** — the dead-letter handler, unchanged.
+3. **Silent death** (OOM-killed, wedged, restarts exhausted) — nothing in the
+   process can report this, so `/readyz` going stale is the only signal. That
+   is what the external poll is for.
+
+### The 60-second boot watchdog
+
+`BOOT_TIMEOUT_MS` in `src/worker/index.ts` exits the process if startup has not
+completed in 60 seconds. This is not belt-and-braces — it covers a failure mode
+the boot alert alone could not:
+
+> With **valid config but an unreachable database**, `pg-boss.start()` retries
+> forever. It neither resolves nor rejects, so the worker sits past its startup
+> banner indefinitely. Fly sees a live process and never restarts it,
+> `main().catch()` never runs, and no alert is sent. Verified by pointing
+> `DATABASE_URL` at a dead port: the process ran until killed, silently.
+
+With the watchdog it exits 1 after 60s, which both engages Fly's restart policy
+and fires the boot-failure webhook.
+
+If you ever add slow work to `main()` — a large backfill, a warm-up query —
+raise this constant or move that work behind `boss.work()`, or a healthy worker
+will be killed mid-boot.
+
+`[[restart]]` in `fly.toml` now states `policy = "on-failure"`, `retries = 10`
+explicitly. That was already the default; writing it down makes the ceiling
+visible. **Exceeding it is a permanent stop** — Fly will not try again, and
+path 1 above is the only thing that will tell you.
+
+### The external poll is a stopgap
+
+`.github/workflows/uptime.yml` curls `/readyz` every 15 minutes. It needs a
+repository variable:
+
+```bash
+gh variable set APP_BASE_URL --body https://authgd.fly.dev
+```
+
+Do not mistake it for real alerting. GitHub cron is best-effort and routinely
+runs 5-15 minutes late or skips runs entirely; scheduled workflows are disabled
+after 60 days of repository inactivity; and if Actions is down the check is down
+silently. A failed run notifies whoever's notification settings happen to cover
+it, which is not a paging guarantee. Replace it with an uptime service that
+actually pages — keep the endpoint, delete the workflow.
 
 ## Contact label — use a dedicated one
 

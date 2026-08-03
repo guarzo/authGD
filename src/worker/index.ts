@@ -4,7 +4,7 @@ import { getConfig } from "@/config";
 import { createDb } from "@/db";
 import { createDiscordClient } from "@/lib/discord/rest";
 import { createEsiClient } from "@/lib/esi/client";
-import { postOpsWebhookOrThrow } from "@/lib/ops-webhook";
+import { postOpsWebhookOrThrow, postOpsWebhookUrl } from "@/lib/ops-webhook";
 import { createWandererClient } from "@/lib/wanderer/client";
 import { startDispatcher } from "@/worker/dispatcher";
 import { buildJobHandlers } from "@/worker/handlers";
@@ -105,7 +105,87 @@ async function main(): Promise<void> {
   console.log("authGD worker started");
 }
 
-main().catch((err) => {
+/**
+ * A worker that has not finished booting in this long is not going to.
+ *
+ * pg-boss's `start()` retries its connection indefinitely: with valid config
+ * but an unreachable database it neither resolves nor rejects, so the process
+ * sits past the startup banner forever. That is worse than crashing — Fly sees
+ * a live process, never restarts it, and `main().catch()` below never fires, so
+ * no alert is sent either. The worker is silently doing nothing, which is the
+ * exact failure mode this file is meant to eliminate.
+ *
+ * 60s is deliberately generous. Migrations run in the Fly release command, not
+ * here, so a healthy boot is a connection and a handful of CREATE-IF-NOT-EXISTS
+ * statements — seconds, not minutes.
+ */
+const BOOT_TIMEOUT_MS = 60_000;
+
+/**
+ * Last-resort alert for a worker that dies before it can start working.
+ *
+ * The incident this exists for: the worker crashlooped on first deploy,
+ * exhausted its restarts, and stayed down silently. The dead-letter handler is
+ * the only thing in this process that posts to the ops webhook, and it is
+ * registered *inside* main() after boss.start() — so a worker that dies at boot
+ * could never reach it. That is the silence being fixed here.
+ *
+ * It reads process.env directly instead of getConfig() on purpose: the most
+ * likely boot failure is getConfig() itself throwing on invalid config, so
+ * there is no validated Config available. That means doing by hand the two
+ * things getConfig() would have done — find the webhook URL, and honour
+ * dry-run so a developer's laptop never pages the real ops channel.
+ */
+async function alertBootFailure(err: unknown): Promise<void> {
+  const url = process.env.DISCORD_OPS_WEBHOOK_URL;
+  if (!url) return;
+  if (process.env.SYNC_MODE === "dry-run") return;
+  // A ZodError serializes to ~200 characters PER failing variable, so on the
+  // common "nothing is set" failure the raw message blows past the webhook's
+  // length cap and gets cut mid-JSON — losing most of the names, which are the
+  // only part worth reading. Collapse it to the list of variables instead.
+  const detail =
+    err instanceof z.ZodError
+      ? `invalid or missing config: ${[
+          ...new Set(err.issues.map((i) => i.path.join(".")).filter(Boolean)),
+        ]
+          .sort()
+          .join(", ")}`
+      : err instanceof Error
+        ? err.message
+        : String(err);
+  try {
+    await postOpsWebhookUrl(
+      url,
+      `authGD: **worker FAILED TO START** — it will not process any jobs until this is fixed.\n\`\`\`\n${detail.slice(0, 1500)}\n\`\`\``,
+    );
+  } catch (alertErr) {
+    // Nothing left to escalate to. Log and let the exit code speak.
+    console.error("boot-failure alert could not be delivered", alertErr);
+  }
+}
+
+/** Alert (best-effort) and exit non-zero so Fly's restart policy engages. */
+function failBoot(err: unknown): void {
   console.error("worker failed to start", err);
-  process.exit(1);
-});
+  // Await the alert before exiting — process.exit() would abort the in-flight
+  // POST. Failure to alert must not mask the original failure, so the exit code
+  // is 1 either way (alertBootFailure never rejects).
+  void alertBootFailure(err).finally(() => process.exit(1));
+}
+
+const bootTimer = setTimeout(() => {
+  failBoot(
+    new Error(
+      `worker boot did not complete within ${BOOT_TIMEOUT_MS / 1000}s — most likely the database is unreachable (pg-boss retries forever without failing)`,
+    ),
+  );
+}, BOOT_TIMEOUT_MS);
+
+main()
+  // Boot finished; stop the watchdog so it can't fire at a running worker.
+  .then(() => clearTimeout(bootTimer))
+  .catch((err) => {
+    clearTimeout(bootTimer);
+    failBoot(err);
+  });

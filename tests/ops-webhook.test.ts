@@ -3,8 +3,44 @@ import {
   OpsWebhookError,
   postOpsWebhook,
   postOpsWebhookOrThrow,
+  postOpsWebhookUrl,
 } from "@/lib/ops-webhook";
 import { testConfig } from "./helpers/config";
+
+describe("postOpsWebhookUrl", () => {
+  it("posts to a bare URL with no Config", async () => {
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 204 }));
+    await postOpsWebhookUrl("https://hook.example/x", "worker died", fetchImpl);
+    const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("https://hook.example/x");
+    expect(JSON.parse(init.body as string)).toEqual({ content: "worker died" });
+  });
+
+  it("truncates to Discord's limit", async () => {
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 204 }));
+    await postOpsWebhookUrl("https://hook.example/x", "z".repeat(5000), fetchImpl);
+    const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect((JSON.parse(init.body as string) as { content: string }).content).toHaveLength(
+      1900,
+    );
+  });
+
+  it("has NO dry-run guard — the caller owns that", async () => {
+    // Documenting the sharp edge: this bypass exists only for the worker's
+    // boot-failure path, which checks SYNC_MODE itself. Anything with a Config
+    // must use postOpsWebhookOrThrow instead.
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 204 }));
+    await postOpsWebhookUrl("https://hook.example/x", "sent regardless", fetchImpl);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it("throws OpsWebhookError on HTTP failure", async () => {
+    const fetchImpl = (async () => new Response("nope", { status: 500 })) as typeof fetch;
+    await expect(
+      postOpsWebhookUrl("https://hook.example/x", "x", fetchImpl),
+    ).rejects.toBeInstanceOf(OpsWebhookError);
+  });
+});
 
 describe("postOpsWebhook", () => {
   it("posts content to the configured webhook", async () => {
