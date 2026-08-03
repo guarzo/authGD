@@ -6,7 +6,23 @@ const envSchema = z.object({
   TOKEN_ENCRYPTION_KEY: z.string().refine((s) => Buffer.from(s, "base64").length === 32, {
     message: "TOKEN_ENCRYPTION_KEY must be base64 of exactly 32 bytes",
   }),
-  APP_BASE_URL: z.string().url(),
+  // Trailing slashes are stripped because three call sites CONCATENATE this
+  // value rather than URL-joining it — the two OAuth redirect_uri strings in
+  // src/lib/esi/sso.ts and src/lib/discord/oauth.ts. There, a trailing slash
+  // produces `https://host//auth/eve/callback`, which no longer matches the
+  // URI registered in the developer portal, and z.string().url() accepts the
+  // slash happily — so it surfaces much later as an unexplained redirect
+  // mismatch rather than a config error. Every other consumer goes through
+  // `new URL(path, appBaseUrl)`, which is unaffected either way.
+  // Normalising rather than rejecting: a deployment whose secret has a
+  // trailing slash today already has broken OAuth, and refusing to boot would
+  // turn that into a total outage — with no health check to catch it, since
+  // /api/health does not read config. Mirrors the same normalisation the
+  // Wanderer client already does to its own base URL.
+  APP_BASE_URL: z
+    .string()
+    .url()
+    .transform((s) => s.replace(/\/+$/, "")),
   ALLIANCE_ID: z.coerce.number().int().positive(),
   // Also the last-admin recovery mechanism: malformed values must fail startup.
   BOOTSTRAP_ADMIN_CHARACTER_IDS: z

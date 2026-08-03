@@ -58,4 +58,33 @@ describe("loadConfig", () => {
       loadConfig({ ...validEnv, BOOTSTRAP_ADMIN_CHARACTER_IDS: "123,123" }),
     ).toThrow(/duplicates/);
   });
+
+  // The OAuth redirect_uri strings CONCATENATE appBaseUrl, so a trailing slash
+  // silently produced `https://host//auth/eve/callback` — accepted by
+  // z.string().url(), rejected by the provider as a redirect mismatch.
+  describe("APP_BASE_URL trailing slash", () => {
+    it("strips one or more trailing slashes", () => {
+      for (const raw of [
+        "https://auth.example/",
+        "https://auth.example//",
+        "http://localhost:3000/",
+      ]) {
+        expect(loadConfig({ ...validEnv, APP_BASE_URL: raw }).appBaseUrl).toBe(
+          raw.replace(/\/+$/, ""),
+        );
+      }
+    });
+
+    it("leaves a correct value untouched", () => {
+      expect(
+        loadConfig({ ...validEnv, APP_BASE_URL: "https://auth.example" }).appBaseUrl,
+      ).toBe("https://auth.example");
+    });
+
+    it("keeps a path prefix, stripping only the trailing slash", () => {
+      expect(
+        loadConfig({ ...validEnv, APP_BASE_URL: "https://auth.example/app/" }).appBaseUrl,
+      ).toBe("https://auth.example/app");
+    });
+  });
 });

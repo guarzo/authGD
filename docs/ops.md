@@ -553,14 +553,13 @@ your working `.env` stays untouched and switching back is deleting one file.
 APP_BASE_URL=https://your-stable-domain.ngrok-free.app
 ```
 
-**No trailing slash.** The value is string-concatenated, not URL-joined, and
-`z.string().url()` accepts a trailing slash happily — so it fails much later, as
-an unexplained redirect-URI mismatch:
-
-```text
-APP_BASE_URL=https://x.ngrok.app   →  https://x.ngrok.app/auth/eve/callback
-APP_BASE_URL=https://x.ngrok.app/  →  https://x.ngrok.app//auth/eve/callback   ✗
-```
+A trailing slash is harmless — `src/config.ts` strips it. That matters because
+the two OAuth `redirect_uri` values are string-concatenated rather than
+URL-joined, so an unnormalised `https://x.ngrok.app/` would yield
+`https://x.ngrok.app//auth/eve/callback`, which no longer matches the URI
+registered in the developer portal. `z.string().url()` accepts the slash, so
+before normalisation this surfaced only as an unexplained redirect mismatch at
+login. Write it without the slash anyway — that is the form you register below.
 
 #### 3. Register the redirect URIs
 
