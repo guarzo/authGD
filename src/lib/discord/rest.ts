@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { Config } from "@/config";
+import { isDryRun, logSuppressedWrite } from "@/lib/sync-mode";
 
 const API = "https://discord.com/api/v10";
 
@@ -105,12 +106,21 @@ export function createDiscordClient(cfg: Config, fetchImpl: typeof fetch = fetch
       assertOk(res, "GET", path);
       return parseBody(memberSchema, res, "GET", path);
     },
+    // Dry-run guarded; the reads above are not, so the role diff stays real.
     async addMemberRole(userId: string, roleId: string): Promise<void> {
+      if (isDryRun(cfg)) {
+        logSuppressedWrite("discord", `add role ${roleId} to user ${userId}`);
+        return;
+      }
       await request(`/guilds/${guild}/members/${userId}/roles/${roleId}`, {
         method: "PUT",
       });
     },
     async removeMemberRole(userId: string, roleId: string): Promise<void> {
+      if (isDryRun(cfg)) {
+        logSuppressedWrite("discord", `remove role ${roleId} from user ${userId}`);
+        return;
+      }
       await request(`/guilds/${guild}/members/${userId}/roles/${roleId}`, {
         method: "DELETE",
       });

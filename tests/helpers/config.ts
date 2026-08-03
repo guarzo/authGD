@@ -25,6 +25,12 @@ export function testConfig(overrides: Partial<NodeJS.ProcessEnv> = {}): Config {
     STANDINGS_LABEL: "flygd",
     STANDINGS_VALUE: "5",
     ESI_CONTACT: "ops@example.com",
+    // "live", deliberately (spec D10): 13 test files build config through this
+    // helper and assert LIVE behavior — real refreshes, real request counts.
+    // Defaulting to dry-run would suppress the very requests those tests exist
+    // to verify and leave them passing, which is worse than breaking them.
+    // Safety tests opt in with testConfig({ SYNC_MODE: "dry-run" }).
+    SYNC_MODE: "live",
     ...overrides,
   } as NodeJS.ProcessEnv);
 }

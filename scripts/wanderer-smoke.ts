@@ -22,6 +22,17 @@ async function main() {
     process.exit(2);
   }
   const cfg = loadConfig();
+  // This script's whole purpose is to prove the LIVE contract, so dry-run makes
+  // it meaningless. Without this check it fails anyway — the suppressed add is
+  // invisible on re-read — but with the misleading message "ADD not visible on
+  // re-read", which reads like a broken Wanderer instead of a mode mismatch.
+  if (cfg.syncMode === "dry-run") {
+    console.error(
+      "SYNC_MODE=dry-run suppresses ACL writes, so this smoke check cannot " +
+        "verify anything. Re-run with SYNC_MODE=live.",
+    );
+    process.exit(2);
+  }
   const wanderer = createWandererClient(cfg);
 
   const before = await wanderer.getAclMembers();

@@ -28,6 +28,9 @@ const env = {
   STANDINGS_LABEL: "flygd",
   STANDINGS_VALUE: "5",
   ESI_CONTACT: "ops@example.com",
+  // e2e never exercises an external integration, so nothing here depends on
+  // live behavior — and dry-run is the correct default for a browsable app.
+  SYNC_MODE: "dry-run",
 };
 
 export default defineConfig({

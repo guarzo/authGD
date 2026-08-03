@@ -12,8 +12,29 @@ import { QUEUES, createQueues, scheduleJobs } from "@/worker/queues";
 
 const deadLetterSchema = z.object({ jobType: z.string().optional() }).nullish();
 
+/**
+ * Names the mode and the three systems this process would mutate, BEFORE any
+ * queue starts. "Which credentials is this terminal holding?" has to be
+ * answerable at a glance — the production incident this guards against was a
+ * worker pointed at real credentials that nobody realized was live.
+ */
+function logStartupBanner(cfg: ReturnType<typeof getConfig>): void {
+  const targets = [
+    `wanderer=${cfg.wanderer.baseUrl} acl=${cfg.wanderer.aclId}`,
+    `discord guild=${cfg.discord.guildId}`,
+    `standings label=${cfg.standings.label} value=${cfg.standings.value}`,
+  ];
+  if (cfg.syncMode === "dry-run") {
+    console.log("authGD worker: SYNC_MODE=dry-run — outbound writes are SUPPRESSED");
+  } else {
+    console.log("authGD worker: SYNC_MODE=live — outbound writes are REAL");
+  }
+  for (const t of targets) console.log(`  target: ${t}`);
+}
+
 async function main(): Promise<void> {
   const cfg = getConfig();
+  logStartupBanner(cfg);
   const { db, pool } = createDb(cfg.databaseUrl);
 
   // pg-boss keeps its own pool, separate from createDb's — cap it too.
@@ -25,7 +46,11 @@ async function main(): Promise<void> {
   const handlers = buildJobHandlers({
     db,
     cfg,
-    esi: createEsiClient({ userAgent: `authgd/0.1.0 (${cfg.esiContact})` }),
+    esi: createEsiClient({
+      userAgent: `authgd/0.1.0 (${cfg.esiContact})`,
+      // The ESI factory takes no Config, so the guard's mode arrives here.
+      syncMode: cfg.syncMode,
+    }),
     wanderer: createWandererClient(cfg),
     discord: createDiscordClient(cfg),
   });

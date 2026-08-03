@@ -25,7 +25,8 @@ fly secrets set \
   DISCORD_ROLE_ID_GREEN=... DISCORD_OPS_WEBHOOK_URL=... \
   WANDERER_BASE_URL=... WANDERER_API_KEY=... WANDERER_ACL_ID=... \
   STANDINGS_LABEL=authgd STANDINGS_VALUE=5 \
-  ESI_CONTACT="you@example.com"
+  ESI_CONTACT="you@example.com" \
+  SYNC_MODE=live
 fly deploy
 fly scale count web=1 worker=1
 ```
@@ -69,6 +70,59 @@ character already on the ACL.
 | `STANDINGS_LABEL` | no (default `authgd`) | in-game contact label the app OWNS — see the warning below |
 | `STANDINGS_VALUE` | no (default 5) | standing pushed for members |
 | `ESI_CONTACT` | yes | operator contact sent in the ESI User-Agent (CCP requirement) |
+| `SYNC_MODE` | **yes, no default** | `live` \| `dry-run`. `dry-run` suppresses every outbound mutation (see below). Production MUST be `live` |
+
+## SYNC_MODE — the dry-run safety guard
+
+`SYNC_MODE` is **required and has no default**. Every other arrangement has a
+silent failure mode, so both production and development must state intent.
+
+| Mode | Effect |
+|---|---|
+| `live` | normal operation — all outbound writes are real |
+| `dry-run` | every outbound **mutation** is a logged no-op; **reads still happen** |
+
+`dry-run` suppresses, at boundaries a job cannot bypass:
+
+- ESI contact add / edit / **delete** (the job that once removed 130 contacts)
+- Wanderer ACL add / remove / role change
+- Discord role add / remove
+- **EVE refresh-token rotation** — EVE rotates the refresh token on every use,
+  so refreshing against production credentials silently invalidates the stored
+  copy. This is destruction disguised as a read
+- Discord ops-webhook posts, so a local worker never pages the real ops channel
+
+It does **not** suppress the login / character-link OAuth exchanges: those mint
+new credentials from a fresh authorization code and invalidate nothing.
+
+In `dry-run` the Wanderer and Discord jobs write **no audit rows** and report
+`wouldAdd` / `wouldRemove` / `wouldUnblock` / `wouldChangeRoles` instead of the
+applied-change counters, so a suppressed run can never be mistaken for a real
+one. The contacts job cannot obtain a token, so it reports every character as
+skipped and shows no diff — an accepted limitation of refusing the refresh.
+
+The worker prints its mode and its three targets at startup, before any queue
+runs.
+
+### Deploying this change
+
+`SYNC_MODE` must be set **before** the deploy that introduces it, not with it:
+
+```bash
+fly secrets set SYNC_MODE=live     # triggers its own rolling restart
+fly deploy
+```
+
+There is no automatic rollback if you forget. `fly.toml` defines no health
+checks, and only the worker validates config at startup — it crash-loops, while
+`web` boots normally and returns 500 on every request (`getConfig()` is lazy).
+The release command still succeeds, because migrations never read config.
+
+### What SYNC_MODE does NOT protect
+
+**The database.** The purge job deletes rows directly, and the guard only covers
+outbound HTTP. Never put a production `DATABASE_URL` in a local `.env` — no
+setting in this app will save you from that.
 
 ## Contact label — use a dedicated one
 
