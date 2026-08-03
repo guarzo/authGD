@@ -12,6 +12,18 @@ export type FlygdCharacter = {
 };
 
 /**
+ * The same membership test as `getFlygdCharacters`, for callers that already
+ * hold the rows and only need to know whether a character is in the desired
+ * set. Kept next to the query so the two cannot drift: change one, change both.
+ */
+export function isContactsTarget(input: {
+  tier: string;
+  affiliationInvalid: boolean;
+}): boolean {
+  return input.tier === "flygd" && !input.affiliationInvalid;
+}
+
+/**
  * The derived desired set: every character of every FlyGD account (spec: Data
  * model → Derived). Green/Blue accounts simply fall out; nothing is deleted.
  * A character with affiliation_invalid (biomassed/deleted at CCP) is excluded:

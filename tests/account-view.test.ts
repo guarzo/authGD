@@ -116,6 +116,36 @@ describe("getAccountView", () => {
     expect(view.characters).toEqual([]);
     expect(view.discordLinked).toBe(false);
   });
+
+  it("marks non-flygd characters as outside the contacts desired set", async () => {
+    // A blue member is the content of a FLYGD member's contact list, never a
+    // target of the job, so contact_sync_state will never have a row for them.
+    // The view has to say that structurally, or the page reads the permanent
+    // null as "your first sync is still pending".
+    const acc = await seedAccount(ctx.db, { tier: "blue" });
+    await seedCharacter(ctx.db, cfg, { id: 2001, accountId: acc.id });
+
+    const view = await getAccountView(ctx.db, cfg, acc.id);
+    expect(view.characters[0].contactsTarget).toBe(false);
+    expect(view.characters[0].contactSyncResult).toBeNull();
+  });
+
+  it("excludes a flygd character CCP reports as gone", async () => {
+    // affiliation_invalid drops the character from getFlygdCharacters, so it
+    // stops accruing results for the same structural reason.
+    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    await seedCharacter(ctx.db, cfg, { id: 2002, accountId: acc.id });
+    await seedCharacter(ctx.db, cfg, {
+      id: 2003,
+      accountId: acc.id,
+      affiliationInvalid: true,
+    });
+
+    const view = await getAccountView(ctx.db, cfg, acc.id);
+    const byId = new Map(view.characters.map((c) => [c.id, c]));
+    expect(byId.get(2002)!.contactsTarget).toBe(true);
+    expect(byId.get(2003)!.contactsTarget).toBe(false);
+  });
 });
 
 describe("getPushStatus", () => {

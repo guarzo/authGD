@@ -10,6 +10,7 @@ import {
   syncRun,
   wandererAclObservation,
 } from "@/db/schema";
+import { isContactsTarget } from "@/services/desired";
 
 /**
  * The three things authGD pushes on a member's behalf, and the job that pushes
@@ -118,6 +119,16 @@ export interface AccountView {
     isMain: boolean;
     tokenStatus: "valid" | "invalid" | "needs_reauth" | "missing";
     needsReauthForScopes: boolean;
+    /**
+     * Whether the contacts job writes THIS character's contact list, i.e.
+     * whether it is in `getFlygdCharacters`. False for every blue and green
+     * member — their standing is the content of someone else's push, never a
+     * target — and for a character CCP reports as gone.
+     *
+     * Without this, `contactSyncResult` is structurally null for most of the
+     * corp and the page reads that absence as "not yet run" forever.
+     */
+    contactsTarget: boolean;
     contactSyncResult: string | null;
     onMapAcl: boolean;
   }>;
@@ -168,6 +179,10 @@ export async function getAccountView(
       isMain: acc.mainCharacterId === c.id,
       tokenStatus: c.tokenStatus,
       needsReauthForScopes: [...required].some((s) => !c.scopes.includes(s)),
+      contactsTarget: isContactsTarget({
+        tier: acc.tier,
+        affiliationInvalid: c.affiliationInvalid,
+      }),
       contactSyncResult: syncByChar.get(c.id)?.lastResult ?? null,
       onMapAcl: aclSet.has(c.id),
     })),
