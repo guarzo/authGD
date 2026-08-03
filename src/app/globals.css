@@ -1466,12 +1466,14 @@ h3.rule-head__label {
    below it, so the page ends on the artwork rather than on a control. */
 .closing {
   margin: var(--s-8) 0 0;
-  text-align: center;
 }
 
+/* The global reset makes images block-level, so centring is a margin, not a
+   text-align — the latter silently does nothing here. */
 .closing img {
   width: min(560px, 100%);
   height: auto;
+  margin-inline: auto;
 }
 
 .skip {

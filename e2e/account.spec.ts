@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { sql } from "drizzle-orm";
+import { account, syncRun } from "../src/db/schema";
 import { resetDb, seedMember, sessionCookieFor, testDb } from "./helpers";
 
 const { db, pool } = testDb();
@@ -36,7 +37,7 @@ test("account page shows characters, main marker, and tier", async ({
   await expect(page.getByText("(main)")).toBeVisible();
   await expect(page.getByText("Pilot Alt")).toBeVisible();
   // "flygd" also happens to be STANDINGS_LABEL in the e2e env, which the page
-  // renders again in the contacts note now attached to the CONTACTS column —
+  // renders again in the contacts note now attached to the STANDINGS column —
   // so scope to the tier field rather than matching the bare word.
   await expect(page.locator("[data-field='tier']")).toContainText("flygd");
 });
@@ -62,7 +63,7 @@ test("the contacts note describes the column and only shows where it explains so
   // It hangs off the column header as an accessible description, not as a
   // standing footnote at the foot of the page, and not as a title attribute
   // that no keyboard user could ever summon.
-  await expect(page.getByRole("columnheader", { name: "Contacts" })).toHaveAttribute(
+  await expect(page.getByRole("columnheader", { name: "Standings" })).toHaveAttribute(
     "aria-describedby",
     "contacts-note",
   );
@@ -83,7 +84,7 @@ test("the contacts note describes the column and only shows where it explains so
   `);
   await page.reload();
   await expect(page.locator("#contacts-note")).toHaveClass(/visually-hidden/);
-  await expect(page.getByRole("columnheader", { name: "Contacts" })).toHaveAttribute(
+  await expect(page.getByRole("columnheader", { name: "Standings" })).toHaveAttribute(
     "aria-describedby",
     "contacts-note",
   );
@@ -133,4 +134,41 @@ test("unlink is quiet at rest and lands on one vertical with make main", async (
         .evaluate((e) => getComputedStyle(e).color),
     )
     .not.toBe(makeMainColor);
+});
+
+test("last pushed reports per surface, with an unlinked Discord called out", async ({
+  page,
+  context,
+}) => {
+  const acc = await seedMember(db, { name: "Pilot Prime", tier: "flygd" });
+  // Contacts has pushed; wanderer has not. Discord is not linked at all, which
+  // is a different state from "the job has not run" and must read differently.
+  await db.insert(syncRun).values({
+    jobType: "contacts",
+    status: "ok",
+    finishedAt: new Date(Date.now() - 12 * 60 * 1000),
+  });
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.goto("/account");
+
+  const pushed = page.locator("dl.facts").last();
+  await expect(page.getByRole("heading", { name: "Last pushed" })).toBeVisible();
+  await expect(pushed).toContainText("12m ago");
+  await expect(pushed).toContainText("not yet run"); // map: scheduled, never run
+  await expect(pushed).toContainText("not linked"); // discord: nothing to push
+  // The cadence is knowable even for the surfaces that have never run.
+  await expect(pushed.getByText(/^next \d\d:\d\d$/).first()).toBeVisible();
+});
+
+test("last pushed is omitted entirely before any character is linked", async ({
+  page,
+  context,
+}) => {
+  // An account with nothing linked has nothing being pushed for it; three
+  // "not yet run" rows would read as a broken system rather than an empty one.
+  const [acc] = await db.insert(account).values({ tier: "green" }).returning();
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.goto("/account");
+  await expect(page.getByRole("heading", { name: "Your account" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Last pushed" })).toHaveCount(0);
 });
