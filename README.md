@@ -106,7 +106,7 @@ Other useful scripts: `npm run build`, `npm run typecheck`, `npm run test:watch`
   description of the tier model, data model, sync jobs, auth flows, and error handling.
 - [Implementation plans](docs/superpowers/plans/) — the phased build plans.
 - [Operations guide](docs/ops.md) — deployment and the full environment-variable
-  reference. *(Being added on a separate branch; the link may not resolve yet.)*
+  reference.
 
 ## Status
 
@@ -117,9 +117,9 @@ tooling. See the plans linked above for what each phase covers.
 
 [MIT](LICENSE) for the source code.
 
-The Zoo Landers corporation artwork in `docs/assets/` and `public/` is **not**
-covered by the MIT license — it remains corp property and is used here with
-permission.
+The artwork in `docs/assets/` and `public/` is **not** covered by the MIT
+license — it was created by **Faoble** and is used here with permission. All
+rights remain with the artist.
 
 EVE Online and all related logos and images are trademarks or registered trademarks
 of CCP hf. authGD is a third-party tool, not affiliated with or endorsed by CCP hf.
