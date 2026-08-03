@@ -43,6 +43,44 @@ export default tseslint.config(
     ...tseslint.configs.disableTypeChecked,
   },
 
+  // Rule adjustments that encode conventions this codebase already follows,
+  // rather than asking the codebase to change to suit the defaults.
+  // Scoped to TS: `only-throw-error` is type-aware, and re-enabling it
+  // unscoped would undo the disableTypeChecked block above for *.mjs.
+  {
+    files: ["**/*.{ts,tsx}"],
+    rules: {
+      // `_req`, `_url`, `_init` — the leading underscore is already the
+      // established "deliberately unused" marker here.
+      "@typescript-eslint/no-unused-vars": [
+        "error",
+        {
+          argsIgnorePattern: "^_",
+          varsIgnorePattern: "^_",
+          caughtErrorsIgnorePattern: "^_",
+        },
+      ],
+      // DISABLED, with evidence. This rule flagged 5 assertions in src/ as
+      // unnecessary; running its autofix broke `tsc` on all 5. It judges an
+      // assertion in isolation, where literal types survive, and misses that
+      // the value is then widened by its context:
+      //
+      //   src/services/accounts.ts  `as "valid" | "needs_reauth"` — without it
+      //     the object-literal property widens to `string` and no longer
+      //     satisfies the drizzle insert type.
+      //   src/jobs/discord-roles.ts `as Record<string, number>` (x4) — without
+      //     it the four return branches infer as a union carrying
+      //     `notInGuild?: undefined` etc., which fails the index signature on
+      //     JobResult["counts"].
+      //
+      // Returning object literals into a wider declared type is the dominant
+      // shape of the job handlers, so this will keep misfiring. A lint rule
+      // whose --fix breaks the build is worse than no rule: `npm run lint:fix`
+      // is a wired script anyone may run.
+      "@typescript-eslint/no-unnecessary-type-assertion": "off",
+    },
+  },
+
   // The Next plugin ships eslintrc-shaped configs (`plugins` is an array), so
   // it can't be spread into flat config directly — register it by hand.
   {
@@ -72,6 +110,15 @@ export default tseslint.config(
     rules: {
       "@typescript-eslint/no-non-null-assertion": "off",
       "@typescript-eslint/no-explicit-any": "off",
+      // Test doubles are declared `async` to match the real interface they
+      // stand in for, even when the body has nothing to await. 85 of these,
+      // none in src/ — the rule keeps its full value where it matters.
+      "@typescript-eslint/require-await": "off",
+      // Fixtures and JSON payloads are legitimately `any` in tests.
+      "@typescript-eslint/no-unsafe-assignment": "off",
+      "@typescript-eslint/no-unsafe-member-access": "off",
+      // Assertion messages stringify loosely-typed fixture values on purpose.
+      "@typescript-eslint/no-base-to-string": "off",
     },
   },
 
