@@ -2,7 +2,7 @@ import { and, eq } from "drizzle-orm";
 import type { Config } from "@/config";
 import type { Db } from "@/db";
 import { character } from "@/db/schema";
-import { verifyEveAccessToken } from "@/lib/esi/sso";
+import { EveSsoError, verifyEveAccessToken } from "@/lib/esi/sso";
 import { reclaimTransferredCharacter } from "@/services/accounts";
 import { logAudit } from "@/services/audit";
 import { runJob, type JobResult } from "@/services/sync-run";
@@ -30,7 +30,40 @@ export async function runTokenHealthJob(deps: {
         else counts.invalid++; // permanent-only invalidation done in the service
         continue;
       }
-      const identity = await verifyEveAccessToken(token.accessToken);
+      // A permanently failed token never blocks the rest of a sync: a
+      // deterministic verify failure (bad/missing claims, malformed subject)
+      // marks this character and moves on; transient trouble (JWKS fetch,
+      // network) leaves state untouched and counts as transient so the run
+      // retries without permanently invalidating anything.
+      let identity;
+      try {
+        identity = await verifyEveAccessToken(token.accessToken);
+      } catch (err) {
+        if (err instanceof EveSsoError) {
+          const applied = await db.transaction(async (tx) => {
+            const rows = await tx
+              .update(character)
+              .set({ tokenStatus: "invalid" })
+              .where(
+                and(eq(character.id, ch.id), eq(character.refreshTokenEnc, token.tokenEnc)),
+              )
+              .returning({ id: character.id });
+            if (rows.length === 0) return false;
+            await logAudit(tx, {
+              actor: "system",
+              action: "token.verify_failed",
+              target: String(ch.id),
+              details: { error: err.message },
+            });
+            return true;
+          });
+          if (applied) counts.invalid++;
+          else transientFailures++;
+        } else {
+          transientFailures++;
+        }
+        continue;
+      }
 
       if (identity.characterId !== ch.id) {
         // Fail closed: a token whose subject is another character must never

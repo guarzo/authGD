@@ -75,6 +75,21 @@ function refreshFetchFor(accessTokens: Record<string, string>): typeof fetch {
   }) as typeof fetch;
 }
 
+/** Signs a structurally valid EVE JWT missing the `owner` claim — verifyEveAccessToken
+ * throws EveSsoError("EVE JWT missing owner claim") for this, unlike signAccessToken. */
+async function signTokenMissingOwnerClaim(opts: {
+  characterId: number;
+  scopes: string[];
+}): Promise<string> {
+  return new SignJWT({ name: "Pilot", scp: opts.scopes })
+    .setProtectedHeader({ alg: "RS256" })
+    .setIssuer("https://login.eveonline.com")
+    .setAudience("EVE Online")
+    .setSubject(`CHARACTER:EVE:${opts.characterId}`)
+    .setExpirationTime("5m")
+    .sign(privateKey);
+}
+
 async function getChar(id: number) {
   const rows = await ctx.db.select().from(character).where(eq(character.id, id));
   return rows[0];
@@ -212,6 +227,52 @@ describe("runTokenHealthJob", () => {
     expect(ch.tokenStatus).toBe("invalid");
     const audits = await ctx.db.select().from(auditLog);
     expect(audits.some((a) => a.action === "token.subject_mismatch")).toBe(true);
+  });
+
+  it("a verify failure on one character never blocks the rest of the run", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    await seedCharacter(ctx.db, cfg, {
+      id: 1, accountId: acc.id, main: true, refreshToken: "rt1", ownerHash: "oh-1",
+    });
+    await seedCharacter(ctx.db, cfg, {
+      id: 2, accountId: acc.id, refreshToken: "rt2", ownerHash: "oh-2",
+    });
+    const badAt = await signTokenMissingOwnerClaim({
+      characterId: 1, scopes: [...cfg.eveSso.scopes],
+    });
+    const goodAt = await signAccessToken({
+      characterId: 2, ownerHash: "oh-2", scopes: [...cfg.eveSso.scopes],
+    });
+    const result = await runTokenHealthJob({
+      db: ctx.db, cfg, fetchImpl: refreshFetchFor({ rt1: badAt, rt2: goodAt }),
+    });
+    expect(result.status).toBe("ok");
+    expect(result.counts).toMatchObject({ invalid: 1, refreshed: 1 });
+    expect((await getChar(1)).tokenStatus).toBe("invalid");
+    expect((await getChar(2)).tokenStatus).toBe("valid"); // character 2 still processed
+    const audits = await ctx.db.select().from(auditLog);
+    expect(audits.some((a) => a.action === "token.verify_failed")).toBe(true);
+  });
+
+  it("a transient verify failure (JWKS/network trouble) changes nothing and retries", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    await seedCharacter(ctx.db, cfg, {
+      id: 1, accountId: acc.id, main: true, refreshToken: "rt1", ownerHash: "oh-1",
+    });
+    // Signed with a DIFFERENT key than the one verifyEveAccessToken checks
+    // against — jose throws a signature-verification error, not EveSsoError.
+    const otherPair = await generateKeyPair("RS256");
+    const at = await new SignJWT({ name: "Pilot", owner: "oh-1", scp: [...cfg.eveSso.scopes] })
+      .setProtectedHeader({ alg: "RS256" })
+      .setIssuer("https://login.eveonline.com")
+      .setAudience("EVE Online")
+      .setSubject("CHARACTER:EVE:1")
+      .setExpirationTime("5m")
+      .sign(otherPair.privateKey);
+    await expect(
+      runTokenHealthJob({ db: ctx.db, cfg, fetchImpl: refreshFetchFor({ rt1: at }) }),
+    ).rejects.toBeInstanceOf(JobRetryError);
+    expect((await getChar(1)).tokenStatus).toBe("valid"); // unchanged
   });
 
   it("reclaimTransferredCharacter refuses a stale decision (row changed hands)", async () => {
