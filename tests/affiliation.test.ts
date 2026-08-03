@@ -62,4 +62,22 @@ describe("resolveAffiliations", () => {
     expect([...out.resolved.keys()]).toEqual([1]);
     expect(out.unresolved).toEqual([2]);
   });
+
+  it("ignores response rows for ids that were never requested", async () => {
+    const out = await resolveAffiliations([1, 2], async () => [
+      ...okFor([1, 2]),
+      { characterId: 999, corporationId: 9990, allianceId: 99000001 },
+    ]);
+    expect(out.resolved.has(999)).toBe(false);
+    expect([...out.resolved.keys()].sort((a, b) => a - b)).toEqual([1, 2]);
+  });
+
+  it("keeps the first row when the response duplicates an id", async () => {
+    const out = await resolveAffiliations([1], async () => [
+      { characterId: 1, corporationId: 10, allianceId: 99000001 },
+      { characterId: 1, corporationId: 20, allianceId: null },
+    ]);
+    expect(out.resolved.get(1)).toEqual({ corporationId: 10, allianceId: 99000001 });
+    expect(out.unresolved).toEqual([]);
+  });
 });
