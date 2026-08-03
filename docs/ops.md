@@ -32,6 +32,87 @@ fly scale count web=1 worker=1
 `TOKEN_ENCRYPTION_KEY`: `openssl rand -base64 32`. Rotating it invalidates
 every stored EVE refresh token (members re-auth); treat it as unrotatable.
 
+## Monitoring
+
+Two public endpoints, deliberately separate:
+
+| Endpoint | 200 means | 503 means |
+|---|---|---|
+| `/api/health` | this web machine serves and Postgres answers | the process is up but the database is unreachable |
+| `/api/health/sync` | a sync job ran within the last 90 minutes | the worker is dead, wedged, or has never run — or, with `"db":"error"`, the database is unreachable |
+
+Both responses carry a `db` field (`"ok"` or `"error"`), so a 503 from
+`/api/health/sync` distinguishes a stalled worker from a dead database without a
+second request.
+
+Only `/api/health` is wired into `fly.toml`. A failing Fly check removes the
+machine from the load balancer and gates deploys, so pointing it at worker
+freshness would take the site down over a fault that has nothing to do with
+serving pages.
+
+Point an external uptime monitor at **both** URLs. Fly cannot tell you it is
+down; that is the entire reason the external check exists.
+
+Notes:
+
+- A `failed` run still counts as fresh. The endpoint measures whether the worker
+  is alive, not whether jobs succeed. Job outcomes belong to `/admin/sync`; the
+  ops webhook is narrower still, firing only on exhausted retries
+  (`src/worker/index.ts`), permanent Wanderer read failures
+  (`src/jobs/wanderer.ts`), and Discord role configuration errors
+  (`src/jobs/discord-roles.ts`) — every other failure appears only in
+  `/admin/sync`. Folding job outcomes into this endpoint would let one permanent
+  config error hold the check red forever and train you to ignore it.
+- A brand-new deploy reads 503 on `/api/health/sync` until the first `membership`
+  tick, up to 30 minutes. This is intended: "never ran" is a real failure.
+- Detection is not instant. A dead worker surfaces up to 90 minutes after its
+  last run, plus your monitor's poll interval.
+- The 90-minute threshold is a constant in `src/core/health.ts`, compared with
+  `<=`. If you change a schedule in `src/worker/queues.ts` to something slower
+  than 90 minutes for the most frequent job, change it there too.
+
+## Sizing and redundancy — decisions, not defaults
+
+- **512MB for both web and worker**, declared as `[[vm]]` blocks in `fly.toml`.
+  The worker runs `tsx` and transpiles at runtime, so it carried the real OOM
+  risk; both were raised to keep the groups uniform.
+- **`web=2`** closes the deploy gap that `web=1` creates. The web tier is
+  stateless — sessions and OAuth PKCE state are both in Postgres — so extra
+  instances are safe. Set it with `fly scale count web=2`; machine count is not a
+  `fly.toml` field.
+- **`worker=1`, deliberately.** The Wanderer reconcile is destructive; a second
+  worker is not a change to make casually.
+- **Single-node Postgres, deliberately.** HA adds real operational weight to an
+  unmanaged `postgres-flex` cluster you already patch yourself.
+
+**Before scaling to `web=2`, check connection headroom.** `fly postgres connect`
+opens an interactive psql session; there is no flag for passing SQL (`-c` is the
+config-file path):
+
+```bash
+fly postgres connect -a <pg-app>
+```
+
+Then at the prompt:
+
+```sql
+SHOW max_connections;
+```
+
+| Source | Connections |
+|---|---|
+| web pools (2 machines × `max` 5) | 10 |
+| worker `createDb` pool | 5 |
+| worker pg-boss pool | 5 |
+| **steady state** | **20** |
+| release command (capped at 1) | +1 |
+| rolling replacement overlap, worst case | +15 |
+| **deploy peak, worst case** | **~36** |
+
+Confirm headroom above ~36 including superuser-reserved connections. If it is
+short, lower the per-pool `max` in `src/db/index.ts` rather than skipping the
+check.
+
 ## First-deploy Wanderer smoke check
 
 The Wanderer client contract was confirmed from wanderer's source; verify it

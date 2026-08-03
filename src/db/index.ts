@@ -4,10 +4,11 @@ import * as schema from "./schema";
 
 /**
  * `max` is capped deliberately. node-postgres defaults to 10 per pool, and this
- * app opens three of them against one small Postgres — web, worker, and pg-boss
- * — so the default allows ~30 backends at 10-25MB RSS each. That exhausted a
- * 256MB database machine on the first production deploy and crashlooped the
- * worker. Members number in the tens, not thousands; 5 is ample.
+ * app opens one per web machine plus worker and pg-boss against one small
+ * Postgres — four at web=2 — so the default allows ~30 backends at 10-25MB RSS
+ * each. That exhausted a 256MB database machine on the first production
+ * deploy and crashlooped the worker. Members number in the tens, not
+ * thousands; 5 is ample.
  */
 export function createDb(url: string, max = 5) {
   const pool = new Pool({ connectionString: url, max });

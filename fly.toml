@@ -22,3 +22,28 @@ primary_region = "iad"
 [env]
   HOSTNAME = "0.0.0.0"
   PORT = "3000"
+
+# web only. /api/health/sync is deliberately absent: a failing check pulls the
+# machine out of the load balancer and gates deploys, so wiring worker freshness
+# here would take the site down over a fault unrelated to serving pages.
+[[http_service.checks]]
+  interval = "30s"
+  timeout = "5s"
+  grace_period = "10s"
+  method = "GET"
+  path = "/api/health"
+
+# Sizing declared here rather than left in `fly scale` state, so it is reviewable
+# and cannot drift silently. The worker runs tsx and transpiles at runtime, which
+# is why 256mb was the riskier setting for it than for the compiled web server.
+[[vm]]
+  memory = "512mb"
+  cpu_kind = "shared"
+  cpus = 1
+  processes = ["web"]
+
+[[vm]]
+  memory = "512mb"
+  cpu_kind = "shared"
+  cpus = 1
+  processes = ["worker"]
