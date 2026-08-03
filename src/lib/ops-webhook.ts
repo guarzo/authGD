@@ -1,22 +1,44 @@
 import type { Config } from "@/config";
 
-/** Posts to the optional Discord ops webhook. Never throws — alerting must not break jobs. */
-export async function postOpsWebhook(
+export class OpsWebhookError extends Error {}
+
+/**
+ * Posts to the optional Discord ops webhook and THROWS OpsWebhookError on
+ * failure. Used by the dead-letter handler, where a lost alert must retry.
+ * No-op when no webhook is configured.
+ */
+export async function postOpsWebhookOrThrow(
   cfg: Config,
   content: string,
   fetchImpl: typeof fetch = fetch,
 ): Promise<void> {
   const url = cfg.discord.opsWebhookUrl;
   if (!url) return;
+  let res: Response;
   try {
-    const res = await fetchImpl(url, {
+    res = await fetchImpl(url, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ content: content.slice(0, 1900) }),
       signal: AbortSignal.timeout(10_000),
     });
-    if (!res.ok) console.error(`ops webhook post failed (${res.status})`);
   } catch (err) {
-    console.error("ops webhook post failed", err);
+    throw new OpsWebhookError(
+      `ops webhook post failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  if (!res.ok) throw new OpsWebhookError(`ops webhook post failed (${res.status})`);
+}
+
+/** Best-effort variant for ordinary jobs — alerting must not break them. */
+export async function postOpsWebhook(
+  cfg: Config,
+  content: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<void> {
+  try {
+    await postOpsWebhookOrThrow(cfg, content, fetchImpl);
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : err);
   }
 }

@@ -25,17 +25,42 @@ const JOB_QUEUES = [
 ] as const;
 
 export async function createQueues(boss: PgBoss): Promise<void> {
-  await boss.createQueue(QUEUES.deadLetter);
+  // Dead-letter queue: retry options apply to jobs SENT to it directly.
+  // Auto-dead-lettered jobs inherit the ORIGINAL job's retry_limit (pg-boss
+  // copies it in the dlq_jobs insert — src/plans.js), so failed ops alerts
+  // retry ~5 times via inheritance from the job queues below.
+  const dlqOptions = { name: QUEUES.deadLetter, ...RETRY };
+  await boss.createQueue(QUEUES.deadLetter, dlqOptions);
+  await boss.updateQueue(QUEUES.deadLetter, dlqOptions);
+  // updateQueue COALESCEs every field, so it can overwrite stale values but
+  // NEVER clear one. The one value we need absent — a dead-letter target on
+  // the DLQ itself, which would bounce alerts elsewhere — is therefore
+  // inspected explicitly, failing startup with the manual fix.
+  const dlq = await boss.getQueue(QUEUES.deadLetter);
+  if (dlq?.deadLetter) {
+    throw new Error(
+      `queue ${QUEUES.deadLetter} has a dead-letter target (${dlq.deadLetter}) ` +
+        `that pg-boss cannot clear via updateQueue; remove it manually: ` +
+        `UPDATE pgboss.queue SET dead_letter = NULL WHERE name = '${QUEUES.deadLetter}'`,
+    );
+  }
   for (const name of JOB_QUEUES) {
     // policy "short": singletonKey uniqueness only exists under this policy
     // (pg-boss job_i1 partial index) — standard queues ignore singletonKey.
     // Final-retry failures dead-letter into ops-dead-letter → ops webhook.
-    await boss.createQueue(name, {
+    const options = {
       name,
-      policy: "short",
+      policy: "short" as const,
       ...RETRY,
       deadLetter: QUEUES.deadLetter,
-    });
+    };
+    // createQueue is ON CONFLICT DO NOTHING: an existing queue keeps stale
+    // settings, so updateQueue repairs configuration on every startup. The
+    // repair guarantee is limited to fields we SET — job queues pass every
+    // managed field with a non-null value, so all of them are repaired; only
+    // clearing a value is impossible (see the DLQ inspection above).
+    await boss.createQueue(name, options);
+    await boss.updateQueue(name, options);
   }
 }
 
