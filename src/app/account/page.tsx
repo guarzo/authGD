@@ -44,10 +44,31 @@ function contactsNoteApplies(result: string | null) {
  * The contact job records a small set of result codes. "ok" and "missing_label"
  * get bespoke treatment; anything else is a failure the member can act on by
  * re-authing, so it reads as bad rather than as noise.
+ *
+ * A character the job never targets has no code and never will: blue and green
+ * members are the *content* of a FLYGD member's contact list, not a list that
+ * gets written. Reading that structural absence as "not yet run" told most of
+ * the corp their first sync was pending, permanently. Their standing is still
+ * being pushed; the LAST PUSHED section is where that question is answered.
  */
-function ContactState({ result, label }: { result: string | null; label: string }) {
-  if (result === "ok") return <Status tone="ok">ok</Status>;
+function ContactState({
+  result,
+  label,
+  target,
+}: {
+  result: string | null;
+  label: string;
+  target: boolean;
+}) {
+  if (!target) {
+    return (
+      <span className="dim" aria-label="not applicable">
+        —
+      </span>
+    );
+  }
   if (result === null) return <Status tone="off">not yet run</Status>;
+  if (result === "ok") return <Status tone="ok">ok</Status>;
   if (result === "missing_label") {
     return (
       <>
@@ -113,8 +134,12 @@ export default async function AccountPage({
   // Shown once above the manifest rather than repeated in every affected cell:
   // two identical four-line paragraphs in a table column is noise, and the note
   // is about the column as a whole, not about one character.
-  const showContactsNote = view.characters.some((c) =>
-    contactsNoteApplies(c.contactSyncResult),
+  //
+  // Non-targets are excluded: their cell reads "—", not a state the note
+  // explains. Telling a blue member authGD manages a contact label on their
+  // characters describes something that never happens to them.
+  const showContactsNote = view.characters.some(
+    (c) => c.contactsTarget && contactsNoteApplies(c.contactSyncResult),
   );
 
   return (
@@ -135,8 +160,14 @@ export default async function AccountPage({
           </p>
         )}
 
-        {view.characters.length > 0 &&
-          view.characters.every((c) => c.contactSyncResult === null) && (
+        {/* Only the characters the contacts job actually targets can be waiting
+            on a first run. Testing every character instead meant a blue member,
+            who has no targets and never will, was told their first sync was
+            pending for as long as they stayed blue. */}
+        {view.characters.some((c) => c.contactsTarget) &&
+          view.characters.every(
+            (c) => !c.contactsTarget || c.contactSyncResult === null,
+          ) && (
             <p className="notice" data-glyph="·">
               First sync has not run yet. Standings, map access and Discord roles update
               within a few minutes of linking a character.
@@ -231,6 +262,7 @@ export default async function AccountPage({
                       <ContactState
                         result={c.contactSyncResult}
                         label={cfg.standings.label}
+                        target={c.contactsTarget}
                       />
                     </div>
                   </td>

@@ -48,11 +48,13 @@ test("the contacts note describes the column and only shows where it explains so
 }) => {
   const acc = await seedMember(db, {
     name: "Synced Main",
-    tier: "blue",
+    tier: "flygd",
     alts: ["Unsynced Alt"],
   });
-  // Only the main has ever synced, so the alt's never-run state is one the note
-  // explains and the note earns its space above the manifest.
+  // FLYGD, because only a FLYGD account's characters are contacts targets at
+  // all — the note explains a column that says nothing to anyone else. Only the
+  // main has ever synced, so the alt's never-run state is one the note explains
+  // and the note earns its space above the manifest.
   await db.execute(sql`
     insert into contact_sync_state (character_id, last_result, last_synced_at)
     select id, 'ok', now() from "character" where name = 'Synced Main'
@@ -174,6 +176,44 @@ test("last pushed reports per surface, with an unlinked Discord called out", asy
     .evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().left)));
   expect(nextEdges).toHaveLength(2);
   expect(nextEdges[0]).toBe(nextEdges[1]);
+});
+
+test("a blue member is not told their first sync is pending", async ({
+  page,
+  context,
+}) => {
+  // The contacts job only ever writes FLYGD members' contact lists, so a blue
+  // member accrues no per-character result and never will. Reading that
+  // absence as "not yet run" told most of the corp their first sync was
+  // pending, permanently.
+  const acc = await seedMember(db, { name: "Blue Pilot", tier: "blue" });
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.goto("/account");
+
+  await expect(page.getByRole("heading", { name: "Your account" })).toBeVisible();
+  await expect(page.getByText("First sync has not run yet")).toHaveCount(0);
+  // Scoped to the manifest: "not yet run" is still the truthful state for a
+  // JOB that has never fired, which is what the LAST PUSHED rows report here.
+  // The claim being fixed is the per-character one.
+  await expect(page.getByRole("table").getByText("not yet run")).toHaveCount(0);
+  // The account-level answer still shows: the standing is being pushed, and
+  // this is where the member can see when.
+  await expect(page.getByRole("heading", { name: "Last pushed" })).toBeVisible();
+  // The contact-label note stays in the accessible tree as the column's
+  // description, but it is not visible copy: authGD writes no contact label on
+  // a blue member's characters, so there is nothing for it to explain.
+  await expect(page.locator("#contacts-note")).toHaveClass(/visually-hidden/);
+});
+
+test("a flygd member still sees the first-run notice", async ({ page, context }) => {
+  // The notice is correct here and must survive: this account has a target
+  // character, and it has no recorded result yet.
+  const acc = await seedMember(db, { name: "Flygd Pilot", tier: "flygd" });
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.goto("/account");
+  await expect(page.getByText("First sync has not run yet")).toBeVisible();
+  // The label note applies to this account, so it becomes visible copy.
+  await expect(page.locator("#contacts-note")).toHaveClass(/table-note/);
 });
 
 test("last pushed is omitted entirely before any character is linked", async ({

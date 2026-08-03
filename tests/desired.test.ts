@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { getFlygdCharacters } from "@/services/desired";
+import { getFlygdCharacters, isContactsTarget } from "@/services/desired";
 import { setupTestDb, truncateAll } from "./helpers/db";
 import { testConfig } from "./helpers/config";
 import { seedAccount, seedCharacter } from "./helpers/seed";
@@ -37,5 +37,29 @@ describe("getFlygdCharacters", () => {
     });
     const rows = await getFlygdCharacters(ctx.db);
     expect(rows.map((r) => r.characterId)).toEqual([1]);
+  });
+
+  it("agrees with isContactsTarget on the same rows", async () => {
+    // The predicate exists so callers holding rows don't re-derive the desired
+    // set by hand. This is the guard against the two definitions drifting.
+    const flygd = await seedAccount(ctx.db, { tier: "flygd" });
+    const blue = await seedAccount(ctx.db, { tier: "blue" });
+    await seedCharacter(ctx.db, cfg, { id: 1, accountId: flygd.id, main: true });
+    await seedCharacter(ctx.db, cfg, {
+      id: 2,
+      accountId: flygd.id,
+      affiliationInvalid: true,
+    });
+    await seedCharacter(ctx.db, cfg, { id: 3, accountId: blue.id });
+
+    const inSet = new Set((await getFlygdCharacters(ctx.db)).map((r) => r.characterId));
+    const cases = [
+      { id: 1, tier: "flygd", affiliationInvalid: false },
+      { id: 2, tier: "flygd", affiliationInvalid: true },
+      { id: 3, tier: "blue", affiliationInvalid: false },
+    ];
+    for (const c of cases) {
+      expect(isContactsTarget(c)).toBe(inSet.has(c.id));
+    }
   });
 });
