@@ -418,6 +418,91 @@ Two behaviors worth knowing:
 Character ids come from a reserved `91_000_0xx` block, chosen to sit clear of
 the `90_000_0xx` ids the e2e suite generates, so the two can never collide.
 
+### Real OAuth locally, over a tunnel
+
+The seeded cookie above covers most dev work. You need real OAuth only when you
+are changing the login or character-link flows themselves.
+
+Both providers redirect back to a URL derived from `APP_BASE_URL`, so they have
+to reach your machine. A tunnel with a **stable** domain is what makes this
+bearable — a fresh random hostname per run means re-registering the redirect URI
+in two developer portals every time.
+
+#### 1. Start the tunnel
+
+```bash
+ngrok http 3000 --domain your-stable-domain.ngrok-free.app
+```
+
+#### 2. Override `APP_BASE_URL` in `.env.local`
+
+`.env.local` wins over `.env` (both are loaded, later file first), and `.env*` is
+gitignored apart from `.env.example`. Keeping the override in a second file means
+your working `.env` stays untouched and switching back is deleting one file.
+
+```bash
+# .env.local — tunnelled OAuth. Delete this file to go back to localhost.
+APP_BASE_URL=https://your-stable-domain.ngrok-free.app
+```
+
+**No trailing slash.** The value is string-concatenated, not URL-joined, and
+`z.string().url()` accepts a trailing slash happily — so it fails much later, as
+an unexplained redirect-URI mismatch:
+
+```text
+APP_BASE_URL=https://x.ngrok.app   →  https://x.ngrok.app/auth/eve/callback
+APP_BASE_URL=https://x.ngrok.app/  →  https://x.ngrok.app//auth/eve/callback   ✗
+```
+
+#### 3. Register the redirect URIs
+
+Exactly two, and they must match character-for-character:
+
+| Provider | Redirect URI to register |
+|---|---|
+| EVE (developers.eveonline.com → your application) | `https://your-stable-domain.ngrok-free.app/auth/eve/callback` |
+| Discord (Developer Portal → your app → OAuth2 → Redirects) | `https://your-stable-domain.ngrok-free.app/auth/discord/callback` |
+
+**One EVE entry covers both flows.** Login (`/auth/eve/login`) and adding a
+character (`/auth/eve/link`) both call `buildEveAuthorizeUrl`, so they share the
+single `/auth/eve/callback` URI. Discord needs only `identify` scope.
+
+#### 4. Browse the tunnel URL, not localhost
+
+Once `APP_BASE_URL` is `https://…`, the session cookie is issued with `Secure`
+(`src/app/auth/eve/callback/route.ts`), so the browser will not send it back over
+plain `http://localhost:3000`. You will appear logged out no matter how many
+times you log in. Use the tunnel origin for the whole session.
+
+This applies to seeded cookies too: paste them on the origin you are browsing,
+and mark them `Secure` when that origin is https.
+
+#### The failure that looks like a Discord bug
+
+EVE and Discord treat `redirect_uri` differently, and it matters when you change
+`APP_BASE_URL`:
+
+- **EVE** sends `redirect_uri` only on the authorize request. The token exchange
+  (`exchangeEveCode`, `src/lib/esi/sso.ts`) sends `grant_type`, `code`, and
+  `code_verifier` — no `redirect_uri`.
+- **Discord** sends it **twice** — on authorize *and* again in the token exchange
+  (`src/lib/discord/oauth.ts`), where it must match the first one exactly.
+
+So if you change `APP_BASE_URL` (or restart the server with a different tunnel
+domain) *between* clicking "link Discord" and the redirect landing, the exchange
+fails while EVE login keeps working. It reads like a Discord outage; it is a
+mid-flight config change. Restart the flow from the current origin.
+
+#### Switching back to localhost
+
+```bash
+rm .env.local     # or comment out the APP_BASE_URL line
+```
+
+Restart `npm run dev` — `.env.local` is read at process start, not per request.
+The registered tunnel redirect URIs can stay in both portals; they are inert
+while `APP_BASE_URL` points at localhost, so this is a one-line round trip.
+
 ### Expected noise
 
 `--env-file-if-exists` prints one line per missing file, and `tsx` re-execs
