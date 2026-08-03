@@ -54,13 +54,20 @@ Point an external uptime monitor at **both** URLs. Fly cannot tell you it is
 down; that is the entire reason the external check exists.
 
 `/api/health` depends on Postgres, and the Fly check above has no
-consecutive-failure threshold, so a single 5-second blip — including a planned
+consecutive-failure threshold, so a single blip — including a planned
 Postgres patching window (see Sizing and redundancy) — takes every web machine
 out of rotation at once; they all share one database. This is accepted: without
 Postgres the app cannot serve anything useful, so removing machines that can't
 reach it costs little. The consequence is that once Fly's proxy stops routing,
 Fly itself has nothing left to tell you — the external monitor is the only
 party still watching the app from outside.
+
+A database that is up but slow is handled by two cooperating timeouts. The
+connection pool gives up after 5 seconds (`src/db/index.ts`), so the endpoint
+answers 503 with `"db":"error"` rather than queueing forever; the Fly check
+waits 10 seconds, so that answer arrives before the proxy gives up and reports
+an opaque timeout with no body. If you change either, keep the pool's timeout
+below the check's.
 
 Notes:
 

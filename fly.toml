@@ -28,7 +28,7 @@ primary_region = "iad"
 # here would take the site down over a fault unrelated to serving pages.
 #
 # /api/health itself depends on Postgres, and this check has no
-# consecutive-failure threshold, so a single 5-second blip — including a
+# consecutive-failure threshold, so a single blip — including a
 # planned Postgres patching window — takes every web machine out of rotation
 # simultaneously; they all share one database. Accepted: without Postgres the
 # app cannot serve anything useful, so pulling machines that can't reach it is
@@ -37,7 +37,10 @@ primary_region = "iad"
 # still can.
 [[http_service.checks]]
   interval = "30s"
-  timeout = "5s"
+  # Above the 5s pool connection timeout in src/db/index.ts, so a database that
+  # is up but slow returns the app's own 503 with `db: "error"` — a usable
+  # diagnosis — instead of an opaque proxy timeout at the same instant.
+  timeout = "10s"
   grace_period = "10s"
   method = "GET"
   path = "/api/health"

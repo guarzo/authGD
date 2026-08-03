@@ -28,10 +28,9 @@ describe("checkLiveness", () => {
   it(
     "is false when Postgres is unreachable",
     async () => {
-      // Built directly rather than via createDb: that helper takes no
-      // connectionTimeoutMillis, so an unreachable host would sit on the OS
-      // TCP timeout (~130s) instead of failing in a second. Construction
-      // otherwise mirrors createDb — same Pool + drizzle(schema) pairing.
+      // Built directly rather than via createDb so this test can use a 1s
+      // connect timeout instead of that helper's production 5s — same Pool +
+      // drizzle(schema) pairing, just impatient.
       const badPool = new Pool({
         connectionString: "postgres://nobody:nobody@127.0.0.1:1/none",
         connectionTimeoutMillis: 1000,
