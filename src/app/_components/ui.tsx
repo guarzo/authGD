@@ -74,12 +74,27 @@ export function Status({
   return <span className={tone === "neutral" ? "st" : `st st--${tone}`}>{children}</span>;
 }
 
-export function Tier({ tier, locked }: { tier: string; locked?: boolean }) {
+/**
+ * `size="lead"` is for the one place a tier is the subject of the page rather
+ * than a cell in a list. It buys hierarchy with size alone: the badge already
+ * carries its tier's hue, so growing it spends no extra colour against
+ * DESIGN.md's ration.
+ */
+export function Tier({
+  tier,
+  locked,
+  size,
+}: {
+  tier: string;
+  locked?: boolean;
+  size?: "lead";
+}) {
   const known = tier === "flygd" || tier === "blue" || tier === "green";
   // An unknown tier is a data problem, not a blue member: give it a neutral
   // badge rather than borrowing another tier's colour and asserting a lie.
+  const tone = known ? `tier tier--${tier}` : "tier tier--unknown";
   return (
-    <span className={known ? `tier tier--${tier}` : "tier tier--unknown"}>
+    <span className={size === "lead" ? `${tone} tier--lead` : tone}>
       {tier}
       {locked && (
         <>

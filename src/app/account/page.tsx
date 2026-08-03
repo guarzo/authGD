@@ -25,13 +25,27 @@ const ERRORS: Record<string, string> = {
 };
 
 /**
+ * The id the CONTACTS column header points `aria-describedby` at. The note is
+ * a standing property of that column, not news, so it lives there once instead
+ * of as a disclaimer every member reads on every visit.
+ */
+const CONTACTS_NOTE_ID = "contacts-note";
+
+/** A contacts state the note actually explains. "ok" needs no explanation, and
+ *  "missing_label" already carries more specific instructions than the generic
+ *  note would add — so neither surfaces it. */
+function contactsNoteApplies(result: string | null) {
+  return result !== "ok" && result !== "missing_label";
+}
+
+/**
  * The contact job records a small set of result codes. "ok" and "missing_label"
  * get bespoke treatment; anything else is a failure the member can act on by
  * re-authing, so it reads as bad rather than as noise.
  */
 function ContactState({ result, label }: { result: string | null; label: string }) {
-  if (result === null) return <Status tone="off">not yet run</Status>;
   if (result === "ok") return <Status tone="ok">ok</Status>;
+  if (result === null) return <Status tone="off">not yet run</Status>;
   if (result === "missing_label") {
     return (
       <>
@@ -63,6 +77,13 @@ export default async function AccountPage({
     ...(view.isAdmin ? [{ key: "admin", href: "/admin/accounts", label: "Admin" }] : []),
   ];
 
+  // Shown once above the manifest rather than repeated in every affected cell:
+  // two identical four-line paragraphs in a table column is noise, and the note
+  // is about the column as a whole, not about one character.
+  const showContactsNote = view.characters.some((c) =>
+    contactsNoteApplies(c.contactSyncResult),
+  );
+
   return (
     <>
       <SiteHeader items={nav} current="account" />
@@ -92,20 +113,18 @@ export default async function AccountPage({
         <RuleHead as="h2">Standing</RuleHead>
         <dl className="facts">
           <dt>Tier</dt>
-          <dd data-field="tier">
-            <Tier tier={view.tier} />
-            {view.status === "cryo" && (
-              <>
-                {" "}
-                <Status tone="warn">cryo</Status>
-              </>
-            )}
+          <dd data-field="tier" className="facts__lead">
+            <Tier tier={view.tier} size="lead" />
+            {view.status === "cryo" && <Status tone="warn">cryo</Status>}
           </dd>
 
           <dt>Discord</dt>
           <dd>
             {view.discordLinked ? (
-              <Status tone="ok">linked</Status>
+              // Secondary to the tier, and per DESIGN.md a settled state is not
+              // actionable: a neutral token says "linked" without competing
+              // with the tier badge for the eye.
+              <Status>linked</Status>
             ) : (
               <a href="/auth/discord/link">Link Discord</a>
             )}
@@ -113,18 +132,35 @@ export default async function AccountPage({
         </dl>
 
         <RuleHead as="h2">Crew manifest</RuleHead>
+
+        {/* One element, always in the accessible tree as the CONTACTS column's
+            description, so a keyboard user reaches it by navigating the header
+            and never needs a hover-only title attribute. It becomes visible
+            copy only when some row's contacts state is one the note explains —
+            a caption on the manifest, not a disclaimer on the account. */}
+        <p
+          id={CONTACTS_NOTE_ID}
+          className={showContactsNote ? "table-note" : "visually-hidden"}
+        >
+          authGD owns the <code>{cfg.standings.label}</code> contact label on your
+          characters: contacts under that label are managed automatically and may be
+          added, changed, or removed.
+        </p>
+
         <Scroller label="Your characters">
           <table className="log">
             <thead>
               <tr>
-                <th>
+                <th scope="col">
                   <span className="visually-hidden">Portrait</span>
                 </th>
-                <th>Name</th>
-                <th>Token</th>
-                <th>Contacts</th>
-                <th>Map</th>
-                <th>
+                <th scope="col">Name</th>
+                <th scope="col">Token</th>
+                <th scope="col" aria-describedby={CONTACTS_NOTE_ID}>
+                  Contacts
+                </th>
+                <th scope="col">Map</th>
+                <th scope="col">
                   <span className="visually-hidden">Actions</span>
                 </th>
               </tr>
@@ -173,7 +209,7 @@ export default async function AccountPage({
                     )}
                   </td>
                   <td>
-                    <div className="btn-row btn-row--tight">
+                    <div className="btn-row btn-row--tight btn-row--end">
                       {!c.isMain && (
                         <form
                           action={setMainAction.bind(null, c.id)}
@@ -187,7 +223,7 @@ export default async function AccountPage({
                           action={unlinkAction.bind(null, c.id)}
                           className="inline-form"
                         >
-                          <Submit className="btn btn--quiet btn--micro btn--danger">
+                          <Submit className="btn btn--quiet btn--micro btn--danger-quiet">
                             unlink
                           </Submit>
                         </form>
@@ -204,12 +240,6 @@ export default async function AccountPage({
           <a className="btn btn--primary" href="/auth/eve/link">
             Add character
           </a>
-        </p>
-
-        <p className="footnote">
-          authGD owns the <code>{cfg.standings.label}</code> contact label on your
-          characters: contacts under that label are managed automatically and may be
-          added, changed, or removed.
         </p>
       </main>
     </>
