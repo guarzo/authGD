@@ -17,6 +17,8 @@ RUN npm ci --omit=dev
 # Web process: the self-contained standalone server.
 COPY --from=build /app/.next/standalone ./web
 COPY --from=build /app/.next/static ./web/.next/static
+# Standalone output excludes public/ — without this the favicon and app icons 404.
+COPY --from=build /app/public ./web/public
 # Worker + release migrate run from source via tsx (prod dependency).
 COPY src ./src
 COPY scripts ./scripts
