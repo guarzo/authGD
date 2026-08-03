@@ -22,7 +22,10 @@ COPY src ./src
 COPY scripts ./scripts
 COPY drizzle ./drizzle
 COPY tsconfig.json next.config.ts ./
-RUN addgroup -S authgd && adduser -S authgd -G authgd && chown -R authgd:authgd /app
+# No chown: COPY'd files are world-readable and nothing under /app is written
+# at runtime (all pages force-dynamic, no ISR/image cache) — a recursive chown
+# would duplicate node_modules + the standalone build into an extra layer.
+RUN addgroup -S authgd && adduser -S authgd -G authgd
 USER authgd
 ENV HOSTNAME=0.0.0.0 PORT=3000
 EXPOSE 3000
