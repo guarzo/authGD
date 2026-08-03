@@ -1,7 +1,9 @@
+import type { Config } from "@/config";
 import type { Db } from "@/db";
 import { wandererAclObservation } from "@/db/schema";
 import { diffAcl } from "@/core/acl-diff";
 import { WandererError, type WandererClient } from "@/lib/wanderer/client";
+import { postOpsWebhook } from "@/lib/ops-webhook";
 import { logAudit } from "@/services/audit";
 import { getFlygdCharacters } from "@/services/desired";
 import { runJob, type JobResult } from "@/services/sync-run";
@@ -22,9 +24,11 @@ const isTransient = (err: unknown): boolean =>
 
 export async function runWandererJob(deps: {
   db: Db;
+  cfg: Config;
   wanderer: WandererClient;
+  fetchImpl?: typeof fetch;
 }): Promise<JobResult> {
-  const { db, wanderer } = deps;
+  const { db, cfg, wanderer } = deps;
   return runJob(db, "wanderer", async () => {
     const desiredIds = (await getFlygdCharacters(db)).map((c) => c.characterId);
 
@@ -33,11 +37,15 @@ export async function runWandererJob(deps: {
     try {
       members = await wanderer.getAclMembers();
     } catch (err) {
-      return {
-        status: "failed",
-        errorSummary: `ACL read failed: ${err instanceof Error ? err.message : String(err)}`,
-        ...(isTransient(err) ? { retry: true } : {}),
-      };
+      const msg = `ACL read failed: ${err instanceof Error ? err.message : String(err)}`;
+      if (isTransient(err)) {
+        return { status: "failed", errorSummary: msg, retry: true };
+      }
+      // Permanent (e.g. rotated API key): this is otherwise a silent,
+      // permanent outage — pg-boss sees a returned "failed" as handled and
+      // never dead-letters it, so alert directly.
+      await postOpsWebhook(cfg, `authGD: wanderer ${msg}`, deps.fetchImpl);
+      return { status: "failed", errorSummary: msg };
     }
 
     const diff = diffAcl({ desiredIds, members: characterEntries(members) });

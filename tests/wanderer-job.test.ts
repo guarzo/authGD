@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { auditLog, wandererAclObservation } from "@/db/schema";
 import { runWandererJob } from "@/jobs/wanderer";
 import {
@@ -32,6 +32,8 @@ type Member = WandererAclMember;
 /** Fake Wanderer with a mutable member list and scriptable failures. */
 function fakeWanderer(initial: Member[], opts: {
   failFirstRead?: boolean;
+  /** Initial read failure is permanent (e.g. rotated API key), not transient. */
+  permanentFirstReadFailure?: boolean;
   failReRead?: boolean;
   failRemoveOf?: number;
   /** When set with failRemoveOf, the remove failure is permanent (transient: false). */
@@ -44,6 +46,9 @@ function fakeWanderer(initial: Member[], opts: {
       reads++;
       if (opts.failFirstRead && reads === 1) {
         throw new WandererError("read failed", { status: 502, transient: true });
+      }
+      if (opts.permanentFirstReadFailure && reads === 1) {
+        throw new WandererError("read failed", { status: 401, transient: false });
       }
       if (opts.failReRead && reads > 1) {
         throw new WandererError("re-read failed", { status: 502, transient: true });
@@ -83,7 +88,7 @@ describe("runWandererJob", () => {
       { characterId: 4, role: "manager" },
       { characterId: null, role: "viewer" }, // corp/alliance entry — never touched
     ]);
-    const result = await runWandererJob({ db: ctx.db, wanderer: w.client });
+    const result = await runWandererJob({ db: ctx.db, cfg, wanderer: w.client });
     expect(result.status).toBe("ok");
     expect(result.counts).toMatchObject({ added: 1, removed: 2 });
     expect(w.reads()).toBe(2); // initial + post-mutation
@@ -104,16 +109,53 @@ describe("runWandererJob", () => {
     await seedFlygdChar(1);
     const w = fakeWanderer([{ characterId: 2, role: "member" }], { failFirstRead: true });
     await expect(
-      runWandererJob({ db: ctx.db, wanderer: w.client }),
+      runWandererJob({ db: ctx.db, cfg, wanderer: w.client }),
     ).rejects.toBeInstanceOf(JobRetryError);
     expect(w.members()).toEqual([{ characterId: 2, role: "member" }]); // untouched
     expect(await ctx.db.select().from(wandererAclObservation)).toEqual([]);
   });
 
+  it("alerts the ops webhook on a PERMANENT initial read failure (e.g. rotated API key)", async () => {
+    await seedFlygdChar(1);
+    const w = fakeWanderer([{ characterId: 2, role: "member" }], {
+      permanentFirstReadFailure: true,
+    });
+    const webhook = vi.fn(async () => new Response("", { status: 200 }));
+    const result = await runWandererJob({
+      db: ctx.db,
+      cfg,
+      wanderer: w.client,
+      fetchImpl: webhook as unknown as typeof fetch,
+    });
+    // returned, not thrown: a permanent read failure must not retry-loop —
+    // but pg-boss would otherwise see success and never dead-letter it, so
+    // the ops webhook is the only alert path.
+    expect(result.status).toBe("failed");
+    expect(result.retry).toBeUndefined();
+    expect(webhook).toHaveBeenCalledOnce();
+    const [, init] = webhook.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string).content).toContain("wanderer");
+  });
+
+  it("does NOT alert the ops webhook on a transient initial read failure", async () => {
+    await seedFlygdChar(1);
+    const w = fakeWanderer([{ characterId: 2, role: "member" }], { failFirstRead: true });
+    const webhook = vi.fn(async () => new Response("", { status: 200 }));
+    await expect(
+      runWandererJob({
+        db: ctx.db,
+        cfg,
+        wanderer: w.client,
+        fetchImpl: webhook as unknown as typeof fetch,
+      }),
+    ).rejects.toBeInstanceOf(JobRetryError);
+    expect(webhook).not.toHaveBeenCalled();
+  });
+
   it("persists the initial read as the observation when nothing needs mutating", async () => {
     await seedFlygdChar(1);
     const w = fakeWanderer([{ characterId: 1, role: "member" }]);
-    await runWandererJob({ db: ctx.db, wanderer: w.client });
+    await runWandererJob({ db: ctx.db, cfg, wanderer: w.client });
     expect(w.reads()).toBe(1);
     const observed = await ctx.db.select().from(wandererAclObservation);
     expect(observed).toHaveLength(1);
@@ -130,7 +172,7 @@ describe("runWandererJob", () => {
       { failRemoveOf: 5 },
     );
     await expect(
-      runWandererJob({ db: ctx.db, wanderer: w.client }),
+      runWandererJob({ db: ctx.db, cfg, wanderer: w.client }),
     ).rejects.toBeInstanceOf(JobRetryError);
     const observed = await ctx.db.select().from(wandererAclObservation);
     // 5's removal failed, so the post-mutation read still contains it — and
@@ -141,7 +183,7 @@ describe("runWandererJob", () => {
   it("unblocks a desired blocked member and observes the new role", async () => {
     await seedFlygdChar(1);
     const w = fakeWanderer([{ characterId: 1, role: "blocked" }]);
-    const result = await runWandererJob({ db: ctx.db, wanderer: w.client });
+    const result = await runWandererJob({ db: ctx.db, cfg, wanderer: w.client });
     expect(result.status).toBe("ok");
     expect(result.counts).toMatchObject({ unblocked: 1, added: 0, removed: 0 });
     const observed = await ctx.db.select().from(wandererAclObservation);
@@ -161,7 +203,7 @@ describe("runWandererJob", () => {
       { failRemoveOf: 5, permanentRemoveFailure: true },
     );
     // returned, not thrown: permanent failures must not retry-loop
-    const result = await runWandererJob({ db: ctx.db, wanderer: w.client });
+    const result = await runWandererJob({ db: ctx.db, cfg, wanderer: w.client });
     expect(result.status).toBe("partial");
     expect(result.retry).toBeUndefined();
   });
@@ -175,7 +217,7 @@ describe("runWandererJob", () => {
     });
     const w = fakeWanderer([{ characterId: 2, role: "member" }], { failReRead: true });
     await expect(
-      runWandererJob({ db: ctx.db, wanderer: w.client }),
+      runWandererJob({ db: ctx.db, cfg, wanderer: w.client }),
     ).rejects.toBeInstanceOf(JobRetryError);
     const observed = await ctx.db.select().from(wandererAclObservation);
     expect(observed.map((o) => o.characterId)).toEqual([42]); // stale but honest
