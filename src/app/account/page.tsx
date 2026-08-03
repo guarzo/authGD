@@ -81,12 +81,13 @@ export default async function AccountPage({
           </p>
         )}
 
-        {view.characters.every((c) => c.contactSyncResult === null) && (
-          <p className="notice" data-glyph="·">
-            First sync has not run yet. Standings, map access and Discord roles update
-            within a few minutes of linking a character.
-          </p>
-        )}
+        {view.characters.length > 0 &&
+          view.characters.every((c) => c.contactSyncResult === null) && (
+            <p className="notice" data-glyph="·">
+              First sync has not run yet. Standings, map access and Discord roles update
+              within a few minutes of linking a character.
+            </p>
+          )}
 
         <RuleHead as="h2">Standing</RuleHead>
         <dl className="facts">
