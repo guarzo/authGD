@@ -64,7 +64,10 @@ describe("createWandererClient", () => {
         aclResponse([{ eve_character_id: "12345678901234567890", role: "viewer" }]),
       ),
     );
-    await expect(createWandererClient(cfg).getAclMembers()).rejects.toThrow();
+    // assert the safe-integer validation itself fired, on the character-id path
+    const err = await createWandererClient(cfg).getAclMembers().catch((e: unknown) => e);
+    expect(String(err)).toMatch(/positive safe integer/);
+    expect(String(err)).toMatch(/eve_character_id/);
   });
 
   it("fails closed on zero or multiple external ids", async () => {

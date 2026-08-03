@@ -32,14 +32,12 @@ const ADMINISTRATOR = 1n << 3n;
  * bot has Manage Roles (or Administrator); bot's highest role sits ABOVE
  * every managed role. Failure is permanent-config — no retry loop.
  */
-/** Malformed permissions strings must never grant access — treat as zero. */
+/** Malformed permissions strings must never grant access — treat as zero.
+ * Digits-only: BigInt would also accept hex ("0x...") and padded input, which
+ * Discord never sends and which must not sneak permissions in. */
 function parsePermissions(permissions: string): bigint {
-  try {
-    const n = BigInt(permissions);
-    return n < 0n ? 0n : n;
-  } catch {
-    return 0n;
-  }
+  if (!/^\d+$/.test(permissions)) return 0n;
+  return BigInt(permissions);
 }
 
 export function validateRoleConfig(input: {

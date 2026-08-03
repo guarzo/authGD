@@ -22,10 +22,17 @@ const roleSchema = z.object({
 const memberSchema = z.object({ roles: z.array(z.string()) });
 const userSchema = z.object({ id: z.string() });
 
-/** Malformed bodies are deterministic — fail closed as permanent, never retry-loop. */
-function safeParse<T>(schema: z.ZodSchema<T>, data: unknown, method: string, path: string): T {
+/** Malformed bodies are deterministic — fail closed as permanent, never
+ * retry-loop. Reads the body here so invalid JSON classifies the same way as
+ * a schema failure. */
+async function parseBody<T>(
+  schema: z.ZodSchema<T>,
+  res: Response,
+  method: string,
+  path: string,
+): Promise<T> {
   try {
-    return schema.parse(data);
+    return schema.parse(await res.json());
   } catch {
     throw new DiscordApiError(`discord ${method} ${path}: malformed response body`, {
       transient: false,
@@ -73,12 +80,12 @@ export function createDiscordClient(cfg: Config, fetchImpl: typeof fetch = fetch
     async getGuildRoles() {
       const path = `/guilds/${guild}/roles`;
       const res = await request(path);
-      return safeParse(z.array(roleSchema), await res.json(), "GET", path);
+      return parseBody(z.array(roleSchema), res, "GET", path);
     },
     async getBotUserId(): Promise<string> {
       const path = "/users/@me";
       const res = await request(path);
-      return safeParse(userSchema, await res.json(), "GET", path).id;
+      return (await parseBody(userSchema, res, "GET", path)).id;
     },
     /** null when the user is not in the guild (404). */
     async getGuildMember(userId: string): Promise<{ roles: string[] } | null> {
@@ -86,7 +93,7 @@ export function createDiscordClient(cfg: Config, fetchImpl: typeof fetch = fetch
       const res = await rawRequest(path);
       if (res.status === 404) return null;
       assertOk(res, "GET", path);
-      return safeParse(memberSchema, await res.json(), "GET", path);
+      return parseBody(memberSchema, res, "GET", path);
     },
     async addMemberRole(userId: string, roleId: string): Promise<void> {
       await request(`/guilds/${guild}/members/${userId}/roles/${roleId}`, {

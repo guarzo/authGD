@@ -38,6 +38,20 @@ describe("createDiscordClient", () => {
     expect((err as DiscordApiError).transient).toBe(false);
   });
 
+  it("classifies a non-JSON body as a permanent DiscordApiError too", async () => {
+    server.use(
+      http.get(`${API}/guilds/9000/roles`, () =>
+        new HttpResponse("<html>gateway</html>", {
+          status: 200,
+          headers: { "content-type": "text/html" },
+        }),
+      ),
+    );
+    const err = await createDiscordClient(cfg).getGuildRoles().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(DiscordApiError);
+    expect((err as DiscordApiError).transient).toBe(false);
+  });
+
   it("returns null for a 404 guild member (user not in guild)", async () => {
     server.use(
       http.get(`${API}/guilds/9000/members/u1`, () =>
