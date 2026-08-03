@@ -33,11 +33,11 @@ updates:
 
     ignore:
       # @types/node majors track NODE majors, and this repo pins the Node major
-      # in three files that scripts/check-node-version.sh forces to agree. A
-      # @types/node v24 bump on a Node 22 runtime is the bad case: the types
-      # describe APIs the runtime does not have, so `npm run typecheck` PASSES
-      # and the failure lands at execution instead. Majors here belong to the
-      # deliberate Node bump; minors and patches still flow normally.
+      # in three files that scripts/check-node-version.sh forces to agree. Types
+      # ahead of the runtime are the bad case: they describe APIs the runtime
+      # does not have, so `npm run typecheck` PASSES and the failure lands at
+      # execution instead. Majors here belong to the deliberate Node bump;
+      # minors and patches still flow.
       - dependency-name: "@types/node"
         update-types:
           - version-update:semver-major
@@ -121,10 +121,10 @@ updates:
 
 # Deliberately NOT configured: package-ecosystem: docker.
 #
-# The Dockerfile pins the floating tag `node:22-alpine`, not a digest, so the
-# only update Dependabot could ever propose is a MAJOR tag change to
-# node:24-alpine — and it would edit the Dockerfile alone. scripts/check-node-version.sh
+# The Dockerfile pins the floating tag `node:24-alpine`, not a digest, so the
+# only update Dependabot could ever propose is a MAJOR tag change (node:26-alpine
+# and onward) — and it would edit the Dockerfile alone. scripts/check-node-version.sh
 # requires the Dockerfile, .nvmrc and package.json `engines` to agree, so such a
 # PR fails CI by construction and can never be merged as-is. A Node bump here is
-# a deliberate four-file change; automating one third of it produces only noise.
-# Patch rebuilds of node:22-alpine are picked up by `docker build` anyway.
+# a deliberate multi-file change; automating one third of it produces only noise.
+# Patch rebuilds of node:24-alpine are picked up by `docker build` anyway.

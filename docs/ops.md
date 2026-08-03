@@ -378,9 +378,8 @@ least one never-used id in reserve, or check
 
 ## Local development
 
-Requires **Node 22.9+** (the floor for `--env-file-if-exists`, which
-`npm run worker`, `npm run db:migrate`, and `npm run smoke:wanderer` use to load
-`.env`) and Docker. `npm install` enforces it via `engines` + `.npmrc`, and
+Requires **Node 24+** (Active LTS; the Dockerfile ships `node:24-alpine`) and
+Docker. `npm install` enforces it via `engines` + `.npmrc`, and
 `nvm use` picks it up from `.nvmrc`. The three pins (`Dockerfile`, `.nvmrc`,
 `package.json` `engines`) must agree on the major — `scripts/check-node-version.sh`
 fails CI if a bump misses one.
@@ -526,8 +525,9 @@ precedence over `--env-file` anyway. But it does mean changes to the `worker`
 npm script do not reach production.
 
 `npm run db:migrate` **is** the release command (`fly.toml`), so it does carry
-the flags into the deploy path. That makes the Node 22.9 floor load-bearing in
-production: below it, `node` rejects `--env-file-if-exists` outright and every
-deploy fails. The Dockerfile copies `.npmrc` before `npm ci` in both stages so
-`engine-strict` turns that into a **build** failure instead of a release-time
-one.
+the flags into the deploy path. That is what makes the Node floor load-bearing
+in production rather than a developer convenience: below Node 22.9 `node`
+rejects `--env-file-if-exists` outright and every deploy fails. The floor now
+sits at 24 to track Active LTS, well clear of that, but the Dockerfile copies
+`.npmrc` before `npm ci` in both stages so `engine-strict` turns any regression
+below the floor into a **build** failure instead of a release-time one.
