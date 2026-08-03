@@ -2044,11 +2044,13 @@ async function main() {
     console.log("ADD ok — member visible on re-read");
 
     await wanderer.removeAclMember(characterId);
-    removed = true;
     const afterRemove = await wanderer.getAclMembers();
     if (afterRemove.some((m) => m.characterId === characterId)) {
       throw new Error("REMOVE not visible on re-read");
     }
+    // Only after absence is CONFIRMED — if the member is still present, the
+    // finally block must retry the removal.
+    removed = true;
     console.log("REMOVE ok — member gone on re-read");
     console.log("PASS: wanderer client contract verified live");
   } finally {
@@ -2467,7 +2469,9 @@ Append to `tests/worker-queues.test.ts`:
 
 ```ts
   it("repairs stale queue settings on startup (createQueue alone is ON CONFLICT DO NOTHING)", async () => {
+    // pg-boss's Queue type requires name even on updateQueue
     await boss.updateQueue(QUEUES.contacts, {
+      name: QUEUES.contacts,
       policy: "standard",
       retryLimit: 1,
       retryDelay: 1,
@@ -2532,11 +2536,13 @@ Expected: repair test FAILS (policy stays `standard`); `postOpsWebhookOrThrow` F
 
 ```ts
 export async function createQueues(boss: PgBoss): Promise<void> {
-  // The dead-letter queue gets its own retry policy (no deadLetter target —
-  // it is the end of the line) so a failed ops alert retries instead of
-  // vanishing.
-  await boss.createQueue(QUEUES.deadLetter, { name: QUEUES.deadLetter, ...RETRY });
-  await boss.updateQueue(QUEUES.deadLetter, { ...RETRY });
+  // Dead-letter queue: retry options apply to jobs SENT to it directly.
+  // Auto-dead-lettered jobs inherit the ORIGINAL job's retry_limit (pg-boss
+  // copies it in the dlq_jobs insert — src/plans.js), so failed ops alerts
+  // retry ~5 times via inheritance from the job queues below.
+  const dlqOptions = { name: QUEUES.deadLetter, ...RETRY };
+  await boss.createQueue(QUEUES.deadLetter, dlqOptions);
+  await boss.updateQueue(QUEUES.deadLetter, dlqOptions);
   for (const name of JOB_QUEUES) {
     // policy "short": singletonKey uniqueness only exists under this policy
     // (pg-boss job_i1 partial index) — standard queues ignore singletonKey.
@@ -2549,6 +2555,9 @@ export async function createQueues(boss: PgBoss): Promise<void> {
     };
     // createQueue is ON CONFLICT DO NOTHING: an existing queue keeps stale
     // settings, so updateQueue repairs configuration on every startup.
+    // Caveat: updateQueue COALESCEs each field, so it can OVERWRITE stale
+    // values but never CLEAR one (passing undefined/null keeps the old
+    // value) — we always pass every field we manage, which is sufficient.
     await boss.createQueue(name, options);
     await boss.updateQueue(name, options);
   }
@@ -2650,7 +2659,10 @@ Plan 2 post-merge review: (a) pg-boss `short` policy allows one queued job to st
 - Consumes: existing `resolveAffiliations`, `runMembershipJob` shapes (signatures unchanged).
 - Produces:
   - `resolveAffiliations` ignores response rows whose id was not requested and duplicate rows for the same id (first wins); requested-but-omitted ids stay `unresolved` exactly as before.
-  - Membership affiliation writes become a CAS on `affiliation_checked_at`: `WHERE id = ? AND (affiliation_checked_at IS NULL OR affiliation_checked_at < <this run's checkedAt>) RETURNING id`. Only characters whose write WON count as confirmed for the tier pass — a run whose data lost to a newer run never transitions an account on it. Same guard on the `affiliation_invalid` flag write. New count `stale` reports lost writes.
+  - Membership runs carry a **DB-derived ordering token captured BEFORE any external work**: `checkedAt` comes from `select clock_timestamp()` at the top of the job body, before `resolveAffiliations` issues ESI calls. A slower, older run therefore holds an OLDER token no matter how late it finishes — `new Date()` after the ESI phase would invert that.
+  - Affiliation writes CAS on the token: `WHERE id = ? AND (affiliation_checked_at IS NULL OR affiliation_checked_at < <checkedAt>) RETURNING id`. Only characters whose write WON count as confirmed for the tier pass. Ties lose (strict `<`).
+  - **The tier transaction re-verifies the token under lock**: a CAS win only proves the write was newest momentarily — another run can supersede it before the tier transaction runs. Inside the transaction, the main character row is locked `FOR UPDATE` FIRST (the repo's documented lock order is character before account — see the LOCK ORDER comment in `src/services/accounts.ts`) and its `affiliation_checked_at` must still EQUAL this run's token; otherwise skip. Only then is the account row locked and re-checked as today.
+  - `affiliation_invalid` writes go per-id with the same guard + `RETURNING`; the audit row is written only for ids that WON and were not already flagged (checked per-id at write time, not from the pre-run snapshot); losing writes count as `stale` and are neither flagged nor audited. New count `stale` reports all lost writes.
 
 - [ ] **Step 1: Write failing tests**
 
@@ -2676,33 +2688,63 @@ Append to `tests/affiliation.test.ts`:
   });
 ```
 
-Append to `tests/membership-job.test.ts` (inside the main describe; needs `character` in the schema import — already there):
+Append to `tests/membership-job.test.ts` (inside the main describe; `character` is already in the schema import):
 
 ```ts
-  it("never lets a stale run overwrite a newer affiliation write or transition on it", async () => {
+  it("a slower OLDER run cannot overwrite a newer overlapping run or transition on it", async () => {
     const acc = await seedAccount(ctx.db, { tier: "flygd" });
     await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
-    // A NEWER run already confirmed this character in-alliance, later than
-    // this run's start time can ever be.
-    const future = new Date(Date.now() + 60_000);
-    await ctx.db
-      .update(character)
-      .set({
-        allianceId: 99000001,
-        corporationId: 500,
-        affiliationCheckedAt: future,
-      })
-      .where(eq(character.id, 1));
-    // This (older) run believes the main LEFT the alliance.
-    const result = await runMembershipJob({ db: ctx.db, cfg, esi: esiWith({ 1: null }) });
+    // GENUINELY overlapping runs: the newer run executes entirely inside the
+    // older run's external ESI phase — i.e. after the older run captured its
+    // ordering token — then the older run comes back with stale
+    // "left alliance" data and finishes last.
+    let calls = 0;
+    const esi = {
+      postAffiliation: async (ids: number[]): Promise<Affiliation[]> => {
+        calls++;
+        if (calls === 1) {
+          await runMembershipJob({ db: ctx.db, cfg, esi: esiWith({ 1: 99000001 }) });
+        }
+        return ids.map((id) => ({ characterId: id, corporationId: 1000, allianceId: null }));
+      },
+    };
+    const result = await runMembershipJob({ db: ctx.db, cfg, esi });
     const [ch] = await ctx.db.select().from(character).where(eq(character.id, 1));
-    expect(ch.allianceId).toBe(99000001); // newer write preserved
-    expect(ch.affiliationCheckedAt).toEqual(future);
+    expect(ch.allianceId).toBe(99000001); // the newer (inner) run's write survives
     const after = await getAccount(acc.id);
-    expect(after.tier).toBe("flygd"); // no demotion from stale data
+    expect(after.tier).toBe("flygd"); // no demotion from the stale outer read
     expect(result.counts).toMatchObject({ demoted: 0, stale: 1 });
   });
+
+  it("a losing invalid-flag write is neither flagged nor audited, and counts stale", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
+    // Same overlap shape: a newer run confirms the character VALID while the
+    // older run's ESI phase is in flight; the older run then 400-bisects the
+    // id to "invalid" and must lose.
+    let calls = 0;
+    const esi = {
+      postAffiliation: async (): Promise<Affiliation[]> => {
+        calls++;
+        if (calls === 1) {
+          await runMembershipJob({ db: ctx.db, cfg, esi: esiWith({ 1: 99000001 }) });
+        }
+        throw new EsiError("bad id", 400, "permanent");
+      },
+    };
+    const result = await runMembershipJob({ db: ctx.db, cfg, esi });
+    const [ch] = await ctx.db.select().from(character).where(eq(character.id, 1));
+    expect(ch.affiliationInvalid).toBe(false); // losing flag write discarded
+    const audits = await ctx.db
+      .select()
+      .from(auditLog)
+      .where(eq(auditLog.action, "character.affiliation_invalid"));
+    expect(audits).toHaveLength(0);
+    expect(result.counts).toMatchObject({ stale: 1 });
+  });
 ```
+
+(The between-CAS-and-transaction window from finding 2 is closed by the in-transaction token re-verification; the overlap tests above pin the ordering mechanism itself, and the re-verify shares the exact same equality check.)
 
 - [ ] **Step 2: Run tests to verify failure**
 
@@ -2730,15 +2772,36 @@ Expected: FAIL — unrequested id resolved; stale run demotes and overwrites.
     for (const id of ids) if (!returned.has(id)) out.unresolved.push(id);
 ```
 
-`src/jobs/membership.ts` — add `or`, `isNull`, `lt` to the drizzle-orm import; replace the resolved-write loop and thread a `confirmed` set into the tier pass:
+`src/jobs/membership.ts` — add `or`, `isNull`, `lt`, `sql` to the drizzle-orm import. Three coordinated changes inside the job body:
+
+**(a) Ordering token — FIRST thing in the job body, before `resolveAffiliations`:**
 
 ```ts
-    const checkedAt = new Date();
-    // CAS on affiliation_checked_at: "short" queues allow two concurrent runs,
-    // and an older run finishing last must not overwrite newer data — or
-    // transition tiers from it. Only rows whose write WON are confirmed.
+    // Ordering token for this run, captured BEFORE any external work and from
+    // the DATABASE clock: "short" queues allow two overlapping runs, and a
+    // slower, older run must never beat a newer one just by finishing last
+    // (a post-ESI `new Date()` would give the older run the LATER stamp).
+    const tokenResult = await db.execute<{ now: Date }>(sql`select clock_timestamp() as now`);
+    const checkedAt = tokenResult.rows[0].now;
+```
+
+(Delete the existing `const checkedAt = new Date();` line further down.)
+
+**(b) Guarded resolved/invalid writes — replace the write loops:**
+
+```ts
+    // CAS on affiliation_checked_at: only rows whose write WON are confirmed
+    // for the tier pass; a lost write means a newer run owns this character.
     const confirmed = new Set<number>();
     let stale = 0;
+    const tokenGuard = (id: number) =>
+      and(
+        eq(character.id, id),
+        or(
+          isNull(character.affiliationCheckedAt),
+          lt(character.affiliationCheckedAt, checkedAt),
+        ),
+      );
     for (const [id, aff] of outcome.resolved) {
       const won = await db
         .update(character)
@@ -2748,22 +2811,64 @@ Expected: FAIL — unrequested id resolved; stale run demotes and overwrites.
           affiliationCheckedAt: checkedAt,
           affiliationInvalid: false,
         })
-        .where(
-          and(
-            eq(character.id, id),
-            or(
-              isNull(character.affiliationCheckedAt),
-              lt(character.affiliationCheckedAt, checkedAt),
-            ),
-          ),
-        )
+        .where(tokenGuard(id))
         .returning({ id: character.id });
       if (won.length > 0) confirmed.add(id);
       else stale++;
     }
+    for (const id of outcome.invalid) {
+      // Per-id so the audit reflects rows that actually changed: RETURNING
+      // proves the write won; the flag is read at write time (not from the
+      // pre-run snapshot) so a losing run cannot audit a phantom flag.
+      const [before] = await db
+        .select({ flagged: character.affiliationInvalid })
+        .from(character)
+        .where(eq(character.id, id));
+      const won = await db
+        .update(character)
+        .set({ affiliationInvalid: true, affiliationCheckedAt: checkedAt })
+        .where(tokenGuard(id))
+        .returning({ id: character.id });
+      if (won.length === 0) {
+        stale++;
+        continue;
+      }
+      if (before && !before.flagged) {
+        await logAudit(db, {
+          actor: "system",
+          action: "character.affiliation_invalid",
+          target: String(id),
+        });
+      }
+    }
 ```
 
-Apply the same `and(inArray(...), or(isNull(...), lt(...)))` guard to the `affiliation_invalid` UPDATE. In the tier pass, wherever the main's confirmation is computed from `outcome.resolved`, additionally require `confirmed.has(acc.mainCharacterId)` (a resolved-but-lost main is NOT confirmed for this run). Add `stale` to the returned counts.
+(This replaces the existing bulk `inArray` invalid UPDATE and its `alreadyFlagged` pre-run snapshot loop entirely.)
+
+**(c) Tier pass** — require `confirmed.has(acc.mainCharacterId)` wherever the main's confirmation is computed from `outcome.resolved`, and add a token re-verification INSIDE the existing tier transaction, BEFORE the account-row lock (lock order: character before account, per the LOCK ORDER comment in `src/services/accounts.ts`):
+
+```ts
+      const applied = await db.transaction(async (tx) => {
+        // A CAS win is only momentary — re-verify under lock that our write
+        // is STILL the latest before transitioning the tier on it.
+        const [mainRow] = await tx
+          .select()
+          .from(character)
+          .where(eq(character.id, acc.mainCharacterId!))
+          .for("update");
+        if (
+          !mainRow ||
+          mainRow.affiliationCheckedAt?.getTime() !== checkedAt.getTime()
+        ) {
+          return false; // superseded — the newer run owns this decision
+        }
+        const [locked] = await tx
+          .select()
+          .from(account)
+          // …existing account lock + re-check + update/audit/enqueue unchanged…
+```
+
+Add `stale` to the returned counts.
 
 - [ ] **Step 4: Run tests to verify pass**
 
@@ -2793,7 +2898,7 @@ The unread CodeRabbit comment from PR #2 (posted 5 minutes after merge): `getGui
 
 - [ ] **Step 1: Update/write tests**
 
-In `tests/discord-rest.test.ts`, find the existing `getGuildMember` 404 test and give its fixture a real Discord error body: `HttpResponse.json({ message: "Unknown Member", code: 10007 }, { status: 404 })` — it must still expect `null`. Then append:
+`tests/discord-rest.test.ts` already defines `const cfg = testConfig()` (guild `9000`), `const API = "https://discord.com/api/v10"`, and a module-scope msw `server`; each test constructs the client inline as `createDiscordClient(cfg)`. Find the existing `getGuildMember` 404 test and give its fixture a real Discord error body: `HttpResponse.json({ message: "Unknown Member", code: 10007 }, { status: 404 })` — it must still expect `null`. Then append, matching those conventions exactly:
 
 ```ts
   it("treats 404 Unknown Guild (10004) as a permanent error, not 'left the guild'", async () => {
@@ -2802,7 +2907,9 @@ In `tests/discord-rest.test.ts`, find the existing `getGuildMember` 404 test and
         HttpResponse.json({ message: "Unknown Guild", code: 10004 }, { status: 404 }),
       ),
     );
-    const err = await client.getGuildMember("u1").catch((e: unknown) => e);
+    const err = await createDiscordClient(cfg)
+      .getGuildMember("u1")
+      .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(DiscordApiError);
     expect((err as DiscordApiError).transient).toBe(false);
   });
@@ -2813,13 +2920,13 @@ In `tests/discord-rest.test.ts`, find the existing `getGuildMember` 404 test and
         new HttpResponse("<html>gateway</html>", { status: 404 }),
       ),
     );
-    const err = await client.getGuildMember("u1").catch((e: unknown) => e);
+    const err = await createDiscordClient(cfg)
+      .getGuildMember("u1")
+      .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(DiscordApiError);
     expect((err as DiscordApiError).transient).toBe(false);
   });
 ```
-
-(Adapt the `API` constant / client construction names to what the file already uses.)
 
 - [ ] **Step 2: Run tests to verify failure**
 
