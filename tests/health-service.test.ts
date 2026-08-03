@@ -25,23 +25,25 @@ describe("checkLiveness", () => {
 
   // The failure branch is exercised for real rather than assumed: port 1 has
   // no listener, so the pool fails to connect.
-  it(
-    "is false when Postgres is unreachable",
-    async () => {
-      // Built directly rather than via createDb so this test can use a 1s
-      // connect timeout instead of that helper's production 5s — same Pool +
-      // drizzle(schema) pairing, just impatient.
-      const badPool = new Pool({
-        connectionString: "postgres://nobody:nobody@127.0.0.1:1/none",
-        connectionTimeoutMillis: 1000,
-        max: 1,
-      });
-      const bad = { db: drizzle(badPool, { schema }), pool: badPool };
+  it("is false when Postgres is unreachable", async () => {
+    // Built directly rather than via createDb so this test can use a 1s
+    // connect timeout instead of that helper's production 5s — same Pool +
+    // drizzle(schema) pairing, just impatient.
+    const badPool = new Pool({
+      connectionString: "postgres://nobody:nobody@127.0.0.1:1/none",
+      connectionTimeoutMillis: 1000,
+      max: 1,
+    });
+    const bad = { db: drizzle(badPool, { schema }), pool: badPool };
+    try {
       expect(await checkLiveness(bad.db)).toBe(false);
+    } finally {
+      // A failed assertion throws; without the finally the pool would leak
+      // and vitest would hang on open handles instead of reporting the
+      // failure.
       await bad.pool.end();
-    },
-    10000,
-  );
+    }
+  }, 10000);
 });
 
 describe("newestSyncRun", () => {

@@ -27,8 +27,11 @@ fly secrets set \
   ESI_CONTACT="you@example.com" \
   SYNC_MODE=live
 fly deploy
-fly scale count web=2 worker=1
 ```
+
+Deploy at `web=1`. Scaling to `web=2` comes after the connection-headroom
+check below — two web machines double the pool count against one small
+Postgres, so the check is the gate, not a formality.
 
 `TOKEN_ENCRYPTION_KEY`: `openssl rand -base64 32`. Rotating it invalidates
 every stored EVE refresh token (members re-auth); treat it as unrotatable.
@@ -95,8 +98,8 @@ Notes:
   risk; both were raised to keep the groups uniform.
 - **`web=2`** closes the deploy gap that `web=1` creates. The web tier is
   stateless — sessions and OAuth PKCE state are both in Postgres — so extra
-  instances are safe. Set it with `fly scale count web=2`; machine count is not a
-  `fly.toml` field.
+  instances are safe. Machine count is not a `fly.toml` field; set it with
+  `fly scale count`, after the headroom check below.
 - **`worker=1`, deliberately.** The Wanderer reconcile is destructive; a second
   worker is not a change to make casually.
 - **Single-node Postgres, deliberately.** HA adds real operational weight to an
@@ -128,7 +131,11 @@ SHOW max_connections;
 
 Confirm headroom above ~36 including superuser-reserved connections. If it is
 short, lower the per-pool `max` in `src/db/index.ts` rather than skipping the
-check.
+check. Once it clears:
+
+```bash
+fly scale count web=2 worker=1
+```
 
 ## First-deploy Wanderer smoke check
 
