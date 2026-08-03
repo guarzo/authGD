@@ -97,9 +97,12 @@ Run the test suite (needs the dev Postgres from step 1 running):
 npm test
 ```
 
-`.env.example` ships `SYNC_MODE=dry-run`, so a fresh clone cannot change anything
-in EVE, Discord, or Wanderer. EVE SSO login and Discord linking need real
-credentials; everything else works on the fakes.
+`.env.example` ships `SYNC_MODE=dry-run`, so the sync jobs cannot change anything
+in EVE, Discord, or Wanderer. On the fake values the app itself, the migrations,
+and both test suites work. The Wanderer, Discord-roles, and contacts sync jobs
+are **expected to fail or skip** — the fake hosts and tokens are not real, and
+that is what a correctly-configured dev worker looks like. EVE SSO login and
+Discord linking need real credentials.
 
 **[`docs/ops.md` → Local development](docs/ops.md#local-development) is the
 canonical guide** — why `npm test` cannot touch your dev database, what works on

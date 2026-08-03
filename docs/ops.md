@@ -169,19 +169,32 @@ docker compose -f docker-compose.dev.yml up -d   # Postgres 16 on :5433
 npm install
 cp .env.example .env                             # working fakes; boots as-is
 npm run db:migrate
-npm run dev                                      # web    → http://localhost:3000
-npm run worker                                   # worker (second terminal)
+npm run dev                                      # web → http://localhost:3000
 ```
 
-No editing is required to get a browsable app. **Every value in `.env.example`
-is a working fake** and `SYNC_MODE=dry-run`, so a fresh clone cannot touch a
-real EVE, Discord, or Wanderer account even if you paste real credentials into
-the wrong field later.
+`npm run dev` holds the terminal. Start the worker in a second one:
+
+```bash
+npm run worker
+```
+
+No editing is required to get a browsable app: **every value in `.env.example`
+is a working fake**, and `SYNC_MODE=dry-run` means every outbound *sync*
+mutation is a logged no-op — no in-game contacts deleted, no Wanderer ACL
+reconciled, no Discord roles changed, no EVE refresh token rotated.
+
+**`SYNC_MODE` does not cover the OAuth flows, deliberately.** Login and
+character-link exchange a fresh authorization code for new credentials; they
+invalidate nothing, and guarding them would make local OAuth testing
+impossible. So if you put **real** EVE or Discord client credentials in
+`.env`, those flows will contact the real providers and can mint real tokens
+or create a real Discord link — dry-run will not stop them. It stops the sync
+jobs from changing anything, not the app from authenticating.
 
 The worker prints its mode and targets on startup — check it before trusting
 that a terminal is safe:
 
-```
+```text
 authGD worker: SYNC_MODE=dry-run — outbound writes are SUPPRESSED
   target: wanderer=https://wanderer.example acl=dev-acl-id
   target: discord guild=9000
@@ -241,7 +254,7 @@ Logging in without EVE SSO needs a seeded session — see the dev seed script.
 `--env-file-if-exists` prints one line per missing file, and `tsx` re-execs
 node, so a missing `.env.local` produces this **twice**:
 
-```
+```text
 .env.local not found. Continuing without it.
 ```
 
@@ -249,14 +262,36 @@ It is informational, not an error.
 
 ### Port 5433 is already allocated
 
-```
+```text
 Bind for 0.0.0.0:5433 failed: port is already allocated
 ```
 
-This means another compose project (a differently-named checkout of this repo)
-already has the dev Postgres up. It is the same image with the same
-credentials — reuse it rather than fighting it. `docker ps` will show which
-container holds the port.
+Something else already holds the port — often another checkout of this repo
+running the same compose file under a different project name, in which case you
+can just use it. **Do not assume that, though: verify before reusing.** Whatever
+holds 5433 becomes your dev database, so pointing at the wrong one silently
+gives you someone else's data.
+
+Find the container, then check all three of these:
+
+```bash
+docker ps --filter publish=5433 --format '{{.Names}}\t{{.Image}}\t{{.Labels}}'
+```
+
+1. **Image** is `postgres:16-alpine` — a different major version will fail or
+   behave differently under the same migrations.
+2. **Compose project** is a checkout of this repo, not an unrelated service that
+   happens to use 5433 (`com.docker.compose.project` in the labels).
+3. **The `authgd_test` database exists** — it is created only by
+   `scripts/init-test-db.sql` at *first* container init, so a Postgres started
+   any other way will not have it and the test suites will fail:
+
+   ```bash
+   docker exec <container> psql -U authgd -lqt | cut -d'|' -f1 | grep -w authgd_test
+   ```
+
+If any of those don't hold, stop that container or change the host port rather
+than reusing it.
 
 ### Note for deployers
 
