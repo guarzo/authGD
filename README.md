@@ -1,8 +1,8 @@
+# authGD
+
 <p align="center">
   <img src="docs/assets/hero.png" alt="Zoo Landers — Flygd" width="100%">
 </p>
-
-# authGD
 
 A modern, minimal replacement for the Alliance Auth stack, built for a small EVE Online corporation. 
 It does only what the corp actually uses — no plugin ecosystem, no admin sprawl.
