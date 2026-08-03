@@ -16,7 +16,9 @@ beforeEach(() => truncateAll(ctx.db));
 /** Counts pg pool queries for the duration of `fn` (same shape as
  * tests/audit-resolve.test.ts) so we can assert the raw path is free. */
 type PoolQuery = typeof import("pg").Pool.prototype.query;
-async function countQueries<T>(fn: () => Promise<T>): Promise<{ result: T; calls: number }> {
+async function countQueries<T>(
+  fn: () => Promise<T>,
+): Promise<{ result: T; calls: number }> {
   let calls = 0;
   const pool = ctx.pool as unknown as { query: PoolQuery };
   const origQuery: PoolQuery = pool.query.bind(pool);
@@ -65,14 +67,24 @@ describe("resolveFilterIdentity", () => {
 
   it("resolves an actor name to the account whose main displays it", async () => {
     const acc = await seedAccount(ctx.db);
-    await seedCharacter(ctx.db, cfg, { id: 90001, accountId: acc.id, name: "Zed", main: true });
+    await seedCharacter(ctx.db, cfg, {
+      id: 90001,
+      accountId: acc.id,
+      name: "Zed",
+      main: true,
+    });
     const r = await resolveFilterIdentity(ctx.db, "actor", "Zed");
     expect(r).toEqual({ kind: "name", name: "Zed", ids: [acc.id], accountCount: 1 });
   });
 
   it("matches case-insensitively", async () => {
     const acc = await seedAccount(ctx.db);
-    await seedCharacter(ctx.db, cfg, { id: 90001, accountId: acc.id, name: "Zed", main: true });
+    await seedCharacter(ctx.db, cfg, {
+      id: 90001,
+      accountId: acc.id,
+      name: "Zed",
+      main: true,
+    });
     const r = await resolveFilterIdentity(ctx.db, "actor", "zED");
     expect(r.kind).toBe("name");
     expect((r as { ids: string[] }).ids).toEqual([acc.id]);
@@ -80,7 +92,12 @@ describe("resolveFilterIdentity", () => {
 
   it("unions account, character and discord ids for a target name", async () => {
     const acc = await seedAccount(ctx.db, { discordUserId: "555555555555555555" });
-    await seedCharacter(ctx.db, cfg, { id: 90001, accountId: acc.id, name: "Zed", main: true });
+    await seedCharacter(ctx.db, cfg, {
+      id: 90001,
+      accountId: acc.id,
+      name: "Zed",
+      main: true,
+    });
     const r = await resolveFilterIdentity(ctx.db, "target", "Zed");
     expect(r.kind).toBe("name");
     const ids = (r as { ids: string[] }).ids;
@@ -89,24 +106,42 @@ describe("resolveFilterIdentity", () => {
 
   it("does not include discord ids for an actor filter", async () => {
     const acc = await seedAccount(ctx.db, { discordUserId: "555555555555555555" });
-    await seedCharacter(ctx.db, cfg, { id: 90001, accountId: acc.id, name: "Zed", main: true });
+    await seedCharacter(ctx.db, cfg, {
+      id: 90001,
+      accountId: acc.id,
+      name: "Zed",
+      main: true,
+    });
     const r = await resolveFilterIdentity(ctx.db, "actor", "Zed");
     expect((r as { ids: string[] }).ids).toEqual([acc.id]);
   });
 
   it("resolves an alt's name to its character id only, never its account", async () => {
     const acc = await seedAccount(ctx.db);
-    await seedCharacter(ctx.db, cfg, { id: 90001, accountId: acc.id, name: "Boss", main: true });
+    await seedCharacter(ctx.db, cfg, {
+      id: 90001,
+      accountId: acc.id,
+      name: "Boss",
+      main: true,
+    });
     await seedCharacter(ctx.db, cfg, { id: 90002, accountId: acc.id, name: "Alt Zed" });
     const r = await resolveFilterIdentity(ctx.db, "target", "Alt Zed");
     expect(r).toEqual({
-      kind: "name", name: "Alt Zed", ids: ["90002"], accountCount: 1,
+      kind: "name",
+      name: "Alt Zed",
+      ids: ["90002"],
+      accountCount: 1,
     });
   });
 
   it("an alt's name is unresolvable as an actor (no account displays it)", async () => {
     const acc = await seedAccount(ctx.db);
-    await seedCharacter(ctx.db, cfg, { id: 90001, accountId: acc.id, name: "Boss", main: true });
+    await seedCharacter(ctx.db, cfg, {
+      id: 90001,
+      accountId: acc.id,
+      name: "Boss",
+      main: true,
+    });
     await seedCharacter(ctx.db, cfg, { id: 90002, accountId: acc.id, name: "Alt Zed" });
     const r = await resolveFilterIdentity(ctx.db, "actor", "Alt Zed");
     expect(r).toEqual({ kind: "none", name: "Alt Zed" });
@@ -115,8 +150,18 @@ describe("resolveFilterIdentity", () => {
   it("reports accountCount 2 for two accounts sharing a main name", async () => {
     const a = await seedAccount(ctx.db);
     const b = await seedAccount(ctx.db);
-    await seedCharacter(ctx.db, cfg, { id: 90001, accountId: a.id, name: "Zed", main: true });
-    await seedCharacter(ctx.db, cfg, { id: 90002, accountId: b.id, name: "Zed", main: true });
+    await seedCharacter(ctx.db, cfg, {
+      id: 90001,
+      accountId: a.id,
+      name: "Zed",
+      main: true,
+    });
+    await seedCharacter(ctx.db, cfg, {
+      id: 90002,
+      accountId: b.id,
+      name: "Zed",
+      main: true,
+    });
     const r = await resolveFilterIdentity(ctx.db, "actor", "Zed");
     expect(r.kind).toBe("name");
     expect((r as { accountCount: number }).accountCount).toBe(2);
@@ -129,8 +174,18 @@ describe("resolveFilterIdentity", () => {
   it("counts owning accounts when two same-named alts widen a target filter", async () => {
     const a = await seedAccount(ctx.db);
     const b = await seedAccount(ctx.db);
-    await seedCharacter(ctx.db, cfg, { id: 90001, accountId: a.id, name: "Boss A", main: true });
-    await seedCharacter(ctx.db, cfg, { id: 90002, accountId: b.id, name: "Boss B", main: true });
+    await seedCharacter(ctx.db, cfg, {
+      id: 90001,
+      accountId: a.id,
+      name: "Boss A",
+      main: true,
+    });
+    await seedCharacter(ctx.db, cfg, {
+      id: 90002,
+      accountId: b.id,
+      name: "Boss B",
+      main: true,
+    });
     await seedCharacter(ctx.db, cfg, { id: 90003, accountId: a.id, name: "Zed" });
     await seedCharacter(ctx.db, cfg, { id: 90004, accountId: b.id, name: "Zed" });
     const r = await resolveFilterIdentity(ctx.db, "target", "Zed");
@@ -149,7 +204,12 @@ describe("resolveFilterIdentity", () => {
 
   it("stays within the query budget: <=3 for a target name, <=2 for an actor name", async () => {
     const acc = await seedAccount(ctx.db, { discordUserId: "555555555555555555" });
-    await seedCharacter(ctx.db, cfg, { id: 90001, accountId: acc.id, name: "Zed", main: true });
+    await seedCharacter(ctx.db, cfg, {
+      id: 90001,
+      accountId: acc.id,
+      name: "Zed",
+      main: true,
+    });
     const t = await countQueries(() => resolveFilterIdentity(ctx.db, "target", "Zed"));
     expect(t.calls).toBeLessThanOrEqual(3);
     const a = await countQueries(() => resolveFilterIdentity(ctx.db, "actor", "Zed"));
@@ -185,13 +245,28 @@ describe("queryAuditLog id-array filters", () => {
 
   it("unions target ids across identifier forms", async () => {
     const acc = await seedAccount(ctx.db, { discordUserId: "555555555555555555" });
-    await seedCharacter(ctx.db, cfg, { id: 90001, accountId: acc.id, name: "Zed", main: true });
-    await logAudit(ctx.db, { actor: "system", action: "tier.changed", target: acc.id });
-    await logAudit(ctx.db, { actor: "system", action: "character.linked", target: "90001" });
-    await logAudit(ctx.db, {
-      actor: "system", action: "discord.role_changed", target: "555555555555555555",
+    await seedCharacter(ctx.db, cfg, {
+      id: 90001,
+      accountId: acc.id,
+      name: "Zed",
+      main: true,
     });
-    await logAudit(ctx.db, { actor: "system", action: "tier.changed", target: "someone-else" });
+    await logAudit(ctx.db, { actor: "system", action: "tier.changed", target: acc.id });
+    await logAudit(ctx.db, {
+      actor: "system",
+      action: "character.linked",
+      target: "90001",
+    });
+    await logAudit(ctx.db, {
+      actor: "system",
+      action: "discord.role_changed",
+      target: "555555555555555555",
+    });
+    await logAudit(ctx.db, {
+      actor: "system",
+      action: "tier.changed",
+      target: "someone-else",
+    });
 
     const res = await resolveFilterIdentity(ctx.db, "target", "Zed");
     const rows = await queryAuditLog(ctx.db, {
@@ -199,16 +274,27 @@ describe("queryAuditLog id-array filters", () => {
     });
     expect(rows).toHaveLength(3);
     expect(rows.map((r) => r.action).sort()).toEqual([
-      "character.linked", "discord.role_changed", "tier.changed",
+      "character.linked",
+      "discord.role_changed",
+      "tier.changed",
     ]);
   });
 
   it("keeps beforeId keyset paging working under a union filter", async () => {
     const acc = await seedAccount(ctx.db);
-    await seedCharacter(ctx.db, cfg, { id: 90001, accountId: acc.id, name: "Zed", main: true });
+    await seedCharacter(ctx.db, cfg, {
+      id: 90001,
+      accountId: acc.id,
+      name: "Zed",
+      main: true,
+    });
     for (let i = 0; i < 3; i++) {
       await logAudit(ctx.db, { actor: "system", action: "tier.changed", target: acc.id });
-      await logAudit(ctx.db, { actor: "system", action: "character.linked", target: "90001" });
+      await logAudit(ctx.db, {
+        actor: "system",
+        action: "character.linked",
+        target: "90001",
+      });
     }
     const res = await resolveFilterIdentity(ctx.db, "target", "Zed");
     const ids = res.kind === "none" ? [] : res.ids;

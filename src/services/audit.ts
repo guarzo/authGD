@@ -288,10 +288,8 @@ export async function resolveFilterIdentity(
   // Matched character ids are in the union, so their owning accounts are
   // surfaced too and must count -- otherwise two same-named alts on two
   // accounts widen the results while the page reports no ambiguity.
-  const accountCount = new Set([
-    ...displayAccountIds,
-    ...chars.map((c) => c.accountId),
-  ]).size;
+  const accountCount = new Set([...displayAccountIds, ...chars.map((c) => c.accountId)])
+    .size;
 
   return { kind: "name", name: value, ids, accountCount };
 }
