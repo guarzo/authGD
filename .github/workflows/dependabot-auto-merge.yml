@@ -18,13 +18,6 @@ name: Dependabot auto-merge
 
 on: pull_request
 
-# Workflows triggered by Dependabot PRs get a read-only token by default; these
-# two scopes are what `gh pr merge --auto` needs. Nothing here reads the PR's
-# code or runs its dependencies — the diff is never checked out.
-permissions:
-  contents: write
-  pull-requests: write
-
 jobs:
   auto-merge:
     name: Enable auto-merge
@@ -32,9 +25,24 @@ jobs:
     # check alone could be satisfied by a branch named to impersonate the bot.
     if: github.actor == 'dependabot[bot]' && github.repository == 'guarzo/authGD'
     runs-on: ubuntu-latest
+    # Scoped to the job rather than the workflow: this is the only job that
+    # needs a write token, and a job added later should have to ask for it
+    # rather than inherit it. Workflows triggered by Dependabot PRs get a
+    # read-only token by default; these two scopes are what `gh pr merge
+    # --auto` needs. Nothing here checks out the PR's code or runs its
+    # dependencies.
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
+      # Pinned to a commit rather than the `v3` moving tag, which is the one
+      # place this repo departs from ci.yml's major-tag convention. The reason
+      # is the token above: a moving tag repointed at hostile code would run it
+      # with `contents: write` on this repository. `v3` and `v3.1.0` resolve to
+      # this same commit today, so the pin costs nothing now — Dependabot keeps
+      # SHA pins current the same way it keeps tags current.
       - id: meta
-        uses: dependabot/fetch-metadata@v3
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
 
       # Gate on the group name, not on the semver level. The groups in
       # dependabot.yml already encode the judgement: `minor-and-patch` is
@@ -53,10 +61,21 @@ jobs:
       # majors, which are read-the-changelog changes. Security updates are
       # ungrouped by design and land here too: they should be merged fast, but
       # by a human who has read the advisory.
+      #
+      # Also absent, and least obviously: `actions`. That group edits the
+      # workflow files themselves — including this one, since its own pinned
+      # action matches the group's `*` pattern. Every other group is gated by
+      # CI in a meaningful sense: if the bump is bad, a job fails. An action
+      # bump is different. CI runs UNDER the configuration being changed, and
+      # a green run says only that the new action version did not break the
+      # build — not that it is the code its author published. Automating the
+      # merge of new third-party code into the trusted path, using a token that
+      # can write to the default branch, is the one bump worth reading. There
+      # are only a handful a year.
       - name: Enable auto-merge for bounded-risk groups
         if: >-
           contains(
-            fromJSON('["minor-and-patch", "linting", "testing", "types", "actions"]'),
+            fromJSON('["minor-and-patch", "linting", "testing", "types"]'),
             steps.meta.outputs.dependency-group
           )
         run: gh pr merge --auto --squash "$PR_URL"
