@@ -4,13 +4,27 @@ import * as schema from "./schema";
 
 /**
  * `max` is capped deliberately. node-postgres defaults to 10 per pool, and this
- * app opens three of them against one small Postgres — web, worker, and pg-boss
- * — so the default allows ~30 backends at 10-25MB RSS each. That exhausted a
- * 256MB database machine on the first production deploy and crashlooped the
- * worker. Members number in the tens, not thousands; 5 is ample.
+ * app opens one per web machine plus worker and pg-boss against one small
+ * Postgres — four at web=2 — so the default allows ~30 backends at 10-25MB RSS
+ * each. That exhausted a 256MB database machine on the first production
+ * deploy and crashlooped the worker. Members number in the tens, not
+ * thousands; 5 is ample.
+ *
+ * `connectionTimeoutMillis` covers both the TCP connect and the wait for a free
+ * pooled client. Without it, a database that is up but slow — max_connections
+ * reached, or a long lock — leaves callers queued forever. The health endpoints
+ * would then hang instead of returning their documented 503 with `db: "error"`,
+ * losing that signal in exactly the incident that is hardest to diagnose by
+ * hand. 5s sits below the Fly check's 10s timeout so the app's own structured
+ * answer arrives before the proxy gives up on it.
+ *
+ * No global `statement_timeout` on purpose: src/db/migrate.ts builds its pool
+ * through this same function, and a migration or a Wanderer reconcile can
+ * legitimately run long. Bounding those belongs at the call site, not here.
  */
 export function createDb(url: string, max = 5) {
-  const pool = new Pool({ connectionString: url, max });
+  const pool = new Pool({ connectionString: url, max, connectionTimeoutMillis: 5000 });
+
   const db = drizzle(pool, { schema });
   return { db, pool };
 }

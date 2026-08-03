@@ -114,7 +114,7 @@ secret; token-encryption key.
   the no-main rule below if it was that account's main), then proceed with the new
   owner's login/link. Re-authing a character already on *your own* account simply
   refreshes its token/scopes in place.
-- **Scope evolution:** the configured scope set carries a version. The token health job
+- **Scope evolution:** the token health job
   flags characters whose granted scopes no longer cover the required set
   (`token_status: needs_reauth`); the account page shows a one-click "re-auth" per
   character that reruns SSO and updates the link in place — no unlink/re-add ever.

@@ -22,3 +22,40 @@ primary_region = "iad"
 [env]
   HOSTNAME = "0.0.0.0"
   PORT = "3000"
+
+# web only. /api/health/sync is deliberately absent: a failing check pulls the
+# machine out of the load balancer and gates deploys, so wiring worker freshness
+# here would take the site down over a fault unrelated to serving pages.
+#
+# /api/health itself depends on Postgres, and this check has no
+# consecutive-failure threshold, so a single blip — including a
+# planned Postgres patching window — takes every web machine out of rotation
+# simultaneously; they all share one database. Accepted: without Postgres the
+# app cannot serve anything useful, so pulling machines that can't reach it is
+# the right call. Consequence: once the proxy stops routing, Fly cannot tell
+# you the app is down. The external monitor (docs/ops.md) is the party that
+# still can.
+[[http_service.checks]]
+  interval = "30s"
+  # Above the 5s pool connection timeout in src/db/index.ts, so a database that
+  # is up but slow returns the app's own 503 with `db: "error"` — a usable
+  # diagnosis — instead of an opaque proxy timeout at the same instant.
+  timeout = "10s"
+  grace_period = "10s"
+  method = "GET"
+  path = "/api/health"
+
+# Sizing declared here rather than left in `fly scale` state, so it is reviewable
+# and cannot drift silently. The worker runs tsx and transpiles at runtime, which
+# is why 256mb was the riskier setting for it than for the compiled web server.
+[[vm]]
+  memory = "512mb"
+  cpu_kind = "shared"
+  cpus = 1
+  processes = ["web"]
+
+[[vm]]
+  memory = "512mb"
+  cpu_kind = "shared"
+  cpus = 1
+  processes = ["worker"]

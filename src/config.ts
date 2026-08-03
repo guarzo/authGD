@@ -37,7 +37,6 @@ const envSchema = z.object({
   EVE_SSO_CLIENT_ID: z.string().min(1),
   EVE_SSO_CLIENT_SECRET: z.string().min(1),
   EVE_SSO_SCOPES: z.string().min(1),
-  EVE_SCOPE_SET_VERSION: z.coerce.number().int().positive().default(1),
   DISCORD_CLIENT_ID: z.string().min(1),
   DISCORD_CLIENT_SECRET: z.string().min(1),
   DISCORD_BOT_TOKEN: z.string().min(1),
@@ -82,7 +81,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
       clientId: e.EVE_SSO_CLIENT_ID,
       clientSecret: e.EVE_SSO_CLIENT_SECRET,
       scopes: e.EVE_SSO_SCOPES.split(/\s+/).filter(Boolean),
-      scopeSetVersion: e.EVE_SCOPE_SET_VERSION,
     },
     discord: {
       clientId: e.DISCORD_CLIENT_ID,
