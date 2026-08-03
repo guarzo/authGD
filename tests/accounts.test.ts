@@ -7,6 +7,7 @@ import {
   handleEveLogin,
   linkCharacter,
   maybeGrantBootstrapAdmin,
+  promoteAdmin,
   setMainCharacter,
   unlinkCharacter,
   type EveCallbackCharacter,
@@ -66,6 +67,12 @@ const setMain = (accountId: string, characterId: number) =>
   ctx.db.transaction((tx) => setMainCharacter(tx, accountId, characterId));
 const demote = (actor: string, accountId: string) =>
   ctx.db.transaction((tx) => demoteAdmin(tx, actor, accountId));
+
+// Helper to create a simple account for testing
+const seedAccount = async (db: typeof ctx.db) => {
+  const [acc] = await db.insert(account).values({ tier: "green" }).returning();
+  return acc;
+};
 
 describe("handleEveLogin", () => {
   it("creates a pessimistic green account with outbox + audit", async () => {
@@ -351,5 +358,51 @@ describe("demoteAdmin", () => {
     expect([r1.ok, r2.ok].filter(Boolean)).toHaveLength(1);
     const admins = await ctx.db.select().from(account).where(eq(account.isAdmin, true));
     expect(admins.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("promoteAdmin", () => {
+  it("lets an admin grant is_admin, audit-logged", async () => {
+    const admin = await seedAccount(ctx.db);
+    await ctx.db.update(account).set({ isAdmin: true }).where(eq(account.id, admin.id));
+    const target = await seedAccount(ctx.db);
+    const result = await ctx.db.transaction((tx) => promoteAdmin(tx, admin.id, target.id));
+    expect(result).toEqual({ ok: true });
+    const [after] = await ctx.db.select().from(account).where(eq(account.id, target.id));
+    expect(after.isAdmin).toBe(true);
+    const rows = await ctx.db
+      .select()
+      .from(auditLog)
+      .where(eq(auditLog.action, "admin.promoted"));
+    expect(rows).toHaveLength(1);
+    expect(rows[0].actor).toBe(admin.id);
+    expect(rows[0].target).toBe(target.id);
+  });
+
+  it("rejects a non-admin actor", async () => {
+    const nobody = await seedAccount(ctx.db);
+    const target = await seedAccount(ctx.db);
+    const result = await ctx.db.transaction((tx) => promoteAdmin(tx, nobody.id, target.id));
+    expect(result).toEqual({ ok: false, error: "not_authorized" });
+  });
+
+  it("is idempotent for an already-admin target (no duplicate audit)", async () => {
+    const admin = await seedAccount(ctx.db);
+    await ctx.db.update(account).set({ isAdmin: true }).where(eq(account.id, admin.id));
+    await ctx.db.transaction((tx) => promoteAdmin(tx, admin.id, admin.id));
+    const rows = await ctx.db
+      .select()
+      .from(auditLog)
+      .where(eq(auditLog.action, "admin.promoted"));
+    expect(rows).toHaveLength(0);
+  });
+
+  it("returns not_found for a missing target", async () => {
+    const admin = await seedAccount(ctx.db);
+    await ctx.db.update(account).set({ isAdmin: true }).where(eq(account.id, admin.id));
+    const result = await ctx.db.transaction((tx) =>
+      promoteAdmin(tx, admin.id, "00000000-0000-0000-0000-000000000000"),
+    );
+    expect(result).toEqual({ ok: false, error: "not_found" });
   });
 });
