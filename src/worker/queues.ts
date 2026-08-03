@@ -1,4 +1,5 @@
 import type PgBoss from "pg-boss";
+import { JOB_CRON } from "@/core/schedules";
 
 export const QUEUES = {
   membership: "membership",
@@ -68,50 +69,33 @@ export async function createQueues(boss: PgBoss): Promise<void> {
  * Spec schedules. pg-boss allows ONE schedule per queue, which is why the
  * weekly affiliation_invalid recheck is its own queue. Hourly jobs are
  * staggered to avoid stampeding shared integrations.
+ *
+ * The cron expressions themselves live in `@/core/schedules` because the admin
+ * sync page renders their cadence: registering from the same constant is what
+ * makes that display a fact rather than a second copy that can rot.
  */
 export async function scheduleJobs(boss: PgBoss): Promise<void> {
   // Schedules share the dispatcher's global singleton keys so a scheduled
   // tick and an on-demand global trigger coalesce instead of double-queueing.
-  await boss.schedule(
-    QUEUES.membership,
-    "*/30 * * * *",
-    { jobType: QUEUES.membership },
-    { singletonKey: "membership:all" },
-  );
-  await boss.schedule(
-    QUEUES.membershipRecheck,
-    "0 4 * * 0",
-    { jobType: QUEUES.membershipRecheck },
-    { singletonKey: "membership-recheck:all" },
-  );
-  await boss.schedule(
-    QUEUES.contacts,
-    "5 * * * *",
-    { jobType: QUEUES.contacts },
-    { singletonKey: "contacts:all" },
-  );
-  await boss.schedule(
-    QUEUES.wanderer,
-    "10 * * * *",
-    { jobType: QUEUES.wanderer },
-    { singletonKey: "wanderer:all" },
-  );
-  await boss.schedule(
-    QUEUES.discordRoles,
-    "15 * * * *",
-    { jobType: QUEUES.discordRoles },
-    { singletonKey: "roles:all" },
-  );
-  await boss.schedule(
-    QUEUES.tokenHealth,
-    "0 3 * * *",
-    { jobType: QUEUES.tokenHealth },
-    { singletonKey: "token-health:all" },
-  );
-  await boss.schedule(
-    QUEUES.purge,
-    "30 3 * * *",
-    { jobType: QUEUES.purge },
-    { singletonKey: "purge:all" },
-  );
+  const singletonKeys: Record<string, string> = {
+    [QUEUES.membership]: "membership:all",
+    [QUEUES.membershipRecheck]: "membership-recheck:all",
+    [QUEUES.contacts]: "contacts:all",
+    [QUEUES.wanderer]: "wanderer:all",
+    [QUEUES.discordRoles]: "roles:all",
+    [QUEUES.tokenHealth]: "token-health:all",
+    [QUEUES.purge]: "purge:all",
+  };
+  for (const name of JOB_QUEUES) {
+    const cron = JOB_CRON[name];
+    // A queue with no cron entry would silently never tick. Fail startup
+    // instead: the boot watchdog turns that into an alert an admin can see.
+    if (!cron) throw new Error(`queue ${name} has no schedule in JOB_CRON`);
+    await boss.schedule(
+      name,
+      cron,
+      { jobType: name },
+      { singletonKey: singletonKeys[name] },
+    );
+  }
 }

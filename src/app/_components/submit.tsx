@@ -9,16 +9,22 @@ import { useFormStatus } from "react-dom";
  * components, so the pending state has to live in a small client leaf rather
  * than the page itself. Without it a slow enqueue looks identical to a dead
  * click until the page re-renders.
+ *
+ * `pendingLabel` swaps the text while in flight. Worth it on the broad
+ * side-effecting controls: `disabled` plus `aria-busy` are correct but easy to
+ * miss, and a changed word is the part a user actually notices.
  */
 export function Submit({
   className,
   children,
   disabled,
+  pendingLabel,
   "aria-pressed": ariaPressed,
 }: {
   className?: string;
   children: ReactNode;
   disabled?: boolean;
+  pendingLabel?: ReactNode;
   "aria-pressed"?: boolean;
 }) {
   const { pending } = useFormStatus();
@@ -30,7 +36,7 @@ export function Submit({
       aria-busy={pending}
       aria-pressed={ariaPressed}
     >
-      {children}
+      {pending && pendingLabel ? pendingLabel : children}
     </button>
   );
 }
