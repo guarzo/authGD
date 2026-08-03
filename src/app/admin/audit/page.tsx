@@ -81,25 +81,63 @@ function summarizeDetails(action: string, details: unknown): string {
 }
 
 /**
+ * A link that sets one filter field to `value`, keeps every other active
+ * filter, and drops `before` -- clicking a name narrows the query, so the
+ * keyset cursor from the previous, wider query is meaningless and would page
+ * into the middle of the new result set.
+ */
+function filterHref(
+  params: Record<string, string | undefined>,
+  field: "actor" | "target",
+  value: string,
+): string {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v && k !== "before" && k !== field) q.set(k, v);
+  }
+  q.set(field, value);
+  return `/admin/audit?${q.toString()}`;
+}
+
+/**
  * The actor column. `system` is a job, not a person, so it gets the monospace
- * dimmed treatment used for machine output elsewhere in this table — a
+ * dimmed treatment used for machine output elsewhere in this table -- a
  * font-family signal, not a colour-only one. A resolved human name renders
  * plain; an unresolved actor falls back to the raw id in mono so it still
  * reads as "an id", not as a name that happened not to load.
+ *
+ * Resolved values (and `system`) link to themselves as a filter, so the admin
+ * never retypes what is already on screen. Unresolved ids stay inert: they are
+ * already exactly filterable by pasting, and linking them would add a tab stop
+ * per row for nothing.
  */
-function ActorCell({ r }: { r: ResolvedAuditRow }) {
+function ActorCell({
+  r,
+  params,
+}: {
+  r: ResolvedAuditRow;
+  params: Record<string, string | undefined>;
+}) {
   if (r.actorKind === "system") {
     return (
-      <span className="mono dim" title={r.actor}>
+      <a
+        className="mono dim cell-link"
+        href={filterHref(params, "actor", "system")}
+        title={r.actor}
+      >
         system
-      </span>
+      </a>
     );
   }
   if (r.actorName) {
     return (
-      <span className="ellipsis-cell" title={r.actor}>
+      <a
+        className="ellipsis-cell cell-link"
+        href={filterHref(params, "actor", r.actorName)}
+        title={r.actor}
+      >
         {r.actorName}
-      </span>
+      </a>
     );
   }
   return (
@@ -116,20 +154,39 @@ function ActorCell({ r }: { r: ResolvedAuditRow }) {
  * `ellipsis-cell`: a resolved display name, a raw UUID, and a Discord
  * snowflake all lack natural break points, and any of them left unbounded
  * wraps and inflates the row height exactly like the actor column used to.
+ *
+ * A name links to the NAME, not to this row's raw id -- one person's target
+ * rows are spread across an account uuid, a character id and a discord
+ * snowflake, and filtering by whichever one this row happens to carry would
+ * hide the other two thirds of their history.
  */
-function TargetCell({ r }: { r: ResolvedAuditRow }) {
+function TargetCell({
+  r,
+  params,
+}: {
+  r: ResolvedAuditRow;
+  params: Record<string, string | undefined>;
+}) {
   if (r.targetName) {
     return (
-      <span className="ellipsis-cell" title={r.target}>
+      <a
+        className="ellipsis-cell cell-link"
+        href={filterHref(params, "target", r.targetName)}
+        title={r.target}
+      >
         {r.targetName}
-      </span>
+      </a>
     );
   }
   if (r.targetKind === "literal") {
     return (
-      <span className="mono dim ellipsis-cell" title={r.target}>
+      <a
+        className="mono dim ellipsis-cell cell-link"
+        href={filterHref(params, "target", r.target)}
+        title={r.target}
+      >
         {r.target}
-      </span>
+      </a>
     );
   }
   return (
@@ -332,7 +389,7 @@ export default async function AdminAuditPage({
                     {r.at.toISOString().replace("T", " ").slice(0, 19)}
                   </td>
                   <td>
-                    <ActorCell r={r} />
+                    <ActorCell r={r} params={params} />
                   </td>
                   <td className="mono">
                     {/* Sized to fit the current action vocabulary, but bounded
@@ -351,7 +408,7 @@ export default async function AdminAuditPage({
                     </span>
                   </td>
                   <td>
-                    <TargetCell r={r} />
+                    <TargetCell r={r} params={params} />
                   </td>
                   <td>
                     {r.details ? (

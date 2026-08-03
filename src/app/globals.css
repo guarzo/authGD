@@ -522,6 +522,19 @@ h3.rule-head__label {
   white-space: nowrap;
 }
 
+/* Audit log: a resolved name is its own filter control. `color: inherit`
+   keeps the base `a` rule from repainting the cells that are deliberately
+   dimmed mono -- `system` and the literal `all` read as machine values, and
+   that treatment is the point. Everything else about the link (underline,
+   offset, gold on hover) is inherited, so a name behaves exactly like every
+   other link on the page rather than inventing a second affordance.
+
+   Must stay ABOVE `.dim`: equal specificity, so `.dim` wins the resting
+   colour only by being later in the file. */
+.cell-link {
+  color: inherit;
+}
+
 /* Raw JSON payloads in the audit and sync tables. The collapsed line is capped
    so a fat blob can't push the readable columns off screen; opening it shows
    the whole value, because the interesting part (role IDs, trailing failure
