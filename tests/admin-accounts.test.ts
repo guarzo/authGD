@@ -1,0 +1,125 @@
+import { desc, eq } from "drizzle-orm";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { account, auditLog, outbox } from "@/db/schema";
+import {
+  returnTierToAuto,
+  setAccountStatus,
+  setStatusNote,
+  setTierManual,
+} from "@/services/admin-accounts";
+import { setupTestDb, truncateAll } from "./helpers/db";
+import { seedAccount } from "./helpers/seed";
+
+let ctx: Awaited<ReturnType<typeof setupTestDb>>;
+beforeAll(async () => {
+  ctx = await setupTestDb();
+});
+afterAll(() => ctx.cleanup());
+beforeEach(() => truncateAll(ctx.db));
+
+async function seedAdmin() {
+  const acc = await seedAccount(ctx.db);
+  await ctx.db.update(account).set({ isAdmin: true }).where(eq(account.id, acc.id));
+  return acc;
+}
+const getAcc = async (id: string) =>
+  (await ctx.db.select().from(account).where(eq(account.id, id)))[0];
+const outboxRows = () => ctx.db.select().from(outbox);
+const lastAudit = async () =>
+  (await ctx.db.select().from(auditLog).orderBy(desc(auditLog.id)).limit(1))[0];
+
+describe("setTierManual", () => {
+  it("sets tier, locks, stamps changed-by, audits, and enqueues sync in one tx", async () => {
+    const admin = await seedAdmin();
+    const target = await seedAccount(ctx.db, { tier: "flygd" });
+    const r = await ctx.db.transaction((tx) => setTierManual(tx, admin.id, target.id, "blue"));
+    expect(r).toEqual({ ok: true });
+    const after = await getAcc(target.id);
+    expect(after.tier).toBe("blue");
+    expect(after.tierLocked).toBe(true);
+    expect(after.tierChangedBy).toBe(admin.id);
+    expect(after.tierChangedAt).not.toBeNull();
+    const audit = await lastAudit();
+    expect(audit.action).toBe("tier.changed");
+    expect(audit.actor).toBe(admin.id);
+    expect(audit.details).toMatchObject({ to: "blue", locked: true, cause: "manual" });
+    expect(await outboxRows()).toHaveLength(1);
+  });
+
+  it("locking at the SAME tier is still a change (green → locked green)", async () => {
+    const admin = await seedAdmin();
+    const target = await seedAccount(ctx.db, { tier: "green" });
+    await ctx.db.transaction((tx) => setTierManual(tx, admin.id, target.id, "green"));
+    const after = await getAcc(target.id);
+    expect(after.tierLocked).toBe(true);
+    expect(await outboxRows()).toHaveLength(1);
+  });
+
+  it("is a no-op when already locked at that tier", async () => {
+    const admin = await seedAdmin();
+    const target = await seedAccount(ctx.db, { tier: "blue", tierLocked: true });
+    await ctx.db.transaction((tx) => setTierManual(tx, admin.id, target.id, "blue"));
+    expect(await outboxRows()).toHaveLength(0);
+    expect(await lastAudit()).toBeUndefined();
+  });
+
+  it("rejects non-admin actors", async () => {
+    const nobody = await seedAccount(ctx.db);
+    const target = await seedAccount(ctx.db);
+    const r = await ctx.db.transaction((tx) => setTierManual(tx, nobody.id, target.id, "blue"));
+    expect(r).toEqual({ ok: false, error: "not_authorized" });
+  });
+});
+
+describe("returnTierToAuto", () => {
+  it("clears the lock only — tier and changed-at untouched — audits, enqueues", async () => {
+    const admin = await seedAdmin();
+    const target = await seedAccount(ctx.db, { tier: "blue", tierLocked: true });
+    const before = await getAcc(target.id);
+    await ctx.db.transaction((tx) => returnTierToAuto(tx, admin.id, target.id));
+    const after = await getAcc(target.id);
+    expect(after.tierLocked).toBe(false);
+    expect(after.tier).toBe("blue"); // membership job converges it later
+    expect(after.tierChangedAt).toEqual(before.tierChangedAt);
+    expect((await lastAudit()).action).toBe("tier.unlocked");
+    expect(await outboxRows()).toHaveLength(1);
+  });
+
+  it("is a no-op when already unlocked", async () => {
+    const admin = await seedAdmin();
+    const target = await seedAccount(ctx.db);
+    await ctx.db.transaction((tx) => returnTierToAuto(tx, admin.id, target.id));
+    expect(await outboxRows()).toHaveLength(0);
+  });
+});
+
+describe("setAccountStatus / setStatusNote", () => {
+  it("cryo toggle stamps the date, audits, and enqueues", async () => {
+    const admin = await seedAdmin();
+    const target = await seedAccount(ctx.db);
+    await ctx.db.transaction((tx) => setAccountStatus(tx, admin.id, target.id, "cryo"));
+    const after = await getAcc(target.id);
+    expect(after.status).toBe("cryo");
+    expect(after.statusChangedAt).not.toBeNull();
+    expect((await lastAudit()).details).toMatchObject({ to: "cryo" });
+    expect(await outboxRows()).toHaveLength(1);
+  });
+
+  it("status no-op when unchanged", async () => {
+    const admin = await seedAdmin();
+    const target = await seedAccount(ctx.db);
+    await ctx.db.transaction((tx) => setAccountStatus(tx, admin.id, target.id, "active"));
+    expect(await outboxRows()).toHaveLength(0);
+  });
+
+  it("note is trimmed, empty clears to null, audited, NO outbox row", async () => {
+    const admin = await seedAdmin();
+    const target = await seedAccount(ctx.db);
+    await ctx.db.transaction((tx) => setStatusNote(tx, admin.id, target.id, "  back in Oct  "));
+    expect((await getAcc(target.id)).statusNote).toBe("back in Oct");
+    expect((await lastAudit()).action).toBe("status.note_changed");
+    await ctx.db.transaction((tx) => setStatusNote(tx, admin.id, target.id, "   "));
+    expect((await getAcc(target.id)).statusNote).toBeNull();
+    expect(await outboxRows()).toHaveLength(0);
+  });
+});
