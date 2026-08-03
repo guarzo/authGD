@@ -2,12 +2,10 @@ import { createHash, randomBytes } from "node:crypto";
 import { sql } from "drizzle-orm";
 import { createDb } from "../src/db";
 import { account, character, session } from "../src/db/schema";
-
-const TEST_URL =
-  process.env.TEST_DATABASE_URL ?? "postgres://authgd:authgd@localhost:5433/authgd_test";
+import { BASE_URL, TEST_DATABASE_URL } from "./env";
 
 export function testDb() {
-  return createDb(TEST_URL);
+  return createDb(TEST_DATABASE_URL);
 }
 
 export async function resetDb(db: ReturnType<typeof testDb>["db"]) {
@@ -78,5 +76,5 @@ export async function sessionCookieFor(
     accountId,
     expiresAt: new Date(Date.now() + 60 * 60 * 1000),
   });
-  return { name: "authgd_session", value: raw, url: "http://localhost:3111" };
+  return { name: "authgd_session", value: raw, url: BASE_URL };
 }

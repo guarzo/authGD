@@ -444,27 +444,65 @@ This is not obvious, and it stops people running the tests.
 | Database | Used by | Destructive operations |
 |---|---|---|
 | `authgd` | `npm run dev`, `npm run worker`, `npm run db:migrate` | none automatic |
-| `authgd_test` | `npm test`, `npm run test:e2e` | `TRUNCATE` between every test |
+| `authgd_test` | `npm test` | `TRUNCATE` between every test |
 
 `authgd_test` is created by `scripts/init-test-db.sql` at container init. The
-test helpers connect to it explicitly (`tests/helpers/db.ts`,
-`playwright.config.ts`), so the `TRUNCATE ... CASCADE` the suites run between
-tests physically cannot reach `authgd`. Run the tests freely.
+test helpers connect to it explicitly (`tests/helpers/db.ts`), so the
+`TRUNCATE ... CASCADE` the suite runs between tests physically cannot reach
+`authgd`. Run the tests freely.
 
-**Never run `npm test` and `npm run test:e2e` at the same time.** They share
-`authgd_test`, and Playwright is pinned to `workers: 1` for the same reason.
-Symptoms of a collision are rows vanishing mid-test — assertion failures like
-`expected [] to deeply equal [1, 2]` that move around between runs.
+`npm run test:e2e` does not appear above: it provisions a database of its own,
+in its own container, and never touches either of these. See
+[`npm run test:e2e` isolates itself](#npm-run-teste2e-isolates-itself) below.
+
+**Two `npm test` runs at once will fight**, because they share `authgd_test`.
+Symptoms are rows vanishing mid-test — assertion failures like
+`expected [] to deeply equal [1, 2]` that move around between runs. Playwright
+is pinned to `workers: 1` for the same reason within its own suite.
 
 The same applies across git worktrees: two checkouts running `npm test`
-simultaneously fight over the same database. If you need to run tests while
-another checkout is using it, point yours somewhere private:
+simultaneously fight over that one database. If you need to run the unit tests
+while another checkout is using it, point yours somewhere private:
 
 ```bash
 docker exec <pg-container> psql -U authgd -d postgres \
   -c "CREATE DATABASE authgd_test_mine OWNER authgd;"
 TEST_DATABASE_URL=postgres://authgd:authgd@localhost:5433/authgd_test_mine npm test
 ```
+
+#### `npm run test:e2e` isolates itself
+
+The e2e suite is the exception: it needs none of the above. `e2e/env.ts` hashes
+the worktree's absolute path into a dev-server port and a database port, and
+`e2e/provision.ts` starts a Postgres container named `authgd-e2e-<worktree>` on
+that port before the dev server boots. Both `playwright.config.ts` and
+`e2e/helpers.ts` read the resulting URL from that one module, so the server and
+the seeding code cannot end up pointed at different databases.
+
+Concurrent worktrees therefore each get their own port and their own database,
+and `npm run test:e2e` remains the only command you need.
+
+```bash
+npm run test:e2e          # provisions on first run, reuses afterwards
+npm run test:e2e:clean    # remove this worktree's container when you're done
+```
+
+The container is kept between runs on purpose — a throwaway one would pay for
+`initdb` plus a full migration every time, and would strand any reused dev
+server against a database that no longer exists. Nothing reclaims it
+automatically, so `test:e2e:clean` is the tidy-up.
+
+Two overrides exist, both optional:
+
+| Variable | Effect |
+|---|---|
+| `TEST_DATABASE_URL` | Use this database and skip provisioning entirely. |
+| `E2E_PORT` / `E2E_DB_PORT` | Pin a port, e.g. after a hash collision. |
+
+If something that is not this worktree's own dev server already holds the port,
+the run **aborts** rather than attaching to it. Attaching is what used to make a
+sibling worktree's server answer your tests and return a green suite that never
+touched your branch.
 
 ### What works on fakes, and what needs real credentials
 

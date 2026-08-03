@@ -67,8 +67,9 @@ jobs:
           # equivalent for CI, which never needs the non-test `authgd` database.
           POSTGRES_DB: authgd_test
         # Host 5433 matches docker-compose.dev.yml, so the TEST_DATABASE_URL
-        # default baked into tests/helpers/db.ts and playwright.config.ts is
-        # correct with no env override. CI uses the same URL developers do.
+        # default baked into tests/helpers/db.ts and e2e/env.ts is correct with
+        # no env override. e2e/env.ts keeps this default specifically for CI;
+        # locally it derives a per-worktree database instead.
         ports:
           - 5433:5432
         options: >-
