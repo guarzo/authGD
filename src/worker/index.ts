@@ -16,7 +16,8 @@ async function main(): Promise<void> {
   const cfg = getConfig();
   const { db, pool } = createDb(cfg.databaseUrl);
 
-  const boss = new PgBoss({ connectionString: cfg.databaseUrl });
+  // pg-boss keeps its own pool, separate from createDb's — cap it too.
+  const boss = new PgBoss({ connectionString: cfg.databaseUrl, max: 5 });
   boss.on("error", (err) => console.error("pg-boss error", err));
   await boss.start();
   await createQueues(boss);

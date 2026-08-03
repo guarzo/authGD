@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { auditLog, wandererAclObservation } from "@/db/schema";
 import { runWandererJob } from "@/jobs/wanderer";
 import {
+  ACL_GRANT_ROLE,
   WandererError,
   type WandererAclMember,
   type WandererClient,
@@ -181,7 +182,7 @@ describe("runWandererJob", () => {
     expect(result.counts).toMatchObject({ unblocked: 1, added: 0, removed: 0 });
     const observed = await ctx.db.select().from(wandererAclObservation);
     expect(observed).toHaveLength(1);
-    expect(observed[0]).toMatchObject({ characterId: 1, role: "viewer" });
+    expect(observed[0]).toMatchObject({ characterId: 1, role: ACL_GRANT_ROLE });
     const audits = await ctx.db.select().from(auditLog);
     expect(audits.some((a) => a.action === "wanderer.unblocked")).toBe(true);
   });

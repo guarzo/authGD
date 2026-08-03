@@ -111,14 +111,14 @@ describe("createWandererClient", () => {
     expect((err as WandererError).transient).toBe(false);
   });
 
-  it("adds members as viewer without a name, and deletes by EVE id", async () => {
+  it("adds members as member without a name, and deletes by EVE id", async () => {
     const posts: unknown[] = [];
     let deleted = "";
     server.use(
       http.post(MEMBERS, async ({ request }) => {
         posts.push(await request.json());
         return HttpResponse.json({
-          data: { id: "uuid", name: "Resolved Server-Side", role: "viewer", eve_character_id: "90000003" },
+          data: { id: "uuid", name: "Resolved Server-Side", role: "member", eve_character_id: "90000003" },
         });
       }),
       http.delete(`${MEMBERS}/:id`, ({ params }) => {
@@ -129,7 +129,7 @@ describe("createWandererClient", () => {
     const w = createWandererClient(cfg);
     await w.addAclMember(90000003);
     await w.removeAclMember(90000004);
-    expect(posts).toEqual([{ member: { eve_character_id: "90000003", role: "viewer" } }]);
+    expect(posts).toEqual([{ member: { eve_character_id: "90000003", role: "member" } }]);
     expect(deleted).toBe("90000004");
   });
 

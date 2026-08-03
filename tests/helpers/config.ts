@@ -22,7 +22,6 @@ export function testConfig(overrides: Partial<NodeJS.ProcessEnv> = {}): Config {
     DISCORD_OPS_WEBHOOK_URL: "https://discord.example/webhook",
     WANDERER_BASE_URL: "https://wanderer.example",
     WANDERER_API_KEY: "wkey",
-    WANDERER_MAP_SLUG: "map",
     WANDERER_ACL_ID: "acl-1",
     STANDINGS_LABEL: "flygd",
     STANDINGS_VALUE: "5",

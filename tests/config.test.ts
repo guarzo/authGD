@@ -20,7 +20,6 @@ const validEnv = {
   DISCORD_ROLE_ID_GREEN: "12",
   WANDERER_BASE_URL: "https://wanderer.example",
   WANDERER_API_KEY: "k",
-  WANDERER_MAP_SLUG: "map",
   WANDERER_ACL_ID: "acl-1",
   STANDINGS_LABEL: "flygd",
   STANDINGS_VALUE: "5",

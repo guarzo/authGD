@@ -23,8 +23,8 @@ fly secrets set \
   DISCORD_CLIENT_ID=... DISCORD_CLIENT_SECRET=... DISCORD_BOT_TOKEN=... \
   DISCORD_GUILD_ID=... DISCORD_ROLE_ID_FLYGD=... DISCORD_ROLE_ID_BLUE=... \
   DISCORD_ROLE_ID_GREEN=... DISCORD_OPS_WEBHOOK_URL=... \
-  WANDERER_BASE_URL=... WANDERER_API_KEY=... WANDERER_MAP_SLUG=... WANDERER_ACL_ID=... \
-  STANDINGS_LABEL=flygd STANDINGS_VALUE=5 \
+  WANDERER_BASE_URL=... WANDERER_API_KEY=... WANDERER_ACL_ID=... \
+  STANDINGS_LABEL=FLYGD STANDINGS_VALUE=5 \
   ESI_CONTACT="you@example.com"
 fly deploy
 fly scale count web=1 worker=1
@@ -64,9 +64,9 @@ character already on the ACL.
 | `DISCORD_GUILD_ID` | yes | the guild whose roles are managed |
 | `DISCORD_ROLE_ID_FLYGD` / `_BLUE` / `_GREEN` | yes | the three managed role ids (distinct) |
 | `DISCORD_OPS_WEBHOOK_URL` | no | ops alerts (final retry failures, config errors) |
-| `WANDERER_BASE_URL` / `WANDERER_API_KEY` | yes | Wanderer instance + map API key |
-| `WANDERER_MAP_SLUG` / `WANDERER_ACL_ID` | yes | the managed map/ACL |
-| `STANDINGS_LABEL` | no (default `flygd`) | in-game contact label the app OWNS (destructive within it) |
+| `WANDERER_BASE_URL` / `WANDERER_API_KEY` | yes | Wanderer instance + the **ACL's own** API key (the map API key returns 401 on `/api/acls/*`) |
+| `WANDERER_ACL_ID` | yes | the managed ACL — dedicated to authGD, reconciled destructively |
+| `STANDINGS_LABEL` | no (default `FLYGD`) | in-game contact label the app OWNS (destructive within it); matched **case-sensitively** against the label as typed in the client |
 | `STANDINGS_VALUE` | no (default 5) | standing pushed for members |
 | `ESI_CONTACT` | yes | operator contact sent in the ESI User-Agent (CCP requirement) |
 

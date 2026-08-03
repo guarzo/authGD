@@ -35,7 +35,6 @@ beforeAll(async () => {
     DISCORD_ROLE_ID_GREEN: "12",
     WANDERER_BASE_URL: "https://w.example",
     WANDERER_API_KEY: "k",
-    WANDERER_MAP_SLUG: "m",
     WANDERER_ACL_ID: "a",
     ESI_CONTACT: "ops@example.com",
   } as NodeJS.ProcessEnv);
