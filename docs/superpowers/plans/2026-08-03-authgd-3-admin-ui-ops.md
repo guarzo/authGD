@@ -1407,6 +1407,7 @@ Three tightly coupled pieces: (a) F7 — recheck runs must record `sync_run.job_
 
 ```ts
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { syncRun } from "@/db/schema";
 import { getSyncStatus } from "@/services/sync-status";
 import { finishSyncRun, startSyncRun } from "@/services/sync-run";
 import { setupTestDb, truncateAll } from "./helpers/db";
@@ -1442,9 +1443,14 @@ describe("getSyncStatus", () => {
 
   it("keeps rare jobs visible no matter how many runs other jobs pile up", async () => {
     await startSyncRun(ctx.db, "membership-recheck");
-    for (let i = 0; i < 20; i++) await startSyncRun(ctx.db, "contacts");
+    // 501 competing rows: more than any plausible global row window, so a
+    // regression back to windowed grouping fails this test.
+    await ctx.db
+      .insert(syncRun)
+      .values(Array.from({ length: 501 }, () => ({ jobType: "contacts" })));
     const groups = await getSyncStatus(ctx.db, 5);
     expect(groups.map((g) => g.jobType)).toEqual(["membership-recheck", "contacts"]);
+    expect(groups[0].runs).toHaveLength(1);
     expect(groups[1].runs).toHaveLength(5);
   });
 });
@@ -2483,7 +2489,26 @@ Append to `tests/worker-queues.test.ts`:
     expect(q?.retryLimit).toBe(5);
     expect(q?.deadLetter).toBe(QUEUES.deadLetter);
   });
+
+  it("refuses to start when the DLQ itself has a dead-letter target (uncleanable)", async () => {
+    // Set the one misconfiguration updateQueue cannot repair…
+    await boss.updateQueue(QUEUES.deadLetter, {
+      name: QUEUES.deadLetter,
+      deadLetter: QUEUES.contacts,
+    });
+    try {
+      await expect(createQueues(boss)).rejects.toThrow(/dead-letter target/);
+    } finally {
+      // …and clear it with the documented manual fix so later tests (and
+      // reruns against the persistent test DB) start clean.
+      const { db, pool } = createDb(TEST_URL);
+      await db.execute(sql`UPDATE pgboss.queue SET dead_letter = NULL WHERE name = ${QUEUES.deadLetter}`);
+      await pool.end();
+    }
+  });
 ```
+
+(Add `import { sql } from "drizzle-orm";` and `import { createDb } from "@/db";` to the file — `TEST_URL` is already defined there.)
 
 In `tests/ops-webhook.test.ts`: replace every `new Response("", { status: 204 })` with `new Response(null, { status: 204 })` (the string-body form throws inside the mock and silently exercised the catch path), then append:
 
@@ -2543,6 +2568,18 @@ export async function createQueues(boss: PgBoss): Promise<void> {
   const dlqOptions = { name: QUEUES.deadLetter, ...RETRY };
   await boss.createQueue(QUEUES.deadLetter, dlqOptions);
   await boss.updateQueue(QUEUES.deadLetter, dlqOptions);
+  // updateQueue COALESCEs every field, so it can overwrite stale values but
+  // NEVER clear one. The one value we need absent — a dead-letter target on
+  // the DLQ itself, which would bounce alerts elsewhere — is therefore
+  // inspected explicitly, failing startup with the manual fix.
+  const dlq = await boss.getQueue(QUEUES.deadLetter);
+  if (dlq?.deadLetter) {
+    throw new Error(
+      `queue ${QUEUES.deadLetter} has a dead-letter target (${dlq.deadLetter}) ` +
+        `that pg-boss cannot clear via updateQueue; remove it manually: ` +
+        `UPDATE pgboss.queue SET dead_letter = NULL WHERE name = '${QUEUES.deadLetter}'`,
+    );
+  }
   for (const name of JOB_QUEUES) {
     // policy "short": singletonKey uniqueness only exists under this policy
     // (pg-boss job_i1 partial index) — standard queues ignore singletonKey.
@@ -2554,10 +2591,10 @@ export async function createQueues(boss: PgBoss): Promise<void> {
       deadLetter: QUEUES.deadLetter,
     };
     // createQueue is ON CONFLICT DO NOTHING: an existing queue keeps stale
-    // settings, so updateQueue repairs configuration on every startup.
-    // Caveat: updateQueue COALESCEs each field, so it can OVERWRITE stale
-    // values but never CLEAR one (passing undefined/null keeps the old
-    // value) — we always pass every field we manage, which is sufficient.
+    // settings, so updateQueue repairs configuration on every startup. The
+    // repair guarantee is limited to fields we SET — job queues pass every
+    // managed field with a non-null value, so all of them are repaired; only
+    // clearing a value is impossible (see the DLQ inspection above).
     await boss.createQueue(name, options);
     await boss.updateQueue(name, options);
   }
@@ -2661,8 +2698,8 @@ Plan 2 post-merge review: (a) pg-boss `short` policy allows one queued job to st
   - `resolveAffiliations` ignores response rows whose id was not requested and duplicate rows for the same id (first wins); requested-but-omitted ids stay `unresolved` exactly as before.
   - Membership runs carry a **DB-derived ordering token captured BEFORE any external work**: `checkedAt` comes from `select clock_timestamp()` at the top of the job body, before `resolveAffiliations` issues ESI calls. A slower, older run therefore holds an OLDER token no matter how late it finishes — `new Date()` after the ESI phase would invert that.
   - Affiliation writes CAS on the token: `WHERE id = ? AND (affiliation_checked_at IS NULL OR affiliation_checked_at < <checkedAt>) RETURNING id`. Only characters whose write WON count as confirmed for the tier pass. Ties lose (strict `<`).
-  - **The tier transaction re-verifies the token under lock**: a CAS win only proves the write was newest momentarily — another run can supersede it before the tier transaction runs. Inside the transaction, the main character row is locked `FOR UPDATE` FIRST (the repo's documented lock order is character before account — see the LOCK ORDER comment in `src/services/accounts.ts`) and its `affiliation_checked_at` must still EQUAL this run's token; otherwise skip. Only then is the account row locked and re-checked as today.
-  - `affiliation_invalid` writes go per-id with the same guard + `RETURNING`; the audit row is written only for ids that WON and were not already flagged (checked per-id at write time, not from the pre-run snapshot); losing writes count as `stale` and are neither flagged nor audited. New count `stale` reports all lost writes.
+  - **The tier transition is an exported, directly-testable function** `applyTierTransition(db: Db, input: { accountId: string; mainCharacterId: number; next: "flygd" | "green"; checkedAt: Date }): Promise<boolean>`: a CAS win only proves the write was newest momentarily — another run can supersede it before the tier transaction runs. Inside its transaction, the main character row is locked `FOR UPDATE` FIRST (the repo's documented lock order is character before account — see the LOCK ORDER comment in `src/services/accounts.ts`) and its `affiliation_checked_at` must still EQUAL this run's token; otherwise it returns false without touching anything. Only then is the account row locked and re-checked as today. The job's tier pass calls it; tests call it directly to pin the supersession window.
+  - `affiliation_invalid` writes run as ONE TRANSACTION per character: lock the row `FOR UPDATE`, check token and current flag under the lock, update, and audit newly-flagged rows — all in the same transaction, so an interleaved run can never produce a duplicate audit row. Losing writes count as `stale` and are neither flagged nor audited. New count `stale` reports all lost writes.
 
 - [ ] **Step 1: Write failing tests**
 
@@ -2744,7 +2781,54 @@ Append to `tests/membership-job.test.ts` (inside the main describe; `character` 
   });
 ```
 
-(The between-CAS-and-transaction window from finding 2 is closed by the in-transaction token re-verification; the overlap tests above pin the ordering mechanism itself, and the re-verify shares the exact same equality check.)
+And two focused tests for the supersession window itself — the gap between a CAS win and the tier transaction — driven directly through the exported `applyTierTransition` (add it and `outbox` to the imports):
+
+```ts
+  it("applyTierTransition refuses when the run's write was superseded before the transaction", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
+    const myToken = new Date("2026-08-03T10:00:00Z");
+    const newerToken = new Date("2026-08-03T10:00:01Z");
+    // this run's CAS won at myToken…
+    await ctx.db
+      .update(character)
+      .set({ affiliationCheckedAt: myToken, allianceId: null })
+      .where(eq(character.id, 1));
+    // …then a newer run superseded it before our tier transaction ran
+    await ctx.db
+      .update(character)
+      .set({ affiliationCheckedAt: newerToken, allianceId: 99000001 })
+      .where(eq(character.id, 1));
+    const applied = await applyTierTransition(ctx.db, {
+      accountId: acc.id,
+      mainCharacterId: 1,
+      next: "green",
+      checkedAt: myToken,
+    });
+    expect(applied).toBe(false);
+    expect((await getAccount(acc.id)).tier).toBe("flygd");
+    expect(await ctx.db.select().from(outbox)).toHaveLength(0); // nothing enqueued
+  });
+
+  it("applyTierTransition applies when its write is still the latest", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
+    const myToken = new Date("2026-08-03T10:00:00Z");
+    await ctx.db
+      .update(character)
+      .set({ affiliationCheckedAt: myToken, allianceId: null })
+      .where(eq(character.id, 1));
+    const applied = await applyTierTransition(ctx.db, {
+      accountId: acc.id,
+      mainCharacterId: 1,
+      next: "green",
+      checkedAt: myToken,
+    });
+    expect(applied).toBe(true);
+    expect((await getAccount(acc.id)).tier).toBe("green");
+    expect(await ctx.db.select().from(outbox)).toHaveLength(1);
+  });
+```
 
 - [ ] **Step 2: Run tests to verify failure**
 
@@ -2817,55 +2901,115 @@ Expected: FAIL — unrequested id resolved; stale run demotes and overwrites.
       else stale++;
     }
     for (const id of outcome.invalid) {
-      // Per-id so the audit reflects rows that actually changed: RETURNING
-      // proves the write won; the flag is read at write time (not from the
-      // pre-run snapshot) so a losing run cannot audit a phantom flag.
-      const [before] = await db
-        .select({ flagged: character.affiliationInvalid })
-        .from(character)
-        .where(eq(character.id, id));
-      const won = await db
-        .update(character)
-        .set({ affiliationInvalid: true, affiliationCheckedAt: checkedAt })
-        .where(tokenGuard(id))
-        .returning({ id: character.id });
-      if (won.length === 0) {
-        stale++;
-        continue;
-      }
-      if (before && !before.flagged) {
-        await logAudit(db, {
-          actor: "system",
-          action: "character.affiliation_invalid",
-          target: String(id),
-        });
-      }
+      // ONE transaction per character: lock, check token AND current flag
+      // under the lock, update, audit — a read-then-write across statements
+      // would let an interleaved run cause duplicate audit rows.
+      const outcome2 = await db.transaction(async (tx) => {
+        const [row] = await tx
+          .select()
+          .from(character)
+          .where(eq(character.id, id))
+          .for("update");
+        if (!row) return "gone";
+        if (
+          row.affiliationCheckedAt &&
+          row.affiliationCheckedAt.getTime() >= checkedAt.getTime()
+        ) {
+          return "stale"; // a newer run owns this row
+        }
+        await tx
+          .update(character)
+          .set({ affiliationInvalid: true, affiliationCheckedAt: checkedAt })
+          .where(eq(character.id, id));
+        if (!row.affiliationInvalid) {
+          await logAudit(tx, {
+            actor: "system",
+            action: "character.affiliation_invalid",
+            target: String(id),
+          });
+        }
+        return "won";
+      });
+      if (outcome2 === "stale") stale++;
     }
 ```
 
 (This replaces the existing bulk `inArray` invalid UPDATE and its `alreadyFlagged` pre-run snapshot loop entirely.)
 
-**(c) Tier pass** — require `confirmed.has(acc.mainCharacterId)` wherever the main's confirmation is computed from `outcome.resolved`, and add a token re-verification INSIDE the existing tier transaction, BEFORE the account-row lock (lock order: character before account, per the LOCK ORDER comment in `src/services/accounts.ts`):
+**(c) Tier transition** — new EXPORTED function in `src/jobs/membership.ts` (above `runMembershipJob`); it replaces the job's inline `db.transaction` block entirely:
 
 ```ts
-      const applied = await db.transaction(async (tx) => {
-        // A CAS win is only momentary — re-verify under lock that our write
-        // is STILL the latest before transitioning the tier on it.
-        const [mainRow] = await tx
-          .select()
-          .from(character)
-          .where(eq(character.id, acc.mainCharacterId!))
-          .for("update");
-        if (
-          !mainRow ||
-          mainRow.affiliationCheckedAt?.getTime() !== checkedAt.getTime()
-        ) {
-          return false; // superseded — the newer run owns this decision
-        }
-        const [locked] = await tx
-          .select()
-          .from(account)
-          // …existing account lock + re-check + update/audit/enqueue unchanged…
+/**
+ * Applies one system tier transition. Exported so tests can pin the
+ * supersession window directly: a CAS win in the write phase is only
+ * momentary, so this transaction re-verifies — under lock, character row
+ * BEFORE account row per the LOCK ORDER comment in src/services/accounts.ts —
+ * that the run's affiliation write is STILL the latest before transitioning
+ * on it. Returns true when the transition was applied.
+ */
+export async function applyTierTransition(
+  db: Db,
+  input: {
+    accountId: string;
+    mainCharacterId: number;
+    next: "flygd" | "green";
+    checkedAt: Date;
+  },
+): Promise<boolean> {
+  return db.transaction(async (tx) => {
+    const [mainRow] = await tx
+      .select()
+      .from(character)
+      .where(eq(character.id, input.mainCharacterId))
+      .for("update");
+    if (
+      !mainRow ||
+      mainRow.affiliationCheckedAt?.getTime() !== input.checkedAt.getTime()
+    ) {
+      return false; // superseded — the newer run owns this decision
+    }
+    const [locked] = await tx
+      .select()
+      .from(account)
+      .where(eq(account.id, input.accountId))
+      .for("update");
+    if (
+      !locked ||
+      locked.tierLocked ||
+      locked.tier === input.next ||
+      locked.mainCharacterId !== input.mainCharacterId
+    ) {
+      return false; // changed underneath us — leave it to the next run
+    }
+    await tx
+      .update(account)
+      .set({ tier: input.next, tierChangedAt: new Date(), tierChangedBy: "system" })
+      .where(eq(account.id, input.accountId));
+    await logAudit(tx, {
+      actor: "system",
+      action: "tier.changed",
+      target: input.accountId,
+      details: {
+        from: locked.tier,
+        to: input.next,
+        cause: input.next === "flygd" ? "main joined alliance" : "main left alliance",
+      },
+    });
+    await enqueueSync(tx, { kind: "account", accountId: input.accountId });
+    return true;
+  });
+}
+```
+
+In the tier pass: require `confirmed.has(acc.mainCharacterId)` wherever the main's confirmation is computed from `outcome.resolved`, then replace the inline transaction with:
+
+```ts
+      const applied = await applyTierTransition(db, {
+        accountId: acc.id,
+        mainCharacterId: acc.mainCharacterId!,
+        next,
+        checkedAt,
+      });
 ```
 
 Add `stale` to the returned counts.
