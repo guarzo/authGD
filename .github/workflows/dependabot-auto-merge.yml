@@ -1,0 +1,65 @@
+name: Dependabot auto-merge
+
+# Turns on GitHub's native auto-merge for the Dependabot PRs whose risk the
+# grouping in .github/dependabot.yml has already bounded. This workflow does NOT
+# merge anything itself — it flips the auto-merge flag, and GitHub merges only
+# once every REQUIRED status check on main passes.
+#
+# That word "required" is load-bearing. Auto-merge waits on required checks
+# only; a check that is green-but-optional is not waited for, and a branch with
+# no required checks at all merges the moment the flag is set. If the ruleset on
+# main ever drops its required-checks rule, this workflow silently becomes
+# "merge every dependency bump on sight". Treat the two as one unit.
+#
+# Prerequisites, both outside this file:
+#   1. Settings > General > Pull Requests > "Allow auto-merge" enabled.
+#      Without it `gh pr merge --auto` errors and this job goes red.
+#   2. A ruleset on main requiring the CI checks, with enforcement active.
+
+on: pull_request
+
+# Workflows triggered by Dependabot PRs get a read-only token by default; these
+# two scopes are what `gh pr merge --auto` needs. Nothing here reads the PR's
+# code or runs its dependencies — the diff is never checked out.
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    name: Enable auto-merge
+    # The repository guard keeps this from running in forks, where the actor
+    # check alone could be satisfied by a branch named to impersonate the bot.
+    if: github.actor == 'dependabot[bot]' && github.repository == 'guarzo/authGD'
+    runs-on: ubuntu-latest
+    steps:
+      - id: meta
+        uses: dependabot/fetch-metadata@v3
+
+      # Gate on the group name, not on the semver level. The groups in
+      # dependabot.yml already encode the judgement: `minor-and-patch` is
+      # restricted to minor and patch by its own `update-types`, and the tooling
+      # groups fail loudly in the very CI jobs that gate this merge.
+      #
+      # `update-type` would be the obvious alternative, but it is documented as
+      # "the highest semver change being made by this PR" with no stated
+      # behaviour for grouped PRs — so the group name is the claim that is
+      # actually specified.
+      #
+      # Deliberately absent: `react` and `drizzle` (coordinated majors; a
+      # drizzle-orm/drizzle-kit skew surfaces at fly.toml's release_command,
+      # which is the worst place to find it) and every ungrouped PR — the
+      # individual-PR tier is next, zod, pg, pg-boss, jose, tsx and typescript
+      # majors, which are read-the-changelog changes. Security updates are
+      # ungrouped by design and land here too: they should be merged fast, but
+      # by a human who has read the advisory.
+      - name: Enable auto-merge for bounded-risk groups
+        if: >-
+          contains(
+            fromJSON('["minor-and-patch", "linting", "testing", "types", "actions"]'),
+            steps.meta.outputs.dependency-group
+          )
+        run: gh pr merge --auto --squash "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ github.token }}
