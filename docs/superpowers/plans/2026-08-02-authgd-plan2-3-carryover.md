@@ -27,3 +27,7 @@ Plan 1 (Foundation & Auth) merged clean; these notes bind later plans.
   character id; last-admin recovery requires an id that has never been granted.
 - Login page accepts but ignores an `error` search param — wire or drop during UI
   polish.
+
+All three Plan 3 notes resolved (2026-08-03, Plan 3): demoteAdmin route-gated +
+ordered locking; bootstrap recovery caveat documented in docs/ops.md; login
+error param confirmed wired and pinned by e2e.
