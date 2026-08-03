@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { loadConfig, type Config } from "@/config";
-import { account, auditLog, bootstrapAdminGrant, character, outbox, session } from "@/db/schema";
+import { account, auditLog, character, outbox } from "@/db/schema";
 import {
   demoteAdmin,
   handleEveLogin,
@@ -52,7 +52,7 @@ beforeAll(async () => {
     WANDERER_API_KEY: "k",
     WANDERER_ACL_ID: "a",
     ESI_CONTACT: "ops@example.com",
-  } as NodeJS.ProcessEnv);
+  });
 });
 beforeEach(() => truncateAll(ctx.db));
 afterAll(() => ctx.cleanup());
@@ -260,7 +260,7 @@ describe("setMainCharacter", () => {
 
 describe("re-auth side effects", () => {
   it("audits, enqueues, and downgrades status when scopes shrink", async () => {
-    const a = await login(ch());
+    await login(ch());
     await ctx.db.delete(outbox);
     await login(
       ch({ refreshToken: "rt-2", scopes: ["esi-characters.read_contacts.v1"] }), // missing write scope
@@ -334,7 +334,7 @@ describe("demoteAdmin", () => {
   });
 
   it("demotes when another admin exists", async () => {
-    const a = await login(ch());
+    await login(ch());
     const b = await login(ch({ characterId: 90000002, ownerHash: "oh-2", characterName: "B" }));
     await ctx.db.update(account).set({ isAdmin: true });
     expect(await demote("system", b.accountId)).toEqual({ ok: true });

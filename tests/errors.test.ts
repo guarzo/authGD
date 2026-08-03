@@ -40,6 +40,6 @@ describe("classifyEsiError", () => {
     [500, "transient"],
     [503, "transient"],
   ])("status %d → %s", (status, expected) => {
-    expect(classifyEsiError(status as number)).toBe(expected);
+    expect(classifyEsiError(status)).toBe(expected);
   });
 });

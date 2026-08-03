@@ -37,7 +37,7 @@ beforeAll(async () => {
     WANDERER_API_KEY: "k",
     WANDERER_ACL_ID: "a",
     ESI_CONTACT: "ops@example.com",
-  } as NodeJS.ProcessEnv);
+  });
 });
 beforeEach(() =>
   ctx.db.execute(sql`

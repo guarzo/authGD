@@ -47,7 +47,7 @@ describe("loadConfig", () => {
 
   it("rejects missing required vars", () => {
     const { DATABASE_URL: _omitted, ...rest } = validEnv;
-    expect(() => loadConfig(rest as NodeJS.ProcessEnv)).toThrow();
+    expect(() => loadConfig(rest)).toThrow();
   });
 
   it("rejects malformed or duplicate bootstrap admin ids", () => {

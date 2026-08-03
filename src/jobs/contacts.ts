@@ -164,7 +164,11 @@ export async function runContactsJob(deps: {
           stepErr ??= err; // report the add/edit failure first if both failed
         }
 
+        // stepErr is the `unknown` captured from one of the two blocks above,
+        // rethrown so the original failure reaches the outer handler unwrapped.
+        // eslint-disable-next-line @typescript-eslint/only-throw-error -- deliberate rethrow of a caught unknown captured across two try/catch blocks; the rule's allowRethrowing option only covers `throw` directly inside a catch.
         if (stepErr) throw stepErr;
+
         await recordResult(db, target.characterId, "ok", true);
       } catch (err) {
         const needsReauth = err instanceof EsiError && err.kind === "needs_reauth";

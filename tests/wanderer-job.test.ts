@@ -140,7 +140,7 @@ describe("runWandererJob", () => {
         db: ctx.db,
         cfg,
         wanderer: w.client,
-        fetchImpl: webhook as unknown as typeof fetch,
+        fetchImpl: webhook,
       }),
     ).rejects.toBeInstanceOf(JobRetryError);
     expect(webhook).not.toHaveBeenCalled();

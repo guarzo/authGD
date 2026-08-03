@@ -63,7 +63,7 @@ function refreshFetchFor(accessTokens: Record<string, string>): typeof fetch {
       JSON.stringify({ access_token: at, refresh_token: `${rt}-rotated` }),
       { status: 200, headers: { "content-type": "application/json" } },
     );
-  }) as typeof fetch;
+  });
 }
 
 /** Signs a structurally valid EVE JWT missing the `owner` claim — verifyEveAccessToken

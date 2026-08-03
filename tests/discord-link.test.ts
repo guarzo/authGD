@@ -95,7 +95,7 @@ describe("linkDiscord", () => {
     // either the slow one saw the committed row (already_linked) or hit 23505
     if (rejected.length === 1) {
       expect(
-        (rejected[0] as PromiseRejectedResult).reason,
+        (rejected[0]).reason,
       ).toBeInstanceOf(DiscordLinkConflictError);
       expect(fulfilled).toHaveLength(1);
     } else {

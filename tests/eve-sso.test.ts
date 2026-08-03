@@ -3,7 +3,6 @@ import { createLocalJWKSet } from "jose";
 import { describe, expect, it } from "vitest";
 import { loadConfig } from "@/config";
 import {
-  EveSsoError,
   buildEveAuthorizeUrl,
   exchangeEveCode,
   verifyEveAccessToken,
@@ -29,7 +28,7 @@ const cfg = loadConfig({
   WANDERER_API_KEY: "k",
   WANDERER_ACL_ID: "a",
   ESI_CONTACT: "ops@example.com",
-} as NodeJS.ProcessEnv);
+});
 
 describe("buildEveAuthorizeUrl", () => {
   it("contains all required params", () => {

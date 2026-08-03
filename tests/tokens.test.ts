@@ -75,7 +75,7 @@ describe("getFreshAccessToken", () => {
       ctx.db,
       cfg,
       { ...ch, refreshTokenEnc: "not.a.blob" },
-      (async () => tokenJson({})) as typeof fetch,
+      (async () => tokenJson({})),
     );
     expect(r).toMatchObject({ ok: false, reason: "invalid", detail: "malformed_token_blob" });
     expect((await getChar(90000001)).tokenStatus).toBe("invalid");
@@ -84,7 +84,7 @@ describe("getFreshAccessToken", () => {
   it("returns no_token for missing or already-invalid tokens", async () => {
     const ch = await seed({ refreshToken: null, tokenStatus: "missing" });
     const r = await getFreshAccessToken(ctx.db, cfg, ch, (async () =>
-      tokenJson({})) as typeof fetch);
+      tokenJson({})));
     expect(r).toEqual({ ok: false, reason: "no_token" });
   });
 

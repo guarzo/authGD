@@ -5,7 +5,7 @@ import { testConfig } from "./helpers/config";
 describe("postOpsWebhook", () => {
   it("posts content to the configured webhook", async () => {
     const fetchImpl = vi.fn(async () => new Response(null, { status: 204 }));
-    await postOpsWebhook(testConfig(), "job failed", fetchImpl as unknown as typeof fetch);
+    await postOpsWebhook(testConfig(), "job failed", fetchImpl);
     expect(fetchImpl).toHaveBeenCalledOnce();
     const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe("https://discord.example/webhook");
@@ -15,7 +15,7 @@ describe("postOpsWebhook", () => {
   it("is a no-op when no webhook is configured", async () => {
     const fetchImpl = vi.fn(async () => new Response(null, { status: 204 }));
     const cfg = testConfig({ DISCORD_OPS_WEBHOOK_URL: "" });
-    await postOpsWebhook(cfg, "x", fetchImpl as unknown as typeof fetch);
+    await postOpsWebhook(cfg, "x", fetchImpl);
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
@@ -30,7 +30,7 @@ describe("postOpsWebhook", () => {
 describe("postOpsWebhookOrThrow", () => {
   it("posts content to the configured webhook", async () => {
     const fetchImpl = vi.fn(async () => new Response(null, { status: 204 }));
-    await postOpsWebhookOrThrow(testConfig(), "alert", fetchImpl as unknown as typeof fetch);
+    await postOpsWebhookOrThrow(testConfig(), "alert", fetchImpl);
     expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
@@ -39,7 +39,7 @@ describe("postOpsWebhookOrThrow", () => {
     await postOpsWebhookOrThrow(
       testConfig({ DISCORD_OPS_WEBHOOK_URL: "" }),
       "x",
-      fetchImpl as unknown as typeof fetch,
+      fetchImpl,
     );
     expect(fetchImpl).not.toHaveBeenCalled();
   });

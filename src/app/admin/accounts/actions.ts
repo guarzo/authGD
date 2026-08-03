@@ -45,7 +45,12 @@ export async function setStatusAction(
 
 export async function saveNoteAction(accountId: string, formData: FormData): Promise<void> {
   const { accountId: actor } = await requireAdminAction();
-  const note = String(formData.get("note") ?? "");
+  const raw = formData.get("note");
+  // FormData.get() is string | File | null. A File would stringify to
+  // "[object File]" and be persisted as the note *and* written to the audit
+  // log, so treat anything that isn't a string as empty.
+  const note = typeof raw === "string" ? raw : "";
+
   const result = await getDb().transaction((tx) => setStatusNote(tx, actor, accountId, note));
   if (!result.ok) throw new Error(result.error);
   revalidatePath("/admin/accounts");
