@@ -1,0 +1,126 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A new push supersedes the run in flight for the same ref. main is excluded so
+# every commit that lands keeps a complete, attributable run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  static:
+    name: Typecheck, lint & format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      # Runs before the linters: if the Node pin has drifted, everything below
+      # ran on the wrong runtime and the results are not worth reading.
+      - name: Check Node version pins agree
+        run: bash scripts/check-node-version.sh
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Lint
+        run: npm run lint
+      - name: Format check
+        run: npm run format:check
+
+  build:
+    name: Next build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      # No env block on purpose: getConfig() validates lazily per request and
+      # every route is dynamic, so nothing calls it at build time. Verified by
+      # building with DATABASE_URL and TOKEN_ENCRYPTION_KEY unset.
+      - name: Build
+        run: npm run build
+
+  test:
+    name: Tests (unit, then e2e)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: authgd
+          POSTGRES_PASSWORD: authgd
+          # docker-compose.dev.yml creates authgd_test via an init script, which
+          # a service container cannot mount. Naming the database directly is
+          # equivalent for CI, which never needs the non-test `authgd` database.
+          POSTGRES_DB: authgd_test
+        # Host 5433 matches docker-compose.dev.yml, so the TEST_DATABASE_URL
+        # default baked into tests/helpers/db.ts and playwright.config.ts is
+        # correct with no env override. CI uses the same URL developers do.
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U authgd -d authgd_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+
+      # Keyed on the resolved @playwright/test version: the browser build is
+      # tied to the package version, not to the whole lockfile.
+      - name: Resolve Playwright version
+        id: pw
+        run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+      - name: Cache Playwright browsers
+        id: pw-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ steps.pw.outputs.version }}
+      # playwright.config.ts declares no `projects`, so only chromium is used.
+      # On a cache hit the browser is present but its apt dependencies are not,
+      # since those live outside the cached directory.
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      # tests/helpers/db.ts migrates on its own, but e2e/helpers.ts only
+      # TRUNCATEs and assumes the schema exists. Migrating up front removes the
+      # implicit "e2e only works because unit tests ran first" ordering trap.
+      - name: Apply migrations to test database
+        run: npm run db:migrate
+        env:
+          DATABASE_URL: postgres://authgd:authgd@localhost:5433/authgd_test
+
+      # Unit and e2e share one database (docs/ops.md; playwright.config.ts sets
+      # workers: 1). Same job, sequential steps — they can never overlap.
+      - name: Unit tests
+        run: npm test
+      - name: E2E tests
+        run: npm run test:e2e
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
