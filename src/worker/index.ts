@@ -30,17 +30,25 @@ async function main(): Promise<void> {
   });
   // pg-boss v10 handlers receive an ARRAY of jobs.
   for (const [queue, handler] of Object.entries(handlers)) {
-    await boss.work(queue, async ([job]) => handler(job.data));
+    await boss.work(queue, async (jobs) => {
+      for (const job of jobs) await handler(job.data);
+    });
   }
 
   // Ops alerting (spec: Error handling): a job landing here exhausted its
-  // retries — post to the optional Discord ops webhook.
+  // retries — post to the optional Discord ops webhook. Guarded so a
+  // malformed dead-letter payload or a failed webhook post can neither crash
+  // the worker nor silently vanish.
   await boss.work(QUEUES.deadLetter, async ([job]) => {
-    const data = deadLetterSchema.parse(job.data);
-    await postOpsWebhook(
-      cfg,
-      `authGD: job \`${data?.jobType ?? "unknown"}\` failed after final retry.`,
-    );
+    try {
+      const data = deadLetterSchema.parse(job.data);
+      await postOpsWebhook(
+        cfg,
+        `authGD: job \`${data?.jobType ?? "unknown"}\` failed after final retry.`,
+      );
+    } catch (err) {
+      console.error("dead-letter handler failed", err);
+    }
   });
 
   await scheduleJobs(boss);
@@ -48,10 +56,18 @@ async function main(): Promise<void> {
     boss.send(queue, data, options),
   );
 
+  let shuttingDown = false;
   const shutdown = async (): Promise<void> => {
-    stopDispatcher();
-    await boss.stop({ graceful: true, wait: true });
-    await pool.end();
+    if (shuttingDown) return; // re-entrant SIGTERM/SIGINT is a no-op
+    shuttingDown = true;
+    try {
+      await stopDispatcher();
+      await boss.stop({ graceful: true, wait: true });
+      await pool.end();
+    } catch (err) {
+      console.error("worker shutdown failed", err);
+      process.exit(1);
+    }
     process.exit(0);
   };
   process.on("SIGTERM", () => void shutdown());

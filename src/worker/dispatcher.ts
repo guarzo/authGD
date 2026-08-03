@@ -81,6 +81,14 @@ export function planDispatch(
  * takeUndispatched/markDispatched contract): a failed send rolls the claim
  * back so rows are re-attempted next tick. FOR UPDATE SKIP LOCKED makes
  * concurrent dispatchers safe without advisory locks.
+ *
+ * At-least-once contract: sends happen inside the transaction that also
+ * marks rows dispatched, but the two are not atomic with each other beyond
+ * the transaction boundary — if the transaction fails to commit AFTER the
+ * sends have gone out (e.g. a commit-time failure), those jobs are already
+ * enqueued while their outbox rows remain undispatched. The next tick will
+ * re-claim and re-send the same rows; pg-boss's singleton keys coalesce the
+ * resulting duplicates, so this is safe but not exactly-once.
  */
 export async function dispatchOutbox(db: Db, send: QueueSend): Promise<number> {
   return db.transaction(async (tx) => {
@@ -99,16 +107,24 @@ export async function dispatchOutbox(db: Db, send: QueueSend): Promise<number> {
   });
 }
 
-export function startDispatcher(db: Db, send: QueueSend, intervalMs = 2000): () => void {
+export function startDispatcher(
+  db: Db,
+  send: QueueSend,
+  intervalMs = 2000,
+): () => Promise<void> {
   let running = false;
+  let inFlight: Promise<unknown> = Promise.resolve();
   const timer = setInterval(() => {
     if (running) return;
     running = true;
-    void dispatchOutbox(db, send)
+    inFlight = dispatchOutbox(db, send)
       .catch((err) => console.error("outbox dispatch failed", err))
       .finally(() => {
         running = false;
       });
   }, intervalMs);
-  return () => clearInterval(timer);
+  return async () => {
+    clearInterval(timer);
+    await inFlight;
+  };
 }
