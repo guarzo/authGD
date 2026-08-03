@@ -48,7 +48,10 @@ const envSchema = z.object({
   WANDERER_BASE_URL: z.string().url(),
   WANDERER_API_KEY: z.string().min(1),
   WANDERER_ACL_ID: z.string().min(1),
-  STANDINGS_LABEL: z.string().min(1).default("flygd"),
+  // Matched against the in-game contact label by exact string equality
+  // (src/jobs/contacts.ts), so the case here must match the label as typed in
+  // the client — the default mirrors the label FlyGD actually uses.
+  STANDINGS_LABEL: z.string().min(1).default("FLYGD"),
   STANDINGS_VALUE: z.coerce.number().min(-10).max(10).default(5),
   // CCP requires ESI consumers to send identifying contact info (F6).
   ESI_CONTACT: z.string().min(1),

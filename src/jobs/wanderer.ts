@@ -2,7 +2,7 @@ import type { Config } from "@/config";
 import type { Db } from "@/db";
 import { wandererAclObservation } from "@/db/schema";
 import { diffAcl } from "@/core/acl-diff";
-import { WandererError, type WandererClient } from "@/lib/wanderer/client";
+import { ACL_GRANT_ROLE, WandererError, type WandererClient } from "@/lib/wanderer/client";
 import { postOpsWebhook } from "@/lib/ops-webhook";
 import { logAudit } from "@/services/audit";
 import { getFlygdCharacters } from "@/services/desired";
@@ -73,11 +73,11 @@ export async function runWandererJob(deps: {
         errors.push(`remove ${id}: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
-    // A blocked desired member has no effective access — reset to viewer.
+    // A blocked desired member has no effective access — reset to the granted role.
     let unblocked = 0;
     for (const id of diff.unblock) {
       try {
-        await wanderer.updateAclMemberRole(id, "viewer");
+        await wanderer.updateAclMemberRole(id, ACL_GRANT_ROLE);
         unblocked++;
         await logAudit(db, { actor: "system", action: "wanderer.unblocked", target: String(id) });
       } catch (err) {

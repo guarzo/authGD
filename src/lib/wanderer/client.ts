@@ -51,6 +51,15 @@ const aclSchema = z.object({
 export type AclRole = z.infer<typeof roleSchema>;
 export type WandererAclMember = { characterId: number | null; role: AclRole };
 
+/**
+ * The access level this app grants. Used both when adding a new member and
+ * when resetting a blocked-but-desired one, so the two can never drift apart.
+ * "viewer" is wanderer's own default but is read-only on the map; members need
+ * to contribute signatures and connections, so "member" is the operative level.
+ */
+export const ACL_GRANT_ROLE = "member" satisfies AclRole;
+
+
 export function createWandererClient(cfg: Config, fetchImpl: typeof fetch = fetch) {
   const base = cfg.wanderer.baseUrl.replace(/\/$/, "");
   const aclPath = `/api/acls/${cfg.wanderer.aclId}`;
@@ -98,11 +107,11 @@ export function createWandererClient(cfg: Config, fetchImpl: typeof fetch = fetc
       }));
     },
     async addAclMember(characterId: number): Promise<void> {
-      // role "viewer" (wanderer's default); name is resolved server-side.
+      // name is resolved server-side.
       await request(membersPath, {
         method: "POST",
         body: JSON.stringify({
-          member: { eve_character_id: String(characterId), role: "viewer" },
+          member: { eve_character_id: String(characterId), role: ACL_GRANT_ROLE },
         }),
       });
     },
