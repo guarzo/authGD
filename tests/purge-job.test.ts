@@ -1,8 +1,7 @@
-import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { oauthTransaction, outbox, session } from "@/db/schema";
 import { runPurgeJob } from "@/jobs/purge";
-import { setupTestDb } from "./helpers/db";
+import { setupTestDb, truncateAll } from "./helpers/db";
 import { seedAccount } from "./helpers/seed";
 
 let ctx: Awaited<ReturnType<typeof setupTestDb>>;
@@ -10,13 +9,7 @@ beforeAll(async () => {
   ctx = await setupTestDb();
 });
 afterAll(() => ctx.cleanup());
-beforeEach(async () => {
-  await ctx.db.execute(sql`
-    TRUNCATE account, "character", discord_link, session, bootstrap_admin_grant,
-      outbox, oauth_transaction, contact_sync_state, sync_run,
-      wanderer_acl_observation, audit_log RESTART IDENTITY CASCADE
-  `);
-});
+beforeEach(() => truncateAll(ctx.db));
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -34,8 +27,8 @@ describe("runPurgeJob", () => {
     ]);
     await ctx.db.insert(outbox).values([
       { payload: { kind: "all" } }, // undispatched → NEVER purged
+      { payload: { kind: "all" }, dispatchedAt: new Date(Date.now() - 8 * DAY), createdAt: new Date(Date.now() - 8 * DAY) },
       { payload: { kind: "all" }, dispatchedAt: new Date(), createdAt: new Date(Date.now() - 8 * DAY) },
-      { payload: { kind: "all" }, dispatchedAt: new Date(), createdAt: new Date(Date.now() - DAY) },
     ]);
 
     const result = await runPurgeJob({ db: ctx.db });
@@ -44,6 +37,10 @@ describe("runPurgeJob", () => {
 
     expect((await ctx.db.select().from(session)).map((s) => s.id)).toEqual(["live"]);
     expect((await ctx.db.select().from(oauthTransaction)).map((t) => t.stateHash)).toEqual(["live"]);
-    expect(await ctx.db.select().from(outbox)).toHaveLength(2);
+    const survivors = await ctx.db.select().from(outbox);
+    expect(survivors).toHaveLength(2);
+    const dispatchedAts = survivors.map((r) => r.dispatchedAt);
+    expect(dispatchedAts).toContainEqual(null); // undispatched survivor
+    expect(dispatchedAts.some((d) => d !== null && d.getTime() > Date.now() - DAY)).toBe(true); // recent-dispatched survivor
   });
 });

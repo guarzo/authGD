@@ -58,6 +58,15 @@ describe("createWandererClient", () => {
     await expect(createWandererClient(cfg).getAclMembers()).rejects.toThrow();
   });
 
+  it("fails closed on an id that overflows safe integer range", async () => {
+    server.use(
+      http.get(ACL, () =>
+        aclResponse([{ eve_character_id: "12345678901234567890", role: "viewer" }]),
+      ),
+    );
+    await expect(createWandererClient(cfg).getAclMembers()).rejects.toThrow();
+  });
+
   it("fails closed on zero or multiple external ids", async () => {
     server.use(http.get(ACL, () => aclResponse([{ role: "viewer" }])));
     await expect(createWandererClient(cfg).getAclMembers()).rejects.toThrow();

@@ -1,10 +1,10 @@
-import { eq, sql } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { character, contactSyncState } from "@/db/schema";
 import { canPushContacts, runContactsJob, type ContactsEsi } from "@/jobs/contacts";
 import { EsiError, type EsiContact } from "@/lib/esi/client";
 import { JobRetryError } from "@/services/sync-run";
-import { setupTestDb } from "./helpers/db";
+import { setupTestDb, truncateAll } from "./helpers/db";
 import { testConfig } from "./helpers/config";
 import { seedAccount, seedCharacter } from "./helpers/seed";
 
@@ -16,13 +16,7 @@ beforeAll(async () => {
   ctx = await setupTestDb();
 });
 afterAll(() => ctx.cleanup());
-beforeEach(async () => {
-  await ctx.db.execute(sql`
-    TRUNCATE account, "character", discord_link, session, bootstrap_admin_grant,
-      outbox, oauth_transaction, contact_sync_state, sync_run,
-      wanderer_acl_observation, audit_log RESTART IDENTITY CASCADE
-  `);
-});
+beforeEach(() => truncateAll(ctx.db));
 
 const okToken = (async () =>
   new Response(
@@ -122,9 +116,11 @@ describe("runContactsJob", () => {
     expect(calls.edits).toContainEqual({ characterId: 1, ids: [2], labelIds: [5, LABEL_ID] });
     expect(calls.deletes).toContainEqual({ characterId: 1, ids: [99] });
     expect(calls.adds.filter((c) => c.characterId === 1)).toEqual([]);
-    // characters 2 and 3 each get the other two added
-    expect(calls.adds).toContainEqual({ characterId: 2, ids: [1, 3], labelIds: [LABEL_ID] });
-    expect(calls.adds).toContainEqual({ characterId: 3, ids: [1, 2], labelIds: [LABEL_ID] });
+    // characters 2 and 3 each get the other two added — order-independent,
+    // since getFlygdCharacters carries no ORDER BY guarantee.
+    const sortedAdds = calls.adds.map((c) => ({ ...c, ids: [...c.ids].sort((a, b) => a - b) }));
+    expect(sortedAdds).toContainEqual({ characterId: 2, ids: [1, 3], labelIds: [LABEL_ID] });
+    expect(sortedAdds).toContainEqual({ characterId: 3, ids: [1, 2], labelIds: [LABEL_ID] });
     expect((await lastResult(1))?.lastResult).toBe("ok");
     expect((await lastResult(1))?.lastSyncedAt).not.toBeNull();
   });

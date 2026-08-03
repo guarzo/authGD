@@ -1,22 +1,16 @@
-import { isNull, sql } from "drizzle-orm";
+import { isNull } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { outbox } from "@/db/schema";
 import { enqueueSync } from "@/services/outbox";
 import { dispatchOutbox, planDispatch } from "@/worker/dispatcher";
-import { setupTestDb } from "./helpers/db";
+import { setupTestDb, truncateAll } from "./helpers/db";
 
 let ctx: Awaited<ReturnType<typeof setupTestDb>>;
 beforeAll(async () => {
   ctx = await setupTestDb();
 });
 afterAll(() => ctx.cleanup());
-beforeEach(async () => {
-  await ctx.db.execute(sql`
-    TRUNCATE account, "character", discord_link, session, bootstrap_admin_grant,
-      outbox, oauth_transaction, contact_sync_state, sync_run,
-      wanderer_acl_observation, audit_log RESTART IDENTITY CASCADE
-  `);
-});
+beforeEach(() => truncateAll(ctx.db));
 
 type Sent = { queue: string; data: Record<string, unknown>; singletonKey: string };
 const collector = () => {

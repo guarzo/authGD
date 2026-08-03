@@ -84,4 +84,27 @@ describe("validateRoleConfig", () => {
     });
     expect(r).toMatchObject({ ok: false });
   });
+  it("accepts Manage Roles granted only via the @everyone role", () => {
+    const guildId = "everyone-1";
+    const r = validateRoleConfig({
+      managed,
+      guildRoles: [
+        ...guildRoles.map((g) => (g.id === "bot-role" ? { ...g, permissions: "0" } : g)),
+        { id: guildId, position: 0, permissions: MANAGE_ROLES },
+      ],
+      botRoleIds: ["bot-role"],
+      everyoneRoleId: guildId,
+    });
+    expect(r).toEqual({ ok: true });
+  });
+  it("a malformed permissions string doesn't throw and fails closed", () => {
+    const r = validateRoleConfig({
+      managed,
+      guildRoles: guildRoles.map((g) =>
+        g.id === "bot-role" ? { ...g, permissions: "not-a-number" } : g,
+      ),
+      botRoleIds: ["bot-role"],
+    });
+    expect(r).toMatchObject({ ok: false, error: expect.stringContaining("Manage Roles") });
+  });
 });

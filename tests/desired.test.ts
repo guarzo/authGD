@@ -1,7 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { sql } from "drizzle-orm";
 import { getFlygdCharacters } from "@/services/desired";
-import { setupTestDb } from "./helpers/db";
+import { setupTestDb, truncateAll } from "./helpers/db";
 import { testConfig } from "./helpers/config";
 import { seedAccount, seedCharacter } from "./helpers/seed";
 
@@ -12,13 +11,7 @@ beforeAll(async () => {
   ctx = await setupTestDb();
 });
 afterAll(() => ctx.cleanup());
-beforeEach(async () => {
-  await ctx.db.execute(sql`
-    TRUNCATE account, "character", discord_link, session, bootstrap_admin_grant,
-      outbox, oauth_transaction, contact_sync_state, sync_run,
-      wanderer_acl_observation, audit_log RESTART IDENTITY CASCADE
-  `);
-});
+beforeEach(() => truncateAll(ctx.db));
 
 describe("getFlygdCharacters", () => {
   it("returns every character of every flygd account and nothing else", async () => {

@@ -16,6 +16,12 @@ describe("chunk", () => {
     expect(chunk([1, 2, 3, 4, 5], 2)).toEqual([[1, 2], [3, 4], [5]]);
     expect(chunk([], 3)).toEqual([]);
   });
+
+  it("throws when size is not a positive integer", () => {
+    expect(() => chunk([1, 2], 0)).toThrow(/positive integer/);
+    expect(() => chunk([1, 2], -1)).toThrow(/positive integer/);
+    expect(() => chunk([1, 2], 1.5)).toThrow(/positive integer/);
+  });
 });
 
 describe("postAffiliation", () => {

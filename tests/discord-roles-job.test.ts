@@ -1,9 +1,8 @@
-import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { auditLog, outbox, syncRun } from "@/db/schema";
 import { runDiscordRolesJob } from "@/jobs/discord-roles";
 import { DiscordApiError, type DiscordClient } from "@/lib/discord/rest";
-import { setupTestDb } from "./helpers/db";
+import { setupTestDb, truncateAll } from "./helpers/db";
 import { testConfig } from "./helpers/config";
 import { seedAccount, seedCharacter } from "./helpers/seed";
 
@@ -14,13 +13,7 @@ beforeAll(async () => {
   ctx = await setupTestDb();
 });
 afterAll(() => ctx.cleanup());
-beforeEach(async () => {
-  await ctx.db.execute(sql`
-    TRUNCATE account, "character", discord_link, session, bootstrap_admin_grant,
-      outbox, oauth_transaction, contact_sync_state, sync_run,
-      wanderer_acl_observation, audit_log RESTART IDENTITY CASCADE
-  `);
-});
+beforeEach(() => truncateAll(ctx.db));
 
 const MANAGE_ROLES = String(1 << 28);
 const validGuildRoles = [
@@ -142,6 +135,24 @@ describe("runDiscordRolesJob", () => {
       ["u9", "12"],
     ]);
     expect(d.added).toEqual([]);
+  });
+
+  it("a permanent DiscordApiError during a strip resolves with status failed (no throw)", async () => {
+    const d = fakeDiscord({ u9: ["10", "12"] });
+    const client: DiscordClient = {
+      ...d.client,
+      removeMemberRole: async () => {
+        throw new DiscordApiError("discord DELETE roles failed (403)", {
+          status: 403,
+          transient: false,
+        });
+      },
+    };
+    const result = await runDiscordRolesJob(
+      { db: ctx.db, cfg, discord: client },
+      { discordUserId: "u9" },
+    );
+    expect(result.status).toBe("failed");
   });
 
   it("re-syncs the account when a re-link lands DURING the strip", async () => {

@@ -1,4 +1,3 @@
-import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, expect, it } from "vitest";
 import { auditLog, wandererAclObservation } from "@/db/schema";
 import type { DiscordClient } from "@/lib/discord/rest";
@@ -6,7 +5,7 @@ import type { Affiliation } from "@/lib/esi/client";
 import type { WandererAclMember, WandererClient } from "@/lib/wanderer/client";
 import { dispatchOutbox } from "@/worker/dispatcher";
 import { buildJobHandlers, type JobDeps } from "@/worker/handlers";
-import { setupTestDb } from "./helpers/db";
+import { setupTestDb, truncateAll } from "./helpers/db";
 import { testConfig } from "./helpers/config";
 import { seedAccount, seedCharacter } from "./helpers/seed";
 
@@ -18,13 +17,7 @@ beforeAll(async () => {
   ctx = await setupTestDb();
 });
 afterAll(() => ctx.cleanup());
-beforeEach(async () => {
-  await ctx.db.execute(sql`
-    TRUNCATE account, "character", discord_link, session, bootstrap_admin_grant,
-      outbox, oauth_transaction, contact_sync_state, sync_run,
-      wanderer_acl_observation, audit_log RESTART IDENTITY CASCADE
-  `);
-});
+beforeEach(() => truncateAll(ctx.db));
 
 const okToken = (async () =>
   new Response(
@@ -132,7 +125,7 @@ it("main leaves alliance → green → contacts removed, ACL removed, role chang
   const dispatched = await dispatchOutbox(ctx.db, async (queue, data) => {
     sent.push({ queue, data });
   });
-  expect(dispatched).toBeGreaterThanOrEqual(1);
+  expect(dispatched).toBe(1); // exactly one demoted account
   expect(new Set(sent.map((s) => s.queue))).toEqual(
     new Set(["membership", "contacts", "wanderer", "discord-roles"]),
   );
@@ -157,6 +150,7 @@ it("main leaves alliance → green → contacts removed, ACL removed, role chang
   expect(roleOps.added).toContainEqual(["u-leaver", "12"]);
   expect(roleOps.removed).toContainEqual(["u-leaver", "10"]);
   expect(roleOps.added).not.toContainEqual(["u-stayer", "12"]);
+  expect(roleOps.removed).not.toContainEqual(["u-stayer", "10"]);
 
   // 7) Audit trail: demotion cause + downstream actions all recorded.
   const audits = await ctx.db.select().from(auditLog);

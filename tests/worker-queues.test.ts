@@ -1,10 +1,7 @@
 import PgBoss from "pg-boss";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { QUEUES, createQueues, scheduleJobs } from "@/worker/queues";
-
-const TEST_URL =
-  process.env.TEST_DATABASE_URL ??
-  "postgres://authgd:authgd@localhost:5433/authgd_test";
+import { TEST_URL } from "./helpers/db";
 
 let boss: PgBoss;
 beforeAll(async () => {

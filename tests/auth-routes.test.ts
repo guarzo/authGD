@@ -5,12 +5,10 @@ import { setupServer } from "msw/node";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { account, character } from "@/db/schema";
 import { setTestJwksOverride } from "@/lib/esi/sso";
-import { setupTestDb } from "./helpers/db";
+import { setupTestDb, TEST_URL } from "./helpers/db";
 
 // Route modules read config + db lazily via getConfig()/getDb(); set env first.
-process.env.DATABASE_URL =
-  process.env.TEST_DATABASE_URL ??
-  "postgres://authgd:authgd@localhost:5433/authgd_test";
+process.env.DATABASE_URL = TEST_URL;
 process.env.TOKEN_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64");
 process.env.APP_BASE_URL = "http://localhost:3000";
 process.env.ALLIANCE_ID = "99000001";

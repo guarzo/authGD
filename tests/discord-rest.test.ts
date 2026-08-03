@@ -27,6 +27,17 @@ describe("createDiscordClient", () => {
     ]);
   });
 
+  it("throws a permanent DiscordApiError on a malformed roles body", async () => {
+    server.use(
+      http.get(`${API}/guilds/9000/roles`, () =>
+        HttpResponse.json([{ id: "10", position: "not-a-number" }]),
+      ),
+    );
+    const err = await createDiscordClient(cfg).getGuildRoles().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(DiscordApiError);
+    expect((err as DiscordApiError).transient).toBe(false);
+  });
+
   it("returns null for a 404 guild member (user not in guild)", async () => {
     server.use(
       http.get(`${API}/guilds/9000/members/u1`, () =>
