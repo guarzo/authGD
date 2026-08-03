@@ -39,7 +39,7 @@ export default async function AdminAuditPage({
   const filtered = Boolean(params.actor || params.action || params.target);
 
   return (
-    <main id="main" className="page">
+    <main id="main" tabIndex={-1} className="page">
       <div className="page__head">
         <h1>Audit log</h1>
         <p className="page__lede">

@@ -66,7 +66,7 @@ export default async function AccountPage({
   return (
     <>
       <SiteHeader items={nav} current="account" />
-      <main id="main" className="page page--narrow">
+      <main id="main" tabIndex={-1} className="page page--narrow">
         <div className="page__head">
           <h1>Your account</h1>
           <p className="page__lede">

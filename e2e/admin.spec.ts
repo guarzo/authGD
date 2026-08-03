@@ -65,7 +65,26 @@ test("saving a note keeps the crew manifest open and persists the note", async (
   await zedRow.locator("summary").click();
   await expect(zedRow.locator("details")).toHaveJSProperty("open", true);
   await zedRow.getByPlaceholder("notes").fill("watch this one");
-  await zedRow.getByRole("button", { name: "save note" }).click();
-  await expect(zedRow.getByPlaceholder("notes")).toHaveValue("watch this one");
+  const save = zedRow.getByRole("button", { name: "save note" });
+  await save.click();
+  // Submit disables itself while the action is in flight; waiting for it to
+  // come back is what tells us the write has landed.
+  await expect(save).toBeEnabled();
   await expect(zedRow.locator("details")).toHaveJSProperty("open", true);
+  // Re-read from the server. Asserting the value on the same input the test
+  // just typed into would pass whether or not anything was persisted.
+  await page.reload();
+  const reloaded = page.locator("tbody tr", { hasText: "Zed" });
+  await reloaded.locator("summary").click();
+  await expect(reloaded.getByPlaceholder("notes")).toHaveValue("watch this one");
+});
+
+test("the skip link moves focus to the main landmark", async ({ page, context }) => {
+  const admin = await seedWorld();
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.goto("/admin/accounts");
+  await page.keyboard.press("Tab");
+  await expect(page.locator("a.skip")).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page.locator("main#main")).toBeFocused();
 });

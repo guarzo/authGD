@@ -80,7 +80,7 @@ export default async function AdminAccountsPage({
   const syncQueuedHref = qs({ queued: "account" });
 
   return (
-    <main id="main" className="page">
+    <main id="main" tabIndex={-1} className="page">
       <div className="page__head">
         <h1>Accounts</h1>
         <p className="page__lede">
