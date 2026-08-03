@@ -26,6 +26,11 @@ export default async function AccountPage({
   return (
     <main style={{ maxWidth: 720, margin: "2rem auto", padding: "0 1rem" }}>
       <h1>Your account</h1>
+      {view.isAdmin && (
+        <p>
+          <a href="/admin/accounts">Admin →</a>
+        </p>
+      )}
       {error === "already_linked" && (
         <p role="alert">That character is already linked to another account.</p>
       )}
