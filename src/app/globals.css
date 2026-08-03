@@ -1504,12 +1504,24 @@ h3.rule-head__label {
   padding: var(--s-2) var(--s-3);
 }
 
-/* Sync run tables: no fixed layout and no width floor. Both existed so the
-   five per-job sections shared one grid, which stopped being true when each
-   job started showing only the counters it actually moves — a 60rem floor now
-   just forces a scrollbar under a five-column table. Widths come from content. */
+/* Sync run tables: no fixed layout, and a width floor set by legibility rather
+   than by alignment. The old 60rem existed so the five per-job sections shared
+   one grid, which stopped being true when each job started showing only the
+   counters it actually moves. What remains is the point below which the status
+   cell crushes an error string into a one-word column — under that the Scroller
+   takes over. Column widths otherwise come from content. */
 .log--runs {
   width: 100%;
+  min-width: 44rem;
+}
+
+/* Third column is Status by construction (Started, Took, Status, …). It is the
+   one cell that can carry prose — the folded-in error string — and without a
+   floor the auto layout is free to hand it a one-word width and turn a failure
+   into a tall ragged stack exactly where an admin is trying to read it. */
+.log--runs th:nth-child(3),
+.log--runs td:nth-child(3) {
+  min-width: 26ch;
 }
 
 /* Audit log: fixed layout so a bare id in the actor column can't wrap and
