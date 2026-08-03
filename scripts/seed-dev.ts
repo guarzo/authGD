@@ -17,10 +17,13 @@
  * duplicated lines and would put the e2e suite at risk to make dev nicer.
  * The session hashing is NOT duplicated: createSession below is the real one.
  */
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { eq, sql } from "drizzle-orm";
 import { loadConfig, type Config } from "@/config";
 import { createDb, type Db } from "@/db";
 import { account, character } from "@/db/schema";
+import { TRUNCATE_ALL_SQL } from "@/db/tables";
 import { encryptToken } from "@/lib/crypto";
 import { createSession, revokeAccountSessions } from "@/services/session";
 
@@ -80,13 +83,10 @@ const SEED: SeedSpec[] = [
   },
 ];
 
-/** Same 11 tables as tests/helpers/db.ts. Never touches the pgboss schema. */
+/** Table list is shared with tests/helpers/db.ts so the two cannot drift.
+ *  Never touches the pgboss schema. */
 async function truncateAll(db: Db): Promise<void> {
-  await db.execute(sql`
-    TRUNCATE account, "character", discord_link, session, bootstrap_admin_grant,
-      outbox, oauth_transaction, contact_sync_state, sync_run,
-      wanderer_acl_observation, audit_log RESTART IDENTITY CASCADE
-  `);
+  await db.execute(sql.raw(TRUNCATE_ALL_SQL));
 }
 
 /**
@@ -107,6 +107,15 @@ export function isLocalDatabase(url: string): boolean {
     return ["localhost", "127.0.0.1", "[::1]"].includes(host);
   } catch {
     return false; // unparseable → not provably local → refuse
+  }
+}
+
+/** The refusal path is reached BY unparseable URLs, so it must not itself throw. */
+function describeHost(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return "unparseable DATABASE_URL";
   }
 }
 
@@ -182,7 +191,7 @@ async function main(): Promise<void> {
 
   if (!isLocalDatabase(cfg.databaseUrl) && process.env.ALLOW_REMOTE_SEED !== "1") {
     console.error(
-      `refusing to seed a non-local database (${new URL(cfg.databaseUrl).host}).\n` +
+      `refusing to seed a non-local database (${describeHost(cfg.databaseUrl)}).\n` +
         `This script writes fixture accounts and, with --reset, TRUNCATEs every table.\n` +
         `Set ALLOW_REMOTE_SEED=1 if you genuinely mean it.`,
     );
@@ -224,7 +233,13 @@ async function main(): Promise<void> {
 }
 
 // Only run when invoked as a script, so tests can import seedDev directly.
-if (process.argv[1]?.endsWith("seed-dev.ts")) {
+// Compared as RESOLVED paths rather than by filename: an endsWith("seed-dev.ts")
+// check silently stops running main() if the file is ever renamed or emitted as
+// .js, and the command would exit 0 having seeded nothing.
+const invokedDirectly =
+  process.argv[1] !== undefined &&
+  resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url));
+if (invokedDirectly) {
   main().catch((err: unknown) => {
     console.error("seed failed:", err instanceof Error ? err.message : err);
     process.exit(1);

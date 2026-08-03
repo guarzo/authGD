@@ -1,6 +1,7 @@
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { account, character, session } from "@/db/schema";
+import { MANAGED_TABLE_NAMES } from "@/db/tables";
 import { isLocalDatabase, seedDev } from "../scripts/seed-dev";
 import { testConfig } from "./helpers/config";
 import { setupTestDb, truncateAll } from "./helpers/db";
@@ -87,9 +88,10 @@ describe("seedDev", () => {
     const second = await seedDev(ctx.db, cfg);
     // Not accumulating: still one per account, and the ids are new.
     expect(await ctx.db.select().from(session)).toHaveLength(second.length);
-    expect(new Set(second.map((s) => s.sessionId))).not.toEqual(
-      new Set(first.map((s) => s.sessionId)),
-    );
+    // Fully disjoint, not merely "not identical": a set inequality would pass
+    // even if only one of the six cookies had been reissued.
+    const firstIds = new Set(first.map((s) => s.sessionId));
+    expect(second.every((s) => !firstIds.has(s.sessionId))).toBe(true);
   });
 });
 
@@ -127,5 +129,22 @@ describe("isLocalDatabase", () => {
     ]) {
       expect(isLocalDatabase(url)).toBe(false);
     }
+  });
+});
+
+describe("MANAGED_TABLES", () => {
+  // --reset and the test-suite truncation both drive off this list. Before it
+  // was shared, a new table could be missing from a copy and leave stale rows
+  // with no test failing. This makes that drift break a test instead.
+  it("matches every table actually in the database", async () => {
+    const rows = await ctx.db.execute<{ table_name: string }>(sql`
+      select table_name from information_schema.tables
+      where table_schema = 'public' and table_type = 'BASE TABLE'
+    `);
+    const actual = rows.rows
+      .map((r) => r.table_name)
+      .filter((t) => !t.startsWith("__drizzle"))
+      .sort();
+    expect([...MANAGED_TABLE_NAMES].sort()).toEqual(actual);
   });
 });

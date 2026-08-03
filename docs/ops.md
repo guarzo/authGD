@@ -395,7 +395,9 @@ To use one:
 1. Open devtools on the app → **Application** → **Cookies** → the origin you are
    actually browsing (`http://localhost:3000` by default).
 2. Add a cookie whose **name** is your `SESSION_COOKIE_NAME` (default
-   `authgd_session`) and whose **value** is the printed string.
+   `authgd_session`). The **value** is only the text *after* the `=` — the
+   script prints a full `name=value` assignment, but devtools has separate
+   fields, and pasting the whole line into the value box fails to authenticate.
 3. **Path `/`.** Reload.
 
 Set it on the origin you browse, not on whatever `APP_BASE_URL` happens to say.
@@ -415,8 +417,9 @@ Two behaviors worth knowing:
   seed has no legitimate remote use. `ALLOW_REMOTE_SEED=1` overrides it
   deliberately.
 
-Character ids come from a reserved `91_000_0xx` block, chosen to sit clear of
-the `90_000_0xx` ids the e2e suite generates, so the two can never collide.
+Character ids come from the reserved **`91_000_000`–`91_999_999`** range
+(mains at `91_000_00x`, alts at `91_000_1xx`), chosen to sit clear of the
+`90_000_00x` ids `e2e/helpers.ts` generates, so the two can never collide.
 
 ### Real OAuth locally, over a tunnel
 
@@ -436,8 +439,11 @@ ngrok http 3000 --domain your-stable-domain.ngrok-free.app
 
 #### 2. Override `APP_BASE_URL` in `.env.local`
 
-`.env.local` wins over `.env` (both are loaded, later file first), and `.env*` is
-gitignored apart from `.env.example`. Keeping the override in a second file means
+`.env.local` takes precedence over `.env`, and `.env*` is gitignored apart from
+`.env.example`. Both loaders agree on that: Next.js applies its own
+`.env.local`-wins rule for `npm run dev`, and the `worker` / `db:migrate` /
+`db:seed` scripts pass `--env-file-if-exists=.env` before
+`--env-file-if-exists=.env.local`, where the later flag overrides the earlier. Keeping the override in a second file means
 your working `.env` stays untouched and switching back is deleting one file.
 
 ```bash
