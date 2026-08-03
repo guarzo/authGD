@@ -54,10 +54,11 @@
 
   --radius: 2px;
   --measure: 68ch;
-  /* The content column's outer measure. Shared by .page and .shell__bar so the
-     header and the page cannot drift apart — the alignment is structural
-     rather than two matching literals. */
+  /* The two content-column measures. Each is shared by a .page variant and its
+     matching .shell__bar variant, so the header and the page under it cannot
+     drift apart — the alignment is structural rather than matching literals. */
   --measure-page: 78rem;
+  --measure-page-narrow: 60rem;
 
   --ease: cubic-bezier(0.22, 1, 0.36, 1); /* ease-out-quint */
   --dur-color: 140ms;
@@ -173,11 +174,13 @@ a:hover {
   background: var(--hull);
 }
 
-/* Only the contents are measured. The measure is deliberately --measure-page on
-   every route, never .page--narrow's: a header whose width tracked the route
-   would move the frame as you navigated between /account and /admin, which is
-   the opposite of what a registration mark is for. On .page--narrow routes the
-   narrower column reads as an inset within a fixed frame. */
+/* Only the contents are measured, and they track the measure of the page under
+   them, so the seal and the nav land on the H1's verticals on every route.
+   The cost is that the header shifts by half the difference between the two
+   measures when an admin crosses between /account and /admin/*. That was the
+   accepted trade: a member only ever sees /account, so for almost everyone the
+   frame is fixed, and admins get alignment on all four screens instead of on
+   three. */
 .shell__bar {
   display: flex;
   align-items: center;
@@ -188,6 +191,12 @@ a:hover {
   /* Matches .page's horizontal padding, so the seal's left edge and the nav's
      right edge land on the same verticals as the page H1 and the tables. */
   padding: var(--s-3) var(--s-5);
+}
+
+/* Pairs with .page--narrow. Set by the page rather than derived from the DOM:
+   see the SiteHeader comment in _components/ui.tsx. */
+.shell__bar--narrow {
+  max-width: var(--measure-page-narrow);
 }
 
 .shell__mark {
@@ -300,7 +309,7 @@ a:hover {
    without scrolling on a laptop. Prose is capped separately, so this only
    affects the table and the rules. */
 .page--narrow {
-  max-width: 60rem;
+  max-width: var(--measure-page-narrow);
 }
 
 .page__head {
