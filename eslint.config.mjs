@@ -18,6 +18,11 @@ export default tseslint.config(
       "test-results/**",
       "playwright-report/**",
       ".claude/**",
+      // Written by `next build`/`next dev`, gitignored. Its triple-slash
+      // reference trips @typescript-eslint/triple-slash-reference, so a clean
+      // checkout lints clean but any machine that has built does not — CI very
+      // much included.
+      "next-env.d.ts",
     ],
   },
 
@@ -60,24 +65,14 @@ export default tseslint.config(
           caughtErrorsIgnorePattern: "^_",
         },
       ],
-      // DISABLED, with evidence. This rule flagged 5 assertions in src/ as
-      // unnecessary; running its autofix broke `tsc` on all 5. It judges an
-      // assertion in isolation, where literal types survive, and misses that
-      // the value is then widened by its context:
-      //
-      //   src/services/accounts.ts  `as "valid" | "needs_reauth"` — without it
-      //     the object-literal property widens to `string` and no longer
-      //     satisfies the drizzle insert type.
-      //   src/jobs/discord-roles.ts `as Record<string, number>` (x4) — without
-      //     it the four return branches infer as a union carrying
-      //     `notInGuild?: undefined` etc., which fails the index signature on
-      //     JobResult["counts"].
-      //
-      // Returning object literals into a wider declared type is the dominant
-      // shape of the job handlers, so this will keep misfiring. A lint rule
-      // whose --fix breaks the build is worse than no rule: `npm run lint:fix`
-      // is a wired script anyone may run.
-      "@typescript-eslint/no-unnecessary-type-assertion": "off",
+      // NOTE: @typescript-eslint/no-unnecessary-type-assertion stays ENABLED.
+      // It has five known false positives in src/, each suppressed inline at
+      // the call site with the reason. Do not blanket-disable it here: outside
+      // those five spots it correctly catches redundant assertions (it found 16
+      // real ones in tests/). Be aware that its autofix is not trustworthy in
+      // this codebase — where a value is returned into a wider declared type,
+      // the assertion is load-bearing and removing it breaks `tsc`. Always run
+      // `npm run typecheck` after `npm run lint:fix`.
     },
   },
 

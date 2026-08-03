@@ -53,13 +53,15 @@ export async function saveNoteAction(
 ): Promise<void> {
   const { accountId: actor } = await requireAdminAction();
   const raw = formData.get("note");
-  // FormData.get() is string | File | null. A File would stringify to
-  // "[object File]" and be persisted as the note *and* written to the audit
-  // log, so treat anything that isn't a string as empty.
-  const note = typeof raw === "string" ? raw : "";
+  // FormData.get() is string | File | null. Coercing a File or a missing field
+  // to "" would silently CLEAR the note (setStatusNote maps "" to null) and
+  // write a status.note_changed audit entry for an edit nobody requested.
+  // Reject the malformed request instead; "" itself stays valid — that is how
+  // the form asks for the note to be cleared.
+  if (typeof raw !== "string") throw new Error("invalid_note");
 
   const result = await getDb().transaction((tx) =>
-    setStatusNote(tx, actor, accountId, note),
+    setStatusNote(tx, actor, accountId, raw),
   );
   if (!result.ok) throw new Error(result.error);
   revalidatePath("/admin/accounts");

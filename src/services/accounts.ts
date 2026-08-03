@@ -67,6 +67,7 @@ function tokenFields(cfg: Config, ch: EveCallbackCharacter) {
     ownerHash: ch.ownerHash,
     refreshTokenEnc: encryptToken(ch.refreshToken, cfg.tokenEncryptionKey),
     scopes: ch.scopes,
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- load-bearing: without it the property widens to `string` in the inferred object type and no longer satisfies the drizzle insert. The rule checks the assertion in isolation, where the literal union survives.
     tokenStatus: (hasAllScopes ? "valid" : "needs_reauth") as "valid" | "needs_reauth",
   };
 }
