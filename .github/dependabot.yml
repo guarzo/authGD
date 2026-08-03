@@ -65,6 +65,18 @@ updates:
       # immediately in CI's `static` job, and a plugin bumped out of step with
       # its eslint core is the usual cause — so grouping them is both less noise
       # and a better signal.
+      #
+      # Minor and patch only. The three groups below share that restriction for
+      # one reason: they are the groups
+      # .github/workflows/dependabot-auto-merge.yml auto-merges, and "CI is
+      # green" is not evidence about a MAJOR here. eslint 10 passing
+      # `npm run lint` says nothing about whether its rule semantics moved
+      # under the config tuned in the lint/format stage; vitest 4 passing says
+      # nothing about whether test semantics survived. A major that passes CI
+      # is the worst case for auto-merge precisely because there is no signal.
+      # Majors match these patterns but not these update-types, so they fall
+      # through every group and arrive as individual PRs — the same path zod 4
+      # and typescript 7 already take.
       linting:
         patterns:
           - eslint
@@ -73,6 +85,9 @@ updates:
           - eslint-config-prettier
           - "@next/eslint-plugin-next"
           - prettier
+        update-types:
+          - minor
+          - patch
 
       # Same argument: the test job either passes or it does not, and reading
       # three separate PRs to learn that adds nothing.
@@ -81,12 +96,19 @@ updates:
           - vitest
           - "@playwright/test"
           - msw
+        update-types:
+          - minor
+          - patch
 
       # @types/node and @types/pg. The React types are already claimed above by
-      # first-match, so they do not appear here.
+      # first-match, so they do not appear here. @types/node majors are ignored
+      # outright above; this restriction covers the rest.
       types:
         patterns:
           - "@types/*"
+        update-types:
+          - minor
+          - patch
 
       # Catch-all, deliberately restricted to minor and patch. Everything not
       # named above — next, zod, pg, pg-boss, jose, tsx, typescript — batches

@@ -44,15 +44,23 @@ jobs:
       - id: meta
         uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
 
-      # Gate on the group name, not on the semver level. The groups in
-      # dependabot.yml already encode the judgement: `minor-and-patch` is
-      # restricted to minor and patch by its own `update-types`, and the tooling
-      # groups fail loudly in the very CI jobs that gate this merge.
+      # Gate on the group name, not on the semver level. Every group named here
+      # is restricted to minor and patch by its own `update-types` in
+      # dependabot.yml, so the group name already carries the semver claim.
       #
-      # `update-type` would be the obvious alternative, but it is documented as
-      # "the highest semver change being made by this PR" with no stated
-      # behaviour for grouped PRs — so the group name is the claim that is
-      # actually specified.
+      # That restriction is what makes this list safe, and it was not always
+      # there: `linting` and `testing` originally grouped majors too, on the
+      # theory that a bad bump fails loudly in the very CI jobs that gate this
+      # merge. An eslint 9 -> 10 and a vitest 3 -> 4 both arrived green, which
+      # is the counterexample — a major that passes CI is the worst case for
+      # auto-merge, because passing says nothing about whether rule or test
+      # semantics moved. If a group is ever added here, check its update-types
+      # first.
+      #
+      # `update-type` would be the obvious alternative to gating on the name,
+      # but it is documented as "the highest semver change being made by this
+      # PR" with no stated behaviour for grouped PRs — so the group name is the
+      # claim that is actually specified.
       #
       # Deliberately absent: `react` and `drizzle` (coordinated majors; a
       # drizzle-orm/drizzle-kit skew surfaces at fly.toml's release_command,
