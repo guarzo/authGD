@@ -313,4 +313,30 @@ describe("getAdminAccountsList", () => {
     const [row] = await getAdminAccountsList(ctx.db, cfg);
     expect(row.tokenSummary).toEqual({ total: 4, healthy: 1, needsReauth: 2, dead: 1 });
   });
+
+  it("surfaces the label detail on the member view", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
+    await ctx.db.insert(contactSyncState).values({
+      characterId: 1,
+      lastResult: "label_mismatch",
+      lastDetail: "FLYGD",
+    });
+
+    const view = await getAccountView(ctx.db, cfg, acc.id);
+    const ch = view.characters.find((c) => c.id === 1);
+    expect(ch?.contactSyncResult).toBe("label_mismatch");
+    expect(ch?.contactSyncDetail).toBe("FLYGD");
+  });
+
+  it("leaves the detail null when there is nothing to report", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    await seedCharacter(ctx.db, cfg, { id: 2, accountId: acc.id, main: true });
+    await ctx.db
+      .insert(contactSyncState)
+      .values({ characterId: 2, lastResult: "ok", lastDetail: null });
+
+    const view = await getAccountView(ctx.db, cfg, acc.id);
+    expect(view.characters.find((c) => c.id === 2)?.contactSyncDetail).toBeNull();
+  });
 });
