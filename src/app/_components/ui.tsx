@@ -130,13 +130,15 @@ export function Tier({
  * A JSON payload in a table cell. The collapsed line is truncated to keep the
  * readable columns on screen, but the full value has to stay reachable: role
  * IDs and trailing failure counters live at the end of these blobs, and a
- * CSS-only ellipsis would put them out of reach for good.
+ * CSS-only ellipsis would put them out of reach for good. Pass `summary` when
+ * the caller can render a one-line, human summary of the payload (e.g. the
+ * audit log's `green → flygd`) rather than falling back to raw JSON.
  */
-export function Json({ value }: { value: unknown }) {
+export function Json({ value, summary }: { value: unknown; summary?: string }) {
   return (
     <details className="json">
       <summary>
-        <span className="json__peek">{JSON.stringify(value)}</span>
+        <span className="json__peek">{summary ?? JSON.stringify(value)}</span>
       </summary>
       <pre className="json__full">{JSON.stringify(value, null, 2)}</pre>
     </details>

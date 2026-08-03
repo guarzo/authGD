@@ -489,6 +489,18 @@ h3.rule-head__label {
   white-space: nowrap;
 }
 
+/* A single-line, truncated value inside a fixed-width cell, with the full
+   value left in the element's `title`. Declared on a span rather than the
+   `<td>` itself: overflow/display on the cell drops it out of the row's box
+   model (see `.detail` below), the same reason `.json__peek` is a span. */
+.ellipsis-cell {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Raw JSON payloads in the audit and sync tables. The collapsed line is capped
    so a fat blob can't push the readable columns off screen; opening it shows
    the whole value, because the interesting part (role IDs, trailing failure
@@ -947,6 +959,14 @@ h3.rule-head__label {
   align-items: center;
 }
 
+/* Static example text under the action-prefix input. A placeholder would
+   vanish once a value is typed and, worse, reads as an applied filter to a
+   scanning admin while the field is empty. */
+.filter-form__hint {
+  font-size: 0.75rem;
+  color: var(--ink-faint);
+}
+
 .pager {
   margin-top: var(--s-5);
 }
@@ -1318,4 +1338,13 @@ h3.rule-head__label {
 .log--runs {
   table-layout: fixed;
   min-width: 60rem;
+}
+
+/* Audit log: fixed layout so a bare id in the actor column can't wrap and
+   inflate every row to match it (was ~90px tall; a UUID has hyphens to break
+   on, everything else in the row doesn't). Details is the one flexible
+   column, left unset in the colgroup, since it's the one field with no
+   natural cap. */
+.log--audit {
+  table-layout: fixed;
 }
