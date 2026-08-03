@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { getDb } from "@/db";
 import { getAdminContext } from "@/lib/admin-guard";
-import { AUDIT_PAGE_SIZE, queryAuditLog } from "@/services/audit";
-import type { ResolvedAuditRow } from "@/services/audit";
+import { AUDIT_PAGE_SIZE, queryAuditLog, resolveFilterIdentity } from "@/services/audit";
+import type { FilterResolution, ResolvedAuditRow } from "@/services/audit";
 import { RuleHead, Json, Scroller } from "@/app/_components/ui";
 import { Submit } from "@/app/_components/submit";
 
@@ -139,6 +139,13 @@ function TargetCell({ r }: { r: ResolvedAuditRow }) {
   );
 }
 
+/** The ids to filter by, or undefined when the field isn't filtered at all.
+ * A `kind: "none"` resolution never reaches this — the caller short-circuits
+ * to zero rows first — but the union has to be narrowed explicitly. */
+function idsOf(r: FilterResolution | null): string[] | undefined {
+  return r && r.kind !== "none" ? r.ids : undefined;
+}
+
 export default async function AdminAuditPage({
   searchParams,
 }: {
@@ -153,12 +160,35 @@ export default async function AdminAuditPage({
   if (!ctx) redirect("/login");
   const params = await searchParams;
   const beforeId = params.before ? Number(params.before) : undefined;
-  const rows: ResolvedAuditRow[] = await queryAuditLog(getDb(), {
-    actor: params.actor || undefined,
-    action: params.action || undefined,
-    target: params.target || undefined,
-    beforeId: Number.isFinite(beforeId) ? beforeId : undefined,
-  });
+
+  const db = getDb();
+  // Both filters resolve concurrently; each costs 0 queries when absent or
+  // when the admin pasted a raw id.
+  const [actorRes, targetRes] = await Promise.all([
+    params.actor ? resolveFilterIdentity(db, "actor", params.actor) : null,
+    params.target ? resolveFilterIdentity(db, "target", params.target) : null,
+  ]);
+
+  // A name that matched nothing guarantees zero rows, so don't scan audit_log
+  // at all -- and remember WHICH field failed, since the fix differs.
+  const unmatched = (
+    [
+      ["actor", actorRes],
+      ["target", targetRes],
+    ] as const
+  ).filter(([, r]) => r?.kind === "none") as ReadonlyArray<
+    readonly [string, { kind: "none"; name: string }]
+  >;
+
+  const rows: ResolvedAuditRow[] = unmatched.length
+    ? []
+    : await queryAuditLog(db, {
+        actorIds: idsOf(actorRes),
+        action: params.action || undefined,
+        targetIds: idsOf(targetRes),
+        beforeId: Number.isFinite(beforeId) ? beforeId : undefined,
+      });
+
   const older = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) if (v && k !== "before") older.set(k, v);
   if (rows.length > 0) older.set("before", String(rows[rows.length - 1].id));
@@ -169,6 +199,38 @@ export default async function AdminAuditPage({
     params.action && `action: ${params.action}`,
     params.target && `target: ${params.target}`,
   ].filter(Boolean) as string[];
+
+  // One note per field whose name spans more than one account, so a widened
+  // result never looks like a narrow one. Text, not colour.
+  const ambiguityNotes = (
+    [
+      ["actor", actorRes],
+      ["target", targetRes],
+    ] as const
+  )
+    .map(([field, r]) =>
+      r && r.kind === "name" && r.accountCount > 1
+        ? `${field} "${r.name}" matches ${r.accountCount} accounts`
+        : null,
+    )
+    .filter(Boolean) as string[];
+
+  const countLabel =
+    rows.length === 0
+      ? filtered
+        ? "No matching entries"
+        : "No entries"
+      : `${rows.length}${rows.length === AUDIT_PAGE_SIZE ? "+" : ""} ${
+          filtered ? "matching entries" : "entries"
+        }`;
+
+  const emptyMessage = unmatched.length
+    ? `No account or character named ${unmatched
+        .map(([field, r]) => `"${r.name}" (${field})`)
+        .join(" or ")}.`
+    : filtered
+      ? "Nothing matches this filter."
+      : "Nothing has happened yet.";
 
   return (
     <main id="main" tabIndex={-1} className="page">
@@ -225,14 +287,15 @@ export default async function AdminAuditPage({
         </div>
       </form>
 
-      <RuleHead as="h2">
-        {rows.length === 0
-          ? filtered
-            ? "No matching entries"
-            : "No entries"
-          : `${rows.length}${rows.length === AUDIT_PAGE_SIZE ? "+" : ""} ${
-              filtered ? "matching entries" : "entries"
-            }`}
+      <RuleHead
+        as="h2"
+        aside={
+          ambiguityNotes.length > 0 && (
+            <span className="dim">{ambiguityNotes.join(" · ")}</span>
+          )
+        }
+      >
+        {countLabel}
       </RuleHead>
       <Scroller label="Audit entries">
         <table className="log log--audit">
@@ -306,9 +369,7 @@ export default async function AdminAuditPage({
             {rows.length === 0 && (
               <tr>
                 <td className="log__empty" colSpan={5}>
-                  {filtered
-                    ? "Nothing matches this filter."
-                    : "Nothing has happened yet."}
+                  {emptyMessage}
                 </td>
               </tr>
             )}
