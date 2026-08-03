@@ -26,7 +26,7 @@ fly secrets set \
   STANDINGS_LABEL=FLYGD STANDINGS_VALUE=5 \
   ESI_CONTACT="you@example.com"
 fly deploy
-fly scale count web=1 worker=1
+fly scale count web=2 worker=1
 ```
 
 `TOKEN_ENCRYPTION_KEY`: `openssl rand -base64 32`. Rotating it invalidates
@@ -52,6 +52,15 @@ serving pages.
 
 Point an external uptime monitor at **both** URLs. Fly cannot tell you it is
 down; that is the entire reason the external check exists.
+
+`/api/health` depends on Postgres, and the Fly check above has no
+consecutive-failure threshold, so a single 5-second blip — including a planned
+Postgres patching window (see Sizing and redundancy) — takes every web machine
+out of rotation at once; they all share one database. This is accepted: without
+Postgres the app cannot serve anything useful, so removing machines that can't
+reach it costs little. The consequence is that once Fly's proxy stops routing,
+Fly itself has nothing left to tell you — the external monitor is the only
+party still watching the app from outside.
 
 Notes:
 

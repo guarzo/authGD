@@ -26,6 +26,15 @@ primary_region = "iad"
 # web only. /api/health/sync is deliberately absent: a failing check pulls the
 # machine out of the load balancer and gates deploys, so wiring worker freshness
 # here would take the site down over a fault unrelated to serving pages.
+#
+# /api/health itself depends on Postgres, and this check has no
+# consecutive-failure threshold, so a single 5-second blip — including a
+# planned Postgres patching window — takes every web machine out of rotation
+# simultaneously; they all share one database. Accepted: without Postgres the
+# app cannot serve anything useful, so pulling machines that can't reach it is
+# the right call. Consequence: once the proxy stops routing, Fly cannot tell
+# you the app is down. The external monitor (docs/ops.md) is the party that
+# still can.
 [[http_service.checks]]
   interval = "30s"
   timeout = "5s"

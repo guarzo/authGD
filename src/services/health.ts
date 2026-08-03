@@ -7,7 +7,8 @@ export async function checkLiveness(dbx: Dbx): Promise<boolean> {
   try {
     await dbx.execute(sql`select 1`);
     return true;
-  } catch {
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : err);
     return false;
   }
 }

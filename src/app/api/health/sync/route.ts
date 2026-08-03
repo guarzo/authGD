@@ -16,9 +16,10 @@ export async function GET() {
   let newest: Awaited<ReturnType<typeof newestSyncRun>>;
   try {
     newest = await newestSyncRun(getDb());
-  } catch {
+  } catch (err) {
     // An unreachable database is a 503 with db:"error", never an undocumented
     // 500: the monitor must be able to tell a dead worker from a dead database.
+    console.error(err instanceof Error ? err.message : err);
     return NextResponse.json(
       { ok: false, db: "error", newestRunAgeSec: null, newestJobType: null },
       { status: 503, headers: NO_STORE },

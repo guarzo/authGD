@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "@/db";
 import { syncRun } from "@/db/schema";
+import { STALE_AFTER_MS } from "@/core/health";
 import { setupTestDb, truncateAll } from "./helpers/db";
 
 // The routes call getDb(), which would build a SECOND pool that nothing closes.
@@ -11,8 +12,10 @@ vi.mock("@/db", async (importOriginal) => {
   return { ...actual, getDb: () => testDb };
 });
 
-const { GET: healthRoute } = await import("@/app/api/health/route");
-const { GET: syncRoute } = await import("@/app/api/health/sync/route");
+const healthRouteMod = await import("@/app/api/health/route");
+const syncRouteMod = await import("@/app/api/health/sync/route");
+const { GET: healthRoute } = healthRouteMod;
+const { GET: syncRoute } = syncRouteMod;
 
 let ctx: Awaited<ReturnType<typeof setupTestDb>>;
 
@@ -85,5 +88,29 @@ describe("GET /api/health/sync", () => {
   it("sets no-store", async () => {
     const res = await syncRoute();
     expect(res.headers.get("cache-control")).toContain("no-store");
+  });
+
+  it("returns 200 just inside STALE_AFTER_MS and 503 just outside it", async () => {
+    await ctx.db.insert(syncRun).values({
+      jobType: "membership",
+      startedAt: new Date(Date.now() - STALE_AFTER_MS + 5_000),
+    });
+    const freshRes = await syncRoute();
+    expect(freshRes.status).toBe(200);
+
+    await truncateAll(ctx.db);
+    await ctx.db.insert(syncRun).values({
+      jobType: "membership",
+      startedAt: new Date(Date.now() - STALE_AFTER_MS - 5_000),
+    });
+    const staleRes = await syncRoute();
+    expect(staleRes.status).toBe(503);
+  });
+});
+
+describe("dynamic export", () => {
+  it("both health routes are force-dynamic, never statically rendered", () => {
+    expect(healthRouteMod.dynamic).toBe("force-dynamic");
+    expect(syncRouteMod.dynamic).toBe("force-dynamic");
   });
 });
