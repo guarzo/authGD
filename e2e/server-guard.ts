@@ -5,6 +5,7 @@ import {
   BASE_URL,
   IS_CI,
   IS_RUNNER,
+  MANAGED_ENV_KEY,
   TEST_DATABASE_URL,
   WORKTREE_ROOT,
 } from "./env";
@@ -30,6 +31,8 @@ interface PortOwner {
   pid: number;
   cwd: string | null;
   databaseUrl: string | null;
+  /** Worktree recorded by the harness that started this process, if any. */
+  managedBy: string | null;
 }
 
 function listenerPid(port: number): number | null {
@@ -56,6 +59,7 @@ function listenerPid(port: number): number | null {
 function describeOwner(pid: number): PortOwner {
   let cwd: string | null = null;
   let databaseUrl: string | null = null;
+  let managedBy: string | null = null;
   try {
     cwd = readlinkSync(`/proc/${pid}/cwd`);
   } catch {
@@ -63,11 +67,15 @@ function describeOwner(pid: number): PortOwner {
   }
   try {
     const environ = readFileSync(`/proc/${pid}/environ`, "utf8").split("\0");
-    databaseUrl = environ.find((e) => e.startsWith("DATABASE_URL="))?.slice(13) ?? null;
+    const read = (key: string): string | null =>
+      environ.find((e) => e.startsWith(`${key}=`))?.slice(key.length + 1) ?? null;
+    databaseUrl = read("DATABASE_URL");
+    managedBy = read(MANAGED_ENV_KEY);
   } catch {
     databaseUrl = null;
+    managedBy = null;
   }
-  return { pid, cwd, databaseUrl };
+  return { pid, cwd, databaseUrl, managedBy };
 }
 
 function isPortFree(port: number): boolean {
@@ -123,6 +131,21 @@ export function resolveServerReuse(dbRecreated: boolean): boolean {
         `Refusing to attach: the suite would test that process's code against ` +
         `its database and report a pass that never touched this branch.\n` +
         OVERRIDE_HINT,
+    );
+  }
+
+  // Ours by directory, but not started by this harness — a hand-run `next dev`
+  // on the same port, say. Reuse is unsafe (its env is unknown) and so is
+  // restarting it: SIGTERM to a process someone is deliberately running is
+  // exactly the collateral damage this guard exists to avoid. Say so instead.
+  if (owner.managedBy !== WORKTREE_ROOT) {
+    throw new Error(
+      `[e2e] ${BASE_URL} is held by pid ${pid}, which runs from this worktree ` +
+        `but was not started by the e2e harness (no ${MANAGED_ENV_KEY} marker).\n` +
+        `Refusing to reuse it — its configuration is unknown — and refusing to ` +
+        `stop it, since you may be running it on purpose.\n` +
+        `Stop it yourself, or leave it alone and re-run elsewhere:\n` +
+        `  E2E_PORT=<free port> npm run test:e2e`,
     );
   }
 

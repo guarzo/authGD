@@ -66,13 +66,35 @@ export const WORKTREE_SLUG = `${basename(WORKTREE_ROOT)
   .replace(/^-|-$/g, "")
   .slice(0, 24)}-${createHash("sha256").update(WORKTREE_ROOT).digest("hex").slice(0, 6)}`;
 
+/**
+ * Reads a port override, or falls back to the derived default when unset.
+ *
+ * A malformed override throws rather than falling back. Silently substituting
+ * the derived port for `E2E_PORT=311l` would put the run on a port the operator
+ * did not ask for — and they set the override precisely because the default was
+ * wrong for them, so the fallback is the one outcome guaranteed to be unhelpful.
+ */
+function portOverride(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") return fallback;
+  const port = Number(raw);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error(
+      `[e2e] ${name}=${JSON.stringify(raw)} is not a valid port. ` +
+        `Set an integer between 1 and 65535, or unset it to use the ` +
+        `port derived from this worktree (${fallback}).`,
+    );
+  }
+  return port;
+}
+
 /** Dev server port. `E2E_PORT` overrides, e.g. to dodge a hash collision. */
-export const APP_PORT = Number(process.env.E2E_PORT) || portFor("app", 3200, 400);
+export const APP_PORT = portOverride("E2E_PORT", portFor("app", 3200, 400));
 
 export const BASE_URL = `http://localhost:${APP_PORT}`;
 
 /** Host port for the per-worktree Postgres container. `E2E_DB_PORT` overrides. */
-export const DB_PORT = Number(process.env.E2E_DB_PORT) || portFor("db", 5600, 300);
+export const DB_PORT = portOverride("E2E_DB_PORT", portFor("db", 5600, 300));
 
 export const CONTAINER_NAME = `authgd-e2e-${WORKTREE_SLUG}`;
 
@@ -99,3 +121,14 @@ export const TEST_DATABASE_URL =
 
 /** True when this run is responsible for standing up its own database. */
 export const SHOULD_PROVISION = IS_RUNNER && !IS_CI && !process.env.TEST_DATABASE_URL;
+
+/**
+ * Environment marker `playwright.config.ts` puts into the dev server it starts,
+ * so the guard can later prove a process on this port is one the harness owns.
+ *
+ * A matching cwd is not proof: a developer's own `next dev -p <APP_PORT>` in
+ * this worktree looks identical through /proc. The guard restarts servers it
+ * owns, and restarting means SIGTERM — so ownership has to be conclusive, not
+ * inferred.
+ */
+export const MANAGED_ENV_KEY = "E2E_MANAGED_WORKTREE";

@@ -3,8 +3,10 @@ import {
   APP_PORT,
   BASE_URL,
   CONTAINER_NAME,
+  MANAGED_ENV_KEY,
   SHOULD_PROVISION,
   TEST_DATABASE_URL,
+  WORKTREE_ROOT,
 } from "./e2e/env";
 import { ensureTestDatabase } from "./e2e/provision";
 import { resolveServerReuse } from "./e2e/server-guard";
@@ -48,6 +50,9 @@ const env = {
   // e2e never exercises an external integration, so nothing here depends on
   // live behavior — and dry-run is the correct default for a browsable app.
   SYNC_MODE: "dry-run",
+  // Lets the guard prove, on a later run, that a server on this port is one we
+  // started and may therefore restart. See e2e/server-guard.ts.
+  [MANAGED_ENV_KEY]: WORKTREE_ROOT,
 };
 
 export default defineConfig({

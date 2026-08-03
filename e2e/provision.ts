@@ -35,8 +35,28 @@ function sleepSync(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
+/**
+ * Every docker call is bounded. A daemon that accepts the connection and then
+ * stops answering would otherwise hang config load itself — before Playwright
+ * has a test to time out, so the run would sit there silently with no output.
+ * A timeout surfaces as an ordinary failed result, which callers already handle.
+ */
+const DOCKER_TIMEOUT_MS = 30_000;
+
 function docker(args: string[]): { ok: boolean; stdout: string; stderr: string } {
-  const res = spawnSync("docker", args, { encoding: "utf8" });
+  const res = spawnSync("docker", args, {
+    encoding: "utf8",
+    timeout: DOCKER_TIMEOUT_MS,
+  });
+  if (res.error && "code" in res.error && res.error.code === "ETIMEDOUT") {
+    return {
+      ok: false,
+      stdout: "",
+      stderr:
+        `docker ${args.join(" ")} did not return within ` +
+        `${DOCKER_TIMEOUT_MS / 1000}s and was killed`,
+    };
+  }
   return {
     ok: res.status === 0,
     stdout: (res.stdout ?? "").trim(),

@@ -444,21 +444,25 @@ This is not obvious, and it stops people running the tests.
 | Database | Used by | Destructive operations |
 |---|---|---|
 | `authgd` | `npm run dev`, `npm run worker`, `npm run db:migrate` | none automatic |
-| `authgd_test` | `npm test`, `npm run test:e2e` | `TRUNCATE` between every test |
+| `authgd_test` | `npm test` | `TRUNCATE` between every test |
 
 `authgd_test` is created by `scripts/init-test-db.sql` at container init. The
-test helpers connect to it explicitly (`tests/helpers/db.ts`,
-`playwright.config.ts`), so the `TRUNCATE ... CASCADE` the suites run between
-tests physically cannot reach `authgd`. Run the tests freely.
+test helpers connect to it explicitly (`tests/helpers/db.ts`), so the
+`TRUNCATE ... CASCADE` the suite runs between tests physically cannot reach
+`authgd`. Run the tests freely.
 
-**Never run `npm test` and `npm run test:e2e` at the same time.** They share
-`authgd_test`, and Playwright is pinned to `workers: 1` for the same reason.
-Symptoms of a collision are rows vanishing mid-test — assertion failures like
-`expected [] to deeply equal [1, 2]` that move around between runs.
+`npm run test:e2e` does not appear above: it provisions a database of its own,
+in its own container, and never touches either of these. See
+[`npm run test:e2e` isolates itself](#npm-run-teste2e-isolates-itself) below.
+
+**Two `npm test` runs at once will fight**, because they share `authgd_test`.
+Symptoms are rows vanishing mid-test — assertion failures like
+`expected [] to deeply equal [1, 2]` that move around between runs. Playwright
+is pinned to `workers: 1` for the same reason within its own suite.
 
 The same applies across git worktrees: two checkouts running `npm test`
-simultaneously fight over the same database. If you need to run tests while
-another checkout is using it, point yours somewhere private:
+simultaneously fight over that one database. If you need to run the unit tests
+while another checkout is using it, point yours somewhere private:
 
 ```bash
 docker exec <pg-container> psql -U authgd -d postgres \
