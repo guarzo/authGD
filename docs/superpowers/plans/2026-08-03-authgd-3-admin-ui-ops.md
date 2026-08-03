@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** The admin surface (accounts page with tier/lock/cryo controls, audit log, sync status + "sync now"), admin-gated routes and admin management, deployment to Fly.io (one image, web + worker processes, migrate on release), operator docs, a live Wanderer smoke script, Playwright smoke tests, and the deferred Plan 2 findings (F5 CAS, F6 User-Agent, F7 recheck labeling, testJwksOverride retirement).
+**Goal:** The admin surface (accounts page with tier/lock/cryo controls, audit log, sync status + "sync now"), admin-gated routes and admin management, deployment to Fly.io (one image, web + worker processes, migrate on release), operator docs, a live Wanderer smoke script, Playwright smoke tests, the deferred Plan 2 findings (F5 CAS, F6 User-Agent, F7 recheck labeling, testJwksOverride retirement), and the Plan 2 post-merge review findings that arrived after PR #2 merged (queue-config repair on restart, retryable dead-letter alerts, membership-run write race, affiliation response validation, Discord 404 error-code mapping — Tasks 13–15).
 
 **Architecture:** Admin mutations live in services (`src/services/accounts.ts`, new `src/services/admin-accounts.ts`) taking `DbTx` + an `actor`, with defense-in-depth authorization inside the service and audit + outbox rows committed in the same transaction — exactly the Plan 1/2 convention. Read models extend `src/services/account-view.ts` (member view untouched; a new bulk admin query beside it). Pages are server components under `src/app/admin/*` gated per-page by a session→is_admin guard; every server action re-gates independently (layouts do not protect actions). Sort/filter is searchParams-driven and computed in memory (~20 accounts). Deployment: multi-stage Dockerfile producing one image with the standalone Next server (web process) and tsx-run worker/migrate (worker process, release command), wired by `fly.toml`.
 
@@ -39,6 +39,9 @@
 | `src/jobs/{contacts,membership}.ts`, `src/lib/esi/client.ts`, `src/lib/esi/sso.ts`, `src/jobs/token-health.ts`, `src/config.ts`, `src/worker/{index,dispatcher}.ts`, `src/services/outbox.ts` (type only via schema) | F5/F6/F7, jwks DI, recheck payload |
 | `Dockerfile`, `.dockerignore`, `fly.toml`, `docs/ops.md`, `scripts/wanderer-smoke.ts` | deployment + ops |
 | `playwright.config.ts`, `e2e/*` | smoke tests |
+| `src/worker/queues.ts`, `src/lib/ops-webhook.ts`, `src/worker/index.ts` | post-merge: queue repair, retryable dead-letter alert |
+| `src/core/affiliation.ts`, `src/jobs/membership.ts` | post-merge: response validation, stale-write CAS |
+| `src/lib/discord/rest.ts` | post-merge: 404 → null only for code 10007 |
 
 ---
 
@@ -548,12 +551,14 @@ describe("getAdminAccountsList", () => {
     expect(rowC.tierChangedByName).toBe("Alpha"); // resolved to actor's main
   });
 
-  it("defaults to name sort with no-main accounts last", async () => {
+  it("defaults to name sort with no-main accounts last — in BOTH directions", async () => {
     await seedTrio();
     const noMain = await seedAccount(ctx.db, { tier: "green" }); // zero characters
     const rows = await getAdminAccountsList(ctx.db, cfg);
     expect(rows.map((r) => r.mainName)).toEqual(["Alpha", "Beta", "Gamma", null]);
     expect(rows[3].accountId).toBe(noMain.id);
+    const descRows = await getAdminAccountsList(ctx.db, cfg, { sort: "name", dir: "desc" });
+    expect(descRows.map((r) => r.mainName)).toEqual(["Gamma", "Beta", "Alpha", null]);
   });
 
   it("filters by tier and by cryo status", async () => {
@@ -680,30 +685,33 @@ export async function getAdminAccountsList(
   if (filters.tier) rows = rows.filter((r) => r.tier === filters.tier);
   if (filters.status) rows = rows.filter((r) => r.status === filters.status);
 
-  const byName = (a: AdminAccountRow, b: AdminAccountRow) => {
-    if (a.mainName === null && b.mainName === null) return 0;
-    if (a.mainName === null) return 1; // "no main" always last
-    if (b.mainName === null) return -1;
-    return a.mainName.toLowerCase().localeCompare(b.mainName.toLowerCase());
-  };
   const dir = filters.dir === "desc" ? -1 : 1;
   const sort = filters.sort ?? "name";
+  // Null placement ("no main", never-changed) is decided BEFORE direction is
+  // applied: those rows sort last whether asc or desc.
+  const nameCompare = (a: AdminAccountRow, b: AdminAccountRow): number => {
+    const nulls = (a.mainName === null ? 1 : 0) - (b.mainName === null ? 1 : 0);
+    if (nulls !== 0) return nulls;
+    if (a.mainName === null || b.mainName === null) return 0;
+    return a.mainName.toLowerCase().localeCompare(b.mainName.toLowerCase()) * dir;
+  };
   rows.sort((a, b) => {
-    let cmp = 0;
-    if (sort === "tier") cmp = TIER_RANK[a.tier] - TIER_RANK[b.tier];
-    else if (sort === "status") cmp = (a.status === "cryo" ? 1 : 0) - (b.status === "cryo" ? 1 : 0);
-    else if (sort === "tierChangedAt") {
-      // nulls last regardless of direction
-      if (a.tierChangedAt === null && b.tierChangedAt === null) cmp = 0;
-      else if (a.tierChangedAt === null) return 1;
-      else if (b.tierChangedAt === null) return -1;
-      else cmp = a.tierChangedAt.getTime() - b.tierChangedAt.getTime();
+    if (sort === "name") return nameCompare(a, b);
+    if (sort === "tierChangedAt") {
+      const nulls =
+        (a.tierChangedAt === null ? 1 : 0) - (b.tierChangedAt === null ? 1 : 0);
+      if (nulls !== 0) return nulls;
+      const cmp =
+        a.tierChangedAt && b.tierChangedAt
+          ? a.tierChangedAt.getTime() - b.tierChangedAt.getTime()
+          : 0;
+      return cmp * dir || nameCompare(a, b);
     }
-    if (sort === "name" || cmp === 0) {
-      const nameCmp = byName(a, b);
-      return sort === "name" ? nameCmp * dir : cmp * dir || nameCmp;
-    }
-    return cmp * dir;
+    const cmp =
+      sort === "tier"
+        ? TIER_RANK[a.tier] - TIER_RANK[b.tier]
+        : (a.status === "cryo" ? 1 : 0) - (b.status === "cryo" ? 1 : 0);
+    return cmp * dir || nameCompare(a, b);
   });
   return rows;
 }
@@ -1244,6 +1252,11 @@ describe("queryAuditLog", () => {
     expect(await queryAuditLog(ctx.db, { target: "42" })).toHaveLength(1);
   });
 
+  it("treats LIKE wildcards in the action filter as literals", async () => {
+    expect(await queryAuditLog(ctx.db, { action: "tier%" })).toHaveLength(0);
+    expect(await queryAuditLog(ctx.db, { action: "t_er." })).toHaveLength(0);
+  });
+
   it("paginates with beforeId and caps the limit", async () => {
     const all = await queryAuditLog(ctx.db);
     const older = await queryAuditLog(ctx.db, { beforeId: all[0].id });
@@ -1273,7 +1286,12 @@ export async function queryAuditLog(
 ): Promise<Array<typeof auditLog.$inferSelect>> {
   const conds = [];
   if (filters.actor) conds.push(eq(auditLog.actor, filters.actor));
-  if (filters.action) conds.push(like(auditLog.action, `${filters.action}%`));
+  if (filters.action) {
+    // The filter is a LITERAL prefix; % and _ are LIKE wildcards, so escape
+    // them (and backslash, Postgres's default escape character).
+    const prefix = filters.action.replace(/[\\%_]/g, (c) => `\\${c}`);
+    conds.push(like(auditLog.action, `${prefix}%`));
+  }
   if (filters.target) conds.push(eq(auditLog.target, filters.target));
   if (filters.beforeId !== undefined) conds.push(lt(auditLog.id, filters.beforeId));
   const limit = Math.min(filters.limit ?? 100, 100);
@@ -1380,7 +1398,7 @@ Three tightly coupled pieces: (a) F7 — recheck runs must record `sync_run.job_
 - Produces:
   - `runMembershipJob` unchanged signature; records `sync_run.job_type` `"membership-recheck"` when `opts.recheckInvalid` is true, `"membership"` otherwise.
   - `OutboxPayload` union gains `{ kind: "membership-recheck" }`; `planDispatch` maps it to ONE send: queue `membership-recheck`, data `{ jobType: "membership-recheck" }`, singletonKey `"membership-recheck:all"`.
-  - `getSyncStatus(dbx: Dbx, runsPerJob?: number): Promise<Array<{ jobType: string; runs: Array<typeof syncRun.$inferSelect> }>>` in `src/services/sync-status.ts` — known job types first in fixed order (`membership`, `membership-recheck`, `contacts`, `wanderer`, `discord-roles`, `token-health`, `purge`), then unknown types alphabetically; newest runs first; default 5 per job (reads the last 500 rows, groups in memory).
+  - `getSyncStatus(dbx: Dbx, runsPerJob?: number): Promise<Array<{ jobType: string; runs: Array<typeof syncRun.$inferSelect> }>>` in `src/services/sync-status.ts` — known job types first in fixed order (`membership`, `membership-recheck`, `contacts`, `wanderer`, `discord-roles`, `token-health`, `purge`), then unknown types alphabetically; newest runs first; default 5 per job. **One query per job type** (distinct types + a limited query each) — a global row window would routinely drop the weekly recheck behind ~122 hourly/half-hourly runs per day.
   - Actions `syncAllAction(): Promise<void>` (audit `sync.requested` target `"all"` + `enqueueSync({kind:"all"})`, one tx) and `recheckInvalidAction(): Promise<void>` (audit `sync.recheck_requested` target `"all"` + `enqueueSync({kind:"membership-recheck"})`).
 
 - [ ] **Step 1: Write failing tests**
@@ -1420,6 +1438,14 @@ describe("getSyncStatus", () => {
     await startSyncRun(ctx.db, "purge");
     const groups = await getSyncStatus(ctx.db);
     expect(groups.map((g) => g.jobType)).toEqual(["purge", "zz-custom"]);
+  });
+
+  it("keeps rare jobs visible no matter how many runs other jobs pile up", async () => {
+    await startSyncRun(ctx.db, "membership-recheck");
+    for (let i = 0; i < 20; i++) await startSyncRun(ctx.db, "contacts");
+    const groups = await getSyncStatus(ctx.db, 5);
+    expect(groups.map((g) => g.jobType)).toEqual(["membership-recheck", "contacts"]);
+    expect(groups[1].runs).toHaveLength(5);
   });
 });
 ```
@@ -1493,7 +1519,7 @@ Expected: FAIL — module missing, recheck run recorded as `"membership"`, planD
 `src/services/sync-status.ts`:
 
 ```ts
-import { desc } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import type { Dbx } from "@/db";
 import { syncRun } from "@/db/schema";
 
@@ -1511,19 +1537,24 @@ export async function getSyncStatus(
   dbx: Dbx,
   runsPerJob = 5,
 ): Promise<Array<{ jobType: string; runs: Array<typeof syncRun.$inferSelect> }>> {
-  const rows = await dbx.select().from(syncRun).orderBy(desc(syncRun.id)).limit(500);
-  const byJob = new Map<string, Array<typeof syncRun.$inferSelect>>();
-  for (const row of rows) {
-    const list = byJob.get(row.jobType) ?? [];
-    if (list.length < runsPerJob) list.push(row);
-    byJob.set(row.jobType, list);
-  }
-  const known = KNOWN_ORDER.filter((j) => byJob.has(j));
-  const unknown = [...byJob.keys()].filter((j) => !KNOWN_ORDER.includes(j)).sort();
-  return [...known, ...unknown].map((jobType) => ({
-    jobType,
-    runs: byJob.get(jobType) ?? [],
-  }));
+  // One limited query per job type (~8 total): a single global row window
+  // would drop rare jobs (weekly membership-recheck) behind the ~122
+  // hourly/half-hourly runs recorded per day.
+  const types = await dbx.selectDistinct({ jobType: syncRun.jobType }).from(syncRun);
+  const present = types.map((t) => t.jobType);
+  const known = KNOWN_ORDER.filter((j) => present.includes(j));
+  const unknown = present.filter((j) => !KNOWN_ORDER.includes(j)).sort();
+  return Promise.all(
+    [...known, ...unknown].map(async (jobType) => ({
+      jobType,
+      runs: await dbx
+        .select()
+        .from(syncRun)
+        .where(eq(syncRun.jobType, jobType))
+        .orderBy(desc(syncRun.id))
+        .limit(runsPerJob),
+    })),
+  );
 }
 ```
 
@@ -1767,7 +1798,7 @@ and to the returned object: `esiContact: e.ESI_CONTACT,`
     esi: createEsiClient({ userAgent: `authgd/0.1.0 (${cfg.esiContact})` }),
 ```
 
-`ESI_CONTACT` is REQUIRED, so every place tests build config env needs it. Add `ESI_CONTACT: "ops@example.com",` to: `tests/helpers/config.ts` (the shared env block), the inline `loadConfig({...})` in `tests/account-view.test.ts`, the `process.env.X = ...` block at the top of `tests/auth-routes.test.ts`, and `tests/config.test.ts` if it builds env by hand. Then `grep -rln "loadConfig\|EVE_SSO_CLIENT_ID" tests` to confirm nothing else constructs env.
+`ESI_CONTACT` is REQUIRED, so EVERY place tests build config env needs it. Add `ESI_CONTACT: "ops@example.com",` to each of: `tests/helpers/config.ts` (the shared env block), the inline `loadConfig({...})` blocks in `tests/account-view.test.ts`, `tests/eve-sso.test.ts` (~line 12), `tests/accounts.test.ts` (~line 32), and `tests/discord-link.test.ts` (~line 7), the `process.env.X = ...` block at the top of `tests/auth-routes.test.ts`, and `tests/config.test.ts` if it builds env by hand. Then run `grep -rln "loadConfig\|EVE_SSO_CLIENT_ID" tests` and confirm every hit is covered — the full suite fails otherwise.
 
 - [ ] **Step 4: Run the full suite** (the new required env touches every config consumer)
 
@@ -1777,7 +1808,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/jobs/contacts.ts src/lib/esi/client.ts src/config.ts src/worker/index.ts tests/helpers/config.ts tests/contacts-job.test.ts tests/esi-client.test.ts tests/config.test.ts tests/account-view.test.ts tests/auth-routes.test.ts
+git add src/jobs/contacts.ts src/lib/esi/client.ts src/config.ts src/worker/index.ts tests/helpers/config.ts tests/contacts-job.test.ts tests/esi-client.test.ts tests/config.test.ts tests/account-view.test.ts tests/auth-routes.test.ts tests/eve-sso.test.ts tests/accounts.test.ts tests/discord-link.test.ts
 git commit -m "fix: CAS-guard contacts needs_reauth write; ESI User-Agent from config"
 ```
 
@@ -2004,19 +2035,38 @@ async function main() {
   }
 
   await wanderer.addAclMember(characterId);
-  const afterAdd = await wanderer.getAclMembers();
-  if (!afterAdd.some((m) => m.characterId === characterId)) {
-    throw new Error("ADD not visible on re-read");
-  }
-  console.log("ADD ok — member visible on re-read");
+  let removed = false;
+  try {
+    const afterAdd = await wanderer.getAclMembers();
+    if (!afterAdd.some((m) => m.characterId === characterId)) {
+      throw new Error("ADD not visible on re-read");
+    }
+    console.log("ADD ok — member visible on re-read");
 
-  await wanderer.removeAclMember(characterId);
-  const afterRemove = await wanderer.getAclMembers();
-  if (afterRemove.some((m) => m.characterId === characterId)) {
-    throw new Error("REMOVE not visible on re-read");
+    await wanderer.removeAclMember(characterId);
+    removed = true;
+    const afterRemove = await wanderer.getAclMembers();
+    if (afterRemove.some((m) => m.characterId === characterId)) {
+      throw new Error("REMOVE not visible on re-read");
+    }
+    console.log("REMOVE ok — member gone on re-read");
+    console.log("PASS: wanderer client contract verified live");
+  } finally {
+    // Never leave the throwaway character with live map access: any failure
+    // after the add still attempts cleanup, loudly.
+    if (!removed) {
+      try {
+        await wanderer.removeAclMember(characterId);
+        console.error(`cleanup: removed ${characterId} from the ACL after a failure`);
+      } catch (cleanupErr) {
+        console.error(
+          `cleanup FAILED — character ${characterId} may STILL BE ON THE ACL ` +
+            `(id ${cfg.wanderer.aclId}). Remove it manually in Wanderer now.`,
+          cleanupErr,
+        );
+      }
+    }
   }
-  console.log("REMOVE ok — member gone on re-read");
-  console.log("PASS: wanderer client contract verified live");
 }
 
 main().catch((err) => {
@@ -2249,34 +2299,39 @@ export async function seedMember(
   },
 ) {
   const mainId = nextCharId++;
-  const [acc] = await db
-    .insert(account)
-    .values({
-      tier: opts.tier ?? "green",
-      tierLocked: opts.tierLocked ?? false,
-      status: opts.status ?? "active",
-      isAdmin: opts.isAdmin ?? false,
-      mainCharacterId: mainId,
-    })
-    .returning();
-  await db.insert(character).values({
-    id: mainId,
-    accountId: acc.id,
-    name: opts.name,
-    ownerHash: `oh-${mainId}`,
-    scopes: [],
-  });
-  for (const altName of opts.alts ?? []) {
-    const altId = nextCharId++;
-    await db.insert(character).values({
-      id: altId,
+  // account.main_character_id's composite FK is DEFERRED — checked at COMMIT —
+  // so the account and its main character MUST insert in one transaction
+  // (see tests/account-view.test.ts for the same pattern).
+  return db.transaction(async (tx) => {
+    const [acc] = await tx
+      .insert(account)
+      .values({
+        tier: opts.tier ?? "green",
+        tierLocked: opts.tierLocked ?? false,
+        status: opts.status ?? "active",
+        isAdmin: opts.isAdmin ?? false,
+        mainCharacterId: mainId,
+      })
+      .returning();
+    await tx.insert(character).values({
+      id: mainId,
       accountId: acc.id,
-      name: altName,
-      ownerHash: `oh-${altId}`,
+      name: opts.name,
+      ownerHash: `oh-${mainId}`,
       scopes: [],
     });
-  }
-  return acc;
+    for (const altName of opts.alts ?? []) {
+      const altId = nextCharId++;
+      await tx.insert(character).values({
+        id: altId,
+        accountId: acc.id,
+        name: altName,
+        ownerHash: `oh-${altId}`,
+        scopes: [],
+      });
+    }
+    return acc;
+  });
 }
 
 /** Mirrors src/services/session.ts: cookie carries the raw id, DB its sha256. */
@@ -2391,7 +2446,425 @@ git commit -m "test: Playwright smoke suite (account page, admin sort/filter, ti
 
 ---
 
-### Task 13: Final verification and wrap-up
+### Task 13: Queue-config repair on restart + retryable dead-letter alerts (post-merge HIGH×2)
+
+Plan 2 post-merge review, unread before PR #2 merged. Two worker reliability holes: (a) `createQueues` only calls `createQueue`, which pg-boss implements as `ON CONFLICT DO NOTHING` — an existing queue keeps stale policy/retry/dead-letter settings forever, silently disabling singleton coalescing and ops alerts; (b) `postOpsWebhook` never throws, so the dead-letter handler completes its job even when Discord never received the alert — the alert is permanently lost. Bonus found by the same review: the ops-webhook "success" test builds `new Response("", { status: 204 })`, which THROWS in undici (204 cannot carry a body), so that test has been exercising the swallow path, not the success path.
+
+**Files:**
+- Modify: `src/worker/queues.ts`, `src/lib/ops-webhook.ts`, `src/worker/index.ts`
+- Test: `tests/worker-queues.test.ts` (append), `tests/ops-webhook.test.ts` (fix fixtures + append)
+
+**Interfaces:**
+- Consumes: pg-boss v10 `updateQueue(name, options)` / `getQueue(name)` (both exist in `node_modules/pg-boss/types.d.ts`).
+- Produces:
+  - `createQueues(boss)` now calls `updateQueue` after every `createQueue` with the same options, so a restart repairs stale settings; the dead-letter queue itself gets the standard retry options (and no dead-letter target — it is the end of the line).
+  - `postOpsWebhookOrThrow(cfg, content, fetchImpl?): Promise<void>` in `src/lib/ops-webhook.ts` — same POST, but THROWS `OpsWebhookError` on HTTP/network failure (still a silent no-op when no webhook is configured). `postOpsWebhook` becomes a best-effort wrapper around it (existing callers unchanged).
+  - The dead-letter handler in `src/worker/index.ts` catches ONLY the schema-parse failure (malformed payload = permanent, log + complete) and lets webhook failures throw so pg-boss retries the alert.
+
+- [ ] **Step 1: Write failing tests**
+
+Append to `tests/worker-queues.test.ts`:
+
+```ts
+  it("repairs stale queue settings on startup (createQueue alone is ON CONFLICT DO NOTHING)", async () => {
+    await boss.updateQueue(QUEUES.contacts, {
+      policy: "standard",
+      retryLimit: 1,
+      retryDelay: 1,
+      retryBackoff: false,
+    });
+    await createQueues(boss);
+    const q = await boss.getQueue(QUEUES.contacts);
+    expect(q?.policy).toBe("short");
+    expect(q?.retryLimit).toBe(5);
+    expect(q?.deadLetter).toBe(QUEUES.deadLetter);
+  });
+```
+
+In `tests/ops-webhook.test.ts`: replace every `new Response("", { status: 204 })` with `new Response(null, { status: 204 })` (the string-body form throws inside the mock and silently exercised the catch path), then append:
+
+```ts
+import { OpsWebhookError, postOpsWebhookOrThrow } from "@/lib/ops-webhook";
+
+describe("postOpsWebhookOrThrow", () => {
+  it("posts content to the configured webhook", async () => {
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 204 }));
+    await postOpsWebhookOrThrow(testConfig(), "alert", fetchImpl as unknown as typeof fetch);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it("is still a no-op when no webhook is configured", async () => {
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 204 }));
+    await postOpsWebhookOrThrow(
+      testConfig({ DISCORD_OPS_WEBHOOK_URL: "" }),
+      "x",
+      fetchImpl as unknown as typeof fetch,
+    );
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("THROWS on HTTP failure so the dead-letter job retries", async () => {
+    const fetchImpl = (async () => new Response("nope", { status: 500 })) as typeof fetch;
+    await expect(postOpsWebhookOrThrow(testConfig(), "x", fetchImpl)).rejects.toBeInstanceOf(
+      OpsWebhookError,
+    );
+  });
+
+  it("THROWS on network failure", async () => {
+    const fetchImpl = (async () => {
+      throw new Error("down");
+    }) as typeof fetch;
+    await expect(postOpsWebhookOrThrow(testConfig(), "x", fetchImpl)).rejects.toBeInstanceOf(
+      OpsWebhookError,
+    );
+  });
+});
+```
+
+- [ ] **Step 2: Run tests to verify failure**
+
+Run: `npm test -- tests/worker-queues.test.ts tests/ops-webhook.test.ts`
+Expected: repair test FAILS (policy stays `standard`); `postOpsWebhookOrThrow` FAILS (not exported).
+
+- [ ] **Step 3: Implement**
+
+`src/worker/queues.ts` — replace `createQueues`:
+
+```ts
+export async function createQueues(boss: PgBoss): Promise<void> {
+  // The dead-letter queue gets its own retry policy (no deadLetter target —
+  // it is the end of the line) so a failed ops alert retries instead of
+  // vanishing.
+  await boss.createQueue(QUEUES.deadLetter, { name: QUEUES.deadLetter, ...RETRY });
+  await boss.updateQueue(QUEUES.deadLetter, { ...RETRY });
+  for (const name of JOB_QUEUES) {
+    // policy "short": singletonKey uniqueness only exists under this policy
+    // (pg-boss job_i1 partial index) — standard queues ignore singletonKey.
+    // Final-retry failures dead-letter into ops-dead-letter → ops webhook.
+    const options = {
+      name,
+      policy: "short" as const,
+      ...RETRY,
+      deadLetter: QUEUES.deadLetter,
+    };
+    // createQueue is ON CONFLICT DO NOTHING: an existing queue keeps stale
+    // settings, so updateQueue repairs configuration on every startup.
+    await boss.createQueue(name, options);
+    await boss.updateQueue(name, options);
+  }
+}
+```
+
+`src/lib/ops-webhook.ts` — replace the file body:
+
+```ts
+import type { Config } from "@/config";
+
+export class OpsWebhookError extends Error {}
+
+/**
+ * Posts to the optional Discord ops webhook and THROWS OpsWebhookError on
+ * failure. Used by the dead-letter handler, where a lost alert must retry.
+ * No-op when no webhook is configured.
+ */
+export async function postOpsWebhookOrThrow(
+  cfg: Config,
+  content: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<void> {
+  const url = cfg.discord.opsWebhookUrl;
+  if (!url) return;
+  let res: Response;
+  try {
+    res = await fetchImpl(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ content: content.slice(0, 1900) }),
+      signal: AbortSignal.timeout(10_000),
+    });
+  } catch (err) {
+    throw new OpsWebhookError(
+      `ops webhook post failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  if (!res.ok) throw new OpsWebhookError(`ops webhook post failed (${res.status})`);
+}
+
+/** Best-effort variant for ordinary jobs — alerting must not break them. */
+export async function postOpsWebhook(
+  cfg: Config,
+  content: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<void> {
+  try {
+    await postOpsWebhookOrThrow(cfg, content, fetchImpl);
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : err);
+  }
+}
+```
+
+`src/worker/index.ts` — dead-letter handler: import `postOpsWebhookOrThrow`, and replace the handler body so ONLY payload parsing is caught:
+
+```ts
+  await boss.work(QUEUES.deadLetter, async ([job]) => {
+    let data: z.infer<typeof deadLetterSchema>;
+    try {
+      data = deadLetterSchema.parse(job.data);
+    } catch (err) {
+      // Malformed payload is permanent — log locally and complete the job.
+      console.error("dead-letter payload malformed", err);
+      return;
+    }
+    // Throws on failure → pg-boss retries the alert (queue has RETRY options).
+    await postOpsWebhookOrThrow(
+      cfg,
+      `authGD: job \`${data?.jobType ?? "unknown"}\` failed after final retry.`,
+    );
+  });
+```
+
+- [ ] **Step 4: Run tests to verify pass**
+
+Run: `npm test -- tests/worker-queues.test.ts tests/ops-webhook.test.ts && npm run typecheck`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/worker/queues.ts src/lib/ops-webhook.ts src/worker/index.ts tests/worker-queues.test.ts tests/ops-webhook.test.ts
+git commit -m "fix: repair queue config on startup; retry lost dead-letter alerts"
+```
+
+---
+
+### Task 14: Membership stale-run guard + affiliation response validation (post-merge MEDIUM×2)
+
+Plan 2 post-merge review: (a) pg-boss `short` policy allows one queued job to start while another is active, so an OLDER membership run can finish last and overwrite a NEWER run's affiliation writes — and then transition tiers from stale data; (b) `resolveAffiliations` trusts every id ESI returns, even ids never requested, letting a bad response mutate arbitrary character rows (including during account-scoped runs).
+
+**Files:**
+- Modify: `src/core/affiliation.ts`, `src/jobs/membership.ts`
+- Test: `tests/affiliation.test.ts` (append), `tests/membership-job.test.ts` (append)
+
+**Interfaces:**
+- Consumes: existing `resolveAffiliations`, `runMembershipJob` shapes (signatures unchanged).
+- Produces:
+  - `resolveAffiliations` ignores response rows whose id was not requested and duplicate rows for the same id (first wins); requested-but-omitted ids stay `unresolved` exactly as before.
+  - Membership affiliation writes become a CAS on `affiliation_checked_at`: `WHERE id = ? AND (affiliation_checked_at IS NULL OR affiliation_checked_at < <this run's checkedAt>) RETURNING id`. Only characters whose write WON count as confirmed for the tier pass — a run whose data lost to a newer run never transitions an account on it. Same guard on the `affiliation_invalid` flag write. New count `stale` reports lost writes.
+
+- [ ] **Step 1: Write failing tests**
+
+Append to `tests/affiliation.test.ts`:
+
+```ts
+  it("ignores response rows for ids that were never requested", async () => {
+    const out = await resolveAffiliations([1, 2], async () => [
+      ...okFor([1, 2]),
+      { characterId: 999, corporationId: 9990, allianceId: 99000001 },
+    ]);
+    expect(out.resolved.has(999)).toBe(false);
+    expect([...out.resolved.keys()].sort((a, b) => a - b)).toEqual([1, 2]);
+  });
+
+  it("keeps the first row when the response duplicates an id", async () => {
+    const out = await resolveAffiliations([1], async () => [
+      { characterId: 1, corporationId: 10, allianceId: 99000001 },
+      { characterId: 1, corporationId: 20, allianceId: null },
+    ]);
+    expect(out.resolved.get(1)).toEqual({ corporationId: 10, allianceId: 99000001 });
+    expect(out.unresolved).toEqual([]);
+  });
+```
+
+Append to `tests/membership-job.test.ts` (inside the main describe; needs `character` in the schema import — already there):
+
+```ts
+  it("never lets a stale run overwrite a newer affiliation write or transition on it", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
+    // A NEWER run already confirmed this character in-alliance, later than
+    // this run's start time can ever be.
+    const future = new Date(Date.now() + 60_000);
+    await ctx.db
+      .update(character)
+      .set({
+        allianceId: 99000001,
+        corporationId: 500,
+        affiliationCheckedAt: future,
+      })
+      .where(eq(character.id, 1));
+    // This (older) run believes the main LEFT the alliance.
+    const result = await runMembershipJob({ db: ctx.db, cfg, esi: esiWith({ 1: null }) });
+    const [ch] = await ctx.db.select().from(character).where(eq(character.id, 1));
+    expect(ch.allianceId).toBe(99000001); // newer write preserved
+    expect(ch.affiliationCheckedAt).toEqual(future);
+    const after = await getAccount(acc.id);
+    expect(after.tier).toBe("flygd"); // no demotion from stale data
+    expect(result.counts).toMatchObject({ demoted: 0, stale: 1 });
+  });
+```
+
+- [ ] **Step 2: Run tests to verify failure**
+
+Run: `npm test -- tests/affiliation.test.ts tests/membership-job.test.ts`
+Expected: FAIL — unrequested id resolved; stale run demotes and overwrites.
+
+- [ ] **Step 3: Implement**
+
+`src/core/affiliation.ts` — in `resolveChunk`'s success path:
+
+```ts
+    const rows = await post(ids);
+    const requested = new Set(ids);
+    const returned = new Set<number>();
+    for (const r of rows) {
+      // Never trust unrequested or duplicate ids: a malformed response must
+      // not mutate arbitrary character rows (first row wins on duplicates).
+      if (!requested.has(r.characterId) || returned.has(r.characterId)) continue;
+      returned.add(r.characterId);
+      out.resolved.set(r.characterId, {
+        corporationId: r.corporationId,
+        allianceId: r.allianceId,
+      });
+    }
+    for (const id of ids) if (!returned.has(id)) out.unresolved.push(id);
+```
+
+`src/jobs/membership.ts` — add `or`, `isNull`, `lt` to the drizzle-orm import; replace the resolved-write loop and thread a `confirmed` set into the tier pass:
+
+```ts
+    const checkedAt = new Date();
+    // CAS on affiliation_checked_at: "short" queues allow two concurrent runs,
+    // and an older run finishing last must not overwrite newer data — or
+    // transition tiers from it. Only rows whose write WON are confirmed.
+    const confirmed = new Set<number>();
+    let stale = 0;
+    for (const [id, aff] of outcome.resolved) {
+      const won = await db
+        .update(character)
+        .set({
+          corporationId: aff.corporationId,
+          allianceId: aff.allianceId,
+          affiliationCheckedAt: checkedAt,
+          affiliationInvalid: false,
+        })
+        .where(
+          and(
+            eq(character.id, id),
+            or(
+              isNull(character.affiliationCheckedAt),
+              lt(character.affiliationCheckedAt, checkedAt),
+            ),
+          ),
+        )
+        .returning({ id: character.id });
+      if (won.length > 0) confirmed.add(id);
+      else stale++;
+    }
+```
+
+Apply the same `and(inArray(...), or(isNull(...), lt(...)))` guard to the `affiliation_invalid` UPDATE. In the tier pass, wherever the main's confirmation is computed from `outcome.resolved`, additionally require `confirmed.has(acc.mainCharacterId)` (a resolved-but-lost main is NOT confirmed for this run). Add `stale` to the returned counts.
+
+- [ ] **Step 4: Run tests to verify pass**
+
+Run: `npm test -- tests/affiliation.test.ts tests/membership-job.test.ts tests/deprovision-flow.test.ts`
+Expected: PASS (deprovision flow exercises the same job — it must stay green).
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/core/affiliation.ts src/jobs/membership.ts tests/affiliation.test.ts tests/membership-job.test.ts
+git commit -m "fix: guard membership writes against stale concurrent runs; validate affiliation response ids"
+```
+
+---
+
+### Task 15: `getGuildMember` 404 → null only for Discord code 10007 (post-merge Major)
+
+The unread CodeRabbit comment from PR #2 (posted 5 minutes after merge): `getGuildMember` maps EVERY 404 to `null` ("not in guild"). A 404 with code `10004` (Unknown Guild — misconfigured `DISCORD_GUILD_ID`) or a malformed body then reads as "user left the guild" and the role job silently skips everyone instead of failing loudly.
+
+**Files:**
+- Modify: `src/lib/discord/rest.ts`
+- Test: `tests/discord-rest.test.ts` (fix existing 404 fixture + append)
+
+**Interfaces:**
+- Consumes: existing `DiscordApiError`, `rawRequest`, `assertOk`, `parseBody`.
+- Produces: `getGuildMember` returns `null` ONLY when the 404 body carries `code: 10007` (Unknown Member); any other 404 (including `10004` and malformed bodies) throws a NON-transient `DiscordApiError`. Signature unchanged; the role job's null-handling ("user not in guild → log and skip") is untouched.
+
+- [ ] **Step 1: Update/write tests**
+
+In `tests/discord-rest.test.ts`, find the existing `getGuildMember` 404 test and give its fixture a real Discord error body: `HttpResponse.json({ message: "Unknown Member", code: 10007 }, { status: 404 })` — it must still expect `null`. Then append:
+
+```ts
+  it("treats 404 Unknown Guild (10004) as a permanent error, not 'left the guild'", async () => {
+    server.use(
+      http.get(`${API}/guilds/9000/members/u1`, () =>
+        HttpResponse.json({ message: "Unknown Guild", code: 10004 }, { status: 404 }),
+      ),
+    );
+    const err = await client.getGuildMember("u1").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(DiscordApiError);
+    expect((err as DiscordApiError).transient).toBe(false);
+  });
+
+  it("treats a malformed 404 body as a permanent error", async () => {
+    server.use(
+      http.get(`${API}/guilds/9000/members/u1`, () =>
+        new HttpResponse("<html>gateway</html>", { status: 404 }),
+      ),
+    );
+    const err = await client.getGuildMember("u1").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(DiscordApiError);
+    expect((err as DiscordApiError).transient).toBe(false);
+  });
+```
+
+(Adapt the `API` constant / client construction names to what the file already uses.)
+
+- [ ] **Step 2: Run tests to verify failure**
+
+Run: `npm test -- tests/discord-rest.test.ts`
+Expected: the two new cases FAIL (both currently return `null`).
+
+- [ ] **Step 3: Implement** — in `src/lib/discord/rest.ts`, replace the `getGuildMember` 404 branch:
+
+```ts
+    /** null ONLY for Discord code 10007 (Unknown Member — user not in guild).
+     * Any other 404 (10004 Unknown Guild = bad config, malformed body) is a
+     * permanent error: the role job must fail loudly, not skip everyone. */
+    async getGuildMember(userId: string): Promise<{ roles: string[] } | null> {
+      const path = `/guilds/${guild}/members/${userId}`;
+      const res = await rawRequest(path);
+      if (res.status === 404) {
+        const body = (await res.json().catch(() => undefined)) as
+          | { code?: number }
+          | undefined;
+        if (body?.code === 10007) return null;
+        throw new DiscordApiError(
+          `discord GET ${path} failed (404${body?.code !== undefined ? `, code ${body.code}` : ", malformed body"})`,
+          { status: 404, transient: false },
+        );
+      }
+      assertOk(res, "GET", path);
+      return parseBody(memberSchema, res, "GET", path);
+    },
+```
+
+- [ ] **Step 4: Run tests to verify pass**
+
+Run: `npm test -- tests/discord-rest.test.ts tests/discord-roles-job.test.ts`
+Expected: PASS (role-job suite mocks `getGuildMember` at the client seam, so it stays green).
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/lib/discord/rest.ts tests/discord-rest.test.ts
+git commit -m "fix: getGuildMember returns null only for Unknown Member (10007)"
+```
+
+---
+
+### Task 16: Final verification and wrap-up
 
 **Files:**
 - Modify: `docs/superpowers/plans/2026-08-02-authgd-plan2-3-carryover.md` (mark Plan 3 items resolved)
@@ -2424,6 +2897,7 @@ error param confirmed wired and pinned by e2e.
   - Route gating incl. every server action. ✔ Tasks 4–7
   - Deployment (Dockerfile/fly.toml/migrate-on-release), ops docs incl. bootstrap caveat + env reference, Wanderer live smoke. ✔ Tasks 10+11
   - F5/F6/F7 + testJwksOverride retirement. ✔ Tasks 7–9
+  - Plan 2 post-merge review findings: queue-config repair on restart, retryable dead-letter alerts (+ fixed 204 fixture), membership stale-run CAS, affiliation response-id validation, Discord 404 → 10007-only. ✔ Tasks 13–15
   - Playwright: account page, admin sort/filter, tier controls, login error param. ✔ Task 12
 
 - [ ] **Step 4: Commit**
