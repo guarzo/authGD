@@ -1,4 +1,21 @@
+import { z } from "zod";
 import type { Config } from "@/config";
+
+export class DiscordOAuthError extends Error {
+  status?: number;
+  constructor(message: string, status?: number) {
+    super(message);
+    this.status = status;
+  }
+}
+
+const tokenResponseSchema = z.object({ access_token: z.string().min(1) });
+// Snowflake ids are decimal digit strings; this value feeds the unique
+// discord_user_id identity column, so anything else is rejected outright.
+const userResponseSchema = z.object({
+  id: z.string().regex(/^\d+$/),
+  username: z.string().min(1),
+});
 
 export function buildDiscordAuthorizeUrl(
   cfg: Config,
@@ -35,9 +52,12 @@ export async function exchangeDiscordCode(
     }).toString(),
     signal: AbortSignal.timeout(10_000),
   });
-  if (!res.ok) throw new Error(`discord token exchange failed (${res.status})`);
-  const json = (await res.json()) as { access_token: string };
-  return { accessToken: json.access_token };
+  if (!res.ok) {
+    throw new DiscordOAuthError(`discord token exchange failed (${res.status})`, res.status);
+  }
+  const parsed = tokenResponseSchema.safeParse(await res.json().catch(() => undefined));
+  if (!parsed.success) throw new DiscordOAuthError("discord token response malformed");
+  return { accessToken: parsed.data.access_token };
 }
 
 export async function fetchDiscordUser(
@@ -48,7 +68,10 @@ export async function fetchDiscordUser(
     headers: { authorization: `Bearer ${accessToken}` },
     signal: AbortSignal.timeout(10_000),
   });
-  if (!res.ok) throw new Error(`discord user fetch failed (${res.status})`);
-  const json = (await res.json()) as { id: string; username: string };
-  return { id: json.id, username: json.username };
+  if (!res.ok) {
+    throw new DiscordOAuthError(`discord user fetch failed (${res.status})`, res.status);
+  }
+  const parsed = userResponseSchema.safeParse(await res.json().catch(() => undefined));
+  if (!parsed.success) throw new DiscordOAuthError("discord user response malformed");
+  return { id: parsed.data.id, username: parsed.data.username };
 }

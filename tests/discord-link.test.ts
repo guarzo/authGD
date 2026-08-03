@@ -125,7 +125,7 @@ describe("discord callback route", () => {
         return HttpResponse.json({ access_token: "dt" });
       }),
       http.get("https://discord.com/api/users/@me", () =>
-        HttpResponse.json({ id: "duid-route", username: "user" }),
+        HttpResponse.json({ id: "123456789012345678", username: "user" }),
       ),
     );
     msw.listen({ onUnhandledRequest: "error" });
@@ -144,7 +144,7 @@ describe("discord callback route", () => {
       const res = await discordCallback(req);
       expect(res.status).toBe(307);
       const rows = await ctx.db.select().from(discordLink);
-      expect(rows[0]?.discordUserId).toBe("duid-route");
+      expect(rows[0]?.discordUserId).toBe("123456789012345678");
     } finally {
       msw.close();
     }
