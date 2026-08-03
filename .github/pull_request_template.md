@@ -11,6 +11,7 @@ template asks only for the things CI cannot tell a reviewer.
 ## What CI cannot check
 
 <!--
+Redact secrets, credentials, tokens, cookies, and personal data before quoting output.
 Real output from anything verified by hand: a live service, a reproduced failure
 mode, a manual smoke test. Quote it rather than describing it — nothing is
 claimed to pass here that was not actually run.
