@@ -11,6 +11,7 @@
     "test:watch": "vitest",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/db/migrate.ts",
+    "smoke:wanderer": "tsx scripts/wanderer-smoke.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
