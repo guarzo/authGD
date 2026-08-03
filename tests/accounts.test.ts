@@ -15,6 +15,7 @@ import {
 import { createSession, getSessionAccount } from "@/services/session";
 import { decryptToken } from "@/lib/crypto";
 import { setupTestDb, truncateAll } from "./helpers/db";
+import { seedAccount } from "./helpers/seed";
 
 let ctx: Awaited<ReturnType<typeof setupTestDb>>;
 let cfg: Config;
@@ -67,12 +68,6 @@ const setMain = (accountId: string, characterId: number) =>
   ctx.db.transaction((tx) => setMainCharacter(tx, accountId, characterId));
 const demote = (actor: string, accountId: string) =>
   ctx.db.transaction((tx) => demoteAdmin(tx, actor, accountId));
-
-// Helper to create a simple account for testing
-const seedAccount = async (db: typeof ctx.db) => {
-  const [acc] = await db.insert(account).values({ tier: "green" }).returning();
-  return acc;
-};
 
 describe("handleEveLogin", () => {
   it("creates a pessimistic green account with outbox + audit", async () => {
