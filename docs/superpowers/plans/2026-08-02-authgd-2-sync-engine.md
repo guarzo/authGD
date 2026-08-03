@@ -1222,8 +1222,10 @@ git commit -m "feat: affiliation chunk/bisect resolution and tier decision rule"
 - Consumes: `decryptToken`/`encryptToken` (`src/lib/crypto.ts`), `refreshEveToken`/`EveSsoError` (`src/lib/esi/sso.ts`), `classifyOAuthError` (`src/core/errors.ts`), `logAudit`.
 - Produces:
   - `type CharacterTokenRow = { id: number; refreshTokenEnc: string | null; tokenStatus: "valid" | "invalid" | "needs_reauth" | "missing" }`
-  - `getFreshAccessToken(db: Db, cfg: Config, ch: CharacterTokenRow, fetchImpl?: typeof fetch): Promise<AccessTokenResult>` where `type AccessTokenResult = { ok: true; accessToken: string } | { ok: false; reason: "no_token" | "invalid" | "transient"; detail?: string }` — refreshes via `refreshEveToken`, persists the rotated refresh token on success. Permanent OAuth failures AND malformed stored blobs (carry-over: `decryptToken` throws uncleanly) mark `token_status: invalid` + audit `token.invalidated`; transient failures change no state. Used by Tasks 8 and 11.
-  - **Concurrency (EVE rotates refresh tokens on every use, and overlapping jobs may race):** the success path persists with compare-and-swap on the blob that was read (`WHERE refresh_token_enc = <old>`); a lost race keeps the first writer's stored token and still returns `ok`. The permanent-failure path re-reads the row first: if the stored blob changed since our read, a concurrent job already rotated it — `invalid_grant` on the OLD token says nothing about the NEW one, so return `transient` and do NOT invalidate.
+  - `getFreshAccessToken(db: Db, cfg: Config, ch: CharacterTokenRow, fetchImpl?: typeof fetch): Promise<AccessTokenResult>` where `type AccessTokenResult = { ok: true; accessToken: string; tokenEnc: string } | { ok: false; reason: "no_token" | "invalid" | "transient"; detail?: string }` — refreshes via `refreshEveToken`, persists the rotated refresh token on success and returns the NEW stored blob as `tokenEnc` **so callers can condition their own follow-up writes on it** (Task 11 does). Permanent OAuth failures AND malformed stored blobs (carry-over: `decryptToken` throws uncleanly) mark `token_status: invalid` + audit `token.invalidated`; transient failures change no state. Used by Tasks 8 and 11.
+  - **Concurrency (EVE rotates refresh tokens on every use; overlapping jobs — or a transfer reclaim — may race):**
+    - The success path persists with compare-and-swap on the blob that was read (`WHERE refresh_token_enc = <old>` + `RETURNING`). **A CAS miss is returned as `transient`, never `ok`** — the row changed underneath us (rotation, re-auth, or reclaim by a new owner), so a stale decision must not act on it.
+    - Invalidation is ONE conditional transaction: `UPDATE … SET token_status='invalid' WHERE id = ? AND refresh_token_enc = <the blob the decision was based on> RETURNING`, auditing only when the update wins; a guard miss returns `transient` and changes nothing.
   - Test seed helpers in `tests/helpers/seed.ts`: `seedAccount(db, opts?)` and `seedCharacter(db, cfg, opts)` (exact signatures in code below). Later test tasks consume these.
 
 - [ ] **Step 1: Write the seed helper and failing test**
@@ -1346,14 +1348,16 @@ async function getChar(id: number) {
 }
 
 describe("getFreshAccessToken", () => {
-  it("returns the access token and persists the rotated refresh token", async () => {
+  it("returns the access token + stored blob and persists the rotated refresh token", async () => {
     const ch = await seed({ refreshToken: "old-rt" });
     const fetchImpl = (async () =>
       tokenJson({ access_token: "new-at", refresh_token: "new-rt" })) as typeof fetch;
     const r = await getFreshAccessToken(ctx.db, cfg, ch, fetchImpl);
-    expect(r).toEqual({ ok: true, accessToken: "new-at" });
+    expect(r).toMatchObject({ ok: true, accessToken: "new-at" });
     const updated = await getChar(90000001);
     expect(decryptToken(updated.refreshTokenEnc as string, cfg.tokenEncryptionKey)).toBe("new-rt");
+    // tokenEnc is exactly what is now stored — callers guard follow-up writes on it
+    expect(r).toMatchObject({ tokenEnc: updated.refreshTokenEnc });
   });
 
   it("marks token invalid + audits on permanent OAuth errors", async () => {
@@ -1399,7 +1403,7 @@ describe("getFreshAccessToken", () => {
     expect(r).toEqual({ ok: false, reason: "no_token" });
   });
 
-  it("does not clobber a concurrently rotated token on success (CAS)", async () => {
+  it("treats a CAS miss on success as TRANSIENT — a stale token is never usable", async () => {
     const stale = await seed({ refreshToken: "old-rt" }); // row as WE read it
     // another job rotates underneath us before our refresh completes
     const currentBlob = encryptToken("current-rt", cfg.tokenEncryptionKey);
@@ -1410,9 +1414,11 @@ describe("getFreshAccessToken", () => {
     const fetchImpl = (async () =>
       tokenJson({ access_token: "our-at", refresh_token: "our-rt" })) as typeof fetch;
     const r = await getFreshAccessToken(ctx.db, cfg, stale, fetchImpl);
-    expect(r).toEqual({ ok: true, accessToken: "our-at" }); // our access token still works
+    // the row changed hands under us — our whole read is stale, so downstream
+    // callers must NOT act on this character this run
+    expect(r).toMatchObject({ ok: false, reason: "transient" });
     const after = await getChar(90000001);
-    // …but the FIRST writer's stored refresh token wins
+    // the first writer's stored refresh token wins
     expect(decryptToken(after.refreshTokenEnc as string, cfg.tokenEncryptionKey)).toBe("current-rt");
   });
 
@@ -1458,21 +1464,37 @@ export type CharacterTokenRow = {
 };
 
 export type AccessTokenResult =
-  | { ok: true; accessToken: string }
+  | { ok: true; accessToken: string; tokenEnc: string }
   | { ok: false; reason: "no_token" | "invalid" | "transient"; detail?: string };
 
-async function markInvalid(db: Db, characterId: number, reason: string): Promise<void> {
-  await db.transaction(async (tx) => {
-    await tx
+/**
+ * Marks the token invalid ONLY if the stored blob is still the one this
+ * decision was based on — one conditional transaction, auditing only when the
+ * guard wins. A miss means the row changed underneath us (rotation, re-auth,
+ * or transfer reclaim): the stale decision is discarded.
+ */
+async function invalidateIfUnchanged(
+  db: Db,
+  characterId: number,
+  expectedEnc: string,
+  reason: string,
+): Promise<boolean> {
+  return db.transaction(async (tx) => {
+    const rows = await tx
       .update(character)
       .set({ tokenStatus: "invalid" })
-      .where(eq(character.id, characterId));
+      .where(
+        and(eq(character.id, characterId), eq(character.refreshTokenEnc, expectedEnc)),
+      )
+      .returning({ id: character.id });
+    if (rows.length === 0) return false;
     await logAudit(tx, {
       actor: "system",
       action: "token.invalidated",
       target: String(characterId),
       details: { reason },
     });
+    return true;
   });
 }
 
@@ -1494,38 +1516,46 @@ export async function getFreshAccessToken(
   try {
     refreshToken = decryptToken(ch.refreshTokenEnc, cfg.tokenEncryptionKey);
   } catch {
-    await markInvalid(db, ch.id, "malformed_token_blob");
-    return { ok: false, reason: "invalid", detail: "malformed_token_blob" };
+    const applied = await invalidateIfUnchanged(db, ch.id, ch.refreshTokenEnc, "malformed_token_blob");
+    return applied
+      ? { ok: false, reason: "invalid", detail: "malformed_token_blob" }
+      : { ok: false, reason: "transient", detail: "concurrent rotation" };
   }
   try {
     const r = await refreshEveToken(cfg, refreshToken, fetchImpl);
     // Compare-and-swap on the blob we read: EVE rotates refresh tokens on
-    // every use, so a concurrent job may have rotated first. If the CAS
-    // misses, keep the first writer's stored token — our access token is
-    // still valid for this run.
-    await db
+    // every use, so a concurrent job (or a transfer reclaim) may have won the
+    // row first. A miss means our whole read is stale — report transient and
+    // let the next run work from fresh state; never hand out the stale token.
+    const tokenEnc = encryptToken(r.refreshToken, cfg.tokenEncryptionKey);
+    const rows = await db
       .update(character)
-      .set({ refreshTokenEnc: encryptToken(r.refreshToken, cfg.tokenEncryptionKey) })
+      .set({ refreshTokenEnc: tokenEnc })
       .where(
         and(eq(character.id, ch.id), eq(character.refreshTokenEnc, ch.refreshTokenEnc)),
-      );
-    return { ok: true, accessToken: r.accessToken };
+      )
+      .returning({ id: character.id });
+    if (rows.length === 0) {
+      return { ok: false, reason: "transient", detail: "concurrent rotation" };
+    }
+    return { ok: true, accessToken: r.accessToken, tokenEnc };
   } catch (err) {
     if (
       err instanceof EveSsoError &&
       classifyOAuthError(err.oauthError, err.status) === "permanent"
     ) {
       // invalid_grant on the OLD blob says nothing about a token another job
-      // rotated in the meantime — re-read before invalidating.
-      const [current] = await db
-        .select({ refreshTokenEnc: character.refreshTokenEnc })
-        .from(character)
-        .where(eq(character.id, ch.id));
-      if (!current || current.refreshTokenEnc !== ch.refreshTokenEnc) {
-        return { ok: false, reason: "transient", detail: "concurrent rotation" };
-      }
-      await markInvalid(db, ch.id, err.oauthError ?? `status_${err.status}`);
-      return { ok: false, reason: "invalid", detail: err.oauthError };
+      // rotated in the meantime — the conditional update discards the stale
+      // decision atomically (no separate read-then-write window).
+      const applied = await invalidateIfUnchanged(
+        db,
+        ch.id,
+        ch.refreshTokenEnc,
+        err.oauthError ?? `status_${err.status}`,
+      );
+      return applied
+        ? { ok: false, reason: "invalid", detail: err.oauthError }
+        : { ok: false, reason: "transient", detail: "concurrent rotation" };
     }
     return {
       ok: false,
@@ -2596,11 +2626,13 @@ git commit -m "feat: per-character contact push with label ownership and abort-o
 - Consumes: `Config["wanderer"]`, `getFlygdCharacters`, `runJob`, `wandererAclObservation` table, `logAudit`.
 - Produces:
   - `class WandererError extends Error { status?: number; transient: boolean }` (429/5xx/network → transient; other HTTP → permanent).
+  - `type AclRole = "admin" | "manager" | "member" | "viewer" | "blocked"` (the documented role enum — parsing is strict, so an unexpected role spelling fails the WHOLE read closed rather than silently losing admin protection).
   - `createWandererClient(cfg: Config, fetchImpl?: typeof fetch)` / `type WandererClient` — the confirmed contract (see Global Constraints):
-    - `getAclMembers(): Promise<Array<{ characterId: number | null; role: string }>>` — `GET {base}/api/acls/{aclId}`, members under `data.members`. Members carrying `eve_corporation_id`/`eve_alliance_id` instead of `eve_character_id` are returned with `characterId: null` (NOT rejected as malformed). EVE ids accepted as digit-string or number.
+    - `getAclMembers(): Promise<Array<{ characterId: number | null; role: AclRole }>>` — `GET {base}/api/acls/{aclId}`, members under `data.members`. **Each member must carry EXACTLY ONE of the three external ids** (zero or multiple → parse failure, fail closed); corporation/alliance members are returned with `characterId: null`. EVE ids accepted as digit-string or number.
     - `addAclMember(characterId: number): Promise<void>` — `POST {base}/api/acls/{aclId}/members` with `{ member: { eve_character_id: String(id), role: "viewer" } }`; the name is resolved server-side and never sent.
+    - `updateAclMemberRole(characterId: number, role: AclRole): Promise<void>` — `PUT {base}/api/acls/{aclId}/members/{characterId}` with `{ member: { role } }` (confirmed contract; keyed by EVE id).
     - `removeAclMember(characterId: number): Promise<void>` — `DELETE {base}/api/acls/{aclId}/members/{characterId}` (the EVE id, not the member UUID); **404 = already not a member = idempotent success**.
-  - `type AclMember = { characterId: number; role: string }`; `diffAcl(input: { desiredIds: number[]; members: AclMember[] }): { add: number[]; remove: number[] }` — **`admin`-role entries are never removed; `manager` entries are removable like anyone else.** Callers pass ONLY character entries.
+  - `type AclMember = { characterId: number; role: string }`; `diffAcl(input: { desiredIds: number[]; members: AclMember[] }): { add: number[]; remove: number[]; unblock: number[] }` — **`admin`-role entries are never removed; `manager` entries are removable like anyone else.** `unblock` lists DESIRED characters whose current role is `blocked` — a blocked entry grants no access, so presence alone is not convergence; the job resets them to `viewer` via PUT. Elevated/normal roles (admin, manager, member, viewer) are otherwise preserved as-is. Callers pass ONLY character entries.
   - `runWandererJob(deps: { db: Db; wanderer: WandererClient }): Promise<JobResult>` — job type `"wanderer"`. **Corporation/alliance ACL entries (`characterId: null`) are filtered out before diffing — never added, removed, or observed.** Read fails → `failed` before ANY mutation (never remove on unknown state), retry per the error's transience. After any mutation (or partial failure), **re-read the ACL and persist THAT read's character entries** wholesale into `wanderer_acl_observation`; when nothing was mutated, persist the initial read. If the post-mutation re-read fails, the observation is left untouched (stale-but-honest). **Classification is preserved end-to-end:** `retry` is set only when at least one failure (mutation or re-read) was transient — all-permanent failures finish `partial` WITHOUT retry. Audits `wanderer.added` / `wanderer.removed` per successful mutation.
 
 - [ ] **Step 1: Write failing tests**
@@ -2621,7 +2653,7 @@ describe("diffAcl", () => {
           { characterId: 3, role: "member" },
         ],
       }),
-    ).toEqual({ add: [1], remove: [3] });
+    ).toEqual({ add: [1], remove: [3], unblock: [] });
   });
 
   it("NEVER removes admin-role entries; managers are removable", () => {
@@ -2634,13 +2666,28 @@ describe("diffAcl", () => {
           { characterId: 3, role: "member" },
         ],
       }),
-    ).toEqual({ add: [], remove: [2, 3] });
+    ).toEqual({ add: [], remove: [2, 3], unblock: [] });
+  });
+
+  it("unblocks desired blocked members, preserving all other roles", () => {
+    expect(
+      diffAcl({
+        desiredIds: [1, 2, 3, 4],
+        members: [
+          { characterId: 1, role: "blocked" }, // desired but blocked → unblock
+          { characterId: 2, role: "manager" }, // elevated → preserved
+          { characterId: 3, role: "viewer" }, // normal → preserved
+          { characterId: 4, role: "admin" }, // elevated → preserved
+          { characterId: 5, role: "blocked" }, // blocked AND undesired → removed
+        ],
+      }),
+    ).toEqual({ add: [], remove: [5], unblock: [1] });
   });
 
   it("is a no-op when converged", () => {
     expect(
       diffAcl({ desiredIds: [1], members: [{ characterId: 1, role: "member" }] }),
-    ).toEqual({ add: [], remove: [] });
+    ).toEqual({ add: [], remove: [], unblock: [] });
   });
 });
 ```
@@ -2693,10 +2740,49 @@ describe("createWandererClient", () => {
   it("fails closed on malformed member payloads", async () => {
     server.use(
       http.get(ACL, () =>
-        aclResponse([{ eve_character_id: "not-digits", role: "x" }]),
+        aclResponse([{ eve_character_id: "not-digits", role: "viewer" }]),
       ),
     );
     await expect(createWandererClient(cfg).getAclMembers()).rejects.toThrow();
+  });
+
+  it("fails closed on an unknown role spelling (admin protection depends on it)", async () => {
+    server.use(
+      http.get(ACL, () =>
+        aclResponse([{ eve_character_id: "90000001", role: "administrator" }]),
+      ),
+    );
+    await expect(createWandererClient(cfg).getAclMembers()).rejects.toThrow();
+  });
+
+  it("fails closed on zero or multiple external ids", async () => {
+    server.use(http.get(ACL, () => aclResponse([{ role: "viewer" }])));
+    await expect(createWandererClient(cfg).getAclMembers()).rejects.toThrow();
+    server.use(
+      http.get(ACL, () =>
+        aclResponse([
+          { eve_character_id: "1", eve_corporation_id: "2", role: "viewer" },
+        ]),
+      ),
+    );
+    await expect(createWandererClient(cfg).getAclMembers()).rejects.toThrow();
+  });
+
+  it("updates a member's role via PUT keyed by EVE id", async () => {
+    let putId = "";
+    let putBody: unknown;
+    server.use(
+      http.put(`${MEMBERS}/:id`, async ({ params, request }) => {
+        putId = params.id as string;
+        putBody = await request.json();
+        return HttpResponse.json({
+          data: { id: "uuid", name: "Pilot", role: "viewer", eve_character_id: putId },
+        });
+      }),
+    );
+    await createWandererClient(cfg).updateAclMemberRole(90000006, "viewer");
+    expect(putId).toBe("90000006");
+    expect(putBody).toEqual({ member: { role: "viewer" } });
   });
 
   it("classifies 5xx as transient and 403 as permanent", async () => {
@@ -2753,7 +2839,11 @@ import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { auditLog, wandererAclObservation } from "@/db/schema";
 import { runWandererJob } from "@/jobs/wanderer";
-import { WandererError, type WandererClient } from "@/lib/wanderer/client";
+import {
+  WandererError,
+  type WandererAclMember,
+  type WandererClient,
+} from "@/lib/wanderer/client";
 import { JobRetryError } from "@/services/sync-run";
 import { setupTestDb } from "./helpers/db";
 import { testConfig } from "./helpers/config";
@@ -2774,7 +2864,7 @@ beforeEach(async () => {
   `);
 });
 
-type Member = { characterId: number | null; role: string };
+type Member = WandererAclMember;
 
 /** Fake Wanderer with a mutable member list and scriptable failures. */
 function fakeWanderer(initial: Member[], opts: {
@@ -2799,6 +2889,9 @@ function fakeWanderer(initial: Member[], opts: {
     },
     addAclMember: async (id) => {
       members.push({ characterId: id, role: "viewer" });
+    },
+    updateAclMemberRole: async (id, role) => {
+      members = members.map((m) => (m.characterId === id ? { ...m, role } : m));
     },
     removeAclMember: async (id) => {
       if (opts.failRemoveOf === id) {
@@ -2882,6 +2975,19 @@ describe("runWandererJob", () => {
     expect(observed.map((o) => o.characterId).sort((a, b) => a - b)).toEqual([1, 5]);
   });
 
+  it("unblocks a desired blocked member and observes the new role", async () => {
+    await seedFlygdChar(1);
+    const w = fakeWanderer([{ characterId: 1, role: "blocked" }]);
+    const result = await runWandererJob({ db: ctx.db, wanderer: w.client });
+    expect(result.status).toBe("ok");
+    expect(result.counts).toMatchObject({ unblocked: 1, added: 0, removed: 0 });
+    const observed = await ctx.db.select().from(wandererAclObservation);
+    expect(observed).toHaveLength(1);
+    expect(observed[0]).toMatchObject({ characterId: 1, role: "viewer" });
+    const audits = await ctx.db.select().from(auditLog);
+    expect(audits.some((a) => a.action === "wanderer.unblocked")).toBe(true);
+  });
+
   it("does NOT retry when every failure was permanent", async () => {
     await seedFlygdChar(1);
     const w = fakeWanderer(
@@ -2928,16 +3034,21 @@ export type AclMember = { characterId: number; role: string };
 
 /**
  * Spec job 3: admin-role entries are NEVER removed; manager-role entries are
- * removed like anyone else when they leave the desired set.
+ * removed like anyone else when they leave the desired set. A desired
+ * character whose role is "blocked" has no effective access — presence alone
+ * is not convergence — so it is unblocked (reset to viewer); all other roles
+ * (admin/manager/member/viewer) are preserved as-is.
  */
 export function diffAcl(input: { desiredIds: number[]; members: AclMember[] }): {
   add: number[];
   remove: number[];
+  unblock: number[];
 } {
   const desired = new Set(input.desiredIds);
-  const present = new Set(input.members.map((m) => m.characterId));
+  const byId = new Map(input.members.map((m) => [m.characterId, m]));
   return {
-    add: input.desiredIds.filter((id) => !present.has(id)),
+    add: input.desiredIds.filter((id) => !byId.has(id)),
+    unblock: input.desiredIds.filter((id) => byId.get(id)?.role === "blocked"),
     remove: input.members
       .filter((m) => !desired.has(m.characterId) && m.role !== "admin")
       .map((m) => m.characterId),
@@ -2971,20 +3082,31 @@ export class WandererError extends Error {
 }
 
 const eveIdSchema = z.union([z.string().regex(/^\d+$/), z.number().int()]);
+const roleSchema = z.enum(["admin", "manager", "member", "viewer", "blocked"]);
+// Strict on both axes, fail closed: an unknown role spelling could cost an
+// entry its admin protection, and a member with zero/multiple external ids
+// violates the documented contract — either rejects the WHOLE read, so the
+// job never mutates from a misunderstood ACL.
+const memberSchema = z
+  .object({
+    role: roleSchema,
+    eve_character_id: eveIdSchema.nullish(),
+    eve_corporation_id: eveIdSchema.nullish(),
+    eve_alliance_id: eveIdSchema.nullish(),
+  })
+  .refine(
+    (m) =>
+      [m.eve_character_id, m.eve_corporation_id, m.eve_alliance_id].filter(
+        (v) => v != null,
+      ).length === 1,
+    { message: "ACL member must carry exactly one external id" },
+  );
 const aclSchema = z.object({
-  data: z.object({
-    members: z.array(
-      z.object({
-        role: z.string(),
-        eve_character_id: eveIdSchema.nullish(),
-        eve_corporation_id: eveIdSchema.nullish(),
-        eve_alliance_id: eveIdSchema.nullish(),
-      }),
-    ),
-  }),
+  data: z.object({ members: z.array(memberSchema) }),
 });
 
-export type WandererAclMember = { characterId: number | null; role: string };
+export type AclRole = z.infer<typeof roleSchema>;
+export type WandererAclMember = { characterId: number | null; role: AclRole };
 
 export function createWandererClient(cfg: Config, fetchImpl: typeof fetch = fetch) {
   const base = cfg.wanderer.baseUrl.replace(/\/$/, "");
@@ -3039,6 +3161,13 @@ export function createWandererClient(cfg: Config, fetchImpl: typeof fetch = fetc
         body: JSON.stringify({
           member: { eve_character_id: String(characterId), role: "viewer" },
         }),
+      });
+    },
+    async updateAclMemberRole(characterId: number, role: AclRole): Promise<void> {
+      // keyed by EVE id, not the member row's UUID
+      await request(`${membersPath}/${characterId}`, {
+        method: "PUT",
+        body: JSON.stringify({ member: { role } }),
       });
     },
     async removeAclMember(characterId: number): Promise<void> {
@@ -3123,11 +3252,23 @@ export async function runWandererJob(deps: {
         errors.push(`remove ${id}: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
+    // A blocked desired member has no effective access — reset to viewer.
+    let unblocked = 0;
+    for (const id of diff.unblock) {
+      try {
+        await wanderer.updateAclMemberRole(id, "viewer");
+        unblocked++;
+        await logAudit(db, { actor: "system", action: "wanderer.unblocked", target: String(id) });
+      } catch (err) {
+        anyTransient ||= isTransient(err);
+        errors.push(`unblock ${id}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
 
     // Persist the POST-mutation state (spec: the UI never shows pre-mutation
     // state). No mutation → the initial read is already the live state.
     let observed: typeof members | null = members;
-    if (added + removed > 0 || errors.length > 0) {
+    if (added + removed + unblocked > 0 || errors.length > 0) {
       try {
         observed = await wanderer.getAclMembers();
       } catch (err) {
@@ -3148,7 +3289,14 @@ export async function runWandererJob(deps: {
       });
     }
 
-    const counts = { added, removed, addFailed: diff.add.length - added, removeFailed: diff.remove.length - removed };
+    const counts = {
+      added,
+      removed,
+      unblocked,
+      addFailed: diff.add.length - added,
+      removeFailed: diff.remove.length - removed,
+      unblockFailed: diff.unblock.length - unblocked,
+    };
     if (errors.length > 0 || observed === null) {
       return {
         status: "partial",
@@ -3195,7 +3343,7 @@ git commit -m "feat: wanderer ACL sync with post-mutation observation"
     - `diffRoles(input: { tier: "flygd" | "blue" | "green"; managed: ManagedRoleIds; memberRoleIds: string[] }): { add: string[]; remove: string[] }` — ensure exactly the tier's role among the three managed roles; other roles untouched.
     - `stripManagedRoles(managed: ManagedRoleIds, memberRoleIds: string[]): string[]` — the managed roles the member currently has (for unlinked-user deprovision).
     - `validateRoleConfig(input: { managed: ManagedRoleIds; guildRoles: Array<{ id: string; position: number; permissions: string }>; botRoleIds: string[] }): { ok: true } | { ok: false; error: string }` — three distinct ids, all present in the guild, bot has Manage Roles (or Administrator), bot's highest role above every managed role.
-  - `runDiscordRolesJob(deps: { db: Db; cfg: Config; discord: DiscordClient; fetchImpl?: typeof fetch }, opts?: { accountId?: string; discordUserId?: string }): Promise<JobResult>` — job type `"discord-roles"`. Config validation runs FIRST each run; validation failure is **permanent-config**: posts the ops webhook immediately and returns `failed` WITHOUT retry. **A permanent `DiscordApiError` (e.g. 401/403 — bad bot token, missing access) while FETCHING the config data takes the same permanent-config path**; only transient fetch errors propagate into a pg-boss retry. `opts.discordUserId` handles `{kind:"discord-user"}` outbox payloads: if the user is still unlinked, strip managed roles (not-in-guild → log and skip); if re-linked meanwhile, skip (the account path owns it). Otherwise iterate Discord-linked accounts (optionally scoped), ensuring exactly the tier's managed role; user-not-in-guild → count and skip; audits `discord.role_changed`.
+  - `runDiscordRolesJob(deps: { db: Db; cfg: Config; discord: DiscordClient; fetchImpl?: typeof fetch }, opts?: { accountId?: string; discordUserId?: string }): Promise<JobResult>` — job type `"discord-roles"`. Config validation runs FIRST each run; validation failure is **permanent-config**: posts the ops webhook immediately and returns `failed` WITHOUT retry. **A permanent `DiscordApiError` (e.g. 401/403 — bad bot token, missing access) while FETCHING the config data takes the same permanent-config path**; only transient fetch errors propagate into a pg-boss retry. `opts.discordUserId` handles `{kind:"discord-user"}` outbox payloads: if the user is still unlinked, strip managed roles (not-in-guild → log and skip); if re-linked meanwhile, skip (the account path owns it). **Last-writer race guard:** after stripping, the link is re-checked — if the user re-linked WHILE the strip ran (so the strip may have clobbered a just-restored role), an `{kind:"account"}` outbox row is enqueued for that account so the account path re-syncs the roles. Otherwise iterate Discord-linked accounts (optionally scoped), ensuring exactly the tier's managed role; user-not-in-guild → count and skip; audits `discord.role_changed`.
 
 - [ ] **Step 1: Write failing tests**
 
@@ -3375,7 +3523,7 @@ describe("createDiscordClient", () => {
 ```ts
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { auditLog, syncRun } from "@/db/schema";
+import { auditLog, outbox, syncRun } from "@/db/schema";
 import { runDiscordRolesJob } from "@/jobs/discord-roles";
 import { DiscordApiError, type DiscordClient } from "@/lib/discord/rest";
 import { setupTestDb } from "./helpers/db";
@@ -3517,6 +3665,30 @@ describe("runDiscordRolesJob", () => {
       ["u9", "12"],
     ]);
     expect(d.added).toEqual([]);
+  });
+
+  it("re-syncs the account when a re-link lands DURING the strip", async () => {
+    const d = fakeDiscord({ u9: ["10"] });
+    // the re-link commits while the strip's role removal is in flight
+    const client: DiscordClient = {
+      ...d.client,
+      removeMemberRole: async (userId, roleId) => {
+        const acc = await seedAccount(ctx.db, { tier: "flygd", discordUserId: "u9" });
+        await seedCharacter(ctx.db, cfg, { id: 99, accountId: acc.id, main: true });
+        await d.client.removeMemberRole(userId, roleId);
+      },
+    };
+    const result = await runDiscordRolesJob(
+      { db: ctx.db, cfg, discord: client },
+      { discordUserId: "u9" },
+    );
+    expect(result.status).toBe("ok");
+    expect(result.counts).toMatchObject({ relinkResync: 1 });
+    // the account path re-asserts the roles via a fresh outbox row
+    const rows = await ctx.db.select().from(outbox);
+    expect(rows.map((r) => r.payload)).toContainEqual(
+      expect.objectContaining({ kind: "account" }),
+    );
   });
 
   it("skips the strip when the user re-linked meanwhile", async () => {
@@ -3734,6 +3906,7 @@ import { diffRoles, stripManagedRoles, validateRoleConfig } from "@/core/role-di
 import { DiscordApiError, type DiscordClient } from "@/lib/discord/rest";
 import { postOpsWebhook } from "@/lib/ops-webhook";
 import { logAudit } from "@/services/audit";
+import { enqueueSync } from "@/services/outbox";
 import { runJob, type JobResult } from "@/services/sync-run";
 
 export async function runDiscordRolesJob(
@@ -3796,6 +3969,17 @@ export async function runDiscordRolesJob(
           target: opts.discordUserId,
           details: { removed: remove, cause: "discord unlinked" },
         });
+      }
+      // Last-writer race: a re-link may have landed (and its role sync run)
+      // WHILE we stripped. Re-check; if linked now, hand ownership back to the
+      // account path with a fresh outbox row so the roles are re-asserted.
+      const relinked = await db
+        .select()
+        .from(discordLink)
+        .where(eq(discordLink.discordUserId, opts.discordUserId));
+      if (relinked.length > 0) {
+        await enqueueSync(db, { kind: "account", accountId: relinked[0].accountId });
+        return { status: "ok", counts: { removed: remove.length, relinkResync: 1 } };
       }
       return { status: "ok", counts: { removed: remove.length } };
     }
@@ -3886,13 +4070,14 @@ git commit -m "feat: discord role sync with permanent-config validation"
 **Interfaces:**
 - Consumes: `getFreshAccessToken`, `verifyEveAccessToken`/`setTestJwksOverride` (`src/lib/esi/sso.ts`), `runJob`, `logAudit`, and the internal `reclaimCharacter`/`findCharacterForUpdate` helpers in `src/services/accounts.ts`.
 - Produces:
-  - `reclaimTransferredCharacter(dbx: DbTx, characterId: number): Promise<{ ok: true } | { ok: false; error: "not_found" }>` exported from `src/services/accounts.ts` — transfer reclaim for background detection. **Unlike `unlinkCharacter` there is no last-character guard**: that guard exists only for ordinary unlink flows; transfer reclaim already legitimately produces zero-character accounts (spec: the account "simply stays Green until an admin deletes it"). Wraps the existing internal `reclaimCharacter` (advisory lock + row lock, delete link + contact state, audit `character.reclaimed`, no-main rule with demotion + outbox enqueue, session revocation).
+  - `reclaimTransferredCharacter(dbx: DbTx, characterId: number, expected: { accountId: string; ownerHash: string }): Promise<{ ok: true } | { ok: false; error: "not_found" | "changed" }>` exported from `src/services/accounts.ts` — transfer reclaim for background detection. **Unlike `unlinkCharacter` there is no last-character guard**: that guard exists only for ordinary unlink flows; transfer reclaim already legitimately produces zero-character accounts (spec: the account "simply stays Green until an admin deletes it"). **Stale-decision guard:** after taking the character lock it re-verifies the row still matches `expected` (account AND owner hash) — if the character already changed hands (e.g. the new owner's login reclaimed it first), it returns `"changed"` and deletes nothing. Wraps the existing internal `reclaimCharacter` (advisory lock + row lock, delete link + contact state, audit `character.reclaimed`, no-main rule with demotion + outbox enqueue, session revocation).
   - `runTokenHealthJob(deps: { db: Db; cfg: Config; fetchImpl?: typeof fetch }): Promise<JobResult>` — job type `"token-health"`. For every character with a stored token not already `invalid`:
-    - Refresh via `getFreshAccessToken` (permanent-only invalidation, CAS rotation, concurrent-rotation safety live there; transient → counted, retried at job level).
+    - Refresh via `getFreshAccessToken` (permanent-only invalidation, CAS rotation, concurrent-rotation safety live there; transient — including CAS misses — → counted, retried at job level).
     - Verify the returned access token JWT → subject character id, `ownerHash`, granted `scopes`.
-    - **Subject binding (fail closed):** if the JWT's character id ≠ the row's id, the token must never vouch for this row — mark `token_status: invalid` + audit `token.subject_mismatch`, keep the link, continue.
-    - **owner_hash mismatch** → ownership transfer: in ONE transaction, audit `character.owner_mismatch` then `reclaimTransferredCharacter(tx, ch.id)` — this deprovisions fully (main cleared, demotion unless locked, outbox row for jobs 2–4, sessions revoked) even when it is the account's last character.
-    - Otherwise persist current `scopes` and recompute `token_status`: full coverage of `cfg.eveSso.scopes` → `valid`, shortfall → `needs_reauth` (audit `token.needs_reauth` on transition).
+    - **Every follow-up write is conditioned on `token.tokenEnc`** (the blob our CAS just stored): `WHERE id = ? AND refresh_token_enc = ? RETURNING`. A guard miss means the row changed after our refresh (re-auth, reclaim by the new owner) — the stale decision is discarded and counted transient.
+    - **Subject binding (fail closed):** if the JWT's character id ≠ the row's id, the token must never vouch for this row — conditionally mark `token_status: invalid`, auditing `token.subject_mismatch` only when the guard wins; keep the link, continue.
+    - **owner_hash mismatch** → ownership transfer: in ONE transaction, `reclaimTransferredCharacter(tx, ch.id, { accountId: ch.accountId, ownerHash: ch.ownerHash })` and audit `character.owner_mismatch` only when the reclaim wins — the service re-verifies account+owner under the character lock, so a transfer that already completed concurrently is never double-deleted. Full deprovision (main cleared, demotion unless locked, outbox row for jobs 2–4, sessions revoked) even when it is the account's last character.
+    - Otherwise persist current `scopes` and recompute `token_status` (guarded, as above): full coverage of `cfg.eveSso.scopes` → `valid`, shortfall → `needs_reauth` (audit `token.needs_reauth` on transition).
     - Transient refresh failures → `partial` + retry. Counts: `refreshed`, `invalid`, `needsReauth`, `unlinked`, `skipped`.
 
 - [ ] **Step 1: Write failing test**
@@ -3918,6 +4103,7 @@ import {
 import { account, auditLog, character, outbox, session } from "@/db/schema";
 import { runTokenHealthJob } from "@/jobs/token-health";
 import { setTestJwksOverride } from "@/lib/esi/sso";
+import { reclaimTransferredCharacter } from "@/services/accounts";
 import { JobRetryError } from "@/services/sync-run";
 import { createSession } from "@/services/session";
 import { setupTestDb } from "./helpers/db";
@@ -4114,6 +4300,19 @@ describe("runTokenHealthJob", () => {
     const audits = await ctx.db.select().from(auditLog);
     expect(audits.some((a) => a.action === "token.subject_mismatch")).toBe(true);
   });
+
+  it("reclaimTransferredCharacter refuses a stale decision (row changed hands)", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    // the row's CURRENT owner hash is already the new owner's
+    await seedCharacter(ctx.db, cfg, {
+      id: 1, accountId: acc.id, main: true, ownerHash: "oh-new-owner",
+    });
+    const r = await ctx.db.transaction((tx) =>
+      reclaimTransferredCharacter(tx, 1, { accountId: acc.id, ownerHash: "oh-stale" }),
+    );
+    expect(r).toEqual({ ok: false, error: "changed" });
+    expect(await getChar(1)).toBeDefined(); // nothing deleted
+  });
 });
 ```
 
@@ -4139,9 +4338,19 @@ First, export the transfer-specific reclaim from `src/services/accounts.ts` — 
 export async function reclaimTransferredCharacter(
   dbx: DbTx,
   characterId: number,
-): Promise<{ ok: true } | { ok: false; error: "not_found" }> {
+  expected: { accountId: string; ownerHash: string },
+): Promise<{ ok: true } | { ok: false; error: "not_found" | "changed" }> {
   const existing = await findCharacterForUpdate(dbx, characterId);
   if (!existing) return { ok: false, error: "not_found" };
+  // Stale-decision guard: re-verify under the lock. If the row already
+  // changed hands (the new owner's login reclaimed it, or a re-auth updated
+  // the owner hash), this caller's decision is based on dead data.
+  if (
+    existing.accountId !== expected.accountId ||
+    existing.ownerHash !== expected.ownerHash
+  ) {
+    return { ok: false, error: "changed" };
+  }
   await reclaimCharacter(dbx, existing);
   return { ok: true };
 }
@@ -4150,7 +4359,7 @@ export async function reclaimTransferredCharacter(
 `src/jobs/token-health.ts`:
 
 ```ts
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { Config } from "@/config";
 import type { Db } from "@/db";
 import { character } from "@/db/schema";
@@ -4186,20 +4395,27 @@ export async function runTokenHealthJob(deps: {
 
       if (identity.characterId !== ch.id) {
         // Fail closed: a token whose subject is another character must never
-        // vouch for this row (whatever produced it — bug or tampering).
-        await db.transaction(async (tx) => {
-          await tx
+        // vouch for this row. Guard on the blob our CAS just stored so a
+        // concurrent re-auth/reclaim discards this stale decision.
+        const applied = await db.transaction(async (tx) => {
+          const rows = await tx
             .update(character)
             .set({ tokenStatus: "invalid" })
-            .where(eq(character.id, ch.id));
+            .where(
+              and(eq(character.id, ch.id), eq(character.refreshTokenEnc, token.tokenEnc)),
+            )
+            .returning({ id: character.id });
+          if (rows.length === 0) return false;
           await logAudit(tx, {
             actor: "system",
             action: "token.subject_mismatch",
             target: String(ch.id),
             details: { subjectCharacterId: identity.characterId },
           });
+          return true;
         });
-        counts.invalid++;
+        if (applied) counts.invalid++;
+        else transientFailures++;
         continue;
       }
 
@@ -4207,27 +4423,44 @@ export async function runTokenHealthJob(deps: {
         // Ownership transfer (spec: Auth flows): full reclaim — main cleared,
         // demotion unless locked, deprovision jobs enqueued, sessions revoked.
         // No last-character guard: transfer legitimately empties accounts.
-        await db.transaction(async (tx) => {
-          await logAudit(tx, {
-            actor: "system",
-            action: "character.owner_mismatch",
-            target: String(ch.id),
-            details: { detectedBy: "token-health" },
+        // The service re-verifies account+owner under the character lock, so a
+        // transfer that already completed concurrently is never double-applied.
+        const result = await db.transaction(async (tx) => {
+          const r = await reclaimTransferredCharacter(tx, ch.id, {
+            accountId: ch.accountId,
+            ownerHash: ch.ownerHash,
           });
-          await reclaimTransferredCharacter(tx, ch.id);
+          if (r.ok) {
+            await logAudit(tx, {
+              actor: "system",
+              action: "character.owner_mismatch",
+              target: String(ch.id),
+              details: { detectedBy: "token-health" },
+            });
+          }
+          return r;
         });
-        counts.unlinked++;
+        if (result.ok) counts.unlinked++;
+        else transientFailures++; // row changed underneath — next run decides
         continue;
       }
 
       // Scope shortfall vs the CURRENT required set ⇒ needs_reauth (one-click
-      // in-place re-auth in the UI); full coverage ⇒ valid.
+      // in-place re-auth in the UI); full coverage ⇒ valid. Guarded on the
+      // blob we rotated to — a miss means the row moved on without us.
       const covered = cfg.eveSso.scopes.every((s) => identity.scopes.includes(s));
       const nextStatus = covered ? ("valid" as const) : ("needs_reauth" as const);
-      await db
+      const statusRows = await db
         .update(character)
         .set({ scopes: identity.scopes, tokenStatus: nextStatus })
-        .where(eq(character.id, ch.id));
+        .where(
+          and(eq(character.id, ch.id), eq(character.refreshTokenEnc, token.tokenEnc)),
+        )
+        .returning({ id: character.id });
+      if (statusRows.length === 0) {
+        transientFailures++;
+        continue;
+      }
       if (nextStatus === "needs_reauth" && ch.tokenStatus !== "needs_reauth") {
         await logAudit(db, {
           actor: "system",
@@ -4698,8 +4931,8 @@ git commit -m "feat: transactional outbox dispatcher with singleton fan-out"
 - Consumes: everything from Tasks 6–13; `PgBoss` from `pg-boss`.
 - Produces:
   - `createQueues(boss: PgBoss): Promise<void>` — creates the dead-letter queue plus all seven job queues with `{ policy: "short", retryLimit: 5, retryDelay: 60, retryBackoff: true, deadLetter: "ops-dead-letter" }`. **`policy: "short"` is load-bearing:** pg-boss enforces singletonKey uniqueness only via the `job_i1` partial index scoped to that policy — on the default `standard` policy singletonKey coalesces nothing (see Global Constraints).
-  - `type JobDeps = { db: Db; cfg: Config; esi: Pick<EsiClient, "postAffiliation"> & ContactsEsi; wanderer: WandererClient; discord: DiscordClient; fetchImpl?: typeof fetch }` and `buildJobHandlers(deps: JobDeps): Record<string, (data: unknown) => Promise<void>>` in `src/worker/handlers.ts` — one handler per job queue, each zod-parsing its payload (fail closed) and invoking the job. This is the seam Task 15 uses to drive dispatcher-emitted payloads through the REAL worker routing; `src/worker/index.ts` registers the same handlers with `boss.work`.
-  - `scheduleJobs(boss: PgBoss): Promise<void>` — cron per spec: membership `*/30 * * * *`; membership-recheck (weekly `affiliation_invalid` recheck) `0 4 * * 0`; contacts `5 * * * *`; wanderer `10 * * * *`; discord-roles `15 * * * *`; token-health `0 3 * * *`; purge `30 3 * * *`. (pg-boss supports ONE schedule per queue — that's why the weekly recheck is its own queue.)
+  - `type JobDeps = { db: Db; cfg: Config; esi: Pick<EsiClient, "postAffiliation"> & ContactsEsi; wanderer: WandererClient; discord: DiscordClient; fetchImpl?: typeof fetch }` and `buildJobHandlers(deps: JobDeps): Record<string, (data: unknown) => Promise<void>>` in `src/worker/handlers.ts` — one handler per job queue, each parsing its payload with a `.strict()` zod schema requiring the queue's LITERAL `jobType` (truly fail closed — `{ garbage: true }` rejects instead of triggering a global job) and invoking the job. This is the seam Task 15 uses to drive dispatcher-emitted payloads through the REAL worker routing; `src/worker/index.ts` registers the same handlers with `boss.work`.
+  - `scheduleJobs(boss: PgBoss): Promise<void>` — cron per spec: membership `*/30 * * * *`; membership-recheck (weekly `affiliation_invalid` recheck) `0 4 * * 0`; contacts `5 * * * *`; wanderer `10 * * * *`; discord-roles `15 * * * *`; token-health `0 3 * * *`; purge `30 3 * * *`. (pg-boss supports ONE schedule per queue — that's why the weekly recheck is its own queue.) **Every schedule passes the queue's global singleton key** (`membership:all`, `contacts:all`, `wanderer:all`, `roles:all`, …) so scheduled ticks and dispatcher-emitted global sends coalesce with each other instead of queueing overlapping reconciliations.
   - `src/worker/index.ts` — the worker container entrypoint: starts pg-boss on `cfg.databaseUrl`, creates queues, registers `boss.work` handlers (zod-parsing job data), registers the dead-letter handler (posts ops webhook naming `data.jobType`), applies schedules, starts the dispatcher, and shuts down cleanly on SIGTERM/SIGINT.
 
 - [ ] **Step 1: Write failing test**
@@ -4735,17 +4968,24 @@ describe("worker queues", () => {
     expect(second).toBeNull(); // coalesced
   });
 
-  it("applies one schedule per queue", async () => {
+  it("applies one schedule per queue, each carrying its global singleton key", async () => {
     await scheduleJobs(boss);
     const schedules = await boss.getSchedules();
-    const byName = new Map(schedules.map((s) => [s.name, s.cron]));
-    expect(byName.get(QUEUES.membership)).toBe("*/30 * * * *");
-    expect(byName.get(QUEUES.membershipRecheck)).toBe("0 4 * * 0");
-    expect(byName.get(QUEUES.contacts)).toBe("5 * * * *");
-    expect(byName.get(QUEUES.wanderer)).toBe("10 * * * *");
-    expect(byName.get(QUEUES.discordRoles)).toBe("15 * * * *");
-    expect(byName.get(QUEUES.tokenHealth)).toBe("0 3 * * *");
-    expect(byName.get(QUEUES.purge)).toBe("30 3 * * *");
+    const byName = new Map(schedules.map((s) => [s.name, s]));
+    expect(byName.get(QUEUES.membership)?.cron).toBe("*/30 * * * *");
+    expect(byName.get(QUEUES.membershipRecheck)?.cron).toBe("0 4 * * 0");
+    expect(byName.get(QUEUES.contacts)?.cron).toBe("5 * * * *");
+    expect(byName.get(QUEUES.wanderer)?.cron).toBe("10 * * * *");
+    expect(byName.get(QUEUES.discordRoles)?.cron).toBe("15 * * * *");
+    expect(byName.get(QUEUES.tokenHealth)?.cron).toBe("0 3 * * *");
+    expect(byName.get(QUEUES.purge)?.cron).toBe("30 3 * * *");
+    // scheduled ticks coalesce with dispatcher-emitted global sends
+    expect(byName.get(QUEUES.contacts)?.options).toMatchObject({
+      singletonKey: "contacts:all",
+    });
+    expect(byName.get(QUEUES.wanderer)?.options).toMatchObject({
+      singletonKey: "wanderer:all",
+    });
   });
 });
 ```
@@ -4796,15 +5036,50 @@ export async function createQueues(boss: PgBoss): Promise<void> {
  * staggered to avoid stampeding shared integrations.
  */
 export async function scheduleJobs(boss: PgBoss): Promise<void> {
-  await boss.schedule(QUEUES.membership, "*/30 * * * *", { jobType: QUEUES.membership });
-  await boss.schedule(QUEUES.membershipRecheck, "0 4 * * 0", {
-    jobType: QUEUES.membershipRecheck,
-  });
-  await boss.schedule(QUEUES.contacts, "5 * * * *", { jobType: QUEUES.contacts });
-  await boss.schedule(QUEUES.wanderer, "10 * * * *", { jobType: QUEUES.wanderer });
-  await boss.schedule(QUEUES.discordRoles, "15 * * * *", { jobType: QUEUES.discordRoles });
-  await boss.schedule(QUEUES.tokenHealth, "0 3 * * *", { jobType: QUEUES.tokenHealth });
-  await boss.schedule(QUEUES.purge, "30 3 * * *", { jobType: QUEUES.purge });
+  // Schedules share the dispatcher's global singleton keys so a scheduled
+  // tick and an on-demand global trigger coalesce instead of double-queueing.
+  await boss.schedule(
+    QUEUES.membership,
+    "*/30 * * * *",
+    { jobType: QUEUES.membership },
+    { singletonKey: "membership:all" },
+  );
+  await boss.schedule(
+    QUEUES.membershipRecheck,
+    "0 4 * * 0",
+    { jobType: QUEUES.membershipRecheck },
+    { singletonKey: "membership-recheck:all" },
+  );
+  await boss.schedule(
+    QUEUES.contacts,
+    "5 * * * *",
+    { jobType: QUEUES.contacts },
+    { singletonKey: "contacts:all" },
+  );
+  await boss.schedule(
+    QUEUES.wanderer,
+    "10 * * * *",
+    { jobType: QUEUES.wanderer },
+    { singletonKey: "wanderer:all" },
+  );
+  await boss.schedule(
+    QUEUES.discordRoles,
+    "15 * * * *",
+    { jobType: QUEUES.discordRoles },
+    { singletonKey: "roles:all" },
+  );
+  await boss.schedule(
+    QUEUES.tokenHealth,
+    "0 3 * * *",
+    { jobType: QUEUES.tokenHealth },
+    { singletonKey: "token-health:all" },
+  );
+  await boss.schedule(
+    QUEUES.purge,
+    "30 3 * * *",
+    { jobType: QUEUES.purge },
+    { singletonKey: "purge:all" },
+  );
 }
 ```
 
@@ -4827,11 +5102,29 @@ import type { EsiClient } from "@/lib/esi/client";
 import type { WandererClient } from "@/lib/wanderer/client";
 import { QUEUES } from "@/worker/queues";
 
-const accountScopedSchema = z.object({ accountId: z.string().uuid().optional() });
-const discordJobSchema = z.object({
-  accountId: z.string().uuid().optional(),
-  discordUserId: z.string().optional(),
-});
+// Fail closed: every payload must carry the queue's literal jobType and no
+// unknown fields — garbage never triggers a job (it rejects, retries, and
+// surfaces via the dead-letter alert).
+const membershipSchema = z
+  .object({
+    jobType: z.literal(QUEUES.membership),
+    accountId: z.string().uuid().optional(),
+  })
+  .strict();
+const membershipRecheckSchema = z
+  .object({ jobType: z.literal(QUEUES.membershipRecheck) })
+  .strict();
+const contactsSchema = z.object({ jobType: z.literal(QUEUES.contacts) }).strict();
+const wandererSchema = z.object({ jobType: z.literal(QUEUES.wanderer) }).strict();
+const discordSchema = z
+  .object({
+    jobType: z.literal(QUEUES.discordRoles),
+    accountId: z.string().uuid().optional(),
+    discordUserId: z.string().optional(),
+  })
+  .strict();
+const tokenHealthSchema = z.object({ jobType: z.literal(QUEUES.tokenHealth) }).strict();
+const purgeSchema = z.object({ jobType: z.literal(QUEUES.purge) }).strict();
 
 export type JobDeps = {
   db: Db;
@@ -4853,32 +5146,36 @@ export function buildJobHandlers(
 ): Record<string, (data: unknown) => Promise<void>> {
   return {
     [QUEUES.membership]: async (data) => {
-      const { accountId } = accountScopedSchema.parse(data);
+      const { accountId } = membershipSchema.parse(data);
       await runMembershipJob(deps, { accountId });
     },
-    [QUEUES.membershipRecheck]: async () => {
+    [QUEUES.membershipRecheck]: async (data) => {
+      membershipRecheckSchema.parse(data);
       await runMembershipJob(deps, { recheckInvalid: true });
     },
-    [QUEUES.contacts]: async () => {
+    [QUEUES.contacts]: async (data) => {
+      contactsSchema.parse(data);
       await runContactsJob(deps);
     },
-    [QUEUES.wanderer]: async () => {
+    [QUEUES.wanderer]: async (data) => {
+      wandererSchema.parse(data);
       await runWandererJob(deps);
     },
     [QUEUES.discordRoles]: async (data) => {
-      await runDiscordRolesJob(deps, discordJobSchema.parse(data));
+      const { accountId, discordUserId } = discordSchema.parse(data);
+      await runDiscordRolesJob(deps, { accountId, discordUserId });
     },
-    [QUEUES.tokenHealth]: async () => {
+    [QUEUES.tokenHealth]: async (data) => {
+      tokenHealthSchema.parse(data);
       await runTokenHealthJob(deps);
     },
-    [QUEUES.purge]: async () => {
+    [QUEUES.purge]: async (data) => {
+      purgeSchema.parse(data);
       await runPurgeJob(deps);
     },
   };
 }
 ```
-
-(The zod schemas intentionally ignore the extra `jobType` field every payload carries — zod objects strip unknown keys by default.)
 
 `src/worker/index.ts`:
 
@@ -4990,7 +5287,7 @@ import { afterAll, beforeAll, beforeEach, expect, it } from "vitest";
 import { auditLog, wandererAclObservation } from "@/db/schema";
 import type { DiscordClient } from "@/lib/discord/rest";
 import type { Affiliation } from "@/lib/esi/client";
-import type { WandererClient } from "@/lib/wanderer/client";
+import type { WandererAclMember, WandererClient } from "@/lib/wanderer/client";
 import { dispatchOutbox } from "@/worker/dispatcher";
 import { buildJobHandlers, type JobDeps } from "@/worker/handlers";
 import { setupTestDb } from "./helpers/db";
@@ -5057,7 +5354,7 @@ it("main leaves alliance → green → contacts removed, ACL removed, role chang
   };
 
   // Wanderer: the ACL still lists the leaver's chars.
-  let aclMembers: Array<{ characterId: number | null; role: string }> = [
+  let aclMembers: WandererAclMember[] = [
     { characterId: 10, role: "viewer" },
     { characterId: 11, role: "viewer" },
     { characterId: 20, role: "viewer" },
@@ -5066,6 +5363,9 @@ it("main leaves alliance → green → contacts removed, ACL removed, role chang
     getAclMembers: async () => [...aclMembers],
     addAclMember: async (id) => {
       aclMembers.push({ characterId: id, role: "viewer" });
+    },
+    updateAclMemberRole: async (id, role) => {
+      aclMembers = aclMembers.map((m) => (m.characterId === id ? { ...m, role } : m));
     },
     removeAclMember: async (id) => {
       aclMembers = aclMembers.filter((m) => m.characterId !== id);
@@ -5148,6 +5448,9 @@ it("main leaves alliance → green → contacts removed, ACL removed, role chang
   expect(tierChange?.details).toMatchObject({ to: "green", cause: "main left alliance" });
   expect(audits.filter((a) => a.action === "wanderer.removed")).toHaveLength(2);
   expect(audits.some((a) => a.action === "discord.role_changed")).toBe(true);
+
+  // 8) Fail-closed routing: garbage payloads reject instead of running a job.
+  await expect(handlers["membership"]({ garbage: true })).rejects.toThrow();
 });
 ```
 
