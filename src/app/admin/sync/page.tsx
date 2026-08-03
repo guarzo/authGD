@@ -4,7 +4,15 @@ import { getDb } from "@/db";
 import type { syncRunStatusEnum } from "@/db/schema";
 import { getAdminContext } from "@/lib/admin-guard";
 import { getSyncStatus } from "@/services/sync-status";
-import { Json, RuleHead, Scroller, Status, type Tone } from "@/app/_components/ui";
+import { cadenceFor } from "@/core/schedules";
+import {
+  countColumns,
+  formatDuration,
+  humanizeKey,
+  isNoChange,
+} from "@/core/run-summary";
+import { Json, Scroller, Status, type Tone } from "@/app/_components/ui";
+import { Disclosure } from "@/app/_components/disclosure";
 import { Submit } from "@/app/_components/submit";
 import { formatAgo } from "@/app/_components/format-ago";
 import { RelativeTime } from "@/app/_components/relative-time";
@@ -43,6 +51,16 @@ function tone(status: SyncRunStatus | null): Tone {
   }
 }
 
+/**
+ * Which jobs open on their own. "Not OK" is read as "actionable", so a run
+ * still in flight does not count: a null status resolves on its own within
+ * seconds, and expanding on it would mean the page flaps open and shut through
+ * every sweep instead of pointing at the one job that needs an admin.
+ */
+function needsAttention(status: SyncRunStatus | null): boolean {
+  return status === "partial" || status === "failed";
+}
+
 export default async function AdminSyncPage({
   searchParams,
 }: {
@@ -53,34 +71,46 @@ export default async function AdminSyncPage({
   const { queued } = await searchParams;
   const groups = await getSyncStatus(getDb());
   const now = Date.now();
+  // The cadence column is dropped entirely rather than filled with dashes when
+  // nothing on the page is scheduled — an empty column is exactly the noise
+  // this page is being cleaned of.
+  const anyCadence = groups.some((g) => cadenceFor(g.jobType) !== null);
 
   return (
     <main id="main" tabIndex={-1} className="page">
       <div className="page__head">
         <h1>Sync</h1>
         <p className="page__lede">
-          The five jobs that keep tiers, roles and standings in step with the game. The
-          buttons enqueue work; the worker picks it up within a few seconds.
+          The jobs that keep tiers, roles and standings in step with the game. The buttons
+          enqueue work; the worker picks it up within a few seconds.
         </p>
       </div>
 
+      {/* role="status" because a server action redirect re-renders without a
+          document load: without it the outcome of the press is visible but
+          never announced. */}
       {queued === "all" && (
-        <p className="notice" data-glyph="·">
-          Sync queued for every account. The worker picks it up within a few seconds.
+        <p className="notice" role="status" data-glyph="·">
+          Sync queued for every account. The worker picks it up within a few seconds; the
+          strip below updates as runs finish.
         </p>
       )}
       {queued === "recheck" && (
-        <p className="notice" data-glyph="·">
+        <p className="notice" role="status" data-glyph="·">
           Affiliation recheck queued. The worker picks it up within a few seconds.
         </p>
       )}
 
       <div className="btn-row">
         <form action={syncAllAction}>
-          <Submit className="btn btn--primary">Sync everything now</Submit>
+          <Submit className="btn btn--primary" pendingLabel="Queueing…">
+            Sync everything now
+          </Submit>
         </form>
         <form action={recheckInvalidAction}>
-          <Submit className="btn">Recheck invalid affiliations</Submit>
+          <Submit className="btn" pendingLabel="Queueing…">
+            Recheck invalid affiliations
+          </Submit>
         </form>
       </div>
 
@@ -91,75 +121,155 @@ export default async function AdminSyncPage({
         </p>
       )}
 
-      {groups.map((g) => {
-        const latest = g.runs[0];
-        const latestAt = latest ? (latest.finishedAt ?? latest.startedAt) : null;
-        const latestIso = latestAt ? latestAt.toISOString() : null;
-        return (
-          <section key={g.jobType}>
-            <RuleHead
-              as="h2"
-              aside={
-                latest && (
-                  <>
-                    <Status tone={tone(latest.status)}>
-                      {latest.status ?? "running"}
-                    </Status>
-                    <RelativeTime iso={latestIso} initial={formatAgo(latestIso, now)} />
-                  </>
-                )
-              }
-            >
-              {g.jobType}
-            </RuleHead>
-            <Scroller label={`${g.jobType} runs`}>
-              <table className="log log--runs">
-                {/* Fixed widths so the four job tables line up with each other;
-                    auto layout gives every section a different ragged grid.
-                    The first four are sized to their content so the leftover
-                    goes to the error column, which is the only one that wraps. */}
-                <colgroup>
-                  <col style={{ width: "13rem" }} />
-                  <col style={{ width: "13rem" }} />
-                  <col style={{ width: "7rem" }} />
-                  <col style={{ width: "14rem" }} />
-                  <col />
-                </colgroup>
-                <thead>
-                  <tr>
-                    <th>Started</th>
-                    <th>Finished</th>
-                    <th>Status</th>
-                    <th>Counts</th>
-                    <th>Error</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {g.runs.map((r) => (
-                    <tr key={r.id}>
-                      <td className="mono nowrap">{fmt(r.startedAt)}</td>
-                      <td className="mono nowrap">{fmt(r.finishedAt)}</td>
-                      <td>
-                        <Status tone={tone(r.status)}>{r.status ?? "running"}</Status>
-                      </td>
-                      <td>
-                        {r.counts ? (
-                          <Json value={r.counts} />
-                        ) : (
-                          <span className="dim">&mdash;</span>
-                        )}
-                      </td>
-                      <td className="detail">
-                        {r.errorSummary ?? <span className="dim">&mdash;</span>}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </Scroller>
-          </section>
-        );
-      })}
+      {groups.length > 0 && (
+        <ul className={anyCadence ? "strip strip--cadence" : "strip"}>
+          {/* aria-hidden: these label the summary rows visually, but each row
+              is a single disclosure control whose accessible name already
+              carries job, health and age in that order. */}
+          <li className="strip__head" aria-hidden="true">
+            <span />
+            <span>Job</span>
+            <span>Health</span>
+            <span>Last run</span>
+            {anyCadence && <span>Cadence</span>}
+          </li>
+          {groups.map((g) => {
+            const latest = g.runs[0];
+            const latestAt = latest ? (latest.finishedAt ?? latest.startedAt) : null;
+            const latestIso = latestAt ? latestAt.toISOString() : null;
+            const cadence = cadenceFor(g.jobType);
+            const cols = countColumns(g.jobType, g.runs);
+            const span = cols.length || 1;
+            return (
+              <li key={g.jobType} className="strip__job">
+                <Disclosure
+                  className="strip__disc"
+                  defaultOpen={latest ? needsAttention(latest.status) : false}
+                  summary={
+                    <>
+                      <h2 className="strip__name">{g.jobType}</h2>
+                      {latest ? (
+                        <Status tone={tone(latest.status)}>
+                          {latest.status ?? "running"}
+                        </Status>
+                      ) : (
+                        <Status tone="off">no runs</Status>
+                      )}
+                      <RelativeTime iso={latestIso} initial={formatAgo(latestIso, now)} />
+                      {anyCadence && (
+                        <span className="strip__cadence mono">
+                          {cadence ?? "on demand"}
+                        </span>
+                      )}
+                    </>
+                  }
+                >
+                  {g.runs.length === 0 ? (
+                    <p className="dim strip__empty">No runs recorded for this job yet.</p>
+                  ) : (
+                    <Scroller label={`${g.jobType} runs`}>
+                      {/* No colgroup: each job now shows only the counters it
+                          actually moves, so the tables deliberately no longer
+                          share a column set and cannot be aligned to each
+                          other. Widths come from content. */}
+                      <table className="log log--runs">
+                        <thead>
+                          <tr>
+                            <th>Started</th>
+                            <th>Took</th>
+                            <th>Status</th>
+                            {cols.length > 0 ? (
+                              cols.map((k) => (
+                                <th key={k} className="num">
+                                  {humanizeKey(k)}
+                                </th>
+                              ))
+                            ) : (
+                              <th>Counts</th>
+                            )}
+                            <th>Raw</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {g.runs.map((r) => (
+                            <tr key={r.id}>
+                              <td className="mono nowrap">{fmt(r.startedAt)}</td>
+                              <td className="mono nowrap num">
+                                {formatDuration(r.startedAt, r.finishedAt) ?? (
+                                  <span className="dim">…</span>
+                                )}
+                              </td>
+                              {/* The error lives here rather than in a column of
+                                  its own: it is populated on a small minority
+                                  of runs, and a column that is an em-dash on
+                                  every row is width spent on nothing. */}
+                              <td>
+                                <Status tone={tone(r.status)}>
+                                  {r.status ?? "running"}
+                                </Status>
+                                {r.errorSummary && (
+                                  <span className="detail strip__err">
+                                    {r.errorSummary}
+                                  </span>
+                                )}
+                              </td>
+                              {!r.counts || cols.length === 0 ? (
+                                // Three absences that read differently: a run
+                                // still in flight has not reported yet, a
+                                // finished one that recorded nothing never
+                                // will, and a recorded all-zero result is a
+                                // real answer. cols is empty only when no run
+                                // in the window moved a counter, so there is
+                                // one header cell to span.
+                                <td colSpan={span} className="dim">
+                                  {!r.counts ? (
+                                    r.finishedAt ? (
+                                      <>&mdash;</>
+                                    ) : (
+                                      <>&hellip;</>
+                                    )
+                                  ) : isNoChange(r.counts) ? (
+                                    "no change"
+                                  ) : (
+                                    <>&mdash;</>
+                                  )}
+                                </td>
+                              ) : isNoChange(r.counts) ? (
+                                <td colSpan={span} className="dim">
+                                  no change
+                                </td>
+                              ) : (
+                                cols.map((k) => {
+                                  const v = r.counts?.[k];
+                                  return (
+                                    <td
+                                      key={k}
+                                      className={v ? "mono num" : "mono num dim"}
+                                    >
+                                      {v ?? "—"}
+                                    </td>
+                                  );
+                                })
+                              )}
+                              <td>
+                                {r.counts ? (
+                                  <Json value={r.counts} summary="json" />
+                                ) : (
+                                  <span className="dim">&mdash;</span>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </Scroller>
+                  )}
+                </Disclosure>
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </main>
   );
 }

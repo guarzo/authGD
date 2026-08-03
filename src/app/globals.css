@@ -517,9 +517,9 @@ h3.rule-head__label {
    what would otherwise be inherited from it, whatever the specificity. */
 .json__peek {
   display: block;
-  /* min() rather than a flat 34ch: in the fixed-layout sync table the column is
-     narrower than 34ch, and a cap wider than the cell spills the JSON over the
-     next column instead of truncating it. */
+  /* min() rather than a flat 34ch: in a fixed-layout table like the audit log
+     the column is narrower than 34ch, and a cap wider than the cell spills the
+     JSON over the next column instead of truncating it. */
   max-width: min(34ch, 100%);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1146,6 +1146,176 @@ h3.rule-head__label {
   color: var(--gold);
 }
 
+/* --- Sync status strip -------------------------------------------------- */
+/* One row per job carrying the whole answer — name, health, age, cadence —
+   with the run history collapsed underneath it. The point of the grid is that
+   the health tokens line up in a single column: a failure is then found by
+   scanning one narrow strip, not five tables. */
+
+.strip {
+  list-style: none;
+  margin: var(--s-6) 0 0;
+  padding: 0;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+}
+
+.strip__head,
+.strip__disc > summary {
+  display: grid;
+  /* 1ch is the +/- marker, which is a grid item because summary is the grid
+     container. Every track after the name is a fixed width, not `auto`: each
+     row is its own grid container, so content-sized tracks would let a long
+     cadence in one row shift that row's health token out of line with the
+     rest — which is the single column this whole strip exists to let you
+     scan. The last track is dropped entirely when nothing is scheduled. */
+  grid-template-columns: 1ch minmax(7rem, 1fr) 7.5rem 6.5rem;
+  align-items: center;
+  gap: var(--s-4);
+  padding: var(--s-3) var(--s-4);
+}
+
+/* The cadence track exists only when something on the page is scheduled;
+   otherwise the column would be 9rem of nothing at the right edge. */
+.strip--cadence .strip__head,
+.strip--cadence .strip__disc > summary {
+  grid-template-columns: 1ch minmax(7rem, 1fr) 7.5rem 6.5rem 9rem;
+}
+
+/* Header labels sit over their values: health reads from the left edge of its
+   track, the two time columns from the right, so the figures form a column. */
+.strip__head > :nth-child(3),
+.strip__disc > summary > .st {
+  justify-self: start;
+}
+
+.strip__head > :nth-child(4),
+.strip__head > :nth-child(5),
+.strip__disc > summary > time,
+.strip__cadence {
+  justify-self: end;
+}
+
+.strip__head {
+  background: var(--hull);
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: var(--t-label);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.strip__job + .strip__job,
+.strip__head + .strip__job {
+  border-top: 1px solid var(--rule);
+}
+
+.strip__disc > summary {
+  cursor: pointer;
+  list-style: none;
+  transition: background-color var(--dur-color) var(--ease);
+}
+
+.strip__disc > summary::-webkit-details-marker {
+  display: none;
+}
+
+.strip__disc > summary::before {
+  content: "+";
+  font-family: var(--font-mono), ui-monospace, monospace;
+  color: var(--ink-faint);
+}
+
+.strip__disc[open] > summary::before {
+  content: "\2212"; /* minus */
+}
+
+.strip__disc > summary:hover {
+  background: var(--hull-hi);
+}
+
+.strip__disc > summary:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: -2px;
+}
+
+/* The job name is a real h2 so the page keeps its heading outline; nothing
+   else about browser h2 sizing should survive. */
+.strip__name {
+  margin: 0;
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: var(--t-label);
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink);
+  line-height: 1.4;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.strip__cadence {
+  font-size: 0.75rem;
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+
+.strip__disc > div {
+  padding: 0 var(--s-4) var(--s-4);
+}
+
+.strip__empty {
+  margin: 0;
+  padding: var(--s-3) 0;
+}
+
+/* The error summary now shares the status cell, so it needs to sit under the
+   token rather than beside it. */
+.strip__err {
+  display: block;
+  margin-top: var(--s-2);
+  max-width: 44ch;
+}
+
+/* Counters read as a column of figures, so they align on the right; .mono
+   already supplies tabular-nums. */
+.log th.num,
+.log td.num {
+  text-align: right;
+}
+
+/* Below this width the four tracks cannot hold their labels, and a grid that
+   overflows is worse than one that wraps. The header row goes with them: it
+   labels track positions that no longer exist. */
+@media (max-width: 46rem) {
+  .strip__head {
+    display: none;
+  }
+
+  .strip__disc > summary {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--s-2) var(--s-3);
+    /* The marker leaves the flow and sits in a gutter. As a flex item it was a
+       sibling the name had to share a line with, and any basis that let it do
+       so depended on `ch` resolving identically in two different font sizes —
+       it does not, so the marker ended up alone on the first line. */
+    position: relative;
+    padding-left: calc(var(--s-4) + 1ch + var(--s-3));
+  }
+
+  .strip__disc > summary::before {
+    position: absolute;
+    left: var(--s-4);
+    top: var(--s-3);
+  }
+
+  .strip__name {
+    flex: 1 1 100%;
+  }
+}
+
 .crew {
   margin: var(--s-3) 0 0;
   padding: 0;
@@ -1334,10 +1504,24 @@ h3.rule-head__label {
   padding: var(--s-2) var(--s-3);
 }
 
-/* Sync run tables: fixed layout so the per-job sections share one grid. */
+/* Sync run tables: no fixed layout, and a width floor set by legibility rather
+   than by alignment. The old 60rem existed so the five per-job sections shared
+   one grid, which stopped being true when each job started showing only the
+   counters it actually moves. What remains is the point below which the status
+   cell crushes an error string into a one-word column — under that the Scroller
+   takes over. Column widths otherwise come from content. */
 .log--runs {
-  table-layout: fixed;
-  min-width: 60rem;
+  width: 100%;
+  min-width: 44rem;
+}
+
+/* Third column is Status by construction (Started, Took, Status, …). It is the
+   one cell that can carry prose — the folded-in error string — and without a
+   floor the auto layout is free to hand it a one-word width and turn a failure
+   into a tall ragged stack exactly where an admin is trying to read it. */
+.log--runs th:nth-child(3),
+.log--runs td:nth-child(3) {
+  min-width: 26ch;
 }
 
 /* Audit log: fixed layout so a bare id in the actor column can't wrap and
