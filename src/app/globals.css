@@ -1438,6 +1438,42 @@ h3.rule-head__label {
   max-width: var(--measure);
 }
 
+/* --- Last pushed -------------------------------------------------------- */
+
+.push {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--s-1) var(--s-4);
+  margin: 0;
+}
+
+/* Both branches are monospaced, so a min-width in ch lines the "next" column
+   up across the three rows without a second grid or a subgrid fallback. */
+.push > time,
+.push > .st {
+  min-width: 8ch;
+}
+
+.push__next {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: var(--t-label);
+  letter-spacing: 0.08em;
+  color: var(--ink-faint);
+}
+
+/* The closing beat: the lander, drawn at the size it was cut for. Nothing
+   below it, so the page ends on the artwork rather than on a control. */
+.closing {
+  margin: var(--s-8) 0 0;
+  text-align: center;
+}
+
+.closing img {
+  width: min(560px, 100%);
+  height: auto;
+}
+
 .skip {
   position: absolute;
   left: -9999px;

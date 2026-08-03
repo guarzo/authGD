@@ -3,9 +3,11 @@ import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
 import { getConfig } from "@/config";
 import { getDb } from "@/db";
-import { getAccountView } from "@/services/account-view";
+import { getAccountView, type PushStatus } from "@/services/account-view";
 import { getSessionAccount } from "@/services/session";
 import { RuleHead, Scroller, SiteHeader, Status, Tier } from "@/app/_components/ui";
+import { RelativeTime } from "@/app/_components/relative-time";
+import { formatAgo } from "@/app/_components/format-ago";
 import { Submit } from "@/app/_components/submit";
 import { setMainAction, unlinkAction } from "./actions";
 
@@ -59,6 +61,36 @@ function ContactState({ result, label }: { result: string | null; label: string 
   return <Status tone="bad">{result.replace(/_/g, " ")}</Status>;
 }
 
+/** Wall-clock UTC, the timezone every EVE player already reads schedules in. */
+function utcHhmm(d: Date): string {
+  return `${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}`;
+}
+
+/**
+ * One line of the closing telemetry: when authGD last pushed this, and when it
+ * will look again.
+ *
+ * `formatAgo(null)` means "running", which is true on the sync page and false
+ * here, so a never-pushed row gets its own state rather than being handed a
+ * null. The next-check time still renders in that case: a member whose first
+ * sync hasn't landed is exactly the one who wants to know when it will.
+ */
+function PushRow({ push, now }: { push: PushStatus; now: number }) {
+  const iso = push.lastPushedAt?.toISOString() ?? null;
+  return (
+    <dd className="push">
+      {iso === null ? (
+        <Status tone="off">not yet run</Status>
+      ) : (
+        <RelativeTime iso={iso} initial={formatAgo(iso, now)} />
+      )}
+      {push.nextCheckAt && (
+        <span className="push__next">next {utcHhmm(push.nextCheckAt)}</span>
+      )}
+    </dd>
+  );
+}
+
 export default async function AccountPage({
   searchParams,
 }: {
@@ -71,6 +103,7 @@ export default async function AccountPage({
   const view = await getAccountView(getDb(), cfg, sess.accountId);
   const { error } = await searchParams;
   const message = error ? ERRORS[error] : undefined;
+  const now = Date.now();
 
   const nav = [
     { key: "account", href: "/account", label: "Account" },
@@ -157,7 +190,7 @@ export default async function AccountPage({
                 <th scope="col">Name</th>
                 <th scope="col">Token</th>
                 <th scope="col" aria-describedby={CONTACTS_NOTE_ID}>
-                  Contacts
+                  Standings
                 </th>
                 <th scope="col">Map</th>
                 <th scope="col">
@@ -240,6 +273,46 @@ export default async function AccountPage({
           <a className="btn btn--primary" href="/auth/eve/link">
             Add character
           </a>
+        </p>
+
+        {/* Omitted entirely with no characters linked: there is nothing being
+            pushed on their behalf yet, and three "not yet run" rows would read
+            as a broken system rather than an empty one. */}
+        {view.characters.length > 0 && (
+          <>
+            <RuleHead as="h2" aside={<span className="dim mono">UTC</span>}>
+              Last pushed
+            </RuleHead>
+            <dl className="facts">
+              <dt>Standings</dt>
+              <PushRow push={view.pushes.standings} now={now} />
+
+              <dt>Map</dt>
+              <PushRow push={view.pushes.map} now={now} />
+
+              <dt>Discord</dt>
+              {view.discordLinked ? (
+                <PushRow push={view.pushes.discord} now={now} />
+              ) : (
+                <dd className="push">
+                  <Status tone="off">not linked</Status>
+                </dd>
+              )}
+            </dl>
+          </>
+        )}
+
+        {/* The closing beat. Decorative, so alt is empty; drawn at 560px from a
+            1120px asset cut for exactly this, never a scaled-down master. */}
+        <p className="closing">
+          <img
+            src="/brand/lander-moon.webp"
+            alt=""
+            width={1120}
+            height={711}
+            loading="lazy"
+            decoding="async"
+          />
         </p>
       </main>
     </>
