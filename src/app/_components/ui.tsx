@@ -10,6 +10,9 @@ export type NavItem = { href: string; label: string; key: string };
 export function SiteHeader({ items, current }: { items: NavItem[]; current?: string }) {
   return (
     <header className="shell">
+      <a className="skip" href="#main">
+        Skip to content
+      </a>
       <a className="shell__mark" href="/account">
         <img src="/brand/seal-sm.webp" alt="" width={34} height={34} />
         <span className="shell__wordmark">

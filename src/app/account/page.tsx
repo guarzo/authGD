@@ -6,6 +6,7 @@ import { getDb } from "@/db";
 import { getAccountView } from "@/services/account-view";
 import { getSessionAccount } from "@/services/session";
 import { RuleHead, Scroller, SiteHeader, Status, Tier } from "@/app/_components/ui";
+import { Submit } from "@/app/_components/submit";
 import { setMainAction, unlinkAction } from "./actions";
 
 // Reads the session cookie and hits the DB on every request; getConfig() also
@@ -65,7 +66,7 @@ export default async function AccountPage({
   return (
     <>
       <SiteHeader items={nav} current="account" />
-      <main className="page page--narrow">
+      <main id="main" tabIndex={-1} className="page page--narrow">
         <div className="page__head">
           <h1>Your account</h1>
           <p className="page__lede">
@@ -80,7 +81,15 @@ export default async function AccountPage({
           </p>
         )}
 
-        <RuleHead>Standing</RuleHead>
+        {view.characters.length > 0 &&
+          view.characters.every((c) => c.contactSyncResult === null) && (
+            <p className="notice" data-glyph="·">
+              First sync has not run yet. Standings, map access and Discord roles update
+              within a few minutes of linking a character.
+            </p>
+          )}
+
+        <RuleHead as="h2">Standing</RuleHead>
         <dl className="facts">
           <dt>Tier</dt>
           <dd data-field="tier">
@@ -103,7 +112,7 @@ export default async function AccountPage({
           </dd>
         </dl>
 
-        <RuleHead>Crew manifest</RuleHead>
+        <RuleHead as="h2">Crew manifest</RuleHead>
         <Scroller label="Your characters">
           <table className="log">
             <thead>
@@ -170,9 +179,7 @@ export default async function AccountPage({
                           action={setMainAction.bind(null, c.id)}
                           className="inline-form"
                         >
-                          <button type="submit" className="btn btn--quiet btn--micro">
-                            make main
-                          </button>
+                          <Submit className="btn btn--quiet btn--micro">make main</Submit>
                         </form>
                       )}
                       {view.characters.length > 1 && (
@@ -180,12 +187,9 @@ export default async function AccountPage({
                           action={unlinkAction.bind(null, c.id)}
                           className="inline-form"
                         >
-                          <button
-                            type="submit"
-                            className="btn btn--quiet btn--micro btn--danger"
-                          >
+                          <Submit className="btn btn--quiet btn--micro btn--danger">
                             unlink
-                          </button>
+                          </Submit>
                         </form>
                       )}
                     </div>

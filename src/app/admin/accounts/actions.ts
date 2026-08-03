@@ -67,13 +67,20 @@ export async function saveNoteAction(
   revalidatePath("/admin/accounts");
 }
 
-export async function syncAccountAction(accountId: string): Promise<void> {
+export async function syncAccountAction(
+  accountId: string,
+  // The page's current tier/status/sort/dir query string, plus queued=account,
+  // bound in by the caller: without it the redirect below would always land
+  // on the unfiltered list, dropping whatever filter the admin was scanning.
+  redirectTo: string,
+): Promise<void> {
   const { accountId: actor } = await requireAdminAction();
   await getDb().transaction(async (tx) => {
     await logAudit(tx, { actor, action: "sync.requested", target: accountId });
     await enqueueSync(tx, { kind: "account", accountId });
   });
   revalidatePath("/admin/accounts");
+  redirect(redirectTo);
 }
 
 export async function promoteAdminAction(accountId: string): Promise<void> {

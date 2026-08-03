@@ -9,6 +9,7 @@ import {
   type AdminListSort,
 } from "@/services/account-view";
 import { RuleHead, Scroller, Status, Tier } from "@/app/_components/ui";
+import { Submit } from "@/app/_components/submit";
 import {
   demoteAdminAction,
   promoteAdminAction,
@@ -46,6 +47,7 @@ export default async function AdminAccountsPage({
     sort?: string;
     dir?: string;
     error?: string;
+    queued?: string;
   }>;
 }) {
   const ctx = await getAdminContext();
@@ -60,6 +62,7 @@ export default async function AdminAccountsPage({
     : undefined;
   const status =
     params.status === "cryo" || params.status === "active" ? params.status : undefined;
+  const filtered = Boolean(tier || status);
   const rows = await getAdminAccountsList(getDb(), getConfig(), {
     tier,
     status,
@@ -74,9 +77,10 @@ export default async function AdminAccountsPage({
     }
     return `/admin/accounts?${p.toString()}`;
   };
+  const syncQueuedHref = qs({ queued: "account" });
 
   return (
-    <main className="page">
+    <main id="main" tabIndex={-1} className="page">
       <div className="page__head">
         <h1>Accounts</h1>
         <p className="page__lede">
@@ -91,7 +95,13 @@ export default async function AdminAccountsPage({
         </p>
       )}
 
-      <RuleHead>Filter</RuleHead>
+      {params.queued === "account" && (
+        <p className="notice" data-glyph="·">
+          Sync queued. The worker picks it up within a few seconds.
+        </p>
+      )}
+
+      <RuleHead as="h2">Filter</RuleHead>
       <div className="filters">
         <div className="filters__group" role="group" aria-label="Filter by tier">
           <span className="filters__label">Tier</span>
@@ -140,7 +150,9 @@ export default async function AdminAccountsPage({
         </div>
       </div>
 
-      <RuleHead>{rows.length === 1 ? "1 account" : `${rows.length} accounts`}</RuleHead>
+      <RuleHead as="h2">
+        {rows.length === 1 ? "1 account" : `${rows.length} accounts`}
+      </RuleHead>
       <Scroller label="Accounts">
         <table className="log log--dense">
           <thead>
@@ -180,12 +192,14 @@ export default async function AdminAccountsPage({
           </thead>
           <tbody>
             {rows.map((r) => (
-              <AccountRow key={r.accountId} r={r} />
+              <AccountRow key={r.accountId} r={r} syncQueuedHref={syncQueuedHref} />
             ))}
             {rows.length === 0 && (
               <tr>
                 <td className="log__empty" colSpan={10}>
-                  No accounts match this filter.
+                  {filtered
+                    ? "No accounts match this filter."
+                    : "No accounts yet. They appear here after someone signs in with EVE."}
                 </td>
               </tr>
             )}
@@ -196,7 +210,13 @@ export default async function AdminAccountsPage({
   );
 }
 
-function AccountRow({ r }: { r: AdminAccountRow }) {
+function AccountRow({
+  r,
+  syncQueuedHref,
+}: {
+  r: AdminAccountRow;
+  syncQueuedHref: string;
+}) {
   const tokens = r.tokenSummary;
   const tokenTone =
     tokens.dead > 0
@@ -238,9 +258,7 @@ function AccountRow({ r }: { r: AdminAccountRow }) {
               placeholder="notes"
               aria-label={`Note for ${r.mainName ?? "account"}`}
             />
-            <button type="submit" className="btn btn--quiet btn--micro">
-              save note
-            </button>
+            <Submit className="btn btn--quiet btn--micro">save note</Submit>
           </form>
         </details>
       </td>
@@ -255,14 +273,13 @@ function AccountRow({ r }: { r: AdminAccountRow }) {
                 action={setTierAction.bind(null, r.accountId, t)}
                 className="inline-form"
               >
-                <button
-                  type="submit"
+                <Submit
                   className="btn btn--quiet btn--micro"
                   disabled={r.tierLocked && r.tier === t}
                   aria-pressed={r.tier === t}
                 >
                   {t}
-                </button>
+                </Submit>
               </form>
             ))}
             {r.tierLocked && (
@@ -270,9 +287,7 @@ function AccountRow({ r }: { r: AdminAccountRow }) {
                 action={returnToAutoAction.bind(null, r.accountId)}
                 className="inline-form"
               >
-                <button type="submit" className="btn btn--quiet btn--micro">
-                  auto
-                </button>
+                <Submit className="btn btn--quiet btn--micro">auto</Submit>
               </form>
             )}
           </div>
@@ -297,9 +312,9 @@ function AccountRow({ r }: { r: AdminAccountRow }) {
                 r.status === "cryo" ? "active" : "cryo",
               )}
             >
-              <button type="submit" className="btn btn--quiet btn--micro">
+              <Submit className="btn btn--quiet btn--micro">
                 {r.status === "cryo" ? "wake" : "cryo"}
-              </button>
+              </Submit>
             </form>
           </div>
           {r.status === "cryo" && (
@@ -349,24 +364,18 @@ function AccountRow({ r }: { r: AdminAccountRow }) {
       <td>
         {r.isAdmin ? (
           <form action={demoteAdminAction.bind(null, r.accountId)}>
-            <button type="submit" className="btn btn--quiet btn--micro btn--danger">
-              revoke
-            </button>
+            <Submit className="btn btn--quiet btn--micro btn--danger">revoke</Submit>
           </form>
         ) : (
           <form action={promoteAdminAction.bind(null, r.accountId)}>
-            <button type="submit" className="btn btn--quiet btn--micro">
-              grant
-            </button>
+            <Submit className="btn btn--quiet btn--micro">grant</Submit>
           </form>
         )}
       </td>
 
       <td>
-        <form action={syncAccountAction.bind(null, r.accountId)}>
-          <button type="submit" className="btn btn--quiet btn--micro nowrap">
-            sync now
-          </button>
+        <form action={syncAccountAction.bind(null, r.accountId, syncQueuedHref)}>
+          <Submit className="btn btn--quiet btn--micro nowrap">sync now</Submit>
         </form>
       </td>
     </tr>
