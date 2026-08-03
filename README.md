@@ -118,8 +118,8 @@ changing the Drizzle schema.
 - [Design spec](docs/superpowers/specs/2026-08-02-authgd-design.md) — the authoritative
   description of the tier model, data model, sync jobs, auth flows, and error handling.
 - [Implementation plans](docs/superpowers/plans/) — the phased build plans.
-- [Operations guide](docs/ops.md) — deployment and the full environment-variable
-  reference.
+- [Operations guide](docs/ops.md) — deployment, the Fly.io runbook, and the full
+  environment-variable reference.
 
 ## Status
 
