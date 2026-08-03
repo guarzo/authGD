@@ -19,8 +19,16 @@ afterAll(async () => {
 describe("worker queues", () => {
   it("coalesces duplicate sends via singletonKey", async () => {
     const key = `test-${Date.now()}`; // unique per run: pg-boss state persists
-    const first = await boss.send(QUEUES.contacts, { jobType: "contacts" }, { singletonKey: key });
-    const second = await boss.send(QUEUES.contacts, { jobType: "contacts" }, { singletonKey: key });
+    const first = await boss.send(
+      QUEUES.contacts,
+      { jobType: "contacts" },
+      { singletonKey: key },
+    );
+    const second = await boss.send(
+      QUEUES.contacts,
+      { jobType: "contacts" },
+      { singletonKey: key },
+    );
     expect(first).not.toBeNull();
     expect(second).toBeNull(); // coalesced
   });
@@ -73,7 +81,9 @@ describe("worker queues", () => {
       // …and clear it with the documented manual fix so later tests (and
       // reruns against the persistent test DB) start clean.
       const { db, pool } = createDb(TEST_URL);
-      await db.execute(sql`UPDATE pgboss.queue SET dead_letter = NULL WHERE name = ${QUEUES.deadLetter}`);
+      await db.execute(
+        sql`UPDATE pgboss.queue SET dead_letter = NULL WHERE name = ${QUEUES.deadLetter}`,
+      );
       await pool.end();
     }
   });

@@ -19,7 +19,11 @@ export function SiteHeader({ items, current }: { items: NavItem[]; current?: str
       </a>
       <nav className="shell__nav" aria-label="Main">
         {items.map((i) => (
-          <a key={i.key} href={i.href} aria-current={i.key === current ? "page" : undefined}>
+          <a
+            key={i.key}
+            href={i.href}
+            aria-current={i.key === current ? "page" : undefined}
+          >
             {i.label}
           </a>
         ))}
@@ -57,7 +61,13 @@ export type Tone = "ok" | "warn" | "bad" | "off" | "neutral";
  * Machine state. The glyph and the word both carry the meaning, so colour is
  * never the only signal.
  */
-export function Status({ tone = "neutral", children }: { tone?: Tone; children: ReactNode }) {
+export function Status({
+  tone = "neutral",
+  children,
+}: {
+  tone?: Tone;
+  children: ReactNode;
+}) {
   return <span className={tone === "neutral" ? "st" : `st st--${tone}`}>{children}</span>;
 }
 

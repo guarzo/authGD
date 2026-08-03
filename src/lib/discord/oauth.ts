@@ -53,7 +53,10 @@ export async function exchangeDiscordCode(
     signal: AbortSignal.timeout(10_000),
   });
   if (!res.ok) {
-    throw new DiscordOAuthError(`discord token exchange failed (${res.status})`, res.status);
+    throw new DiscordOAuthError(
+      `discord token exchange failed (${res.status})`,
+      res.status,
+    );
   }
   const parsed = tokenResponseSchema.safeParse(await res.json().catch(() => undefined));
   if (!parsed.success) throw new DiscordOAuthError("discord token response malformed");

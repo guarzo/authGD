@@ -19,8 +19,15 @@ test("unauthenticated /account redirects to login", async ({ page }) => {
   await expect(page).toHaveURL(/\/login/);
 });
 
-test("account page shows characters, main marker, and tier", async ({ page, context }) => {
-  const acc = await seedMember(db, { name: "Pilot Prime", tier: "flygd", alts: ["Pilot Alt"] });
+test("account page shows characters, main marker, and tier", async ({
+  page,
+  context,
+}) => {
+  const acc = await seedMember(db, {
+    name: "Pilot Prime",
+    tier: "flygd",
+    alts: ["Pilot Alt"],
+  });
   await context.addCookies([await sessionCookieFor(db, acc.id)]);
   await page.goto("/account");
   await expect(page.getByRole("heading", { name: "Your account" })).toBeVisible();

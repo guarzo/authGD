@@ -26,11 +26,7 @@ export const oauthIntentEnum = pgEnum("oauth_intent", [
   "link-character",
   "link-discord",
 ]);
-export const syncRunStatusEnum = pgEnum("sync_run_status", [
-  "ok",
-  "partial",
-  "failed",
-]);
+export const syncRunStatusEnum = pgEnum("sync_run_status", ["ok", "partial", "failed"]);
 
 export const account = pgTable("account", {
   id: uuid("id").primaryKey().defaultRandom(),

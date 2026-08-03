@@ -14,7 +14,11 @@
     "db:migrate": "tsx src/db/migrate.ts",
     "smoke:wanderer": "tsx scripts/wanderer-smoke.ts",
     "typecheck": "tsc --noEmit",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
   },
   "dependencies": {
     "drizzle-orm": "^0.44.0",
@@ -28,13 +32,19 @@
     "zod": "^3.24.0"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "@next/eslint-plugin-next": "^15.5.22",
     "@playwright/test": "^1.62.1",
     "@types/node": "^22.0.0",
     "@types/pg": "^8.11.0",
     "@types/react": "^19.0.0",
     "drizzle-kit": "^0.31.0",
+    "eslint": "^9.39.5",
+    "eslint-config-prettier": "^10.1.8",
     "msw": "^2.7.0",
+    "prettier": "^3.9.6",
     "typescript": "^5.7.0",
+    "typescript-eslint": "^8.65.0",
     "vitest": "^3.0.0"
   }
 }

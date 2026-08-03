@@ -71,7 +71,8 @@ export default async function AdminSyncPage() {
 
       {groups.length === 0 && (
         <p className="notice" data-glyph="·">
-          No runs recorded yet. Either the worker has not started, or nothing has come due.
+          No runs recorded yet. Either the worker has not started, or nothing has come
+          due.
         </p>
       )}
 
@@ -86,7 +87,9 @@ export default async function AdminSyncPage() {
               aside={
                 latest && (
                   <>
-                    <Status tone={tone(latest.status)}>{latest.status ?? "running"}</Status>
+                    <Status tone={tone(latest.status)}>
+                      {latest.status ?? "running"}
+                    </Status>
                     <RelativeTime iso={latestIso} initial={formatAgo(latestIso, now)} />
                   </>
                 )

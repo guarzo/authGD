@@ -19,14 +19,18 @@ export async function setTierAction(
   tier: "flygd" | "blue" | "green",
 ): Promise<void> {
   const { accountId: actor } = await requireAdminAction();
-  const result = await getDb().transaction((tx) => setTierManual(tx, actor, accountId, tier));
+  const result = await getDb().transaction((tx) =>
+    setTierManual(tx, actor, accountId, tier),
+  );
   if (!result.ok) throw new Error(result.error);
   revalidatePath("/admin/accounts");
 }
 
 export async function returnToAutoAction(accountId: string): Promise<void> {
   const { accountId: actor } = await requireAdminAction();
-  const result = await getDb().transaction((tx) => returnTierToAuto(tx, actor, accountId));
+  const result = await getDb().transaction((tx) =>
+    returnTierToAuto(tx, actor, accountId),
+  );
   if (!result.ok) throw new Error(result.error);
   revalidatePath("/admin/accounts");
 }
@@ -43,10 +47,22 @@ export async function setStatusAction(
   revalidatePath("/admin/accounts");
 }
 
-export async function saveNoteAction(accountId: string, formData: FormData): Promise<void> {
+export async function saveNoteAction(
+  accountId: string,
+  formData: FormData,
+): Promise<void> {
   const { accountId: actor } = await requireAdminAction();
-  const note = String(formData.get("note") ?? "");
-  const result = await getDb().transaction((tx) => setStatusNote(tx, actor, accountId, note));
+  const raw = formData.get("note");
+  // FormData.get() is string | File | null. Coercing a File or a missing field
+  // to "" would silently CLEAR the note (setStatusNote maps "" to null) and
+  // write a status.note_changed audit entry for an edit nobody requested.
+  // Reject the malformed request instead; "" itself stays valid — that is how
+  // the form asks for the note to be cleared.
+  if (typeof raw !== "string") throw new Error("invalid_note");
+
+  const result = await getDb().transaction((tx) =>
+    setStatusNote(tx, actor, accountId, raw),
+  );
   if (!result.ok) throw new Error(result.error);
   revalidatePath("/admin/accounts");
 }

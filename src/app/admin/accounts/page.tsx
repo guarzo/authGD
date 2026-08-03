@@ -41,20 +41,31 @@ export default async function AdminAccountsPage({
   searchParams,
 }: {
   searchParams: Promise<{
-    tier?: string; status?: string; sort?: string; dir?: string; error?: string;
+    tier?: string;
+    status?: string;
+    sort?: string;
+    dir?: string;
+    error?: string;
   }>;
 }) {
   const ctx = await getAdminContext();
   if (!ctx) redirect("/login");
   const params = await searchParams;
-  const sort = (SORTS.some((s) => s.key === params.sort) ? params.sort : "name") as AdminListSort;
+  const sort = (
+    SORTS.some((s) => s.key === params.sort) ? params.sort : "name"
+  ) as AdminListSort;
   const dir = params.dir === "desc" ? "desc" : "asc";
   const tier = TIERS.includes(params.tier as (typeof TIERS)[number])
     ? (params.tier as (typeof TIERS)[number])
     : undefined;
   const status =
     params.status === "cryo" || params.status === "active" ? params.status : undefined;
-  const rows = await getAdminAccountsList(getDb(), getConfig(), { tier, status, sort, dir });
+  const rows = await getAdminAccountsList(getDb(), getConfig(), {
+    tier,
+    status,
+    sort,
+    dir,
+  });
 
   const qs = (over: Record<string, string | undefined>) => {
     const p = new URLSearchParams();
@@ -145,7 +156,10 @@ export default async function AdminAccountsPage({
                       already carries the state; it keeps the link's accessible
                       name stable at just the column label. */}
                   <a
-                    href={qs({ sort: s.key, dir: sort === s.key && dir === "asc" ? "desc" : "asc" })}
+                    href={qs({
+                      sort: s.key,
+                      dir: sort === s.key && dir === "asc" ? "desc" : "asc",
+                    })}
                   >
                     {s.label}
                     {sort === s.key && (
@@ -185,7 +199,13 @@ export default async function AdminAccountsPage({
 function AccountRow({ r }: { r: AdminAccountRow }) {
   const tokens = r.tokenSummary;
   const tokenTone =
-    tokens.dead > 0 ? "bad" : tokens.needsReauth > 0 ? "warn" : tokens.total === 0 ? "off" : "ok";
+    tokens.dead > 0
+      ? "bad"
+      : tokens.needsReauth > 0
+        ? "warn"
+        : tokens.total === 0
+          ? "off"
+          : "ok";
 
   return (
     <tr>
@@ -246,7 +266,10 @@ function AccountRow({ r }: { r: AdminAccountRow }) {
               </form>
             ))}
             {r.tierLocked && (
-              <form action={returnToAutoAction.bind(null, r.accountId)} className="inline-form">
+              <form
+                action={returnToAutoAction.bind(null, r.accountId)}
+                className="inline-form"
+              >
                 <button type="submit" className="btn btn--quiet btn--micro">
                   auto
                 </button>
@@ -301,7 +324,11 @@ function AccountRow({ r }: { r: AdminAccountRow }) {
       </td>
 
       <td>
-        {r.discordLinked ? <Status tone="ok">linked</Status> : <Status tone="off">none</Status>}
+        {r.discordLinked ? (
+          <Status tone="ok">linked</Status>
+        ) : (
+          <Status tone="off">none</Status>
+        )}
       </td>
 
       <td>

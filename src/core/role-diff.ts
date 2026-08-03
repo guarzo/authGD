@@ -55,7 +55,10 @@ export function validateRoleConfig(input: {
   const byId = new Map(input.guildRoles.map((r) => [r.id, r]));
   const missing = ids.filter((id) => !byId.has(id));
   if (missing.length > 0) {
-    return { ok: false, error: `managed roles missing from guild: ${missing.join(", ")}` };
+    return {
+      ok: false,
+      error: `managed roles missing from guild: ${missing.join(", ")}`,
+    };
   }
   const botRoleIds = input.everyoneRoleId
     ? [...new Set([...input.botRoleIds, input.everyoneRoleId])]

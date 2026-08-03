@@ -53,12 +53,11 @@ describe("planDispatch", () => {
   });
 
   it("maps 'all' to the four sync queues", () => {
-    expect(planDispatch({ kind: "all" }).map((p) => p.queue).sort()).toEqual([
-      "contacts",
-      "discord-roles",
-      "membership",
-      "wanderer",
-    ]);
+    expect(
+      planDispatch({ kind: "all" })
+        .map((p) => p.queue)
+        .sort(),
+    ).toEqual(["contacts", "discord-roles", "membership", "wanderer"]);
   });
 
   it("maps membership-recheck to the recheck queue with its global singleton key", () => {
@@ -94,7 +93,9 @@ describe("dispatchOutbox", () => {
     const failingSend = async () => {
       throw new Error("pg-boss unavailable");
     };
-    await expect(dispatchOutbox(ctx.db, failingSend)).rejects.toThrow("pg-boss unavailable");
+    await expect(dispatchOutbox(ctx.db, failingSend)).rejects.toThrow(
+      "pg-boss unavailable",
+    );
     const undispatched = await ctx.db
       .select()
       .from(outbox)

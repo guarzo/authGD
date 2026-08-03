@@ -69,8 +69,8 @@ export default async function AccountPage({
         <div className="page__head">
           <h1>Your account</h1>
           <p className="page__lede">
-            Membership, characters, and the state authGD is pushing out to standings,
-            the map, and Discord.
+            Membership, characters, and the state authGD is pushing out to standings, the
+            map, and Discord.
           </p>
         </div>
 
@@ -135,7 +135,8 @@ export default async function AccountPage({
                   </td>
                   <td>
                     <span className="char">
-                      {c.name} {c.isMain && <strong className="char__main">(main)</strong>}
+                      {c.name}{" "}
+                      {c.isMain && <strong className="char__main">(main)</strong>}
                     </span>
                   </td>
                   <td>
@@ -149,7 +150,10 @@ export default async function AccountPage({
                   </td>
                   <td>
                     <div className="stack">
-                      <ContactState result={c.contactSyncResult} label={cfg.standings.label} />
+                      <ContactState
+                        result={c.contactSyncResult}
+                        label={cfg.standings.label}
+                      />
                     </div>
                   </td>
                   <td>
@@ -162,15 +166,24 @@ export default async function AccountPage({
                   <td>
                     <div className="btn-row btn-row--tight">
                       {!c.isMain && (
-                        <form action={setMainAction.bind(null, c.id)} className="inline-form">
+                        <form
+                          action={setMainAction.bind(null, c.id)}
+                          className="inline-form"
+                        >
                           <button type="submit" className="btn btn--quiet btn--micro">
                             make main
                           </button>
                         </form>
                       )}
                       {view.characters.length > 1 && (
-                        <form action={unlinkAction.bind(null, c.id)} className="inline-form">
-                          <button type="submit" className="btn btn--quiet btn--micro btn--danger">
+                        <form
+                          action={unlinkAction.bind(null, c.id)}
+                          className="inline-form"
+                        >
+                          <button
+                            type="submit"
+                            className="btn btn--quiet btn--micro btn--danger"
+                          >
                             unlink
                           </button>
                         </form>

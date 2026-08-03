@@ -23,7 +23,10 @@ const validGuildRoles = [
   { id: "bot-role", name: "Bot", position: 9, permissions: MANAGE_ROLES },
 ];
 
-function fakeDiscord(members: Record<string, string[] | null>, guildRoles = validGuildRoles) {
+function fakeDiscord(
+  members: Record<string, string[] | null>,
+  guildRoles = validGuildRoles,
+) {
   const added: Array<[string, string]> = [];
   const removed: Array<[string, string]> = [];
   const client: DiscordClient = {
@@ -65,7 +68,7 @@ describe("runDiscordRolesJob", () => {
       db: ctx.db,
       cfg,
       discord: d.client,
-      fetchImpl: webhook as unknown as typeof fetch,
+      fetchImpl: webhook,
     });
     expect(result.status).toBe("failed"); // returned, not thrown → no retry loop
     expect(webhook).toHaveBeenCalledOnce();
@@ -91,7 +94,7 @@ describe("runDiscordRolesJob", () => {
       db: ctx.db,
       cfg,
       discord: client,
-      fetchImpl: webhook as unknown as typeof fetch,
+      fetchImpl: webhook,
     });
     expect(result.status).toBe("failed");
     expect(webhook).toHaveBeenCalledOnce();

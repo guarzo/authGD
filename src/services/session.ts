@@ -38,17 +38,11 @@ export async function getSessionAccount(
   const row = rows[0];
   if (!row) return null;
   if (Date.now() - row.lastSeenAt.getTime() > TOUCH_INTERVAL_MS) {
-    await dbx
-      .update(session)
-      .set({ lastSeenAt: new Date() })
-      .where(eq(session.id, key));
+    await dbx.update(session).set({ lastSeenAt: new Date() }).where(eq(session.id, key));
   }
   return { accountId: row.accountId };
 }
 
-export async function revokeAccountSessions(
-  dbx: Dbx,
-  accountId: string,
-): Promise<void> {
+export async function revokeAccountSessions(dbx: Dbx, accountId: string): Promise<void> {
   await dbx.delete(session).where(eq(session.accountId, accountId));
 }

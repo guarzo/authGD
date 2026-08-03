@@ -14,7 +14,5 @@ export async function GET(req: NextRequest) {
     sessionId: sess.sessionId,
     accountId: sess.accountId,
   });
-  return NextResponse.redirect(
-    buildDiscordAuthorizeUrl(cfg, tx.state, tx.codeChallenge),
-  );
+  return NextResponse.redirect(buildDiscordAuthorizeUrl(cfg, tx.state, tx.codeChallenge));
 }

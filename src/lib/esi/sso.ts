@@ -45,9 +45,9 @@ async function tokenRequest(
   body: URLSearchParams,
   fetchImpl: typeof fetch,
 ): Promise<{ accessToken: string; refreshToken: string }> {
-  const basic = Buffer.from(
-    `${cfg.eveSso.clientId}:${cfg.eveSso.clientSecret}`,
-  ).toString("base64");
+  const basic = Buffer.from(`${cfg.eveSso.clientId}:${cfg.eveSso.clientSecret}`).toString(
+    "base64",
+  );
   const res = await fetchImpl(TOKEN_URL, {
     method: "POST",
     headers: {
@@ -137,11 +137,6 @@ export async function verifyEveAccessToken(
     characterId: Number(match[1]),
     characterName: name,
     ownerHash: owner,
-    scopes: Array.isArray(scp)
-      ? scp.map(String)
-      : typeof scp === "string"
-        ? [scp]
-        : [],
+    scopes: Array.isArray(scp) ? scp.map(String) : typeof scp === "string" ? [scp] : [],
   };
 }
-

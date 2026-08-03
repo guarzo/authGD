@@ -14,7 +14,12 @@ export const metadata: Metadata = {
 export default async function AdminAuditPage({
   searchParams,
 }: {
-  searchParams: Promise<{ actor?: string; action?: string; target?: string; before?: string }>;
+  searchParams: Promise<{
+    actor?: string;
+    action?: string;
+    target?: string;
+    before?: string;
+  }>;
 }) {
   const ctx = await getAdminContext();
   if (!ctx) redirect("/login");

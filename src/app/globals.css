@@ -132,7 +132,8 @@ a {
   color: var(--ink);
   text-decoration-color: var(--rule-strong);
   text-underline-offset: 0.2em;
-  transition: color var(--dur-color) var(--ease),
+  transition:
+    color var(--dur-color) var(--ease),
     text-decoration-color var(--dur-color) var(--ease);
 }
 
@@ -223,7 +224,8 @@ a:hover {
   padding: var(--s-2) var(--s-3);
   border: 1px solid transparent;
   border-radius: var(--radius);
-  transition: color var(--dur-color) var(--ease),
+  transition:
+    color var(--dur-color) var(--ease),
     background-color var(--dur-color) var(--ease);
 }
 
@@ -602,8 +604,10 @@ h3.rule-head__label {
   text-transform: uppercase;
   text-decoration: none;
   cursor: pointer;
-  transition: background-color var(--dur-color) var(--ease),
-    border-color var(--dur-color) var(--ease), color var(--dur-color) var(--ease);
+  transition:
+    background-color var(--dur-color) var(--ease),
+    border-color var(--dur-color) var(--ease),
+    color var(--dur-color) var(--ease);
 }
 
 .btn:hover:not(:disabled) {

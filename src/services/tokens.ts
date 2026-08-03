@@ -59,7 +59,11 @@ export async function getFreshAccessToken(
   ch: CharacterTokenRow,
   fetchImpl: typeof fetch = fetch,
 ): Promise<AccessTokenResult> {
-  if (!ch.refreshTokenEnc || ch.tokenStatus === "invalid" || ch.tokenStatus === "missing") {
+  if (
+    !ch.refreshTokenEnc ||
+    ch.tokenStatus === "invalid" ||
+    ch.tokenStatus === "missing"
+  ) {
     return { ok: false, reason: "no_token" };
   }
   let refreshToken: string;
