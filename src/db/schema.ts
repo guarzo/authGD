@@ -28,6 +28,13 @@ export const oauthIntentEnum = pgEnum("oauth_intent", [
 ]);
 export const syncRunStatusEnum = pgEnum("sync_run_status", ["ok", "partial", "failed"]);
 
+/**
+ * The recorded outcome of one sync run. Exported here rather than re-derived at
+ * each use site: two private copies of `(typeof syncRunStatusEnum.enumValues)[number]`
+ * are two places to forget when the enum grows.
+ */
+export type SyncRunStatus = (typeof syncRunStatusEnum.enumValues)[number];
+
 export const account = pgTable("account", {
   id: uuid("id").primaryKey().defaultRandom(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

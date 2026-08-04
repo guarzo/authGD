@@ -1120,6 +1120,22 @@ h3.rule-head__label {
   justify-content: flex-end;
 }
 
+/* A control row that follows the data it operates on rather than heading the
+   page. It carries the top margin the page__head would otherwise have given
+   it. */
+.btn-row--controls {
+  margin-top: var(--s-6);
+}
+
+/* When the page itself was last asked. Belongs beside Refresh, not in the
+   strip: it is a fact about this render, not about any job. */
+.btn-row__stamp {
+  font-size: var(--t-label);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
 .btn-group {
   display: inline-flex;
   gap: 2px;
@@ -1294,6 +1310,37 @@ h3.rule-head__label {
 
 .notice--warn {
   --tone: var(--signal-warn);
+}
+
+/* The reserved slot for a notice that isn't there yet. It stays in the DOM so
+   the live region is registered before the text it announces arrives, and it
+   must therefore draw nothing at all when empty. */
+.notice-slot {
+  margin: 0;
+}
+
+/* --- Worker liveness ---------------------------------------------------- */
+/* One line about the process, above seven lines about jobs. In the label
+   register rather than prose: it is a reading off an instrument, and it sits
+   directly under a lede that is prose, so the register change is what marks
+   the switch from explanation to state. */
+
+.worker {
+  margin: 0 0 var(--s-5);
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: var(--t-label);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+
+/* Inside a notice the box supplies the spacing, and the line takes the signal
+   colour: on the notice's own ground (a 12% red tint over --void) this is
+   further from its background than the 4.81:1 --signal-bad measures against
+   the lighter --hull-hi. */
+.notice > .worker {
+  margin: 0;
+  color: var(--signal-bad);
 }
 
 /* --- Login -------------------------------------------------------------- */
@@ -1474,6 +1521,21 @@ h3.rule-head__label {
   color: var(--gold);
 }
 
+/* The Raw disclosure has a control on every run row and `.json` gives it type
+   but no box, which measured 18.6px tall — under WCAG 2.5.8's 24px and under
+   both sizes DESIGN.md commits to. It is a control in a table cell, not a link
+   in a sentence, so the inline-target exception does not cover it. Take the
+   28px `.btn--micro` floor the admin tables already argue for. No horizontal
+   padding: the peek has to keep aligning with the column it sits in.
+
+   Below `.log summary` rather than beside `.json`, because the two selectors
+   have the same specificity and this one has to win the alignment. */
+.json > summary {
+  min-height: 1.75rem;
+  padding: 0.2rem 0;
+  align-items: center;
+}
+
 /* The accounts row toggle: a plain `<button>` rather than `<summary>`, since
    the drawer it opens is a sibling `<tr>` now, not a child of a `<details>`
    nested in this cell (see row-disclosure.tsx). It rebuilds the same look —
@@ -1531,30 +1593,28 @@ h3.rule-head__label {
      row is its own grid container, so content-sized tracks would let a long
      cadence in one row shift that row's health token out of line with the
      rest — which is the single column this whole strip exists to let you
-     scan. The last track is dropped entirely when nothing is scheduled. */
-  grid-template-columns: 1ch minmax(7rem, 1fr) 7.5rem 6.5rem;
+     scan. The cadence track is unconditional: the status service seeds a row
+     for every scheduled job, so there is always something to put in it. */
+  grid-template-columns: 1ch minmax(7rem, 1fr) 7.5rem 6.5rem 9rem;
   align-items: center;
   gap: var(--s-4);
   padding: var(--s-3) var(--s-4);
 }
 
-/* The cadence track exists only when something on the page is scheduled;
-   otherwise the column would be 9rem of nothing at the right edge. */
-.strip--cadence .strip__head,
-.strip--cadence .strip__disc > summary {
-  grid-template-columns: 1ch minmax(7rem, 1fr) 7.5rem 6.5rem 9rem;
-}
-
 /* Header labels sit over their values: health reads from the left edge of its
-   track, the two time columns from the right, so the figures form a column. */
-.strip__head > :nth-child(3),
+   track, the two time columns from the right, so the figures form a column.
+   The header cells carry explicit classes rather than being addressed by
+   :nth-child, so that they align with their value cells the same way the value
+   cells do — by name. Positional selectors made inserting a column a silent
+   one-track shift of every alignment rule below the insertion point. */
+.strip__head > .strip__h-health,
 .strip__disc > summary > .st {
   justify-self: start;
 }
 
-.strip__head > :nth-child(4),
-.strip__head > :nth-child(5),
-.strip__disc > summary > time,
+.strip__head > .strip__h-last,
+.strip__head > .strip__h-cadence,
+.strip__disc > summary > .ago,
 .strip__cadence {
   justify-self: end;
 }
@@ -1630,6 +1690,12 @@ h3.rule-head__label {
 .strip__empty {
   margin: 0;
   padding: var(--s-3) 0;
+}
+
+/* The per-row re-run lever. Sits under the history rather than over it, so it
+   needs the gap the table's own bottom edge doesn't give it. */
+.strip__act {
+  margin-top: var(--s-3);
 }
 
 /* The error summary now shares the status cell, so it needs to sit under the
@@ -1787,8 +1853,12 @@ h3.rule-head__label {
    room for font-fallback drift. A min-width rather than a fixed basis on
    purpose: a state that somehow outgrows it loses the alignment instead of
    being clipped. The e2e spec asserts the two edges match, so this number
-   cannot rot silently. */
-.push > time,
+   cannot rot silently.
+
+   `.ago` and not `time`: RelativeTime drops to a `<span class="ago">` when it
+   has no instant to hang a machine value on, and a type selector would lose
+   the column the day that case reaches this row. */
+.push > .ago,
 .push > .st {
   min-width: 7rem;
 }

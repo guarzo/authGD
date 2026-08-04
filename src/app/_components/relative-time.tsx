@@ -24,8 +24,15 @@ export function RelativeTime({ iso, initial }: { iso: string | null; initial: st
     return () => clearInterval(id);
   }, [iso]);
 
+  // No instant, no `<time>`: a `<time>` with no `datetime` takes its machine
+  // value from its own text, and "never" is not one. The sync strip reaches
+  // this whenever a scheduled job has no runs at all. The shared `.ago` class
+  // is what layout hangs off, so a row that lost its `<time>` keeps its
+  // position in the strip's grid.
+  if (!iso) return <span className="ago dim mono">{text}</span>;
+
   return (
-    <time className="dim mono" dateTime={iso ?? undefined}>
+    <time className="ago dim mono" dateTime={iso}>
       {text}
     </time>
   );

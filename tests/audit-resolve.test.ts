@@ -140,6 +140,22 @@ describe("resolveAuditIdentities / queryAuditLog resolution", () => {
     expect(row.target).toBe("all");
   });
 
+  // RESERVED_TARGET_LITERALS inherits "system" from the any-field set, which
+  // reads like an accident of composition and is not one: without it a target
+  // of "system" would fall through to name resolution, find nothing, and render
+  // as a dead `unresolved` cell instead of a filter link.
+  it("classifies target 'system' as a literal too, not just as an actor", async () => {
+    await logAudit(ctx.db, {
+      actor: "system",
+      action: "sync.requested",
+      target: "system",
+    });
+    const [row] = await queryAuditLog(ctx.db);
+    expect(row.targetKind).toBe("literal");
+    expect(row.targetName).toBeNull();
+    expect(row.target).toBe("system");
+  });
+
   it("leaves an unresolvable target unchanged (discord.unlinked's stale previous snowflake)", async () => {
     await logAudit(ctx.db, {
       actor: "system",
