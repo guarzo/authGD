@@ -96,7 +96,7 @@ export async function getPushStatus(
 }
 
 export interface AccountView {
-  tier: "flygd" | "blue" | "green";
+  tier: "pending" | "flygd" | "blue" | "green";
   status: "active" | "cryo";
   isAdmin: boolean;
   mainCharacterId: number | null;
@@ -209,7 +209,7 @@ export interface AdminCharacterRow {
 export interface AdminAccountRow {
   accountId: string;
   isAdmin: boolean;
-  tier: "flygd" | "blue" | "green";
+  tier: "pending" | "flygd" | "blue" | "green";
   tierLocked: boolean;
   tierChangedAt: Date | null;
   tierChangedByName: string | null;
@@ -227,13 +227,17 @@ export interface AdminAccountRow {
 export type AdminListSort = "name" | "tier" | "status" | "tierChangedAt";
 
 export interface AdminListFilters {
-  tier?: "flygd" | "blue" | "green";
+  tier?: "pending" | "flygd" | "blue" | "green";
   status?: "active" | "cryo";
   sort?: AdminListSort;
   dir?: "asc" | "desc";
 }
 
-const TIER_RANK = { flygd: 0, blue: 1, green: 2 } as const;
+// pending ranks first: an unapproved account is the one an admin has to act
+// on, so the tier-sorted view puts the queue at the top. This is NOT how an
+// admin finds the queue — the table defaults to name sort — see the pending
+// count link on the accounts page.
+const TIER_RANK = { pending: 0, flygd: 1, blue: 2, green: 3 } as const;
 
 export async function getAdminAccountsList(
   dbx: Dbx,

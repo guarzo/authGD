@@ -7,7 +7,7 @@ import { encryptToken } from "@/lib/crypto";
 export async function seedAccount(
   db: Db,
   opts: {
-    tier?: "flygd" | "blue" | "green";
+    tier?: "pending" | "flygd" | "blue" | "green";
     tierLocked?: boolean;
     status?: "active" | "cryo";
     isAdmin?: boolean;

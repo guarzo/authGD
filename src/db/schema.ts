@@ -16,7 +16,7 @@ import {
 import { sql } from "drizzle-orm";
 import type { ContactSyncResult } from "@/core/contact-result";
 
-export const tierEnum = pgEnum("tier", ["flygd", "blue", "green"]);
+export const tierEnum = pgEnum("tier", ["flygd", "blue", "green", "pending"]);
 export const accountStatusEnum = pgEnum("account_status", ["active", "cryo"]);
 export const tokenStatusEnum = pgEnum("token_status", [
   "valid",

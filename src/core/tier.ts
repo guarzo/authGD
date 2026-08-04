@@ -1,4 +1,4 @@
-export type Tier = "flygd" | "blue" | "green";
+export type Tier = "pending" | "flygd" | "blue" | "green";
 
 /**
  * Membership rule: unlocked accounts are system-managed — the desired tier is

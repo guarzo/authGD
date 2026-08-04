@@ -23,7 +23,7 @@ export async function seedMember(
   db: ReturnType<typeof testDb>["db"],
   opts: {
     name: string;
-    tier?: "flygd" | "blue" | "green";
+    tier?: "pending" | "flygd" | "blue" | "green";
     tierLocked?: boolean;
     status?: "active" | "cryo";
     isAdmin?: boolean;

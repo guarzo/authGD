@@ -1,0 +1,1 @@
+ALTER TYPE "public"."tier" ADD VALUE 'pending';
