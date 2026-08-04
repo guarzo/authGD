@@ -1,8 +1,7 @@
 import type { Metadata } from "next";
-import { redirect } from "next/navigation";
 import { getConfig, type Config } from "@/config";
 import { getDb } from "@/db";
-import { getAdminContext } from "@/lib/admin-guard";
+import { requireAdminPage } from "@/lib/admin-guard";
 import { isContactsTarget } from "@/services/desired";
 import {
   getAdminAccountsList,
@@ -10,12 +9,16 @@ import {
   type AdminCharacterRow,
   type AdminListSort,
 } from "@/services/account-view";
-import { RuleHead, Scroller, Status, Tier } from "@/app/_components/ui";
+import { Notice, RuleHead, Scroller, Status, Tier } from "@/app/_components/ui";
 // Shared with the member's own character table rather than reimplemented here:
 // the near-miss label copy and the "not managed" wording are the same question
 // asked about the same character, and two copies drift.
-import { ContactRemedy, ContactState, hasContactRemedy } from "@/app/account/contact-state";
-import { RowDisclosure } from "@/app/_components/row-disclosure";
+import {
+  ContactRemedy,
+  ContactState,
+  hasContactRemedy,
+} from "@/app/account/contact-state";
+import { Disclosure } from "@/app/_components/disclosure";
 import { Submit } from "@/app/_components/submit";
 import { ConfirmArmScope, ConfirmSubmit } from "@/app/_components/confirm-submit";
 import { renderedAt } from "@/app/_components/utc-time";
@@ -32,7 +35,7 @@ import {
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
-  title: "Accounts",
+  title: "Members",
 };
 
 const SORTS: Array<{ key: AdminListSort; label: string }> = [
@@ -81,8 +84,7 @@ export default async function AdminAccountsPage({
     queued?: string;
   }>;
 }) {
-  const ctx = await getAdminContext();
-  if (!ctx) redirect("/login");
+  await requireAdminPage();
   const params = await searchParams;
   const sort = (
     SORTS.some((s) => s.key === params.sort) ? params.sort : "name"
@@ -114,23 +116,19 @@ export default async function AdminAccountsPage({
   return (
     <main id="main" tabIndex={-1} className="page">
       <div className="page__head">
-        <h1>Accounts</h1>
+        <h1>Members</h1>
         <p className="page__lede">
-          One row per account. Tier and cryo are set here; everything else is what the
-          sync jobs last observed.
+          One row per member. Tier and cryo are set here; everything else is what the sync
+          jobs last observed.
         </p>
       </div>
 
       {params.error && ERRORS[params.error] && (
-        <p className="notice notice--bad" data-glyph="!" role="alert">
-          {ERRORS[params.error]}
-        </p>
+        <Notice tone="bad">{ERRORS[params.error]}</Notice>
       )}
 
       {params.queued === "account" && (
-        <p className="notice" data-glyph="·">
-          Sync queued. The worker picks it up within a few seconds.
-        </p>
+        <Notice>Sync queued. The worker picks it up within a few seconds.</Notice>
       )}
 
       <RuleHead as="h2">Filter</RuleHead>
@@ -183,9 +181,9 @@ export default async function AdminAccountsPage({
       </div>
 
       <RuleHead as="h2" aside={<span className="dim mono">{renderedAt()}</span>}>
-        {rows.length === 1 ? "1 account" : `${rows.length} accounts`}
+        {rows.length === 1 ? "1 member" : `${rows.length} members`}
       </RuleHead>
-      <Scroller label="Accounts" tall>
+      <Scroller label="Members" tall>
         <table className="log log--dense log--sticky-head log--sticky-col">
           {/* The scanning anchor gets the surplus. Every other column holds a
               single badge, date, or button pair, so `width: 1%` collapses it to
@@ -243,7 +241,7 @@ export default async function AdminAccountsPage({
                 <tr>
                   <td className="log__empty" colSpan={COLUMN_COUNT}>
                     {filtered
-                      ? "No accounts match this filter."
+                      ? "No members match this filter."
                       : "No accounts yet. They appear here after someone signs in with EVE."}
                   </td>
                 </tr>
@@ -339,13 +337,18 @@ function AccountRow({
   // with no identity at all, in the column whose whole job is saying whose tier
   // is about to change.
   const identity = mainName ?? firstName ?? idLabel;
-  // RowDisclosure puts its label on the summary as `aria-label`, which
+  // Disclosure (as="row") puts its label on the toggle as `aria-label`, which
   // overrides the visible text, so this mirrors that text verbatim — an
   // accessible name has to stay a superset of its visible label (WCAG 2.5.3).
-  const pinLabel = firstName ? `${identity} ·no main` : identity;
+  // That includes the "(+N)" alt count in the summary below: without it a
+  // voice-control user reading "Sam Alt no main plus one" off the screen
+  // matches nothing, since the spoken name stops before the count.
+  const altCount = r.characters.length > 1 ? ` (+${r.characters.length - 1})` : "";
+  const pinLabel = `${firstName ? `${identity} ·no main` : identity}${altCount}`;
 
   return (
-    <RowDisclosure
+    <Disclosure
+      as="row"
       label={pinLabel}
       colSpan={COLUMN_COUNT}
       summary={
@@ -421,7 +424,14 @@ function AccountRow({
 
           {/* One grade, one group. Revoke and sync now are both row actions; before,
               revoke was a bordered danger button and sync now was bare text, which
-              read as one button with a broken half rather than two peers. */}
+              read as one button with a broken half rather than two peers.
+
+              All four names here name their row, the way the drawer's controls
+              already do: on a table with one row per account the visible word
+              names the verb and nothing else, and "grant" read out of its row
+              does not say whose admin is about to change. Each name leads with
+              the visible label, so speech input still reaches the control by
+              what is written on it (WCAG 2.5.3). */}
           <td>
             <div className="btn-row btn-row--tight">
               {r.isAdmin ? (
@@ -435,13 +445,21 @@ function AccountRow({
                 </form>
               ) : (
                 <form action={promoteAdminAction.bind(null, r.accountId)}>
-                  <Submit className="btn btn--micro" pendingLabel="granting…">
+                  <Submit
+                    className="btn btn--micro"
+                    pendingLabel="granting…"
+                    aria-label={`grant admin to ${identity}`}
+                  >
                     grant
                   </Submit>
                 </form>
               )}
               <form action={syncAccountAction.bind(null, r.accountId, syncQueuedHref)}>
-                <Submit className="btn btn--micro nowrap" pendingLabel="queueing…">
+                <Submit
+                  className="btn btn--micro nowrap"
+                  pendingLabel="queueing…"
+                  aria-label={`sync now for ${identity}`}
+                >
                   sync now
                 </Submit>
               </form>
@@ -547,7 +565,11 @@ function AccountRow({
               placeholder="notes"
               aria-label={`Note for ${identity}`}
             />
-            <Submit className="btn btn--micro" pendingLabel="saving…">
+            <Submit
+              className="btn btn--micro"
+              pendingLabel="saving…"
+              aria-label={`save note for ${identity}`}
+            >
               save note
             </Submit>
           </form>
@@ -630,6 +652,6 @@ function AccountRow({
           </table>
         </Scroller>
       </section>
-    </RowDisclosure>
+    </Disclosure>
   );
 }

@@ -11,9 +11,30 @@ test("login page renders the wired error param", async ({ page }) => {
   await page.goto("/login?error=oauth_denied");
   // Next.js dev also renders its own role="alert" route-announcer, so scope
   // to the alert that actually carries our copy.
-  await expect(page.getByRole("alert").filter({ hasText: "cancelled" })).toContainText(
-    "cancelled",
-  );
+  await expect(
+    page.getByRole("alert").filter({ hasText: "No access was granted" }),
+  ).toContainText("No access was granted");
+});
+
+// Every code the callbacks can redirect to /login with. A code with no entry in
+// the ERRORS map renders nothing at all, which is the one failure mode this
+// page cannot show the member, so each is checked by name.
+for (const [code, phrase] of [
+  ["oauth_expired", "expired before you finished"],
+  ["oauth_failed", "EVE couldn't be reached"],
+  ["session_expired", "Your session ended"],
+] as const) {
+  test(`login page explains ?error=${code}`, async ({ page }) => {
+    await page.goto(`/login?error=${code}`);
+    await expect(page.getByRole("alert").filter({ hasText: phrase })).toBeVisible();
+  });
+}
+
+// An unknown code must degrade to the plain page, never an empty alert box.
+test("login page ignores an unrecognised error code", async ({ page }) => {
+  await page.goto("/login?error=not_a_real_code");
+  await expect(page.locator(".notice--bad")).toHaveCount(0);
+  await expect(page.getByRole("link", { name: /log in with eve online/i })).toBeVisible();
 });
 
 test("unauthenticated /account redirects to login", async ({ page }) => {

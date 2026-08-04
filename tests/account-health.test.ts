@@ -62,13 +62,16 @@ describe("computeAccountHealth", () => {
     );
   });
 
-  it.each(["missing_label", "label_mismatch", "token_invalid", "missing_scope", "needs_reauth"])(
-    "counts %s as needing attention — the member can clear it themselves",
-    (result) => {
-      const chars = [char({ contactsTarget: true, contactSyncResult: result })];
-      expect(computeAccountHealth(chars)).toEqual(health(1, 0, false, "degraded"));
-    },
-  );
+  it.each([
+    "missing_label",
+    "label_mismatch",
+    "token_invalid",
+    "missing_scope",
+    "needs_reauth",
+  ])("counts %s as needing attention — the member can clear it themselves", (result) => {
+    const chars = [char({ contactsTarget: true, contactSyncResult: result })];
+    expect(computeAccountHealth(chars)).toEqual(health(1, 0, false, "degraded"));
+  });
 
   // ContactRemedy tells the member "nothing to do here" for these. A headline
   // demanding attention over copy saying the opposite teaches members that the
@@ -83,7 +86,11 @@ describe("computeAccountHealth", () => {
 
   it("does not double-count a stalled sync on a character that already needs attention", () => {
     const chars = [
-      char({ tokenStatus: "invalid", contactsTarget: true, contactSyncResult: "sync_failed" }),
+      char({
+        tokenStatus: "invalid",
+        contactsTarget: true,
+        contactSyncResult: "sync_failed",
+      }),
     ];
     expect(computeAccountHealth(chars)).toEqual(health(1, 0, false, "degraded"));
   });

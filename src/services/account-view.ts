@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray, isNotNull, or } from "drizzle-orm";
 import type { Config } from "@/config";
-import { JOB_CRON, nextOccurrence } from "@/core/schedules";
+import { nextRunAt } from "@/core/schedules";
 import type { Dbx } from "@/db";
 import {
   account,
@@ -58,22 +58,6 @@ export interface PushStatus {
  * freshness it did not deliver.
  */
 
-/**
- * `JOB_CRON` is keyed by string, so a rename there is not a type error here.
- * A missing or unsupported cadence degrades to "we don't know when" — the null
- * `PushStatus.nextCheckAt` already renders as an absent "next" — rather than
- * throwing and taking the whole account page down over a decoration.
- */
-function nextCheck(jobType: string, now: Date): Date | null {
-  const cron = JOB_CRON[jobType];
-  if (!cron) return null;
-  try {
-    return nextOccurrence(cron, now);
-  } catch {
-    return null;
-  }
-}
-
 export async function getPushStatus(
   dbx: Dbx,
   now: Date = new Date(),
@@ -99,7 +83,11 @@ export async function getPushStatus(
         .limit(1);
       const status: PushStatus = {
         lastPushedAt: row?.finishedAt ?? null,
-        nextCheckAt: nextCheck(jobType, now),
+        // `nextRunAt` owns the degradation: an unknown job type or an
+        // unsupported cadence becomes "we don't know when" — the null
+        // `nextCheckAt` already renders as an absent "next" — rather than
+        // throwing and taking the whole account page down over a decoration.
+        nextCheckAt: nextRunAt(jobType, now),
       };
       return [kind, status] as const;
     }),
