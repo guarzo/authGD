@@ -6,6 +6,7 @@ import {
   createOperation,
   finalizeOperation,
   recordPayment,
+  revertPayment,
   setParticipantExcluded,
   setRoster,
   type RosterEntry,
@@ -193,5 +194,50 @@ describe("getPayoutOperationDetail — exact money on the read side", () => {
     expect(iskToCents(detail!.corpAmount)).not.toBe(
       (totalCents * naiveBasisPoints) / 10000n,
     );
+  });
+});
+
+describe("derived payment state comes from paidAmount, not from a paid row", () => {
+  it("reports a paid-then-reverted participant as unpaid in both the list and the detail", async () => {
+    const { operator, operationId, byName } = await seedOperation({
+      totalValue: "300.00",
+      names: ["A", "B"],
+    });
+    await ctx.db.transaction((tx) => finalizeOperation(tx, operator.id, operationId));
+    await ctx.db.transaction((tx) => recordPayment(tx, operator.id, byName.get("A")!.id));
+    await ctx.db.transaction((tx) => recordPayment(tx, operator.id, byName.get("B")!.id));
+    await ctx.db.transaction((tx) => revertPayment(tx, operator.id, byName.get("A")!.id));
+
+    // A still has a `paid` row in payout_payment; an existence check would
+    // count it. paidAmount is null, and that is what decides.
+    const [summary] = (await listPayoutOperations(ctx.db)).filter(
+      (o) => o.id === operationId,
+    );
+    expect(summary.paidCount).toBe(1);
+
+    const detail = await getPayoutOperationDetail(ctx.db, operationId);
+    const states = new Map(
+      detail!.participants.map((p) => [p.displayName, p.paymentState]),
+    );
+    expect(states.get("A")).toBe("unpaid");
+    expect(states.get("B")).toBe("paid");
+  });
+
+  it("returns each participant's history oldest-first", async () => {
+    const { operator, operationId, byName } = await seedOperation({
+      totalValue: "300.00",
+      names: ["A"],
+    });
+    await ctx.db.transaction((tx) => finalizeOperation(tx, operator.id, operationId));
+    await ctx.db.transaction(async (tx) => {
+      await recordPayment(tx, operator.id, byName.get("A")!.id);
+      await revertPayment(tx, operator.id, byName.get("A")!.id);
+      await recordPayment(tx, operator.id, byName.get("A")!.id);
+    });
+
+    const detail = await getPayoutOperationDetail(ctx.db, operationId);
+    const a = detail!.participants.find((p) => p.displayName === "A")!;
+    expect(a.payments.map((p) => p.kind)).toEqual(["paid", "reverted", "paid"]);
+    expect(a.paymentState).toBe("paid");
   });
 });

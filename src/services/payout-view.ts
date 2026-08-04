@@ -30,7 +30,7 @@ export async function listPayoutOperations(dbx: Dbx): Promise<PayoutOperationSum
   // every operation's `raw_paste` — an entire pasted inventory window, per
   // pool — across the wire to compute one sum. Nothing below reads a column
   // that is not named here.
-  const [ops, pools, participants, payments] = await Promise.all([
+  const [ops, pools, participants] = await Promise.all([
     dbx
       .select({
         id: payoutOperation.id,
@@ -48,11 +48,9 @@ export async function listPayoutOperations(dbx: Dbx): Promise<PayoutOperationSum
         id: payoutParticipant.id,
         operationId: payoutParticipant.operationId,
         excluded: payoutParticipant.excluded,
+        paidAmount: payoutParticipant.paidAmount,
       })
       .from(payoutParticipant),
-    dbx
-      .select({ participantId: payoutPayment.participantId, kind: payoutPayment.kind })
-      .from(payoutPayment),
   ]);
 
   // bigint cents, not Number: numeric(20,2) holds values far past 2^53, and the
@@ -70,13 +68,10 @@ export async function listPayoutOperations(dbx: Dbx): Promise<PayoutOperationSum
     list.push(p);
     participantsByOp.set(p.operationId, list);
   }
-  // PR 1 only ever writes payout_payment.kind = 'paid' (reverted is schema-only
-  // until PR 2), so "has a paid row" and "last event is paid" agree. The fold
-  // in the design doc only diverges from a plain existence check once
-  // 'reverted' rows exist.
-  const paidParticipantIds = new Set(
-    payments.filter((p) => p.kind === "paid").map((p) => p.participantId),
-  );
+  // `paidAmount` is the source of truth for derived payment state, not a fold
+  // of payout_payment: it is one column, written under the same operation row
+  // lock that decides on it, so it cannot disagree with itself. The event log
+  // stays append-only history — displayed, never folded into a decision.
 
   return ops.map((op) => {
     // Excluded rows are not owed anything and are not part of "how many have
@@ -89,7 +84,7 @@ export async function listPayoutOperations(dbx: Dbx): Promise<PayoutOperationSum
       status: op.status,
       totalValue: centsToIsk(totalByOp.get(op.id) ?? 0n),
       participantCount: owed.length,
-      paidCount: owed.filter((p) => paidParticipantIds.has(p.id)).length,
+      paidCount: owed.filter((p) => p.paidAmount !== null).length,
     };
   });
 }
@@ -102,6 +97,9 @@ export type ParticipantPaymentState = "excluded" | "unpaid" | "paid";
 
 export type PayoutParticipantView = typeof payoutParticipant.$inferSelect & {
   paymentState: ParticipantPaymentState;
+  /** Append-only history for this participant, `(at asc, id asc)`. Rendered,
+   *  never folded — `paymentState` comes from `paidAmount`. */
+  payments: Array<typeof payoutPayment.$inferSelect>;
 };
 
 export type PayoutOperationDetail = {
@@ -156,11 +154,14 @@ export async function getPayoutOperationDetail(
         .select()
         .from(payoutPayment)
         .where(inArray(payoutPayment.participantId, participantIds))
-        .orderBy(asc(payoutPayment.at))
+        .orderBy(asc(payoutPayment.at), asc(payoutPayment.id))
     : [];
-  const paidParticipantIds = new Set(
-    payments.filter((p) => p.kind === "paid").map((p) => p.participantId),
-  );
+  const paymentsByParticipant = new Map<string, typeof payments>();
+  for (const payment of payments) {
+    const list = paymentsByParticipant.get(payment.participantId) ?? [];
+    list.push(payment);
+    paymentsByParticipant.set(payment.participantId, list);
+  }
 
   const totalCents = pools.reduce((sum, p) => sum + iskToCents(p.totalValue), 0n);
   // The corp's cut is not stored — storing it would be a second copy of a number
@@ -176,11 +177,8 @@ export async function getPayoutOperationDetail(
     pools: pools.map((p) => ({ ...p, items: itemsByPool.get(p.id) ?? [] })),
     participants: participants.map((p) => ({
       ...p,
-      paymentState: p.excluded
-        ? "excluded"
-        : paidParticipantIds.has(p.id)
-          ? "paid"
-          : "unpaid",
+      paymentState: p.excluded ? "excluded" : p.paidAmount !== null ? "paid" : "unpaid",
+      payments: paymentsByParticipant.get(p.id) ?? [],
     })),
     totalValue: centsToIsk(totalCents),
     corpAmount,

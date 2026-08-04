@@ -1,7 +1,13 @@
 import { asc, eq, inArray, sql } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { loadConfig, type Config } from "@/config";
-import { lootPool, payoutOperation, payoutParticipant, payoutPayment } from "@/db/schema";
+import {
+  auditLog,
+  lootPool,
+  payoutOperation,
+  payoutParticipant,
+  payoutPayment,
+} from "@/db/schema";
 import { unlinkCharacter } from "@/services/accounts";
 import { addAppraisedPool, deletePool } from "@/services/payout-loot";
 import {
@@ -16,6 +22,8 @@ import {
   removeParticipant,
   requirePayoutOperator,
   resolveRosterNames,
+  revertPayment,
+  setCorpSharePct,
   setParticipantExcluded,
   setParticipantShares,
   setRoster,
@@ -571,10 +579,11 @@ describe("the service layer is the authorization boundary", () => {
    * re-checks inside its own transaction. If any of these stop throwing, the
    * guard was dropped from that function.
    *
-   * All eleven mutating exports are exercised here: createOperation, setRoster,
+   * All thirteen mutating exports are exercised here: createOperation, setRoster,
    * finalizeOperation, unlockOperation, setParticipantShares,
    * setParticipantExcluded, removeParticipant, recordPayment, addAppraisedPool,
-   * deletePool. addFlatPool is covered separately in payout-loot.test.ts.
+   * deletePool, setCorpSharePct, revertPayment. addFlatPool is covered separately
+   * in payout-loot.test.ts.
    */
   it("rejects every mutation when the actor is not an active flygd account", async () => {
     const operator = await seedOperator();
@@ -645,6 +654,12 @@ describe("the service layer is the authorization boundary", () => {
       ).rejects.toThrow(PayoutForbiddenError);
       await expect(
         ctx.db.transaction((tx) => recordPayment(tx, actor, participant.id)),
+      ).rejects.toThrow(PayoutForbiddenError);
+      await expect(
+        ctx.db.transaction((tx) => revertPayment(tx, actor, participant.id)),
+      ).rejects.toThrow(PayoutForbiddenError);
+      await expect(
+        ctx.db.transaction((tx) => setCorpSharePct(tx, actor, operationId, "10")),
       ).rejects.toThrow(PayoutForbiddenError);
       await expect(
         ctx.db.transaction((tx) =>
@@ -793,5 +808,156 @@ describe("payment history is ordered as it happened", () => {
       .where(inArray(payoutPayment.participantId, ids))
       .orderBy(asc(payoutPayment.at), asc(payoutPayment.id));
     expect(history.map((h) => h.participantId)).toEqual([first.id, second.id]);
+  });
+});
+
+describe("revertPayment", () => {
+  it("clears paidAmount, appends a reverted row, and lets the participant be paid again", async () => {
+    const { operationId, participantId, operator } =
+      await seedFightWithOnePaidParticipant();
+
+    await ctx.db.transaction((tx) => revertPayment(tx, operator.id, participantId));
+
+    const [reverted] = await ctx.db
+      .select()
+      .from(payoutParticipant)
+      .where(eq(payoutParticipant.id, participantId));
+    expect(reverted.paidAmount).toBeNull();
+    expect(reverted.amount).toBe("1000.00"); // what is owed did not change
+
+    const history = await ctx.db
+      .select()
+      .from(payoutPayment)
+      .where(eq(payoutPayment.participantId, participantId))
+      .orderBy(asc(payoutPayment.at), asc(payoutPayment.id));
+    expect(history.map((h) => h.kind)).toEqual(["paid", "reverted"]);
+    expect(history[1].amount).toBe("1000.00");
+    expect(history[1].actor).toBe(operator.id);
+
+    const audits = await ctx.db
+      .select()
+      .from(auditLog)
+      .where(eq(auditLog.action, "payout.payment_reverted"));
+    expect(audits).toHaveLength(1);
+    expect(audits[0].target).toBe(operationId); // the operation uuid, not the participant
+
+    // The whole point of clearing paidAmount: recordPayment's idempotence
+    // check is `paidAmount !== null`, so a reverted participant is payable.
+    await ctx.db.transaction((tx) => recordPayment(tx, operator.id, participantId));
+    const [repaid] = await ctx.db
+      .select()
+      .from(payoutParticipant)
+      .where(eq(payoutParticipant.id, participantId));
+    expect(repaid.paidAmount).toBe("1000.00");
+  });
+
+  it("refuses a participant who is not currently paid", async () => {
+    const { participantId, operator } = await seedFightWithOneUnpaidParticipant();
+    await expect(
+      ctx.db.transaction((tx) => revertPayment(tx, operator.id, participantId)),
+    ).rejects.toThrow(PayoutLockedError);
+  });
+
+  it("refuses a draft operation", async () => {
+    const { operationId, participantId, operator } =
+      await seedFightWithOnePaidParticipant();
+    // Reach draft without going through unlockOperation, which refuses once a
+    // payment exists — this is testing revertPayment's own status guard.
+    await ctx.db
+      .update(payoutOperation)
+      .set({ status: "draft" })
+      .where(eq(payoutOperation.id, operationId));
+    await expect(
+      ctx.db.transaction((tx) => revertPayment(tx, operator.id, participantId)),
+    ).rejects.toThrow(PayoutLockedError);
+  });
+
+  /**
+   * The decision this test exists to pin: reverting corrects the record of who
+   * was paid, it does NOT reopen the numbers. `hasPayments` counts every
+   * payout_payment row regardless of kind, so the operation stays frozen
+   * forever. A later change that makes hasPayments a fold has to argue with
+   * this test rather than quietly enabling a paid operation's loot total to be
+   * rewritten afterwards.
+   */
+  it("does not un-freeze the operation", async () => {
+    const { operationId, participantId, operator } =
+      await seedFightWithOnePaidParticipant();
+    await ctx.db.transaction((tx) => revertPayment(tx, operator.id, participantId));
+
+    // unlockOperation's refusal IS the hasPayments check, so this is the
+    // assertion that proves the freeze survived rather than merely observing
+    // that the operation is still `finalized`.
+    await expect(
+      ctx.db.transaction((tx) => unlockOperation(tx, operator.id, operationId)),
+    ).rejects.toThrow(PayoutLockedError);
+    await expect(
+      ctx.db.transaction((tx) =>
+        setParticipantShares(tx, operator.id, participantId, "2"),
+      ),
+    ).rejects.toThrow(PayoutLockedError);
+  });
+
+  it("leaves paidAmount null when recalculate runs after a revert", async () => {
+    const { operationId, participantId, poolId, operator } =
+      await seedFightWithOnePaidParticipant();
+    await ctx.db.transaction((tx) => revertPayment(tx, operator.id, participantId));
+
+    await ctx.db
+      .update(lootPool)
+      .set({ totalValue: "1200.00" })
+      .where(eq(lootPool.id, poolId));
+    await ctx.db.transaction((tx) => recalculate(tx, operationId));
+
+    const [after] = await ctx.db
+      .select()
+      .from(payoutParticipant)
+      .where(eq(payoutParticipant.id, participantId));
+    expect(after.amount).toBe("1200.00"); // moved
+    expect(after.paidAmount).toBeNull(); // recalculate writes ONLY amount
+  });
+
+  /**
+   * Inside one transaction Postgres freezes `now()`, so under `defaultNow()`
+   * all three rows would carry one identical instant. That is what makes this
+   * a pin on the explicit stamp rather than a restatement of it.
+   */
+  it("pay -> revert -> pay in one transaction yields three distinct instants", async () => {
+    const { participantId, operator } = await seedFightWithOneUnpaidParticipant();
+
+    await ctx.db.transaction(async (tx) => {
+      await recordPayment(tx, operator.id, participantId);
+      await revertPayment(tx, operator.id, participantId);
+      await recordPayment(tx, operator.id, participantId);
+    });
+
+    // Compared in SQL, deliberately. `at` is microsecond resolution and a JS
+    // Date truncates to milliseconds, so three inserts microseconds apart read
+    // as equal through `.getTime()` and the assertion would pass or fail by
+    // luck. Under `defaultNow()` the distinct count here is 1, not 3.
+    //
+    // `instants === 3` is DETERMINISTIC, and it is the clamp in nextPaymentAt
+    // that makes it so — not clock_timestamp() happening to tick between three
+    // statements. A bare clock_timestamp() would make this assertion true on
+    // most hosts and flaky on a coarse clock; the clamp forces each row at
+    // least a microsecond past this participant's previous one, so it cannot
+    // be otherwise.
+    const res = await ctx.db.execute(sql`
+      select count(*)::int as rows, count(distinct at)::int as instants
+      from payout_payment
+      where participant_id = ${participantId}`);
+    const counts = res.rows[0] as { rows: number; instants: number };
+    expect(counts.rows).toBe(3);
+    expect(counts.instants).toBe(3);
+
+    // Companion, not the discriminator: with three distinct instants the
+    // ordering below is forced, but under defaultNow() the tie would fall back
+    // to random-uuid order and land on the right sequence half the time.
+    const history = await ctx.db
+      .select()
+      .from(payoutPayment)
+      .where(eq(payoutPayment.participantId, participantId))
+      .orderBy(asc(payoutPayment.at), asc(payoutPayment.id));
+    expect(history.map((h) => h.kind)).toEqual(["paid", "reverted", "paid"]);
   });
 });

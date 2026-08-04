@@ -541,3 +541,70 @@ export async function recordPayment(
     details: { participantId, amount: participant.amount },
   });
 }
+
+/**
+ * The one place `paidAmount` is not immutable. Phase 1 called it immutable to
+ * stop *recalculation* rewriting what was paid, and that still holds absolutely
+ * — `recalculate` writes only `amount`. A revert is the deliberate, audited
+ * case where "what was paid" genuinely changed, because it turned out nobody
+ * was paid.
+ *
+ * Deliberately does NOT call `assertEditable`. A revert is not an edit, and the
+ * gate would make it impossible: the first payment freezes the operation
+ * permanently, so every participant who could ever need reverting is behind it.
+ * Reverting does not lift that freeze either — `hasPayments` counts rows of any
+ * kind, so loot, shares and corpSharePct stay frozen forever once money moved.
+ * "I marked the wrong person paid" is fully served by reverting one participant
+ * and paying another, both of which work while frozen.
+ */
+export async function revertPayment(
+  dbtx: DbTx,
+  actor: string,
+  participantId: string,
+): Promise<void> {
+  await requirePayoutOperator(dbtx, actor);
+  // Read ONLY the operation id before the lock, for the same reason
+  // recordPayment does: `status` and `paidAmount` are what this decides on, and
+  // two concurrent reverts that both read paidAmount first would both see it
+  // set and both append a `reverted` row for one payment.
+  const [ref] = await dbtx
+    .select({ operationId: payoutParticipant.operationId })
+    .from(payoutParticipant)
+    .where(eq(payoutParticipant.id, participantId));
+  if (!ref) throw new PayoutNotFoundError("participant not found");
+  const op = await lockOperation(dbtx, ref.operationId);
+  if (op.status !== "finalized") {
+    throw new PayoutLockedError("operation must be finalized to revert a payment");
+  }
+  const [participant] = await dbtx
+    .select()
+    .from(payoutParticipant)
+    .where(eq(payoutParticipant.id, participantId));
+  if (!participant) throw new PayoutNotFoundError("participant not found");
+  if (participant.paidAmount === null) {
+    throw new PayoutLockedError("participant is not marked paid; nothing to revert");
+  }
+  const amount = participant.paidAmount;
+  await dbtx
+    .update(payoutParticipant)
+    .set({ paidAmount: null })
+    .where(eq(payoutParticipant.id, participantId));
+  await dbtx.insert(payoutPayment).values({
+    participantId,
+    kind: "reverted",
+    amount,
+    // The SAME stamp recordPayment uses, and it has to be: a revert that keeps
+    // the column's defaultNow() lands on transaction-start time and can sort
+    // before the payment it reverts, and a bare clock_timestamp() can tie with
+    // it at clock resolution. nextPaymentAt clamps past this participant's
+    // latest row, so pay -> revert -> pay is strictly increasing.
+    at: nextPaymentAt(participantId),
+    actor,
+  });
+  await logAudit(dbtx, {
+    actor,
+    action: "payout.payment_reverted",
+    target: op.id,
+    details: { participantId, amount },
+  });
+}
