@@ -1602,14 +1602,18 @@ h3.rule-head__label {
 }
 
 /* Header labels sit over their values: health reads from the left edge of its
-   track, the two time columns from the right, so the figures form a column. */
-.strip__head > :nth-child(3),
+   track, the two time columns from the right, so the figures form a column.
+   The header cells carry explicit classes rather than being addressed by
+   :nth-child, so that they align with their value cells the same way the value
+   cells do — by name. Positional selectors made inserting a column a silent
+   one-track shift of every alignment rule below the insertion point. */
+.strip__head > .strip__h-health,
 .strip__disc > summary > .st {
   justify-self: start;
 }
 
-.strip__head > :nth-child(4),
-.strip__head > :nth-child(5),
+.strip__head > .strip__h-last,
+.strip__head > .strip__h-cadence,
 .strip__disc > summary > .ago,
 .strip__cadence {
   justify-self: end;

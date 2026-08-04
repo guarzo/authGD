@@ -35,10 +35,9 @@ const DIGITS_RE = /^\d+$/;
  *
  * The job types are DERIVED from the schedules table rather than listed here,
  * because that table is what the re-run action validates against
- * (`Object.hasOwn(JOB_CRON, jobType)`): a new scheduled job becomes a
- * filterable target the same day it becomes re-runnable, with no second list
- * to forget. A hand-written list is exactly how the `"all"`-only assumption
- * this replaces went stale.
+ * (`isJobType`): a new scheduled job becomes a filterable target the same day
+ * it becomes re-runnable, with no second list to forget. A hand-written list is
+ * exactly how the `"all"`-only assumption this replaces went stale.
  *
  * These bypass name resolution in both directions — they must render as
  * `literal` (a clickable filter link on the audit page) and short-circuit as a
@@ -56,6 +55,15 @@ const DIGITS_RE = /^\d+$/;
  */
 const RESERVED_LITERALS_ANY_FIELD: ReadonlySet<string> = new Set(["system", "all"]);
 
+/**
+ * Every literal reserved *in the target column* — the union, not the
+ * job-types-only remainder its name might suggest. `system` is in here by
+ * inheritance and that is load-bearing, not incidental: `logAudit` writes
+ * `actor: "system"` from every job, and nothing stops a future call site
+ * writing `target: "system"` for a system-owned object. Were it absent, such a
+ * row would fall through to name resolution, resolve to nothing, and render as
+ * `unresolved` — a dead cell instead of a filter link.
+ */
 const RESERVED_TARGET_LITERALS: ReadonlySet<string> = new Set([
   ...RESERVED_LITERALS_ANY_FIELD,
   ...Object.keys(JOB_CRON),

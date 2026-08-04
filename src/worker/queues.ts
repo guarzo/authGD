@@ -1,5 +1,5 @@
 import type PgBoss from "pg-boss";
-import { JOB_CRON } from "@/core/schedules";
+import { cronFor } from "@/core/schedules";
 
 export const QUEUES = {
   membership: "membership",
@@ -96,7 +96,7 @@ export async function createQueues(boss: PgBoss): Promise<void> {
  */
 export async function scheduleJobs(boss: PgBoss): Promise<void> {
   for (const name of JOB_QUEUES) {
-    const cron = JOB_CRON[name];
+    const cron = cronFor(name);
     // A queue with no cron entry would silently never tick. Fail startup
     // instead: the boot watchdog turns that into an alert an admin can see.
     if (!cron) throw new Error(`queue ${name} has no schedule in JOB_CRON`);

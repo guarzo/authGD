@@ -1,7 +1,5 @@
-import type { syncRunStatusEnum } from "@/db/schema";
-import { nextOccurrence } from "@/core/schedules";
-
-type SyncRunStatus = (typeof syncRunStatusEnum.enumValues)[number];
+import type { SyncRunStatus } from "@/db/schema";
+import { nextFire, SCAN_WINDOW_MS } from "@/core/schedules";
 
 /**
  * Per-row health for the admin sync table.
@@ -9,9 +7,11 @@ type SyncRunStatus = (typeof syncRunStatusEnum.enumValues)[number];
  * The page previously coloured each row from the last recorded run status
  * alone, which has no model of time: a dead worker renders fully green (its
  * last run succeeded), and a run wedged for four days looks exactly like one
- * that started four seconds ago. This module adds the two time-based verdicts
- * that fixes — "overdue" (it succeeded, but should have run again by now) and
- * "stuck" (it started and never came back).
+ * that started four seconds ago. This module adds the time-based verdicts that
+ * fixes — "overdue" (it succeeded, but should have run again by now), "stuck"
+ * (it started and never came back) and "missing" (it has never run at all, on a
+ * worker that has demonstrably been running other things for longer than this
+ * job's own cadence).
  *
  * Deliberately NOT reusing `STALE_AFTER_MS` from `@/core/health`: that is one
  * global 90-minute threshold tuned to the 30-minute membership job, and the
@@ -42,47 +42,90 @@ export const STUCK_MULTIPLIER = 3;
  */
 export const STUCK_FLOOR_MS = 15 * 60 * 1000;
 
+/**
+ * The vocabulary is deliberately disjoint from `SyncRunStatus` ("ok" /
+ * "partial" / "failed"). A superset would make `HEALTH_TONE[run.status]`
+ * typecheck silently and reproduce the status-only colouring this module exists
+ * to replace, from a call site twenty lines away in the same file.
+ */
 export type RowHealth =
-  "ok" | "partial" | "failed" | "running" | "stuck" | "overdue" | "never";
+  /** Succeeded, and not yet due again. */
+  | "fresh"
+  /** Last run reported `partial` — some of its work failed. */
+  | "degraded"
+  /** Last run reported `failed`. */
+  | "failing"
+  /** Started, no outcome recorded, still inside the stuck threshold. */
+  | "inflight"
+  /** In flight far longer than its own cadence allows. */
+  | "stuck"
+  /** Succeeded, but the schedule says it should have run again by now. */
+  | "overdue"
+  /** Never run, on a worker that has been recording other jobs for longer. */
+  | "missing"
+  /** Never run, and nothing yet says it should have. */
+  | "never"
+  /** Scheduled, but its cron cannot be read — we cannot judge it either way. */
+  | "unknown";
 
 /**
- * The gap between two consecutive fires of `cron`, or null when that cannot be
- * determined (unsupported grammar, or an unsatisfiable expression such as
- * Feb 30). Derived by asking `nextOccurrence` twice rather than by evaluating
- * the expression here, so `nextOccurrence` stays the only thing in the
- * codebase that decides when a cron fires. (`formatCadence` and this page's
- * `cadenceNamesTime` do read cron *fields*, but neither computes a fire time.)
+ * The gap between two consecutive fires of `cron`.
  *
- * `nextOccurrence` THROWS on grammar outside its supported subset. This module
- * renders a page, so it must degrade rather than propagate: an unreadable cron
- * simply means "cadence unknown".
+ * `atLeast` is the honest answer for a cadence longer than the schedule
+ * module's scan window: we do not know the interval, but we know a lower bound
+ * for it, and using that bound beats falling back to the 15-minute floor and
+ * calling a monthly job stuck after a quarter of an hour.
  */
-function cadenceIntervalMs(cron: string, from: Date): number | null {
+type Cadence =
+  | { kind: "exact"; ms: number }
+  | { kind: "atLeast"; ms: number }
+  | { kind: "unreadable" };
+
+/**
+ * Derived by asking `nextFire` twice rather than by evaluating the expression
+ * here, so `nextFire` stays the only thing in the codebase that decides when a
+ * cron fires. (`formatCadence` and the sync page's `cadenceNamesTime` do read
+ * cron *fields*, but neither computes a fire time.)
+ *
+ * `nextFire` THROWS on grammar outside its supported subset. This module
+ * renders a page, so it must degrade rather than propagate.
+ */
+function readCadence(cron: string, from: Date): Cadence {
+  let first;
   try {
-    const first = nextOccurrence(cron, from);
-    if (!first) return null;
-    const second = nextOccurrence(cron, first);
-    if (!second) return null;
-    return second.getTime() - first.getTime();
+    first = nextFire(cron, from);
   } catch {
-    return null;
+    return { kind: "unreadable" };
   }
+  if (first.kind === "unsatisfiable") return { kind: "unreadable" };
+  if (first.kind === "beyond-window") return { kind: "atLeast", ms: SCAN_WINDOW_MS };
+  const second = nextFire(cron, first.at);
+  if (second.kind !== "at") return { kind: "atLeast", ms: SCAN_WINDOW_MS };
+  return { kind: "exact", ms: second.at.getTime() - first.at.getTime() };
 }
 
-/**
- * True when `cron` says the job should have fired more than OVERDUE_GRACE_MS
- * ago, measured from its own last run. An unreadable or unsatisfiable cron is
- * never overdue — a paraphrase we cannot compute must not become an alarm.
- */
-function isOverdue(cron: string, lastRunAt: Date, now: Date): boolean {
-  let due: Date | null;
+type Due =
+  /** The job was due at this instant. */
+  | { kind: "at"; at: Date }
+  /** Satisfiable, but not due inside the scan window — nowhere near late. */
+  | { kind: "far" }
+  | { kind: "unreadable" };
+
+function dueAfter(cron: string, from: Date): Due {
+  let fire;
   try {
-    due = nextOccurrence(cron, lastRunAt);
+    fire = nextFire(cron, from);
   } catch {
-    return false;
+    return { kind: "unreadable" };
   }
-  if (!due) return false;
-  return now.getTime() - due.getTime() > OVERDUE_GRACE_MS;
+  if (fire.kind === "unsatisfiable") return { kind: "unreadable" };
+  if (fire.kind === "beyond-window") return { kind: "far" };
+  return { kind: "at", at: fire.at };
+}
+
+/** True when `due` has passed by more than the grace window. */
+function isLate(due: Due, now: Date): boolean {
+  return due.kind === "at" && now.getTime() - due.at.getTime() > OVERDUE_GRACE_MS;
 }
 
 export function rowHealth(input: {
@@ -91,36 +134,65 @@ export function rowHealth(input: {
   finishedAt: Date | null;
   cron: string | null; // null = unscheduled / on-demand
   now: Date;
+  /**
+   * The earliest instant we have evidence the worker was recording runs, or
+   * null when we have no such evidence (no runs at all, or a worker the page
+   * already believes is dead).
+   *
+   * This is the only anchor a never-run job has. Without it "never" is a
+   * terminal state that no elapsed time escalates: a job whose handler was
+   * never registered reads identically on day 1 and day 90, in the calmest
+   * colour, in the row that never opens itself. Passing null when the worker
+   * is not fresh is deliberate — a dead worker puts every row in this state at
+   * once, and that is a page-level condition the worker line already reports.
+   */
+  seenSince?: Date | null;
 }): RowHealth {
-  const { status, startedAt, finishedAt, cron, now } = input;
+  const { status, startedAt, finishedAt, cron, now, seenSince = null } = input;
 
   // Nothing has ever run. getSyncStatus seeds a row for every scheduled job
   // precisely so this state is visible instead of being an absent row.
-  if (startedAt === null) return "never";
+  if (startedAt === null) {
+    if (cron === null || seenSince === null) return "never";
+    const due = dueAfter(cron, seenSince);
+    if (due.kind === "unreadable") return "unknown";
+    // The worker has been recording for longer than one full cadence of this
+    // job, and this job still has nothing. That is not "not yet".
+    return isLate(due, now) ? "missing" : "never";
+  }
 
   // In flight: started, no outcome recorded. finishSyncRun writes a status
   // alongside finishedAt (services/sync-run), so a null status with a
   // finishedAt cannot happen today — and if it ever does it is a half-written
   // finish, not a success. Keying purely on `status === null` is the fail-safe
-  // reading: that shape reports running/stuck (amber, worth a look) instead of
-  // falling through to a green "ok" for a run whose outcome nobody knows.
+  // reading: that shape reports inflight/stuck (amber, worth a look) instead of
+  // falling through to a green "fresh" for a run whose outcome nobody knows.
   if (status === null) {
-    const cadence = cron === null ? null : cadenceIntervalMs(cron, startedAt);
+    const cadence = cron === null ? null : readCadence(cron, startedAt);
+    // An unreadable cron falls back to the floor, which errs toward flagging
+    // stuck early. That is the safe direction here: the row is visible either
+    // way, and a wedged run is the more urgent of the two facts.
     const threshold =
-      cadence === null
+      cadence === null || cadence.kind === "unreadable"
         ? STUCK_FLOOR_MS
-        : Math.max(STUCK_FLOOR_MS, cadence * STUCK_MULTIPLIER);
-    return now.getTime() - startedAt.getTime() > threshold ? "stuck" : "running";
+        : Math.max(STUCK_FLOOR_MS, cadence.ms * STUCK_MULTIPLIER);
+    return now.getTime() - startedAt.getTime() > threshold ? "stuck" : "inflight";
   }
 
-  if (status === "failed") return "failed";
-  if (status === "partial") return "partial";
+  if (status === "failed") return "failing";
+  if (status === "partial") return "degraded";
 
   // Succeeded — but a job that succeeded and then never ran again is the
   // failure mode a status-only page cannot see.
-  if (status === "ok" && cron !== null) {
-    if (isOverdue(cron, finishedAt ?? startedAt, now)) return "overdue";
+  if (cron !== null) {
+    const due = dueAfter(cron, finishedAt ?? startedAt);
+    // An unreadable cadence used to degrade to a green "ok" here while the
+    // stuck path above degraded toward amber. Same input, opposite direction,
+    // and the green one was indistinguishable from a job that ran four minutes
+    // ago — exactly the conflation this module exists to end.
+    if (due.kind === "unreadable") return "unknown";
+    if (isLate(due, now)) return "overdue";
   }
 
-  return "ok";
+  return "fresh";
 }

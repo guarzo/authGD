@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getDb } from "@/db";
-import { JOB_CRON } from "@/core/schedules";
+import { isJobType } from "@/core/schedules";
 import { requireAdminAction } from "@/lib/admin-guard";
 import { logAudit } from "@/services/audit";
 import { enqueueSync } from "@/services/outbox";
@@ -38,7 +38,7 @@ export async function syncJobAction(formData: FormData): Promise<void> {
   // side checks again; this one keeps the bad row out of the outbox and the
   // audit log entirely. Unreachable from the rendered page, so it throws
   // rather than earning notice copy.
-  if (typeof jobType !== "string" || !Object.hasOwn(JOB_CRON, jobType)) {
+  if (!isJobType(jobType)) {
     throw new Error("invalid_job_type");
   }
 

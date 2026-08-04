@@ -1,25 +1,33 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { getDb } from "@/db";
-import type { syncRunStatusEnum } from "@/db/schema";
 import { getAdminContext } from "@/lib/admin-guard";
 import { getSyncStatus } from "@/services/sync-status";
 import { newestSyncRun } from "@/services/health";
 import { evaluateFreshness } from "@/core/health";
-import { rowHealth, type RowHealth } from "@/core/run-health";
-import { cadenceFor, JOB_CRON, nextOccurrence } from "@/core/schedules";
+import { rowHealth } from "@/core/run-health";
+import { cadenceFor, cronFor } from "@/core/schedules";
 import {
   countColumns,
   formatDuration,
   humanizeKey,
   isNoChange,
 } from "@/core/run-summary";
-import { Json, Scroller, Status, type Tone } from "@/app/_components/ui";
+import { Json, Scroller, Status } from "@/app/_components/ui";
 import { Disclosure } from "@/app/_components/disclosure";
 import { Submit } from "@/app/_components/submit";
 import { elapsedShort, formatAgo } from "@/app/_components/format-ago";
 import { RelativeTime } from "@/app/_components/relative-time";
 import { recheckInvalidAction, syncAllAction, syncJobAction } from "./actions";
+import {
+  evidenceSince,
+  healthLabel,
+  HEALTH_TONE,
+  needsAttention,
+  nextRunFor,
+  queuedNotice,
+  tone,
+} from "./view";
 
 export const dynamic = "force-dynamic";
 
@@ -37,141 +45,6 @@ function utcHhmm(d: Date): string {
 
 function utcHhmmss(d: Date): string {
   return d.toISOString().slice(11, 19);
-}
-
-/**
- * True when the cron's hour field is a fixed number rather than `*` or a
- * step. When it is, the cadence string `formatCadence` prints already names a
- * wall-clock time (`daily 03:00 UTC`, `Sun 04:00 UTC`) and a next-run line
- * under it would either repeat that number or, worse, read as "soon" for a job
- * that only fires once a week. Read off the raw expression rather than the
- * humanized cadence string, so a rewording of `formatCadence` can't silently
- * break this.
- *
- * Deliberately looser than `formatCadence`'s own test, which also requires a
- * numeric minute: for a stepped minute on a fixed hour that function falls
- * back to printing the raw expression while this one still suppresses the
- * next-run line. Nothing in JOB_CRON has that shape, and suppressing a
- * decoration is the safe side to err on.
- */
-function cadenceNamesTime(cron: string): boolean {
-  const hour = cron.trim().split(/\s+/)[1];
-  return /^\d+$/.test(hour ?? "");
-}
-
-/**
- * Mirrors `nextCheck` in account-view.ts: a missing or unsupported cadence
- * degrades to "we don't know when" rather than throwing and taking the whole
- * sync page down over a decoration.
- */
-function nextRunFor(jobType: string, now: Date): Date | null {
-  const cron = JOB_CRON[jobType];
-  if (!cron || cadenceNamesTime(cron)) return null;
-  try {
-    return nextOccurrence(cron, now);
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Typed against the enum rather than string, so adding a status to the schema
- * is a compile error here instead of a silently grey badge. "partial" means
- * some of the job's work failed, which is a warning an admin must see, not an
- * inactive state. A null status is a run still in flight: not a failure and
- * not inactive either, so it stays neutral rather than borrowing the warn
- * colour PRODUCT.md reserves for things the admin can and should fix.
- *
- * This is the *recorded* status of one historical run, which is all the runs
- * table below needs. The summary row asks a different question — is this job
- * healthy *now* — and that one has to consult the clock: see `rowHealth`.
- */
-type SyncRunStatus = (typeof syncRunStatusEnum.enumValues)[number];
-
-function tone(status: SyncRunStatus | null): Tone {
-  switch (status) {
-    case "ok":
-      return "ok";
-    case "partial":
-      return "warn";
-    case "failed":
-      return "bad";
-    case null:
-      return "neutral"; // still running
-  }
-}
-
-/**
- * Colour for a row's live health. Keyed off `RowHealth` and not off the run
- * status, so "the last run said ok six hours ago on a 30-minute cadence" can
- * be amber while "the last run said ok four minutes ago" is green.
- *
- * `overdue` and `stuck` are warn, not bad: nothing has reported a failure, the
- * schedule has simply not been kept. `never` is off rather than bad for the
- * same reason PRODUCT.md keeps green tier and a dead token out of alarm
- * colour — a job that has not run yet is a state, not a fault.
- */
-const HEALTH_TONE: Record<RowHealth, Tone> = {
-  ok: "ok",
-  partial: "warn",
-  failed: "bad",
-  running: "neutral",
-  stuck: "warn",
-  overdue: "warn",
-  never: "off",
-};
-
-/**
- * The word beside the glyph, so colour is never the only carrier. Deliberately
- * only the word: `running` and `stuck` differ from each other only in how long
- * they have held the same shape, and the obvious answer — baking the elapsed
- * time into the label — puts a second, frozen clock on a row that already
- * carries a ticking one. The `.ago` beside this reads the *start* time of an
- * in-flight run (`latestAt` falls back to `startedAt` when `finishedAt` is
- * null) and re-renders every 30s, so it is already the duration this label
- * would have restated. One number per row, and it stays true on a tab left
- * open for an hour.
- */
-function healthLabel(health: RowHealth): string {
-  return health === "never" ? "no runs" : health;
-}
-
-/**
- * Which rows open on their own. "Not OK" is read as "actionable", which rules
- * out two states that look unhealthy but are not one job's problem:
- *
- * `running` resolves on its own within seconds, and expanding on it would mean
- * the page flaps open and shut through every sweep instead of pointing at the
- * one job that needs an admin. `stuck` is the same shape held far too long, so
- * that one does open.
- *
- * `overdue` is excluded for a bigger reason: when the worker dies, every row
- * goes overdue at once, so opening on it would expand all seven drawers
- * together and destroy exactly the "this one job needs you" signal auto-open
- * exists to create. A dead worker is a page-level condition and it is the
- * worker line above the strip that says so.
- */
-function needsAttention(health: RowHealth): boolean {
-  return health === "partial" || health === "failed" || health === "stuck";
-}
-
-/**
- * The one-line outcome of the press that got us here. Per-job re-runs redirect
- * with the job type itself, and that value is checked against the schedules
- * table before it is echoed: a hand-typed `?queued=` is untrusted input, and
- * this is copy, not a lookup that fails safe on its own.
- */
-function queuedNotice(queued: string | undefined): string {
-  if (queued === "all") {
-    return "Membership, contacts, map and Discord queued for every account. The worker picks them up within a few seconds; use Refresh to see the runs land.";
-  }
-  if (queued === "recheck") {
-    return "Affiliation recheck queued. The worker picks it up within a few seconds; use Refresh to see the run land.";
-  }
-  if (queued && Object.hasOwn(JOB_CRON, queued)) {
-    return `${queued} queued. The worker picks it up within a few seconds; use Refresh to see the run land.`;
-  }
-  return "";
 }
 
 export default async function AdminSyncPage({
@@ -198,6 +71,9 @@ export default async function AdminSyncPage({
         ? `worker · last run ${workerAge} ago`
         : `worker · no run in ${workerAge}`;
   const notice = queuedNotice(queued);
+  // How far back this page can see the worker doing anything at all. Only this
+  // lets a never-run row escalate: see `evidenceSince` and `rowHealth`.
+  const seenSince = evidenceSince(worker.fresh, groups);
 
   return (
     <main id="main" tabIndex={-1} className="page">
@@ -246,9 +122,9 @@ export default async function AdminSyncPage({
         <li className="strip__head" aria-hidden="true">
           <span />
           <span>Job</span>
-          <span>Health</span>
-          <span>Last run</span>
-          <span>Cadence</span>
+          <span className="strip__h-health">Health</span>
+          <span className="strip__h-last">Last run</span>
+          <span className="strip__h-cadence">Cadence</span>
         </li>
         {groups.map((g) => {
           const latest = g.runs[0];
@@ -263,8 +139,9 @@ export default async function AdminSyncPage({
             status: latest?.status ?? null,
             startedAt,
             finishedAt,
-            cron: JOB_CRON[g.jobType] ?? null,
+            cron: cronFor(g.jobType),
             now: renderedAt,
+            seenSince,
           });
           // Null for a job type found in `sync_run` but absent from JOB_CRON —
           // a retired or hand-queued job. Every *seeded* row has a cadence by
@@ -428,7 +305,7 @@ export default async function AdminSyncPage({
                     row of that table. Only for jobs the worker actually has
                     a queue for — the action rejects anything else, and a
                     control that can only fail is worse than none. */}
-                {JOB_CRON[g.jobType] && (
+                {cronFor(g.jobType) !== null && (
                   <form action={syncJobAction} className="btn-row strip__act">
                     <input type="hidden" name="jobType" value={g.jobType} />
                     <Submit className="btn btn--micro" pendingLabel="Queueing…">

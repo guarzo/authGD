@@ -9,6 +9,8 @@ import {
 } from "@/core/run-health";
 
 const MIN = 60 * 1000;
+const HOUR = 60 * MIN;
+const DAY = 24 * HOUR;
 /**
  * A Sunday 04:00 UTC. Chosen so the weekly `membership-recheck` (`0 4 * * 0`)
  * has a fire minute inside the fixture rather than a week away; the other
@@ -16,6 +18,13 @@ const MIN = 60 * 1000;
  * below measures from its own run time, not from a fire minute.
  */
 const SUNDAY_0400 = new Date("2026-03-01T04:00:00.000Z");
+
+/**
+ * Annual, and 10 months out from the fixture: past the schedule module's 8-day
+ * scan window, but perfectly satisfiable. The two are different answers and
+ * this module has to tell them apart.
+ */
+const ANNUAL = "0 0 1 1 *";
 
 function at(base: Date, ms: number): Date {
   return new Date(base.getTime() + ms);
@@ -34,29 +43,51 @@ function row(over: Partial<Parameters<typeof rowHealth>[0]> = {}): RowHealth {
 }
 
 describe("rowHealth", () => {
-  it("reports a job that has never run", () => {
-    expect(row({ startedAt: null, finishedAt: null, status: null })).toBe("never");
-    // "never" wins even for an unscheduled job with no cron to reason about
-    expect(row({ startedAt: null, finishedAt: null, status: null, cron: null })).toBe(
-      "never",
-    );
-  });
-
   it("passes failed and partial straight through", () => {
-    expect(row({ status: "failed" })).toBe("failed");
-    expect(row({ status: "partial" })).toBe("partial");
+    expect(row({ status: "failed" })).toBe("failing");
+    expect(row({ status: "partial" })).toBe("degraded");
     // ...even long after the fact, where an overdue check would also fire:
     // the recorded failure is the more useful thing to say.
-    expect(row({ status: "failed", now: at(SUNDAY_0400, 30 * 24 * 60 * MIN) })).toBe(
-      "failed",
-    );
-    expect(row({ status: "partial", now: at(SUNDAY_0400, 30 * 24 * 60 * MIN) })).toBe(
-      "partial",
-    );
+    expect(row({ status: "failed", now: at(SUNDAY_0400, 30 * DAY) })).toBe("failing");
+    expect(row({ status: "partial", now: at(SUNDAY_0400, 30 * DAY) })).toBe("degraded");
   });
 
-  it("reports a fresh success as ok", () => {
-    expect(row()).toBe("ok");
+  it("reports a recent success as fresh", () => {
+    expect(row()).toBe("fresh");
+  });
+
+  describe("never run", () => {
+    const unrun = (over: Partial<Parameters<typeof rowHealth>[0]> = {}) =>
+      row({ startedAt: null, finishedAt: null, status: null, ...over });
+
+    it("says never when nothing yet says it should have run", () => {
+      // No evidence the worker has been up at all.
+      expect(unrun()).toBe("never");
+      // Evidence, but not yet a full cadence of it.
+      expect(unrun({ seenSince: at(SUNDAY_0400, -MIN) })).toBe("never");
+      // Unscheduled: there is no cadence to be late against, ever.
+      expect(unrun({ cron: null, seenSince: at(SUNDAY_0400, -365 * DAY) })).toBe("never");
+    });
+
+    it("escalates to missing once the worker has outlived the cadence", () => {
+      // The worker has been recording runs for an hour; a 30-minute job with
+      // nothing at all is not "not yet".
+      expect(unrun({ seenSince: at(SUNDAY_0400, -HOUR) })).toBe("missing");
+    });
+
+    it("stays never for a cadence that has not come round yet", () => {
+      // Evidence stretches back a month, but the job only fires annually and
+      // its next fire is still ahead of us: nothing is late.
+      expect(unrun({ cron: ANNUAL, seenSince: at(SUNDAY_0400, -30 * DAY) })).toBe(
+        "never",
+      );
+    });
+
+    it("says unknown when the cron cannot be read", () => {
+      const seenSince = at(SUNDAY_0400, -365 * DAY);
+      expect(unrun({ cron: "not a cron", seenSince })).toBe("unknown");
+      expect(unrun({ cron: "0 0 30 2 *", seenSince })).toBe("unknown"); // Feb 30
+    });
   });
 
   describe("in flight", () => {
@@ -68,56 +99,42 @@ describe("rowHealth", () => {
         now: at(SUNDAY_0400, elapsedMs),
       });
 
-    it("is running below the threshold and stuck above it", () => {
+    it("is inflight below the threshold and stuck above it", () => {
       // membership: 30m cadence * 3 = 90m, above the 15m floor
-      expect(flight(89 * MIN, JOB_CRON.membership)).toBe("running");
-      expect(flight(90 * MIN, JOB_CRON.membership)).toBe("running"); // strictly greater
+      expect(flight(89 * MIN, JOB_CRON.membership)).toBe("inflight");
+      expect(flight(90 * MIN, JOB_CRON.membership)).toBe("inflight"); // strictly greater
       expect(flight(91 * MIN, JOB_CRON.membership)).toBe("stuck");
     });
 
     it("floors the threshold for an unscheduled job", () => {
-      expect(flight(STUCK_FLOOR_MS, null)).toBe("running");
+      expect(flight(STUCK_FLOOR_MS, null)).toBe("inflight");
       expect(flight(STUCK_FLOOR_MS + MIN, null)).toBe("stuck");
     });
 
     it("floors the threshold for a cron faster than the floor", () => {
       // */1 gives a 1m cadence; 3m would be absurdly trigger-happy, so the
       // 15m floor must win.
-      expect(flight(14 * MIN, "*/1 * * * *")).toBe("running");
+      expect(flight(14 * MIN, "*/1 * * * *")).toBe("inflight");
       expect(flight(16 * MIN, "*/1 * * * *")).toBe("stuck");
     });
 
     it("falls back to the floor when the cron cannot be read", () => {
-      expect(flight(14 * MIN, "not a cron")).toBe("running"); // throws internally
+      expect(flight(14 * MIN, "not a cron")).toBe("inflight"); // throws internally
       expect(flight(16 * MIN, "not a cron")).toBe("stuck");
       expect(flight(16 * MIN, "0 0 30 2 *")).toBe("stuck"); // unsatisfiable
     });
 
     it("uses each job's own cadence, so the weekly job gets a week of slack", () => {
-      const week = 7 * 24 * 60 * MIN;
-      expect(flight(week, JOB_CRON["membership-recheck"])).toBe("running");
-      expect(flight(3 * week + MIN, JOB_CRON["membership-recheck"])).toBe("stuck");
+      expect(flight(7 * DAY, JOB_CRON["membership-recheck"])).toBe("inflight");
+      expect(flight(21 * DAY + MIN, JOB_CRON["membership-recheck"])).toBe("stuck");
     });
 
-    // finishSyncRun writes status and finishedAt together, so a null status
-    // with a finishedAt is unreachable today. It is still the one shape in the
-    // state space with no outcome recorded, and it must not render green:
-    // rowHealth keys in-flight purely on `status === null` for that reason.
-    it("treats a null status with a finishedAt as in flight, not ok", () => {
-      expect(
-        row({
-          status: null,
-          finishedAt: at(SUNDAY_0400, MIN),
-          now: at(SUNDAY_0400, 2 * MIN),
-        }),
-      ).toBe("running");
-      expect(
-        row({
-          status: null,
-          finishedAt: at(SUNDAY_0400, MIN),
-          now: at(SUNDAY_0400, 91 * MIN),
-        }),
-      ).toBe("stuck");
+    it("gives a cadence beyond the scan window the window as a lower bound", () => {
+      // An annual job is not stuck after 15 minutes just because its interval
+      // cannot be measured inside an 8-day scan: 8 days * 3 is the floor that
+      // applies instead.
+      expect(flight(20 * DAY, ANNUAL)).toBe("inflight");
+      expect(flight(25 * DAY, ANNUAL)).toBe("stuck");
     });
   });
 
@@ -126,8 +143,8 @@ describe("rowHealth", () => {
     const due = at(SUNDAY_0400, 30 * MIN);
 
     it("respects the grace window on both sides", () => {
-      expect(row({ now: at(due, OVERDUE_GRACE_MS - 1) })).toBe("ok");
-      expect(row({ now: at(due, OVERDUE_GRACE_MS) })).toBe("ok"); // strictly greater
+      expect(row({ now: at(due, OVERDUE_GRACE_MS - 1) })).toBe("fresh");
+      expect(row({ now: at(due, OVERDUE_GRACE_MS) })).toBe("fresh"); // strictly greater
       expect(row({ now: at(due, OVERDUE_GRACE_MS + 1) })).toBe("overdue");
     });
 
@@ -135,7 +152,7 @@ describe("rowHealth", () => {
       // A run that started at 04:00 and finished at 04:20 is next due 04:30,
       // not 04:10 — measuring from the start would call it overdue early.
       const late = { startedAt: SUNDAY_0400, finishedAt: at(SUNDAY_0400, 20 * MIN) };
-      expect(row({ ...late, now: at(SUNDAY_0400, 34 * MIN) })).toBe("ok");
+      expect(row({ ...late, now: at(SUNDAY_0400, 34 * MIN) })).toBe("fresh");
       // With no finishedAt recorded, startedAt is the only anchor available.
       expect(
         row({ startedAt: SUNDAY_0400, finishedAt: null, now: at(due, 6 * MIN) }),
@@ -143,23 +160,32 @@ describe("rowHealth", () => {
     });
 
     it("never fires for an unscheduled job, however old the run", () => {
-      expect(row({ cron: null, now: at(SUNDAY_0400, 365 * 24 * 60 * MIN) })).toBe("ok");
+      expect(row({ cron: null, now: at(SUNDAY_0400, 365 * DAY) })).toBe("fresh");
     });
 
-    it("degrades to ok when the cron throws or is unsatisfiable", () => {
-      const ancient = at(SUNDAY_0400, 365 * 24 * 60 * MIN);
-      expect(row({ cron: "not a cron", now: ancient })).toBe("ok");
-      expect(row({ cron: "*/5/2 * * * *", now: ancient })).toBe("ok");
-      expect(row({ cron: "0 0 30 2 *", now: ancient })).toBe("ok"); // Feb 30
+    it("says unknown, not fresh, when the cron throws or is unsatisfiable", () => {
+      // The stuck path degrades toward amber on the same input. A green "ok"
+      // here would be indistinguishable from a job that ran four minutes ago —
+      // the exact conflation this module exists to end.
+      const ancient = at(SUNDAY_0400, 365 * DAY);
+      expect(row({ cron: "not a cron", now: ancient })).toBe("unknown");
+      expect(row({ cron: "*/5/2 * * * *", now: ancient })).toBe("unknown");
+      expect(row({ cron: "0 0 30 2 *", now: ancient })).toBe("unknown"); // Feb 30
+    });
+
+    it("stays fresh for a satisfiable cadence beyond the scan window", () => {
+      // Not due for ten months. "We could not see the fire inside 8 days" is
+      // not the same claim as "we could not read the expression".
+      expect(row({ cron: ANNUAL, now: at(SUNDAY_0400, 7 * DAY) })).toBe("fresh");
     });
 
     it.each(Object.entries(JOB_CRON))(
       "computes an overdue verdict for %s (%s)",
       (_jobType, cron) => {
         // Just after the last run, every job is on time...
-        expect(row({ cron, now: at(SUNDAY_0400, MIN) })).toBe("ok");
+        expect(row({ cron, now: at(SUNDAY_0400, MIN) })).toBe("fresh");
         // ...and eight days later, every job is late, including the weekly one.
-        expect(row({ cron, now: at(SUNDAY_0400, 8 * 24 * 60 * MIN) })).toBe("overdue");
+        expect(row({ cron, now: at(SUNDAY_0400, 8 * DAY) })).toBe("overdue");
       },
     );
 
@@ -167,11 +193,8 @@ describe("rowHealth", () => {
       // The 90-minute global STALE_AFTER_MS would flag this; a per-cadence
       // threshold must not.
       expect(
-        row({
-          cron: JOB_CRON["membership-recheck"],
-          now: at(SUNDAY_0400, 3 * 24 * 60 * MIN),
-        }),
-      ).toBe("ok");
+        row({ cron: JOB_CRON["membership-recheck"], now: at(SUNDAY_0400, 3 * DAY) }),
+      ).toBe("fresh");
     });
   });
 
