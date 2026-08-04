@@ -12,7 +12,8 @@ export async function resetDb(db: ReturnType<typeof testDb>["db"]) {
   await db.execute(sql`
     TRUNCATE account, "character", discord_link, session, bootstrap_admin_grant,
       outbox, oauth_transaction, contact_sync_state, sync_run,
-      wanderer_acl_observation, audit_log RESTART IDENTITY CASCADE
+      wanderer_acl_observation, audit_log, payout_operation, loot_pool,
+      loot_item, payout_participant, payout_payment RESTART IDENTITY CASCADE
   `);
 }
 
