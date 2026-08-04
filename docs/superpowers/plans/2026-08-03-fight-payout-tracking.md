@@ -18,7 +18,10 @@
 - **Enqueue, don't execute** — with exactly one documented exception. Web code enqueues; the worker executes. The appraisal server action calls triff.tools directly because it is read-only, idempotent, and interactive. That call site carries a comment saying so. Nothing else in this feature may widen the exception.
 - **Every state change writes an audit row.** `payout.*` actions always target the operation uuid, never a participant or pool id.
 - **Identity FKs are `ON DELETE SET NULL`, never `CASCADE` or `RESTRICT`.** `unlinkCharacter` hard-deletes character rows; a paid participant row must survive that with its `displayName` and amounts intact.
-- **Mutation requires tier `flygd` AND status `active`; reading any operation requires tier `flygd`.** Enforced in the service layer, because `getSessionAccount` checks neither. Layouts do not protect server actions — every action gates itself.
+- **Mutation requires tier `flygd` AND status `active`; reading any operation requires tier `flygd`.** Every mutating service function calls `requirePayoutOperator` as its first statement, inside the caller's transaction — not only in the server action. An action-only check leaves a TOCTOU window (the tier can change between check and write) and leaves any other caller unguarded. Layouts do not protect server actions either; each action gates itself as well.
+- **Finalization freezes an operation.** `assertEditable` refuses on `status !== "draft"` *and* on the existence of any payment. Correcting a finalized operation goes through an audited `unlockOperation`, which is available only to the operation's `createdBy` or an admin, and only while no payment exists.
+- **Anything that decides based on a row must read that row after taking the lock.** `recordPayment` locks the operation first and re-reads the participant, or two concurrent clicks both see `paidAmount === null` and each write a payment event.
+- **Exact money on the read side too.** View/summary code sums with `iskToCents`/`centsToIsk`, never `Number()` — `numeric(20,2)` holds values well past 2^53.
 - **Cite test output.** Never claim `npm test`, `npm run typecheck`, or `npm run test:e2e` passed without running it and quoting the result.
 - **`npm test` needs a private database in a worktree:** `TEST_DATABASE_URL=postgres://authgd:authgd@localhost:5433/authgd_test_payout npm test`. `npm run test:e2e` isolates itself and needs nothing.
 - **Stay in scope.** No renaming, restructuring, or cleaning up files these tasks do not name.
@@ -1805,8 +1808,9 @@ explicit "re-price" trigger with its own actor; nothing in PR 1 emits it.
 
 - [ ] **Step 1: Write the failing test**
 
-First, in `tests/helpers/seed.ts`, extend `seedAccount`'s options (this is the only
-change to that file):
+First, in `tests/helpers/seed.ts`, extend `seedAccount`'s options with `status`
+and `isAdmin` (this is the only change to that file; both are additive and
+default to today's behaviour, so no existing caller changes):
 
 ```ts
 export async function seedAccount(
@@ -1815,6 +1819,7 @@ export async function seedAccount(
     tier?: "flygd" | "blue" | "green";
     tierLocked?: boolean;
     status?: "active" | "cryo";
+    isAdmin?: boolean;
     discordUserId?: string;
   } = {},
 ) {
@@ -1824,6 +1829,7 @@ export async function seedAccount(
       tier: opts.tier ?? "green",
       tierLocked: opts.tierLocked ?? false,
       status: opts.status ?? "active",
+      isAdmin: opts.isAdmin ?? false,
     })
     .returning();
   if (opts.discordUserId) {
@@ -1841,7 +1847,7 @@ Then create `tests/payouts-service.test.ts`:
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { loadConfig, type Config } from "@/config";
-import { lootPool, payoutParticipant, payoutPayment } from "@/db/schema";
+import { lootPool, payoutOperation, payoutParticipant, payoutPayment } from "@/db/schema";
 import { unlinkCharacter } from "@/services/accounts";
 import {
   PayoutForbiddenError,
@@ -1897,7 +1903,11 @@ async function seedOperator() {
   return seedAccount(ctx.db, { tier: "flygd", status: "active" });
 }
 
-async function seedFightWithOnePaidParticipant() {
+/** A finalized operation with one unpaid participant owed the whole 1000.00.
+ *  The pool is inserted directly rather than through `addFlatPool` so the
+ *  helper does not depend on Task 8; `setRoster` runs afterwards and its
+ *  `recalculate` is what assigns the amount. */
+async function seedFightWithOneUnpaidParticipant() {
   const operator = await seedOperator();
   const { id: operationId } = await ctx.db.transaction((tx) =>
     createOperation(tx, operator.id, {
@@ -1931,8 +1941,15 @@ async function seedFightWithOnePaidParticipant() {
     .from(payoutParticipant)
     .where(eq(payoutParticipant.operationId, operationId));
   await ctx.db.transaction((tx) => finalizeOperation(tx, operator.id, operationId));
-  await ctx.db.transaction((tx) => recordPayment(tx, operator.id, participant.id));
   return { operator, operationId, participantId: participant.id, poolId: pool.id };
+}
+
+async function seedFightWithOnePaidParticipant() {
+  const seeded = await seedFightWithOneUnpaidParticipant();
+  await ctx.db.transaction((tx) =>
+    recordPayment(tx, seeded.operator.id, seeded.participantId),
+  );
+  return seeded;
 }
 
 describe("requirePayoutOperator", () => {
@@ -2133,6 +2150,42 @@ describe("recordPayment", () => {
     expect(payments).toHaveLength(1);
     void operationId;
   });
+
+  /**
+   * Two operators double-clicking "mark paid" at the same moment. Sequential
+   * idempotence (the test above) does NOT cover this: if `paidAmount` is read
+   * before the operation row lock, both transactions see null, then serialize,
+   * then both insert — one payment event per click, for one payment.
+   * `recordPayment` therefore locks first and re-reads the participant after.
+   *
+   * `vitest.config.ts` sets `fileParallelism: false`, but that is about test
+   * FILES; two transactions inside one test still run concurrently against the
+   * same Postgres, which is exactly what this needs.
+   */
+  it("two concurrent payments produce one payment row, not two", async () => {
+    const { participantId, operator } = await seedFightWithOneUnpaidParticipant();
+
+    const results = await Promise.allSettled([
+      ctx.db.transaction((tx) => recordPayment(tx, operator.id, participantId)),
+      ctx.db.transaction((tx) => recordPayment(tx, operator.id, participantId)),
+    ]);
+    // Both should succeed — the second is a no-op, not an error. If one rejects
+    // with a serialization failure that is also acceptable behaviour, but the
+    // row count below is the assertion that actually matters.
+    expect(results.filter((r) => r.status === "rejected")).toHaveLength(0);
+
+    const payments = await ctx.db
+      .select()
+      .from(payoutPayment)
+      .where(eq(payoutPayment.participantId, participantId));
+    expect(payments).toHaveLength(1);
+
+    const [participant] = await ctx.db
+      .select()
+      .from(payoutParticipant)
+      .where(eq(payoutParticipant.id, participantId));
+    expect(participant.paidAmount).toBe(payments[0].amount);
+  });
 });
 
 describe("unlockOperation", () => {
@@ -2159,6 +2212,142 @@ describe("unlockOperation", () => {
       .from((await import("@/db/schema")).payoutOperation)
       .where(eq((await import("@/db/schema")).payoutOperation.id, operationId));
     expect(op.status).toBe("draft");
+  });
+
+  it("refuses an operator who did not create the operation and is not an admin", async () => {
+    const creator = await seedOperator();
+    const other = await seedOperator();
+    const { id: operationId } = await ctx.db.transaction((tx) =>
+      createOperation(tx, creator.id, {
+        name: "Someone else's fight",
+        occurredAt: new Date(),
+        corpSharePct: "0",
+      }),
+    );
+    await ctx.db.transaction((tx) => finalizeOperation(tx, creator.id, operationId));
+    await expect(
+      ctx.db.transaction((tx) => unlockOperation(tx, other.id, operationId)),
+    ).rejects.toThrow(PayoutForbiddenError);
+  });
+
+  it("allows an admin who did not create the operation", async () => {
+    const creator = await seedOperator();
+    const admin = await seedAccount(ctx.db, {
+      tier: "flygd",
+      status: "active",
+      isAdmin: true,
+    });
+    const { id: operationId } = await ctx.db.transaction((tx) =>
+      createOperation(tx, creator.id, {
+        name: "Admin unlock",
+        occurredAt: new Date(),
+        corpSharePct: "0",
+      }),
+    );
+    await ctx.db.transaction((tx) => finalizeOperation(tx, creator.id, operationId));
+    await ctx.db.transaction((tx) => unlockOperation(tx, admin.id, operationId));
+    const [op] = await ctx.db
+      .select()
+      .from(payoutOperation)
+      .where(eq(payoutOperation.id, operationId));
+    expect(op.status).toBe("draft");
+  });
+});
+
+describe("finalization freezes the operation", () => {
+  /**
+   * Without this, finalizing means nothing: the numbers stay editable, and
+   * `unlockOperation` has no job to do. `assertEditable` refuses on status, not
+   * only on payments — see "Lifecycle" in the design doc.
+   */
+  it("rejects payout-affecting edits on a finalized, UNPAID operation", async () => {
+    const operator = await seedOperator();
+    const member = await seedAccount(ctx.db, { tier: "blue", status: "active" });
+    const { id: operationId } = await ctx.db.transaction((tx) =>
+      createOperation(tx, operator.id, {
+        name: "Frozen fight",
+        occurredAt: new Date(),
+        corpSharePct: "0",
+      }),
+    );
+    await ctx.db.transaction((tx) =>
+      setRoster(tx, operator.id, operationId, [
+        {
+          accountId: member.id,
+          recipientCharacterId: null,
+          displayName: "Pilot",
+          sourceCharacters: ["Pilot"],
+          shares: "1.00",
+          excluded: false,
+        },
+      ]),
+    );
+    await ctx.db.transaction((tx) => finalizeOperation(tx, operator.id, operationId));
+    const [participant] = await ctx.db
+      .select()
+      .from(payoutParticipant)
+      .where(eq(payoutParticipant.operationId, operationId));
+
+    await expect(
+      ctx.db.transaction((tx) => setParticipantShares(tx, operator.id, participant.id, "2")),
+    ).rejects.toThrow(PayoutLockedError);
+    await expect(
+      ctx.db.transaction((tx) => setRoster(tx, operator.id, operationId, [])),
+    ).rejects.toThrow(PayoutLockedError);
+
+    // …and unlocking restores editability, which is the point of having it.
+    await ctx.db.transaction((tx) => unlockOperation(tx, operator.id, operationId));
+    await ctx.db.transaction((tx) =>
+      setParticipantShares(tx, operator.id, participant.id, "2"),
+    );
+    const [after] = await ctx.db
+      .select()
+      .from(payoutParticipant)
+      .where(eq(payoutParticipant.id, participant.id));
+    expect(after.shares).toBe("2.00");
+  });
+});
+
+describe("the service layer is the authorization boundary", () => {
+  /**
+   * Server actions gate themselves, but they are not the only possible caller,
+   * and a gate in the action leaves a TOCTOU window: the tier could change
+   * between the action's check and the transaction's write. Each mutation
+   * re-checks inside its own transaction. If any of these stop throwing, the
+   * guard was dropped from that function.
+   */
+  it("rejects every mutation when the actor is not an active flygd account", async () => {
+    const operator = await seedOperator();
+    const green = await seedAccount(ctx.db, { tier: "green", status: "active" });
+    const cryo = await seedAccount(ctx.db, { tier: "flygd", status: "cryo" });
+    const { id: operationId } = await ctx.db.transaction((tx) =>
+      createOperation(tx, operator.id, {
+        name: "Guarded",
+        occurredAt: new Date(),
+        corpSharePct: "0",
+      }),
+    );
+
+    for (const actor of [green.id, cryo.id]) {
+      await expect(
+        ctx.db.transaction((tx) =>
+          createOperation(tx, actor, {
+            name: "Nope",
+            occurredAt: new Date(),
+            corpSharePct: "0",
+          }),
+        ),
+      ).rejects.toThrow(PayoutForbiddenError);
+      await expect(
+        ctx.db.transaction((tx) => setRoster(tx, actor, operationId, [])),
+      ).rejects.toThrow(PayoutForbiddenError);
+      await expect(
+        ctx.db.transaction((tx) => finalizeOperation(tx, actor, operationId)),
+      ).rejects.toThrow(PayoutForbiddenError);
+      await expect(
+        ctx.db.transaction((tx) => unlockOperation(tx, actor, operationId)),
+      ).rejects.toThrow(PayoutForbiddenError);
+    }
   });
 });
 ```
@@ -2233,7 +2422,30 @@ export async function hasPayments(dbx: Dbx, operationId: string): Promise<boolea
   return rows.length > 0;
 }
 
+/**
+ * The single gate every payout-affecting edit passes through. Two conditions,
+ * for two different reasons:
+ *
+ *   1. status must be `draft`. Finalization is a commitment ("Lifecycle" in the
+ *      design doc) — if a finalized operation stayed editable, finalizing would
+ *      mean nothing and `unlockOperation` would have no purpose. Correcting a
+ *      finalized operation is legal, but it goes through an audited unlock.
+ *   2. no payment may exist. This outlives the status check, because unlock is
+ *      itself refused once money has moved — mechanism 3 in "Recalculation
+ *      safety". Checking it here as well means no path can reach an edit.
+ *
+ * Callers hold the operation row lock (via `lockOperation`) before calling this,
+ * so neither condition can change underneath the edit that follows.
+ */
 export async function assertEditable(dbtx: DbTx, operationId: string): Promise<void> {
+  const [op] = await dbtx
+    .select({ status: payoutOperation.status })
+    .from(payoutOperation)
+    .where(eq(payoutOperation.id, operationId));
+  if (!op) throw new Error("operation not found");
+  if (op.status !== "draft") {
+    throw new PayoutLockedError("operation is finalized; unlock it before editing");
+  }
   if (await hasPayments(dbtx, operationId)) {
     throw new PayoutLockedError("operation has a payment and can no longer be edited");
   }
@@ -2250,6 +2462,7 @@ export async function createOperation(
     notes?: string | null;
   },
 ): Promise<{ id: string }> {
+  await requirePayoutOperator(dbtx, actor);
   const [op] = await dbtx
     .insert(payoutOperation)
     .values({
@@ -2359,6 +2572,7 @@ export async function setRoster(
   operationId: string,
   entries: RosterEntry[],
 ): Promise<void> {
+  await requirePayoutOperator(dbtx, actor);
   await lockOperation(dbtx, operationId);
   await assertEditable(dbtx, operationId);
   await dbtx.delete(payoutParticipant).where(eq(payoutParticipant.operationId, operationId));
@@ -2400,6 +2614,7 @@ export async function setParticipantShares(
   shares: string,
 ): Promise<void> {
   const operationId = await loadParticipantOperationId(dbtx, participantId);
+  await requirePayoutOperator(dbtx, actor);
   await lockOperation(dbtx, operationId);
   await assertEditable(dbtx, operationId);
   await dbtx
@@ -2422,6 +2637,7 @@ export async function setParticipantExcluded(
   excluded: boolean,
 ): Promise<void> {
   const operationId = await loadParticipantOperationId(dbtx, participantId);
+  await requirePayoutOperator(dbtx, actor);
   await lockOperation(dbtx, operationId);
   await assertEditable(dbtx, operationId);
   await dbtx
@@ -2443,6 +2659,7 @@ export async function removeParticipant(
   participantId: string,
 ): Promise<void> {
   const operationId = await loadParticipantOperationId(dbtx, participantId);
+  await requirePayoutOperator(dbtx, actor);
   await lockOperation(dbtx, operationId);
   await assertEditable(dbtx, operationId);
   await dbtx.delete(payoutParticipant).where(eq(payoutParticipant.id, participantId));
@@ -2499,6 +2716,7 @@ export async function finalizeOperation(
   actor: string,
   operationId: string,
 ): Promise<void> {
+  await requirePayoutOperator(dbtx, actor);
   const op = await lockOperation(dbtx, operationId);
   if (op.status === "finalized") return; // idempotent
   await dbtx
@@ -2509,14 +2727,27 @@ export async function finalizeOperation(
 }
 
 /** Unlock (finalized -> draft) exists to correct an UNPAID operation; once any
- * payment exists there is no unlock, per "Recalculation safety" mechanism 3. */
+ * payment exists there is no unlock, per "Recalculation safety" mechanism 3.
+ * Restricted to the operation's `createdBy` or an admin ("Lifecycle" in the
+ * design doc): unlock reopens a commitment someone else made, so it is not a
+ * thing any operator should be able to do to any other operator's numbers. */
 export async function unlockOperation(
   dbtx: DbTx,
   actor: string,
   operationId: string,
 ): Promise<void> {
+  await requirePayoutOperator(dbtx, actor);
   const op = await lockOperation(dbtx, operationId);
   if (op.status === "draft") return; // idempotent
+  if (op.createdBy !== actor) {
+    const [acc] = await dbtx
+      .select({ isAdmin: account.isAdmin })
+      .from(account)
+      .where(eq(account.id, actor));
+    if (!acc?.isAdmin) {
+      throw new PayoutForbiddenError("only the operation's creator or an admin may unlock it");
+    }
+  }
   if (await hasPayments(dbtx, operationId)) {
     throw new PayoutLockedError("operation has a payment and cannot be unlocked");
   }
@@ -2532,15 +2763,26 @@ export async function recordPayment(
   actor: string,
   participantId: string,
 ): Promise<void> {
+  await requirePayoutOperator(dbtx, actor);
+  // Read ONLY the operation id here. Every field this function decides on --
+  // paidAmount above all -- must be read *after* the operation row lock, or two
+  // concurrent "mark paid" clicks both observe paidAmount = null before either
+  // takes the lock, then both proceed to insert once serialized. Locking first
+  // and re-reading is what makes the idempotence check below actually hold.
+  const [ref] = await dbtx
+    .select({ operationId: payoutParticipant.operationId })
+    .from(payoutParticipant)
+    .where(eq(payoutParticipant.id, participantId));
+  if (!ref) throw new Error("participant not found");
+  const op = await lockOperation(dbtx, ref.operationId);
+  if (op.status !== "finalized") {
+    throw new PayoutLockedError("operation must be finalized before paying");
+  }
   const [participant] = await dbtx
     .select()
     .from(payoutParticipant)
     .where(eq(payoutParticipant.id, participantId));
   if (!participant) throw new Error("participant not found");
-  const op = await lockOperation(dbtx, participant.operationId);
-  if (op.status !== "finalized") {
-    throw new PayoutLockedError("operation must be finalized before paying");
-  }
   if (participant.paidAmount !== null) return; // already paid: idempotent, no duplicate event
   await dbtx
     .update(payoutParticipant)
@@ -2725,6 +2967,7 @@ import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { lootItem, lootPool, payoutParticipant } from "@/db/schema";
 import {
+  PayoutForbiddenError,
   PayoutLockedError,
   createOperation,
   finalizeOperation,
@@ -2891,6 +3134,33 @@ describe("payment lock", () => {
       ),
     ).rejects.toThrow(PayoutLockedError);
   });
+
+  it("rejects adding or deleting a pool once the operation is finalized", async () => {
+    const { operatorId, operationId } = await seedOperation();
+    const { poolId } = await ctx.db.transaction((tx) =>
+      addFlatPool(tx, operatorId, operationId, { totalValue: "100.00", notes: "note" }),
+    );
+    await ctx.db.transaction((tx) => finalizeOperation(tx, operatorId, operationId));
+
+    await expect(
+      ctx.db.transaction((tx) =>
+        addFlatPool(tx, operatorId, operationId, { totalValue: "50.00", notes: "late" }),
+      ),
+    ).rejects.toThrow(PayoutLockedError);
+    await expect(
+      ctx.db.transaction((tx) => deletePool(tx, operatorId, poolId)),
+    ).rejects.toThrow(PayoutLockedError);
+  });
+
+  it("rejects a non-operator actor at the service layer, not just in the action", async () => {
+    const { operationId } = await seedOperation();
+    const green = await seedAccount(ctx.db, { tier: "green", status: "active" });
+    await expect(
+      ctx.db.transaction((tx) =>
+        addFlatPool(tx, green.id, operationId, { totalValue: "1.00", notes: "n" }),
+      ),
+    ).rejects.toThrow(PayoutForbiddenError);
+  });
 });
 ```
 
@@ -2983,7 +3253,12 @@ import type { DbTx } from "@/db";
 import { lootItem, lootPool } from "@/db/schema";
 import type { PricingMode } from "@/core/pricing";
 import { logAudit } from "@/services/audit";
-import { assertEditable, lockOperation, recalculate } from "@/services/payouts";
+import {
+  assertEditable,
+  lockOperation,
+  recalculate,
+  requirePayoutOperator,
+} from "@/services/payouts";
 import type { AppraisalResult } from "@/services/appraisal";
 
 export async function addAppraisedPool(
@@ -2998,6 +3273,7 @@ export async function addAppraisedPool(
     appraisal: AppraisalResult;
   },
 ): Promise<{ poolId: string }> {
+  await requirePayoutOperator(dbtx, actor);
   await lockOperation(dbtx, operationId);
   await assertEditable(dbtx, operationId);
   const [pool] = await dbtx
@@ -3049,6 +3325,7 @@ export async function addFlatPool(
   if (!input.notes.trim()) {
     throw new Error("a flat pool requires a note explaining the negotiated total");
   }
+  await requirePayoutOperator(dbtx, actor);
   await lockOperation(dbtx, operationId);
   await assertEditable(dbtx, operationId);
   const [pool] = await dbtx
@@ -3072,6 +3349,7 @@ export async function addFlatPool(
 }
 
 export async function deletePool(dbtx: DbTx, actor: string, poolId: string): Promise<void> {
+  await requirePayoutOperator(dbtx, actor);
   const [pool] = await dbtx.select().from(lootPool).where(eq(lootPool.id, poolId));
   if (!pool) throw new Error("pool not found");
   await lockOperation(dbtx, pool.operationId);
@@ -3167,6 +3445,7 @@ import {
   payoutPayment,
 } from "@/db/schema";
 import { hasPayments } from "@/services/payouts";
+import { centsToIsk, iskToCents } from "@/core/payout-split";
 
 export type PayoutOperationSummary = {
   id: string;
@@ -3193,9 +3472,11 @@ export async function listPayoutOperations(
     dbx.select().from(payoutPayment),
   ]);
 
-  const totalByOp = new Map<string, number>();
+  // bigint cents, not Number: numeric(20,2) holds values far past 2^53, and the
+  // "no floats" constraint is not relaxed just because this is the read side.
+  const totalByOp = new Map<string, bigint>();
   for (const p of pools) {
-    totalByOp.set(p.operationId, (totalByOp.get(p.operationId) ?? 0) + Number(p.totalValue));
+    totalByOp.set(p.operationId, (totalByOp.get(p.operationId) ?? 0n) + iskToCents(p.totalValue));
   }
   const participantsByOp = new Map<string, typeof participants>();
   for (const p of participants) {
@@ -3220,7 +3501,7 @@ export async function listPayoutOperations(
       name: op.name,
       occurredAt: op.occurredAt,
       status: op.status,
-      totalValue: (totalByOp.get(op.id) ?? 0).toFixed(2),
+      totalValue: centsToIsk(totalByOp.get(op.id) ?? 0n),
       participantCount: owed.length,
       paidCount: owed.filter((p) => paidParticipantIds.has(p.id)).length,
     };
@@ -3242,6 +3523,10 @@ export type PayoutOperationDetail = {
   pools: PayoutPoolView[];
   participants: PayoutParticipantView[];
   totalValue: string;
+  /** Derived, not stored: totalValue minus every participant's amount. This is
+   *  the corp's configured percentage plus all rounding remainders — the number
+   *  that makes the displayed split add up to the total. */
+  corpAmount: string;
   /** hasPayments(operationId) — once true, every edit action rejects via
    *  assertEditable; the page uses this to hide those controls instead of
    *  letting a member discover the rejection by submitting. */
@@ -3291,7 +3576,14 @@ export async function getPayoutOperationDetail(
     payments.filter((p) => p.kind === "paid").map((p) => p.participantId),
   );
 
-  const totalValue = pools.reduce((sum, p) => sum + Number(p.totalValue), 0).toFixed(2);
+  const totalCents = pools.reduce((sum, p) => sum + iskToCents(p.totalValue), 0n);
+  // The corp's cut is not stored — storing it would be a second copy of a number
+  // computeSplit already derives, and the two could drift. It is exactly the
+  // part of the pot no participant was assigned: the configured percentage plus
+  // every sub-ISK rounding remainder. Deriving it here means it always agrees
+  // with what recalculate wrote, by construction.
+  const assignedCents = participants.reduce((sum, p) => sum + iskToCents(p.amount), 0n);
+  const corpAmount = centsToIsk(totalCents - assignedCents);
 
   return {
     operation: op,
@@ -3304,7 +3596,8 @@ export async function getPayoutOperationDetail(
           ? "paid"
           : "unpaid",
     })),
-    totalValue,
+    totalValue: centsToIsk(totalCents),
+    corpAmount,
     locked,
   };
 }
@@ -3877,17 +4170,23 @@ export default async function PayoutOperationPage({
   const { error } = await searchParams;
   const detail = await getPayoutOperationDetail(getDb(), id);
   if (!detail) notFound();
-  const { operation, pools, participants, totalValue, locked } = detail;
+  const { operation, pools, participants, totalValue, corpAmount, locked } = detail;
 
   const nav = [
     { key: "account", href: "/account", label: "Account" },
     { key: "payouts", href: "/payouts", label: "Payouts" },
     ...(access.isAdmin ? [{ key: "admin", href: "/admin/accounts", label: "Admin" }] : []),
   ];
-  // Every edit action (pools, roster, per-participant controls) rejects once
-  // ANY payment exists (assertEditable) — this mirrors that in the UI so an
-  // operator discovers the freeze by its absence, not by a failed submit.
-  const canEdit = access.isOperator && !locked;
+  // Mirrors `assertEditable` exactly, so an operator discovers the freeze by the
+  // controls being absent rather than by a failed submit. Both halves matter:
+  // finalizing freezes the numbers (unlock reopens them), and a payment freezes
+  // them permanently. Drifting from the service check here would put buttons on
+  // screen that can only reject.
+  const canEdit = access.isOperator && operation.status === "draft" && !locked;
+  // Mirrors `unlockOperation`'s creator-or-admin check. Unlock reopens someone
+  // else's committed numbers, so it is not shown to every operator.
+  const canUnlock =
+    access.isOperator && (operation.createdBy === access.accountId || access.isAdmin);
 
   return (
     <>
@@ -3923,7 +4222,9 @@ export default async function PayoutOperationPage({
             )}
           </dd>
           <dt>Corp share</dt>
-          <dd className="mono">{operation.corpSharePct}%</dd>
+          <dd className="mono">
+            {corpAmount} ISK <span className="dim">({operation.corpSharePct}% + remainder)</span>
+          </dd>
           <dt>Total loot</dt>
           <dd className="mono">{totalValue} ISK</dd>
           {operation.notes && (
@@ -3941,7 +4242,7 @@ export default async function PayoutOperationPage({
                 <Submit className="btn btn--primary">Finalize</Submit>
               </form>
             )}
-            {operation.status === "finalized" && !locked && (
+            {operation.status === "finalized" && !locked && canUnlock && (
               <form action={unlockAction.bind(null, operation.id)}>
                 <Submit className="btn btn--quiet">Unlock</Submit>
               </form>
@@ -3965,31 +4266,57 @@ export default async function PayoutOperationPage({
               </tr>
             </thead>
             <tbody>
-              {pools.map((pool) => (
-                <tr key={pool.id}>
-                  <td>
-                    {pool.valuationSource === "appraised" ? (
-                      <Status tone="ok">
-                        appraised
-                        {pool.pricingMode && ` · ${pool.pricingMode}`}
-                      </Status>
-                    ) : (
-                      <Status tone="warn">flat (manual)</Status>
-                    )}
-                  </td>
-                  <td className="mono nowrap">{pool.totalValue} ISK</td>
-                  <td>{pool.notes}</td>
-                  <td>
-                    {canEdit && (
-                      <form action={deletePoolAction.bind(null, operation.id, pool.id)}>
-                        <Submit className="btn btn--quiet btn--micro btn--danger-quiet">
-                          delete
-                        </Submit>
-                      </form>
-                    )}
-                  </td>
-                </tr>
-              ))}
+              {pools.map((pool) => {
+                // An unresolved item priced at 0.00 is the one thing on this page
+                // an operator MUST see before finalizing: it means the total is
+                // quietly low and everyone is about to be underpaid. Naming the
+                // items is the whole safeguard — a count alone doesn't tell you
+                // whether it's a junk module or the faction battleship.
+                const unresolved = pool.items.filter((i) => i.priceSource === "unresolved");
+                return (
+                  <tr key={pool.id}>
+                    <td>
+                      {pool.valuationSource === "appraised" ? (
+                        <Status tone="ok">
+                          appraised
+                          {pool.pricingMode && ` · ${pool.pricingMode}`}
+                        </Status>
+                      ) : (
+                        <Status tone="warn">flat (manual)</Status>
+                      )}
+                    </td>
+                    <td className="mono nowrap">{pool.totalValue} ISK</td>
+                    <td>
+                      {pool.notes}
+                      {unresolved.length > 0 && (
+                        <p className="notice notice--warn" data-glyph="!">
+                          <span>
+                            <strong>
+                              {unresolved.length} item
+                              {unresolved.length === 1 ? "" : "s"} priced at 0.00
+                            </strong>{" "}
+                            — not found, or no market data for the chosen pricing.
+                            The pool total is short by whatever they are worth.
+                            <br />
+                            <span className="dim">
+                              {unresolved.map((i) => `${i.name} ×${i.qty}`).join(", ")}
+                            </span>
+                          </span>
+                        </p>
+                      )}
+                    </td>
+                    <td>
+                      {canEdit && (
+                        <form action={deletePoolAction.bind(null, operation.id, pool.id)}>
+                          <Submit className="btn btn--quiet btn--micro btn--danger-quiet">
+                            delete
+                          </Submit>
+                        </form>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
               {pools.length === 0 && (
                 <tr>
                   <td className="log__empty" colSpan={4}>
@@ -4252,6 +4579,7 @@ export async function resetDb(db: ReturnType<typeof testDb>["db"]) {
 // e2e/payouts.spec.ts
 import { expect, test } from "@playwright/test";
 import { resetDb, seedMember, sessionCookieFor, testDb } from "./helpers";
+import { lootItem, lootPool, payoutOperation } from "../src/db/schema";
 
 const { db, pool } = testDb();
 test.afterAll(() => pool.end());
@@ -4342,10 +4670,18 @@ test("create, add a flat pool, paste a roster, finalize, mark paid", async ({
   // 1,000,000 total, 10% corp share -> 900,000 pool, split evenly two ways
   // (both unresolved names get shares "1" and no account) -> 450,000.00 each.
   await expect(page.getByText("450000.00 ISK")).toHaveCount(2);
+  // The corp's actual cut is shown, not just the percentage — 10% of 1,000,000
+  // plus whatever the per-share floor left behind (nothing, here).
+  await expect(page.getByText("100000.00 ISK")).toBeVisible();
 
   await page.getByRole("button", { name: "Finalize" }).click();
   await expect(page.getByRole("button", { name: "Unlock" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Finalize" })).toHaveCount(0);
+  // Finalizing freezes the numbers: the edit affordances go away until unlock.
+  // This is the UI half of assertEditable's status check.
+  await expect(page.getByLabel("Paste (names separated by /)")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Add flat pool" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "delete" })).toHaveCount(0);
 
   await page
     .getByRole("button", { name: "mark paid" })
@@ -4392,6 +4728,70 @@ test("pasting two alts of one account collapses them into one participant row", 
   const rows = page.getByRole("row").filter({ hasText: "Stealthbot" });
   await expect(rows).toHaveCount(1);
   await expect(rows).toContainText("Stealthbot Alt");
+});
+
+/**
+ * An appraised pool with an item triff could not price is the one condition an
+ * operator must not miss: the pool total is quietly short, so everyone is about
+ * to be underpaid. The pool row is written directly here rather than through
+ * the appraise form, because the form calls triff.tools and this suite must not
+ * depend on an external service — `tests/appraisal.test.ts` covers the fetching.
+ */
+test("an unresolved loot item is named on the page, not silently priced at zero", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "FC Prime",
+    tier: "flygd",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+
+  const [op] = await db
+    .insert(payoutOperation)
+    .values({
+      name: "Short appraisal",
+      occurredAt: new Date("2026-08-01"),
+      corpSharePct: "0",
+      createdBy: operator.id,
+    })
+    .returning();
+  const [pool] = await db
+    .insert(lootPool)
+    .values({
+      operationId: op.id,
+      valuationSource: "appraised",
+      pricingMode: "sell_best",
+      stationId: 60003760,
+      totalValue: "100.00",
+    })
+    .returning();
+  await db.insert(lootItem).values([
+    {
+      poolId: pool.id,
+      typeId: 34,
+      name: "Tritanium",
+      qty: 10,
+      unitPrice: "10.00",
+      totalValue: "100.00",
+      priceSource: "triff",
+    },
+    {
+      poolId: pool.id,
+      typeId: null,
+      name: "Nyx",
+      qty: 1,
+      unitPrice: "0.00",
+      totalValue: "0.00",
+      priceSource: "unresolved",
+    },
+  ]);
+
+  await page.goto(`/payouts/${op.id}`);
+  await expect(page.getByText("1 item priced at 0.00")).toBeVisible();
+  // The name matters — "1 item" alone doesn't tell you it's a supercarrier.
+  await expect(page.getByText("Nyx ×1")).toBeVisible();
 });
 ```
 
