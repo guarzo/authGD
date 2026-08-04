@@ -459,6 +459,30 @@ h3.rule-head__label {
   outline-offset: 2px;
 }
 
+/* An inline-size container so the accounts row drawer can size itself to what
+   is actually on screen rather than to the table it is a row of (see .drawer
+   below). It belongs on `.scroller` and not on `.scroller-frame`: `.scroller`
+   carries the 1px border above, so the frame's inline size is 2px wider than
+   the scrollport — a frame-hosted container measured a 288px drawer inside a
+   286px region.
+
+   Narrowed with `:has(.drawer)` rather than applied to `.scroller` bare, the
+   way `.scroller-frame:has(.log--sticky-col)` below narrows the start fade:
+   the class is shared with the audit, sync and account pages, and none of
+   those hold a drawer or want inline-size containment.
+
+   No `@supports` guard, deliberately. Both ways this can go unsupported fail
+   soft: an engine without `:has()` drops this rule, leaving `100cqi` with no
+   container ancestor, so it resolves against the small viewport — near enough
+   to the region at 320px, and wider than it on desktop, which the drawer's own
+   `<td>` then clips to the table anyway. An engine without container queries
+   at all cannot parse the `cqi` unit, which invalidates `.drawer`'s `width`
+   declaration outright; nothing else sets a width there, so it falls back to
+   `auto` — the pre-fix layout, which is a bug but not a broken one. */
+.scroller:has(.drawer) {
+  container-type: inline-size;
+}
+
 /* The non-scrolling frame the edge fades are pinned to. `.scroller`'s own
    `position: relative` doesn't help here on purpose: a child positioned
    against a box that itself scrolls scrolls with it. This wrapper never
@@ -1843,17 +1867,53 @@ h3.rule-head__label {
 /* The row drawer. Set tier / cryo / note come first since the admin opened
    the row to act, and the crew table sits below them at full width — this is
    why the drawer row spans every column instead of just the Name column (see
-   disclosure.tsx, as="row"). */
+   disclosure.tsx, as="row").
+
+   The width is the fix for a drawer that was as wide as the table it hangs
+   off. `.drawer__controls` wraps, but a flex line box is as wide as its
+   container, and the container was a `<td colSpan>` across all eight columns:
+   at 320px that made the control row 943.8px inside a 286px region, and `save
+   note` sat 332px of horizontal scroll off to the right with no tabular reason
+   to be there. `100cqi` against the scroller's inline-size container (above)
+   sizes the panel to the scrollport instead, and sticky positioning holds it
+   there at every offset.
+
+   `- 2 * var(--s-3)` is the drawer cell's own inline padding (`.log--dense td`
+   above), and subtracting it is not cosmetic: a bare `100cqi` overflows that
+   cell by 24px and *invents* horizontal scroll on viewports that had none —
+   measured at 1280px, the table went 1198 → 1222 and maxScrollLeft 0 → 24.
+   With the padding subtracted, desktop is byte-identical to before. `left`
+   matches the same padding so the 12px gutter survives the pinning and the
+   panel stays aligned with the table's own cell padding as the region
+   scrolls.
+
+   This `sticky` is not the one `.log--sticky-col` does, despite the e2e test
+   next door being called "an open row drawer keeps the pin, and is not itself
+   pinned" — that test asserts `position: static` on the drawer's `<td>`, and
+   still does. This lands on the div inside that cell. A pinned column gets a
+   z-index, an opaque background and a border-right so it reads as a column
+   that stays put while other columns pass under it; this has none of them, and
+   sits in its own row, so it never overlaps a pinned Name cell. Both are
+   "sticky"; only one is the pin. */
 .drawer {
   display: grid;
   gap: var(--s-4);
   margin-top: var(--s-3);
   padding-top: var(--s-3);
   border-top: 1px solid var(--rule);
+  width: calc(100cqi - 2 * var(--s-3));
+  position: sticky;
+  left: var(--s-3);
 }
 
 /* The three control groups still want a wrapping row rather than a stack: at
-   three groups, none of them tall, a stack buys nothing but wasted height. */
+   three groups, none of them tall, a stack buys nothing but wasted height.
+   That holds from 390px up. At 320px the drawer's usable width is 262px and
+   the wrapping does the stacking itself — the tier group (168.3px) and the
+   freeze/confirm pair (77px) need 277.3px to share a line — so the groups land
+   three deep there. That is the accepted cost of the width above: 141px of
+   extra height at 320px only, on a page that scrolls vertically anyway, in
+   exchange for 332px of horizontal scroll inside a nested scroll region. */
 .drawer__controls {
   display: flex;
   flex-wrap: wrap;
@@ -1873,6 +1933,15 @@ h3.rule-head__label {
 .drawer__crew {
   display: grid;
   gap: var(--s-2);
+  /* Grid items floor at `min-width: auto`, i.e. their min-content, and this one
+     holds the crew table's own Scroller — whose min-content is the crew table,
+     372.5px at 320px. That floor sized the drawer's grid column, so the panel
+     was 262px wide with a 372.5px column inside it and `.drawer__controls`
+     stretched to 372.5 as well: wide enough to keep the tier group and freeze
+     on one line, which put freeze's right edge 4.3px past the 286px region.
+     Zeroing the floor lets the column be the 262px the drawer asked for and
+     hands the overflow to the Scroller, which is what a Scroller is for. */
+  min-width: 0;
 }
 
 .drawer__label {

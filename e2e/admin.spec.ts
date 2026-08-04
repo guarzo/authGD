@@ -588,6 +588,131 @@ test("an open drawer does not widen the shared first column", async ({
   );
 });
 
+/**
+ * The drawer's controls, keyed by the aria-label each carries on Zed's row.
+ * These four are the drawer's whole control surface: the tier group, the cryo
+ * group, and the note field with its save button.
+ */
+const DRAWER_CONTROLS = {
+  "set tier": '[aria-label="Set Zed to blue"]',
+  freeze: '[aria-label="freeze Zed"]',
+  "note field": '[aria-label="Note for Zed"]',
+  "save note": '[aria-label="save note for Zed"]',
+};
+
+/**
+ * The regression: the drawer is a `<tr class="drawer-row"><td colSpan={8}>`, so
+ * its controls were bound to the accounts table's width rather than to what is
+ * on screen. `.drawer__controls` wraps, but its flex line box was 943.8px wide
+ * inside a 286px region, so wrapping never fired and `save note` sat 332px of
+ * horizontal scroll off to the right — a note field with no tabular reason to
+ * be anywhere but on screen. The drawer sizes itself to the scroll region now
+ * (`.scroller:has(.drawer)` / `.drawer` in globals.css).
+ *
+ * `freeze Zed` is the load-bearing case in the pin assertions below. 83% of its
+ * width sits inside the pinned column's x-band with 0% of its area covered, so
+ * an x-extent-only comparison — `clearOfPin`, which is the right measure for a
+ * control sharing a row with the pin — would wrongly report it 83% occluded
+ * here. Only a 2-D intersection tells "under the pin" apart from "in the pin's
+ * x-band, in another row's vertical band".
+ */
+test("accounts at 320px: an open drawer wraps to the scroll region, not to the table", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedWorld();
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.setViewportSize({ width: 320, height: 720 });
+  await page.goto("/admin/accounts");
+  await page.waitForSelector(".scroller tbody tr");
+
+  const geometry = () =>
+    page.evaluate(() => {
+      const sc = document.querySelector(".scroller") as HTMLElement;
+      sc.scrollLeft = 0;
+      const table = sc.querySelector("table") as HTMLElement;
+      return {
+        regionWidth: sc.clientWidth,
+        tableWidth: table.getBoundingClientRect().width,
+        maxScrollLeft: sc.scrollWidth - sc.clientWidth,
+      };
+    });
+
+  // Measured closed, before the drawer exists, so the open figures below have
+  // something to be unchanged against. Hard-coding the 967.8px this comes out
+  // at today would fail on any future column change for a reason that has
+  // nothing to do with the drawer.
+  const closed = await geometry();
+  // There has to be something to scroll past, or the pin assertions are vacuous.
+  expect(closed.maxScrollLeft).toBeGreaterThan(0);
+
+  const zedRow = rowFor(page, "Zed");
+  await toggleOf(zedRow).click();
+  await expect(drawerOf(zedRow)).toBeVisible();
+
+  // The drawer no longer contributes to the table's width: it sizes off the
+  // scrollport via a container query rather than off the cell it lives in, so
+  // opening one adds no horizontal scroll at all.
+  const open = await geometry();
+  expect(open.tableWidth, "an open drawer does not widen the table").toBeCloseTo(
+    closed.tableWidth,
+    1,
+  );
+  expect(open.maxScrollLeft, "an open drawer adds no horizontal scroll").toBeCloseTo(
+    closed.maxScrollLeft,
+    1,
+  );
+
+  // Every control reachable with the region at rest: content-x plus width
+  // inside the region. This is the 332px of scroll, asserted as a property
+  // rather than as the numbers it currently measures.
+  const reach = await page.evaluate((controls) => {
+    const sc = document.querySelector(".scroller") as HTMLElement;
+    sc.scrollLeft = 0;
+    const s = sc.getBoundingClientRect();
+    return Object.fromEntries(
+      Object.entries(controls).map(([name, sel]) => {
+        const r = (sc.querySelector(sel) as HTMLElement).getBoundingClientRect();
+        return [name, { contentX: r.left - s.left + sc.scrollLeft, width: r.width }];
+      }),
+    );
+  }, DRAWER_CONTROLS);
+  for (const [name, box] of Object.entries(reach)) {
+    expect(
+      box.contentX + box.width,
+      `${name} is reachable without scrolling the region`,
+    ).toBeLessThanOrEqual(open.regionWidth + 0.5);
+  }
+
+  // ...and the pin the region keeps does not pay for it: 0% of each control's
+  // area is under a pinned first cell, at rest, mid-scroll and fully right.
+  //
+  // `covered: 0` has two ways to be true for nothing: the control could be
+  // off-screen, or there could be no pinned cell to be under. `inRegion`
+  // closes the first. This closes the second — `coveredByPin` sums over the
+  // sticky first cells it finds, so with none found every `covered` is 0 and
+  // the whole loop below would pass against a table that had lost its pin.
+  const pinnedCells = await page.evaluate(() => {
+    const table = document.querySelector(".scroller table") as HTMLElement;
+    return Array.from(
+      table.querySelectorAll(":scope > tbody > tr > td:first-child"),
+    ).filter((c) => getComputedStyle(c).position === "sticky").length;
+  });
+  expect(
+    pinnedCells,
+    "there is a pin for the drawer to be measured against",
+  ).toBeGreaterThan(0);
+
+  const offsets = [0, Math.round(open.maxScrollLeft / 2), open.maxScrollLeft];
+  for (const [name, sel] of Object.entries(DRAWER_CONTROLS)) {
+    for (const at of offsets) {
+      const m = await coveredByPin(page, ".scroller", sel, at);
+      expect(m.covered, `${name} is not under the pin at scrollLeft ${at}`).toBe(0);
+      expect(m.inRegion, `${name} is on screen at scrollLeft ${at}`).toBeCloseTo(1, 2);
+    }
+  }
+});
+
 test("the start fade never paints over the pinned column", async ({ page, context }) => {
   const admin = await seedDenseWorld();
   await context.addCookies([await sessionCookieFor(db, admin.id)]);

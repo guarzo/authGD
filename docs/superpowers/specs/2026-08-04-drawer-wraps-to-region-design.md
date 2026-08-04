@@ -5,7 +5,7 @@ Status: accepted
 
 ## Problem
 
-`row-disclosure.tsx` renders the open drawer as its own row: `<tr
+`disclosure.tsx` (`as="row"`) renders the open drawer as its own row: `<tr
 class="drawer-row"><td colSpan={COLUMN_COUNT}>`. That cell is as wide as the
 accounts table, and the accounts table is wide because it holds eight columns
 of tabular data. `.drawer__controls` is `display: flex; flex-wrap: wrap`, but
@@ -70,6 +70,41 @@ Scoped with `:has(.drawer)` rather than applied to `.scroller` bare: the class
 is shared with the audit, sync, and account pages, and none of them need
 inline-size containment. `globals.css:497` already uses `:has()` to narrow a
 scroller rule this way.
+
+### Correction found during implementation
+
+A third rule is needed, which the measurements above did not predict:
+
+```css
+.drawer__crew {
+  min-width: 0;
+}
+```
+
+`.drawer` is `display: grid`, and grid items floor at `min-width: auto` — their
+min-content. `.drawer__crew` holds the crew table's own nested `Scroller`,
+whose min-content is the crew table itself: 372.5px at a 320px viewport. That
+floor sized the drawer's grid column, so the panel was 262px wide with a
+372.5px column inside it, `.drawer__controls` stretched to 372.5px, and
+`freeze`'s right edge landed 4.3px outside the 286px region.
+
+The prototype missed this because its variant put `container-type` on *every*
+`.scroller`, including the crew `Scroller` nested inside the drawer.
+Inline-size containment zeroes that scroller's intrinsic contribution, which is
+what produced the 262px column the tables above record. The shipped rule is
+scoped with `:has(.drawer)`, so the crew scroller is not contained and the
+floor returns. Zeroing it explicitly hands the overflow to the `Scroller`,
+which is what a `Scroller` is for — and is the state the accepted screenshot
+was actually taken in.
+
+Four alternatives were checked and produce identical geometry
+(`.drawer__crew > *`, `.drawer > *`, an unscoped `.scroller` container, and
+`.drawer .scroller`); this one targets the offending element and leaves
+`.drawer__controls`' own min-content intact.
+
+The lesson worth keeping: a prototype whose selectors differ from the shipped
+selectors can measure a layout nobody will ship. The numbers in this document
+were re-verified against the shipped CSS and reproduce exactly.
 
 ## What it costs the pin
 
@@ -140,24 +175,53 @@ Also rejected: tightening `.drawer__controls`' group gap from `--s-6` (32px) to
   width within the region;
 - `coveredByPin` returns 0 for each of them at `scrollLeft` 0, mid, and max;
 - `inRegion` is 1 at those offsets, so the zeros are not vacuous;
+- at least one pinned cell exists, so the zeros are not vacuous the *other*
+  way. `coveredByPin` sums over the sticky first cells it finds; with none
+  found, every `covered` is 0 and `inRegion` is still 1, so the whole loop
+  would pass against a table that had lost its pin entirely. `inRegion` alone
+  does not close this — it answers "is the control on screen", not "is there a
+  pin to be under";
 - the accounts table's own width and `maxScrollLeft` are unchanged, proving the
   drawer no longer contributes to the table's width.
 
-`coveredByPin` is the helper PR #61 adds to `e2e/geometry.ts`. That PR is
-unmerged, so this branch carries a verbatim copy of it. See "Coordination".
+`coveredByPin` is the helper PR #61 adds to `e2e/geometry.ts`. This branch was
+written against an unmerged #61 and carries a verbatim copy of it. See
+"Coordination".
 
 ## Coordination
 
-Branched from `main` at bec6ca9 (PR #62 merged; the task brief predates that).
+Branched from `main` at bec6ca9, then rebased onto bb08765 after PR #61
+`fix/pin-stays-with-drawer-open` merged.
 
-PR #61 `fix/pin-stays-with-drawer-open` is still open and overlaps:
+The three overlapping files behaved as predicted, and the prediction is worth
+recording because it was the point of the copy strategy:
 
-- `e2e/geometry.ts` — both branches add `coveredByPin`. This branch's copy is
-  verbatim from #61, so whichever merges second resolves by keeping one copy.
-- `e2e/admin.spec.ts` — both add tests; different tests, adjacent region.
-- `src/app/globals.css` — #61 edits a comment inside the 40rem breakpoint;
-  this branch adds rules near `.scroller` (line ~416) and `.drawer` (~1650).
-  No expected textual overlap.
+- `e2e/geometry.ts` — both branches add `coveredByPin`. This branch's copy was
+  byte-identical to #61's, comment included, inserted at the same position
+  between `pinGeometry` and `clearOfPin`. Git merged it **silently**: no
+  conflict, one copy of the function, and `admin.spec.ts` imports it once. Had
+  the copy drifted by so much as a comment word, this would have been a
+  conflict inside a helper both branches' tests depend on.
+- `e2e/admin.spec.ts` — conflicted on the import block only (#61 added
+  `BASE_URL`). Resolved by keeping it. Both branches' tests survive; #61's "an
+  open drawer does not widen the shared first column" and this branch's
+  320px test sit adjacent.
+- `src/app/globals.css` — conflicted inside `.drawer`'s leading comment. `main`
+  had renamed the component reference (see below) while this branch rewrote the
+  comment around it. Resolved by keeping the expanded comment and adopting
+  `main`'s reference.
+
+### The component was renamed upstream
+
+`row-disclosure.tsx` is gone; `disclosure.tsx` replaces it with an `as` prop —
+`as="details"` (the default, used by `admin/sync/page.tsx`) and `as="row"` (used
+by `admin/accounts/page.tsx`). This matters to the `:has(.drawer)` scoping,
+which was written when only one component could produce a `.drawer`: the
+`details` branch renders a bare `<div id={id}>` with **no** `.drawer` class, so
+`.drawer` still has exactly one renderer and the container rule still applies to
+exactly one scroller. Checked rather than assumed. If a future change gives the
+`details` branch the `.drawer` class, this rule starts containing the sync
+page's scroller too, and the scoping needs revisiting.
 
 ## Out of scope, noted again
 
