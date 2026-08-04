@@ -129,6 +129,33 @@ describe("runTokenHealthJob", () => {
     expect(audits.some((a) => a.action === "token.needs_reauth")).toBe(true);
   });
 
+  it("records which scopes are missing, not the whole required set", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    await seedCharacter(ctx.db, cfg, {
+      id: 1,
+      accountId: acc.id,
+      main: true,
+      refreshToken: "rt1",
+      ownerHash: "oh-1",
+    });
+    const at = await signAccessToken({
+      characterId: 1,
+      ownerHash: "oh-1",
+      scopes: ["esi-characters.read_contacts.v1"], // write scope missing
+    });
+    await runTokenHealthJob({
+      db: ctx.db,
+      cfg,
+      jwks,
+      fetchImpl: refreshFetchFor({ rt1: at }),
+    });
+    const audits = await ctx.db.select().from(auditLog);
+    const row = audits.find((a) => a.action === "token.needs_reauth");
+    expect(row?.details).toMatchObject({
+      missingScopes: ["esi-characters.write_contacts.v1"],
+    });
+  });
+
   it("marks token invalid ONLY on permanent OAuth errors", async () => {
     const acc = await seedAccount(ctx.db, { tier: "flygd" });
     await seedCharacter(ctx.db, cfg, {
