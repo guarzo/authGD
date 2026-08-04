@@ -445,8 +445,8 @@ describe("unlockOperation", () => {
     await ctx.db.transaction((tx) => unlockOperation(tx, operator.id, operationId));
     const [op] = await ctx.db
       .select()
-      .from((await import("@/db/schema")).payoutOperation)
-      .where(eq((await import("@/db/schema")).payoutOperation.id, operationId));
+      .from(payoutOperation)
+      .where(eq(payoutOperation.id, operationId));
     expect(op.status).toBe("draft");
   });
 

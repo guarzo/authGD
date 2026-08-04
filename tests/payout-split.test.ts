@@ -12,7 +12,11 @@ describe("iskToCents / centsToIsk", () => {
       ["1000000.01", 100000001n],
     ] as const) {
       expect(iskToCents(str)).toBe(cents);
-      expect(centsToIsk(cents)).toBe(centsToIsk(iskToCents(centsToIsk(cents))));
+      // Round-trips back through the pair, rather than comparing two
+      // expressions that both run the conversion under test — the old form
+      // (`centsToIsk(cents)` vs `centsToIsk(iskToCents(centsToIsk(cents)))`)
+      // held for any implementation, including a broken one.
+      expect(iskToCents(centsToIsk(cents))).toBe(cents);
     }
   });
 

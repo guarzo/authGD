@@ -13,7 +13,20 @@ export function CopyAmountButton({ amount }: { amount: string }) {
   const [failed, setFailed] = useState(false);
   // onClick must return void, not a Promise (no-misused-promises) — the
   // clipboard write is fired and handled here rather than awaited by React.
+  function showFailed(): void {
+    setCopied(false);
+    setFailed(true);
+    setTimeout(() => setFailed(false), 2000);
+  }
   function handleClick(): void {
+    // `navigator.clipboard` is undefined outside a secure context, not merely
+    // a rejecting promise — reading `.writeText` off it throws synchronously,
+    // so the `.catch` below never gets attached and the button silently does
+    // nothing. The failure path has to be entered by hand for that case.
+    if (!navigator.clipboard?.writeText) {
+      showFailed();
+      return;
+    }
     void navigator.clipboard
       .writeText(amount)
       .then(() => {
@@ -22,12 +35,9 @@ export function CopyAmountButton({ amount }: { amount: string }) {
         setTimeout(() => setCopied(false), 2000);
       })
       .catch(() => {
-        // Permission denied or a non-secure context both reject silently —
-        // an unhandled rejection here would leave the operator clicking a
-        // button that appears to do nothing, so it gets the same visible
-        // feedback treatment as success.
-        setFailed(true);
-        setTimeout(() => setFailed(false), 2000);
+        // A denied permission rejects rather than throwing — same visible
+        // feedback, so an operator never clicks a button that appears dead.
+        showFailed();
       });
   }
   return (

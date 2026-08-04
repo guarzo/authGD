@@ -228,9 +228,10 @@ describe("contacts", () => {
 
 describe("resolveIds", () => {
   it("maps lowercased names to their inventory type id", async () => {
+    let requestBody: unknown;
     server.use(
       http.post(`${BASE}/universe/ids/`, async ({ request }) => {
-        expect(await request.json()).toEqual(["Tritanium", "Pyerite"]);
+        requestBody = await request.json();
         return HttpResponse.json({
           inventory_types: [
             { id: 34, name: "Tritanium" },
@@ -241,6 +242,10 @@ describe("resolveIds", () => {
     );
     const esi = createEsiClient();
     const map = await esi.resolveIds(["Tritanium", "Pyerite"]);
+    // Asserted out here, not inside the resolver: a failed `expect` in there
+    // rejects the handler, which MSW surfaces as a transport error on the
+    // client call rather than as this test's own assertion failure.
+    expect(requestBody).toEqual(["Tritanium", "Pyerite"]);
     expect(map.get("tritanium")).toBe(34);
     expect(map.get("pyerite")).toBe(35);
   });

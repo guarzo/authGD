@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { lootPool, payoutOperation, payoutParticipant } from "@/db/schema";
 import { setupTestDb, truncateAll } from "./helpers/db";
+import { expectCheckViolation } from "./helpers/constraints";
 
 let ctx: Awaited<ReturnType<typeof setupTestDb>>;
 beforeAll(async () => {
@@ -43,19 +44,21 @@ describe("payout schema", () => {
       .insert(payoutOperation)
       .values({ name: "Op", occurredAt: new Date() })
       .returning();
-    await expect(
+    await expectCheckViolation(
       ctx.db
         .insert(payoutParticipant)
         .values({ operationId: op.id, displayName: "Bad Share", shares: "-1" }),
-    ).rejects.toThrow();
+      "payout_participant_shares_ck",
+    );
   });
 
   it("rejects a corpSharePct over 100", async () => {
-    await expect(
+    await expectCheckViolation(
       ctx.db
         .insert(payoutOperation)
         .values({ name: "Op", occurredAt: new Date(), corpSharePct: "101" }),
-    ).rejects.toThrow();
+      "payout_operation_corp_pct_ck",
+    );
   });
 
   it("rejects a flat pool with no note", async () => {
@@ -63,13 +66,14 @@ describe("payout schema", () => {
       .insert(payoutOperation)
       .values({ name: "Op", occurredAt: new Date() })
       .returning();
-    await expect(
+    await expectCheckViolation(
       ctx.db.insert(lootPool).values({
         operationId: op.id,
         valuationSource: "flat",
         totalValue: "500.00",
       }),
-    ).rejects.toThrow();
+      "loot_pool_flat_note_ck",
+    );
   });
 
   it("rejects an appraised pool with both stationId and regionId set", async () => {
@@ -77,7 +81,7 @@ describe("payout schema", () => {
       .insert(payoutOperation)
       .values({ name: "Op", occurredAt: new Date() })
       .returning();
-    await expect(
+    await expectCheckViolation(
       ctx.db.insert(lootPool).values({
         operationId: op.id,
         valuationSource: "appraised",
@@ -86,7 +90,8 @@ describe("payout schema", () => {
         regionId: 10000002,
         totalValue: "500.00",
       }),
-    ).rejects.toThrow();
+      "loot_pool_appraised_fields_ck",
+    );
   });
 
   it("rejects an appraised pool with neither stationId nor regionId set", async () => {
@@ -94,13 +99,14 @@ describe("payout schema", () => {
       .insert(payoutOperation)
       .values({ name: "Op", occurredAt: new Date() })
       .returning();
-    await expect(
+    await expectCheckViolation(
       ctx.db.insert(lootPool).values({
         operationId: op.id,
         valuationSource: "appraised",
         pricingMode: "sell_best",
         totalValue: "500.00",
       }),
-    ).rejects.toThrow();
+      "loot_pool_appraised_fields_ck",
+    );
   });
 });

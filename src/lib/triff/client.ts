@@ -6,8 +6,11 @@ const QUOTE_CHUNK = 900;
 
 export class TriffError extends Error {
   status?: number;
-  constructor(message: string, status?: number) {
-    super(message);
+  constructor(message: string, status?: number, options?: { cause?: unknown }) {
+    super(message, options);
+    // Without this every instance reports `name === "Error"`, so a log line or
+    // a `err.name` check cannot tell a triff failure from any other.
+    this.name = "TriffError";
     this.status = status;
   }
 }
@@ -87,6 +90,11 @@ export function createTriffClient(opts: TriffClientOptions = {}) {
     } catch (err) {
       throw new TriffError(
         `triff quote request failed: ${err instanceof Error ? err.message : String(err)}`,
+        undefined,
+        // The formatted message loses the original's stack and any nested
+        // cause (DNS vs TLS vs abort), which is the part worth reading when
+        // this fires in production.
+        { cause: err },
       );
     }
     if (!res.ok) {

@@ -1,5 +1,5 @@
 import type { createEsiClient } from "@/lib/esi/client";
-import type { createTriffClient } from "@/lib/triff/client";
+import type { createTriffClient, TriffQuote } from "@/lib/triff/client";
 import { centsToIsk, iskToCents } from "@/core/payout-split";
 import { parseLootPaste } from "@/core/loot-paste";
 import { selectPrice, type PricingMode } from "@/core/pricing";
@@ -41,12 +41,7 @@ export async function appraiseLoot(
         stationId: opts.stationId,
         regionId: opts.regionId,
       })
-    : new Map<
-        number,
-        Awaited<ReturnType<typeof deps.triff.quote>> extends Map<number, infer V>
-          ? V
-          : never
-      >();
+    : new Map<number, TriffQuote>();
 
   const items: AppraisedItem[] = lines.map((line) => {
     const typeId = idByLowerName.get(line.name.toLowerCase()) ?? null;

@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   lootItem,
@@ -18,6 +18,7 @@ import {
 } from "@/services/payouts";
 import { addAppraisedPool, addFlatPool, deletePool } from "@/services/payout-loot";
 import { setupTestDb, truncateAll } from "./helpers/db";
+import { expectCheckViolation } from "./helpers/constraints";
 import { seedAccount } from "./helpers/seed";
 
 let ctx: Awaited<ReturnType<typeof setupTestDb>>;
@@ -56,6 +57,32 @@ async function soleParticipantAmount(operationId: string) {
     .from(payoutParticipant)
     .where(eq(payoutParticipant.operationId, operationId));
   return p.amount;
+}
+
+/**
+ * Blocks until `count` backends on this database are parked on a lock. Used
+ * to observe that concurrent transactions have genuinely reached
+ * `lockOperation` and queued, which is the state the serialization test is
+ * about — a fixed sleep can only guess at it.
+ *
+ * The polling connection is a fourth checkout from a pool of five (blocker
+ * plus two attempts hold the other three), so it never waits on the pool.
+ */
+async function waitForLockWaiters(count: number, timeoutMs = 5000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const res = await ctx.db.execute(sql`
+      select count(*)::int as n
+      from pg_stat_activity
+      where datname = current_database()
+        and wait_event_type = 'Lock'
+        and pid <> pg_backend_pid()`);
+    if (Number((res.rows[0] as { n: number }).n) >= count) return;
+    if (Date.now() > deadline) {
+      throw new Error(`timed out waiting for ${count} backends to block on a lock`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
 }
 
 describe("addAppraisedPool", () => {
@@ -268,9 +295,12 @@ describe("deletePool", () => {
 
     const attempt1 = ctx.db.transaction((tx) => deletePool(tx, operatorId, poolId));
     const attempt2 = ctx.db.transaction((tx) => deletePool(tx, operatorId, poolId));
-    // Give both attempts time to complete their initial (unlocked) pool
-    // lookup and queue on lockOperation, which is blocked by the lock above.
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    // Wait for both attempts to actually be queued on lockOperation, rather
+    // than sleeping a fixed 100ms and hoping. A sleep that is long enough on
+    // a developer machine is not necessarily long enough on a loaded CI box,
+    // and when it is too short the test does not fail — it silently stops
+    // testing serialization and passes for the wrong reason.
+    await waitForLockWaiters(2);
     releaseBlocker();
     // Wait for the blocker's own transaction to actually commit and release
     // the row lock, rather than relying on the next test's beforeEach
@@ -340,20 +370,6 @@ describe("payment lock", () => {
     ).rejects.toThrow(PayoutForbiddenError);
   });
 });
-
-/**
- * `error.message` from node-postgres is Drizzle's generic "Failed query:
- * ..." wrapper — the driver puts the actual Postgres error (and the
- * violated constraint's name) on `.cause`. Assert there so these tests
- * verify the DB rejected the specific constraint, not just "some" error.
- */
-async function expectCheckViolation(promise: Promise<unknown>, constraintName: string) {
-  await expect(promise).rejects.toMatchObject({
-    cause: expect.objectContaining({
-      message: expect.stringContaining(constraintName),
-    }),
-  });
-}
 
 describe("loot_item CHECK constraints", () => {
   it("rejects a non-positive qty at the database level (loot_item_qty_ck)", async () => {

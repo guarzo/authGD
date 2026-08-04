@@ -180,4 +180,21 @@ describe("createTriffClient", () => {
     expect(quotes.has(34)).toBe(true);
     expect(quotes.has(99)).toBe(false);
   });
+
+  it("wraps a transport failure as TriffError, keeping the original as the cause", async () => {
+    // The one failure mode with no HTTP response at all — DNS, TLS, a refused
+    // connection. It leaves `status` undefined (there is no status to report)
+    // and it is the case where the original error is the only thing worth
+    // reading, so it must survive on `.cause` rather than being flattened
+    // into a message string.
+    const fetchImpl = (() =>
+      Promise.reject(new Error("connect ECONNREFUSED 127.0.0.1:443"))) as typeof fetch;
+    const triff = createTriffClient({ fetchImpl });
+    const err = await triff.quote([34], { stationId: 60003760 }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(TriffError);
+    expect((err as TriffError).status).toBeUndefined();
+    expect((err as TriffError).name).toBe("TriffError");
+    expect((err as TriffError).message).toContain("connect ECONNREFUSED");
+    expect((err as TriffError).cause).toBeInstanceOf(Error);
+  });
 });

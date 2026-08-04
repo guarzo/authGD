@@ -390,6 +390,7 @@ git commit -m "feat(db): add payout schema, constraints, and migration"
   by design (see spec, *The split*).
 - Produces (exact signatures, consumed by `src/services/payouts.ts`'s
   `recalculate` in a later task):
+
   ```ts
   export function iskToCents(value: string): bigint;
   export function centsToIsk(cents: bigint): string;

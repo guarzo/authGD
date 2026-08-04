@@ -26,11 +26,33 @@ export type PayoutOperationSummary = {
  * lives outside the guarded service in src/services/payouts.ts.
  */
 export async function listPayoutOperations(dbx: Dbx): Promise<PayoutOperationSummary[]> {
+  // Explicit column lists, not `select()`. A bare select on loot_pool drags
+  // every operation's `raw_paste` — an entire pasted inventory window, per
+  // pool — across the wire to compute one sum. Nothing below reads a column
+  // that is not named here.
   const [ops, pools, participants, payments] = await Promise.all([
-    dbx.select().from(payoutOperation).orderBy(desc(payoutOperation.occurredAt)),
-    dbx.select().from(lootPool),
-    dbx.select().from(payoutParticipant),
-    dbx.select().from(payoutPayment),
+    dbx
+      .select({
+        id: payoutOperation.id,
+        name: payoutOperation.name,
+        occurredAt: payoutOperation.occurredAt,
+        status: payoutOperation.status,
+      })
+      .from(payoutOperation)
+      .orderBy(desc(payoutOperation.occurredAt)),
+    dbx
+      .select({ operationId: lootPool.operationId, totalValue: lootPool.totalValue })
+      .from(lootPool),
+    dbx
+      .select({
+        id: payoutParticipant.id,
+        operationId: payoutParticipant.operationId,
+        excluded: payoutParticipant.excluded,
+      })
+      .from(payoutParticipant),
+    dbx
+      .select({ participantId: payoutPayment.participantId, kind: payoutPayment.kind })
+      .from(payoutPayment),
   ]);
 
   // bigint cents, not Number: numeric(20,2) holds values far past 2^53, and the

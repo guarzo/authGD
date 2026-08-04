@@ -1,6 +1,6 @@
 # Fight payout tracking
 
-**Status:** design approved, not yet implemented
+**Status:** implemented — shipped as PR 1 (see the phase-2 section for what was deferred)
 **Date:** 2026-08-03
 
 ## The gap
@@ -217,7 +217,7 @@ Pure, in `src/core/payout-split.ts`, with no I/O and no database access — the
 same shape as `src/core/tier.ts` and `src/core/role-diff.ts`.
 
 ```
-corpShare    = total × corpSharePct        (ROUND_DOWN to 0.01)
+corpShare    = total × (corpSharePct / 100)   (ROUND_DOWN to 0.01)
 pool         = total − corpShare
 totalShares  = Σ shares over non-excluded participants
 perShare     = pool / totalShares          (ROUND_DOWN to 0.01)

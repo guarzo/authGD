@@ -29,7 +29,7 @@ export default async function PayoutsPage() {
 
   return (
     <>
-      <SiteHeader items={nav} current="payouts" />
+      <SiteHeader items={nav} current="/payouts" />
       <main id="main" tabIndex={-1} className="page">
         <div className="page__head">
           <h1>Payouts</h1>
