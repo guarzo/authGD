@@ -83,10 +83,13 @@ const demote = (actor: string, accountId: string) =>
 const wake = (accountId: string) => ctx.db.transaction((tx) => wakeSelf(tx, accountId));
 
 describe("handleEveLogin", () => {
-  it("creates a pessimistic green account with outbox + audit", async () => {
+  it("creates a pending account with outbox + audit, not a green one", async () => {
     const { accountId } = await login(ch());
     const [acc] = await ctx.db.select().from(account).where(eq(account.id, accountId));
-    expect(acc.tier).toBe("green");
+    // Pending, not green: a first login grants no tier and no Discord role.
+    // The membership sync promotes it to flygd once it confirms the main is in
+    // the alliance; anyone else waits for an admin.
+    expect(acc.tier).toBe("pending");
     expect(acc.tierLocked).toBe(false);
     expect(acc.mainCharacterId).toBe(90000001);
 
