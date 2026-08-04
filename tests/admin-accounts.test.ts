@@ -73,6 +73,19 @@ describe("setTierManual", () => {
     );
     expect(r).toEqual({ ok: false, error: "not_authorized" });
   });
+
+  it("records the tier it moved from, so the transition reads both ways", async () => {
+    const admin = await seedAdmin();
+    const target = await seedAccount(ctx.db, { tier: "flygd" });
+    await ctx.db.transaction((tx) => setTierManual(tx, admin.id, target.id, "blue"));
+    const audit = await lastAudit();
+    expect(audit.details).toMatchObject({
+      from: "flygd",
+      to: "blue",
+      locked: true,
+      cause: "manual",
+    });
+  });
 });
 
 describe("setAccountStatus not_found", () => {
@@ -104,6 +117,18 @@ describe("returnTierToAuto", () => {
     const target = await seedAccount(ctx.db);
     await ctx.db.transaction((tx) => returnTierToAuto(tx, admin.id, target.id));
     expect(await outboxRows()).toHaveLength(0);
+  });
+
+  it("records the tier automation was handed back", async () => {
+    const admin = await seedAdmin();
+    // Seeded and locked tiers differ, so the assertion picks between two live
+    // values rather than passing against a hardcoded literal.
+    const target = await seedAccount(ctx.db, { tier: "flygd" });
+    await ctx.db.transaction((tx) => setTierManual(tx, admin.id, target.id, "blue"));
+    await ctx.db.transaction((tx) => returnTierToAuto(tx, admin.id, target.id));
+    const audit = await lastAudit();
+    expect(audit.action).toBe("tier.unlocked");
+    expect(audit.details).toMatchObject({ tier: "blue" });
   });
 });
 
@@ -137,5 +162,36 @@ describe("setAccountStatus / setStatusNote", () => {
     await ctx.db.transaction((tx) => setStatusNote(tx, admin.id, target.id, "   "));
     expect((await getAcc(target.id)).statusNote).toBeNull();
     expect(await outboxRows()).toHaveLength(0);
+  });
+
+  it("records the status it moved from", async () => {
+    const admin = await seedAdmin();
+    const target = await seedAccount(ctx.db);
+    await ctx.db.transaction((tx) => setAccountStatus(tx, admin.id, target.id, "cryo"));
+    const audit = await lastAudit();
+    expect(audit.details).toMatchObject({ from: "active", to: "cryo" });
+  });
+
+  it("records whether a status note was added, replaced, or cleared", async () => {
+    const admin = await seedAdmin();
+    const target = await seedAccount(ctx.db);
+
+    await ctx.db.transaction((tx) => setStatusNote(tx, admin.id, target.id, "first"));
+    expect((await lastAudit()).details).toMatchObject({ had: false, has: true });
+
+    await ctx.db.transaction((tx) => setStatusNote(tx, admin.id, target.id, "second"));
+    expect((await lastAudit()).details).toMatchObject({ had: true, has: true });
+
+    await ctx.db.transaction((tx) => setStatusNote(tx, admin.id, target.id, "   "));
+    expect((await lastAudit()).details).toMatchObject({ had: true, has: false });
+  });
+
+  it("does not record the note text, which lives on the account", async () => {
+    const admin = await seedAdmin();
+    const target = await seedAccount(ctx.db);
+    await ctx.db.transaction((tx) =>
+      setStatusNote(tx, admin.id, target.id, "left the corp"),
+    );
+    expect(JSON.stringify((await lastAudit()).details)).not.toContain("left the corp");
   });
 });

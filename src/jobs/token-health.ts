@@ -100,7 +100,8 @@ export async function runTokenHealthJob(deps: {
       // Scope shortfall vs the CURRENT required set ⇒ needs_reauth (one-click
       // in-place re-auth in the UI); full coverage ⇒ valid. Guarded on the
       // blob we rotated to — a miss means the row moved on without us.
-      const covered = cfg.eveSso.scopes.every((s) => identity.scopes.includes(s));
+      const missingScopes = cfg.eveSso.scopes.filter((s) => !identity.scopes.includes(s));
+      const covered = missingScopes.length === 0;
       const nextStatus = covered ? ("valid" as const) : ("needs_reauth" as const);
       const statusRows = await db
         .update(character)
@@ -118,6 +119,10 @@ export async function runTokenHealthJob(deps: {
           actor: "system",
           action: "token.needs_reauth",
           target: String(ch.id),
+          // What is missing, not what is required: the required set is config
+          // an operator can read, and the difference is what tells an app-wide
+          // scope change apart from one member's revocation.
+          details: { missingScopes },
         });
         counts.needsReauth++;
       }

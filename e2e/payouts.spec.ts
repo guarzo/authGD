@@ -316,6 +316,10 @@ test("an unresolved loot item is named on the page, not silently priced at zero"
   ]);
 
   await page.goto(`/payouts/${op.id}`);
+  // `generateMetadata` names the operation the tab is showing. Pinned on a
+  // page that exists, opposite the 404 case in `not-found.spec.ts`: without
+  // this, a loader that returned null for everything would still pass there.
+  await expect(page).toHaveTitle("Short appraisal · Zoo Landers");
   await expect(page.getByText("1 item priced at 0.00")).toBeVisible();
   // The name matters — "1 item" alone doesn't tell you it's a supercarrier.
   await expect(page.getByText("Nyx ×1")).toBeVisible();

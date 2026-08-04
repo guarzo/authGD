@@ -53,7 +53,12 @@ export async function runWandererJob(deps: {
       return { status: "failed", errorSummary: msg };
     }
 
-    const diff = diffAcl({ desiredIds, members: characterEntries(members) });
+    const entries = characterEntries(members);
+    // The role each member holds right now, from the list already fetched
+    // above: which permission level a removal revoked is what an admin needs
+    // to restore the entry if the removal turns out to have been wrong.
+    const roleById = new Map(entries.map((m) => [m.characterId, m.role]));
+    const diff = diffAcl({ desiredIds, members: entries });
     const errors: string[] = [];
     let anyTransient = false;
     let added = 0;
@@ -90,6 +95,7 @@ export async function runWandererJob(deps: {
             actor: "system",
             action: "wanderer.removed",
             target: String(id),
+            details: { role: roleById.get(id) },
           });
         }
       } catch (err) {
