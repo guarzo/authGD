@@ -415,11 +415,13 @@ test("an open row drawer keeps the pin, and is not itself pinned", async ({
  * Table columns are shared, so anything rendered inside the name cell sets a
  * min-content width for column 1 on *every* row. The drawer's crew group is
  * `flex: 1 1 100%`, so while the drawer lived in that cell, opening one row
- * widened column 1 for the whole table: measured at 320px, 97px closed against
- * 281.5px open, which is how the pinned cell came to cover 98% of the region.
+ * widened column 1 for the whole table until the pinned cell took 279.5px of a
+ * 286px region — 98%, the figure recorded at globals.css's tombstone for the
+ * rule that used to unpin column 1 to compensate.
  *
- * The test above cannot catch this. It asserts the pin holds, and a pinned cell
- * is wholly on screen at either width, so it passes just as happily at 281.5px.
+ * The test above cannot catch this. It asserts the pin holds, and `pinGeometry`
+ * compares the cell against its own current width, so it is width-agnostic by
+ * construction: a wider pinned cell is still wholly on screen and still passes.
  * `clearOfPin` notices the widening only indirectly, once a control at the far
  * right happens to fall under the pin. Neither says the thing that has to stay
  * true, so this does: opening a row must not move column 1 at all.
@@ -446,16 +448,18 @@ test("an open drawer does not widen the shared first column", async ({
   await toggleOf(first).click();
   await expect(drawerOf(first)).toBeVisible();
 
-  // Vacuous unless the drawer really does want more width than the column it
-  // used to sit in — "unchanged" is trivially true of a drawer with nothing in
-  // it, and this is the pressure that used to be applied to column 1.
+  // Rules out the one genuinely vacuous case — a drawer that renders nothing,
+  // against which "unchanged" would be trivially true. It is not evidence of
+  // how much width the drawer's content demands: a cell spanning every column
+  // is wider than any single column by table structure alone.
   const drawer = (await drawerOf(first).locator("xpath=./td").boundingBox())!.width;
   expect(drawer, "the drawer is wider than the column it left").toBeGreaterThan(closed);
 
   const open = (await neighbourName.boundingBox())!.width;
   // Precision 0 — within half a pixel — matching how every other width claim in
-  // this file is stated. The regression this guards is a 338px move, so the
-  // tolerance costs nothing and keeps sub-pixel layout drift from flaking it.
+  // this file is stated. The regression this guards moves the column by hundreds
+  // of pixels, so the tolerance costs nothing and keeps sub-pixel layout drift
+  // from flaking it.
   expect(open, "opening one row must not widen column 1 for the others").toBeCloseTo(
     closed,
     0,
