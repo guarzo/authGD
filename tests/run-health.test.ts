@@ -93,6 +93,27 @@ describe("rowHealth", () => {
       expect(flight(week, JOB_CRON["membership-recheck"])).toBe("running");
       expect(flight(3 * week + MIN, JOB_CRON["membership-recheck"])).toBe("stuck");
     });
+
+    // finishSyncRun writes status and finishedAt together, so a null status
+    // with a finishedAt is unreachable today. It is still the one shape in the
+    // state space with no outcome recorded, and it must not render green:
+    // rowHealth keys in-flight purely on `status === null` for that reason.
+    it("treats a null status with a finishedAt as in flight, not ok", () => {
+      expect(
+        row({
+          status: null,
+          finishedAt: at(SUNDAY_0400, MIN),
+          now: at(SUNDAY_0400, 2 * MIN),
+        }),
+      ).toBe("running");
+      expect(
+        row({
+          status: null,
+          finishedAt: at(SUNDAY_0400, MIN),
+          now: at(SUNDAY_0400, 91 * MIN),
+        }),
+      ).toBe("stuck");
+    });
   });
 
   describe("overdue", () => {

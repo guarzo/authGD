@@ -95,10 +95,13 @@ export function rowHealth(input: {
   // precisely so this state is visible instead of being an absent row.
   if (startedAt === null) return "never";
 
-  // In flight: started, no status recorded yet. A finished run always writes a
-  // status alongside finishedAt (services/sync-run), so requiring both to be
-  // absent is what "still running" means.
-  if (status === null && finishedAt === null) {
+  // In flight: started, no outcome recorded. finishSyncRun writes a status
+  // alongside finishedAt (services/sync-run), so a null status with a
+  // finishedAt cannot happen today — and if it ever does it is a half-written
+  // finish, not a success. Keying purely on `status === null` is the fail-safe
+  // reading: that shape reports running/stuck (amber, worth a look) instead of
+  // falling through to a green "ok" for a run whose outcome nobody knows.
+  if (status === null) {
     const cadence = cron === null ? null : cadenceIntervalMs(cron, startedAt);
     const threshold =
       cadence === null
