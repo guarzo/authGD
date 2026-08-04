@@ -51,7 +51,7 @@ existence check it uses today holds only until `reverted` rows exist. The
 obvious phase-2 move is to implement that fold, ordering by
 `payout_payment.at`.
 
-**That fold is unsafe and phase 2 does not build it.**
+**That fold, ordered by the `at` column as it stands today, is unsafe.**
 
 `payout_payment.at` is `defaultNow()` (`src/db/schema.ts:327`), and Postgres'
 `now()` is *transaction start* time, not commit time. Two transactions touching
@@ -67,14 +67,35 @@ what happened ->  paid, then reverted      ->  is unpaid
 ```
 
 `payout_payment.id` is `defaultRandom()` (`schema.ts:321`), so it is no tiebreak
-either. Making the fold correct needs a monotonic sequence column — a migration,
-for a question that has a cheaper answer.
+either.
+
+**The fix is the timestamp, not a sequence column.** `defaultNow()` is only a
+*default*. Both writers can supply `at` explicitly, and both already hold the
+operation row lock when they insert, so phase 2 writes `at` as
+`clock_timestamp()` from inside the lock. Replaying the trace above, `T_revert`
+takes its clock reading *after* it acquires the lock, which is after `T_pay`
+committed — so it records the later time. Any two payment rows ever compared
+belong to the same operation and are serialized by that same lock, which makes
+this ordering total everywhere it is used.
+
+Residual risk, stated rather than hidden: a backwards system-clock step could
+still invert two events, and two rows could in principle land in the same
+microsecond. **Display order is `(at asc, id asc)`, and among exact ties it is
+arbitrary.** Rows written before phase 2 used `now()`, but no participant can
+have more than one of them — `recordPayment` short-circuits on
+`paidAmount !== null` (`payouts.ts:440`) and nothing cleared it until revert
+existed — so no pre-existing pair can be mis-ordered against each other.
+
+This needs no migration, and it does make the fold *possible*. Phase 2 still does
+not fold.
 
 **Decision.** `paidAmount` is the source of truth for derived payment state.
 `recordPayment` sets it, `revertPayment` clears it, both under the operation row
 lock, so it cannot disagree with itself. `payout_payment` remains the
-append-only history of who did what and when: displayed, never folded into a
-decision.
+append-only history of who did what and when: displayed in the order above, never
+folded into a decision. The fold would now be correct, but it is a per-participant
+ordered scan to answer what one already-locked column answers directly, and
+carrying both invites them to drift apart.
 
 Both existing call sites change from "has a paid row" to `paidAmount !== null`
 (`payout-view.ts:77` and `:161`). This is also what keeps `recordPayment`'s
@@ -146,13 +167,43 @@ make revert impossible, since the first payment freezes the operation.
 ### `setItemPrice(dbtx, actor, itemId, unitPrice)`
 
 In `src/services/payout-loot.ts`, next to the pool writers it has to keep
-consistent. Sets `priceSource: 'manual'`, recomputes the item's `totalValue`
-**rounding once at the line total** (invariant 2 — an override is a price like
-any other, and per-unit rounding makes the error scale with quantity), then
-re-derives the pool's `totalValue` from its items exactly as `addAppraisedPool`
-does (`payout-loot.ts:35`), then `recalculate`.
+consistent. Sets `priceSource: 'manual'`, recomputes the item's `totalValue`,
+then re-derives the pool's `totalValue` from its items exactly as
+`addAppraisedPool` does (`payout-loot.ts:35`), then `recalculate`.
 
 Calls `assertEditable`: it moves money.
+
+**Precision: manual prices are exactly two decimals.** `unitPrice` is
+`numeric(20,2)` (`schema.ts:280`), so two decimals is what the column can hold.
+The action parses the operator's input to a cents `bigint` with `iskToCents` and
+**rejects more than two decimal places with a readable message** rather than
+silently rounding a number someone typed deliberately.
+
+The payoff is that invariant 2 has nothing to round: `totalValue` is
+`unitPriceCents × qty`, an exact `bigint` product. Rounding once at the line total
+is the rule for *derived* prices; a manual price is already at cent precision, so
+per-unit and line-total rounding coincide and there is no error to scale.
+
+This leaves manual and appraised items deliberately inconsistent, and the
+inconsistency is worth naming so nobody "fixes" it: for an appraised item,
+`unitPrice` is a lossy 2-decimal rendering of a sub-cent market price while
+`totalValue` is computed from the full-precision one, so `unitPrice × qty` does
+**not** reproduce `totalValue` (this is what phase 1's sub-cent warning,
+`[id]/page.tsx:194`, is telling the operator). For a manual item the two agree
+exactly.
+
+**Consequence, accepted:** a sub-cent unit price cannot be entered by hand. An
+operator repricing a heap of near-worthless ammo at 0.004 ISK has no way to say
+so, and entering 0.01 would inflate it 2.5×. The escape hatch is the flat-total
+pool, which takes a pool value directly and does not go through per-item pricing.
+Overrides exist mainly for items the appraisal could not resolve — which are
+typically valuable, not sub-cent — so this is the rare case, and supporting it
+properly would mean a wider column, a migration, and a second stored
+representation of "the price the operator typed".
+
+**Bound:** reject a computed line total, or a re-derived pool total, that would
+fall outside `numeric(20,2)`'s range, with a readable message. See defect 9's
+magnitude bound below — this is the same failure reached from the other side.
 
 `rawPaste` is kept verbatim precisely so re-appraisal stays possible
 (`…-design.md:87`), and an override does not disturb it.
@@ -164,8 +215,17 @@ which have **no `where` clause at all** — every `loot_pool`, every
 `payout_participant`, every `payout_payment` in the database, folded in memory.
 The handover calls this the single most likely thing to bite in production.
 
-The primary fix is scoping, not paging: constrain the three child queries with
-`inArray(operationId, pageIds)`. Pagination then bounds `pageIds`.
+**Phase 2 leaves three queries, not four.** Once list state comes from
+`paidAmount` rather than "has a paid row" (above), the participant rows already
+carry the answer and the `payout_payment` query has nothing left to contribute:
+it is deleted, not scoped. That is also the convenient outcome, because
+`payout_payment` has no `operationId` column (`schema.ts:320-330` — only
+`participantId`), so scoping it would have meant a join back through
+participants to bound a query whose result is no longer read.
+
+The remaining two child queries — `loot_pool` and `payout_participant` — are
+constrained with `inArray(operationId, pageIds)`. The primary fix is that
+scoping; pagination is what bounds `pageIds`.
 
 `src/services/audit.ts:388-394` already establishes this repo's pagination
 pattern — keyset, `lt(auditLog.id, beforeId)` with `orderBy(desc(id))`, a
@@ -280,11 +340,25 @@ so exceeding it degrades rather than breaks — but if the real count is large,
 the design should move to a server action behind a client component.
 
 **`/payouts/[id]`, payments** — a revert control on paid participants, plus each
-participant's payment history, which is currently stored and never shown. The
-freeze notice must state that reverting does not reopen editing.
+participant's payment history, which is currently stored and never shown. History
+renders in `(at asc, id asc)` order, which the `clock_timestamp()` rule above
+makes causally correct for any two rows on the same operation. The freeze notice
+must state that reverting does not reopen editing.
 
 **`/account`** — the "your payouts" section: operation name, date, amount owed,
-paid state. Rows link through to `/payouts/[id]` **only** when the viewer passes
+paid state.
+
+**Finalized operations only.** A draft's roster and loot are still being edited,
+so its `amount` moves — and the phase-1 `recalculate` rewrites it on every roster
+or pool change. Presenting a moving number to a member under the heading "amount
+owed" states a commitment the operation has not made, and a member who checks
+twice would see two different figures with no explanation. Finalization is
+already the point at which the numbers stop moving, and it is already the
+precondition for payment (`revertPayment` and `recordPayment` both require it),
+so it is the honest cutoff. The cost is that a member cannot see a payout coming
+before it is final, which is the correct trade: nothing is owed yet.
+
+Rows link through to `/payouts/[id]` **only** when the viewer passes
 `canReadPayouts` (`payouts.ts:33`, tier `flygd`, any status); otherwise the row
 renders as plain text.
 
@@ -307,7 +381,7 @@ All nine from the handover are in scope.
 
 | # | Defect | Fix |
 | --- | --- | --- |
-| 1 | `listPayoutOperations` does four unbounded queries | Scope the child queries; keyset pagination (above) |
+| 1 | `listPayoutOperations` does four unbounded queries | Drop the payment query, scope the other two, keyset pagination (above) |
 | 2 | `shares` is `numeric(6,2)`; >9999.99 is a raw Postgres error | Reject `shares > 9999.99` with a readable message in `setParticipantShares` and its action, beside the existing `<= 0n` guard (`actions.ts:224`). **Not** a column widening — that would need a migration for a message |
 | 3 | Zero-quantity paste lines dropped silently | Keep dropping them (phase 1's lenience is deliberate and matches blank-line handling), but return them so the page can name what it ignored |
 | 4 | `computeSplit` does no input validation | Reject negative `totalCents` and `corpSharePct` outside 0–100 |
@@ -315,25 +389,44 @@ All nine from the handover are in scope.
 | 6 | Identical unresolved names not deduped | Prevented in `addParticipant` (above) |
 | 7 | `perShareCents` returned and consumed nowhere | Drop it from `SplitResult` |
 | 8 | `loot_item_qty_ck` / `loot_item_price_ck` untested | Constraint tests |
-| 9 | Parser edge cases | See below — one is fixed, one is deliberately left |
+| 9 | Parser edge cases | See below — three parts: one fixed, one bounded, one deliberately left |
 
 Defect 4 is defence in depth — the DB check constraints already catch it at
 persist time.
 
-**Defect 9, split in two.** A line that is only a quantity (`"12"`) is currently
+**Defect 9, in three parts.** A line that is only a quantity (`"12"`) is currently
 absorbed as an item named `12`, which is a silent wrong answer: it becomes a
 zero-priced unresolved row rather than an obvious mistake. It joins defect 3's
 reported-and-dropped set.
+
+**An absurd-magnitude quantity is bounded.** A long digit run parses through
+`parseQty` (`loot-paste.ts:10-12`, a bare `Number()`) to a finite but non-safe
+integer, and today it dies downstream as a raw Postgres overflow rather than a
+readable error. Two distinct bounds, because they fail differently:
+
+- **Quantity — `Number.MAX_SAFE_INTEGER`.** `lootItem.qty` is
+  `bigint(… { mode: "number" })` (`schema.ts:278`), so beyond 2^53 the value is
+  already wrong in JavaScript before Postgres ever sees it. This is a
+  correctness bound, not a taste bound, which is why it is that number and not a
+  game-flavoured cap. Over it, the line joins the reported-and-dropped set.
+- **Line and pool totals — the `numeric(20,2)` range.** A safe-integer quantity
+  can still overflow `totalValue`, and the sum of items can overflow the pool's.
+  Both are checked in `payout-loot.ts` and rejected with a readable message, in
+  the same place as `setItemPrice`'s bound above.
+
+The regexes only ever match digits (`loot-paste.ts:4-8`), so nothing but
+magnitude can get through this path.
 
 `"12xFoo"` with no space is **left as a literal name, deliberately.** Reading it
 as "12 of Foo" guesses at intent, and `x` without a separator is genuinely
 ambiguous against real EVE type names. Phase 2 documents this rather than
 changing it; a paste in that shape is not a format the game produces.
 
-Both defects 3 and 9 feed one mechanism: `parseLootPaste` returns its dropped
-lines alongside its items, and the appraisal form renders them as "N lines
-ignored", naming each. Nothing is rejected, so a mostly-good paste still
-appraises — matching phase 1's choice not to fail a whole paste on one bad line.
+Defects 3 and 9's first two parts feed one mechanism: `parseLootPaste` returns its
+dropped lines alongside its items, and the appraisal form renders them as "N lines
+ignored", naming each and why. Nothing is rejected wholesale, so a mostly-good
+paste still appraises — matching phase 1's choice not to fail a whole paste on one
+bad line.
 
 ## No migration
 
@@ -341,6 +434,12 @@ Everything phase 2 needs already exists in the schema. `priceSource: 'manual'`
 and `payout_payment_kind: 'reverted'` are both already enum members — phase 1
 anticipated both behaviours without building them. Defect 2 is fixed with a
 readable guard rather than by widening the column.
+
+Two decisions above were each the point where a migration would otherwise have
+been reached for, and each was answered without one: payment ordering takes
+`clock_timestamp()` under the existing lock instead of a monotonic sequence
+column, and manual prices are held to the two decimals `numeric(20,2)` already
+provides instead of widening it. Both are recorded with what they give up.
 
 `drizzle/` is untouched. There is nothing to run against production data, and
 the release-command migration step on deploy is a no-op for this PR.
@@ -373,10 +472,13 @@ Grouped by what would otherwise regress.
 
 **Money**
 
-- `setItemPrice` rounds once at the line total, asserting the correct value
-  *and* asserting it is not the per-unit value — mirroring the shape
-  `tests/appraisal.test.ts` already uses, so deleting the behaviour fails a test
-  rather than passing silently.
+- `setItemPrice` computes `totalValue` as an exact `unitPriceCents × qty` product,
+  asserted against a hand-computed value at a quantity large enough that a
+  floating-point route would drift.
+- `setItemPrice` rejects an input with more than two decimal places, rather than
+  rounding it.
+- `setItemPrice` and the pool writers reject a line or pool total outside
+  `numeric(20,2)` with a readable error, not a Postgres one.
 - `computeSplit` input validation (defect 4).
 - `loot_item_qty_ck` / `loot_item_price_ck` reject as intended (defect 8).
 
@@ -386,6 +488,10 @@ Grouped by what would otherwise regress.
 - Revert does **not** reopen editing — `assertEditable` still rejects. This pins
   the decision above so a later change has to argue with a test.
 - `recalculate` after a revert still never writes `paidAmount`.
+- A pay → revert → pay sequence on one participant yields three history rows with
+  strictly increasing `at`, ordered as they happened. This is the test that pins
+  `clock_timestamp()`; reverting to `defaultNow()` inside one test transaction
+  collapses all three to the same instant and fails it.
 
 **Authorization**
 
@@ -402,9 +508,18 @@ Grouped by what would otherwise regress.
 
 **Pagination**
 
-- Page 2 does not drag page 1's pools, participants, or payments into memory —
-  asserted against the scoped queries, not just the returned shape.
+- Page 2 does not drag page 1's pools or participants into memory — asserted
+  against the scoped queries, not just the returned shape.
+- The list reports paid state correctly with no `payout_payment` query in play,
+  including for a participant whose only rows are a `paid` and a later
+  `reverted` — the case the deleted query got wrong.
 - The composite cursor does not skip operations sharing an `occurredAt`.
+
+**Account view**
+
+- A draft operation the viewer is on does **not** appear in "your payouts"; it
+  appears once finalized.
+- Payment history renders oldest-first for a pay → revert → pay participant.
 
 **Multi-pool**
 
