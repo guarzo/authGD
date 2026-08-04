@@ -46,7 +46,7 @@ export const metadata: Metadata = {
 // start them (src/services/oauth-tx.ts).
 const ERRORS: Record<string, string> = {
   already_linked:
-    "That character belongs to another account. An admin needs to sort that out before it can move.",
+    "That character belongs to an account with its own history, so it can't be merged automatically. Ask an admin.",
   discord_already_linked: "That Discord account is already linked to another account.",
   discord_denied: "Discord authorization was cancelled.",
   discord_expired:
