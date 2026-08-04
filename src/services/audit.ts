@@ -48,11 +48,11 @@ const DIGITS_RE = /^\d+$/;
  * Reserving a string costs something: a *character* named exactly like one of
  * these can no longer be found by name, because the literal check wins before
  * any name lookup happens. So the reservation is no wider than the column it
- * is needed in. Job types are only ever written to `target` (by `sync.*`), and
- * EVE permits every one of them as a character name — `wanderer` and `purge`
- * especially — so reserving them for `actor` too would shadow a real name to
- * buy nothing. `system` and `all` stay field-agnostic: that predates this
- * change, and narrowing them now would be an unrelated behaviour change.
+ * is needed in. Job types are only ever written to `target` (by `sync.*`), so
+ * reserving them for `actor` too would buy nothing while shadowing whatever
+ * an account or character might legitimately be called there. `system` and
+ * `all` stay field-agnostic: that predates this change, and narrowing them now
+ * would be an unrelated behaviour change.
  */
 const RESERVED_LITERALS_ANY_FIELD: ReadonlySet<string> = new Set(["system", "all"]);
 

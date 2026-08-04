@@ -9,7 +9,12 @@ import {
 } from "@/core/run-health";
 
 const MIN = 60 * 1000;
-/** A Sunday 04:00 UTC — the one minute every JOB_CRON expression can fire. */
+/**
+ * A Sunday 04:00 UTC. Chosen so the weekly `membership-recheck` (`0 4 * * 0`)
+ * has a fire minute inside the fixture rather than a week away; the other
+ * expressions fire at other minutes, which does not matter because every case
+ * below measures from its own run time, not from a fire minute.
+ */
 const SUNDAY_0400 = new Date("2026-03-01T04:00:00.000Z");
 
 function at(base: Date, ms: number): Date {

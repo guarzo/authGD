@@ -1,9 +1,9 @@
 /**
  * "3m" style, coarse on purpose: the point is freshness, not precision. The
  * bare elapsed string is its own export because the sync page needs the same
- * vocabulary in three grammars — "4m ago" in the time column, "no run in 4h"
- * on the worker line, "running 42m" in a status token — and three separate
- * formatters would drift into disagreeing about the same instant.
+ * vocabulary in two grammars — "4m ago" in the time column and "no run in 4h"
+ * on the worker line — and two separate formatters would drift into
+ * disagreeing about the same instant.
  */
 export function elapsedShort(ms: number): string {
   const s = Math.max(0, Math.round(ms / 1000));

@@ -31,13 +31,14 @@ type SyncRunStatus = (typeof syncRunStatusEnum.enumValues)[number];
  */
 export const OVERDUE_GRACE_MS = 5 * 60 * 1000;
 
-/** A run is "stuck" once it has been in flight for this many cadences. */
+/** A run is "stuck" once it has been in flight for MORE than this many cadences. */
 export const STUCK_MULTIPLIER = 3;
 
 /**
- * Floor for the stuck threshold. The frequent jobs have a 30-minute cadence,
- * but an unscheduled/on-demand run has no cadence at all, and no job here
- * legitimately runs for a quarter of an hour.
+ * Floor for the stuck threshold. It binds only when the cadence is unknown: the
+ * shortest scheduled cadence is membership's 30 minutes, so the smallest
+ * derived threshold is already 90. An unscheduled/on-demand run has no cadence
+ * at all, and no job here legitimately runs for a quarter of an hour.
  */
 export const STUCK_FLOOR_MS = 15 * 60 * 1000;
 
@@ -47,8 +48,10 @@ export type RowHealth =
 /**
  * The gap between two consecutive fires of `cron`, or null when that cannot be
  * determined (unsupported grammar, or an unsatisfiable expression such as
- * Feb 30). Derived by asking `nextOccurrence` twice rather than by re-parsing
- * the expression here, so there is exactly one cron reader in the codebase.
+ * Feb 30). Derived by asking `nextOccurrence` twice rather than by evaluating
+ * the expression here, so `nextOccurrence` stays the only thing in the
+ * codebase that decides when a cron fires. (`formatCadence` and this page's
+ * `cadenceNamesTime` do read cron *fields*, but neither computes a fire time.)
  *
  * `nextOccurrence` THROWS on grammar outside its supported subset. This module
  * renders a page, so it must degrade rather than propagate: an unreadable cron

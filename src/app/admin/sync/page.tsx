@@ -41,13 +41,18 @@ function utcHhmmss(d: Date): string {
 
 /**
  * True when the cron's hour field is a fixed number rather than `*` or a
- * step — the same test `formatCadence` uses to decide whether it can print a
- * wall-clock time itself. When it's fixed, the cadence string already names
- * the time (`daily 03:00 UTC`, `Sun 04:00 UTC`) and a next-run line under it
- * would either repeat that number or, worse, read as "soon" for a job that
- * only fires once a week. Read off the raw expression rather than the
+ * step. When it is, the cadence string `formatCadence` prints already names a
+ * wall-clock time (`daily 03:00 UTC`, `Sun 04:00 UTC`) and a next-run line
+ * under it would either repeat that number or, worse, read as "soon" for a job
+ * that only fires once a week. Read off the raw expression rather than the
  * humanized cadence string, so a rewording of `formatCadence` can't silently
  * break this.
+ *
+ * Deliberately looser than `formatCadence`'s own test, which also requires a
+ * numeric minute: for a stepped minute on a fixed hour that function falls
+ * back to printing the raw expression while this one still suppresses the
+ * next-run line. Nothing in JOB_CRON has that shape, and suppressing a
+ * decoration is the safe side to err on.
  */
 function cadenceNamesTime(cron: string): boolean {
   const hour = cron.trim().split(/\s+/)[1];
@@ -237,7 +242,7 @@ export default async function AdminSyncPage({
       <ul className="strip">
         {/* aria-hidden: these label the summary rows visually, but each row
             is a single disclosure control whose accessible name already
-            carries job, health and age in that order. */}
+            carries job, health, age and cadence in that order. */}
         <li className="strip__head" aria-hidden="true">
           <span />
           <span>Job</span>

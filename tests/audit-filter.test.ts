@@ -82,10 +82,10 @@ describe("resolveFilterIdentity", () => {
     },
   );
 
-  // The reservation is scoped to the column that needs it. EVE permits every
-  // job type as a character name, and a job type is only ever written to
-  // `target`, so reserving it for `actor` as well would make a real pilot
-  // unfindable to buy nothing. This is the half of the tradeoff we refused.
+  // The reservation is scoped to the column that needs it. A job type is only
+  // ever written to `target`, so reserving it for `actor` as well would make
+  // an account or character with that name unfindable to buy nothing. This is
+  // the half of the tradeoff we refused.
   it("still resolves a character named like a job type in the actor column", async () => {
     const acc = await seedAccount(ctx.db);
     await seedCharacter(ctx.db, cfg, {
