@@ -347,6 +347,16 @@ describe("linkCharacter absorbing an accidental account", () => {
     const stray = await ctx.db.transaction((tx) =>
       handleEveLogin(tx, cfg, ch({ characterId: 90000332, ownerHash: "oh-332" })),
     );
+    // A row the stray account itself AUTHORED. Reachable in production: a
+    // demoted ex-admin still satisfies isAbsorbable (isAdmin is false now)
+    // while its old admin.* rows carry actor = its own uuid. Seeded directly
+    // because handleEveLogin only ever writes actor "system", so without this
+    // the actor half of the assertion below would pass vacuously.
+    await ctx.db.insert(auditLog).values({
+      actor: stray.accountId,
+      action: "admin.demoted",
+      target: main.id,
+    });
 
     await ctx.db.transaction((tx) =>
       linkCharacter(tx, cfg, main.id, ch({ characterId: 90000332, ownerHash: "oh-332" })),
@@ -361,13 +371,29 @@ describe("linkCharacter absorbing an accidental account", () => {
       sourceAccountId: stray.accountId,
       characterId: 90000332,
     });
-    // audit_log.actor is plain text with no FK: rows the deleted account wrote
-    // survive with a uuid that resolves to nothing (actorKind "unresolved").
-    const orphaned = await ctx.db
+    // audit_log.actor and .target are plain text with no FK, so BOTH halves of
+    // the deleted account's history survive it: rows written ABOUT it (target)
+    // and rows it wrote ITSELF (actor). Each keeps a uuid that now resolves to
+    // nothing, which is what the audit page renders as actorKind "unresolved".
+    const aboutStray = await ctx.db
       .select()
       .from(auditLog)
       .where(eq(auditLog.target, stray.accountId));
-    expect(orphaned.length).toBeGreaterThan(0);
+    expect(aboutStray.length).toBeGreaterThan(0);
+
+    const byStray = await ctx.db
+      .select()
+      .from(auditLog)
+      .where(eq(auditLog.actor, stray.accountId));
+    expect(byStray).toHaveLength(1);
+    expect(byStray[0].action).toBe("admin.demoted");
+
+    // The account row itself is gone — that is what makes both sets unresolved.
+    const [gone] = await ctx.db
+      .select()
+      .from(account)
+      .where(eq(account.id, stray.accountId));
+    expect(gone).toBeUndefined();
   });
 });
 
