@@ -82,6 +82,23 @@ describe("resolveFilterIdentity", () => {
     },
   );
 
+  // The reservation is scoped to the column that needs it. EVE permits every
+  // job type as a character name, and a job type is only ever written to
+  // `target`, so reserving it for `actor` as well would make a real pilot
+  // unfindable to buy nothing. This is the half of the tradeoff we refused.
+  it("still resolves a character named like a job type in the actor column", async () => {
+    const acc = await seedAccount(ctx.db);
+    await seedCharacter(ctx.db, cfg, {
+      id: 90001,
+      accountId: acc.id,
+      name: "Wanderer",
+      main: true,
+    });
+    const res = await resolveFilterIdentity(ctx.db, "actor", "Wanderer");
+    expect(res).toMatchObject({ kind: "name", name: "Wanderer" });
+    expect(res).not.toEqual({ kind: "raw", ids: ["Wanderer"] });
+  });
+
   // The end-to-end shape of the bug: the row exists, and the filter finds it.
   it("finds a single-job sync.requested row by its job-type target", async () => {
     const acc = await seedAccount(ctx.db);

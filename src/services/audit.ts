@@ -43,17 +43,21 @@ const DIGITS_RE = /^\d+$/;
  * These bypass name resolution in both directions — they must render as
  * `literal` (a clickable filter link on the audit page) and short-circuit as a
  * raw filter value, or filtering by them matches no character and silently
- * returns nothing. The membership is checked without regard to which column a
- * value came from (intentional): a raw hit is always safe even where a literal
- * is never actually stored, e.g. `("target","system")` or `("actor","all")`.
+ * returns nothing.
  *
- * The cost is that a *character* named exactly like one of these strings can
- * no longer be filtered by name — accepted, the same way it has always been
- * accepted for `all`, and preferable to a target cell no one can click.
+ * Reserving a string costs something: a *character* named exactly like one of
+ * these can no longer be found by name, because the literal check wins before
+ * any name lookup happens. So the reservation is no wider than the column it
+ * is needed in. Job types are only ever written to `target` (by `sync.*`), and
+ * EVE permits every one of them as a character name — `wanderer` and `purge`
+ * especially — so reserving them for `actor` too would shadow a real name to
+ * buy nothing. `system` and `all` stay field-agnostic: that predates this
+ * change, and narrowing them now would be an unrelated behaviour change.
  */
-const RESERVED_FILTER_LITERALS: ReadonlySet<string> = new Set([
-  "system",
-  "all",
+const RESERVED_LITERALS_ANY_FIELD: ReadonlySet<string> = new Set(["system", "all"]);
+
+const RESERVED_TARGET_LITERALS: ReadonlySet<string> = new Set([
+  ...RESERVED_LITERALS_ANY_FIELD,
   ...Object.keys(JOB_CRON),
 ]);
 
@@ -69,7 +73,7 @@ const RESERVED_FILTER_LITERALS: ReadonlySet<string> = new Set([
  * `wanderer.*` only ever target an EVE character id; everything else
  * (`tier.*`, `status.*`, `account.*`, `admin.*`, `sync.*`) targets an account.
  * The literal targets of `sync.*` (`"all"`, or a job type for a single-job
- * re-run — see RESERVED_FILTER_LITERALS) are short-circuited by the caller
+ * re-run — see RESERVED_TARGET_LITERALS) are short-circuited by the caller
  * before this function is consulted, so `sync.*` reaching here always means
  * the account-uuid form.
  */
@@ -118,7 +122,7 @@ export async function resolveAuditIdentities(
 
   for (const r of rows) {
     if (r.actor !== "system" && UUID_RE.test(r.actor)) accountIds.add(r.actor);
-    if (RESERVED_FILTER_LITERALS.has(r.target)) continue;
+    if (RESERVED_TARGET_LITERALS.has(r.target)) continue;
     const kind = targetKindFromAction(r.action);
     if (kind === "account" && UUID_RE.test(r.target)) accountIds.add(r.target);
     else if (kind === "character" && DIGITS_RE.test(r.target))
@@ -194,7 +198,7 @@ export async function resolveAuditIdentities(
 
     let targetName: string | null = null;
     let targetKind: ResolvedAuditRow["targetKind"] = "unresolved";
-    if (RESERVED_FILTER_LITERALS.has(r.target)) {
+    if (RESERVED_TARGET_LITERALS.has(r.target)) {
       // Renders as a filter link (see TargetCell): a single-job sync re-run
       // names its job here, and a target you cannot click to filter by is
       // half the value of recording it.
@@ -257,11 +261,9 @@ export async function resolveFilterIdentity(
   field: "actor" | "target",
   value: string,
 ): Promise<FilterResolution> {
-  if (
-    RESERVED_FILTER_LITERALS.has(value) ||
-    UUID_RE.test(value) ||
-    DIGITS_RE.test(value)
-  ) {
+  const reserved =
+    field === "target" ? RESERVED_TARGET_LITERALS : RESERVED_LITERALS_ANY_FIELD;
+  if (reserved.has(value) || UUID_RE.test(value) || DIGITS_RE.test(value)) {
     return { kind: "raw", ids: [value] };
   }
 
