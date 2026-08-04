@@ -4,6 +4,9 @@ import { getDb } from "@/db";
 import type { syncRunStatusEnum } from "@/db/schema";
 import { getAdminContext } from "@/lib/admin-guard";
 import { getSyncStatus } from "@/services/sync-status";
+import { newestSyncRun } from "@/services/health";
+import { evaluateFreshness } from "@/core/health";
+import { rowHealth, type RowHealth } from "@/core/run-health";
 import { cadenceFor, JOB_CRON, nextOccurrence } from "@/core/schedules";
 import {
   countColumns,
@@ -14,9 +17,9 @@ import {
 import { Json, Scroller, Status, type Tone } from "@/app/_components/ui";
 import { Disclosure } from "@/app/_components/disclosure";
 import { Submit } from "@/app/_components/submit";
-import { formatAgo } from "@/app/_components/format-ago";
+import { elapsedShort, formatAgo } from "@/app/_components/format-ago";
 import { RelativeTime } from "@/app/_components/relative-time";
-import { recheckInvalidAction, syncAllAction } from "./actions";
+import { recheckInvalidAction, syncAllAction, syncJobAction } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -30,6 +33,10 @@ function fmt(d: Date | null): string {
 
 function utcHhmm(d: Date): string {
   return d.toISOString().slice(11, 16);
+}
+
+function utcHhmmss(d: Date): string {
+  return d.toISOString().slice(11, 19);
 }
 
 /**
@@ -66,9 +73,13 @@ function nextRunFor(jobType: string, now: Date): Date | null {
  * Typed against the enum rather than string, so adding a status to the schema
  * is a compile error here instead of a silently grey badge. "partial" means
  * some of the job's work failed, which is a warning an admin must see, not an
- * inactive state. A null status is a job still running: not a failure and not
- * inactive either, so it stays neutral rather than borrowing the warn colour
- * PRODUCT.md reserves for things the admin can and should fix.
+ * inactive state. A null status is a run still in flight: not a failure and
+ * not inactive either, so it stays neutral rather than borrowing the warn
+ * colour PRODUCT.md reserves for things the admin can and should fix.
+ *
+ * This is the *recorded* status of one historical run, which is all the runs
+ * table below needs. The summary row asks a different question — is this job
+ * healthy *now* — and that one has to consult the clock: see `rowHealth`.
  */
 type SyncRunStatus = (typeof syncRunStatusEnum.enumValues)[number];
 
@@ -86,13 +97,76 @@ function tone(status: SyncRunStatus | null): Tone {
 }
 
 /**
- * Which jobs open on their own. "Not OK" is read as "actionable", so a run
- * still in flight does not count: a null status resolves on its own within
- * seconds, and expanding on it would mean the page flaps open and shut through
- * every sweep instead of pointing at the one job that needs an admin.
+ * Colour for a row's live health. Keyed off `RowHealth` and not off the run
+ * status, so "the last run said ok six hours ago on a 30-minute cadence" can
+ * be amber while "the last run said ok four minutes ago" is green.
+ *
+ * `overdue` and `stuck` are warn, not bad: nothing has reported a failure, the
+ * schedule has simply not been kept. `never` is off rather than bad for the
+ * same reason PRODUCT.md keeps green tier and a dead token out of alarm
+ * colour — a job that has not run yet is a state, not a fault.
  */
-function needsAttention(status: SyncRunStatus | null): boolean {
-  return status === "partial" || status === "failed";
+const HEALTH_TONE: Record<RowHealth, Tone> = {
+  ok: "ok",
+  partial: "warn",
+  failed: "bad",
+  running: "neutral",
+  stuck: "warn",
+  overdue: "warn",
+  never: "off",
+};
+
+/**
+ * The word beside the glyph, so colour is never the only carrier. `running`
+ * and `stuck` take their elapsed time into the label: those two states are the
+ * same shape and differ only in how long they have held it, and "running 42m"
+ * answers that without opening the row.
+ */
+function healthLabel(health: RowHealth, startedAt: Date | null, now: number): string {
+  if (health === "never") return "no runs";
+  if (health === "running" || health === "stuck") {
+    if (!startedAt) return health;
+    return `${health} ${elapsedShort(now - startedAt.getTime())}`;
+  }
+  return health;
+}
+
+/**
+ * Which rows open on their own. "Not OK" is read as "actionable", which rules
+ * out two states that look unhealthy but are not one job's problem:
+ *
+ * `running` resolves on its own within seconds, and expanding on it would mean
+ * the page flaps open and shut through every sweep instead of pointing at the
+ * one job that needs an admin. `stuck` is the same shape held far too long, so
+ * that one does open.
+ *
+ * `overdue` is excluded for a bigger reason: when the worker dies, every row
+ * goes overdue at once, so opening on it would expand all seven drawers
+ * together and destroy exactly the "this one job needs you" signal auto-open
+ * exists to create. A dead worker is a page-level condition and it is the
+ * worker line above the strip that says so.
+ */
+function needsAttention(health: RowHealth): boolean {
+  return health === "partial" || health === "failed" || health === "stuck";
+}
+
+/**
+ * The one-line outcome of the press that got us here. Per-job re-runs redirect
+ * with the job type itself, and that value is checked against the schedules
+ * table before it is echoed: a hand-typed `?queued=` is untrusted input, and
+ * this is copy, not a lookup that fails safe on its own.
+ */
+function queuedNotice(queued: string | undefined): string {
+  if (queued === "all") {
+    return "Membership, contacts, map and Discord queued for every account. The worker picks them up within a few seconds; use Refresh to see the runs land.";
+  }
+  if (queued === "recheck") {
+    return "Affiliation recheck queued. The worker picks it up within a few seconds; use Refresh to see the run land.";
+  }
+  if (queued && Object.hasOwn(JOB_CRON, queued)) {
+    return `${queued} queued. The worker picks it up within a few seconds; use Refresh to see the run land.`;
+  }
+  return "";
 }
 
 export default async function AdminSyncPage({
@@ -103,8 +177,22 @@ export default async function AdminSyncPage({
   const ctx = await getAdminContext();
   if (!ctx) redirect("/login");
   const { queued } = await searchParams;
-  const groups = await getSyncStatus(getDb());
-  const now = Date.now();
+  const db = getDb();
+  const [groups, newest] = await Promise.all([getSyncStatus(db), newestSyncRun(db)]);
+  // One instant for the whole render: the worker line, every row's health and
+  // the "checked at" stamp all have to agree, and reading the clock per row
+  // would let them disagree by however long the page takes to build.
+  const renderedAt = new Date();
+  const now = renderedAt.getTime();
+  const worker = evaluateFreshness(newest?.startedAt ?? null, renderedAt);
+  const workerAge = worker.ageSec === null ? null : elapsedShort(worker.ageSec * 1000);
+  const workerLine =
+    workerAge === null
+      ? "worker · no runs recorded"
+      : worker.fresh
+        ? `worker · last run ${workerAge} ago`
+        : `worker · no run in ${workerAge}`;
+  const notice = queuedNotice(queued);
   // The cadence column is dropped entirely rather than filled with dashes when
   // nothing on the page is scheduled — an empty column is exactly the noise
   // this page is being cleaned of.
@@ -122,31 +210,29 @@ export default async function AdminSyncPage({
 
       {/* role="status" because a server action redirect re-renders without a
           document load: without it the outcome of the press is visible but
-          never announced. */}
-      {queued === "all" && (
-        <p className="notice" role="status" data-glyph="·">
-          Sync queued for every account. The worker picks it up within a few seconds; the
-          strip below updates as runs finish.
-        </p>
-      )}
-      {queued === "recheck" && (
-        <p className="notice" role="status" data-glyph="·">
-          Affiliation recheck queued. The worker picks it up within a few seconds.
-        </p>
-      )}
+          never announced. The element is always in the tree and only its text
+          changes — a live region *inserted* with its content already in place
+          is announced unreliably, NVDA and JAWS especially, because the region
+          has to be registered before the mutation it is meant to report. */}
+      <p
+        role="status"
+        className={notice ? "notice" : "notice-slot"}
+        data-glyph={notice ? "·" : undefined}
+      >
+        {notice}
+      </p>
 
-      <div className="btn-row">
-        <form action={syncAllAction}>
-          <Submit className="btn btn--primary" pendingLabel="Queueing…">
-            Sync everything now
-          </Submit>
-        </form>
-        <form action={recheckInvalidAction}>
-          <Submit className="btn" pendingLabel="Queueing…">
-            Recheck invalid affiliations
-          </Submit>
-        </form>
-      </div>
+      {/* Every row below reports on one job. This line reports on the process
+          that runs all of them: without it a worker that died at 02:00 leaves
+          seven rows still showing whatever they last succeeded at, and the
+          page looks perfect through the outage that brought the admin here. */}
+      {worker.fresh ? (
+        <p className="worker">{workerLine}</p>
+      ) : (
+        <p className="notice notice--bad" data-glyph="!">
+          <span className="worker">{workerLine}</span>
+        </p>
+      )}
 
       {groups.length === 0 && (
         <p className="notice" data-glyph="·">
@@ -169,27 +255,35 @@ export default async function AdminSyncPage({
           </li>
           {groups.map((g) => {
             const latest = g.runs[0];
-            const latestAt = latest ? (latest.finishedAt ?? latest.startedAt) : null;
+            const startedAt = latest?.startedAt ?? null;
+            const finishedAt = latest?.finishedAt ?? null;
+            // finish-time for a completed run, start-time for one in flight:
+            // in both cases the last moment this job is known to have been
+            // doing something.
+            const latestAt = finishedAt ?? startedAt;
             const latestIso = latestAt ? latestAt.toISOString() : null;
+            const health = rowHealth({
+              status: latest?.status ?? null,
+              startedAt,
+              finishedAt,
+              cron: JOB_CRON[g.jobType] ?? null,
+              now: renderedAt,
+            });
             const cadence = cadenceFor(g.jobType);
-            const nextRun = nextRunFor(g.jobType, new Date(now));
+            const nextRun = nextRunFor(g.jobType, renderedAt);
             const cols = countColumns(g.jobType, g.runs);
             const span = cols.length || 1;
             return (
               <li key={g.jobType} className="strip__job">
                 <Disclosure
                   className="strip__disc"
-                  defaultOpen={latest ? needsAttention(latest.status) : false}
+                  defaultOpen={needsAttention(health)}
                   summary={
                     <>
                       <h2 className="strip__name">{g.jobType}</h2>
-                      {latest ? (
-                        <Status tone={tone(latest.status)}>
-                          {latest.status ?? "running"}
-                        </Status>
-                      ) : (
-                        <Status tone="off">no runs</Status>
-                      )}
+                      <Status tone={HEALTH_TONE[health]}>
+                        {healthLabel(health, startedAt, now)}
+                      </Status>
                       <RelativeTime iso={latestIso} initial={formatAgo(latestIso, now)} />
                       {anyCadence && (
                         <span className="strip__cadence mono">
@@ -332,12 +426,54 @@ export default async function AdminSyncPage({
                       </table>
                     </Scroller>
                   )}
+                  {/* Below the history, not above it: the admin opened this row
+                      to read why it failed, and the error string is the top
+                      row of that table. Only for jobs the worker actually has
+                      a queue for — the action rejects anything else, and a
+                      control that can only fail is worse than none. */}
+                  {JOB_CRON[g.jobType] && (
+                    <form action={syncJobAction} className="btn-row strip__act">
+                      <input type="hidden" name="jobType" value={g.jobType} />
+                      <Submit className="btn btn--micro" pendingLabel="Queueing…">
+                        Re-run {g.jobType}
+                      </Submit>
+                    </form>
+                  )}
                 </Disclosure>
               </li>
             );
           })}
         </ul>
       )}
+
+      {/* State before action (PRODUCT.md principle 2): the strip answers "what
+          is true right now" before the gold button, which is the most
+          saturated thing on the page, gets to pull the eye. */}
+      <div className="btn-row btn-row--controls">
+        <form action={syncAllAction}>
+          <Submit className="btn btn--primary" pendingLabel="Queueing…">
+            Sync membership, contacts, map, Discord
+          </Submit>
+        </form>
+        <form action={recheckInvalidAction}>
+          <Submit className="btn" pendingLabel="Queueing…">
+            Recheck invalid affiliations
+          </Submit>
+        </form>
+        {/* A plain anchor, not a router link: this page is the only thing on
+            screen that can answer "did the run land", and a soft navigation to
+            the URL you are already on is exactly the case a client router is
+            entitled to serve from its own cache. It drops `?queued=` on the
+            way, which is the point — otherwise a refresh three hours later
+            re-shows "queued a few seconds ago" as if it were fresh.
+
+            No polling behind it: an admin reading an expanded failed row must
+            not have the page move under them. */}
+        <a className="btn" href="/admin/sync">
+          Refresh
+        </a>
+        <span className="btn-row__stamp mono">checked {utcHhmmss(renderedAt)} UTC</span>
+      </div>
     </main>
   );
 }

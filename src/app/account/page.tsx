@@ -49,10 +49,11 @@ function contactsNoteApplies(result: string | null) {
  * One line of the closing telemetry: when authGD last pushed this, and when it
  * will look again.
  *
- * `formatAgo(null)` means "running", which is true on the sync page and false
- * here, so a never-pushed row gets its own state rather than being handed a
- * null. The next-check time still renders in that case: a member whose first
- * sync hasn't landed is exactly the one who wants to know when it will.
+ * A never-pushed row gets its own state rather than being handed a null:
+ * `formatAgo(null)` would say "never", which is accurate but reads as a fault
+ * in a member's telemetry rather than the ordinary "we haven't got to you yet"
+ * this is. The next-check time still renders in that case: a member whose
+ * first sync hasn't landed is exactly the one who wants to know when it will.
  */
 function PushRow({ push, now }: { push: PushStatus; now: number }) {
   const iso = push.lastPushedAt?.toISOString() ?? null;
