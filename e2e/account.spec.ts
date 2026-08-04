@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { eq, sql } from "drizzle-orm";
-import { account, character, syncRun } from "../src/db/schema";
+import { account, character, discordLink, syncRun } from "../src/db/schema";
 import { resetDb, seedMember, sessionCookieFor, testDb } from "./helpers";
 
 const { db, pool } = testDb();
@@ -215,7 +215,7 @@ test("unlink arms on the first click, confirms on the second, and Escape disarms
   ).toHaveLength(1);
 });
 
-test("last pushed reports per surface, with an unlinked Discord called out", async ({
+test("last pushed reports per surface, and drops Discord when it isn't linked", async ({
   page,
   context,
 }) => {
@@ -242,9 +242,10 @@ test("last pushed reports per surface, with an unlinked Discord called out", asy
   await expect(row("Standings")).toContainText(/next \d\d:05$/);
   await expect(row("Map")).toContainText("not yet run"); // scheduled, never run
   await expect(row("Map")).toContainText(/next \d\d:10$/);
-  // Nothing to push, so no cadence either: a different state from "not run".
-  await expect(row("Discord")).toContainText("not linked");
-  await expect(row("Discord")).not.toContainText("next");
+  // Nothing to push, so the row is dropped entirely rather than shown as an
+  // inert "not linked" token: STANDING above already states the same fact
+  // with the fix (Link Discord) attached, ~800px away.
+  await expect(pushed.locator("dt:text-is('Discord')")).toHaveCount(0);
 
   // The "next" column lines up across rows despite the states differing in
   // width, which is the whole point of reserving a column for them.
@@ -289,8 +290,30 @@ test("a flygd member still sees the first-run notice", async ({ page, context })
   await context.addCookies([await sessionCookieFor(db, acc.id)]);
   await page.goto("/account");
   await expect(page.getByText("First sync has not run yet")).toBeVisible();
+  // This account has no Discord link, and the notice renders directly above
+  // the "Link Discord" button. Promising roles here would tell the member the
+  // one step they still owe is already taken care of.
+  await expect(page.getByRole("status")).toContainText("Discord roles start once you");
+  await expect(page.getByRole("link", { name: "Link Discord" })).toBeVisible();
   // The label note applies to this account, so it becomes visible copy.
   await expect(page.locator("#contacts-note")).toHaveClass(/table-note/);
+});
+
+test("the first-run notice promises Discord roles once Discord is linked", async ({
+  page,
+  context,
+}) => {
+  const acc = await seedMember(db, { name: "Linked Pilot", tier: "flygd" });
+  await db.insert(discordLink).values({
+    accountId: acc.id,
+    discordUserId: "606060606060606060",
+  });
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.goto("/account");
+  await expect(page.getByRole("status")).toContainText(
+    "Standings, map access and Discord roles",
+  );
+  await expect(page.getByRole("link", { name: "Link Discord" })).toHaveCount(0);
 });
 
 test("last pushed is omitted entirely before any character is linked", async ({

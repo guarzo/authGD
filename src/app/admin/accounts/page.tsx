@@ -13,7 +13,11 @@ import { Notice, RuleHead, Scroller, Status, Tier } from "@/app/_components/ui";
 // Shared with the member's own character table rather than reimplemented here:
 // the near-miss label copy and the "not managed" wording are the same question
 // asked about the same character, and two copies drift.
-import { ContactState } from "@/app/account/contact-state";
+import {
+  ContactRemedy,
+  ContactState,
+  hasContactRemedy,
+} from "@/app/account/contact-state";
 import { Disclosure } from "@/app/_components/disclosure";
 import { Submit } from "@/app/_components/submit";
 import { ConfirmArmScope, ConfirmSubmit } from "@/app/_components/confirm-submit";
@@ -610,13 +614,29 @@ function AccountRow({
                     <div className="stack">
                       <ContactState
                         result={c.contactSyncResult}
-                        detail={c.contactSyncDetail}
-                        label={cfg.standings.label}
                         target={isContactsTarget({
                           tier: r.tier,
                           affiliationInvalid: c.affiliationInvalid,
                         })}
                       />
+                      {/* Gated on the same predicate the token is: splitting the
+                          prose out of ContactState moved its `!target` early
+                          return with it, and a non-target character holding a
+                          stale result from when it was a target would otherwise
+                          read "— not managed" and then explain how to fix it. */}
+                      {hasContactRemedy(
+                        c.contactSyncResult,
+                        isContactsTarget({
+                          tier: r.tier,
+                          affiliationInvalid: c.affiliationInvalid,
+                        }),
+                      ) && (
+                        <ContactRemedy
+                          result={c.contactSyncResult}
+                          detail={c.contactSyncDetail}
+                          label={cfg.standings.label}
+                        />
+                      )}
                     </div>
                   </td>
                   <td>

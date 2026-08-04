@@ -356,6 +356,15 @@ a:hover {
   margin-top: var(--s-2);
 }
 
+/* The account page's one-line verdict: whether there is anything below the
+   fold worth reading. It is always a `.st` Status token, same as everything
+   else this page calls state, so "the mono word is what the system computed"
+   holds here too. Layout only, no colour of its own — that comes from the
+   token's own tone (or lack of one for the quiet states). */
+.verdict {
+  margin-top: var(--s-3);
+}
+
 /* --- Section header ----------------------------------------------------- */
 /* The signature component: a typed label, then a hairline to the edge. */
 
@@ -993,6 +1002,32 @@ h3.rule-head__label {
 .st--off::before {
   background: transparent;
   border: 1px solid currentColor;
+}
+
+/* The account page's verdict in its loud states, and only there. At --t-label
+   the verdict read quieter than the .tier--lead badge a block below it, which
+   is 14px inside a gold border and fill — so on a degraded account the loudest
+   thing above the fold was the one fact that needs no action. This outranks it
+   on size while spending no extra colour.
+
+   Uppercase and the wide tracking come off deliberately: they are legible
+   devices at 11px, where they mark a value in a table, but at this size they
+   turn a sentence into what reads like a section heading. Sentence case keeps
+   it a statement about the account. The quiet verdicts (nominal, first sync
+   pending) keep the plain token — a page with nothing wrong should not open
+   with a large line saying so.
+
+   `.st` is nowrap and inline-flex, so this copy cannot wrap: at 320px the
+   content box is 288px and the longest current verdict measures ~250px in
+   mono at this size. That is the budget. Lengthening the copy overflows
+   rather than wraps, so measure before rewording it. */
+.st--lead {
+  font-size: var(--t-body);
+  /* The badge it has to outrank is 600 inside a border and a tint. Matching
+     its weight, one size step above it, gets there without a fill of its own. */
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
 }
 
 /* --- Tier badge --------------------------------------------------------- */
@@ -2008,6 +2043,19 @@ h3.rule-head__label {
   margin-bottom: var(--s-4);
   font-size: 0.8125rem;
   color: var(--ink-faint);
+}
+
+/* A run of the same notes placed *after* the table instead of before it. The
+   caption position needs no top margin, so a .table-note following a table's
+   last row butts straight against the border; this restores the gap without
+   changing the caption case. The last note's own bottom margin is dropped so
+   the group spaces against what follows it, not doubly. */
+.table-notes {
+  margin-top: var(--s-4);
+}
+
+.table-notes .table-note:last-child {
+  margin-bottom: 0;
 }
 
 /* The hairline runs the full width of the content column, so it terminates on

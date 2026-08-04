@@ -14,6 +14,7 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
+import type { ContactSyncResult } from "@/core/contact-result";
 
 export const tierEnum = pgEnum("tier", ["flygd", "blue", "green"]);
 export const accountStatusEnum = pgEnum("account_status", ["active", "cryo"]);
@@ -152,7 +153,7 @@ export const contactSyncState = pgTable("contact_sync_state", {
     .primaryKey()
     .references(() => character.id),
   lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }),
-  lastResult: text("last_result"),
+  lastResult: text("last_result").$type<ContactSyncResult>(),
   /**
    * Free-text context for `lastResult` — currently the label name(s) actually
    * found on the character when `last_result = 'label_mismatch'`. Nullable and

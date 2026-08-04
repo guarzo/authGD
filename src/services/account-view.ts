@@ -117,6 +117,16 @@ export interface AccountView {
      * corp and the page reads that absence as "not yet run" forever.
      */
     contactsTarget: boolean;
+    /**
+     * Widened from `ContactSyncResult` on purpose. The column is narrowed with
+     * `$type<>()`, which constrains the writer at compile time but puts no
+     * constraint on the database: a row written by an older deployment, or by
+     * hand, can hold a code this build has never heard of. Handing readers the
+     * union would let a `switch` look exhaustive when it is not, and would make
+     * the deliberate "unrecognized result" branch in ContactRemedy read as dead
+     * code somebody then deletes. `string` is the honest type for a value that
+     * crossed the database boundary. See src/core/contact-result.ts.
+     */
     contactSyncResult: string | null;
     /** Context for `contactSyncResult` — the label name(s) actually found when
      *  the result is `label_mismatch`, else null. */
@@ -189,6 +199,8 @@ export interface AdminCharacterRow {
   tokenStatus: "valid" | "invalid" | "needs_reauth" | "missing";
   needsReauthForScopes: boolean;
   affiliationInvalid: boolean;
+  /** Widened from `ContactSyncResult` for the reason given on the member-facing
+   *  field above: this value crossed the database boundary. */
   contactSyncResult: string | null;
   contactSyncDetail: string | null;
   mapObservedAt: Date | null;

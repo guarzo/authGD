@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Image from "next/image";
 import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
 import { getConfig } from "@/config";
@@ -6,6 +7,7 @@ import { getDb } from "@/db";
 import { getAccountView, type PushStatus } from "@/services/account-view";
 import { canReadPayouts } from "@/services/payouts";
 import { getSessionAccount } from "@/services/session";
+import { computeAccountHealth } from "@/core/account-health";
 import {
   Notice,
   RuleHead,
@@ -19,8 +21,21 @@ import { formatAgo } from "@/app/_components/format-ago";
 import { utcHhmm } from "@/app/_components/utc-time";
 import { Submit } from "@/app/_components/submit";
 import { ConfirmArmScope, ConfirmSubmit } from "@/app/_components/confirm-submit";
-import { ContactState } from "./contact-state";
+import { ContactRemedy, ContactState, hasContactRemedy } from "./contact-state";
 import { setMainAction, unlinkAction, wakeSelfAction } from "./actions";
+
+/** Columns in the crew manifest table: portrait, name, token, contacts, map,
+ *  actions. Kept alongside the empty-state row's `colSpan` so the two can't
+ *  drift apart the way a bare `6` scattered at both sites could. */
+const MANIFEST_COLUMN_COUNT = 6;
+
+/** The id a contacts cell's `aria-describedby` points at when — and only
+ *  when — `ContactRemedy` has something to say about that character. Unlike
+ *  `CONTACTS_NOTE_ID` below, which is always in the DOM and merely toggles
+ *  between visible and visually-hidden, this element is not rendered at all
+ *  for a character with no remedy. The reference and the element are gated on
+ *  the same `hasContactRemedy` predicate, so the id can never dangle. */
+const contactRemedyId = (characterId: number) => `contact-remedy-${characterId}`;
 
 // Reads the session cookie and hits the DB on every request; getConfig() also
 // requires env vars that aren't present at build time, so this route must
@@ -135,6 +150,15 @@ export default async function AccountPage({
     (c) => c.contactsTarget && contactsNoteApplies(c.contactSyncResult),
   );
 
+  // One derivation feeds three surfaces: the verdict line, the first-sync
+  // notice below (previously computed inline here, separately), and the
+  // colour grade on "Add character" further down.
+  const health = computeAccountHealth(view.characters);
+
+  const contactRemedies = view.characters.filter((c) =>
+    hasContactRemedy(c.contactSyncResult, c.contactsTarget),
+  );
+
   return (
     <>
       <SiteHeader items={nav} current="/account" measure="narrow" />
@@ -145,6 +169,42 @@ export default async function AccountPage({
             Membership, characters, and the state authGD is pushing out to standings, the
             map, and Discord.
           </p>
+          {/* One line, above everything else: whether there is anything to
+              read past this point before the member can leave. Quiet states
+              stay text-only at the token's own size; the loud ones reuse the
+              same Status token the manifest below uses for its own warn
+              states, at size="lead" so they outrank the gold tier badge a
+              block down — otherwise the loudest thing on a degraded page is
+              the one fact that needs no action. No new colour either way.
+              Suppressed entirely at zero characters — "nominal" would be true
+              and useless, and the manifest's empty state says the real thing. */}
+          {view.characters.length > 0 &&
+            (health.verdict === "degraded" ? (
+              <p className="verdict">
+                <Status tone="warn" size="lead">
+                  {health.attention} character{health.attention === 1 ? "" : "s"} need
+                  {health.attention === 1 ? "s" : ""} attention
+                </Status>
+              </p>
+            ) : health.verdict === "stalled" ? (
+              // Not "needs attention": nothing here is the member's to fix
+              // themselves. For an unrecognized code the remedy does name an
+              // action — ask an admin — which is why the wording is about who
+              // owns the fix rather than claiming there is nothing to do.
+              <p className="verdict">
+                <Status tone="warn" size="lead">
+                  {health.stalled} character{health.stalled === 1 ? "" : "s"} not syncing
+                </Status>
+              </p>
+            ) : health.verdict === "first-sync-pending" ? (
+              <p className="verdict">
+                <Status tone="off">first sync pending</Status>
+              </p>
+            ) : (
+              <p className="verdict">
+                <Status>nominal</Status>
+              </p>
+            ))}
         </div>
 
         {message && <Notice tone="bad">{message}</Notice>}
@@ -152,16 +212,26 @@ export default async function AccountPage({
         {/* Only the characters the contacts job actually targets can be waiting
             on a first run. Testing every character instead meant a blue member,
             who has no targets and never will, was told their first sync was
-            pending for as long as they stayed blue. */}
-        {view.characters.some((c) => c.contactsTarget) &&
-          view.characters.every(
-            (c) => !c.contactsTarget || c.contactSyncResult === null,
-          ) && (
-            <Notice>
-              First sync has not run yet. Standings, map access and Discord roles update
-              within a few minutes of linking a character.
-            </Notice>
-          )}
+            pending for as long as they stayed blue. Reads `firstSyncPending`
+            rather than the verdict: a just-linked character has no scopes yet,
+            so it is simultaneously "needs attention" and "waiting on its first
+            run", and this notice — the one that says the wait is minutes, not
+            broken — must survive the verdict leading with the fault. */}
+        {health.firstSyncPending && (
+          <Notice>
+            First sync has not run yet.{" "}
+            {/* The Discord clause is conditional because this notice renders
+                directly above a "Link Discord" button on an unlinked account.
+                Promising Discord roles there is both false (nothing pushes to
+                Discord until the link exists) and quietly costly: it tells a
+                member the one thing they still have to do is already handled.
+                The unlinked branch spends the same clause pointing at the
+                control instead. */}
+            {view.discordLinked
+              ? "Standings, map access and Discord roles update within a few minutes of linking a character."
+              : "Standings and map access update within a few minutes of linking a character. Discord roles start once you link Discord below."}
+          </Notice>
+        )}
 
         <RuleHead as="h2">Standing</RuleHead>
         <dl className="facts">
@@ -251,6 +321,14 @@ export default async function AccountPage({
                 {view.characters.map((c) => (
                   <tr key={c.id}>
                     <td>
+                      {/* The EVE image server is a third party serving one
+                          small thumbnail per row; running each through the
+                          image optimizer would add a proxy hop and a
+                          dependency on their uptime per row of an admin's
+                          scan, for no visible gain on a 32x32 avatar — not
+                          adding images.evetech.net to remotePatterns for
+                          this. */}
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
                         className="portrait"
                         src={`https://images.evetech.net/characters/${c.id}/portrait?size=64`}
@@ -270,17 +348,27 @@ export default async function AccountPage({
                       {c.tokenStatus === "valid" && !c.needsReauthForScopes ? (
                         <Status tone="ok">ok</Status>
                       ) : (
-                        <a href="/auth/eve/link">
-                          <Status tone="warn">re-auth needed</Status>
+                        // A control, not a value: `.st` carries no underline of
+                        // its own (it's display:inline-flex), so an anchor
+                        // wrapping one rendered with no affordance at all —
+                        // identical to an inert token one column over. This is
+                        // the same "make main"/"unlink" grade the row's other
+                        // controls use, per globals.css's value/control split.
+                        <a className="btn btn--quiet btn--micro" href="/auth/eve/link">
+                          re-authorize
                         </a>
                       )}
                     </td>
-                    <td>
+                    <td
+                      aria-describedby={
+                        hasContactRemedy(c.contactSyncResult, c.contactsTarget)
+                          ? contactRemedyId(c.id)
+                          : undefined
+                      }
+                    >
                       <div className="stack">
                         <ContactState
                           result={c.contactSyncResult}
-                          detail={c.contactSyncDetail}
-                          label={cfg.standings.label}
                           target={c.contactsTarget}
                         />
                       </div>
@@ -324,13 +412,60 @@ export default async function AccountPage({
                     </td>
                   </tr>
                 ))}
+                {view.characters.length === 0 && (
+                  <tr>
+                    <td className="log__empty" colSpan={MANIFEST_COLUMN_COUNT}>
+                      No characters linked yet. Add one to start pushing standings, map
+                      access, and Discord roles for it.
+                    </td>
+                  </tr>
+                )}
               </ConfirmArmScope>
             </tbody>
           </table>
         </Scroller>
 
+        {/* Remediation prose lives below the Scroller, never inside it: at
+            320px the table region scrolls horizontally, and up to three
+            sentences of fix instructions inside a cell drove that row to
+            ~340px tall while staying off-screen and unreachable. Each block
+            is capped at `--measure` like every other prose block on the
+            page, and is named by character since more than one row can need
+            explaining at once. */}
+        {contactRemedies.length > 0 && (
+          <div className="table-notes">
+            {contactRemedies.map((c) => (
+              <p key={c.id} id={contactRemedyId(c.id)} className="table-note">
+                <strong>{c.name}:</strong>{" "}
+                <ContactRemedy
+                  result={c.contactSyncResult}
+                  detail={c.contactSyncDetail}
+                  label={cfg.standings.label}
+                  // Only when the TOKEN cell isn't already showing a
+                  // re-authorize control for this row: two links to one href
+                  // in one row is noise. This covers the stale-snapshot case
+                  // where the token has since refreshed to valid but the last
+                  // contacts run still reports a token fault — there the cell
+                  // reads "ok" and this is the only place the control can live.
+                  showReauth={c.tokenStatus === "valid" && !c.needsReauthForScopes}
+                />
+              </p>
+            ))}
+          </div>
+        )}
+
         <p className="btn-row pager">
-          <a className="btn btn--primary" href="/auth/eve/link">
+          {/* Demoted to the default grade whenever any character needs
+              attention: DESIGN.md rations gold to one primary action per
+              view, and "state before action" means the loudest thing on a
+              broken page must not be adding more to it. Gold only in the
+              nominal state — which a zero-character account also computes to
+              (`computeAccountHealth` has no target and no fault to find) —
+              where adding a character genuinely is the primary action. */}
+          <a
+            className={health.attention === 0 ? "btn btn--primary" : "btn"}
+            href="/auth/eve/link"
+          >
             Add character
           </a>
         </p>
@@ -350,13 +485,16 @@ export default async function AccountPage({
               <dt>Map</dt>
               <PushRow push={view.pushes.map} now={now} />
 
-              <dt>Discord</dt>
-              {view.discordLinked ? (
-                <PushRow push={view.pushes.discord} now={now} />
-              ) : (
-                <dd className="push">
-                  <Status tone="off">not linked</Status>
-                </dd>
+              {/* Dropped entirely rather than shown as an inert "not linked"
+                  token: nothing is being pushed for it, and STANDING above
+                  already states the same fact with the fix attached. Stating
+                  it twice, ~800px apart, was the same information doing
+                  nothing the second time. */}
+              {view.discordLinked && (
+                <>
+                  <dt>Discord</dt>
+                  <PushRow push={view.pushes.discord} now={now} />
+                </>
               )}
             </dl>
           </>
@@ -369,14 +507,7 @@ export default async function AccountPage({
             asset for a smaller frame rather than cropping or downscaling it,
             same technique the full size already uses, just a smaller target. */}
         <p className={`closing${view.characters.length <= 1 ? " closing--compact" : ""}`}>
-          <img
-            src="/brand/lander-moon.webp"
-            alt=""
-            width={1120}
-            height={711}
-            loading="lazy"
-            decoding="async"
-          />
+          <Image src="/brand/lander-moon.webp" alt="" width={1120} height={711} />
         </p>
       </main>
     </>
