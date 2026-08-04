@@ -53,13 +53,13 @@ test("resolved names, distinguishable system actor, one-line details, filtered c
   // Details render a one-line human summary collapsed, with the full JSON
   // still reachable behind the "+" disclosure.
   const adminDetails = adminRow.locator("details.json");
-  await expect(adminDetails.locator(".json__peek")).toHaveText("green → flygd");
+  await expect(adminDetails.locator(".json__peek")).toHaveText("green → flygd, admin");
   await expect(adminDetails.locator(".json__full")).toBeHidden();
   await adminDetails.locator("summary").click();
   await expect(adminDetails.locator(".json__full")).toContainText('"cause": "admin"');
 
   const systemDetails = systemRow.locator("details.json");
-  await expect(systemDetails.locator(".json__peek")).toHaveText("→ green");
+  await expect(systemDetails.locator(".json__peek")).toHaveText("→ green, membership");
 
   // The count states it is a filtered subset, not a total, once a filter is
   // applied.
@@ -760,4 +760,33 @@ test("paging past the end with an active filter keeps that filter on the exit li
   await exitLink.click();
   await expect(page).toHaveURL(/[?&]actor=Boss/);
   await expect(page.locator("tbody tr")).toHaveCount(2);
+});
+
+test("a demotion row shows why it happened without opening the payload", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  const member = await seedMember(db, { name: "Zed", tier: "green" });
+
+  await db.insert(auditLog).values([
+    {
+      actor: "system",
+      action: "tier.changed",
+      target: member.id,
+      details: { from: "flygd", to: "green", cause: "main left alliance" },
+    },
+  ]);
+
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.goto("/admin/audit");
+
+  // The product question, answered from the collapsed line: an admin reads why
+  // the tier moved without opening the disclosure.
+  const row = page.locator("tbody tr").filter({ hasText: "Zed" });
+  await expect(row).toHaveCount(1);
+  await expect(row.locator("details.json .json__peek")).toHaveText(
+    "flygd → green, main left alliance",
+  );
+  await expect(row.locator("details.json .json__full")).toBeHidden();
 });
