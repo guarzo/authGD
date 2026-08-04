@@ -101,7 +101,7 @@ describe("EVE auth flow", () => {
 
     const accounts = await ctx.db.select().from(account);
     expect(accounts).toHaveLength(1);
-    expect(accounts[0].tier).toBe("green");
+    expect(accounts[0].tier).toBe("pending");
     const chars = await ctx.db.select().from(character);
     expect(chars[0].id).toBe(90000001);
   });

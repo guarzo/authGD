@@ -204,7 +204,11 @@ async function createAccountWithCharacter(
 ): Promise<string> {
   const [acc] = await dbx
     .insert(account)
-    .values({ tier: "green", mainCharacterId: ch.characterId })
+    // Explicit, not the column default: the default stays green because a
+    // migration cannot use a newly added enum value in the transaction that
+    // adds it. Deploy 1 taught every reader about pending; this line is
+    // deploy 2, and must never ship in the same release as deploy 1.
+    .values({ tier: "pending", mainCharacterId: ch.characterId })
     .returning();
   await dbx.insert(character).values({
     id: ch.characterId,
