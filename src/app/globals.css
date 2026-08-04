@@ -1345,6 +1345,17 @@ h3.rule-head__label {
   letter-spacing: 0.08em;
 }
 
+/* The copy button's result line. It holds the width of its longest message
+   even while empty, because it sits in a right-aligned row of buttons: without
+   the reservation, "copied" appearing shoves every control beside it sideways
+   at the exact moment an operator is still moving between them. */
+.copy-result {
+  display: inline-block;
+  min-width: 5rem;
+  font-size: 0.6875rem;
+  letter-spacing: 0.08em;
+}
+
 /* --- Fields ------------------------------------------------------------- */
 
 .field {
@@ -1366,6 +1377,34 @@ h3.rule-head__label {
 
 .field:hover {
   border-color: var(--gold-dim);
+}
+
+/* The payout flow's five forms used to reuse `.stack`, whose
+   `justify-items: start` exists so a status token doesn't blow out to the
+   full width of its table cell (see `.stack` below). Applied to a form that
+   rule stops every field from stretching, so each control falls back to its
+   own intrinsic width instead — which is type-dependent and engine-dependent
+   both: a `<select>` sizes to its longest option, a `<textarea>` to its `cols`
+   default regardless of `rows`, and the various `<input>` types disagree with
+   each other and across browsers. Measured in Chromium, the five controls on
+   these forms spanned 106px to 210px. The column reads ragged rather than
+   aligned. `.form-stack` is the same vertical grid without that override, at a
+   roomier gap, so fields take grid's default stretch and share one edge;
+   `max-width` keeps that edge from running the full width of `.page--narrow`
+   when nothing else caps it. */
+.form-stack {
+  display: grid;
+  gap: var(--s-4);
+  max-width: var(--measure);
+}
+
+/* One field: its label, its control, and optionally a hint below (the
+   corp-share and appraise-location hints, both outside their `<label>` so they
+   don't get folded into its accessible name). Tighter gap than the form's, so
+   a field's own parts read as one unit against the space between fields. */
+.form-stack__field {
+  display: grid;
+  gap: var(--s-1);
 }
 
 .filters {

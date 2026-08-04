@@ -343,99 +343,39 @@ export default async function PayoutOperationPage({
                 arm state. */}
             <ConfirmArmScope>
               <tbody>
-                {pools.map((pool, index) => {
-                  // An unresolved item priced at 0.00 is the one thing on this page
-                  // an operator MUST see before finalizing: it means the total is
-                  // quietly low and everyone is about to be underpaid. Naming the
-                  // items is the whole safeguard — a count alone doesn't tell you
-                  // whether it's a junk module or the faction battleship.
-                  const unresolved = pool.items.filter(
-                    (i) => i.priceSource === "unresolved",
-                  );
-                  // A resolved item can still show "0.00" as its unit price: the
-                  // line total is rounded once (see appraiseLoot), so a sub-cent
-                  // per-unit price stores as a 2dp display value that reads as
-                  // free while the line genuinely contributed to the pool. This
-                  // is derived from the persisted row, not a separate flag.
-                  const subCentPriced = pool.items.filter(
-                    (i) =>
-                      i.priceSource === "triff" &&
-                      iskToCents(i.unitPrice) === 0n &&
-                      iskToCents(i.totalValue) !== 0n,
-                  );
-                  return (
-                    <tr key={pool.id}>
-                      <td className="mono nowrap">{index + 1}</td>
-                      <td>
-                        {pool.valuationSource === "appraised" ? (
-                          <Status tone="ok">
-                            appraised
-                            {pool.pricingMode &&
-                              ` · ${PRICING_LABELS[pool.pricingMode as PricingMode] ?? pool.pricingMode}`}
-                          </Status>
-                        ) : (
-                          <Status tone="warn">flat (manual)</Status>
-                        )}
-                      </td>
-                      <td className="mono nowrap">{pool.totalValue} ISK</td>
-                      <td>
-                        {pool.notes}
-                        {unresolved.length > 0 && (
-                          <p className="notice notice--warn" data-glyph="!">
-                            <span>
-                              <strong>
-                                {unresolved.length} item
-                                {unresolved.length === 1 ? "" : "s"} priced at 0.00
-                              </strong>{" "}
-                              — not found, or no market data for the chosen pricing. The
-                              pool total is short by whatever they are worth.
-                              <br />
-                              <span className="dim">
-                                {unresolved.map((i) => `${i.name} ×${i.qty}`).join(", ")}
-                              </span>
-                            </span>
-                          </p>
-                        )}
-                        {subCentPriced.length > 0 && (
-                          <p className="notice notice--warn" data-glyph="!">
-                            <span>
-                              <strong>
-                                {subCentPriced.length} item
-                                {subCentPriced.length === 1 ? "" : "s"} priced under 0.01
-                                ISK each
-                              </strong>{" "}
-                              — the unit price rounds to 0.00 for display only; the line
-                              total is real and already counted in the pool.
-                              <br />
-                              <span className="dim">
-                                {subCentPriced
-                                  .map((i) => `${i.name} ×${i.qty} (${i.totalValue} ISK)`)
-                                  .join(", ")}
-                              </span>
-                            </span>
-                          </p>
-                        )}
-                      </td>
-                      <td>
-                        {canEdit && (
-                          <form
-                            action={deletePoolAction.bind(null, operation.id, pool.id)}
-                          >
-                            {/* Deleting a pool drops its whole appraisal — the
-                              paste, every priced line, the lot — and the only
-                              way back is to re-paste and re-price. */}
-                            <ConfirmSubmit
-                              className="btn btn--quiet btn--micro btn--danger-quiet"
-                              label="delete"
-                              restName="delete pool"
-                              confirmName="confirm delete pool"
-                            />
-                          </form>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
+                {pools.map((pool, index) => (
+                  <tr key={pool.id}>
+                    <td className="mono nowrap">{index + 1}</td>
+                    <td>
+                      {pool.valuationSource === "appraised" ? (
+                        <Status tone="ok">
+                          appraised
+                          {pool.pricingMode &&
+                            ` · ${PRICING_LABELS[pool.pricingMode as PricingMode] ?? pool.pricingMode}`}
+                        </Status>
+                      ) : (
+                        <Status tone="warn">flat (manual)</Status>
+                      )}
+                    </td>
+                    <td className="mono nowrap">{pool.totalValue} ISK</td>
+                    <td>{pool.notes}</td>
+                    <td>
+                      {canEdit && (
+                        <form action={deletePoolAction.bind(null, operation.id, pool.id)}>
+                          {/* Deleting a pool drops its whole appraisal — the
+                            paste, every priced line, the lot — and the only
+                            way back is to re-paste and re-price. */}
+                          <ConfirmSubmit
+                            className="btn btn--quiet btn--micro btn--danger-quiet"
+                            label="delete"
+                            restName="delete pool"
+                            confirmName="confirm delete pool"
+                          />
+                        </form>
+                      )}
+                    </td>
+                  </tr>
+                ))}
                 {pools.length === 0 && (
                   <tr>
                     <td className="log__empty" colSpan={5}>
@@ -448,18 +388,76 @@ export default async function PayoutOperationPage({
           </table>
         </Scroller>
 
-        {/* The two warnings above stay exactly as they are. They are the fast
-            path for "what needs attention" and are readable without opening
-            anything; this table is the *fix* — the place an operator can see
-            every line they pasted and reprice one. Removing either warning in
-            favour of the table would trade a glance for an expand-and-scan.
-
-            Below the Scroller rather than inside a pool row's cell: a table
+        {/* Below the Scroller rather than inside a pool row's cell: a warning
             nested in a horizontally-scrolling cell is unreachable at 320px
             (the same reason the account page's remediation prose sits outside
-            its Scroller). The disclosure keeps a 200-line paste from burying
-            the roster, and `Pool N` ties it back to the numbered row above —
-            `notes` is optional on an appraised pool and unique on none. */}
+            its Scroller, and the item disclosure just below is too). `Pool N`
+            ties each warning back to the numbered row above — `notes` is
+            optional on an appraised pool and unique on none. */}
+        {pools.map((pool, index) => {
+          // An unresolved item priced at 0.00 is the one thing on this page an
+          // operator MUST see before finalizing: it means the total is
+          // quietly low and everyone is about to be underpaid. Naming the
+          // items is the whole safeguard — a count alone doesn't tell you
+          // whether it's a junk module or the faction battleship.
+          const unresolved = pool.items.filter((i) => i.priceSource === "unresolved");
+          // A resolved item can still show "0.00" as its unit price: the line
+          // total is rounded once (see appraiseLoot), so a sub-cent per-unit
+          // price stores as a 2dp display value that reads as free while the
+          // line genuinely contributed to the pool. This is derived from the
+          // persisted row, not a separate flag.
+          const subCentPriced = pool.items.filter(
+            (i) =>
+              i.priceSource === "triff" &&
+              iskToCents(i.unitPrice) === 0n &&
+              iskToCents(i.totalValue) !== 0n,
+          );
+          if (unresolved.length === 0 && subCentPriced.length === 0) return null;
+          return (
+            <div key={pool.id}>
+              {unresolved.length > 0 && (
+                <p className="notice notice--warn" data-glyph="!">
+                  <span>
+                    <strong>
+                      Pool {index + 1}: {unresolved.length} item
+                      {unresolved.length === 1 ? "" : "s"} priced at 0.00
+                    </strong>{" "}
+                    — not found, or no market data for the chosen pricing. The pool total
+                    is short by whatever they are worth.
+                    <br />
+                    <span className="dim">
+                      {unresolved.map((i) => `${i.name} ×${i.qty}`).join(", ")}
+                    </span>
+                  </span>
+                </p>
+              )}
+              {subCentPriced.length > 0 && (
+                <p className="notice notice--warn" data-glyph="!">
+                  <span>
+                    <strong>
+                      Pool {index + 1}: {subCentPriced.length} item
+                      {subCentPriced.length === 1 ? "" : "s"} priced under 0.01 ISK each
+                    </strong>{" "}
+                    — the unit price rounds to 0.00 for display only; the line total is
+                    real and already counted in the pool.
+                    <br />
+                    <span className="dim">
+                      {subCentPriced
+                        .map((i) => `${i.name} ×${i.qty} (${i.totalValue} ISK)`)
+                        .join(", ")}
+                    </span>
+                  </span>
+                </p>
+              )}
+            </div>
+          );
+        })}
+
+        {/* The two warnings above keep their place ahead of this table. They are
+            the fast path for "what needs attention" and are readable without
+            opening anything; this table is the *fix* — the place an operator can
+            see every line they pasted and reprice one. Removing either warning in
+            favour of the table would trade a glance for an expand-and-scan. */}
         {pools.map(
           (pool, index) =>
             pool.items.length > 0 && (
@@ -540,83 +538,98 @@ export default async function PayoutOperationPage({
         )}
 
         {canEdit && (
-          <div className="stack">
-            <form action={addFlatPoolAction.bind(null, operation.id)} className="stack">
-              <RuleHead as="h3">Add a flat-valued pool</RuleHead>
-              <label className="stack">
-                Total value (ISK)
-                <input
-                  className="field"
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  name="totalValue"
-                  required
-                />
-              </label>
-              <label className="stack">
-                Note (required — why this number)
-                <input className="field" name="notes" required />
-              </label>
-              <label className="stack">
-                What was in it (optional)
-                <textarea className="field" name="rawPaste" rows={2} />
-              </label>
-              <Submit className="btn">Add flat pool</Submit>
-            </form>
+          // Collapsed once there is something to bury: a fresh operation has
+          // no pools yet, so there is no clutter to hide and the forms open
+          // by default — see e2e/payouts.spec.ts's fresh-operation tests,
+          // every one of which fills these fields before adding a first pool.
+          <Disclosure
+            summary="Add loot"
+            ariaLabel="Add loot — a flat-valued pool, or a paste for triff to appraise"
+            defaultOpen={pools.length === 0}
+          >
+            <div className="form-stack">
+              <form
+                action={addFlatPoolAction.bind(null, operation.id)}
+                className="form-stack"
+              >
+                <RuleHead as="h3">Add a flat-valued pool</RuleHead>
+                <label className="form-stack__field">
+                  Total value (ISK)
+                  <input
+                    className="field"
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    name="totalValue"
+                    required
+                  />
+                </label>
+                <label className="form-stack__field">
+                  Note (required — why this number)
+                  <input className="field" name="notes" required />
+                </label>
+                <label className="form-stack__field">
+                  What was in it (optional)
+                  <textarea className="field" name="rawPaste" rows={3} />
+                </label>
+                <Submit className="btn">Add flat pool</Submit>
+              </form>
 
-            <form
-              action={addAppraisedPoolAction.bind(null, operation.id)}
-              className="stack"
-            >
-              <RuleHead as="h3">Appraise a loot paste</RuleHead>
-              <label className="stack">
-                Loot paste
-                <textarea className="field" name="rawPaste" rows={6} required />
-              </label>
-              <label className="stack">
-                Pricing
-                <select className="field" name="pricingMode" defaultValue="sell_best">
-                  {PRICING_MODES.map((mode) => (
-                    <option key={mode} value={mode}>
-                      {PRICING_LABELS[mode]}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              {/* Kind + id, rather than a station box and a region box the
-                  operator must leave one of blank. triff accepts exactly one,
-                  and this is the only form on the page whose failure would cost
-                  the operator a long paste, so the rule is expressed as a shape
-                  that cannot be filled in wrongly rather than as prose above two
-                  inputs that can. */}
-              <label className="stack">
-                Price at
-                <select className="field" name="locationKind" defaultValue="station">
-                  <option value="station">Station</option>
-                  <option value="region">Region</option>
-                </select>
-              </label>
-              <label className="stack">
-                Station or region ID
-                <input
-                  className="field"
-                  name="locationId"
-                  inputMode="numeric"
-                  pattern="[0-9]+"
-                  defaultValue="60003760"
-                  required
-                  aria-describedby="appraise-location-hint"
-                />
-              </label>
-              <span className="dim" id="appraise-location-hint">
-                Digits only. Jita 4-4 is station 60003760; The Forge is region 10000002.
-              </span>
-              <Submit className="btn" pendingLabel="Pricing…">
-                Appraise
-              </Submit>
-            </form>
-          </div>
+              <form
+                action={addAppraisedPoolAction.bind(null, operation.id)}
+                className="form-stack"
+              >
+                <RuleHead as="h3">Appraise a loot paste</RuleHead>
+                <label className="form-stack__field">
+                  Loot paste
+                  <textarea className="field" name="rawPaste" rows={10} required />
+                </label>
+                <label className="form-stack__field">
+                  Pricing
+                  <select className="field" name="pricingMode" defaultValue="sell_best">
+                    {PRICING_MODES.map((mode) => (
+                      <option key={mode} value={mode}>
+                        {PRICING_LABELS[mode]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {/* Kind + id, rather than a station box and a region box the
+                    operator must leave one of blank. triff accepts exactly one,
+                    and this is the only form on the page whose failure would cost
+                    the operator a long paste, so the rule is expressed as a shape
+                    that cannot be filled in wrongly rather than as prose above two
+                    inputs that can. */}
+                <label className="form-stack__field">
+                  Price at
+                  <select className="field" name="locationKind" defaultValue="station">
+                    <option value="station">Station</option>
+                    <option value="region">Region</option>
+                  </select>
+                </label>
+                <div className="form-stack__field">
+                  <label htmlFor="appraise-location-id">Station or region ID</label>
+                  <input
+                    id="appraise-location-id"
+                    className="field"
+                    name="locationId"
+                    inputMode="numeric"
+                    pattern="[0-9]+"
+                    defaultValue="60003760"
+                    required
+                    aria-describedby="appraise-location-hint"
+                  />
+                  <span className="dim" id="appraise-location-hint">
+                    Digits only. Jita 4-4 is station 60003760; The Forge is region
+                    10000002.
+                  </span>
+                </div>
+                <Submit className="btn" pendingLabel="Pricing…">
+                  Appraise
+                </Submit>
+              </form>
+            </div>
+          </Disclosure>
         )}
 
         <RuleHead as="h2">Roster</RuleHead>
@@ -653,48 +666,59 @@ export default async function PayoutOperationPage({
           </p>
         )}
         {canEdit && (
-          <div className="stack">
-            <form action={setRosterAction.bind(null, operation.id)} className="stack">
-              <RuleHead as="h3">Replace the roster from a paste</RuleHead>
-              <label className="stack">
-                Paste (names separated by /)
-                <textarea className="field" name="paste" rows={3} required />
-              </label>
-              <Submit className="btn">Set roster</Submit>
-            </form>
+          // Same rule as the loot disclosure above: collapsed only once there
+          // is a roster already worth burying.
+          <Disclosure
+            summary="Edit roster"
+            ariaLabel="Edit roster — replace the roster from a paste, or add one participant"
+            defaultOpen={participants.length === 0}
+          >
+            <div className="form-stack">
+              <form
+                action={setRosterAction.bind(null, operation.id)}
+                className="form-stack"
+              >
+                <RuleHead as="h3">Replace the roster from a paste</RuleHead>
+                <label className="form-stack__field">
+                  Paste (names separated by /)
+                  <textarea className="field" name="paste" rows={8} required />
+                </label>
+                <Submit className="btn">Set roster</Submit>
+              </form>
 
-            {/* A plain `<datalist>`, not a type-ahead: the browser does the
-                filtering, so there is no endpoint, no client component, no new
-                authorization surface, and it works with JavaScript off. The
-                list is omitted entirely past `CHARACTER_NAME_CAP`, and the
-                field then behaves as ordinary free text — `addParticipant`
-                resolves the typed name server-side either way, so a missing
-                suggestion costs a suggestion, not the feature. */}
-            <form
-              action={addParticipantAction.bind(null, operation.id)}
-              className="stack"
-            >
-              <RuleHead as="h3">Add one participant</RuleHead>
-              <label className="stack">
-                Character name
-                <input
-                  className="field"
-                  name="name"
-                  list={characterNames ? CHARACTER_LIST_ID : undefined}
-                  autoComplete="off"
-                  required
-                />
-              </label>
-              {characterNames && (
-                <datalist id={CHARACTER_LIST_ID}>
-                  {characterNames.map((n) => (
-                    <option key={n} value={n} />
-                  ))}
-                </datalist>
-              )}
-              <Submit className="btn">Add participant</Submit>
-            </form>
-          </div>
+              {/* A plain `<datalist>`, not a type-ahead: the browser does the
+                  filtering, so there is no endpoint, no client component, no new
+                  authorization surface, and it works with JavaScript off. The
+                  list is omitted entirely past `CHARACTER_NAME_CAP`, and the
+                  field then behaves as ordinary free text — `addParticipant`
+                  resolves the typed name server-side either way, so a missing
+                  suggestion costs a suggestion, not the feature. */}
+              <form
+                action={addParticipantAction.bind(null, operation.id)}
+                className="form-stack"
+              >
+                <RuleHead as="h3">Add one participant</RuleHead>
+                <label className="form-stack__field">
+                  Character name
+                  <input
+                    className="field"
+                    name="name"
+                    list={characterNames ? CHARACTER_LIST_ID : undefined}
+                    autoComplete="off"
+                    required
+                  />
+                </label>
+                {characterNames && (
+                  <datalist id={CHARACTER_LIST_ID}>
+                    {characterNames.map((n) => (
+                      <option key={n} value={n} />
+                    ))}
+                  </datalist>
+                )}
+                <Submit className="btn">Add participant</Submit>
+              </form>
+            </div>
+          </Disclosure>
         )}
 
         <Scroller label="Participants">
@@ -780,7 +804,10 @@ export default async function PayoutOperationPage({
                         {operation.status === "finalized" &&
                           p.paymentState !== "excluded" && (
                             <>
-                              <CopyAmountButton amount={p.amount} />
+                              <CopyAmountButton
+                                amount={p.amount}
+                                participantName={p.displayName}
+                              />
                               {access.canOpenInfo && p.recipientCharacterId !== null && (
                                 <form
                                   action={openInfoAction.bind(null, operation.id, p.id)}
