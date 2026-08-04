@@ -197,10 +197,15 @@ function TargetCell({
 }
 
 /** The ids to filter by, or undefined when the field isn't filtered at all.
- * A `kind: "none"` resolution never reaches this — the caller short-circuits
- * to zero rows first — but the union has to be narrowed explicitly. */
+ * A `kind: "none"` resolution yields an EMPTY list, never `undefined`:
+ * `queryAuditLog` reads `undefined` as "this field is unfiltered" and an empty
+ * list as "resolved to nothing", so failing closed here keeps an unmatched name
+ * returning zero rows even if the caller's short-circuit below is ever
+ * refactored away. The alternative failure mode is the bad one -- a filter the
+ * admin believes is applied silently showing them everything. */
 function idsOf(r: FilterResolution | null): string[] | undefined {
-  return r && r.kind !== "none" ? r.ids : undefined;
+  if (!r) return undefined;
+  return r.kind === "none" ? [] : r.ids;
 }
 
 export default async function AdminAuditPage({

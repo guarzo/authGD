@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { logAudit, queryAuditLog, resolveFilterIdentity } from "@/services/audit";
 import { setupTestDb, truncateAll } from "./helpers/db";
+import { discordLink } from "@/db/schema";
 import { testConfig } from "./helpers/config";
 import { seedAccount, seedCharacter } from "./helpers/seed";
 
@@ -125,6 +126,13 @@ describe("resolveFilterIdentity", () => {
       main: true,
     });
     await seedCharacter(ctx.db, cfg, { id: 90002, accountId: acc.id, name: "Alt Zed" });
+    // The owning account HAS a discord link. Filtering by the alt's name must
+    // still not pull it in: the discord id belongs to the person as displayed
+    // (their main), and an alt's name is never what the log shows for it.
+    // Without this row the exclusion would hold by accident rather than by rule.
+    await ctx.db
+      .insert(discordLink)
+      .values({ accountId: acc.id, discordUserId: "555555555555555555" });
     const r = await resolveFilterIdentity(ctx.db, "target", "Alt Zed");
     expect(r).toEqual({
       kind: "name",
