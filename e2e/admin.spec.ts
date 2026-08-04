@@ -408,6 +408,60 @@ test("an open row drawer keeps the pin, and is not itself pinned", async ({
   expect(drawerCell.borderRight).toBe("0px");
 });
 
+/**
+ * The width claim, stated directly — the reason the drawer moved out of the
+ * name cell at all.
+ *
+ * Table columns are shared, so anything rendered inside the name cell sets a
+ * min-content width for column 1 on *every* row. The drawer's crew group is
+ * `flex: 1 1 100%`, so while the drawer lived in that cell, opening one row
+ * widened column 1 for the whole table: measured at 320px, 97px closed against
+ * 281.5px open, which is how the pinned cell came to cover 98% of the region.
+ *
+ * The test above cannot catch this. It asserts the pin holds, and a pinned cell
+ * is wholly on screen at either width, so it passes just as happily at 281.5px.
+ * `clearOfPin` notices the widening only indirectly, once a control at the far
+ * right happens to fall under the pin. Neither says the thing that has to stay
+ * true, so this does: opening a row must not move column 1 at all.
+ *
+ * The row measured is deliberately *not* the row being opened. "Opening one row
+ * widens the column for every row" is the actual failure, and a neighbour's name
+ * cell is where that shows.
+ */
+test("an open drawer does not widen the shared first column", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedDenseWorld();
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.setViewportSize({ width: 320, height: 720 });
+  await page.goto("/admin/accounts");
+
+  const first = page.locator(ROWS).first();
+  // `./td[1]` and not `td`: a descendant match would reach the crew table's
+  // cells inside the drawer once it is open.
+  const neighbourName = page.locator(ROWS).nth(1).locator("xpath=./td[1]");
+  const closed = (await neighbourName.boundingBox())!.width;
+
+  await toggleOf(first).click();
+  await expect(drawerOf(first)).toBeVisible();
+
+  // Vacuous unless the drawer really does want more width than the column it
+  // used to sit in — "unchanged" is trivially true of a drawer with nothing in
+  // it, and this is the pressure that used to be applied to column 1.
+  const drawer = (await drawerOf(first).locator("xpath=./td").boundingBox())!.width;
+  expect(drawer, "the drawer is wider than the column it left").toBeGreaterThan(closed);
+
+  const open = (await neighbourName.boundingBox())!.width;
+  // Precision 0 — within half a pixel — matching how every other width claim in
+  // this file is stated. The regression this guards is a 338px move, so the
+  // tolerance costs nothing and keeps sub-pixel layout drift from flaking it.
+  expect(open, "opening one row must not widen column 1 for the others").toBeCloseTo(
+    closed,
+    0,
+  );
+});
+
 test("the start fade never paints over the pinned column", async ({ page, context }) => {
   const admin = await seedDenseWorld();
   await context.addCookies([await sessionCookieFor(db, admin.id)]);
