@@ -108,6 +108,10 @@ export const outbox = pgTable(
         | { kind: "discord-user"; discordUserId: string }
         | { kind: "membership-recheck" }
         | { kind: "all" }
+        // one named job, re-run on demand; jobType is validated against QUEUES
+        // at dispatch time, so an unknown value drops rather than enqueueing
+        // to an arbitrary queue name
+        | { kind: "job"; jobType: string }
       >()
       .notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

@@ -15,6 +15,26 @@ export const QUEUES = {
 /** ~5 tries over ~30 min: 60 s base delay with exponential backoff. */
 const RETRY = { retryLimit: 5, retryDelay: 60, retryBackoff: true };
 
+/**
+ * Global singleton keys that do not follow the `${queue}:all` shape. Only
+ * discord-roles differs, for historical reasons.
+ *
+ * This is the ONE definition. A scheduled tick, the "sync everything" fan-out
+ * and a single-job re-run all have to name the same key or pg-boss stops
+ * coalescing them and the job double-queues — and that agreement used to be
+ * four hand-copied string literals across two files with nothing cross-checking
+ * them. Renaming one and leaving the others was a silent production bug that
+ * every existing test still passed.
+ */
+const GLOBAL_SINGLETON_KEYS: Record<string, string> = {
+  [QUEUES.discordRoles]: "roles:all",
+};
+
+/** The singleton key for a queue-wide (non-account-scoped) run of `queue`. */
+export function globalSingletonKey(queue: string): string {
+  return GLOBAL_SINGLETON_KEYS[queue] ?? `${queue}:all`;
+}
+
 const JOB_QUEUES = [
   QUEUES.membership,
   QUEUES.membershipRecheck,
@@ -75,17 +95,6 @@ export async function createQueues(boss: PgBoss): Promise<void> {
  * makes that display a fact rather than a second copy that can rot.
  */
 export async function scheduleJobs(boss: PgBoss): Promise<void> {
-  // Schedules share the dispatcher's global singleton keys so a scheduled
-  // tick and an on-demand global trigger coalesce instead of double-queueing.
-  const singletonKeys: Record<string, string> = {
-    [QUEUES.membership]: "membership:all",
-    [QUEUES.membershipRecheck]: "membership-recheck:all",
-    [QUEUES.contacts]: "contacts:all",
-    [QUEUES.wanderer]: "wanderer:all",
-    [QUEUES.discordRoles]: "roles:all",
-    [QUEUES.tokenHealth]: "token-health:all",
-    [QUEUES.purge]: "purge:all",
-  };
   for (const name of JOB_QUEUES) {
     const cron = JOB_CRON[name];
     // A queue with no cron entry would silently never tick. Fail startup
@@ -95,7 +104,9 @@ export async function scheduleJobs(boss: PgBoss): Promise<void> {
       name,
       cron,
       { jobType: name },
-      { singletonKey: singletonKeys[name] },
+      // Shared with the dispatcher so a scheduled tick and an on-demand
+      // trigger coalesce instead of double-queueing.
+      { singletonKey: globalSingletonKey(name) },
     );
   }
 }
