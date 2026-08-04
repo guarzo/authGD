@@ -31,6 +31,17 @@ export type NavItem = { href: string; label: string };
  * route of its own to claim, and every item then correctly shows as inactive
  * rather than matching `undefined` against itself.
  *
+ * `section` says the highlighted item names the *section* this page belongs to
+ * rather than this page itself, and it changes only which `aria-current` token
+ * is emitted: `"page"` claims the link's target is the document you are on, and
+ * `/payouts/new`, `/payouts/[id]` and the payout 404 all passed `current`
+ * `"/payouts"` while being none of those things — so a screen reader was told
+ * "Payouts, link, current page" on a page that was not `/payouts`. `"true"`
+ * means "current within this set", which is what the section highlight actually
+ * asserts, and it leaves the visual treatment to `globals.css` (whose
+ * `[aria-current="page"]` selectors need widening to bare `[aria-current]` for
+ * the gold hairline to survive the token change).
+ *
  * The `.shell__bar` wrapper is what carries the layout: the bar's ground and
  * bottom hairline stay full-bleed, and the contents sit on one fixed measure —
  * `--measure-page` — on every route.
@@ -68,10 +79,14 @@ export type NavItem = { href: string; label: string };
 export function SiteHeader({
   items,
   current,
+  section = false,
   admin = false,
 }: {
   items: NavItem[];
   current?: string;
+  /** Set when `current` names the section this page sits under rather than
+   *  this page's own route (`/payouts/new` under `/payouts`). */
+  section?: boolean;
   admin?: boolean;
 }) {
   return (
@@ -93,7 +108,7 @@ export function SiteHeader({
             <a
               key={i.href}
               href={i.href}
-              aria-current={i.href === current ? "page" : undefined}
+              aria-current={i.href === current ? (section ? "true" : "page") : undefined}
             >
               {i.label}
             </a>
@@ -231,19 +246,46 @@ export function Tier({
  * can't drop the role by omission. `bad` is the only tone that interrupts
  * (role="alert"); `warn`/`info` are ambient confirmations a screen reader
  * announces without stealing focus (role="status").
+ *
+ * Empty children render the reserved slot rather than nothing, so the call
+ * site can mount this unconditionally — `<Notice tone="bad">{err}</Notice>` —
+ * instead of `{err && <Notice tone="bad">{err}</Notice>}`. The `&&` form is
+ * the one shape that defeats the live region it just asked for: it inserts a
+ * `role="alert"` node with its text already inside it, and AT announces a
+ * *change* to a region far more reliably than a region born holding text.
+ * `admin/sync/page.tsx:85-99` hand-rolled exactly this and is the reference;
+ * `note-form.tsx:62-78` makes the same argument for its own region. Keeping
+ * the behaviour in the primitive is the point: the next caller cannot omit it
+ * by writing `&&`. An empty slot carries no `notice--bad`/`notice--warn`
+ * class and no glyph, so "is there a message" is still `p.notice--bad`.
+ *
+ * `live={false}` opts out of the region entirely, for the one case where a
+ * second announcement is worse than none: a surface that already announces
+ * itself by moving focus (`error.tsx` focuses its `h1`) gets its heading
+ * preempted by an assertive region rendering in the same commit.
  */
 export function Notice({
   tone = "info",
+  live = true,
   children,
 }: {
   tone?: "bad" | "warn" | "info";
+  /** Set `false` to render the notice with no `role`, when something else on
+   *  the page already announces the same arrival. */
+  live?: boolean;
   children: ReactNode;
 }) {
+  const empty =
+    children === null || children === undefined || children === false || children === "";
   const glyph = tone === "info" ? "·" : "!";
   const role = tone === "bad" ? "alert" : "status";
   const className = tone === "info" ? "notice" : `notice notice--${tone}`;
   return (
-    <p className={className} data-glyph={glyph} role={role}>
+    <p
+      className={empty ? "notice-slot" : className}
+      data-glyph={empty ? undefined : glyph}
+      role={live ? role : undefined}
+    >
       {children}
     </p>
   );

@@ -2,6 +2,7 @@
 
 import type { ReactNode } from "react";
 import { useFormStatus } from "react-dom";
+import { useSubmitGuard } from "./submit-guard";
 
 /**
  * `useFormStatus` only works inside a `<form>`, and only from a client
@@ -11,8 +12,13 @@ import { useFormStatus } from "react-dom";
  * click until the page re-renders.
  *
  * `pendingLabel` swaps the text while in flight. Worth it on the broad
- * side-effecting controls: `disabled` plus `aria-busy` are correct but easy to
- * miss, and a changed word is the part a user actually notices.
+ * side-effecting controls: `aria-busy` is correct but easy to miss, and a
+ * changed word is the part a user actually notices. The button is deliberately
+ * *not* disabled while pending — see `submit-guard.ts` — so `pendingLabel` and
+ * `aria-busy` are the whole of the in-flight signal, and the second click is
+ * stopped by the guard rather than by an unfocusable button. The `disabled`
+ * prop is still honoured for the other meaning of the word: a control the call
+ * site knows is unavailable before anyone presses it.
  *
  * `className` defaults to `"btn"` rather than staying free-form or moving to
  * a closed `grade` union: real call sites stack a colour grade, a size
@@ -45,14 +51,16 @@ export function Submit({
   "aria-label"?: string;
 }) {
   const { pending } = useFormStatus();
+  const guard = useSubmitGuard(pending);
   return (
     <button
       type="submit"
       className={className}
-      disabled={disabled || pending}
+      disabled={disabled}
       aria-busy={pending}
       aria-pressed={ariaPressed}
       aria-label={ariaLabel}
+      onClick={guard}
     >
       {pending && pendingLabel ? pendingLabel : children}
     </button>
