@@ -31,9 +31,10 @@ function redirectNotAdmin(): never {
  * and returning (not just calling) each `redirect`, so TS only accepts this as
  * terminating control flow — and the moment a variant is added to
  * `AdminMutationResult` or `ApproveResult` without a matching case here, the
- * build fails with "not every code path returns a value" instead of a new
- * variant silently reaching the old catch-all `throw new Error(result.error)`
- * and turning into a 500.
+ * build fails — TS2345 at the call sites, because the widened error type is no
+ * longer assignable to this function's parameter — instead of a new variant
+ * silently reaching the old catch-all `throw new Error(result.error)` and
+ * turning into a 500.
  *
  * `not_found` is reachable from every action here, not just approval:
  * mergeAccountInto (services/accounts.ts) deletes the source account outright
