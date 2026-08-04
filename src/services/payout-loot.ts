@@ -127,6 +127,13 @@ export async function deletePool(
   const [pool] = await dbtx.select().from(lootPool).where(eq(lootPool.id, poolId));
   if (!pool) throw new Error("pool not found");
   await lockOperation(dbtx, pool.operationId);
+  // pool.operationId is immutable, so the lock above is already ordered
+  // correctly, but two concurrent deletes of the SAME pool both read it before
+  // either takes the lock. Re-read after the lock and bail out if it's already
+  // gone, so the loser doesn't also delete zero rows and still log its own
+  // payout.pool_deleted audit entry.
+  const [stillThere] = await dbtx.select().from(lootPool).where(eq(lootPool.id, poolId));
+  if (!stillThere) return;
   await assertEditable(dbtx, pool.operationId);
   await dbtx.delete(lootPool).where(eq(lootPool.id, poolId)); // cascades loot_item
   await logAudit(dbtx, {

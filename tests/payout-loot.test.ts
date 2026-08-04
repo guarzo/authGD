@@ -1,6 +1,12 @@
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { lootItem, lootPool, payoutParticipant } from "@/db/schema";
+import {
+  lootItem,
+  lootPool,
+  payoutOperation,
+  payoutParticipant,
+  auditLog,
+} from "@/db/schema";
 import {
   PayoutForbiddenError,
   PayoutLockedError,
@@ -216,6 +222,65 @@ describe("deletePool", () => {
     expect(
       await ctx.db.select().from(lootPool).where(eq(lootPool.id, poolId)),
     ).toHaveLength(0);
+  });
+
+  /**
+   * pool.operationId is immutable, so locking on it is safe regardless of
+   * ordering, but two concurrent deletes of the SAME pool both read the pool
+   * row before either takes the lock. Without a re-read after the lock, the
+   * loser would still delete zero rows and log its own payout.pool_deleted
+   * audit entry — a duplicate, misleading trail for an action that only
+   * happened once.
+   *
+   * True concurrency between two `Promise.allSettled`-launched transactions is
+   * not by itself a reliable way to hit this exact window (whichever call
+   * happens to finish its own initial select first can race the other's
+   * entirely, well before either reaches the lock). To make the interleaving
+   * deterministic, an external "blocker" transaction takes the operation lock
+   * first, so both deletePool calls are guaranteed to complete their initial
+   * pool lookup (finding the row) and then queue on lockOperation before
+   * either can proceed — reproducing the TOCTOU window itself rather than
+   * hoping for it.
+   */
+  it("two concurrent deletes of the same pool log exactly one audit entry", async () => {
+    const { operatorId, operationId } = await seedOperation();
+    const { poolId } = await ctx.db.transaction((tx) =>
+      addFlatPool(tx, operatorId, operationId, { totalValue: "200.00", notes: "note" }),
+    );
+
+    let releaseBlocker!: () => void;
+    const blockerReleased = new Promise<void>((resolve) => {
+      releaseBlocker = resolve;
+    });
+    const blockerHasLock = new Promise<void>((resolve) => {
+      const blockerDone = ctx.db.transaction(async (tx) => {
+        await tx
+          .select()
+          .from(payoutOperation)
+          .where(eq(payoutOperation.id, operationId))
+          .for("update");
+        resolve();
+        await blockerReleased;
+      });
+      void blockerDone;
+    });
+    await blockerHasLock;
+
+    const attempt1 = ctx.db.transaction((tx) => deletePool(tx, operatorId, poolId));
+    const attempt2 = ctx.db.transaction((tx) => deletePool(tx, operatorId, poolId));
+    // Give both attempts time to complete their initial (unlocked) pool
+    // lookup and queue on lockOperation, which is blocked by the lock above.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    releaseBlocker();
+
+    const results = await Promise.allSettled([attempt1, attempt2]);
+    expect(results.filter((r) => r.status === "rejected")).toHaveLength(0);
+
+    const deletedEvents = await ctx.db
+      .select()
+      .from(auditLog)
+      .where(eq(auditLog.action, "payout.pool_deleted"));
+    expect(deletedEvents).toHaveLength(1);
   });
 });
 
