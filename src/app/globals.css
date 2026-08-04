@@ -1418,7 +1418,7 @@ h3.rule-head__label {
   font-family: var(--font-mono), ui-monospace, monospace;
   font-size: var(--t-data);
   color: var(--ink-faint);
-  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .launch__action {
