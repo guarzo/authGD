@@ -374,7 +374,7 @@ test("linking the system actor does not un-dim it", async ({ page, context }) =>
   const linkColor = await systemLink.evaluate((el) => getComputedStyle(el).color);
   // The action-namespace prefix in the same table is a plain `.dim` span.
   const dimSpanColor = await page
-    .locator("tbody tr .dim")
+    .locator("tbody tr td:nth-child(3) .dim")
     .first()
     .evaluate((el) => getComputedStyle(el).color);
 
