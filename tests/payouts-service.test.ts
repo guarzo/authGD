@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { asc, eq, inArray, sql } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { loadConfig, type Config } from "@/config";
 import { lootPool, payoutOperation, payoutParticipant, payoutPayment } from "@/db/schema";
@@ -7,6 +7,7 @@ import { addAppraisedPool, deletePool } from "@/services/payout-loot";
 import {
   PayoutForbiddenError,
   PayoutLockedError,
+  PayoutNotFoundError,
   canReadPayouts,
   createOperation,
   finalizeOperation,
@@ -679,5 +680,118 @@ describe("the service layer is the authorization boundary", () => {
       .from(lootPool)
       .where(eq(lootPool.id, poolId));
     expect(poolStillThere).toBeDefined();
+  });
+});
+
+describe("PayoutNotFoundError", () => {
+  /**
+   * A bare Error here is indistinguishable from a programming mistake, so a
+   * caller has to either swallow everything or nothing. These are the same
+   * discriminable-failure contract PayoutForbiddenError and PayoutLockedError
+   * already give callers.
+   */
+  const MISSING = "00000000-0000-0000-0000-000000000000";
+
+  it("is thrown for a missing operation", async () => {
+    const operator = await seedOperator();
+    await expect(
+      ctx.db.transaction((tx) => finalizeOperation(tx, operator.id, MISSING)),
+    ).rejects.toThrow(PayoutNotFoundError);
+  });
+
+  it("is thrown for a missing participant", async () => {
+    const operator = await seedOperator();
+    await expect(
+      ctx.db.transaction((tx) => setParticipantShares(tx, operator.id, MISSING, "2")),
+    ).rejects.toThrow(PayoutNotFoundError);
+    await expect(
+      ctx.db.transaction((tx) => recordPayment(tx, operator.id, MISSING)),
+    ).rejects.toThrow(PayoutNotFoundError);
+  });
+});
+
+describe("payment history is ordered as it happened", () => {
+  /**
+   * payout_payment.at defaults to now(), which is TRANSACTION START time. Two
+   * writers serialize on the operation row lock, but a transaction that
+   * started earlier can take the lock later and stamp an earlier time than an
+   * event that actually happened first — so a fold or a display ordered by
+   * `at` reads the sequence backwards.
+   *
+   * Inside ONE transaction now() is frozen, which is what makes this test
+   * discriminate: under defaultNow() both rows carry the identical instant.
+   * The reading taken after the lock does not.
+   *
+   * Scope, stated so this test is not read as more than it is: the two rows
+   * here belong to DIFFERENT participants, so the clamp in `nextPaymentAt`
+   * does not apply between them and the separation rests on the clock having
+   * advanced between two round trips. The guaranteed, tie-free case is
+   * per-participant, and Part B's pay -> revert -> pay test is the one that
+   * pins it.
+   *
+   * The comparison is done in Postgres because `at` has microsecond
+   * resolution and a JS Date does not — two inserts a few microseconds apart
+   * would compare equal after truncation to milliseconds, making the
+   * assertion pass or fail by luck.
+   */
+  it("stamps two payments in one transaction with strictly increasing at", async () => {
+    const operator = await seedOperator();
+    const { id: operationId } = await ctx.db.transaction((tx) =>
+      createOperation(tx, operator.id, {
+        name: "Two payees",
+        occurredAt: new Date(),
+        corpSharePct: "0",
+      }),
+    );
+    await ctx.db.insert(lootPool).values({
+      operationId,
+      valuationSource: "flat",
+      totalValue: "1000.00",
+      notes: "sold privately",
+    });
+    await ctx.db.transaction((tx) =>
+      setRoster(
+        tx,
+        operator.id,
+        operationId,
+        ["First Payee", "Second Payee"].map((displayName) => ({
+          displayName,
+          accountId: null,
+          recipientCharacterId: null,
+          sourceCharacters: [displayName],
+          shares: "1",
+          excluded: false,
+        })),
+      ),
+    );
+    await ctx.db.transaction((tx) => finalizeOperation(tx, operator.id, operationId));
+    const participants = await ctx.db
+      .select()
+      .from(payoutParticipant)
+      .where(eq(payoutParticipant.operationId, operationId));
+    const first = participants.find((p) => p.displayName === "First Payee")!;
+    const second = participants.find((p) => p.displayName === "Second Payee")!;
+
+    await ctx.db.transaction(async (tx) => {
+      await recordPayment(tx, operator.id, first.id);
+      await recordPayment(tx, operator.id, second.id);
+    });
+
+    const ids = [first.id, second.id];
+    const [span] = await ctx.db
+      .select({
+        strictlyIncreasing: sql<boolean>`min(${payoutPayment.at}) < max(${payoutPayment.at})`,
+      })
+      .from(payoutPayment)
+      .where(inArray(payoutPayment.participantId, ids));
+    expect(span.strictlyIncreasing).toBe(true);
+
+    // …and the order the page will render is the order the payments happened.
+    const history = await ctx.db
+      .select({ participantId: payoutPayment.participantId })
+      .from(payoutPayment)
+      .where(inArray(payoutPayment.participantId, ids))
+      .orderBy(asc(payoutPayment.at), asc(payoutPayment.id));
+    expect(history.map((h) => h.participantId)).toEqual([first.id, second.id]);
   });
 });

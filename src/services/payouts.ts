@@ -13,6 +13,10 @@ import { logAudit } from "@/services/audit";
 
 export class PayoutForbiddenError extends Error {}
 export class PayoutLockedError extends Error {}
+/** The operation or participant an operation was asked to act on does not
+ *  exist. Distinguishable by callers from a programming error, the same way
+ *  PayoutForbiddenError and PayoutLockedError already are. */
+export class PayoutNotFoundError extends Error {}
 
 /**
  * `getSessionAccount` (src/services/session.ts) resolves a session to an
@@ -44,7 +48,7 @@ export async function lockOperation(
     .from(payoutOperation)
     .where(eq(payoutOperation.id, operationId))
     .for("update");
-  if (!op) throw new Error("operation not found");
+  if (!op) throw new PayoutNotFoundError("operation not found");
   return op;
 }
 
@@ -78,7 +82,7 @@ export async function assertEditable(dbtx: DbTx, operationId: string): Promise<v
     .select({ status: payoutOperation.status })
     .from(payoutOperation)
     .where(eq(payoutOperation.id, operationId));
-  if (!op) throw new Error("operation not found");
+  if (!op) throw new PayoutNotFoundError("operation not found");
   if (op.status !== "draft") {
     throw new PayoutLockedError("operation is finalized; unlock it before editing");
   }
@@ -285,7 +289,7 @@ async function loadParticipantOperationId(
     .select({ operationId: payoutParticipant.operationId })
     .from(payoutParticipant)
     .where(eq(payoutParticipant.id, participantId));
-  if (!p) throw new Error("participant not found");
+  if (!p) throw new PayoutNotFoundError("participant not found");
   return p.operationId;
 }
 
@@ -442,6 +446,44 @@ export async function unlockOperation(
   await logAudit(dbtx, { actor, action: "payout.unlocked", target: operationId });
 }
 
+/**
+ * The `at` to stamp on this participant's next `payout_payment` row.
+ *
+ * `clock_timestamp()` on its own is not monotonic. It repeats at the clock's
+ * resolution, and an NTP correction can step it backwards; either way two rows
+ * can tie or invert, and `(at asc, id asc)` then breaks the tie on
+ * `defaultRandom()` — arbitrarily, not causally. So the reading is clamped
+ * forward past this participant's latest row, which makes `at` STRICTLY
+ * increasing per participant.
+ *
+ * The subquery is safe because every writer of this table holds
+ * `lockOperation`'s `SELECT … FOR UPDATE` on the parent operation and a
+ * participant belongs to exactly one operation, so "the latest row for this
+ * participant" cannot change under us. Scoped to the PARTICIPANT rather than
+ * the operation on purpose: per-participant is the history the detail page
+ * renders, and it is the property that has to hold.
+ *
+ * The accepted cost, stated rather than hidden: under a backwards clock step
+ * `at` reads later than the true wall clock until the clock catches up. A
+ * human reading a pay -> revert -> pay history is reconstructing ORDER, not
+ * the instant, so a possibly-inaccurate instant is the better trade than an
+ * inverted sequence. Ties at clock resolution — far likelier than an NTP step
+ * — are fixed outright, and distort nothing beyond one microsecond.
+ *
+ * No migration and no column: `payout_payment.at` keeps its `defaultNow()`,
+ * these two writers simply do not use it.
+ */
+function nextPaymentAt(participantId: string) {
+  return sql`greatest(
+    clock_timestamp(),
+    coalesce(
+      (select max(${payoutPayment.at}) from ${payoutPayment}
+        where ${payoutPayment.participantId} = ${participantId}),
+      'epoch'::timestamptz
+    ) + interval '1 microsecond'
+  )`;
+}
+
 export async function recordPayment(
   dbtx: DbTx,
   actor: string,
@@ -457,7 +499,7 @@ export async function recordPayment(
     .select({ operationId: payoutParticipant.operationId })
     .from(payoutParticipant)
     .where(eq(payoutParticipant.id, participantId));
-  if (!ref) throw new Error("participant not found");
+  if (!ref) throw new PayoutNotFoundError("participant not found");
   const op = await lockOperation(dbtx, ref.operationId);
   if (op.status !== "finalized") {
     throw new PayoutLockedError("operation must be finalized before paying");
@@ -466,7 +508,7 @@ export async function recordPayment(
     .select()
     .from(payoutParticipant)
     .where(eq(payoutParticipant.id, participantId));
-  if (!participant) throw new Error("participant not found");
+  if (!participant) throw new PayoutNotFoundError("participant not found");
   if (participant.excluded) {
     // Excluded participants carry amount = "0.00"; recording a payment for one
     // would still insert a payout_payment row, making hasPayments() true and
@@ -484,6 +526,13 @@ export async function recordPayment(
     kind: "paid",
     amount: participant.amount,
     actor,
+    // NOT the column's defaultNow(): now() is TRANSACTION START time, so a
+    // transaction that started earlier can take the operation lock later and
+    // stamp an earlier time than an event that already happened. This reading
+    // is taken after lockOperation, which every writer of this table holds,
+    // and clamped past this participant's latest row. See nextPaymentAt above
+    // and the phase-2 design, "Derived payment state".
+    at: nextPaymentAt(participantId),
   });
   await logAudit(dbtx, {
     actor,
