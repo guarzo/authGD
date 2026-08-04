@@ -45,6 +45,15 @@ as a transfer. The source account is folded into the caller's account when
 - it has no `discord_link` row
 - it has no `payout_participant` and no `payout_operation` rows
 - `tier_locked` is false
+- `status` is `active` and `status_note` is null
+
+The last check exists because an admin can put an account into cryo and attach
+an operational note (`setAccountStatus` / `setStatusNote`,
+`src/services/admin-accounts.ts:74` and `:98`) without touching anything else
+in this list. An established single-character account could otherwise qualify
+and have its status and note silently destroyed by the merge. Cryo plus a note
+is the signature of an account someone deliberately curated, which is the
+opposite of an accident.
 
 That is the exact shape of an account created by an accidental login. Any
 other shape returns `already_linked` unchanged, so no existing behaviour
@@ -71,12 +80,18 @@ alone, so it follows the character to its new account correctly.
 
 Two deletion side effects, both accepted:
 
-- `audit_log.actor` is `onDelete: "set null"`, so rows written by the source
-  account lose attribution. Acceptable for an account whose whole history is
-  "created by mistake"; the `account.merged` row on the target records what
-  happened.
-- `bootstrap_admin_grant.account_id` also nulls. This is correct — the grant
-  stays permanently consumed and cannot be re-earned through a merge.
+- `audit_log.actor` is plain `text`, not null, with no foreign key to account
+  (`src/db/schema.ts:191`). Deleting the source account therefore does **not**
+  null it: the uuid stays on the row and resolves to no account, which
+  `resolveAuditRows` already represents as `actorKind: "unresolved"`
+  (`src/services/audit.ts:208`). Those rows render with the raw id rather than
+  a character name. The `account.merged` entry on the target records the
+  source id, so the mapping stays recoverable by reading the log. Audit rows
+  are never rewritten to point at the target — falsifying history to make it
+  read better is worse than an unresolved id.
+- `bootstrap_admin_grant.account_id` **is** a nulling FK
+  (`onDelete: "set null"`) and does null. This is correct — the grant stays
+  permanently consumed and cannot be re-earned through a merge.
 
 ### Operator recovery path
 
@@ -113,6 +128,37 @@ migration only appends the value. Same behaviour, hazard removed.
 
 Appending an enum value is irreversible — Postgres cannot remove one. This
 migration is one-way. It touches no existing rows.
+
+### Rollout: two deploys, not one
+
+Migrations run as a Fly release command *before* the rolling replacement
+(`fly.toml:7`), and `docs/ops.md:137` budgets connections for a documented
+"rolling replacement overlap" — old and new processes coexist by design. A
+single deploy is therefore unsafe: the moment a new web machine writes a
+pending account, an old worker machine is still running the old code, and
+
+- old `decideTier` (`src/core/tier.ts:17`) sees a confirmed non-alliance main,
+  wants green, finds the tier is pending, and transitions it to green —
+  silently defeating the approval gate this whole change exists to build;
+- old `diffRoles` (`src/core/role-diff.ts:9`) evaluates `managed["pending"]`
+  as `undefined` and tries to add an undefined role id to the member.
+
+Split along the write:
+
+**Deploy 1 — every reader learns pending; nothing creates it.** The migration
+appends the enum value. `decideTier`, `applyNoMainRule`, `diffRoles`, the tier
+unions, `approveAccount`, and both UI surfaces all ship. Account creation
+still writes `tier: "green"`. Nothing in the database is pending yet, so the
+new code is inert and old workers have nothing to misread during the overlap.
+
+**Deploy 2 — one line.** `createAccountWithCharacter` switches to
+`tier: "pending"`. By now every worker already understands pending, so the
+overlap is harmless.
+
+The merge work (problem 1) has no such constraint and can ride in either
+deploy. The implementation plan must order the work this way and keep the
+deploy-2 line as its own commit, so the two deploys are two merges rather than
+a hand-edit at deploy time.
 
 ### Type surface
 
@@ -183,15 +229,32 @@ The `already_linked` copy changes: after this it fires only for account shapes
 that fail the absorbable test, so it should say the character belongs to an
 account an admin has to sort out.
 
-**Admin (`/admin/accounts`).** Pending joins the tier filter and sorts to the
-top of the table, so the queue is the default view. `TIER_RANK` in
-`src/services/account-view.ts` gains the value; the badge in
-`src/app/_components/ui.tsx:204` learns a fourth tier. The badge treatment is
-achromatic rather than a fourth hue: DESIGN.md tunes the three tier colours as
-a set against deuteranopia and protanopia, and "not yet decided" reads better
-as an absence of colour than as a new one. For a pending row the tier control
-becomes "Approve as Green" / "Approve as Blue", routing to `approveAccount`.
-Flygd is unchanged — granted by the system, or by the existing manual set.
+**Admin (`/admin/accounts`).** The page defaults to sorting by name
+(`src/app/admin/accounts/page.tsx:89`, `src/services/account-view.ts:323`), so
+adding pending to `TIER_RANK` alone would leave pending accounts scattered
+alphabetically through the table — visible only to an admin who already
+thought to look. The default sort is deliberately **not** changed; reordering
+everyone's table to serve an occasional queue is the wrong trade. Instead:
+
+- `TIERS` in `page.tsx` gains `pending`, so `?tier=pending` is a valid filter
+  rather than being discarded by the whitelist check at `page.tsx:93`.
+- `TIER_RANK` gains `pending` ranked first, which orders the tier-sorted view
+  sensibly. It is not the mechanism for finding the queue.
+- The queue gets its own entry point: a count of pending accounts rendered
+  above the table, linking to `?tier=pending`, shown only when the count is
+  non-zero. Nothing to notice when there is nothing to do.
+
+`TIERS` is a plain array, so a missing entry is not a type error — the filter
+would silently fall through to "no filter" and the queue link would return the
+full table. That path needs an explicit test; typecheck cannot cover it.
+
+The badge in `src/app/_components/ui.tsx:204` learns a fourth tier, with an
+achromatic treatment rather than a fourth hue: DESIGN.md tunes the three tier
+colours as a set against deuteranopia and protanopia, and "not yet decided"
+reads better as an absence of colour than as a new one. For a pending row the
+tier control becomes "Approve as Green" / "Approve as Blue", routing to
+`approveAccount`. Flygd is unchanged — granted by the system, or by the
+existing manual set.
 
 ## Testing
 
@@ -203,11 +266,16 @@ Unit:
 - `applyNoMainRule`: a pending account losing its main stays pending.
 - `approveAccount`: refuses a non-pending account, locks for blue, leaves
   green unlocked, refuses an unauthorized actor, writes the audit row.
-- `linkCharacter` merge: happy path; one test per rejection reason; main
-  adoption when the target had none; source sessions deleted; audit rows.
+- `linkCharacter` merge: happy path; one test per rejection reason, including
+  the cryo and status-note cases; main adoption when the target had none;
+  source sessions deleted; audit rows, including that the source's rows
+  survive the account deletion and resolve as `unresolved`.
+- Admin list: `?tier=pending` filters rather than falling through to the full
+  table; the pending count link appears only when a pending account exists.
 
-E2E: a pending account sees the awaiting-approval notice; an admin approves it
-and the tier badge changes.
+E2E: a pending account sees the awaiting-approval notice; an admin reaches the
+queue from the count link, sees the approval controls, approves, and the tier
+badge changes.
 
 Gates, each run and quoted: `npm test`, `npm run typecheck`,
 `npm run test:e2e`, `npm run format:check`.
