@@ -258,8 +258,8 @@ export async function setParticipantShares(
   participantId: string,
   shares: string,
 ): Promise<void> {
-  const operationId = await loadParticipantOperationId(dbtx, participantId);
   await requirePayoutOperator(dbtx, actor);
+  const operationId = await loadParticipantOperationId(dbtx, participantId);
   await lockOperation(dbtx, operationId);
   await assertEditable(dbtx, operationId);
   await dbtx
@@ -281,8 +281,8 @@ export async function setParticipantExcluded(
   participantId: string,
   excluded: boolean,
 ): Promise<void> {
-  const operationId = await loadParticipantOperationId(dbtx, participantId);
   await requirePayoutOperator(dbtx, actor);
+  const operationId = await loadParticipantOperationId(dbtx, participantId);
   await lockOperation(dbtx, operationId);
   await assertEditable(dbtx, operationId);
   await dbtx
@@ -303,8 +303,8 @@ export async function removeParticipant(
   actor: string,
   participantId: string,
 ): Promise<void> {
-  const operationId = await loadParticipantOperationId(dbtx, participantId);
   await requirePayoutOperator(dbtx, actor);
+  const operationId = await loadParticipantOperationId(dbtx, participantId);
   await lockOperation(dbtx, operationId);
   await assertEditable(dbtx, operationId);
   await dbtx.delete(payoutParticipant).where(eq(payoutParticipant.id, participantId));

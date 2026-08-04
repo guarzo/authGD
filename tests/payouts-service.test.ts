@@ -6,6 +6,7 @@ import { unlinkCharacter } from "@/services/accounts";
 import {
   PayoutForbiddenError,
   PayoutLockedError,
+  canReadPayouts,
   createOperation,
   finalizeOperation,
   recalculate,
@@ -124,6 +125,30 @@ describe("requirePayoutOperator", () => {
   it("allows an active flygd account", async () => {
     const acc = await seedOperator();
     await expect(requirePayoutOperator(ctx.db, acc.id)).resolves.toBeUndefined();
+  });
+});
+
+describe("canReadPayouts", () => {
+  /**
+   * The one authorization rule in this file that deliberately differs from
+   * the mutation rule: tier only, any status. This is the design's explicit
+   * promise that a demoted or cryo member keeps read access — a later
+   * "consistency" edit adding `&& status === "active"` here must fail this.
+   */
+  it("allows a cryo flygd account to read", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "flygd", status: "cryo" });
+    await expect(canReadPayouts(ctx.db, acc.id)).resolves.toBe(true);
+  });
+
+  it("refuses an active green account", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "green", status: "active" });
+    await expect(canReadPayouts(ctx.db, acc.id)).resolves.toBe(false);
+  });
+
+  it("refuses a missing account", async () => {
+    await expect(
+      canReadPayouts(ctx.db, "00000000-0000-0000-0000-000000000000"),
+    ).resolves.toBe(false);
   });
 });
 
@@ -394,6 +419,22 @@ describe("unlockOperation", () => {
     await expect(
       ctx.db.transaction((tx) => unlockOperation(tx, other.id, operationId)),
     ).rejects.toThrow(PayoutForbiddenError);
+  });
+
+  /**
+   * Authorization must be checked before payment state: an actor with no
+   * right to unlock this operation must get PayoutForbiddenError, not
+   * PayoutLockedError, even once money has moved — otherwise the error type
+   * itself leaks whether the operation is paid to someone with no right to
+   * know. This pins that precedence against a future reorder.
+   */
+  it("refuses a non-creator non-admin even when a payment exists", async () => {
+    const { operationId, operator } = await seedFightWithOnePaidParticipant();
+    const other = await seedOperator();
+    await expect(
+      ctx.db.transaction((tx) => unlockOperation(tx, other.id, operationId)),
+    ).rejects.toThrow(PayoutForbiddenError);
+    void operator;
   });
 
   it("allows an admin who did not create the operation", async () => {
