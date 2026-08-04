@@ -16,7 +16,13 @@ import {
   setRoster,
   type RosterEntry,
 } from "@/services/payouts";
-import { addAppraisedPool, addFlatPool, deletePool } from "@/services/payout-loot";
+import {
+  addAppraisedPool,
+  addFlatPool,
+  deletePool,
+  setItemPrice,
+} from "@/services/payout-loot";
+import { MAX_MONEY_CENTS, centsToIsk, iskToCents } from "@/core/payout-split";
 import { setupTestDb, truncateAll } from "./helpers/db";
 import { expectCheckViolation } from "./helpers/constraints";
 import { seedAccount } from "./helpers/seed";
@@ -113,6 +119,7 @@ describe("addAppraisedPool", () => {
             },
           ],
           totalValue: "10.00",
+          dropped: [],
         },
       }),
     );
@@ -146,6 +153,7 @@ describe("addAppraisedPool", () => {
           // 999.00. A caller must not be able to make the persisted pool
           // total disagree with the rows that back it.
           totalValue: "999.00",
+          dropped: [],
         },
       }),
     );
@@ -218,6 +226,7 @@ describe("addFlatPool", () => {
             },
           ],
           totalValue: "100.00",
+          dropped: [],
         },
       }),
     );
@@ -392,6 +401,7 @@ describe("loot_item CHECK constraints", () => {
               },
             ],
             totalValue: "0.00",
+            dropped: [],
           },
         }),
       ),
@@ -419,10 +429,196 @@ describe("loot_item CHECK constraints", () => {
               },
             ],
             totalValue: "0.00",
+            dropped: [],
           },
         }),
       ),
       "loot_item_price_ck",
     );
+  });
+});
+
+describe("setItemPrice", () => {
+  /** One appraised pool holding a single Tritanium line, priced by triff. */
+  async function seedPricedItem(qty: number) {
+    const { operatorId, operationId } = await seedOperation();
+    const { poolId } = await ctx.db.transaction((tx) =>
+      addAppraisedPool(tx, operatorId, operationId, {
+        rawPaste: `${qty}x Tritanium`,
+        pricingMode: "sell_best",
+        stationId: 60003760,
+        appraisal: {
+          items: [
+            {
+              typeId: 34,
+              name: "Tritanium",
+              qty,
+              unitPrice: "5.00",
+              totalValue: centsToIsk(500n * BigInt(qty)),
+              priceSource: "triff",
+            },
+          ],
+          dropped: [],
+          totalValue: centsToIsk(500n * BigInt(qty)),
+        },
+      }),
+    );
+    const [item] = await ctx.db
+      .select()
+      .from(lootItem)
+      .where(eq(lootItem.poolId, poolId));
+    return { operatorId, operationId, poolId, itemId: item.id };
+  }
+
+  it("computes the line total as an exact bigint product at a quantity floats would drift on", async () => {
+    // 12,345,678,901 x 7.77 ISK = 95,925,925,060.77 ISK. In cents that product
+    // is 9,592,592,506,077 — past nothing on its own, but the float route
+    // (12345678901 * 7.77) yields 95925925060.76999..., which renders as a
+    // different line total. bigint has nothing to drift.
+    const QTY = 12345678901;
+    const { operatorId, operationId, poolId, itemId } = await seedPricedItem(QTY);
+
+    await ctx.db.transaction((tx) => setItemPrice(tx, operatorId, itemId, "7.77"));
+
+    const [item] = await ctx.db.select().from(lootItem).where(eq(lootItem.id, itemId));
+    expect(item.unitPrice).toBe("7.77");
+    expect(item.totalValue).toBe("95925925060.77");
+    expect(item.priceSource).toBe("manual");
+    // A manual price is already at cent precision, so unit x qty reproduces
+    // the line total exactly — unlike an appraised item, whose unitPrice is a
+    // lossy 2dp rendering of a sub-cent market price.
+    expect(iskToCents(item.unitPrice) * BigInt(item.qty)).toBe(
+      iskToCents(item.totalValue),
+    );
+
+    // The pool total is re-derived from its item rows, and recalculate ran.
+    const [pool] = await ctx.db.select().from(lootPool).where(eq(lootPool.id, poolId));
+    expect(pool.totalValue).toBe("95925925060.77");
+    expect(await soleParticipantAmount(operationId)).toBe("95925925060.77");
+  });
+
+  it("keeps rawPaste verbatim so the pool can still be re-appraised", async () => {
+    const { operatorId, poolId, itemId } = await seedPricedItem(3);
+    await ctx.db.transaction((tx) => setItemPrice(tx, operatorId, itemId, "10.00"));
+    const [pool] = await ctx.db.select().from(lootPool).where(eq(lootPool.id, poolId));
+    expect(pool.rawPaste).toBe("3x Tritanium");
+  });
+
+  it("rejects a line total past what numeric(20,2) can hold, with a readable error", async () => {
+    const { operatorId, itemId } = await seedPricedItem(1000);
+    // 1000 x 9999999999999999.99 is ~1e21, past the column's range. (The
+    // brief's own "999999999999999.99" is one digit short: at qty 1000 that
+    // line totals 999999999999999990.00, which is still under numeric(20,2)'s
+    // 999999999999999999.99 ceiling and would not reject.)
+    await expect(
+      ctx.db.transaction((tx) =>
+        setItemPrice(tx, operatorId, itemId, "9999999999999999.99"),
+      ),
+    ).rejects.toThrow(/largest value this system can record/);
+  });
+
+  it("rejects a negative unit price before it reaches the column", async () => {
+    const { operatorId, itemId } = await seedPricedItem(2);
+    await expect(
+      ctx.db.transaction((tx) => setItemPrice(tx, operatorId, itemId, "-1.00")),
+    ).rejects.toThrow(/cannot be negative/);
+  });
+
+  it("refuses once the operation is finalized, because it moves money", async () => {
+    const { operatorId, operationId, itemId } = await seedPricedItem(2);
+    await ctx.db.transaction((tx) => finalizeOperation(tx, operatorId, operationId));
+    await expect(
+      ctx.db.transaction((tx) => setItemPrice(tx, operatorId, itemId, "9.00")),
+    ).rejects.toThrow(PayoutLockedError);
+  });
+
+  it("rejects a non-operator actor at the service layer", async () => {
+    const { itemId } = await seedPricedItem(2);
+    const green = await seedAccount(ctx.db, { tier: "green", status: "active" });
+    await expect(
+      ctx.db.transaction((tx) => setItemPrice(tx, green.id, itemId, "9.00")),
+    ).rejects.toThrow(PayoutForbiddenError);
+  });
+
+  it("audits the reprice against the operation uuid, not the item or pool", async () => {
+    const { operatorId, operationId, poolId, itemId } = await seedPricedItem(2);
+    await ctx.db.transaction((tx) => setItemPrice(tx, operatorId, itemId, "9.00"));
+
+    const audits = await ctx.db
+      .select()
+      .from(auditLog)
+      .where(eq(auditLog.action, "payout.item_repriced"));
+    expect(audits).toHaveLength(1);
+    expect(audits[0].target).toBe(operationId); // the operation uuid, not the item or pool
+    expect(audits[0].target).not.toBe(itemId);
+    expect(audits[0].target).not.toBe(poolId);
+  });
+});
+
+describe("addAppraisedPool money bounds", () => {
+  it("rejects a pool total past numeric(20,2) with a readable error, not a Postgres one", async () => {
+    const { operatorId, operationId } = await seedOperation();
+    await expect(
+      ctx.db.transaction((tx) =>
+        addAppraisedPool(tx, operatorId, operationId, {
+          rawPaste: "2x Absurd",
+          pricingMode: "sell_best",
+          stationId: 60003760,
+          appraisal: {
+            items: [
+              {
+                typeId: 34,
+                name: "Absurd",
+                qty: 1,
+                unitPrice: "0.00",
+                totalValue: "999999999999999999.99",
+                priceSource: "triff",
+              },
+              {
+                typeId: 35,
+                name: "Absurd Two",
+                qty: 1,
+                unitPrice: "0.00",
+                totalValue: "999999999999999999.99",
+                priceSource: "triff",
+              },
+            ],
+            dropped: [],
+            totalValue: "0.00",
+          },
+        }),
+      ),
+    ).rejects.toThrow(/largest value this system can record/);
+  });
+
+  it("accepts a pool total of exactly MAX_MONEY_CENTS, the column's own ceiling", async () => {
+    const { operatorId, operationId } = await seedOperation();
+    // Pins `>` against a future `>=` typo in assertWithinMoneyRange: the
+    // rejection test above only proves one-past-the-bound fails, not that the
+    // bound itself still succeeds.
+    const boundaryValue = centsToIsk(MAX_MONEY_CENTS);
+    const { poolId } = await ctx.db.transaction((tx) =>
+      addAppraisedPool(tx, operatorId, operationId, {
+        rawPaste: "1x At the ceiling",
+        pricingMode: "sell_best",
+        stationId: 60003760,
+        appraisal: {
+          items: [
+            {
+              typeId: 34,
+              name: "At the ceiling",
+              qty: 1,
+              unitPrice: "0.00",
+              totalValue: boundaryValue,
+              priceSource: "triff",
+            },
+          ],
+          dropped: [],
+          totalValue: boundaryValue,
+        },
+      }),
+    );
+    const [pool] = await ctx.db.select().from(lootPool).where(eq(lootPool.id, poolId));
+    expect(pool.totalValue).toBe(boundaryValue);
   });
 });

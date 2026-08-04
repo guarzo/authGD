@@ -9,6 +9,14 @@ const DELETE_CHUNK = 20; // ESI DELETE contacts query limit
 const AFFILIATION_MAX = 500;
 const RESOLVE_IDS_CHUNK = 500; // ESI POST /universe/ids/ body limit
 
+/**
+ * The scope belongs to the token making the call, i.e. the paying operator's
+ * own character. Exported so the UI gate, the server action and the docs all
+ * spell it identically: a typo here would silently hide the control forever
+ * rather than fail.
+ */
+export const OPEN_WINDOW_SCOPE = "esi-ui.open_window.v1";
+
 export class EsiError extends Error {
   status: number;
   kind: EsiErrorClass;
@@ -291,9 +299,38 @@ export function createEsiClient(opts: EsiClientOptions = {}) {
     }
   }
 
+  /**
+   * Opens the in-game information window for `targetId` on whichever client
+   * the token's character is logged into. Nothing is persisted, at CCP or
+   * here: the entire effect is a window appearing. ESI answers 204, or an
+   * error if the character is not online — which the caller surfaces as a
+   * message rather than a retry.
+   *
+   * `characterId` is not in the path (the endpoint is scoped by the token);
+   * it is carried so the dry-run log names whose client would have opened.
+   */
+  async function openInformationWindow(
+    characterId: number,
+    accessToken: string,
+    targetId: number,
+  ): Promise<void> {
+    if (dryRun) {
+      logSuppressedWrite(
+        "esi",
+        `open information window for ${targetId} on character ${characterId}`,
+      );
+      return;
+    }
+    await request(`/ui/openwindow/information/?target_id=${targetId}`, {
+      method: "POST",
+      accessToken,
+    });
+  }
+
   return {
     postAffiliation,
     resolveIds,
+    openInformationWindow,
     getContactLabels,
     getAllContacts,
     addContacts: (

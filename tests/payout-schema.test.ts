@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { lootPool, payoutOperation, payoutParticipant } from "@/db/schema";
+import { lootItem, lootPool, payoutOperation, payoutParticipant } from "@/db/schema";
 import { setupTestDb, truncateAll } from "./helpers/db";
 import { expectCheckViolation } from "./helpers/constraints";
 
@@ -107,6 +107,67 @@ describe("payout schema", () => {
         totalValue: "500.00",
       }),
       "loot_pool_appraised_fields_ck",
+    );
+  });
+
+  it("rejects a non-positive loot item qty (loot_item_qty_ck)", async () => {
+    const [op] = await ctx.db
+      .insert(payoutOperation)
+      .values({ name: "Op", occurredAt: new Date() })
+      .returning();
+    const [pool] = await ctx.db
+      .insert(lootPool)
+      .values({
+        operationId: op.id,
+        valuationSource: "flat",
+        totalValue: "0",
+        notes: "note",
+      })
+      .returning();
+    await expectCheckViolation(
+      ctx.db
+        .insert(lootItem)
+        .values({ poolId: pool.id, name: "Nothing", qty: 0, priceSource: "unresolved" }),
+      "loot_item_qty_ck",
+    );
+  });
+
+  it("rejects a negative loot item unit price or total (loot_item_price_ck)", async () => {
+    const [op] = await ctx.db
+      .insert(payoutOperation)
+      .values({ name: "Op", occurredAt: new Date() })
+      .returning();
+    const [pool] = await ctx.db
+      .insert(lootPool)
+      .values({
+        operationId: op.id,
+        valuationSource: "flat",
+        totalValue: "0",
+        notes: "note",
+      })
+      .returning();
+    await expectCheckViolation(
+      ctx.db.insert(lootItem).values({
+        poolId: pool.id,
+        name: "Owed",
+        qty: 1,
+        unitPrice: "-1.00",
+        priceSource: "manual",
+      }),
+      "loot_item_price_ck",
+    );
+    // The constraint covers totalValue as well, and no service-level test
+    // reaches that half of it.
+    await expectCheckViolation(
+      ctx.db.insert(lootItem).values({
+        poolId: pool.id,
+        name: "Owed",
+        qty: 1,
+        unitPrice: "1.00",
+        totalValue: "-1.00",
+        priceSource: "manual",
+      }),
+      "loot_item_price_ck",
     );
   });
 });

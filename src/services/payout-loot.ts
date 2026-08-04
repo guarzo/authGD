@@ -2,15 +2,28 @@ import { eq } from "drizzle-orm";
 import type { DbTx } from "@/db";
 import { lootItem, lootPool } from "@/db/schema";
 import type { PricingMode } from "@/core/pricing";
-import { centsToIsk, iskToCents } from "@/core/payout-split";
+import { MAX_MONEY_CENTS, centsToIsk, iskToCents } from "@/core/payout-split";
 import { logAudit } from "@/services/audit";
 import {
+  PayoutNotFoundError,
   assertEditable,
   lockOperation,
   recalculate,
   requirePayoutOperator,
 } from "@/services/payouts";
 import type { AppraisalResult } from "@/services/appraisal";
+
+/**
+ * `numeric(20, 2)` holds up to 999999999999999999.99 ISK. Past that, an insert
+ * dies as a Drizzle "Failed query" wrapper around a Postgres numeric overflow,
+ * which tells the operator nothing about which line was absurd. This is the
+ * same failure defect 9's quantity bound reaches from the other side.
+ */
+function assertWithinMoneyRange(cents: bigint, what: string): void {
+  if (cents > MAX_MONEY_CENTS) {
+    throw new Error(`${what} exceeds the largest value this system can record`);
+  }
+}
 
 export async function addAppraisedPool(
   dbtx: DbTx,
@@ -32,9 +45,14 @@ export async function addAppraisedPool(
   // formula today, but only one of them is the row that actually lands in
   // loot_item, and a caller that passes a stale or edited totalValue must
   // not be able to make the persisted pool disagree with its own items.
-  const computedTotal = centsToIsk(
-    input.appraisal.items.reduce((sum, it) => sum + iskToCents(it.totalValue), 0n),
-  );
+  let totalCents = 0n;
+  for (const it of input.appraisal.items) {
+    const lineCents = iskToCents(it.totalValue);
+    assertWithinMoneyRange(lineCents, `the line total for ${it.name}`);
+    totalCents += lineCents;
+  }
+  assertWithinMoneyRange(totalCents, "this pool's total");
+  const computedTotal = centsToIsk(totalCents);
   const [pool] = await dbtx
     .insert(lootPool)
     .values({
@@ -116,6 +134,92 @@ export async function addFlatPool(
   });
   await recalculate(dbtx, operationId);
   return { poolId: pool.id };
+}
+
+/**
+ * A manual per-item price override, for the items an appraisal could not
+ * resolve. Lives here rather than in payouts.ts because it has to keep the
+ * pool's derived `totalValue` consistent with its item rows, which is
+ * `addAppraisedPool`'s job too.
+ *
+ * Calls `assertEditable`: this moves money.
+ *
+ * Precision. `unitPrice` is `numeric(20, 2)`, so a manual price is exactly two
+ * decimals; the action refuses a third rather than silently rounding a number
+ * someone typed deliberately. The payoff is that invariant 2 ("round once at
+ * the line total") has nothing to round here — `unitPriceCents * qty` is an
+ * exact bigint product, and because the price is already at cent precision,
+ * per-unit and line-total rounding coincide. This is not a forgotten rounding
+ * step.
+ *
+ * The deliberate inconsistency, named so nobody "fixes" it: for an APPRAISED
+ * item, `unitPrice` is a lossy 2dp rendering of a sub-cent market price while
+ * `totalValue` came from the full-precision one, so `unitPrice * qty` does NOT
+ * reproduce `totalValue` — that gap is what the detail page's sub-cent warning
+ * reports. For a MANUAL item the two agree exactly, by the paragraph above.
+ *
+ * `rawPaste` is untouched: phase 1 keeps it verbatim precisely so the pool can
+ * be re-appraised later, and an override must not cost that.
+ */
+export async function setItemPrice(
+  dbtx: DbTx,
+  actor: string,
+  itemId: string,
+  unitPrice: string,
+): Promise<void> {
+  await requirePayoutOperator(dbtx, actor);
+  const [ref] = await dbtx.select().from(lootItem).where(eq(lootItem.id, itemId));
+  if (!ref) throw new PayoutNotFoundError("loot item not found");
+  const [pool] = await dbtx.select().from(lootPool).where(eq(lootPool.id, ref.poolId));
+  if (!pool) throw new PayoutNotFoundError("loot pool not found");
+  await lockOperation(dbtx, pool.operationId);
+  await assertEditable(dbtx, pool.operationId);
+  // Re-read after the lock: `qty` is what the line total is computed from, and
+  // a concurrent re-appraisal could have replaced it since the read above.
+  const [item] = await dbtx.select().from(lootItem).where(eq(lootItem.id, itemId));
+  if (!item) throw new PayoutNotFoundError("loot item not found");
+
+  const unitPriceCents = iskToCents(unitPrice);
+  // iskToCents' regex admits a leading minus, so this is the guard that keeps a
+  // negative price from dying on loot_item_price_ck instead.
+  if (unitPriceCents < 0n) throw new Error("a unit price cannot be negative");
+  const lineCents = unitPriceCents * BigInt(item.qty);
+  assertWithinMoneyRange(lineCents, `the line total for ${item.name}`);
+
+  await dbtx
+    .update(lootItem)
+    .set({
+      unitPrice: centsToIsk(unitPriceCents),
+      totalValue: centsToIsk(lineCents),
+      priceSource: "manual",
+    })
+    .where(eq(lootItem.id, itemId));
+
+  // Re-derive the pool total from the item rows, never from a running sum or a
+  // caller-supplied number — same rule addAppraisedPool follows.
+  const siblings = await dbtx
+    .select({ totalValue: lootItem.totalValue })
+    .from(lootItem)
+    .where(eq(lootItem.poolId, item.poolId));
+  const poolCents = siblings.reduce((sum, it) => sum + iskToCents(it.totalValue), 0n);
+  assertWithinMoneyRange(poolCents, "this pool's total");
+  await dbtx
+    .update(lootPool)
+    .set({ totalValue: centsToIsk(poolCents) })
+    .where(eq(lootPool.id, item.poolId));
+
+  await logAudit(dbtx, {
+    actor,
+    action: "payout.item_repriced",
+    target: pool.operationId,
+    details: {
+      itemId,
+      poolId: item.poolId,
+      name: item.name,
+      unitPrice: centsToIsk(unitPriceCents),
+    },
+  });
+  await recalculate(dbtx, pool.operationId);
 }
 
 export async function deletePool(

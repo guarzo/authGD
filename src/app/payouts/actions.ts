@@ -6,14 +6,24 @@ import { redirect } from "next/navigation";
 import { getConfig } from "@/config";
 import { getDb } from "@/db";
 import { appraiseLoot } from "@/services/appraisal";
-import { addAppraisedPool, addFlatPool, deletePool } from "@/services/payout-loot";
 import {
+  addAppraisedPool,
+  addFlatPool,
+  deletePool,
+  setItemPrice,
+} from "@/services/payout-loot";
+import {
+  MAX_SHARES_HUNDREDTHS,
+  PayoutDuplicateParticipantError,
+  addParticipant,
   createOperation,
   finalizeOperation,
+  getOpenInfoTarget,
   recordPayment,
   removeParticipant,
   requirePayoutOperator,
   resolveRosterNames,
+  revertPayment,
   setCorpSharePct,
   setParticipantExcluded,
   setParticipantShares,
@@ -21,11 +31,14 @@ import {
   unlockOperation,
 } from "@/services/payouts";
 import { getSessionAccount } from "@/services/session";
-import { createEsiClient, EsiError } from "@/lib/esi/client";
+import { getFreshAccessToken, getMainCharacterWithScope } from "@/services/tokens";
+import { createEsiClient, EsiError, OPEN_WINDOW_SCOPE } from "@/lib/esi/client";
+import { classifyOpenInfoFailure } from "@/core/open-info-error";
 import { createTriffClient, TriffError } from "@/lib/triff/client";
 import { PRICING_MODES, type PricingMode } from "@/core/pricing";
 import { parseRosterPaste } from "@/core/roster-paste";
 import { iskToCents } from "@/core/payout-split";
+import { encodeDropped } from "./dropped";
 
 /** FormData.get() is string | File | null; a File coerced with String() would
  *  stringify to "[object File]" rather than fail loudly, so every text field
@@ -181,6 +194,10 @@ export async function addAppraisedPoolAction(
   const esi = createEsiClient({ userAgent: `authgd/0.1.0 (${cfg.esiContact})` });
   const triff = createTriffClient();
 
+  // Carried out of the try so the redirect below runs after it: `redirect()`
+  // throws a control-flow signal, and calling it inside the try would be
+  // caught by the `catch` and rethrown as an unhandled error.
+  let droppedParam: string | null = null;
   try {
     const appraisal = await appraiseLoot(
       rawPaste,
@@ -196,6 +213,12 @@ export async function addAppraisedPoolAction(
         appraisal,
       }),
     );
+    // Dropped lines are never persisted (design, defect 3), so the only way the
+    // next render learns about them is the query string — same mechanism the
+    // failure path above uses, carrying a payload instead of a fixed code.
+    if (appraisal.dropped.length > 0) {
+      droppedParam = encodeDropped(appraisal.dropped);
+    }
   } catch (err) {
     if (err instanceof TriffError || err instanceof EsiError) {
       // Visible error on the appraisal form, pool left unvalued — never a
@@ -208,6 +231,7 @@ export async function addAppraisedPoolAction(
     throw err;
   }
   revalidateOperation(operationId);
+  if (droppedParam) redirect(`/payouts/${operationId}?dropped=${droppedParam}`);
 }
 
 export async function addFlatPoolAction(
@@ -242,6 +266,25 @@ export async function deletePoolAction(
   revalidateOperation(operationId);
 }
 
+export async function setItemPriceAction(
+  operationId: string,
+  itemId: string,
+  formData: FormData,
+): Promise<void> {
+  const actor = await requireOperatorAccount();
+  const unitPrice = field(formData, "unitPrice").trim();
+  // Two decimals is what numeric(20,2) holds. A third is refused rather than
+  // rounded: an operator who typed 0.004 meant something specific, and a
+  // silent round to 0.01 would inflate the line 2.5x with no sign of it. The
+  // escape hatch for genuinely sub-cent heaps is the flat-total pool, which
+  // takes a pool value directly and skips per-item pricing.
+  if (!/^\d+(\.\d{1,2})?$/.test(unitPrice)) {
+    operationFailed(operationId, "price_invalid");
+  }
+  await getDb().transaction((dbtx) => setItemPrice(dbtx, actor, itemId, unitPrice));
+  revalidateOperation(operationId);
+}
+
 export async function setRosterAction(
   operationId: string,
   formData: FormData,
@@ -253,6 +296,32 @@ export async function setRosterAction(
     const entries = await resolveRosterNames(dbtx, names);
     await setRoster(dbtx, actor, operationId, entries);
   });
+  revalidateOperation(operationId);
+}
+
+/** Both rejections here are things the operator typed, so both redirect rather
+ *  than throw — the conversion #74 applied to every other input rejection in
+ *  this file. A throw would land on error.tsx, which renders `error.digest` and
+ *  never `error.message`, telling them a blank name box was a fault on our end.
+ *
+ *  `operationFailed` returns `never` and must not be called from inside a `try`
+ *  — `redirect` signals by throwing NEXT_REDIRECT, and an enclosing catch would
+ *  swallow it. The call below sits in the `catch`, not the `try`. */
+export async function addParticipantAction(
+  operationId: string,
+  formData: FormData,
+): Promise<void> {
+  const actor = await requireOperatorAccount();
+  const name = field(formData, "name").trim();
+  if (!name) operationFailed(operationId, "participant_name_required");
+  try {
+    await getDb().transaction((dbtx) => addParticipant(dbtx, actor, operationId, name));
+  } catch (err) {
+    if (err instanceof PayoutDuplicateParticipantError) {
+      operationFailed(operationId, "participant_duplicate");
+    }
+    throw err;
+  }
   revalidateOperation(operationId);
 }
 
@@ -276,6 +345,15 @@ export async function setParticipantSharesAction(
   // before the raw string reaches the numeric(6,2) column.
   if (iskToCents(shares) <= 0n) {
     operationFailed(operationId, "shares_positive");
+  }
+  // The numeric(6, 2) column's own range, mirrored here for the same reason the
+  // three checks above mirror the format and payout_participant_shares_ck: an
+  // unbounded "10000" reaches Postgres as a raw numeric overflow and lands the
+  // operator on error.tsx. assertSharesInRange in the service enforces this for
+  // every caller; this copy is the one that can give the operator a page with
+  // their roster still on it. Same constant, so the two cannot drift.
+  if (iskToCents(shares) > MAX_SHARES_HUNDREDTHS) {
+    operationFailed(operationId, "shares_range");
   }
   await getDb().transaction((dbtx) =>
     setParticipantShares(dbtx, actor, participantId, shares),
@@ -343,5 +421,114 @@ export async function markPaidAction(
 ): Promise<void> {
   const actor = await requireOperatorAccount();
   await getDb().transaction((dbtx) => recordPayment(dbtx, actor, participantId));
+  revalidateOperation(operationId);
+}
+
+/** getFreshAccessToken's four failure reasons, mapped to the `?error=` codes
+ *  the detail page renders. Every branch has a message: an operator who clicks
+ *  a control and sees nothing happen cannot tell a dead token from a client
+ *  they forgot to log into. */
+const OPEN_INFO_ERROR_BY_REASON = {
+  no_token: "open_info_reauth",
+  invalid: "open_info_reauth",
+  transient: "open_info_failed",
+  dry_run: "open_info_dry_run",
+} as const;
+
+/** classifyOpenInfoFailure's verdicts, mapped to the same `?error=` codes.
+ *  Kept next to the map above so the page's ERRORS keys have exactly two
+ *  producers and both are visible at once. */
+const OPEN_INFO_ERROR_BY_FAILURE = {
+  reauth: "open_info_reauth",
+  offline: "open_info_offline",
+  busy: "open_info_busy",
+  timeout: "open_info_timeout",
+  failed: "open_info_failed",
+} as const;
+
+/**
+ * Opens the in-game information window for a participant's stored recipient
+ * character on the operator's own client, so they can right-click through to a
+ * transfer without retyping a name.
+ *
+ * ARCHITECTURAL EXCEPTION to "enqueue, don't execute" — the second one, after
+ * interactive appraisal above. The original justification was "read-only and
+ * idempotent", and this is a POST, so it needs its own: the call persists NO
+ * state, at CCP or here. Its entire effect is a window appearing on a game
+ * client. A duplicated call opens it twice, a lost call opens nothing and the
+ * operator clicks again, and there is no record to corrupt. Queueing it would
+ * be actively worse — the window would surface minutes later on a client that
+ * has moved on.
+ *
+ * Takes a participant id, never a character id: the target is re-read from the
+ * database inside the action (see getOpenInfoTarget). Nothing changed, so
+ * nothing is revalidated.
+ *
+ * Every failure below goes out through `operationFailed`, the module's own
+ * `: never`-typed redirect helper, for the reasons argued at the top of this
+ * task: these are upstream and grant failures on a control that persists
+ * nothing, and error.tsx can only call them a fault on our end. What does NOT
+ * redirect is requireOperatorAccount's throw above and an unclassifiable error
+ * below — a forged request and a bug, both of which want a stack trace.
+ */
+export async function openInfoAction(
+  operationId: string,
+  participantId: string,
+): Promise<void> {
+  const actor = await requireOperatorAccount();
+  const cfg = getConfig();
+  const db = getDb();
+
+  // Gated on what this operator GRANTED, not on what config asks for. The
+  // control should already be hidden for them; reaching here means a stale
+  // page or a hand-made request, and it gets a message, not a 500.
+  const main = await getMainCharacterWithScope(db, actor, OPEN_WINDOW_SCOPE);
+  if (!main) operationFailed(operationId, "open_info_reauth");
+
+  // The authorization that matters. requireOperatorAccount above proves this
+  // caller may operate payouts; it proves nothing about WHOSE window opens.
+  // The id that reaches ESI comes from this row, not from the arguments.
+  const targetId = await getOpenInfoTarget(db, operationId, participantId);
+  if (targetId === null) operationFailed(operationId, "open_info_target");
+
+  const token = await getFreshAccessToken(db, cfg, main);
+  if (!token.ok) operationFailed(operationId, OPEN_INFO_ERROR_BY_REASON[token.reason]);
+
+  const esi = createEsiClient({
+    userAgent: `authgd/0.1.0 (${cfg.esiContact})`,
+    // Unlike appraisal (a read), this is a write and must honour dry-run. In
+    // practice getFreshAccessToken already refuses above in dry-run mode; this
+    // is the boundary guard sync-mode.ts asks every write to pass through.
+    syncMode: cfg.syncMode,
+  });
+  try {
+    await esi.openInformationWindow(main.id, token.accessToken, targetId);
+  } catch (err) {
+    const failure = classifyOpenInfoFailure(err);
+    // null means we cannot describe it honestly — a bug, a DNS failure, a
+    // malformed response. Those get a stack trace, not a reassuring sentence.
+    if (failure === null) throw err;
+    operationFailed(operationId, OPEN_INFO_ERROR_BY_FAILURE[failure]);
+  }
+}
+
+/**
+ * Takes back a payment an operator recorded wrongly. `revertPayment` clears
+ * `paidAmount` and appends a `reverted` event, so the participant can be paid
+ * again; the operation stays frozen either way, because money did move.
+ *
+ * Nothing is caught. Every failure `revertPayment` can raise is authorization
+ * (PayoutForbiddenError) or lifecycle state (PayoutLockedError,
+ * PayoutNotFoundError) — none of them is something the operator typed, and none
+ * of them has a field to hand back. That is exactly the line the ?error=
+ * conversion drew across this file: input rejections redirect, and everything
+ * else belongs on error.tsx. This action has no input to reject.
+ */
+export async function revertPaymentAction(
+  operationId: string,
+  participantId: string,
+): Promise<void> {
+  const actor = await requireOperatorAccount();
+  await getDb().transaction((dbtx) => revertPayment(dbtx, actor, participantId));
   revalidateOperation(operationId);
 }

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { centsToIsk, computeSplit, iskToCents } from "@/core/payout-split";
+import {
+  MAX_MONEY_CENTS,
+  centsToIsk,
+  computeSplit,
+  iskToCents,
+} from "@/core/payout-split";
 
 describe("iskToCents / centsToIsk", () => {
   it("round-trips whole and fractional amounts", () => {
@@ -158,4 +163,53 @@ describe("computeSplit", () => {
       expect(result.corpAmountCents + sumAmounts).toBe(totalCents);
     },
   );
+});
+
+describe("MAX_MONEY_CENTS", () => {
+  /**
+   * numeric(20,2) is 20 significant digits with 2 after the point, so 18
+   * integer digits. Asserting the rendered string rather than the bigint is
+   * what actually pins that shape — a wrong exponent still looks like a
+   * plausible constant.
+   */
+  it("is the largest value numeric(20,2) can hold", () => {
+    expect(centsToIsk(MAX_MONEY_CENTS)).toBe("999999999999999999.99");
+    expect(centsToIsk(MAX_MONEY_CENTS).replace(".", "")).toHaveLength(20);
+    expect(iskToCents("999999999999999999.99")).toBe(MAX_MONEY_CENTS);
+  });
+});
+
+describe("computeSplit input validation", () => {
+  /**
+   * Defence in depth. payout_operation_corp_share_pct_ck and
+   * payout_participant_amount_ck already reject these at persist time, but by
+   * then computeSplit has already produced a plausible-looking split from
+   * nonsense, and the operator sees a raw Postgres error instead of a sentence.
+   */
+  it("rejects a negative total", () => {
+    expect(() =>
+      computeSplit({ totalCents: -1n, corpSharePct: "10.00", participants: [] }),
+    ).toThrow(/total cannot be negative/);
+  });
+
+  it("rejects a corp share above 100", () => {
+    expect(() =>
+      computeSplit({ totalCents: 100n, corpSharePct: "100.01", participants: [] }),
+    ).toThrow(/corp share must be between 0 and 100/);
+  });
+
+  it("rejects a negative corp share", () => {
+    expect(() =>
+      computeSplit({ totalCents: 100n, corpSharePct: "-0.01", participants: [] }),
+    ).toThrow(/corp share must be between 0 and 100/);
+  });
+
+  it("accepts both ends of the corp-share range and a zero total", () => {
+    expect(() =>
+      computeSplit({ totalCents: 0n, corpSharePct: "0.00", participants: [] }),
+    ).not.toThrow();
+    expect(() =>
+      computeSplit({ totalCents: 100n, corpSharePct: "100.00", participants: [] }),
+    ).not.toThrow();
+  });
 });

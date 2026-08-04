@@ -6,6 +6,7 @@ import { getConfig } from "@/config";
 import { getDb } from "@/db";
 import { getAccountView, type PushStatus } from "@/services/account-view";
 import { canReadPayouts } from "@/services/payouts";
+import { listAccountPayouts } from "@/services/payout-view";
 import { getSessionAccount } from "@/services/session";
 import { computeAccountHealth } from "@/core/account-health";
 import {
@@ -23,6 +24,7 @@ import { Submit } from "@/app/_components/submit";
 import { ConfirmArmScope, ConfirmSubmit } from "@/app/_components/confirm-submit";
 import { ContactRemedy, ContactState, hasContactRemedy } from "./contact-state";
 import { setMainAction, unlinkAction, wakeSelfAction } from "./actions";
+import { AccountPayouts } from "./account-payouts";
 
 /** Columns in the crew manifest table: portrait, name, token, contacts, map,
  *  actions. Kept alongside the empty-state row's `colSpan` so the two can't
@@ -127,6 +129,10 @@ export default async function AccountPage({
   // Same tier-only gate the payouts pages themselves re-check — this only
   // decides whether the link appears, never whether the route is reachable.
   const showPayoutsLink = await canReadPayouts(getDb(), sess.accountId);
+  // Finalized operations only, and only rows whose participant resolved to
+  // this account — see listAccountPayouts for both, including what the second
+  // one cannot show.
+  const payouts = await listAccountPayouts(getDb(), sess.accountId);
 
   const nav = [
     // These two sit side by side for an admin, so they must not share a word.
@@ -469,6 +475,13 @@ export default async function AccountPage({
             Add character
           </a>
         </p>
+
+        {/* Omitted entirely when there are none, like the "Last pushed" block
+            below: an empty table under "Your payouts" on every green member's
+            page is a section that never says anything. */}
+        {payouts.length > 0 && (
+          <AccountPayouts rows={payouts} linkToOperations={showPayoutsLink} />
+        )}
 
         {/* Omitted entirely with no characters linked: there is nothing being
             pushed on their behalf yet, and three "not yet run" rows would read

@@ -3,16 +3,61 @@ import { and, eq } from "drizzle-orm";
 import { resetDb, seedMember, sessionCookieFor, testDb } from "./helpers";
 import {
   auditLog,
+  character,
   lootItem,
   lootPool,
   payoutOperation,
   payoutParticipant,
+  payoutPayment,
 } from "../src/db/schema";
 import { centsToIsk, iskToCents } from "../src/core/payout-split";
+import { OPEN_WINDOW_SCOPE } from "../src/lib/esi/client";
 
 const { db, pool } = testDb();
 test.afterAll(() => pool.end());
 test.beforeEach(() => resetDb(db));
+
+test("the payouts list pages with an Older link", async ({ page, context }) => {
+  const reader = await seedMember(db, { name: "List Reader", tier: "flygd" });
+  await context.addCookies([await sessionCookieFor(db, reader.id)]);
+
+  // 51 operations: one more than PAYOUTS_PAGE_SIZE, newest first by date.
+  await db.insert(payoutOperation).values(
+    Array.from({ length: 51 }, (_, i) => ({
+      name: `Op ${String(i).padStart(2, "0")}`,
+      occurredAt: new Date(Date.UTC(2026, 6, 1) - i * 86_400_000),
+    })),
+  );
+
+  await page.goto("/payouts");
+  // The count is a page count now, so the heading must not claim a total.
+  await expect(page.getByRole("heading", { name: "Operations" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Op 00", exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Op 49", exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Op 50", exact: true })).toHaveCount(0);
+
+  await page.getByRole("link", { name: "Older" }).click();
+  await expect(page).toHaveURL(/\/payouts\?before=/);
+  await expect(page.getByRole("link", { name: "Op 50", exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Op 00", exact: true })).toHaveCount(0);
+  // Last page: nothing further to walk to.
+  await expect(page.getByRole("link", { name: "Older" })).toHaveCount(0);
+});
+
+test("a malformed before param renders page 1 instead of failing", async ({
+  page,
+  context,
+}) => {
+  const reader = await seedMember(db, { name: "Cursor Reader", tier: "flygd" });
+  await context.addCookies([await sessionCookieFor(db, reader.id)]);
+  await db.insert(payoutOperation).values({
+    name: "Only fight",
+    occurredAt: new Date("2026-07-01T00:00:00Z"),
+  });
+
+  await page.goto("/payouts?before=garbage");
+  await expect(page.getByRole("link", { name: "Only fight" })).toBeVisible();
+});
 
 test("a green member is denied /payouts", async ({ page, context }) => {
   const acc = await seedMember(db, { name: "Green Pilot", tier: "green" });
@@ -532,8 +577,18 @@ for (const [code, phrase] of [
   ["shares_required", "cannot be blank"],
   ["shares_invalid", "plain number like 1"],
   ["shares_positive", "greater than zero"],
+  ["shares_range", "cannot exceed 9999.99"],
   ["share_format", "plain percentage"],
   ["share_range", "cannot exceed 100%"],
+  ["participant_name_required", "Type a character name"],
+  ["participant_duplicate", "already on this roster"],
+  ["open_info_reauth", "permission your login does not carry"],
+  ["open_info_target", "cannot be opened"],
+  ["open_info_offline", "not logged in"],
+  ["open_info_busy", "rate-limiting"],
+  ["open_info_timeout", "took too long"],
+  ["open_info_failed", "Could not open that window"],
+  ["open_info_dry_run", "dry-run mode"],
 ] as const) {
   test(`the operation page explains ?error=${code}`, async ({ page, context }) => {
     const operator = await seedMember(db, {
@@ -709,4 +764,389 @@ test("bad shares land on the page, not the error boundary", async ({ page, conte
   await expect(page.getByText("Something broke")).toHaveCount(0);
   // The stored value survived both rejections.
   await expect(page.getByLabel("Shares for Alice Pilot")).toHaveValue("1.00");
+});
+
+/**
+ * The whole phase-2 money loop in one pass: override an item price, finalize,
+ * pay, revert, pay again.
+ *
+ * The pool and its item are written directly rather than through the appraise
+ * form, for the same reason the unresolved-item test above does it: the form
+ * calls triff.tools, and this suite must not depend on an external service.
+ * The override itself goes through the UI, because that is what is under test.
+ */
+test("override an item price, finalize, pay, revert, and pay again", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "FC Prime",
+    tier: "flygd",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+
+  const [op] = await db
+    .insert(payoutOperation)
+    .values({
+      name: "Repriced haul",
+      occurredAt: new Date("2026-08-01"),
+      corpSharePct: "0",
+      createdBy: operator.id,
+    })
+    .returning();
+  const [poolRow] = await db
+    .insert(lootPool)
+    .values({
+      operationId: op.id,
+      valuationSource: "appraised",
+      pricingMode: "sell_best",
+      stationId: 60003760,
+      totalValue: "100.00",
+    })
+    .returning();
+  await db.insert(lootItem).values({
+    poolId: poolRow.id,
+    typeId: 34,
+    name: "Tritanium",
+    qty: 10,
+    unitPrice: "10.00",
+    totalValue: "100.00",
+    priceSource: "triff",
+  });
+
+  await page.goto(`/payouts/${op.id}`);
+  // The item table is behind the disclosure, so a 200-line paste cannot bury
+  // the roster — nothing inside it is reachable until it is opened.
+  // exact: true — the save button beside this field is named "save unit
+  // price for Tritanium", which is this label's text with a prefix, and
+  // getByLabel's default substring match would count both.
+  //
+  // not.toBeVisible(), not toHaveCount(0): Disclosure is built on native
+  // <details> precisely so a browser can still find text in a collapsed
+  // section (see disclosure.tsx), so the field stays in the DOM while
+  // closed — only its visibility (and reachability) changes.
+  await expect(
+    page.getByLabel("Unit price for Tritanium", { exact: true }),
+  ).not.toBeVisible();
+  await page.locator("summary", { hasText: "Pool 1 items (1)" }).click();
+
+  await page.getByLabel("Unit price for Tritanium", { exact: true }).fill("25.00");
+  await page.getByRole("button", { name: "save unit price for Tritanium" }).click();
+
+  // 25.00 x 10, exactly — the line total, the pool total and the operation
+  // total all re-derive from the override.
+  //
+  // No second click here: Disclosure's open state is React state that
+  // survives the server action's revalidatePath re-render (see
+  // e2e/admin.spec.ts's row-drawer tests), so the pool section is still open
+  // from the click above — a second click here would close it again.
+  const itemRow = page.getByRole("row").filter({ hasText: "Tritanium" });
+  await expect(itemRow).toContainText("250.00 ISK");
+  await expect(itemRow).toContainText("manual");
+  const poolRowLocator = page.getByRole("row").filter({ hasText: "appraised" });
+  await expect(poolRowLocator).toContainText("250.00 ISK");
+
+  await page
+    .getByLabel("Paste (names separated by /)")
+    .fill("Brain Tartare / Gustav Oswaldo");
+  await page.getByRole("button", { name: "Set roster" }).click();
+  const rowFor = (name: string) => page.getByRole("row").filter({ hasText: name });
+  await expect(rowFor("Brain Tartare")).toContainText("125.00 ISK");
+
+  // Finalize and the FIRST mark-paid are both armed (#74): one click arms, the
+  // second submits. The first payment is what freezes the operation for good,
+  // which is what the arm step is guarding.
+  await page.getByRole("button", { name: "Finalize" }).click();
+  await page.getByRole("button", { name: /^confirm finalize/ }).click();
+  await rowFor("Brain Tartare").getByRole("button", { name: "mark paid" }).click();
+  await page.getByRole("button", { name: /^confirm mark paid/ }).click();
+  // exact: true — "unpaid" contains "paid" as a substring, so a plain
+  // toContainText("paid") is satisfied by the row's PRIOR "unpaid" status and
+  // never actually waits for the update this click causes. Scoped to the
+  // Status badge's own exact text, same as line ~199 above.
+  await expect(rowFor("Brain Tartare").getByText("paid", { exact: true })).toBeVisible();
+
+  // The freeze is permanent, and the page has to say so where the operator is
+  // about to reach for revert — an operator who reverts expecting to fix the
+  // roster has been misled.
+  await expect(page.getByText("This operation is frozen")).toBeVisible();
+  await expect(
+    page.getByText("Reverting a payment does not reopen editing"),
+  ).toBeVisible();
+
+  // Revert arms on the first click and only fires on the second.
+  const revert = rowFor("Brain Tartare").getByRole("button", { name: /^revert/ });
+  await revert.click();
+  await rowFor("Brain Tartare")
+    .getByRole("button", { name: /^confirm revert/ })
+    .click();
+  await expect(rowFor("Brain Tartare")).toContainText("unpaid");
+
+  // Paying again is the whole point of clearing paidAmount — without it a
+  // reverted participant could never be paid, which defeats the feature.
+  //
+  // ONE click, not two: the arm step is keyed on `firstPayment` (`!locked`),
+  // and the operation is still frozen — `hasPayments` counts payment rows, and
+  // reverting appended a row rather than deleting one. This assertion is what
+  // pins that: if the arm were keyed on "somebody is currently paid" instead,
+  // this click would only arm the control and the row would still read unpaid.
+  await rowFor("Brain Tartare").getByRole("button", { name: "mark paid" }).click();
+  // Same exact-text scoping as the first mark-paid above, and it matters more
+  // here: without it, this assertion is satisfied by the row's own prior
+  // "unpaid" text and returns before the server action's insert has even
+  // committed, so the DB read just below races an in-flight transaction.
+  await expect(rowFor("Brain Tartare").getByText("paid", { exact: true })).toBeVisible();
+
+  // Three events, in the order they happened, oldest first.
+  const [brainTartare] = await db
+    .select()
+    .from(payoutParticipant)
+    .where(eq(payoutParticipant.displayName, "Brain Tartare"));
+  const events = await db
+    .select()
+    .from(payoutPayment)
+    .where(eq(payoutPayment.participantId, brainTartare.id));
+  expect(events).toHaveLength(3);
+
+  await rowFor("Brain Tartare").locator("summary", { hasText: "payments (3)" }).click();
+  const history = rowFor("Brain Tartare").locator("li");
+  await expect(history).toHaveCount(3);
+  await expect(history.nth(0)).toContainText("paid");
+  await expect(history.nth(1)).toContainText("reverted");
+  await expect(history.nth(2)).toContainText("paid");
+
+  // The revert is audited like every other state change, and targets the
+  // OPERATION uuid so one operation's history stays under one target.
+  const reverted = await db
+    .select()
+    .from(auditLog)
+    .where(
+      and(eq(auditLog.action, "payout.payment_reverted"), eq(auditLog.target, op.id)),
+    );
+  expect(reverted).toHaveLength(1);
+});
+
+/*
+ * The unit-price control is the other money input on the page, alongside
+ * shares (see "bad shares land on the page, not the error boundary" above) —
+ * a malformed value must land back on the page with a specific message
+ * rather than on error.tsx, and the stored price must survive the rejection.
+ */
+test("bad unit price lands on the page, not the error boundary", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "FC Price",
+    tier: "flygd",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+
+  const [op] = await db
+    .insert(payoutOperation)
+    .values({
+      name: "Price guard",
+      occurredAt: new Date("2026-08-01"),
+      corpSharePct: "0",
+      createdBy: operator.id,
+    })
+    .returning();
+  const [poolRow] = await db
+    .insert(lootPool)
+    .values({
+      operationId: op.id,
+      valuationSource: "appraised",
+      pricingMode: "sell_best",
+      stationId: 60003760,
+      totalValue: "100.00",
+    })
+    .returning();
+  await db.insert(lootItem).values({
+    poolId: poolRow.id,
+    typeId: 34,
+    name: "Tritanium",
+    qty: 10,
+    unitPrice: "10.00",
+    totalValue: "100.00",
+    priceSource: "triff",
+  });
+
+  await page.goto(`/payouts/${op.id}`);
+  await page.locator("summary", { hasText: "Pool 1 items (1)" }).click();
+
+  // type=number, so the browser refuses to submit text or a comma-grouped
+  // value at all — bypassClientGuard drives it the way a scripted client
+  // (or EVE's own comma-grouped paste) would.
+  await bypassClientGuard(
+    page.getByLabel("Unit price for Tritanium", { exact: true }),
+    "1,234.00",
+  );
+  await page.getByRole("button", { name: "save unit price for Tritanium" }).click();
+  await expect(page.locator("p.notice--bad")).toContainText("plain number like 12.34");
+  await expect(page.getByText("Something broke")).toHaveCount(0);
+  // The stored value survived the rejection.
+  await expect(page.getByLabel("Unit price for Tritanium", { exact: true })).toHaveValue(
+    "10.00",
+  );
+});
+
+/**
+ * The datalist is inert HTML, not a type-ahead: it ships with the page, the
+ * browser filters it, and the form submits without JavaScript. This asserts
+ * the options are in the document — the browser's own popup is not something
+ * Playwright can or should drive.
+ */
+test("manual participant entry offers known character names and adds one", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "FC Prime",
+    tier: "flygd",
+    status: "active",
+  });
+  await seedMember(db, { name: "Latecomer Pilot", tier: "green" });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+
+  const [op] = await db
+    .insert(payoutOperation)
+    .values({
+      name: "Late arrival",
+      occurredAt: new Date("2026-08-01"),
+      corpSharePct: "0",
+      createdBy: operator.id,
+    })
+    .returning();
+
+  await page.goto(`/payouts/${op.id}`);
+  await expect(page.locator("datalist option[value='Latecomer Pilot']")).toHaveCount(1);
+
+  await page.getByLabel("Character name").fill("Latecomer Pilot");
+  await page.getByRole("button", { name: "Add participant" }).click();
+  await expect(page.getByRole("row").filter({ hasText: "Latecomer Pilot" })).toHaveCount(
+    1,
+  );
+});
+
+/**
+ * The one new rejection an operator can actually reach by using the form
+ * normally, so it gets the round trip rather than only a rendered `?error=`
+ * case: nothing in the markup stops a name being typed twice, and two rows
+ * under one name pay two full shares to whoever answers to it.
+ *
+ * `participant_name_required` has no round trip because it cannot have one —
+ * the field is `required`, and `bypassClientGuard` deliberately does not strip
+ * that. Its coverage is the table-driven case in Step 1.
+ */
+test("adding the same name twice is refused on the page, not on the error boundary", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "FC Prime",
+    tier: "flygd",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+
+  const [op] = await db
+    .insert(payoutOperation)
+    .values({
+      name: "Double add",
+      occurredAt: new Date("2026-08-01"),
+      corpSharePct: "0",
+      createdBy: operator.id,
+    })
+    .returning();
+
+  await page.goto(`/payouts/${op.id}`);
+  await page.getByLabel("Character name").fill("Twice Pilot");
+  await page.getByRole("button", { name: "Add participant" }).click();
+  await expect(page.getByRole("row").filter({ hasText: "Twice Pilot" })).toHaveCount(1);
+
+  await page.getByLabel("Character name").fill("Twice Pilot");
+  await page.getByRole("button", { name: "Add participant" }).click();
+  // p.notice--bad, never getByRole("alert"): this is a soft navigation, so
+  // Next's route announcer carries role="alert" too.
+  await expect(page.locator("p.notice--bad")).toContainText("already on this roster");
+  await expect(page.getByText("Something broke")).toHaveCount(0);
+  // And the roster is unchanged — the rejection added nothing.
+  await expect(page.getByRole("row").filter({ hasText: "Twice Pilot" })).toHaveCount(1);
+});
+
+/**
+ * The open-info control is gated on the operator's own PERSISTED scopes, and
+ * is hidden rather than disabled when the grant is absent.
+ *
+ * The scope is written straight onto the seeded character row. Widening the
+ * scope list in `tests/helpers/config.ts` or `playwright.config.ts` would be
+ * the wrong lever twice over: it flips unrelated assertions in
+ * `tests/account-view.test.ts:73-81` and `tests/accounts.test.ts:289`, and it
+ * would test config rather than the gate — the whole point of the gate is that
+ * a persisted grant, not a configured request, decides.
+ *
+ * Nothing here clicks the control. Doing so would call EVE SSO and ESI for
+ * real; the four `open_info_*` outcomes are covered as units in
+ * `tests/tokens.test.ts` and `tests/esi-client.test.ts`.
+ */
+test("open info appears only for an operator whose character granted the scope", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "FC Prime",
+    tier: "flygd",
+    status: "active",
+  });
+  const recipient = await seedMember(db, { name: "Paid Pilot", tier: "flygd" });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+
+  // The control also needs a resolved recipient — it is the ESI target_id, and
+  // an unresolved participant name has none. seedMember allocates the character
+  // id internally, so read it back rather than guessing.
+  const [recipientChar] = await db
+    .select()
+    .from(character)
+    .where(eq(character.accountId, recipient.id));
+
+  const [op] = await db
+    .insert(payoutOperation)
+    .values({
+      name: "Scope check",
+      occurredAt: new Date("2026-08-01"),
+      corpSharePct: "0",
+      status: "finalized",
+      createdBy: operator.id,
+    })
+    .returning();
+  await db.insert(payoutParticipant).values({
+    operationId: op.id,
+    accountId: recipient.id,
+    recipientCharacterId: recipientChar.id,
+    displayName: "Paid Pilot",
+    shares: "1",
+    amount: "100.00",
+  });
+
+  // seedMember writes `scopes: []`, so this is the no-grant case.
+  await page.goto(`/payouts/${op.id}`);
+  const row = page.getByRole("row").filter({ hasText: "Paid Pilot" });
+  await expect(row.getByRole("button", { name: "open info for Paid Pilot" })).toHaveCount(
+    0,
+  );
+  // The scope-free controls are unaffected — an operator without the grant
+  // loses nothing phase 1 gave them.
+  await expect(row.getByRole("button", { name: "copy amount" })).toHaveCount(1);
+
+  await db
+    .update(character)
+    .set({ scopes: [OPEN_WINDOW_SCOPE] })
+    .where(eq(character.accountId, operator.id));
+
+  await page.reload();
+  await expect(row.getByRole("button", { name: "open info for Paid Pilot" })).toHaveCount(
+    1,
+  );
 });
