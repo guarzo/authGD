@@ -107,13 +107,13 @@ test("clicking a since-deleted operation announces the 404 and lands focus in it
   await expect(page.getByRole("heading", { name: "No such operation" })).toBeVisible();
   await expect(page.getByRole("link", { name: "All operations" })).toBeVisible();
 
-  // The title is deliberately *not* asserted. `page.tsx`'s own `metadata`
-  // survives its `notFound()`, so the tab still reads "Payout operation" here
-  // — a known cosmetic wart recorded in the boundary's comment. Next's route
-  // announcer was measured reading the `h1` instead, but only because React is
-  // mid-swap on the hoisted `<title>` when its effect fires; that is a race,
-  // and pinning it would make this suite fail on a framework timing change
-  // rather than on a regression in our own behaviour.
+  // The tab agrees with the page. `page.tsx` exports `generateMetadata`, which
+  // resolves the same lookup the page did, finds nothing, and titles the tab
+  // after this heading rather than "Payout operation" — a title for an
+  // operation that isn't there. Asserted on the soft-nav path specifically:
+  // it is the one where the document is never reloaded, so a stale title
+  // would simply persist.
+  await expect(page).toHaveTitle("No such operation · Zoo Landers");
 
   // Focus is the half that is deterministic and ours. The pressed link is
   // gone; without `FocusHeading` this is `BODY`, and the member's next Tab
@@ -149,6 +149,29 @@ test("a truncated operation id pasted in gets the operation 404, not the error b
   await expect(page.getByRole("heading", { name: "No such operation" })).toBeVisible();
   // Not "Something broke": a mistyped id is not a fault on this end.
   await expect(page.getByText("Something broke")).toHaveCount(0);
+});
+
+test("a malformed operation id gets the operation 404, not the error boundary", async ({
+  page,
+  context,
+}) => {
+  const member = await seedMember(db, {
+    name: "Typo Follower",
+    tier: "flygd",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, member.id)]);
+
+  // Not a uuid in any form postgres accepts. Without the shape check in
+  // `page.tsx` this reached the `uuid` column as a query parameter, postgres
+  // rejected the cast (22P02), and the member was shown "Something broke" —
+  // an apology for a server fault, for what is a mistyped or truncated URL.
+  const res = await page.goto("/payouts/not-a-uuid");
+
+  expect(res?.status()).toBe(404);
+  await expect(page.getByRole("heading", { name: "No such operation" })).toBeVisible();
+  await expect(page.getByText("Something broke")).toHaveCount(0);
+  await expect(page).toHaveTitle("No such operation · Zoo Landers");
 });
 
 test("the payouts 404 stays behind the payouts guard", async ({ page, context }) => {
