@@ -37,6 +37,7 @@ import { createTriffClient, TriffError } from "@/lib/triff/client";
 import { PRICING_MODES, type PricingMode } from "@/core/pricing";
 import { parseRosterPaste } from "@/core/roster-paste";
 import { iskToCents } from "@/core/payout-split";
+import { encodeDropped } from "./dropped";
 
 /** FormData.get() is string | File | null; a File coerced with String() would
  *  stringify to "[object File]" rather than fail loudly, so every text field
@@ -192,6 +193,10 @@ export async function addAppraisedPoolAction(
   const esi = createEsiClient({ userAgent: `authgd/0.1.0 (${cfg.esiContact})` });
   const triff = createTriffClient();
 
+  // Carried out of the try so the redirect below runs after it: `redirect()`
+  // throws a control-flow signal, and calling it inside the try would be
+  // caught by the `catch` and rethrown as an unhandled error.
+  let droppedParam: string | null = null;
   try {
     const appraisal = await appraiseLoot(
       rawPaste,
@@ -207,6 +212,12 @@ export async function addAppraisedPoolAction(
         appraisal,
       }),
     );
+    // Dropped lines are never persisted (design, defect 3), so the only way the
+    // next render learns about them is the query string — same mechanism the
+    // failure path above uses, carrying a payload instead of a fixed code.
+    if (appraisal.dropped.length > 0) {
+      droppedParam = encodeDropped(appraisal.dropped);
+    }
   } catch (err) {
     if (err instanceof TriffError || err instanceof EsiError) {
       // Visible error on the appraisal form, pool left unvalued — never a
@@ -219,6 +230,7 @@ export async function addAppraisedPoolAction(
     throw err;
   }
   revalidateOperation(operationId);
+  if (droppedParam) redirect(`/payouts/${operationId}?dropped=${droppedParam}`);
 }
 
 export async function addFlatPoolAction(

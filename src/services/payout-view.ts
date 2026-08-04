@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, inArray, lt, or } from "drizzle-orm";
 import type { Dbx } from "@/db";
 import {
+  character,
   lootItem,
   lootPool,
   payoutOperation,
@@ -274,4 +275,39 @@ export async function getPayoutOperationDetail(
     corpAmount,
     locked,
   };
+}
+
+/**
+ * How many character names the add-participant `<datalist>` ships inside the
+ * page.
+ *
+ * The list is inert HTML the browser filters, which is what buys "no endpoint,
+ * no client component, no new authorization surface, works without
+ * JavaScript". The price is bytes on every operator's page load.
+ *
+ * ASSUMPTION, flagged rather than relied on silently: this alliance's character
+ * count is in the hundreds, not tens of thousands. At a few hundred names this
+ * is a few kilobytes. Past the cap the field degrades to plain free text —
+ * still fully usable, just without suggestions — rather than breaking. If
+ * production ever exceeds this, the replacement is a server action behind a
+ * client component, NOT a larger cap.
+ */
+export const CHARACTER_NAME_CAP = 500;
+
+/**
+ * Every known character name for the add-participant datalist, or `null` when
+ * there are more of them than the cap.
+ *
+ * `limit(CAP + 1)` answers both "are there too many?" and "what are they?" in
+ * one query; a separate `count(*)` would be a second round trip to learn what
+ * the first row set already implies.
+ */
+export async function listCharacterNames(dbx: Dbx): Promise<string[] | null> {
+  const rows = await dbx
+    .select({ name: character.name })
+    .from(character)
+    .orderBy(asc(character.name))
+    .limit(CHARACTER_NAME_CAP + 1);
+  if (rows.length > CHARACTER_NAME_CAP) return null;
+  return rows.map((r) => r.name);
 }

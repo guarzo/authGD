@@ -2,7 +2,7 @@ import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import * as schema from "@/db/schema";
-import { lootPool, payoutOperation, payoutParticipant } from "@/db/schema";
+import { character, lootPool, payoutOperation, payoutParticipant } from "@/db/schema";
 import { iskToCents } from "@/core/payout-split";
 import {
   createOperation,
@@ -14,9 +14,11 @@ import {
   type RosterEntry,
 } from "@/services/payouts";
 import {
+  CHARACTER_NAME_CAP,
   decodePayoutCursor,
   encodePayoutCursor,
   getPayoutOperationDetail,
+  listCharacterNames,
   listPayoutOperations,
   type PayoutListCursor,
 } from "@/services/payout-view";
@@ -373,5 +375,42 @@ describe("payout list cursor encoding", () => {
     ]) {
       expect(decodePayoutCursor(raw)).toBeUndefined();
     }
+  });
+});
+
+describe("listCharacterNames", () => {
+  async function seedCharacters(count: number) {
+    const acc = await seedAccount(ctx.db, { tier: "flygd", status: "active" });
+    await ctx.db.insert(character).values(
+      Array.from({ length: count }, (_, i) => ({
+        id: 5_000_000 + i,
+        accountId: acc.id,
+        // Zero-padded so alphabetical order is also numeric order, which is
+        // what lets the cap test assert *which* names came back.
+        name: `Pilot ${String(i).padStart(4, "0")}`,
+        ownerHash: `oh-${5_000_000 + i}`,
+        scopes: [],
+      })),
+    );
+  }
+
+  it("returns every name, alphabetically, under the cap", async () => {
+    await seedCharacters(3);
+    const names = await listCharacterNames(ctx.db);
+    expect(names).toEqual(["Pilot 0000", "Pilot 0001", "Pilot 0002"]);
+  });
+
+  it("returns exactly the cap's worth at the cap", async () => {
+    await seedCharacters(CHARACTER_NAME_CAP);
+    expect(await listCharacterNames(ctx.db)).toHaveLength(CHARACTER_NAME_CAP);
+  });
+
+  // Past the cap the datalist is dropped entirely and the field degrades to
+  // plain free text. Returning a truncated list instead would be worse than
+  // none: an operator would type a real pilot's name, see no suggestion, and
+  // reasonably conclude the name is unknown.
+  it("returns null past the cap rather than a truncated list", async () => {
+    await seedCharacters(CHARACTER_NAME_CAP + 1);
+    expect(await listCharacterNames(ctx.db)).toBeNull();
   });
 });
