@@ -610,3 +610,16 @@ test("expanding an audit payload keeps the timestamp column pinned at 320px", as
   expect(open.overlapX).toBeCloseTo(open.cellWidth, 0);
   expect(open.text).toMatch(/\d+[smhd] ago/);
 });
+
+test("a repeated filter param does not break the page", async ({ page, context }) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+
+  const res = await page.goto("/admin/audit?actor=alpha&actor=beta");
+  expect(res?.status()).toBe(200);
+
+  // Last value wins: appending &actor=beta to a URL that already has an actor
+  // is how a duplicate arises, so the appended one is the intent. Active
+  // filters render as a dim aside on the rule head (page.tsx:331), not chips.
+  await expect(page.getByText("actor: beta")).toBeVisible();
+});

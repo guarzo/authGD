@@ -29,6 +29,13 @@ function stamp(d: Date): string {
  * keyset cursor from the previous, wider query is meaningless and would page
  * into the middle of the new result set.
  */
+/** Collapses a possibly-repeated query param to one value, last wins: a
+ * duplicate arises in practice by appending `&actor=x` to a URL that already
+ * has one, so the appended value is the intent. */
+function one(v: string | string[] | undefined): string | undefined {
+  return Array.isArray(v) ? v[v.length - 1] : v;
+}
+
 function filterHref(
   params: Record<string, string | undefined>,
   field: "actor" | "target",
@@ -154,11 +161,14 @@ function idsOf(r: FilterResolution | null): string[] | undefined {
 export default async function AdminAuditPage({
   searchParams,
 }: {
+  // Next passes `string | string[]` for any param, and the page used to
+  // declare only `string`. A repeated param (`?actor=a&actor=b`) then reached
+  // `.trim()` on an array and took the whole page down with a 500.
   searchParams: Promise<{
-    actor?: string;
-    action?: string;
-    target?: string;
-    before?: string;
+    actor?: string | string[];
+    action?: string | string[];
+    target?: string | string[];
+    before?: string | string[];
   }>;
 }) {
   const ctx = await getAdminContext();
@@ -172,11 +182,12 @@ export default async function AdminAuditPage({
   // `action` is deliberately untouched: it is a prefix match whose semantics
   // are out of scope for this branch.
   const params = {
-    ...raw,
-    actor: raw.actor?.trim() || undefined,
-    target: raw.target?.trim() || undefined,
+    actor: one(raw.actor)?.trim() || undefined,
+    action: one(raw.action) || undefined,
+    target: one(raw.target)?.trim() || undefined,
+    before: one(raw.before),
   };
-  const beforeId = raw.before ? Number(raw.before) : undefined;
+  const beforeId = params.before ? Number(params.before) : undefined;
 
   const db = getDb();
   // Both filters resolve concurrently; each costs 0 queries when absent or
