@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ContactRemedy } from "@/app/account/contact-state";
+import { StandingTier } from "@/app/account/standing";
+import type { Tier } from "@/core/tier";
 
 // The job stores near-miss candidates as a JSON array (src/core/contact-label.ts),
 // and tests/contacts-job.test.ts only asserts that encoded value at the DB
@@ -183,5 +185,22 @@ describe("ContactRemedy (job-failure codes)", () => {
         createElement(ContactRemedy, { result: null, detail: null, label: "AuthGD" }),
       ),
     ).toBe("");
+  });
+});
+
+describe("StandingTier", () => {
+  const render = (tier: Tier) =>
+    renderToStaticMarkup(createElement(StandingTier, { tier }));
+
+  it("tells a pending member their access is awaiting approval", () => {
+    const html = render("pending");
+    expect(html).toContain("awaiting approval");
+    // No tier badge: pending is the absence of a granted tier, and a badge
+    // would imply the member holds one.
+    expect(html).not.toContain("tier--");
+  });
+
+  it("still renders a badge for a granted tier", () => {
+    expect(render("green")).toContain("tier--green");
   });
 });
