@@ -70,9 +70,11 @@ function labelled(word: string, key: string): Part {
 
 /**
  * Which payload keys matter, per action, and how they read. Adding an action
- * means adding a row here. A key nobody declared shows up as a visible blank
- * rather than being silently dropped, which is the failure mode the old
- * hand-written templates had.
+ * means adding a row here. A key nobody declared for a declared action is
+ * dropped from the summary line silently, e.g. `tier.changed`'s `locked`
+ * never shows up next to `to`: the full payload is still one click away
+ * behind the JSON disclosure, so nothing here is actually lost, just not
+ * surfaced in the one-line read.
  */
 const PARTS: Record<string, readonly Part[]> = {
   "tier.changed": [transition("from", "to")],

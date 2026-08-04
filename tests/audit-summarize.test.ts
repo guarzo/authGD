@@ -32,6 +32,12 @@ describe("summarizeDetails", () => {
     expect(summarizeDetails("unknown.action", "a string")).toBe("—");
     expect(summarizeDetails("unknown.action", null)).toBe("—");
   });
+
+  it("does not throw on a self-referential payload", () => {
+    const cyclic: Record<string, unknown> = { a: 1 };
+    cyclic.self = cyclic;
+    expect(() => summarizeDetails("unknown.action", cyclic)).not.toThrow();
+  });
 });
 
 const ROLE_NAMES = new Map([

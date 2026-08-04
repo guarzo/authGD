@@ -24,12 +24,6 @@ function stamp(d: Date): string {
   return d.toISOString().replace("T", " ").slice(0, 19);
 }
 
-/**
- * A link that sets one filter field to `value`, keeps every other active
- * filter, and drops `before` -- clicking a name narrows the query, so the
- * keyset cursor from the previous, wider query is meaningless and would page
- * into the middle of the new result set.
- */
 /** Collapses a possibly-repeated query param to one value, last wins: a
  * duplicate arises in practice by appending `&actor=x` to a URL that already
  * has one, so the appended value is the intent. */
@@ -37,6 +31,12 @@ function one(v: string | string[] | undefined): string | undefined {
   return Array.isArray(v) ? v[v.length - 1] : v;
 }
 
+/**
+ * A link that sets one filter field to `value`, keeps every other active
+ * filter, and drops `before` -- clicking a name narrows the query, so the
+ * keyset cursor from the previous, wider query is meaningless and would page
+ * into the middle of the new result set.
+ */
 function filterHref(
   params: Record<string, string | undefined>,
   field: "actor" | "target",
@@ -218,8 +218,17 @@ export default async function AdminAuditPage({
         beforeId: Number.isFinite(beforeId) ? beforeId : undefined,
       });
 
-  const older = new URLSearchParams();
-  for (const [k, v] of Object.entries(params)) if (v && k !== "before") older.set(k, v);
+  // The active filters, cursor dropped. Shared by the pager (which then adds
+  // its own `before`) and the past-the-end exit link (which must not), so the
+  // two round-trip through the same params instead of drifting apart.
+  const filterParams = new URLSearchParams();
+  for (const [k, v] of Object.entries(params))
+    if (v && k !== "before") filterParams.set(k, v);
+  const filterHrefBase = filterParams.toString()
+    ? `/admin/audit?${filterParams.toString()}`
+    : "/admin/audit";
+
+  const older = new URLSearchParams(filterParams);
   if (rows.length > 0) older.set("before", String(rows[rows.length - 1].id));
 
   const now = Date.now();
@@ -251,11 +260,23 @@ export default async function AdminAuditPage({
     )
     .filter(Boolean) as string[];
 
+  // The cursor ran past the end of a non-empty log -- distinct from the log
+  // (or the filtered subset of it) genuinely having zero rows. Mirrors the
+  // priority `emptyMessage` below uses: an unmatched name still names the
+  // field that failed, even if `before` also happens to be set.
+  const pastEnd =
+    !unmatched.length &&
+    beforeId !== undefined &&
+    Number.isFinite(beforeId) &&
+    rows.length === 0;
+
   const countLabel =
     rows.length === 0
-      ? filtered
-        ? "No matching entries"
-        : "No entries"
+      ? pastEnd
+        ? "No older entries"
+        : filtered
+          ? "No matching entries"
+          : "No entries"
       : `${rows.length}${rows.length === AUDIT_PAGE_SIZE ? "+" : ""} ${
           filtered ? "matching entries" : "entries"
         }`;
@@ -264,13 +285,14 @@ export default async function AdminAuditPage({
     `No account or character named ${unmatched
       .map(([field, r]) => `"${r.name}" (${field})`)
       .join(" or ")}.`
-  ) : beforeId !== undefined && Number.isFinite(beforeId) ? (
+  ) : pastEnd ? (
     // The log is not empty, the cursor is simply past its end. Saying
     // "nothing has happened yet" here is false, and the `Older ->` button
     // is gone (it renders only on a full page), so this state had no exit
-    // at all.
+    // at all. The exit link keeps whatever filter got the admin here.
     <>
-      Nothing older than this point. <a href="/admin/audit">Back to the latest entries</a>
+      Nothing older than this point.{" "}
+      <a href={filterHrefBase}>Back to the latest entries</a>
     </>
   ) : filtered ? (
     "Nothing matches this filter."

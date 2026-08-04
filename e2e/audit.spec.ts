@@ -620,7 +620,8 @@ test("a repeated filter param does not break the page", async ({ page, context }
 
   // Last value wins: appending &actor=beta to a URL that already has an actor
   // is how a duplicate arises, so the appended one is the intent. Active
-  // filters render as a dim aside on the rule head (page.tsx:331), not chips.
+  // filters render as a dim aside on the Filter `RuleHead` (its `aside` prop),
+  // not chips.
   await expect(page.getByText("actor: beta")).toBeVisible();
 });
 
@@ -720,4 +721,43 @@ test("paging past the end says so instead of claiming an empty log", async ({
     "href",
     "/admin/audit",
   );
+
+  // The count heading must not contradict the row's own "still has entries,
+  // just past the cursor" message by claiming the log is empty.
+  await expect(page.getByRole("heading", { name: "No older entries" })).toBeVisible();
+});
+
+test("paging past the end with an active filter keeps that filter on the exit link", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  await db.insert(auditLog).values([
+    {
+      actor: admin.id,
+      action: "tier.changed",
+      target: admin.id,
+      details: { to: "green" },
+    },
+    {
+      actor: admin.id,
+      action: "tier.changed",
+      target: admin.id,
+      details: { to: "blue" },
+    },
+  ]);
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+
+  // Same guaranteed-past-the-oldest cursor as above, but with a filter active:
+  // the exit link this state offers is the page's only way out, and it must
+  // not silently drop the filter that got the admin here.
+  await page.goto("/admin/audit?actor=Boss&before=1");
+
+  await expect(page.locator(".log__empty")).toContainText("older");
+  const exitLink = page.locator(".log__empty").getByRole("link");
+  await expect(exitLink).toHaveAttribute("href", "/admin/audit?actor=Boss");
+
+  await exitLink.click();
+  await expect(page).toHaveURL(/[?&]actor=Boss/);
+  await expect(page.locator("tbody tr")).toHaveCount(2);
 });
