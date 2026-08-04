@@ -466,14 +466,29 @@ test helpers connect to it explicitly (`tests/helpers/db.ts`), so the
 in its own container, and never touches either of these. See
 [`npm run test:e2e` isolates itself](#npm-run-teste2e-isolates-itself) below.
 
-**Two `npm test` runs at once will fight**, because they share `authgd_test`.
-Symptoms are rows vanishing mid-test — assertion failures like
-`expected [] to deeply equal [1, 2]` that move around between runs. Playwright
-is pinned to `workers: 1` for the same reason within its own suite.
+**Two `npm test` runs at once used to fight**, because they share
+`authgd_test` and the suite `TRUNCATE`s it between every test. A sibling run
+would see rows vanish mid-test — assertion failures like
+`expected [] to deeply equal [1, 2]` that moved around between runs,
+indistinguishable from a real regression. Playwright is pinned to
+`workers: 1` for the same reason within its own suite.
 
-The same applies across git worktrees: two checkouts running `npm test`
-simultaneously fight over that one database. If you need to run the unit tests
-while another checkout is using it, point yours somewhere private:
+That silent corruption is now a named error instead. `tests/helpers/global-setup.ts`
+takes a session-scoped `pg_try_advisory_lock` on `authgd_test` for the
+lifetime of the run (a fixed 64-bit key, chosen to be nowhere near
+pg-boss's own per-database advisory locks). A second `npm test` — in this
+checkout or another git worktree — fails immediately with a message naming
+the database and pointing at the fix below, instead of running and
+corrupting the first run's results. The lock is per-database, so it never
+fires for a run already pointed at its own private database via
+`TEST_DATABASE_URL` (see below) — there's nothing to contend with. If
+Postgres isn't reachable at all, the lock check fails open rather than
+blocking the suite: plenty of test files never touch the database and must
+keep working with Postgres down.
+
+If you need to run the unit tests while another checkout is using
+`authgd_test`, point yours somewhere private — this is what the error
+message itself suggests:
 
 ```bash
 docker exec <pg-container> psql -U authgd -d postgres \
