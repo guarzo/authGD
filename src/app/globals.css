@@ -255,6 +255,18 @@ a:hover {
   color: var(--ink-faint);
 }
 
+/* The only on-screen label naming the admin register, since otherwise the
+   sole signal is which tab happens to be lit. A label, not a badge: mono and
+   --ink-faint keep it at the same visual weight as the wordmark's subtitle
+   line rather than a loud, filled pill competing with the nav for attention. */
+.shell__register {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: var(--t-label);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
 .shell__nav {
   display: flex;
   align-items: center;
@@ -288,10 +300,24 @@ a:hover {
    one primary action — and DESIGN.md rations gold to one primary action per
    view plus the mark. A hairline under the label is the system's own
    structural device (it is what .rule-head is built from) and spends 1px of
-   gold instead of a whole outline. The attribute selector outranks
-   .shell__nav a:hover, so the active tab stays gold when hovered. */
+   gold instead of a whole outline.
+
+   Measured: --gold vs --ink-dim (the inactive label colour) is only 1.18:1 —
+   every state clears 3:1 against the ground it sits on (8.67 / 10.21 /
+   12.67:1), but active-vs-inactive was carried almost entirely by hue, which
+   nearly vanishes for a red-green colorblind reader and leaves the 1px
+   hairline below doing the whole job alone. --ink (L 0.94, against --ink-dim's
+   0.78) adds a real lightness delta on top of the hue and the hairline,
+   instead of relying on either alone. It is 1.68:1 against --ink-dim, still
+   short of 3:1, so the hairline is doing necessary work rather than
+   decorating — do not remove it on the strength of the new colour alone.
+
+   Note that --ink is also the :hover colour, so a hovered inactive tab now
+   matches the active tab's text exactly; the two are told apart by hover's
+   --hull-hi fill versus the active hairline, not by colour. That is why this
+   selector no longer needs to outrank .shell__nav a:hover — they agree. */
 .shell__nav a[aria-current="page"] {
-  color: var(--gold);
+  color: var(--ink);
 }
 
 /* Inset to the item's padding so the rule underlines the label rather than the

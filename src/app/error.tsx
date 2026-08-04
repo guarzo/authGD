@@ -27,7 +27,7 @@ export default function Error({
   return (
     <>
       <SiteHeader
-        items={[{ key: "account", href: "/account", label: "Your account" }]}
+        items={[{ href: "/account", label: "Your account" }]}
         measure="narrow"
       />
       <main id="main" tabIndex={-1} className="page page--narrow">

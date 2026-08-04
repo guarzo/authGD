@@ -1,8 +1,7 @@
 import type { Metadata } from "next";
-import { redirect } from "next/navigation";
 import { getConfig, type Config } from "@/config";
 import { getDb } from "@/db";
-import { getAdminContext } from "@/lib/admin-guard";
+import { requireAdminPage } from "@/lib/admin-guard";
 import { isContactsTarget } from "@/services/desired";
 import {
   getAdminAccountsList,
@@ -32,7 +31,7 @@ import {
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
-  title: "Accounts",
+  title: "Members",
 };
 
 const SORTS: Array<{ key: AdminListSort; label: string }> = [
@@ -81,8 +80,7 @@ export default async function AdminAccountsPage({
     queued?: string;
   }>;
 }) {
-  const ctx = await getAdminContext();
-  if (!ctx) redirect("/login");
+  await requireAdminPage();
   const params = await searchParams;
   const sort = (
     SORTS.some((s) => s.key === params.sort) ? params.sort : "name"
@@ -114,10 +112,10 @@ export default async function AdminAccountsPage({
   return (
     <main id="main" tabIndex={-1} className="page">
       <div className="page__head">
-        <h1>Accounts</h1>
+        <h1>Members</h1>
         <p className="page__lede">
-          One row per account. Tier and cryo are set here; everything else is what the
-          sync jobs last observed.
+          One row per member. Tier and cryo are set here; everything else is what the sync
+          jobs last observed.
         </p>
       </div>
 
@@ -183,9 +181,9 @@ export default async function AdminAccountsPage({
       </div>
 
       <RuleHead as="h2" aside={<span className="dim mono">{renderedAt()}</span>}>
-        {rows.length === 1 ? "1 account" : `${rows.length} accounts`}
+        {rows.length === 1 ? "1 member" : `${rows.length} members`}
       </RuleHead>
-      <Scroller label="Accounts" tall>
+      <Scroller label="Members" tall>
         <table className="log log--dense log--sticky-head log--sticky-col">
           {/* The scanning anchor gets the surplus. Every other column holds a
               single badge, date, or button pair, so `width: 1%` collapses it to
@@ -243,7 +241,7 @@ export default async function AdminAccountsPage({
                 <tr>
                   <td className="log__empty" colSpan={COLUMN_COUNT}>
                     {filtered
-                      ? "No accounts match this filter."
+                      ? "No members match this filter."
                       : "No accounts yet. They appear here after someone signs in with EVE."}
                   </td>
                 </tr>
