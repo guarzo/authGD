@@ -24,15 +24,28 @@ import { useEffect, useRef, type MouseEvent } from "react";
  * The latch is taken only once the form is known to be submittable, because a
  * click that the browser blocks on constraint validation produces no submit and
  * therefore no `pending` transition to clear it again — latching there would
- * leave the button permanently dead. For the same reason the release effect has
- * no dependency array: it runs after every render, so any render that finds the
- * form idle releases the latch, not only the one where `pending` flips back.
+ * leave the button permanently dead.
+ *
+ * Release waits for `pending` to have been observed true and then false again,
+ * rather than for any render that happens to find it false. A bare
+ * `if (!pending) release()` in an effect with no dependencies looks equivalent
+ * and is not: it also fires on a re-render that arrives in the window between
+ * the click and React committing the action's pending state, which would reopen
+ * the double-submit window this exists to close. `/payouts/new` has no other
+ * client state that could produce such a render, but this is a shared primitive
+ * and `ConfirmSubmit` sits in tables that do.
  */
 export function useSubmitGuard(pending: boolean) {
   const inFlight = useRef(false);
+  const started = useRef(false);
 
   useEffect(() => {
-    if (!pending) inFlight.current = false;
+    if (pending) {
+      started.current = true;
+    } else if (started.current) {
+      started.current = false;
+      inFlight.current = false;
+    }
   });
 
   return function guard(e: MouseEvent<HTMLButtonElement>): boolean {
