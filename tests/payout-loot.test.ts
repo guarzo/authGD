@@ -144,6 +144,18 @@ describe("addFlatPool", () => {
     ).rejects.toThrow(/not a valid ISK amount/);
   });
 
+  it("rejects a negative totalValue with a domain error rather than a raw DB constraint failure", async () => {
+    const { operatorId, operationId } = await seedOperation();
+    await expect(
+      ctx.db.transaction((tx) =>
+        addFlatPool(tx, operatorId, operationId, {
+          totalValue: "-500.00",
+          notes: "note",
+        }),
+      ),
+    ).rejects.toThrow(/cannot be negative/);
+  });
+
   it("rejects requirePayoutOperator before the note check, so a forbidden actor sees the authorization error first", async () => {
     const { operationId } = await seedOperation();
     const green = await seedAccount(ctx.db, { tier: "green", status: "active" });

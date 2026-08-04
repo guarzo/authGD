@@ -88,10 +88,14 @@ export async function addFlatPool(
   if (!input.notes.trim()) {
     throw new Error("a flat pool requires a note explaining the negotiated total");
   }
-  // Validates the same ISK-decimal shape iskToCents enforces everywhere else
-  // money enters the system; the return value is unused here, only the
-  // format check (iskToCents throws on anything else).
-  iskToCents(input.totalValue);
+  // iskToCents validates the ISK-decimal shape (throws on anything else,
+  // same guard every other money entry point uses) but its regex allows a
+  // leading minus, so a negative total would otherwise reach the insert and
+  // die on loot_pool_total_ck with an unreadable Drizzle "Failed query"
+  // error -- exactly what this guard exists to prevent. Zero stays allowed.
+  if (iskToCents(input.totalValue) < 0n) {
+    throw new Error("a flat pool total cannot be negative");
+  }
   await lockOperation(dbtx, operationId);
   await assertEditable(dbtx, operationId);
   const [pool] = await dbtx

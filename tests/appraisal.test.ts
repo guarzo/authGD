@@ -104,15 +104,25 @@ describe("appraiseLoot", () => {
     // asserted a plain sum of three lines and passed under BOTH the naive
     // and the correct implementation, so it never actually guarded the
     // rounding order — see design doc discussion in the task-8 fix round.
+    // A second, differently-scaled line (small qty, ordinary 2dp price) is
+    // included so this is also the only test with two nonzero-priced lines,
+    // checking each line total AND the combined pool total.
     "rounds once at the line total, not once per unit before multiplying by qty",
     async () => {
+      const raw = "5000000x Widget\n3x Tritanium";
       const result = await appraiseLoot(
-        "5000000x Widget",
+        raw,
         { pricingMode: "sell_best", stationId: 1 },
-        { esi: fakeEsi({ widget: 1 }), triff: fakeTriff({ 1: { sell: { best: 0.125 } } }) },
+        {
+          esi: fakeEsi({ widget: 1, tritanium: 34 }),
+          triff: fakeTriff({ 1: { sell: { best: 0.125 } }, 34: { sell: { best: 5.1 } } }),
+        },
       );
-      expect(result.items[0].totalValue).toBe("625000.00");
-      expect(result.totalValue).toBe("625000.00");
+      const widget = result.items.find((i) => i.name === "Widget")!;
+      const tri = result.items.find((i) => i.name === "Tritanium")!;
+      expect(widget.totalValue).toBe("625000.00");
+      expect(tri.totalValue).toBe("15.30");
+      expect(result.totalValue).toBe("625015.30");
     },
   );
 
