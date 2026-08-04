@@ -26,7 +26,10 @@ import { SiteHeader } from "@/app/_components/ui";
  * measured inert. A segment-scoped not-found does not get to set the title —
  * `page.tsx`'s own metadata is resolved and applied even though the page
  * threw, on hard and soft navigation alike. (The root boundary is different
- * and does export one: no page segment matched, so nothing competes with it.)
+ * and does export one: no page segment matched, so nothing competes with it.
+ * `error.tsx` is a third case and different again — a hoisted `<title>` there
+ * *does* beat the failed segment's resolved metadata, measured on `/payouts`
+ * with its list query broken. Do not generalise from this file to that one.)
  *
  * So the title is set from the other end. `page.tsx` exports
  * `generateMetadata` instead of a static `metadata`, and it returns "No such

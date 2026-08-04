@@ -5,13 +5,22 @@ import { useEffect, useRef, type ReactNode } from "react";
 /**
  * A page `h1` that takes focus once, when it mounts.
  *
- * This exists for the two `not-found.tsx` boundaries, and the reason is that a
- * 404 here is usually reached without a document load. `/payouts` is the app's
- * only `next/link` call site (payouts/page.tsx), so a member holding an open
- * list who clicks an operation that has since been deleted gets a *soft*
- * navigation into `notFound()`: React swaps the subtree, the link they pressed
- * unmounts, and focus falls back to `<body>`. Their next Tab restarts at the
- * top of the document, on a page they were never told they had arrived at.
+ * This exists for the two `not-found.tsx` boundaries and `error.tsx`, and the
+ * reason is that all three are usually reached without a document load. For a
+ * 404 that is `/payouts`, the app's only `next/link` call site
+ * (payouts/page.tsx): a member holding an open list who clicks an operation
+ * that has since been deleted gets a *soft* navigation into `notFound()`.
+ * React swaps the subtree, the link they pressed unmounts, and focus falls
+ * back to `<body>`. Their next Tab restarts at the top of the document, on a
+ * page they were never told they had arrived at.
+ *
+ * `error.tsx` is the same shape with a different trigger — a server action
+ * throwing replaces the page in place, and the button that was pressed is the
+ * thing that unmounts. It also gets a second use out of this that the 404s do
+ * not: `reset()` remounts the boundary rather than reusing it (measured), so a
+ * retry that fails again re-runs this effect and re-announces the heading.
+ * That is the only signal a screen-reader user gets that the press landed and
+ * produced the same answer.
  *
  * Nothing in the framework moves focus for us. The App Router does call
  * `focus()` on arrival, but it targets the first element of the changed
