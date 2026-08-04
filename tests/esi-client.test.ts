@@ -226,6 +226,73 @@ describe("contacts", () => {
   });
 });
 
+describe("resolveIds", () => {
+  it("maps lowercased names to their inventory type id", async () => {
+    server.use(
+      http.post(`${BASE}/universe/ids/`, async ({ request }) => {
+        expect(await request.json()).toEqual(["Tritanium", "Pyerite"]);
+        return HttpResponse.json({
+          inventory_types: [
+            { id: 34, name: "Tritanium" },
+            { id: 35, name: "Pyerite" },
+          ],
+        });
+      }),
+    );
+    const esi = createEsiClient();
+    const map = await esi.resolveIds(["Tritanium", "Pyerite"]);
+    expect(map.get("tritanium")).toBe(34);
+    expect(map.get("pyerite")).toBe(35);
+  });
+
+  it("omits names ESI does not know", async () => {
+    server.use(
+      http.post(`${BASE}/universe/ids/`, () =>
+        HttpResponse.json({ inventory_types: [{ id: 34, name: "Tritanium" }] }),
+      ),
+    );
+    const esi = createEsiClient();
+    const map = await esi.resolveIds(["Tritanium", "Not A Real Item"]);
+    expect(map.has("tritanium")).toBe(true);
+    expect(map.has("not a real item")).toBe(false);
+  });
+
+  it("chunks names at 500 per request", async () => {
+    const requestSizes: number[] = [];
+    server.use(
+      http.post(`${BASE}/universe/ids/`, async ({ request }) => {
+        const body = (await request.json()) as string[];
+        requestSizes.push(body.length);
+        return HttpResponse.json({ inventory_types: [] });
+      }),
+    );
+    const esi = createEsiClient();
+    const names = Array.from({ length: 501 }, (_, i) => `Item ${i}`);
+    await esi.resolveIds(names);
+    expect(requestSizes).toEqual([500, 1]);
+  });
+
+  it("returns an empty map when the response has no inventory_types key", async () => {
+    server.use(
+      http.post(`${BASE}/universe/ids/`, () => HttpResponse.json({ ships: [] })),
+    );
+    const esi = createEsiClient();
+    const map = await esi.resolveIds(["Tritanium"]);
+    expect(map.size).toBe(0);
+  });
+
+  it("keys the map case-insensitively", async () => {
+    server.use(
+      http.post(`${BASE}/universe/ids/`, () =>
+        HttpResponse.json({ inventory_types: [{ id: 34, name: "TRITANIUM" }] }),
+      ),
+    );
+    const esi = createEsiClient();
+    const map = await esi.resolveIds(["tritanium"]);
+    expect(map.get("tritanium")).toBe(34);
+  });
+});
+
 describe("User-Agent (F6)", () => {
   it("sends the configured User-Agent on every request", async () => {
     let ua: string | null = null;
