@@ -17,6 +17,16 @@ export interface CharacterHealthInput {
   contactSyncResult: string | null;
 }
 
+/**
+ * Deliberately not an input: map ACL membership. `onMapAcl` comes from
+ * `wanderer_acl_observation`, which src/services/account-view.ts documents as a
+ * delete-and-replace snapshot where "a character legitimately off the ACL has
+ * no row, which is indistinguishable from a job that has not run". False and
+ * fine is therefore the same value as false and broken, so a verdict counting
+ * it would raise an alarm it cannot substantiate for every member who is
+ * legitimately off the map. The MAP column still reports the raw fact per row.
+ * If that table ever gains a "checked at" of its own, revisit this.
+ */
 export interface AccountHealth {
   /** How many characters need the member to do something. */
   attention: number;
