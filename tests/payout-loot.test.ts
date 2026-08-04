@@ -252,8 +252,9 @@ describe("deletePool", () => {
     const blockerReleased = new Promise<void>((resolve) => {
       releaseBlocker = resolve;
     });
+    let blockerDone!: Promise<void>;
     const blockerHasLock = new Promise<void>((resolve) => {
-      const blockerDone = ctx.db.transaction(async (tx) => {
+      blockerDone = ctx.db.transaction(async (tx) => {
         await tx
           .select()
           .from(payoutOperation)
@@ -262,7 +263,6 @@ describe("deletePool", () => {
         resolve();
         await blockerReleased;
       });
-      void blockerDone;
     });
     await blockerHasLock;
 
@@ -272,6 +272,12 @@ describe("deletePool", () => {
     // lookup and queue on lockOperation, which is blocked by the lock above.
     await new Promise((resolve) => setTimeout(resolve, 100));
     releaseBlocker();
+    // Wait for the blocker's own transaction to actually commit and release
+    // the row lock, rather than relying on the next test's beforeEach
+    // TRUNCATE to incidentally block on it -- a failure inside the blocker
+    // would otherwise surface as an unhandled rejection instead of failing
+    // this test.
+    await blockerDone;
 
     const results = await Promise.allSettled([attempt1, attempt2]);
     expect(results.filter((r) => r.status === "rejected")).toHaveLength(0);
