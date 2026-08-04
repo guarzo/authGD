@@ -20,10 +20,11 @@ import {
   unlockOperation,
 } from "@/services/payouts";
 import { getSessionAccount } from "@/services/session";
-import { createEsiClient } from "@/lib/esi/client";
+import { createEsiClient, EsiError } from "@/lib/esi/client";
 import { createTriffClient, TriffError } from "@/lib/triff/client";
 import { PRICING_MODES, type PricingMode } from "@/core/pricing";
 import { parseRosterPaste } from "@/core/roster-paste";
+import { iskToCents } from "@/core/payout-split";
 
 /** FormData.get() is string | File | null; a File coerced with String() would
  *  stringify to "[object File]" rather than fail loudly, so every text field
@@ -73,6 +74,16 @@ export async function createOperationAction(formData: FormData): Promise<void> {
   }
   const battleReportUrl = battleReportUrlRaw;
   const corpSharePct = field(formData, "corpSharePct").trim() || "0";
+  // The <input type="number" min max> on the form is client-side only —
+  // mirrors payout_operation_corp_share_pct_ck with a readable message before
+  // the raw string reaches the numeric(5,2) column, same precedent addFlatPool
+  // sets for its totalValue field.
+  if (!/^\d+(\.\d{1,2})?$/.test(corpSharePct)) {
+    throw new Error("corp share must be a plain number like 10 or 10.5");
+  }
+  if (Number(corpSharePct) > 100) {
+    throw new Error("corp share cannot exceed 100%");
+  }
   const notes = field(formData, "notes").trim() || null;
 
   const { id } = await getDb().transaction((dbtx) =>
@@ -140,9 +151,12 @@ export async function addAppraisedPoolAction(
       }),
     );
   } catch (err) {
-    if (err instanceof TriffError) {
+    if (err instanceof TriffError || err instanceof EsiError) {
       // Visible error on the appraisal form, pool left unvalued — never a
-      // silent partial total, per the design's Pricing/Failure handling.
+      // silent partial total, per the design's Pricing/Failure handling. An
+      // ESI failure (name resolution inside appraiseLoot's resolveIds) is just
+      // as much a transient upstream failure as a triff failure and deserves
+      // the same friendly path, not an uncaught exit past this catch.
       redirect(`/payouts/${operationId}?error=appraisal_failed`);
     }
     throw err;
@@ -159,6 +173,13 @@ export async function addFlatPoolAction(
   const notes = field(formData, "notes").trim();
   if (!notes) throw new Error("a flat pool requires a note explaining the number");
   const rawPaste = field(formData, "rawPaste").trim() || null;
+  // <input type="number"> accepts scientific notation like "1e5" client-side;
+  // iskToCents' regex rejects it, but let this action fail with the same
+  // readable message the other numeric fields above use, rather than relying
+  // solely on addFlatPool's deeper (also correct) check.
+  if (!/^-?\d+(\.\d{1,2})?$/.test(totalValue)) {
+    throw new Error("total must be a plain number like 12345.67");
+  }
 
   await getDb().transaction((dbtx) =>
     addFlatPool(dbtx, actor, operationId, { rawPaste, totalValue, notes }),
@@ -197,6 +218,12 @@ export async function setParticipantSharesAction(
   const actor = await requireOperatorAccount();
   const shares = field(formData, "shares").trim();
   if (!shares) throw new Error("shares is required");
+  // Mirrors payout_participant_shares_ck (shares > 0) with a readable message
+  // before the raw string reaches the numeric(6,2) column — "abc" or "1e5"
+  // would otherwise die as a raw Postgres invalid-input-syntax error.
+  if (iskToCents(shares) <= 0n) {
+    throw new Error("shares must be a positive number");
+  }
   await getDb().transaction((dbtx) =>
     setParticipantShares(dbtx, actor, participantId, shares),
   );
