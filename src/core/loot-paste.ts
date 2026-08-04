@@ -66,5 +66,13 @@ export function parseLootPaste(raw: string): ParsedLootLine[] {
     totals.set(name, (totals.get(name) ?? 0) + qty);
   }
 
-  return order.map((name) => ({ name, qty: totals.get(name)! }));
+  // "0x Foo" (and any name whose lines all sum to zero) is dropped rather than
+  // rejected, matching this parser's existing lenience toward junk lines
+  // (blank/whitespace-only lines are already skipped above). A qty-0 row would
+  // otherwise reach loot_item as a genuine value-carrying line and die on the
+  // raw loot_item_qty_ck constraint instead of just disappearing quietly, the
+  // way a stray blank line already does.
+  return order
+    .map((name) => ({ name, qty: totals.get(name)! }))
+    .filter((line) => line.qty > 0);
 }

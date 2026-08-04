@@ -113,6 +113,19 @@ describe("parseLootPaste", () => {
       input: "12x Foo\n   \nFoo x5",
       expected: [{ name: "Foo", qty: 17 }],
     },
+    {
+      // A DB row with qty 0 would violate loot_item_qty_ck; dropped here,
+      // same as any other junk line, rather than surfacing as a raw
+      // constraint error later.
+      label: "a zero quantity line is dropped",
+      input: "0x Foo\n12x Bar",
+      expected: [{ name: "Bar", qty: 12 }],
+    },
+    {
+      label: "a name whose lines all sum to zero is dropped entirely",
+      input: "0x Foo\n0x Foo",
+      expected: [],
+    },
   ];
 
   it.each(cases)("$label", ({ input, expected }) => {
