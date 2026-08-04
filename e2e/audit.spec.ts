@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { auditLog } from "../src/db/schema";
+import { auditLog, discordLink } from "../src/db/schema";
 import { resetDb, seedMember, sessionCookieFor, testDb } from "./helpers";
 
 const { db, pool } = testDb();
@@ -46,7 +46,7 @@ test("resolved names, distinguishable system actor, one-line details, filtered c
   // treatment used for other machine-generated values on this page.
   const systemRow = rows.filter({ hasText: "system" });
   await expect(systemRow).toHaveCount(1);
-  const systemActor = systemRow.locator("td").nth(1).locator("span.mono.dim");
+  const systemActor = systemRow.locator("td").nth(1).locator(".mono.dim");
   await expect(systemActor).toHaveText("system");
 
   // Details render a one-line human summary collapsed, with the full JSON
@@ -218,4 +218,165 @@ test("filter labels, fields, and submit each sit on one line", async ({
   expect(new Set(tops.fields).size).toBe(1);
   // The submit button belongs on the field line, not the label line.
   expect(Math.abs(tops.submit[0] - tops.fields[0])).toBeLessThanOrEqual(1);
+});
+
+test("names are clickable filters, and a name unions a person's identifier forms", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  const member = await seedMember(db, { name: "Zed", tier: "green" });
+  await db.insert(discordLink).values({
+    accountId: member.id,
+    discordUserId: "555555555555555555",
+  });
+
+  // The same person, targeted three different ways plus one unrelated row.
+  await db.insert(auditLog).values([
+    {
+      actor: admin.id,
+      action: "tier.changed",
+      target: member.id,
+      details: { from: "green", to: "flygd" },
+    },
+    {
+      actor: "system",
+      action: "character.linked",
+      target: String(member.mainCharacterId),
+    },
+    {
+      actor: "system",
+      action: "discord.role_changed",
+      target: "555555555555555555",
+      details: { added: "10", removed: "", tier: "flygd" },
+    },
+    {
+      actor: admin.id,
+      action: "tier.changed",
+      target: admin.id,
+      details: { to: "flygd" },
+    },
+  ]);
+
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.goto("/admin/audit");
+  await expect(page.locator("tbody tr")).toHaveCount(4);
+
+  // Clicking the target name filters by the NAME, not by that row's raw id.
+  await page.getByRole("link", { name: "Zed" }).first().click();
+  await expect(page).toHaveURL(/[?&]target=Zed/);
+
+  // All three of Zed's identifier forms come back; Boss's own row does not.
+  const rows = page.locator("tbody tr");
+  await expect(rows).toHaveCount(3);
+  await expect(rows.filter({ hasText: "tier.changed" })).toHaveCount(1);
+  await expect(rows.filter({ hasText: "character.linked" })).toHaveCount(1);
+  await expect(rows.filter({ hasText: "discord.role_changed" })).toHaveCount(1);
+  await expect(page.getByRole("heading", { name: "3 matching entries" })).toBeVisible();
+
+  // clear still works.
+  await page.getByRole("link", { name: "clear" }).click();
+  await expect(page.locator("tbody tr")).toHaveCount(4);
+
+  // Clicking an actor name filters the actor column.
+  await page
+    .locator("tbody tr td:nth-child(2)")
+    .getByRole("link", { name: "Boss" })
+    .first()
+    .click();
+  await expect(page).toHaveURL(/[?&]actor=Boss/);
+  await expect(page.locator("tbody tr")).toHaveCount(2);
+});
+
+test("raw ids and the literal 'all' target stay filterable", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  const member = await seedMember(db, { name: "Zed", tier: "green" });
+
+  await db.insert(auditLog).values([
+    {
+      actor: admin.id,
+      action: "tier.changed",
+      target: member.id,
+      details: { to: "flygd" },
+    },
+    { actor: admin.id, action: "sync.requested", target: "all" },
+  ]);
+
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+
+  // A pasted account uuid still filters exactly, and the chip echoes it.
+  await page.goto(`/admin/audit?target=${member.id}`);
+  await expect(page.locator("tbody tr")).toHaveCount(1);
+  await expect(page.getByText(`target: ${member.id}`)).toBeVisible();
+
+  // "all" is a real stored target, not a name -- it must not resolve to nothing.
+  await page.goto("/admin/audit?target=all");
+  await expect(page.locator("tbody tr")).toHaveCount(1);
+  await expect(page.locator("tbody tr")).toContainText("sync.requested");
+
+  // A name that matches nothing names the field that failed.
+  await page.goto("/admin/audit?actor=Nobody");
+  await expect(page.locator(".log__empty")).toHaveText(
+    'No account or character named "Nobody" (actor).',
+  );
+});
+
+test("an ambiguous name reports how many accounts it spans", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  const zedA = await seedMember(db, { name: "Zed", tier: "green" });
+  const zedB = await seedMember(db, { name: "Zed", tier: "blue" });
+
+  await db.insert(auditLog).values([
+    {
+      actor: admin.id,
+      action: "tier.changed",
+      target: zedA.id,
+      details: { to: "green" },
+    },
+    { actor: admin.id, action: "tier.changed", target: zedB.id, details: { to: "blue" } },
+  ]);
+
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.goto("/admin/audit?target=Zed");
+
+  await expect(page.locator("tbody tr")).toHaveCount(2);
+  await expect(page.getByText('target "Zed" matches 2 accounts')).toBeVisible();
+});
+
+test("linking the system actor does not un-dim it", async ({ page, context }) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  const member = await seedMember(db, { name: "Zed", tier: "green" });
+
+  await db.insert(auditLog).values([
+    {
+      actor: "system",
+      action: "tier.changed",
+      target: member.id,
+      details: { to: "green" },
+    },
+  ]);
+
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.goto("/admin/audit");
+
+  // `system` is a link (a clickable filter) but must keep the dim
+  // machine-output treatment. `.cell-link` only sets `color: inherit`, so
+  // `.dim` must still win the resting colour by coming later in globals.css.
+  const systemLink = page.getByRole("link", { name: "system" }).first();
+  await expect(systemLink).toBeVisible();
+
+  const linkColor = await systemLink.evaluate((el) => getComputedStyle(el).color);
+  // The action-namespace prefix in the same table is a plain `.dim` span.
+  const dimSpanColor = await page
+    .locator("tbody tr .dim")
+    .first()
+    .evaluate((el) => getComputedStyle(el).color);
+
+  expect(linkColor).toBe(dimSpanColor);
 });
