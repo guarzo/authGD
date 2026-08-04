@@ -1345,6 +1345,17 @@ h3.rule-head__label {
   letter-spacing: 0.08em;
 }
 
+/* The copy button's result line. It holds the width of its longest message
+   even while empty, because it sits in a right-aligned row of buttons: without
+   the reservation, "copied" appearing shoves every control beside it sideways
+   at the exact moment an operator is still moving between them. */
+.copy-result {
+  display: inline-block;
+  min-width: 5rem;
+  font-size: 0.6875rem;
+  letter-spacing: 0.08em;
+}
+
 /* --- Fields ------------------------------------------------------------- */
 
 .field {
