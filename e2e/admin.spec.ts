@@ -249,6 +249,230 @@ test("the skip link moves focus to the main landmark", async ({ page, context })
   await expect(page.locator("main#main")).toBeFocused();
 });
 
+/* --- The approval queue --------------------------------------------------- */
+
+/**
+ * `TIERS` and `TIER_FILTERS` in admin/accounts/page.tsx are the whole mechanism
+ * behind this section, and neither is reachable from a unit test: both are
+ * module-local `const`s inside a server component whose only export is the page.
+ * They are also plain arrays with no type relationship to each other, so nothing
+ * but the tests below stands between a one-word edit and either an admin locking
+ * an established account into the approval queue forever (`pending` added to
+ * TIERS) or the queue becoming unfindable (`pending` dropped from TIER_FILTERS).
+ */
+
+async function seedQueue() {
+  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  const waiting = await seedMember(db, { name: "Waiting Pilot", tier: "pending" });
+  await seedMember(db, { name: "Settled Pilot", tier: "green" });
+  return { admin, waiting };
+}
+
+test("an admin reaches the queue from the count link and approves", async ({
+  page,
+  context,
+}) => {
+  const { admin, waiting } = await seedQueue();
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.goto("/admin/accounts");
+
+  const queueLink = page.getByRole("link", { name: /awaiting approval/i });
+  await expect(queueLink).toHaveText("1 account awaiting approval");
+  await queueLink.click();
+  await expect(page).toHaveURL(/tier=pending/);
+
+  // Asserted as rows that must be ABSENT, not just as the pending row being
+  // present. `pending` reaches the `?tier=` whitelist only via TIER_FILTERS, and
+  // a value that misses the whitelist falls through to `tier: undefined` — an
+  // unfiltered list, in which the pending row is still present and every
+  // presence-only assertion below still passes. The queue silently becoming the
+  // full member list is the failure this filter has.
+  await expect(rowFor(page, "Waiting Pilot")).toHaveCount(1);
+  await expect(rowFor(page, "Settled Pilot")).toHaveCount(0);
+  await expect(rowFor(page, "Boss")).toHaveCount(0);
+  await expect(page.locator(ROWS)).toHaveCount(1);
+
+  // ...and the fall-through those absences are guarding against, shown rather
+  // than described: a `?tier=` the whitelist does not recognise renders every
+  // account, with no empty state and nothing on the page saying the filter was
+  // ignored. That is exactly the screen `?tier=pending` would silently become.
+  await page.goto("/admin/accounts?tier=not_a_tier");
+  await expect(page.locator(ROWS)).toHaveCount(3);
+  await page.goto("/admin/accounts?tier=pending");
+  await expect(page.locator(ROWS)).toHaveCount(1);
+
+  const row = rowFor(page, "Waiting Pilot");
+  const drawer = drawerOf(row);
+  await toggleOf(row).click();
+  // Named for the row like every other per-account control: the visible label
+  // is "Approve as Green" on every queued account, and this is the press that
+  // grants someone access.
+  await drawer
+    .getByRole("button", { name: "approve Waiting Pilot as green", exact: true })
+    .click();
+
+  // The queue is empty, so the standing reminder is gone...
+  await expect(page.getByRole("link", { name: /awaiting approval/i })).toHaveCount(0);
+  // ...and the ?tier=pending view it linked to is empty too, which is also the
+  // second half of the filter claim above: the approved account left this view.
+  await expect(page.locator("td.log__empty")).toHaveText("No members match this filter.");
+  // Read from the database rather than from the page: green is the unlocked
+  // grant, so the membership job may still move it later.
+  const [approved] = await db.select().from(account).where(eq(account.id, waiting.id));
+  expect(approved.tier).toBe("green");
+  expect(approved.tierLocked).toBe(false);
+});
+
+test("pending is never offered as a manual tier an admin can assign", async ({
+  page,
+  context,
+}) => {
+  const { admin } = await seedQueue();
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.goto("/admin/accounts");
+
+  // A settled account offers the three manual tiers and no way back into the
+  // queue. `pending` is in TIER_FILTERS but must never reach TIERS, which is
+  // what the drawer's Set-tier map renders from.
+  const settled = rowFor(page, "Settled Pilot");
+  const settledDrawer = drawerOf(settled);
+  await toggleOf(settled).click();
+  for (const tier of ["flygd", "blue", "green"]) {
+    await expect(
+      settledDrawer.getByRole("button", {
+        name: `Set Settled Pilot to ${tier}`,
+        exact: true,
+      }),
+    ).toBeVisible();
+  }
+  // Matched on the accessible name pattern rather than on the bare word: the
+  // tier controls all name their row, so `name: "pending"` would match nothing
+  // whether the rule holds or not.
+  await expect(settledDrawer.getByRole("button", { name: /to pending$/ })).toHaveCount(0);
+  await expect(settledDrawer.getByRole("button", { name: /^approve /i })).toHaveCount(0);
+
+  // ...and the converse on a pending row: the approve pair replaces the manual
+  // tiers rather than joining them, so there is no way to stamp a queued
+  // account without going through approveAccount's audit entry.
+  const waiting = rowFor(page, "Waiting Pilot");
+  const waitingDrawer = drawerOf(waiting);
+  await toggleOf(waiting).click();
+  await expect(
+    waitingDrawer.getByRole("button", {
+      name: "approve Waiting Pilot as green",
+      exact: true,
+    }),
+  ).toHaveText("Approve as Green");
+  await expect(
+    waitingDrawer.getByRole("button", {
+      name: "approve Waiting Pilot as blue",
+      exact: true,
+    }),
+  ).toHaveText("Approve as Blue");
+  await expect(
+    waitingDrawer.getByRole("button", { name: /^Set Waiting Pilot to/ }),
+  ).toHaveCount(0);
+});
+
+/**
+ * The count is its own query, deliberately not derived from the rows on screen:
+ * `rows` is narrowed by tier AND status, so counting it would hide the queue
+ * from an admin looking at ?status=cryo — precisely when a standing reminder is
+ * most useful, since nothing else on that screen mentions the queue at all.
+ */
+test("the awaiting-approval count survives a status filter that hides the queue", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  // Active, so ?status=cryo excludes it from the table below.
+  await seedMember(db, { name: "Waiting Pilot", tier: "pending" });
+  await seedMember(db, { name: "Frozen Pilot", tier: "green", status: "cryo" });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.goto("/admin/accounts?status=cryo");
+
+  await expect(rowFor(page, "Frozen Pilot")).toHaveCount(1);
+  await expect(rowFor(page, "Waiting Pilot")).toHaveCount(0);
+  await expect(page.getByRole("link", { name: /awaiting approval/i })).toHaveText(
+    "1 account awaiting approval",
+  );
+});
+
+/**
+ * Two admins working the queue, or one with a tab open since this morning. The
+ * account is approved either way — just not by the admin who clicked — so this
+ * is a race the app expects, not a server fault, and it must not land on
+ * error.tsx's "Something broke… that's a fault on this end".
+ */
+test("approving an account someone else already approved lands on a notice, not the error boundary", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  const waiting = await seedMember(db, { name: "Waiting Pilot", tier: "pending" });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.goto("/admin/accounts?tier=pending");
+
+  const row = rowFor(page, "Waiting Pilot");
+  await toggleOf(row).click();
+  const approve = drawerOf(row).getByRole("button", {
+    name: "approve Waiting Pilot as green",
+    exact: true,
+  });
+  await expect(approve).toBeVisible();
+
+  // The other admin's approval, landing between this render and the click
+  // below. Written directly rather than through the action so that
+  // approveAccount's own re-check under the row lock is what has to catch it.
+  await db.update(account).set({ tier: "blue" }).where(eq(account.id, waiting.id));
+
+  await approve.click();
+  // Back to the queue, not to the unfiltered list: the admin was working the
+  // queue and has more of it to work.
+  await expect(page).toHaveURL(/tier=pending&error=not_pending/);
+  // Scoped rather than a bare getByRole("alert"): Next's dev-only
+  // `__next-route-announcer__` carries the same role.
+  await expect(page.locator("p.notice--bad")).toContainText(
+    "already approved by someone else",
+  );
+  await expect(page.getByText("Something broke")).toHaveCount(0);
+  // The other admin's grant stands — the losing click must not re-stamp it.
+  const [after] = await db.select().from(account).where(eq(account.id, waiting.id));
+  expect(after.tier).toBe("blue");
+});
+
+/**
+ * The same race one level up, on the actor rather than the target: an admin
+ * de-roled while the queue was open. requireAdminAction catches this before
+ * approveAccount's own `not_authorized` check ever runs, so what this pins is
+ * the destination, which both agree on — /account, where the member is still
+ * signed in and is told what changed, rather than the error boundary.
+ */
+test("a de-roled admin's approve click gets the notice, not the error boundary", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  await seedMember(db, { name: "Waiting Pilot", tier: "pending" });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.goto("/admin/accounts?tier=pending");
+
+  const row = rowFor(page, "Waiting Pilot");
+  await toggleOf(row).click();
+  const approve = drawerOf(row).getByRole("button", {
+    name: "approve Waiting Pilot as green",
+    exact: true,
+  });
+  await expect(approve).toBeVisible();
+
+  await db.update(account).set({ isAdmin: false }).where(eq(account.id, admin.id));
+
+  await approve.click();
+  await expect(page).toHaveURL(/\/account\?error=not_admin/);
+  await expect(page.locator("p.notice--bad")).toContainText("admin access was removed");
+  await expect(page.getByText("Something broke")).toHaveCount(0);
+});
+
 /* --- Narrow-screen operability ------------------------------------------ */
 
 /**

@@ -316,6 +316,28 @@ test("the first-run notice promises Discord roles once Discord is linked", async
   await expect(page.getByRole("link", { name: "Link Discord" })).toHaveCount(0);
 });
 
+test("a pending member is told their access is awaiting approval", async ({
+  page,
+  context,
+}) => {
+  const acc = await seedMember(db, { name: "Pending Pilot", tier: "pending" });
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.goto("/account");
+
+  // Scoped to the Standing row's own field rather than a bare page-wide text
+  // match: the word "pending" also appears in the first-sync copy elsewhere on
+  // this page, and the claim here is about the tier value specifically.
+  const standing = page.locator("[data-field='tier']");
+  await expect(standing).toContainText("pending");
+  await expect(standing).toContainText("awaiting approval from an admin");
+
+  // Not a fault. DESIGN.md reserves warning colour for the admin table and
+  // PRODUCT.md's "nothing reads as punishment" applies hardest here — the
+  // member has done nothing wrong and is waiting on someone else — so this must
+  // not arrive as a bad/warn Notice.
+  await expect(page.locator(".notice--bad, .notice--warn")).toHaveCount(0);
+});
+
 test("last pushed is omitted entirely before any character is linked", async ({
   page,
   context,
