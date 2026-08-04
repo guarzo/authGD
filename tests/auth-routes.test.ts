@@ -34,6 +34,14 @@ let ctx: Awaited<ReturnType<typeof setupTestDb>>;
 let signToken: (characterId: number, owner: string) => Promise<string>;
 let jwk: Record<string, unknown>;
 
+/** Every callback failure now ends at a page that can explain itself, so the
+ *  assertion is the destination, not a status code. */
+function expectRedirect(res: Response, dest: string) {
+  expect(res.status).toBe(307);
+  const loc = new URL(res.headers.get("location")!);
+  expect(loc.pathname + loc.search).toBe(dest);
+}
+
 const msw = setupServer(
   http.post("https://login.eveonline.com/v2/oauth/token", () =>
     HttpResponse.json({ access_token: "SET_PER_TEST", refresh_token: "rt" }),
@@ -102,7 +110,7 @@ describe("EVE auth flow", () => {
     const res = await callbackRoute(
       new NextRequest("http://localhost:3000/auth/eve/callback?code=abc&state=bogus"),
     );
-    expect(res.status).toBe(400);
+    expectRedirect(res, "/login?error=oauth_expired");
 
     // full replay: consume once successfully, then reuse the same state
     const loginRes = await loginRoute(
@@ -117,7 +125,11 @@ describe("EVE auth flow", () => {
     );
     const url = `http://localhost:3000/auth/eve/callback?code=abc&state=${encodeURIComponent(state)}`;
     expect((await callbackRoute(new NextRequest(url))).status).toBe(307);
-    expect((await callbackRoute(new NextRequest(url))).status).toBe(400);
+    // the replay is refused: same destination as any unusable state, and no
+    // session cookie is issued a second time
+    const replay = await callbackRoute(new NextRequest(url));
+    expectRedirect(replay, "/login?error=oauth_expired");
+    expect(replay.headers.get("set-cookie") ?? "").not.toContain("authgd_session=");
   });
 
   it("rejects an expired state", async () => {
@@ -139,7 +151,7 @@ describe("EVE auth flow", () => {
         `http://localhost:3000/auth/eve/callback?code=abc&state=${encodeURIComponent(state)}`,
       ),
     );
-    expect(res.status).toBe(400);
+    expectRedirect(res, "/login?error=oauth_expired");
   });
 
   it("rejects a link-character transaction without its initiating session", async () => {
@@ -162,7 +174,29 @@ describe("EVE auth flow", () => {
         `http://localhost:3000/auth/eve/callback?code=abc&state=${encodeURIComponent(tx.state)}`,
       ),
     );
-    expect(res.status).toBe(403);
+    // no cookie at all, so the missing session is what gets named
+    expectRedirect(res, "/login?error=session_expired");
+  });
+
+  it("sends a member back to /login when the EVE token exchange fails", async () => {
+    const loginRes = await loginRoute(
+      new NextRequest("http://localhost:3000/auth/eve/login"),
+    );
+    const state = new URL(loginRes.headers.get("location")!).searchParams.get("state")!;
+    // EVE is up enough to answer, but not with a token: the throw from
+    // exchangeEveCode used to escape the route handler as a bare 500.
+    msw.use(
+      http.post("https://login.eveonline.com/v2/oauth/token", () =>
+        HttpResponse.json({ error: "server_error" }, { status: 502 }),
+      ),
+    );
+    const res = await callbackRoute(
+      new NextRequest(
+        `http://localhost:3000/auth/eve/callback?code=abc&state=${encodeURIComponent(state)}`,
+      ),
+    );
+    expectRedirect(res, "/login?error=oauth_failed");
+    expect(res.headers.get("set-cookie") ?? "").not.toContain("authgd_session=");
   });
 
   it("rejects a link-discord transaction presented to the EVE callback without consuming it", async () => {
@@ -175,7 +209,7 @@ describe("EVE auth flow", () => {
         `http://localhost:3000/auth/eve/callback?code=abc&state=${encodeURIComponent(tx.state)}`,
       ),
     );
-    expect(res.status).toBe(400);
+    expectRedirect(res, "/login?error=oauth_expired");
     // the transaction survives for its rightful callback
     expect(
       await consumeOauthTransaction(ctx.db, tx.state, ["link-discord"]),
