@@ -26,14 +26,17 @@ export type TriffQuote = {
 
 const sideSchema = z
   .object({
-    // .finite().nonnegative() rejects Infinity (e.g. from JSON.parse("1e999")),
-    // prices >= 1e21 (whose .toFixed(2) flips to exponential notation and
-    // breaks iskToCents), and negative prices (which would violate
-    // loot_item_price_ck as a raw DB error) -- all three would otherwise slip
-    // past this schema and take a non-TriffError exit that the caller in
-    // actions.ts doesn't catch.
-    best: z.number().finite().nonnegative().nullable().optional(),
-    p05: z.number().finite().nonnegative().nullable().optional(),
+    // .finite().nonnegative() rejects Infinity (e.g. from JSON.parse("1e999"))
+    // and negative prices (which would violate loot_item_price_ck as a raw DB
+    // error). .max(1e15) closes two further exits that .finite() alone does
+    // not: a price >= 1e21 whose .toFixed(2) flips to exponential notation and
+    // breaks iskToCents with a plain (non-TriffError) Error, and anything
+    // above roughly 1e18 that passes iskToCents fine but then overflows
+    // loot_item's numeric(20,2) column as a raw Postgres error. The priciest
+    // item in EVE is on the order of 1e12 ISK, so a quote above 1e15 means
+    // triff returned nonsense and TriffError is the correct outcome.
+    best: z.number().finite().nonnegative().max(1e15).nullable().optional(),
+    p05: z.number().finite().nonnegative().max(1e15).nullable().optional(),
   })
   .nullable()
   .optional();

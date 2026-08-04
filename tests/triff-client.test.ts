@@ -136,6 +136,25 @@ describe("createTriffClient", () => {
     expect(err).toBeInstanceOf(TriffError);
   });
 
+  it("throws TriffError instead of a bare Error on a nonsensical price of 1e21", async () => {
+    // 1e21 is finite and non-negative, so it passes .finite().nonnegative()
+    // alone; only .max(1e15) catches it. Without that bound this price would
+    // pass the schema, survive BigInt(Math.round(...)), and then
+    // price.toFixed(2) returns "1e+21" -- a string iskToCents rejects with a
+    // plain Error that is neither TriffError nor EsiError and so escapes the
+    // catch in actions.ts to the generic error boundary.
+    server.use(
+      http.get(BASE, () =>
+        HttpResponse.json({
+          types: [{ type_id: 34, sell: { best: 1e21, p05: null }, buy: {} }],
+        }),
+      ),
+    );
+    const triff = createTriffClient();
+    const err = await triff.quote([34], { stationId: 60003760 }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(TriffError);
+  });
+
   it("throws TriffError when neither stationId nor regionId is given", async () => {
     const triff = createTriffClient();
     await expect(triff.quote([34], {})).rejects.toBeInstanceOf(TriffError);
