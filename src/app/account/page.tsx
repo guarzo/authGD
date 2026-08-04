@@ -30,10 +30,22 @@ export const metadata: Metadata = {
   title: "Your account",
 };
 
+// Every code here is emitted by a callback route redirect. The distinction the
+// copy has to carry is "retry works" (expired/failed) versus "retrying will do
+// the same thing" (already_linked). Sign-in links expire 10 minutes after you
+// start them (src/services/oauth-tx.ts).
 const ERRORS: Record<string, string> = {
   already_linked: "That character is already linked to another account.",
   discord_already_linked: "That Discord account is already linked to another account.",
   discord_denied: "Discord authorization was cancelled.",
+  discord_expired:
+    "That Discord link expired before it finished. Nothing changed. Start it again below.",
+  discord_failed:
+    "Discord couldn't be reached, so the link didn't finish. Nothing changed. Try again.",
+  link_expired:
+    "That character link expired before it finished. Nothing changed. Start it again below.",
+  link_failed:
+    "EVE couldn't be reached, so the character didn't finish linking. Nothing changed. Try again.",
   stale_character:
     "That character isn't on this account anymore. The page below is current.",
   not_admin: "Your admin access was removed. This is your account page.",
@@ -86,7 +98,11 @@ export default async function AccountPage({
   const cfg = getConfig();
   const sid = (await cookies()).get(cfg.sessionCookieName)?.value;
   const sess = sid ? await getSessionAccount(getDb(), sid) : null;
-  if (!sess) redirect("/login");
+  // A cookie that no longer resolves is a genuine expiry and gets said so. No
+  // cookie at all is a first-time visitor, who must not be told a session they
+  // never had has ended. `resolveAdmin` draws the same line for the admin
+  // pages.
+  if (!sess) redirect(sid ? "/login?error=session_expired" : "/login");
   const view = await getAccountView(getDb(), cfg, sess.accountId);
   const { error } = await searchParams;
   const message = error ? ERRORS[error] : undefined;

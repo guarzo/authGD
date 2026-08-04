@@ -675,6 +675,28 @@ domain) *between* clicking "link Discord" and the redirect landing, the exchange
 fails while EVE login keeps working. It reads like a Discord outage; it is a
 mid-flight config change. Restart the flow from the current origin.
 
+Since the callbacks were hardened, that failure lands on
+`/account?error=discord_failed` rather than a bare 500, so the diagnosis is in
+the server log rather than on the screen. Grep for `discord callback failed` (or
+`eve callback failed`) — the line carries the underlying error message.
+
+#### What each callback error code means
+
+Both callbacks redirect on every failure so a member always has a way back. The
+code in the URL is the only thing distinguishing them, so:
+
+| Code | Reached `/` | Cause |
+|---|---|---|
+| `oauth_denied` / `discord_denied` | login / account | The member declined at the provider. Nothing was requested. |
+| `oauth_expired` / `discord_expired` | login / account | State unknown, already used, or older than the 10-minute transaction TTL (`src/services/oauth-tx.ts`). Also covers a forged `state`. |
+| `oauth_failed` / `discord_failed` | login / account | The provider or database threw. Details are logged, never shown. |
+| `link_expired` / `link_failed` | account | Same two causes, for adding a character to a session that already exists. |
+| `session_expired` | login | The session cookie is gone or dead. Emitted by both callbacks and by `/account`, which distinguishes a dead cookie from no cookie at all. |
+
+A rise in `*_expired` with no matching log lines is normal background: members
+abandon flows and browsers pre-fetch. A rise in `*_failed` is not — those always
+log.
+
 #### Switching back to localhost
 
 ```bash
