@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { getDb } from "@/db";
+import { getConfig } from "@/config";
 import { getAdminContext } from "@/lib/admin-guard";
 import { AUDIT_PAGE_SIZE, queryAuditLog, resolveFilterIdentity } from "@/services/audit";
 import type { FilterResolution, ResolvedAuditRow } from "@/services/audit";
@@ -211,6 +212,11 @@ export default async function AdminAuditPage({
 
   const now = Date.now();
 
+  // tier -> role id in config; this table needs role id -> tier.
+  const roleNames = new Map(
+    Object.entries(getConfig().discord.roleIds).map(([tier, id]) => [id, tier]),
+  );
+
   const filtered = Boolean(params.actor || params.action || params.target);
   const activeFilters = [
     params.actor && `actor: ${params.actor}`,
@@ -395,7 +401,7 @@ export default async function AdminAuditPage({
                     {r.details ? (
                       <Json
                         value={r.details}
-                        summary={summarizeDetails(r.action, r.details)}
+                        summary={summarizeDetails(r.action, r.details, roleNames)}
                       />
                     ) : (
                       <span className="dim">&mdash;</span>
