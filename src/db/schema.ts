@@ -1,8 +1,10 @@
 import {
   bigint,
   boolean,
+  check,
   index,
   jsonb,
+  numeric,
   pgEnum,
   pgTable,
   serial,
@@ -27,6 +29,13 @@ export const oauthIntentEnum = pgEnum("oauth_intent", [
   "link-discord",
 ]);
 export const syncRunStatusEnum = pgEnum("sync_run_status", ["ok", "partial", "failed"]);
+
+/**
+ * The recorded outcome of one sync run. Exported here rather than re-derived at
+ * each use site: two private copies of `(typeof syncRunStatusEnum.enumValues)[number]`
+ * are two places to forget when the enum grows.
+ */
+export type SyncRunStatus = (typeof syncRunStatusEnum.enumValues)[number];
 
 export const account = pgTable("account", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -108,6 +117,10 @@ export const outbox = pgTable(
         | { kind: "discord-user"; discordUserId: string }
         | { kind: "membership-recheck" }
         | { kind: "all" }
+        // one named job, re-run on demand; jobType is validated against QUEUES
+        // at dispatch time, so an unknown value drops rather than enqueueing
+        // to an arbitrary queue name
+        | { kind: "job"; jobType: string }
       >()
       .notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -182,3 +195,135 @@ export const auditLog = pgTable(
   },
   (t) => [index("audit_log_at_idx").on(t.at)],
 );
+
+export const payoutOperationStatusEnum = pgEnum("payout_operation_status", [
+  "draft",
+  "finalized",
+]);
+export const lootValuationSourceEnum = pgEnum("loot_valuation_source", [
+  "appraised",
+  "flat",
+]);
+export const lootPriceSourceEnum = pgEnum("loot_price_source", [
+  "triff",
+  "manual",
+  "unresolved",
+]);
+export const payoutPaymentKindEnum = pgEnum("payout_payment_kind", ["paid", "reverted"]);
+
+export const payoutOperation = pgTable(
+  "payout_operation",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    name: text("name").notNull(),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
+    battleReportUrl: text("battle_report_url"),
+    createdBy: uuid("created_by").references(() => account.id, { onDelete: "set null" }),
+    corpSharePct: numeric("corp_share_pct", { precision: 5, scale: 2 })
+      .notNull()
+      .default("0"),
+    status: payoutOperationStatusEnum("status").notNull().default("draft"),
+    notes: text("notes"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    check(
+      "payout_operation_corp_pct_ck",
+      sql`${t.corpSharePct} >= 0 AND ${t.corpSharePct} <= 100`,
+    ),
+  ],
+);
+
+export const lootPool = pgTable(
+  "loot_pool",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    operationId: uuid("operation_id")
+      .notNull()
+      .references(() => payoutOperation.id, { onDelete: "cascade" }),
+    rawPaste: text("raw_paste"),
+    valuationSource: lootValuationSourceEnum("valuation_source").notNull(),
+    pricingMode: text("pricing_mode"),
+    stationId: bigint("station_id", { mode: "number" }),
+    regionId: bigint("region_id", { mode: "number" }),
+    totalValue: numeric("total_value", { precision: 20, scale: 2 })
+      .notNull()
+      .default("0"),
+    notes: text("notes"),
+    appraisedAt: timestamp("appraised_at", { withTimezone: true }),
+  },
+  (t) => [
+    check("loot_pool_total_ck", sql`${t.totalValue} >= 0`),
+    check(
+      "loot_pool_flat_note_ck",
+      sql`${t.valuationSource} <> 'flat' OR (${t.notes} IS NOT NULL AND ${t.notes} <> '')`,
+    ),
+    check(
+      "loot_pool_appraised_fields_ck",
+      sql`${t.valuationSource} <> 'appraised' OR (${t.pricingMode} IS NOT NULL AND (${t.stationId} IS NOT NULL) <> (${t.regionId} IS NOT NULL))`,
+    ),
+  ],
+);
+
+export const lootItem = pgTable(
+  "loot_item",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    poolId: uuid("pool_id")
+      .notNull()
+      .references(() => lootPool.id, { onDelete: "cascade" }),
+    typeId: bigint("type_id", { mode: "number" }),
+    name: text("name").notNull(),
+    qty: bigint("qty", { mode: "number" }).notNull(),
+    unitPrice: numeric("unit_price", { precision: 20, scale: 2 }).notNull().default("0"),
+    totalValue: numeric("total_value", { precision: 20, scale: 2 })
+      .notNull()
+      .default("0"),
+    priceSource: lootPriceSourceEnum("price_source").notNull(),
+  },
+  (t) => [
+    check("loot_item_qty_ck", sql`${t.qty} > 0`),
+    check("loot_item_price_ck", sql`${t.unitPrice} >= 0 AND ${t.totalValue} >= 0`),
+  ],
+);
+
+export const payoutParticipant = pgTable(
+  "payout_participant",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    operationId: uuid("operation_id")
+      .notNull()
+      .references(() => payoutOperation.id, { onDelete: "cascade" }),
+    accountId: uuid("account_id").references(() => account.id, { onDelete: "set null" }),
+    recipientCharacterId: bigint("recipient_character_id", { mode: "number" }).references(
+      () => character.id,
+      { onDelete: "set null" },
+    ),
+    displayName: text("display_name").notNull(),
+    sourceCharacters: jsonb("source_characters").$type<string[]>().notNull().default([]),
+    shares: numeric("shares", { precision: 6, scale: 2 }).notNull().default("1"),
+    excluded: boolean("excluded").notNull().default(false),
+    amount: numeric("amount", { precision: 20, scale: 2 }).notNull().default("0"),
+    paidAmount: numeric("paid_amount", { precision: 20, scale: 2 }),
+  },
+  (t) => [
+    check("payout_participant_shares_ck", sql`${t.shares} > 0`),
+    check("payout_participant_amount_ck", sql`${t.amount} >= 0`),
+    check(
+      "payout_participant_paid_amount_ck",
+      sql`${t.paidAmount} IS NULL OR ${t.paidAmount} >= 0`,
+    ),
+  ],
+);
+
+export const payoutPayment = pgTable("payout_payment", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  participantId: uuid("participant_id")
+    .notNull()
+    .references(() => payoutParticipant.id, { onDelete: "cascade" }),
+  kind: payoutPaymentKindEnum("kind").notNull(),
+  amount: numeric("amount", { precision: 20, scale: 2 }).notNull(),
+  at: timestamp("at", { withTimezone: true }).notNull().defaultNow(),
+  actor: uuid("actor").references(() => account.id, { onDelete: "set null" }),
+  note: text("note"),
+});

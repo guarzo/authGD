@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { JOB_CRON } from "@/core/schedules";
 import { logAudit, queryAuditLog, resolveFilterIdentity } from "@/services/audit";
 import { setupTestDb, truncateAll } from "./helpers/db";
 import { discordLink } from "@/db/schema";
@@ -59,11 +60,63 @@ describe("resolveFilterIdentity", () => {
   });
 
   // Regression guard: sync.requested / sync.recheck_requested write the literal
-  // target "all" (src/app/admin/sync/actions.ts:13,25). Sending it down the
+  // target "all" (src/app/admin/sync/actions.ts:14,56). Sending it down the
   // name path would match no character and silently return zero rows.
   it("treats the reserved literal 'all' as raw", async () => {
     const r = await resolveFilterIdentity(ctx.db, "target", "all");
     expect(r).toEqual({ kind: "raw", ids: ["all"] });
+  });
+
+  // A single-job re-run writes the JOB TYPE as the target (actions.ts:46), so
+  // every schedules-table key is a literal too. Derived from JOB_CRON on both
+  // sides on purpose: the point is that adding a scheduled job cannot leave a
+  // target that renders in the log but cannot be filtered by.
+  it.each(Object.keys(JOB_CRON))(
+    "treats the job type %s as raw, with no queries",
+    async (jobType) => {
+      const { result, calls } = await countQueries(() =>
+        resolveFilterIdentity(ctx.db, "target", jobType),
+      );
+      expect(result).toEqual({ kind: "raw", ids: [jobType] });
+      expect(calls).toBe(0);
+    },
+  );
+
+  // The reservation is scoped to the column that needs it. A job type is only
+  // ever written to `target`, so reserving it for `actor` as well would make
+  // an account or character with that name unfindable to buy nothing. This is
+  // the half of the tradeoff we refused.
+  it("still resolves a character named like a job type in the actor column", async () => {
+    const acc = await seedAccount(ctx.db);
+    await seedCharacter(ctx.db, cfg, {
+      id: 90001,
+      accountId: acc.id,
+      name: "Wanderer",
+      main: true,
+    });
+    const res = await resolveFilterIdentity(ctx.db, "actor", "Wanderer");
+    expect(res).toMatchObject({ kind: "name", name: "Wanderer" });
+    expect(res).not.toEqual({ kind: "raw", ids: ["Wanderer"] });
+  });
+
+  // The end-to-end shape of the bug: the row exists, and the filter finds it.
+  it("finds a single-job sync.requested row by its job-type target", async () => {
+    const acc = await seedAccount(ctx.db);
+    await logAudit(ctx.db, {
+      actor: acc.id,
+      action: "sync.requested",
+      target: "wanderer",
+    });
+    await logAudit(ctx.db, { actor: acc.id, action: "sync.requested", target: "all" });
+    const res = await resolveFilterIdentity(ctx.db, "target", "wanderer");
+    expect(res).toEqual({ kind: "raw", ids: ["wanderer"] });
+    const rows = await queryAuditLog(ctx.db, {
+      targetIds: res.kind === "none" ? [] : res.ids,
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].target).toBe("wanderer");
+    // and the page renders it as a filter link rather than dead text
+    expect(rows[0].targetKind).toBe("literal");
   });
 
   it("resolves an actor name to the account whose main displays it", async () => {

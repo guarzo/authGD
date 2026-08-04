@@ -162,6 +162,10 @@ describe("discord callback route", () => {
         `http://localhost:3000/auth/discord/callback?code=c&state=${encodeURIComponent(tx.state)}`,
       ),
     );
-    expect(res.status).toBe(403);
+    // no cookie on the request, so the missing session is what gets named
+    expect(res.status).toBe(307);
+    expect(res.headers.get("location")).toBe(
+      "http://localhost:3000/login?error=session_expired",
+    );
   });
 });

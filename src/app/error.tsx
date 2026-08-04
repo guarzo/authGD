@@ -1,6 +1,6 @@
 "use client";
 
-import { SiteHeader } from "@/app/_components/ui";
+import { Notice, SiteHeader } from "@/app/_components/ui";
 
 /**
  * Route-level error boundary (Next 15 App Router: client component, `{error,
@@ -27,7 +27,7 @@ export default function Error({
   return (
     <>
       <SiteHeader
-        items={[{ key: "account", href: "/account", label: "Your account" }]}
+        items={[{ href: "/account", label: "Your account" }]}
         measure="narrow"
       />
       <main id="main" tabIndex={-1} className="page page--narrow">
@@ -39,9 +39,9 @@ export default function Error({
           </p>
         </div>
 
-        <p className="notice notice--bad" data-glyph="!" role="alert">
+        <Notice tone="bad">
           Try again in a moment. If it keeps happening, tell an admin what you were doing.
-        </p>
+        </Notice>
 
         {error.digest && <p className="dim mono">Reference {error.digest}</p>}
 

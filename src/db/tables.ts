@@ -22,6 +22,11 @@ export const MANAGED_TABLES = [
   "sync_run",
   "wanderer_acl_observation",
   "audit_log",
+  "payout_operation",
+  "loot_pool",
+  "loot_item",
+  "payout_participant",
+  "payout_payment",
 ] as const;
 
 /** Bare table names, unquoted — for comparing against information_schema. */

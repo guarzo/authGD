@@ -1,5 +1,6 @@
 import type { Dbx } from "@/db";
-import { account, auditLog, character, discordLink } from "@/db/schema";
+import { JOB_CRON } from "@/core/schedules";
+import { account, auditLog, character, discordLink, payoutOperation } from "@/db/schema";
 import { and, desc, eq, inArray, like, lt, sql } from "drizzle-orm";
 
 export const AUDIT_PAGE_SIZE = 100;
@@ -20,11 +21,53 @@ export type ResolvedAuditRow = typeof auditLog.$inferSelect & {
   actorName: string | null;
   actorKind: "system" | "account" | "unresolved";
   targetName: string | null;
-  targetKind: "account" | "character" | "discord" | "literal" | "unresolved";
+  targetKind: "account" | "character" | "discord" | "payout" | "literal" | "unresolved";
 };
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DIGITS_RE = /^\d+$/;
+
+/**
+ * The literal, non-id values the audit log stores: `system` as an actor (every
+ * job writes it), `all` as the broadcast target of `sync.requested` /
+ * `sync.recheck_requested`, and a job type as the target of a single-job
+ * `sync.requested` (src/app/admin/sync/actions.ts).
+ *
+ * The job types are DERIVED from the schedules table rather than listed here,
+ * because that table is what the re-run action validates against
+ * (`isJobType`): a new scheduled job becomes a filterable target the same day
+ * it becomes re-runnable, with no second list to forget. A hand-written list is
+ * exactly how the `"all"`-only assumption this replaces went stale.
+ *
+ * These bypass name resolution in both directions — they must render as
+ * `literal` (a clickable filter link on the audit page) and short-circuit as a
+ * raw filter value, or filtering by them matches no character and silently
+ * returns nothing.
+ *
+ * Reserving a string costs something: a *character* named exactly like one of
+ * these can no longer be found by name, because the literal check wins before
+ * any name lookup happens. So the reservation is no wider than the column it
+ * is needed in. Job types are only ever written to `target` (by `sync.*`), so
+ * reserving them for `actor` too would buy nothing while shadowing whatever
+ * an account or character might legitimately be called there. `system` and
+ * `all` stay field-agnostic: that predates this change, and narrowing them now
+ * would be an unrelated behaviour change.
+ */
+const RESERVED_LITERALS_ANY_FIELD: ReadonlySet<string> = new Set(["system", "all"]);
+
+/**
+ * Every literal reserved *in the target column* — the union, not the
+ * job-types-only remainder its name might suggest. `system` is in here by
+ * inheritance and that is load-bearing, not incidental: `logAudit` writes
+ * `actor: "system"` from every job, and nothing stops a future call site
+ * writing `target: "system"` for a system-owned object. Were it absent, such a
+ * row would fall through to name resolution, resolve to nothing, and render as
+ * `unresolved` — a dead cell instead of a filter link.
+ */
+const RESERVED_TARGET_LITERALS: ReadonlySet<string> = new Set([
+  ...RESERVED_LITERALS_ANY_FIELD,
+  ...Object.keys(JOB_CRON),
+]);
 
 /**
  * Every target is written by exactly one call site shape in this codebase
@@ -35,15 +78,17 @@ const DIGITS_RE = /^\d+$/;
  * and character ids are ~9-10) would work only by coincidence today and
  * silently rot the day either numbering scheme changes. `discord.*` actions
  * only ever target a Discord user id; `character.*` / `token.*` /
- * `wanderer.*` only ever target an EVE character id; everything else
- * (`tier.*`, `status.*`, `account.*`, `admin.*`, `sync.*`) targets an account.
- * The literal broadcast target `"all"` (used by `sync.*`) is short-circuited by
- * the caller before this function is consulted, so `sync.*` reaching here
- * always means the account-uuid form.
+ * `wanderer.*` only ever target an EVE character id; `payout.*` actions only
+ * ever target a `payout_operation` uuid; everything else (`tier.*`,
+ * `status.*`, `account.*`, `admin.*`, `sync.*`) targets an account.
+ * The literal targets of `sync.*` (`"all"`, or a job type for a single-job
+ * re-run — see RESERVED_TARGET_LITERALS) are short-circuited by the caller
+ * before this function is consulted, so `sync.*` reaching here always means
+ * the account-uuid form.
  */
 function targetKindFromAction(
   action: string,
-): "account" | "character" | "discord" | null {
+): "account" | "character" | "discord" | "payout" | null {
   if (action.startsWith("discord.")) return "discord";
   if (
     action.startsWith("character.") ||
@@ -51,6 +96,7 @@ function targetKindFromAction(
     action.startsWith("wanderer.")
   )
     return "character";
+  if (action.startsWith("payout.")) return "payout";
   if (
     action.startsWith("tier.") ||
     action.startsWith("status.") ||
@@ -66,7 +112,8 @@ function targetKindFromAction(
  * Resolves actor/target ids to human (main character) names in a fixed,
  * small number of batched queries, independent of row count:
  *   1. accounts referenced directly (as actor or an account-shaped target)
- *      + discord links referenced as a target, in parallel
+ *      + discord links referenced as a target + payout operations referenced
+ *      as a target, all in parallel
  *   2. accounts reached only via a discord link (to get *their*
  *      mainCharacterId) — skipped entirely if no discord targets resolved
  *   3. every character name needed (target characters + all main characters
@@ -83,19 +130,21 @@ export async function resolveAuditIdentities(
   const accountIds = new Set<string>();
   const targetCharacterIds = new Set<number>();
   const targetDiscordIds = new Set<string>();
+  const targetPayoutIds = new Set<string>();
 
   for (const r of rows) {
     if (r.actor !== "system" && UUID_RE.test(r.actor)) accountIds.add(r.actor);
-    if (r.target === "all") continue;
+    if (RESERVED_TARGET_LITERALS.has(r.target)) continue;
     const kind = targetKindFromAction(r.action);
     if (kind === "account" && UUID_RE.test(r.target)) accountIds.add(r.target);
     else if (kind === "character" && DIGITS_RE.test(r.target))
       targetCharacterIds.add(Number(r.target));
     else if (kind === "discord" && DIGITS_RE.test(r.target))
       targetDiscordIds.add(r.target);
+    else if (kind === "payout" && UUID_RE.test(r.target)) targetPayoutIds.add(r.target);
   }
 
-  const [directAccounts, links] = await Promise.all([
+  const [directAccounts, links, payoutOperations] = await Promise.all([
     accountIds.size
       ? dbx
           .select({ id: account.id, mainCharacterId: account.mainCharacterId })
@@ -110,6 +159,12 @@ export async function resolveAuditIdentities(
           })
           .from(discordLink)
           .where(inArray(discordLink.discordUserId, [...targetDiscordIds]))
+      : Promise.resolve([]),
+    targetPayoutIds.size
+      ? dbx
+          .select({ id: payoutOperation.id, name: payoutOperation.name })
+          .from(payoutOperation)
+          .where(inArray(payoutOperation.id, [...targetPayoutIds]))
       : Promise.resolve([]),
   ]);
 
@@ -128,6 +183,7 @@ export async function resolveAuditIdentities(
   const discordUserToAccountId = new Map(
     links.map((l) => [l.discordUserId, l.accountId]),
   );
+  const nameByPayoutId = new Map(payoutOperations.map((o) => [o.id, o.name]));
 
   const characterIds = new Set<number>(targetCharacterIds);
   for (const a of accountById.values()) {
@@ -162,7 +218,10 @@ export async function resolveAuditIdentities(
 
     let targetName: string | null = null;
     let targetKind: ResolvedAuditRow["targetKind"] = "unresolved";
-    if (r.target === "all") {
+    if (RESERVED_TARGET_LITERALS.has(r.target)) {
+      // Renders as a filter link (see TargetCell): a single-job sync re-run
+      // names its job here, and a target you cannot click to filter by is
+      // half the value of recording it.
       targetKind = "literal";
     } else {
       const kind = targetKindFromAction(r.action);
@@ -185,23 +244,18 @@ export async function resolveAuditIdentities(
           targetName = name;
           targetKind = "discord";
         }
+      } else if (kind === "payout" && UUID_RE.test(r.target)) {
+        const name = nameByPayoutId.get(r.target) ?? null;
+        if (name !== null) {
+          targetName = name;
+          targetKind = "payout";
+        }
       }
     }
 
     return { ...r, actorName, actorKind, targetName, targetKind };
   });
 }
-
-/**
- * The two literal, non-id values the audit log stores: `system` as an actor
- * (every job writes it) and `all` as the broadcast target of `sync.requested`
- * / `sync.recheck_requested`. Both must bypass name resolution or filtering by
- * them regresses -- a grep of every logAudit call site confirms these are the
- * complete set. Checked below without regard to `field` (intentional): a raw
- * hit is always safe even where a literal is never actually stored, e.g.
- * `("target","system")` or `("actor","all")`.
- */
-const RESERVED_FILTER_LITERALS = new Set(["system", "all"]);
 
 export type FilterResolution =
   | { kind: "raw"; ids: string[] }
@@ -212,7 +266,7 @@ export type FilterResolution =
  * Inverts `resolveAuditIdentities` for the filter box: turns what an admin
  * sees ("Zed") back into the raw ids the audit log actually stores.
  *
- * A raw id costs nothing -- UUIDs, bare digit strings and the two reserved
+ * A raw id costs nothing -- UUIDs, bare digit strings and the reserved
  * literals short-circuit with zero queries, which is what keeps pasting an id
  * working. Everything else is a name, resolved along the same three display
  * paths `resolveAuditIdentities` renders:
@@ -233,11 +287,9 @@ export async function resolveFilterIdentity(
   field: "actor" | "target",
   value: string,
 ): Promise<FilterResolution> {
-  if (
-    RESERVED_FILTER_LITERALS.has(value) ||
-    UUID_RE.test(value) ||
-    DIGITS_RE.test(value)
-  ) {
+  const reserved =
+    field === "target" ? RESERVED_TARGET_LITERALS : RESERVED_LITERALS_ANY_FIELD;
+  if (reserved.has(value) || UUID_RE.test(value) || DIGITS_RE.test(value)) {
     return { kind: "raw", ids: [value] };
   }
 

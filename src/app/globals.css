@@ -255,6 +255,18 @@ a:hover {
   color: var(--ink-faint);
 }
 
+/* The only on-screen label naming the admin register, since otherwise the
+   sole signal is which tab happens to be lit. A label, not a badge: mono and
+   --ink-faint keep it at the same visual weight as the wordmark's subtitle
+   line rather than a loud, filled pill competing with the nav for attention. */
+.shell__register {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: var(--t-label);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
 .shell__nav {
   display: flex;
   align-items: center;
@@ -288,10 +300,24 @@ a:hover {
    one primary action — and DESIGN.md rations gold to one primary action per
    view plus the mark. A hairline under the label is the system's own
    structural device (it is what .rule-head is built from) and spends 1px of
-   gold instead of a whole outline. The attribute selector outranks
-   .shell__nav a:hover, so the active tab stays gold when hovered. */
+   gold instead of a whole outline.
+
+   Measured: --gold vs --ink-dim (the inactive label colour) is only 1.18:1 —
+   every state clears 3:1 against the ground it sits on (8.67 / 10.21 /
+   12.67:1), but active-vs-inactive was carried almost entirely by hue, which
+   nearly vanishes for a red-green colorblind reader and leaves the 1px
+   hairline below doing the whole job alone. --ink (L 0.94, against --ink-dim's
+   0.78) adds a real lightness delta on top of the hue and the hairline,
+   instead of relying on either alone. It is 1.68:1 against --ink-dim, still
+   short of 3:1, so the hairline is doing necessary work rather than
+   decorating — do not remove it on the strength of the new colour alone.
+
+   Note that --ink is also the :hover colour, so a hovered inactive tab now
+   matches the active tab's text exactly; the two are told apart by hover's
+   --hull-hi fill versus the active hairline, not by colour. That is why this
+   selector no longer needs to outrank .shell__nav a:hover — they agree. */
 .shell__nav a[aria-current="page"] {
-  color: var(--gold);
+  color: var(--ink);
 }
 
 /* Inset to the item's padding so the rule underlines the label rather than the
@@ -433,6 +459,30 @@ h3.rule-head__label {
   outline-offset: 2px;
 }
 
+/* An inline-size container so the accounts row drawer can size itself to what
+   is actually on screen rather than to the table it is a row of (see .drawer
+   below). It belongs on `.scroller` and not on `.scroller-frame`: `.scroller`
+   carries the 1px border above, so the frame's inline size is 2px wider than
+   the scrollport — a frame-hosted container measured a 288px drawer inside a
+   286px region.
+
+   Narrowed with `:has(.drawer)` rather than applied to `.scroller` bare, the
+   way `.scroller-frame:has(.log--sticky-col)` below narrows the start fade:
+   the class is shared with the audit, sync and account pages, and none of
+   those hold a drawer or want inline-size containment.
+
+   No `@supports` guard, deliberately. Both ways this can go unsupported fail
+   soft: an engine without `:has()` drops this rule, leaving `100cqi` with no
+   container ancestor, so it resolves against the small viewport — near enough
+   to the region at 320px, and wider than it on desktop, which the drawer's own
+   `<td>` then clips to the table anyway. An engine without container queries
+   at all cannot parse the `cqi` unit, which invalidates `.drawer`'s `width`
+   declaration outright; nothing else sets a width there, so it falls back to
+   `auto` — the pre-fix layout, which is a bug but not a broken one. */
+.scroller:has(.drawer) {
+  container-type: inline-size;
+}
+
 /* The non-scrolling frame the edge fades are pinned to. `.scroller`'s own
    `position: relative` doesn't help here on purpose: a child positioned
    against a box that itself scrolls scrolls with it. This wrapper never
@@ -552,7 +602,7 @@ h3.rule-head__label {
   vertical-align: middle;
 }
 
-/* The drawer row is its own `<tr>` now (see row-disclosure.tsx), so opening it
+/* The drawer row is its own `<tr>` now (see disclosure.tsx, as="row"), so opening it
    no longer grows the row above it — the middle-alignment this table wants
    for its short, single-purpose cells is safe on every row, including this
    one, whose lone cell has nothing else to float away from. */
@@ -736,7 +786,7 @@ h3.rule-head__label {
    `td:first-child`, and pinning a full-width cell gives it an opaque ground
    and a stray hairline out at the table's right edge. The empty-state cell is
    one such colSpan; the accounts drawer's cell is the other, since the drawer
-   is its own `<tr>` now (see row-disclosure.tsx) rather than content nested in
+   is its own `<tr>` now (see disclosure.tsx, as="row") rather than content nested in
    the name cell. */
 .log--sticky-col tbody tr:not(.drawer-row) > td:first-child:not(.log__empty) {
   position: sticky;
@@ -988,9 +1038,15 @@ h3.rule-head__label {
 }
 
 /* A tier the UI doesn't recognise. Neutral on purpose: better to read as
-   unknown data than to borrow a real tier's colour. */
+   unknown data than to borrow a real tier's colour. This is the one badge
+   that means "the data is wrong", so it has to hold AA everywhere the other
+   three do. --ink-faint measured 4.56:1 on the badge's own 14% tint at rest
+   and 3.94:1 on a hovered row (.log tbody tr:hover) — under AA on the one
+   badge an admin most needs to read. --ink-dim clears 5.67:1 measured the
+   same way — on the badge's own tint over a hovered row, not on the flat
+   ground — and stays visibly quieter than the three real tier hues. */
 .tier--unknown {
-  --tone: var(--ink-faint);
+  --tone: var(--ink-dim);
 }
 
 /* The account page's tier is the single most consequential fact on the screen,
@@ -1002,6 +1058,17 @@ h3.rule-head__label {
   font-size: var(--t-data);
   padding: 0.3em 0.65em;
   letter-spacing: 0.12em;
+}
+
+/* Replaces a literal 🔒 emoji, which rendered in the vendor's own colour
+   (ignoring --tone, the one thing this badge is built to carry a single hue
+   through) and at a non-mono advance width that broke the tabular rhythm of
+   the tier column. Drawn in currentColor at the mono advance instead. */
+.tier__lock::after {
+  content: "\25AA";
+  margin-left: 0.3em;
+  font-family: var(--font-mono), ui-monospace, monospace;
+  opacity: 0.8;
 }
 
 /* --- Buttons ------------------------------------------------------------ */
@@ -1036,11 +1103,63 @@ h3.rule-head__label {
 }
 
 .btn:disabled {
-  /* Measured: --ink-faint at 45% over --void was 2.15:1, below the 3:1 DESIGN.md
-     promises for disabled text. 65% measures 3.24:1 for the worst case, which is
-     a disabled .btn--quiet (transparent ground, --ink-faint text) over --void. */
-  opacity: 0.65;
+  /* Was opacity-dimming, and the comment here used to measure the worst case
+     as 3.24:1 — but that number was taken against --void. These are the
+     admin table's in-row controls, and .log tbody tr:hover (below) raises the
+     row to --hull-hi; the same 65% opacity measures 2.88:1 there, under the
+     3:1 DESIGN.md promises, right when an admin's pointer is on the row.
+     An opacity fade moves with whatever ground it sits on, so set the
+     disabled colour explicitly instead: --ink-faint on --hull-hi is 4.85:1,
+     clearing text AA rather than only the 3:1 floor, and it no longer
+     depends on which ground the control happens to be resting on.
+     Higher specificity than .btn--primary/.btn--danger (one class each), so
+     this also overrides their gold/red at rest — a disabled primary button
+     no longer reads as a live call-to-action. */
+  opacity: 1;
+  color: var(--ink-faint);
+  border-color: var(--rule);
+  background: transparent;
   cursor: not-allowed;
+}
+
+/* In-flight state. Submit's `aria-busy` was already correct ARIA, but nothing
+   in the stylesheet styled it, so a caller who forgot `pendingLabel` gave a
+   member no visible sign a click landed — on a table where "sync now" being
+   silent reads as a dead click and invites a second one. This fires from the
+   attribute alone, so it works on every <Submit> regardless of what the
+   caller passed. The pulsing dot reuses the .st/.tier value-marker language
+   (a dot in currentColor) rather than inventing a new device; it animates
+   opacity and scale only, never a layout property, and the reduced-motion
+   block above (:165) already zeroes both animation-duration and
+   animation-iteration-count globally, so it needs no separate override here. */
+.btn[aria-busy="true"] {
+  color: var(--ink-faint);
+  border-color: var(--rule-strong);
+}
+
+.btn[aria-busy="true"]::after {
+  content: "";
+  width: 0.5em;
+  height: 0.5em;
+  margin-left: 0.4em;
+  border-radius: 50%;
+  background: currentColor;
+  /* Matches .st::before: without it a long label in a narrow cell squashes
+     the dot into an ellipse, and the admin table is tested at 320px. */
+  flex-shrink: 0;
+  animation: btn-pulse 900ms var(--ease) infinite;
+}
+
+@keyframes btn-pulse {
+  0%,
+  100% {
+    opacity: 0.3;
+    transform: scale(0.85);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 .btn--primary {
@@ -1150,6 +1269,22 @@ h3.rule-head__label {
    other row's, and the column stopped reading as a column. */
 .btn-row--end {
   justify-content: flex-end;
+}
+
+/* A control row that follows the data it operates on rather than heading the
+   page. It carries the top margin the page__head would otherwise have given
+   it. */
+.btn-row--controls {
+  margin-top: var(--s-6);
+}
+
+/* When the page itself was last asked. Belongs beside Refresh, not in the
+   strip: it is a fact about this render, not about any job. */
+.btn-row__stamp {
+  font-size: var(--t-label);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
 }
 
 .btn-group {
@@ -1326,6 +1461,37 @@ h3.rule-head__label {
 
 .notice--warn {
   --tone: var(--signal-warn);
+}
+
+/* The reserved slot for a notice that isn't there yet. It stays in the DOM so
+   the live region is registered before the text it announces arrives, and it
+   must therefore draw nothing at all when empty. */
+.notice-slot {
+  margin: 0;
+}
+
+/* --- Worker liveness ---------------------------------------------------- */
+/* One line about the process, above seven lines about jobs. In the label
+   register rather than prose: it is a reading off an instrument, and it sits
+   directly under a lede that is prose, so the register change is what marks
+   the switch from explanation to state. */
+
+.worker {
+  margin: 0 0 var(--s-5);
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: var(--t-label);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+
+/* Inside a notice the box supplies the spacing, and the line takes the signal
+   colour: on the notice's own ground (a 12% red tint over --void) this is
+   further from its background than the 4.81:1 --signal-bad measures against
+   the lighter --hull-hi. */
+.notice > .worker {
+  margin: 0;
+  color: var(--signal-bad);
 }
 
 /* --- Login -------------------------------------------------------------- */
@@ -1506,9 +1672,24 @@ h3.rule-head__label {
   color: var(--gold);
 }
 
+/* The Raw disclosure has a control on every run row and `.json` gives it type
+   but no box, which measured 18.6px tall — under WCAG 2.5.8's 24px and under
+   both sizes DESIGN.md commits to. It is a control in a table cell, not a link
+   in a sentence, so the inline-target exception does not cover it. Take the
+   28px `.btn--micro` floor the admin tables already argue for. No horizontal
+   padding: the peek has to keep aligning with the column it sits in.
+
+   Below `.log summary` rather than beside `.json`, because the two selectors
+   have the same specificity and this one has to win the alignment. */
+.json > summary {
+  min-height: 1.75rem;
+  padding: 0.2rem 0;
+  align-items: center;
+}
+
 /* The accounts row toggle: a plain `<button>` rather than `<summary>`, since
    the drawer it opens is a sibling `<tr>` now, not a child of a `<details>`
-   nested in this cell (see row-disclosure.tsx). It rebuilds the same look —
+   nested in this cell (see disclosure.tsx, as="row"). It rebuilds the same look —
    the +/- marker, the hover colour — a `<summary>` gets for free. */
 .row-toggle {
   display: flex;
@@ -1563,30 +1744,28 @@ h3.rule-head__label {
      row is its own grid container, so content-sized tracks would let a long
      cadence in one row shift that row's health token out of line with the
      rest — which is the single column this whole strip exists to let you
-     scan. The last track is dropped entirely when nothing is scheduled. */
-  grid-template-columns: 1ch minmax(7rem, 1fr) 7.5rem 6.5rem;
+     scan. The cadence track is unconditional: the status service seeds a row
+     for every scheduled job, so there is always something to put in it. */
+  grid-template-columns: 1ch minmax(7rem, 1fr) 7.5rem 6.5rem 9rem;
   align-items: center;
   gap: var(--s-4);
   padding: var(--s-3) var(--s-4);
 }
 
-/* The cadence track exists only when something on the page is scheduled;
-   otherwise the column would be 9rem of nothing at the right edge. */
-.strip--cadence .strip__head,
-.strip--cadence .strip__disc > summary {
-  grid-template-columns: 1ch minmax(7rem, 1fr) 7.5rem 6.5rem 9rem;
-}
-
 /* Header labels sit over their values: health reads from the left edge of its
-   track, the two time columns from the right, so the figures form a column. */
-.strip__head > :nth-child(3),
+   track, the two time columns from the right, so the figures form a column.
+   The header cells carry explicit classes rather than being addressed by
+   :nth-child, so that they align with their value cells the same way the value
+   cells do — by name. Positional selectors made inserting a column a silent
+   one-track shift of every alignment rule below the insertion point. */
+.strip__head > .strip__h-health,
 .strip__disc > summary > .st {
   justify-self: start;
 }
 
-.strip__head > :nth-child(4),
-.strip__head > :nth-child(5),
-.strip__disc > summary > time,
+.strip__head > .strip__h-last,
+.strip__head > .strip__h-cadence,
+.strip__disc > summary > .ago,
 .strip__cadence {
   justify-self: end;
 }
@@ -1664,6 +1843,12 @@ h3.rule-head__label {
   padding: var(--s-3) 0;
 }
 
+/* The per-row re-run lever. Sits under the history rather than over it, so it
+   needs the gap the table's own bottom edge doesn't give it. */
+.strip__act {
+  margin-top: var(--s-3);
+}
+
 /* The error summary now shares the status cell, so it needs to sit under the
    token rather than beside it. */
 .strip__err {
@@ -1714,17 +1899,53 @@ h3.rule-head__label {
 /* The row drawer. Set tier / cryo / note come first since the admin opened
    the row to act, and the crew table sits below them at full width — this is
    why the drawer row spans every column instead of just the Name column (see
-   row-disclosure.tsx). */
+   disclosure.tsx, as="row").
+
+   The width is the fix for a drawer that was as wide as the table it hangs
+   off. `.drawer__controls` wraps, but a flex line box is as wide as its
+   container, and the container was a `<td colSpan>` across all eight columns:
+   at 320px that made the control row 943.8px inside a 286px region, and `save
+   note` sat 332px of horizontal scroll off to the right with no tabular reason
+   to be there. `100cqi` against the scroller's inline-size container (above)
+   sizes the panel to the scrollport instead, and sticky positioning holds it
+   there at every offset.
+
+   `- 2 * var(--s-3)` is the drawer cell's own inline padding (`.log--dense td`
+   above), and subtracting it is not cosmetic: a bare `100cqi` overflows that
+   cell by 24px and *invents* horizontal scroll on viewports that had none —
+   measured at 1280px, the table went 1198 → 1222 and maxScrollLeft 0 → 24.
+   With the padding subtracted, desktop is byte-identical to before. `left`
+   matches the same padding so the 12px gutter survives the pinning and the
+   panel stays aligned with the table's own cell padding as the region
+   scrolls.
+
+   This `sticky` is not the one `.log--sticky-col` does, despite the e2e test
+   next door being called "an open row drawer keeps the pin, and is not itself
+   pinned" — that test asserts `position: static` on the drawer's `<td>`, and
+   still does. This lands on the div inside that cell. A pinned column gets a
+   z-index, an opaque background and a border-right so it reads as a column
+   that stays put while other columns pass under it; this has none of them, and
+   sits in its own row, so it never overlaps a pinned Name cell. Both are
+   "sticky"; only one is the pin. */
 .drawer {
   display: grid;
   gap: var(--s-4);
   margin-top: var(--s-3);
   padding-top: var(--s-3);
   border-top: 1px solid var(--rule);
+  width: calc(100cqi - 2 * var(--s-3));
+  position: sticky;
+  left: var(--s-3);
 }
 
 /* The three control groups still want a wrapping row rather than a stack: at
-   three groups, none of them tall, a stack buys nothing but wasted height. */
+   three groups, none of them tall, a stack buys nothing but wasted height.
+   That holds from 390px up. At 320px the drawer's usable width is 262px and
+   the wrapping does the stacking itself — the tier group (168.3px) and the
+   freeze/confirm pair (77px) need 277.3px to share a line — so the groups land
+   three deep there. That is the accepted cost of the width above: 141px of
+   extra height at 320px only, on a page that scrolls vertically anyway, in
+   exchange for 332px of horizontal scroll inside a nested scroll region. */
 .drawer__controls {
   display: flex;
   flex-wrap: wrap;
@@ -1744,6 +1965,15 @@ h3.rule-head__label {
 .drawer__crew {
   display: grid;
   gap: var(--s-2);
+  /* Grid items floor at `min-width: auto`, i.e. their min-content, and this one
+     holds the crew table's own Scroller — whose min-content is the crew table,
+     372.5px at 320px. That floor sized the drawer's grid column, so the panel
+     was 262px wide with a 372.5px column inside it and `.drawer__controls`
+     stretched to 372.5 as well: wide enough to keep the tier group and freeze
+     on one line, which put freeze's right edge 4.3px past the 286px region.
+     Zeroing the floor lets the column be the 262px the drawer asked for and
+     hands the overflow to the Scroller, which is what a Scroller is for. */
+  min-width: 0;
 }
 
 .drawer__label {
@@ -1819,8 +2049,12 @@ h3.rule-head__label {
    room for font-fallback drift. A min-width rather than a fixed basis on
    purpose: a state that somehow outgrows it loses the alignment instead of
    being clipped. The e2e spec asserts the two edges match, so this number
-   cannot rot silently. */
-.push > time,
+   cannot rot silently.
+
+   `.ago` and not `time`: RelativeTime drops to a `<span class="ago">` when it
+   has no instant to hang a machine value on, and a type selector would lose
+   the column the day that case reaches this row. */
+.push > .ago,
 .push > .st {
   min-width: 7rem;
 }
@@ -1981,14 +2215,24 @@ h3.rule-head__label {
      279.5px of a 286px region — 98% — painting over every other column on
      every row.
 
-     The drawer is its own full-width `<tr>` now (see row-disclosure.tsx), so
+     The drawer is its own full-width `<tr>` now (see disclosure.tsx, as="row"), so
      it no longer touches column 1's width and the trade is off: the pin stays
      on with a drawer open, which is the better end of the trade anyway. The
      name an admin is about to change the tier of stays on screen through the
      scroll right to the controls — including the scroll the open drawer's own
-     controls make necessary. What the drawer row needs instead is only to be
-     excluded from the pin itself, which it is, alongside the empty-state cell
-     and for the same reason (see .log--sticky-col above).
+     controls make necessary.
+
+     Re-measured on the new DOM at 320px, region 286px: the pinned cell is 97px
+     — 34% of the region — and the same figure open or closed, against the
+     279.5px/98% the deleted rule was written for. It costs the drawer nothing
+     either, the drawer being in a row of its own: across the whole scroll
+     range no drawer control has any of its area under a pinned cell, even at
+     the offsets where it sits inside the pin's x-band. Both figures are
+     asserted in e2e/admin.spec.ts, "an open row drawer keeps the pin".
+
+     What the drawer row needs instead is only to be excluded from the pin
+     itself, which it is, alongside the empty-state cell and for the same
+     reason (see .log--sticky-col above).
 
      Audit still uses `<details>` in its Details column and was never in scope
      for the unpin; nothing there changes. */

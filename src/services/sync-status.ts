@@ -1,5 +1,6 @@
 import { desc, eq } from "drizzle-orm";
 import type { Dbx } from "@/db";
+import { JOB_CRON } from "@/core/schedules";
 import { syncRun } from "@/db/schema";
 
 const KNOWN_ORDER = [
@@ -20,18 +21,25 @@ export async function getSyncStatus(
   // would drop rare jobs (weekly membership-recheck) behind the ~122
   // hourly/half-hourly runs recorded per day.
   const types = await dbx.selectDistinct({ jobType: syncRun.jobType }).from(syncRun);
-  const present = types.map((t) => t.jobType);
-  const known = KNOWN_ORDER.filter((j) => present.includes(j));
-  const unknown = present.filter((j) => !KNOWN_ORDER.includes(j)).sort();
+  const present = new Set(types.map((t) => t.jobType));
+  // Every scheduled job gets a row even with no runs at all. "discord-roles
+  // has never synced" as a MISSING row is the hardest failure for an eye to
+  // catch; as a row saying "never" it is the most obvious one.
+  const all = new Set([...present, ...Object.keys(JOB_CRON)]);
+  const known = KNOWN_ORDER.filter((j) => all.has(j));
+  const unknown = [...all].filter((j) => !KNOWN_ORDER.includes(j)).sort();
   return Promise.all(
     [...known, ...unknown].map(async (jobType) => ({
       jobType,
-      runs: await dbx
-        .select()
-        .from(syncRun)
-        .where(eq(syncRun.jobType, jobType))
-        .orderBy(desc(syncRun.id))
-        .limit(runsPerJob),
+      // A seeded job with no rows needs no query to tell us it has none.
+      runs: present.has(jobType)
+        ? await dbx
+            .select()
+            .from(syncRun)
+            .where(eq(syncRun.jobType, jobType))
+            .orderBy(desc(syncRun.id))
+            .limit(runsPerJob)
+        : [],
     })),
   );
 }

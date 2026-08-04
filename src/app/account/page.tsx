@@ -4,8 +4,16 @@ import { cookies } from "next/headers";
 import { getConfig } from "@/config";
 import { getDb } from "@/db";
 import { getAccountView, type PushStatus } from "@/services/account-view";
+import { canReadPayouts } from "@/services/payouts";
 import { getSessionAccount } from "@/services/session";
-import { RuleHead, Scroller, SiteHeader, Status, Tier } from "@/app/_components/ui";
+import {
+  Notice,
+  RuleHead,
+  Scroller,
+  SiteHeader,
+  Status,
+  Tier,
+} from "@/app/_components/ui";
 import { RelativeTime } from "@/app/_components/relative-time";
 import { formatAgo } from "@/app/_components/format-ago";
 import { utcHhmm } from "@/app/_components/utc-time";
@@ -23,12 +31,25 @@ export const metadata: Metadata = {
   title: "Your account",
 };
 
+// Every code here is emitted by a callback route redirect. The distinction the
+// copy has to carry is "retry works" (expired/failed) versus "retrying will do
+// the same thing" (already_linked). Sign-in links expire 10 minutes after you
+// start them (src/services/oauth-tx.ts).
 const ERRORS: Record<string, string> = {
   already_linked: "That character is already linked to another account.",
   discord_already_linked: "That Discord account is already linked to another account.",
   discord_denied: "Discord authorization was cancelled.",
+  discord_expired:
+    "That Discord link expired before it finished. Nothing changed. Start it again below.",
+  discord_failed:
+    "Discord couldn't be reached, so the link didn't finish. Nothing changed. Try again.",
+  link_expired:
+    "That character link expired before it finished. Nothing changed. Start it again below.",
+  link_failed:
+    "EVE couldn't be reached, so the character didn't finish linking. Nothing changed. Try again.",
   stale_character:
     "That character isn't on this account anymore. The page below is current.",
+  not_admin: "Your admin access was removed. This is your account page.",
 };
 
 /**
@@ -49,10 +70,11 @@ function contactsNoteApplies(result: string | null) {
  * One line of the closing telemetry: when authGD last pushed this, and when it
  * will look again.
  *
- * `formatAgo(null)` means "running", which is true on the sync page and false
- * here, so a never-pushed row gets its own state rather than being handed a
- * null. The next-check time still renders in that case: a member whose first
- * sync hasn't landed is exactly the one who wants to know when it will.
+ * A never-pushed row gets its own state rather than being handed a null:
+ * `formatAgo(null)` would say "never", which is accurate but reads as a fault
+ * in a member's telemetry rather than the ordinary "we haven't got to you yet"
+ * this is. The next-check time still renders in that case: a member whose
+ * first sync hasn't landed is exactly the one who wants to know when it will.
  */
 function PushRow({ push, now }: { push: PushStatus; now: number }) {
   const iso = push.lastPushedAt?.toISOString() ?? null;
@@ -78,19 +100,28 @@ export default async function AccountPage({
   const cfg = getConfig();
   const sid = (await cookies()).get(cfg.sessionCookieName)?.value;
   const sess = sid ? await getSessionAccount(getDb(), sid) : null;
-  if (!sess) redirect("/login");
+  // A cookie that no longer resolves is a genuine expiry and gets said so. No
+  // cookie at all is a first-time visitor, who must not be told a session they
+  // never had has ended. `resolveAdmin` draws the same line for the admin
+  // pages.
+  if (!sess) redirect(sid ? "/login?error=session_expired" : "/login");
   const view = await getAccountView(getDb(), cfg, sess.accountId);
   const { error } = await searchParams;
   const message = error ? ERRORS[error] : undefined;
   const now = Date.now();
+  // Same tier-only gate the payouts pages themselves re-check — this only
+  // decides whether the link appears, never whether the route is reachable.
+  const showPayoutsLink = await canReadPayouts(getDb(), sess.accountId);
 
   const nav = [
-    // "Your account", not "Account", everywhere it appears: the admin nav
-    // already carries "Accounts" for the roster, and the two read as the same
-    // destination at a glance. The possessive is what distinguishes them, so
-    // it has to be the name on both navs rather than only the admin one.
-    { key: "account", href: "/account", label: "Your account" },
-    ...(view.isAdmin ? [{ key: "admin", href: "/admin/accounts", label: "Admin" }] : []),
+    // These two sit side by side for an admin, so they must not share a word.
+    // The roster is "Members", not "Accounts", for exactly that reason — see
+    // admin-nav.tsx. "Your account" keeps the possessive because this page is
+    // genuinely the reader's own, and nothing else in either bar competes
+    // with it now.
+    { href: "/account", label: "Your account" },
+    ...(showPayoutsLink ? [{ href: "/payouts", label: "Payouts" }] : []),
+    ...(view.isAdmin ? [{ href: "/admin/accounts", label: "Members" }] : []),
   ];
 
   // Shown once above the manifest rather than repeated in every affected cell:
@@ -106,7 +137,7 @@ export default async function AccountPage({
 
   return (
     <>
-      <SiteHeader items={nav} current="account" measure="narrow" />
+      <SiteHeader items={nav} current="/account" measure="narrow" />
       <main id="main" tabIndex={-1} className="page page--narrow">
         <div className="page__head">
           <h1>Your account</h1>
@@ -116,11 +147,7 @@ export default async function AccountPage({
           </p>
         </div>
 
-        {message && (
-          <p className="notice notice--bad" data-glyph="!" role="alert">
-            {message}
-          </p>
-        )}
+        {message && <Notice tone="bad">{message}</Notice>}
 
         {/* Only the characters the contacts job actually targets can be waiting
             on a first run. Testing every character instead meant a blue member,
@@ -130,10 +157,10 @@ export default async function AccountPage({
           view.characters.every(
             (c) => !c.contactsTarget || c.contactSyncResult === null,
           ) && (
-            <p className="notice" data-glyph="·">
+            <Notice>
               First sync has not run yet. Standings, map access and Discord roles update
               within a few minutes of linking a character.
-            </p>
+            </Notice>
           )}
 
         <RuleHead as="h2">Standing</RuleHead>

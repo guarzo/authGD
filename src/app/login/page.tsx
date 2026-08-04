@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { Notice } from "@/app/_components/ui";
 import { getConfig } from "@/config";
 
 // `await searchParams` below already forces dynamic rendering, so the
@@ -12,8 +13,16 @@ export const metadata: Metadata = {
   title: "Sign in",
 };
 
+// Codes reaching this page: oauth_denied / oauth_expired / oauth_failed from
+// the EVE callback, session_expired from account/actions.ts, account/page.tsx,
+// and either callback when the session is gone mid-link. Sign-in links expire
+// 10 minutes after you start them (src/services/oauth-tx.ts).
 const ERRORS: Record<string, string> = {
   oauth_denied: "Nothing changed. No access was granted. Sign in whenever you're ready.",
+  oauth_expired:
+    "That sign-in link expired before you finished. They last 10 minutes. Start again below.",
+  oauth_failed:
+    "EVE couldn't be reached, so sign-in didn't finish. Nothing changed. Try again.",
   session_expired: "Your session ended. Sign in again to pick up where you left off.",
 };
 
@@ -47,11 +56,7 @@ export default async function LoginPage({
             body content. The seal and motto are this page's head, so a member
             bounced back here reads the reason before the disclosure rather
             than hunting for it underneath. */}
-        {message && (
-          <p className="notice notice--bad" data-glyph="!" role="alert">
-            {message}
-          </p>
-        )}
+        {message && <Notice tone="bad">{message}</Notice>}
         <div className="launch__disclosure">
           <p className="launch__disclosure-note">
             Sign in with any EVE character. authGD sets your Discord role; while your main

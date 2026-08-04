@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   JOB_CRON,
+  SCAN_WINDOW_MS,
   cadenceFor,
+  cronFor,
   formatCadence,
+  isJobType,
+  nextFire,
   nextOccurrence,
   parseCron,
 } from "@/core/schedules";
@@ -156,6 +160,44 @@ describe("nextOccurrence", () => {
     expect(nextOccurrence("0 0 30 2 *", at("2026-08-03T12:00:00Z"))).toBeNull();
   });
 
+  // `nextOccurrence` collapses both of these to null, which is all its callers
+  // need for a decoration. Health does need to tell them apart: "we could not
+  // read this expression" is a fault worth an amber row, "it does not fire in
+  // the next 8 days" is a perfectly healthy annual job.
+  describe("nextFire distinguishes beyond-window from unsatisfiable", () => {
+    const from = at("2026-08-03T12:00:00Z");
+
+    it("names an exact instant inside the window", () => {
+      expect(nextFire("*/30 * * * *", from)).toEqual({
+        kind: "at",
+        at: at("2026-08-03T12:30:00Z"),
+      });
+    });
+
+    it("reports beyond-window for a satisfiable date past the scan", () => {
+      // Annual, five months out.
+      expect(nextFire("0 0 1 1 *", from)).toEqual({ kind: "beyond-window" });
+      // Just past the 8-day edge, to pin the boundary rather than a far date.
+      expect(nextFire("0 0 12 8 *", from)).toEqual({ kind: "beyond-window" });
+      // …and one day inside it still resolves.
+      expect(nextFire("0 0 11 8 *", from).kind).toBe("at");
+    });
+
+    it("reports unsatisfiable for a date that can never occur", () => {
+      expect(nextFire("0 0 30 2 *", from)).toEqual({ kind: "unsatisfiable" });
+      expect(nextFire("0 0 31 4 *", from)).toEqual({ kind: "unsatisfiable" }); // April 31
+    });
+
+    it("still throws on grammar it does not support", () => {
+      expect(() => nextFire("*/5/2 * * * *", from)).toThrow();
+      expect(() => nextFire("not a cron", from)).toThrow();
+    });
+
+    it("SCAN_WINDOW_MS is the window the scan actually covers", () => {
+      expect(SCAN_WINDOW_MS).toBe(8 * 24 * 60 * 60 * 1000);
+    });
+  });
+
   it("resolves every schedule the worker actually registers", () => {
     // The guard that matters: if someone adds a cadence to JOB_CRON using
     // grammar this helper does not support, this fails instead of the account
@@ -166,5 +208,27 @@ describe("nextOccurrence", () => {
       expect(next, `${job} (${expression}) did not resolve`).not.toBeNull();
       expect(next!.getTime()).toBeGreaterThan(from.getTime());
     }
+  });
+});
+
+describe("isJobType / cronFor", () => {
+  it("accepts exactly the scheduled job types", () => {
+    for (const job of Object.keys(JOB_CRON)) {
+      expect(isJobType(job), job).toBe(true);
+      expect(cronFor(job)).toBe(JOB_CRON[job as keyof typeof JOB_CRON]);
+    }
+  });
+
+  it("rejects everything else, including inherited object keys", () => {
+    // `Object.hasOwn`, not `in`: `JOB_CRON["toString"]` is a function, and an
+    // `in` check would have let "toString" through both the re-run server
+    // action's validation and the audit page's literal set.
+    for (const bad of ["toString", "constructor", "__proto__", "", "ops-dead-letter"]) {
+      expect(isJobType(bad), bad).toBe(false);
+      expect(cronFor(bad), bad).toBeNull();
+    }
+    expect(isJobType(undefined)).toBe(false);
+    expect(isJobType(null)).toBe(false);
+    expect(isJobType(7)).toBe(false);
   });
 });

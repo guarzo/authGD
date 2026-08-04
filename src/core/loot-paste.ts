@@ -1,0 +1,78 @@
+export type ParsedLootLine = { name: string; qty: number };
+
+// "12x Foo", "12 Foo" — qty (with optional comma grouping) leads the line.
+const QTY_PREFIX = /^(\d[\d,]*)\s*x?\s+(.+)$/i;
+// "Foo x12" — qty trails the line behind a literal "x".
+const QTY_SUFFIX = /^(.+?)\s+x\s*(\d[\d,]*)$/i;
+// "Foo, 12" — qty trails behind a comma.
+const QTY_COMMA = /^(.+),\s*(\d[\d,]*)$/;
+
+function parseQty(text: string): number {
+  return Number(text.replace(/,/g, ""));
+}
+
+/**
+ * Accepts the loot-paste shapes PayGD accepted: "12x Foo", "Foo x12",
+ * tab-separated "Foo\t12", comma-separated "Foo, 12", and a bare name
+ * (qty 1). Quantities may use comma grouping ("1,234"). Duplicate names
+ * (exact string match, matching the source tool's dict-keyed behavior) sum
+ * their quantities; order of first appearance is preserved.
+ */
+export function parseLootPaste(raw: string): ParsedLootLine[] {
+  const totals = new Map<string, number>();
+  const order: string[] = [];
+
+  for (const rawLine of raw.split("\n")) {
+    const line = rawLine.trim();
+    if (!line) continue;
+
+    let qty = 1;
+    let name = line;
+
+    const prefixMatch = line.match(QTY_PREFIX);
+    if (prefixMatch) {
+      qty = parseQty(prefixMatch[1]);
+      name = prefixMatch[2];
+    } else {
+      const suffixMatch = line.match(QTY_SUFFIX);
+      if (suffixMatch) {
+        name = suffixMatch[1];
+        qty = parseQty(suffixMatch[2]);
+      } else {
+        const tabParts = line.split(/\t+/);
+        // The SECOND field, never the last. EVE's inventory window copies more
+        // than two tab-separated columns (Name / Qty / Est. Price, and wider
+        // variants), so reading the last numeric field takes a price as the
+        // quantity — "Tritanium\t100\t500,000" would parse as qty 500000 and
+        // overvalue the line 5000x, silently, with no unresolved-item warning
+        // to catch it. Column two is the quantity in every layout EVE emits.
+        const secondTabPart = tabParts[1]?.trim() ?? "";
+        if (tabParts.length >= 2 && /^[\d,]+$/.test(secondTabPart)) {
+          qty = parseQty(secondTabPart);
+          name = tabParts[0];
+        } else {
+          const commaMatch = line.match(QTY_COMMA);
+          if (commaMatch) {
+            name = commaMatch[1];
+            qty = parseQty(commaMatch[2]);
+          }
+        }
+      }
+    }
+
+    name = name.trim().replace(/\s+/g, " ");
+    if (!name) continue;
+    if (!totals.has(name)) order.push(name);
+    totals.set(name, (totals.get(name) ?? 0) + qty);
+  }
+
+  // "0x Foo" (and any name whose lines all sum to zero) is dropped rather than
+  // rejected, matching this parser's existing lenience toward junk lines
+  // (blank/whitespace-only lines are already skipped above). A qty-0 row would
+  // otherwise reach loot_item as a genuine value-carrying line and die on the
+  // raw loot_item_qty_ck constraint instead of just disappearing quietly, the
+  // way a stray blank line already does.
+  return order
+    .map((name) => ({ name, qty: totals.get(name)! }))
+    .filter((line) => line.qty > 0);
+}

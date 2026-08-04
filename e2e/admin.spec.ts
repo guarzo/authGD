@@ -1,14 +1,16 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { eq } from "drizzle-orm";
 import { account } from "../src/db/schema";
-import { clearOfPin, pinGeometry } from "./geometry";
+import { clearOfPin, coveredByPin, pinGeometry } from "./geometry";
+import { BASE_URL } from "./env";
 import { resetDb, seedMember, sessionCookieFor, testDb } from "./helpers";
 
 /**
  * The accounts table's own data rows.
  *
  * The drawer is a sibling `<tr>` of the row it belongs to now, not a
- * `<details>` nested in the name cell (see row-disclosure.tsx), and it holds a
+ * `<details>` nested in the name cell (see the `as="row"` shape in
+ * disclosure.tsx), and it holds a
  * full crew table. So a bare `tbody tr` filtered by an account name matches
  * three elements for one account — the collapsed row, its drawer row, and the
  * crew row for the same character — and any assertion needing exactly one is a
@@ -42,11 +44,75 @@ async function seedDenseWorld() {
   return admin;
 }
 
-test("non-admins are redirected away from /admin", async ({ page, context }) => {
+// Three denials, three destinations. The pair below is the one that reads as a
+// single case and isn't: a visitor with no cookie has never signed in, so
+// "your session ended" would name an event that never happened.
+test("a visitor who has never signed in gets the plain login page", async ({ page }) => {
+  await page.goto("/admin/accounts");
+  await expect(page).toHaveURL(/\/login$/);
+  await expect(page.locator(".notice--bad")).toHaveCount(0);
+});
+
+test("a visitor whose session died is told so", async ({ page, context }) => {
+  await context.addCookies([
+    { name: "authgd_session", value: "long-dead-session", url: BASE_URL },
+  ]);
+  await page.goto("/admin/accounts");
+  await expect(page).toHaveURL(/\/login\?error=session_expired/);
+});
+
+// resolveAdmin distinguishes "no session" from "signed in but not an admin" —
+// see lib/admin-guard.ts — so a de-roled member lands on their own account
+// page with an explanation, not back at the login screen as if they'd never
+// signed in.
+test("a signed-in non-admin is sent to their account page, not login", async ({
+  page,
+  context,
+}) => {
   const member = await seedMember(db, { name: "Pleb" });
   await context.addCookies([await sessionCookieFor(db, member.id)]);
   await page.goto("/admin/accounts");
-  await expect(page).toHaveURL(/\/login/);
+  await expect(page).toHaveURL(/\/account\?error=not_admin/);
+  await expect(page.getByRole("alert")).toContainText("admin access was removed");
+});
+
+/**
+ * The same distinction, on the server-action path rather than the page path.
+ * These are separate guards: a layout does not protect an action and does not
+ * re-run on soft navigation, so requireAdminAction is what actually gates the
+ * click. It used to `throw`, which landed on error.tsx — "Something broke…
+ * that's a fault on this end, not something you did." For the case that
+ * actually occurs, that copy was a lie: another admin clearing your admin bit
+ * while you had the page open is a race the app expects.
+ *
+ * De-roling *after* the page renders is the whole point. The button only
+ * exists because the page was rendered by an admin; flipping the bit behind it
+ * reproduces the real race rather than a state no user can reach.
+ */
+test("an admin de-roled after the page loaded gets the notice, not the error boundary", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedMember(db, { name: "Boss", isAdmin: true });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.goto("/admin/sync");
+  await expect(
+    page.getByRole("button", { name: "Sync membership, contacts, map, Discord" }),
+  ).toBeVisible();
+
+  await db.update(account).set({ isAdmin: false }).where(eq(account.id, admin.id));
+
+  await page
+    .getByRole("button", { name: "Sync membership, contacts, map, Discord" })
+    .click();
+  await expect(page).toHaveURL(/\/account\?error=not_admin/);
+  // Scoped to the page's own notice rather than `getByRole("alert")`: this
+  // arrival is a client-side navigation, so Next's `__next-route-announcer__`
+  // — also `role="alert"` — is populated and a bare role query matches two
+  // elements. The sibling test above can use the role because a full
+  // `page.goto` leaves the announcer empty.
+  await expect(page.locator("p.notice--bad")).toContainText("admin access was removed");
+  await expect(page.getByText("Something broke")).toHaveCount(0);
 });
 
 test("admin list sorts by name and by tier, and filters cryo", async ({
@@ -115,21 +181,23 @@ test("tier controls: manual set locks; return-to-auto unlocks", async ({
   const zedDrawer = drawerOf(zedRow);
   await toggleOf(zedRow).click();
   await zedDrawer.getByRole("button", { name: "Set Zed to blue" }).click();
-  await expect(zedRow.getByText("🔒")).toBeVisible();
+  // The lock mark is a CSS ::after (see ui.tsx/globals.css), not text, so it's
+  // asserted via the element it's drawn on rather than getByText.
+  await expect(zedRow.locator(".tier__lock")).toBeVisible();
   await expect(zedRow.locator(".tier")).toHaveText(/blue/);
   // The drawer holds the controls, so it has to survive the revalidation the
   // server action triggers or the next click has nothing to land on. The open
-  // state is React state in RowDisclosure and the closed drawer row is
+  // state is React state in Disclosure and the closed drawer row is
   // `hidden`, so visibility is what reports it — there is no `open` property
   // to read any more.
   await expect(zedDrawer).toBeVisible();
   await zedDrawer.getByRole("button", { name: "auto" }).click();
-  await expect(zedRow.getByText("🔒")).not.toBeVisible();
+  await expect(zedRow.locator(".tier__lock")).not.toBeVisible();
 });
 
 // The drawer holds every control for the row, so a server action that collapsed
 // it would make each edit cost a re-open. Its open state is React state in
-// RowDisclosure rather than the DOM's own `open` attribute, precisely so this
+// Disclosure rather than the DOM's own `open` attribute, precisely so this
 // survives the revalidatePath re-render by design instead of by luck.
 test("saving a note keeps the row drawer open and persists the note", async ({
   page,
@@ -276,7 +344,7 @@ test("pinned cells keep the scroll region's tab stop and the row's focus order",
   await page.keyboard.press("Tab");
   expect(
     await page.evaluate(() => document.activeElement?.getAttribute("aria-label")),
-  ).toBe("Accounts");
+  ).toBe("Members");
 
   // Ten stops covers the four header sort links plus the first two rows: the
   // tier, cryo and note controls all sit inside each row's closed drawer, so a
@@ -342,11 +410,18 @@ test("pinned cells keep the scroll region's tab stop and the row's focus order",
  * trade available.
  *
  * The drawer is its own full-width `<tr>` now, so it cannot touch column 1's
- * width and the trade is off. The assertions are inverted rather than deleted:
- * the pin surviving an open drawer is the better end of that trade — the name
- * stays on screen through exactly the scroll the drawer's own controls make
- * necessary — and it is worth a test saying so, because the way to lose it
- * again is for the drawer to drift back inside the first cell.
+ * width and the trade is off. Re-measured at 320px on the current DOM, region
+ * 286px: the pinned cell is 97px — 34% of the region — and identical open and
+ * closed, where the rule this replaced was written against 279.5px/98%. The
+ * pin costs the drawer nothing, because the drawer is in another row: measured
+ * across the full scroll range, no drawer control has any of its area under a
+ * pinned cell, including at the offsets where it shares the pin's x-band.
+ *
+ * The assertions are inverted rather than deleted: the pin surviving an open
+ * drawer is the better end of that trade — the name stays on screen through
+ * exactly the scroll the drawer's own controls make necessary — and it is worth
+ * a test saying so, because the way to lose it again is for the drawer to drift
+ * back inside the first cell.
  */
 test("an open row drawer keeps the pin, and is not itself pinned", async ({
   page,
@@ -358,6 +433,16 @@ test("an open row drawer keeps the pin, and is not itself pinned", async ({
   await page.goto("/admin/accounts");
 
   const first = page.locator(ROWS).first();
+  // Closed first: what the pin costs the region with no drawer open is the
+  // baseline the rule this test replaced was measured against, and the whole
+  // reason that rule is gone is that opening a drawer no longer moves it.
+  const closed = await pinGeometry(
+    page,
+    ".scroller",
+    `${ROWS}:first-child > td:first-child`,
+    "right",
+  );
+
   await toggleOf(first).click();
   await expect(drawerOf(first)).toBeVisible();
 
@@ -369,6 +454,20 @@ test("an open row drawer keeps the pin, and is not itself pinned", async ({
   );
   // There has to be something to scroll past, or the geometry below is vacuous.
   expect(open.maxScrollLeft).toBeGreaterThan(0);
+
+  // The old rule existed because opening a drawer widened column 1 for the
+  // whole table. That coupling is what the drawer's own `<tr>` broke, and it is
+  // the fact the rule's absence rests on — so assert the width, not the CSS.
+  expect(open.cellWidth, "an open drawer does not widen column 1").toBeCloseTo(
+    closed.cellWidth,
+    1,
+  );
+  // 97px of a 286px region as measured; the rule this replaced was written
+  // against 279.5px of 286px, which is what made unpinning the better trade.
+  expect(
+    open.cellWidth / open.regionWidth,
+    "the pin leaves most of the region to the other columns",
+  ).toBeLessThan(0.5);
 
   // The claim is the footprint, not the computed value: scrolled fully right,
   // the name is still wholly on screen.
@@ -406,6 +505,212 @@ test("an open row drawer keeps the pin, and is not itself pinned", async ({
     });
   expect(drawerCell.position).toBe("static");
   expect(drawerCell.borderRight).toBe("0px");
+
+  // Not sticky is not the same as not painted over: the pinned cells above and
+  // below the drawer row are opaque and outrank it, so "the drawer scrolls
+  // freely underneath" has to be measured against them, not inferred from the
+  // drawer's own `position`. Three offsets — at rest, mid-scroll, and fully
+  // right — because the drawer's controls pass through the pin's x-band on the
+  // way, and that is the only span where a regression could show.
+  const tier = ".drawer-row:not([hidden]) .drawer__controls button";
+  for (const at of [0, Math.round(open.maxScrollLeft / 4), open.maxScrollLeft]) {
+    const m = await coveredByPin(page, ".scroller", tier, at);
+    expect(m.covered, `no pinned cell paints over the drawer at scrollLeft ${at}`).toBe(
+      0,
+    );
+  }
+  // ...and that zero is a real result, not one offset that happened to miss:
+  // at rest the first tier button sits squarely inside the pin's x-band and on
+  // screen, so an x-only measure — `clearOfPin` — would call it fully occluded.
+  const rest = await coveredByPin(page, ".scroller", tier, 0);
+  expect(rest.xOverlap, "the drawer's first control shares the pin's x-band").toBeCloseTo(
+    1,
+    1,
+  );
+  expect(rest.inRegion, "...and is on screen while it does").toBeCloseTo(1, 1);
+});
+
+/**
+ * The width claim, stated directly — the reason the drawer moved out of the
+ * name cell at all.
+ *
+ * Table columns are shared, so anything rendered inside the name cell sets a
+ * min-content width for column 1 on *every* row. The drawer's crew group is
+ * `flex: 1 1 100%`, so while the drawer lived in that cell, opening one row
+ * widened column 1 for the whole table until the pinned cell took 279.5px of a
+ * 286px region — 98%, the figure recorded at globals.css's tombstone for the
+ * rule that used to unpin column 1 to compensate.
+ *
+ * The test above cannot catch this. It asserts the pin holds, and `pinGeometry`
+ * compares the cell against its own current width, so it is width-agnostic by
+ * construction: a wider pinned cell is still wholly on screen and still passes.
+ * `clearOfPin` notices the widening only indirectly, once a control at the far
+ * right happens to fall under the pin. Neither says the thing that has to stay
+ * true, so this does: opening a row must not move column 1 at all.
+ *
+ * The row measured is deliberately *not* the row being opened. "Opening one row
+ * widens the column for every row" is the actual failure, and a neighbour's name
+ * cell is where that shows.
+ */
+test("an open drawer does not widen the shared first column", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedDenseWorld();
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.setViewportSize({ width: 320, height: 720 });
+  await page.goto("/admin/accounts");
+
+  const first = page.locator(ROWS).first();
+  // `./td[1]` and not `td`: a descendant match would reach the crew table's
+  // cells inside the drawer once it is open.
+  const neighbourName = page.locator(ROWS).nth(1).locator("xpath=./td[1]");
+  const closed = (await neighbourName.boundingBox())!.width;
+
+  await toggleOf(first).click();
+  await expect(drawerOf(first)).toBeVisible();
+
+  // Rules out the one genuinely vacuous case — a drawer that renders nothing,
+  // against which "unchanged" would be trivially true. It is not evidence of
+  // how much width the drawer's content demands: a cell spanning every column
+  // is wider than any single column by table structure alone.
+  const drawer = (await drawerOf(first).locator("xpath=./td").boundingBox())!.width;
+  expect(drawer, "the drawer is wider than the column it left").toBeGreaterThan(closed);
+
+  const open = (await neighbourName.boundingBox())!.width;
+  // Precision 0 — within half a pixel — matching how every other width claim in
+  // this file is stated. The regression this guards moves the column by hundreds
+  // of pixels, so the tolerance costs nothing and keeps sub-pixel layout drift
+  // from flaking it.
+  expect(open, "opening one row must not widen column 1 for the others").toBeCloseTo(
+    closed,
+    0,
+  );
+});
+
+/**
+ * The drawer's controls, keyed by the aria-label each carries on Zed's row.
+ * These four are the drawer's whole control surface: the tier group, the cryo
+ * group, and the note field with its save button.
+ */
+const DRAWER_CONTROLS = {
+  "set tier": '[aria-label="Set Zed to blue"]',
+  freeze: '[aria-label="freeze Zed"]',
+  "note field": '[aria-label="Note for Zed"]',
+  "save note": '[aria-label="save note for Zed"]',
+};
+
+/**
+ * The regression: the drawer is a `<tr class="drawer-row"><td colSpan={8}>`, so
+ * its controls were bound to the accounts table's width rather than to what is
+ * on screen. `.drawer__controls` wraps, but its flex line box was 943.8px wide
+ * inside a 286px region, so wrapping never fired and `save note` sat 332px of
+ * horizontal scroll off to the right — a note field with no tabular reason to
+ * be anywhere but on screen. The drawer sizes itself to the scroll region now
+ * (`.scroller:has(.drawer)` / `.drawer` in globals.css).
+ *
+ * `freeze Zed` is the load-bearing case in the pin assertions below. 83% of its
+ * width sits inside the pinned column's x-band with 0% of its area covered, so
+ * an x-extent-only comparison — `clearOfPin`, which is the right measure for a
+ * control sharing a row with the pin — would wrongly report it 83% occluded
+ * here. Only a 2-D intersection tells "under the pin" apart from "in the pin's
+ * x-band, in another row's vertical band".
+ */
+test("accounts at 320px: an open drawer wraps to the scroll region, not to the table", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedWorld();
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.setViewportSize({ width: 320, height: 720 });
+  await page.goto("/admin/accounts");
+  await page.waitForSelector(".scroller tbody tr");
+
+  const geometry = () =>
+    page.evaluate(() => {
+      const sc = document.querySelector(".scroller") as HTMLElement;
+      sc.scrollLeft = 0;
+      const table = sc.querySelector("table") as HTMLElement;
+      return {
+        regionWidth: sc.clientWidth,
+        tableWidth: table.getBoundingClientRect().width,
+        maxScrollLeft: sc.scrollWidth - sc.clientWidth,
+      };
+    });
+
+  // Measured closed, before the drawer exists, so the open figures below have
+  // something to be unchanged against. Hard-coding the 967.8px this comes out
+  // at today would fail on any future column change for a reason that has
+  // nothing to do with the drawer.
+  const closed = await geometry();
+  // There has to be something to scroll past, or the pin assertions are vacuous.
+  expect(closed.maxScrollLeft).toBeGreaterThan(0);
+
+  const zedRow = rowFor(page, "Zed");
+  await toggleOf(zedRow).click();
+  await expect(drawerOf(zedRow)).toBeVisible();
+
+  // The drawer no longer contributes to the table's width: it sizes off the
+  // scrollport via a container query rather than off the cell it lives in, so
+  // opening one adds no horizontal scroll at all.
+  const open = await geometry();
+  expect(open.tableWidth, "an open drawer does not widen the table").toBeCloseTo(
+    closed.tableWidth,
+    1,
+  );
+  expect(open.maxScrollLeft, "an open drawer adds no horizontal scroll").toBeCloseTo(
+    closed.maxScrollLeft,
+    1,
+  );
+
+  // Every control reachable with the region at rest: content-x plus width
+  // inside the region. This is the 332px of scroll, asserted as a property
+  // rather than as the numbers it currently measures.
+  const reach = await page.evaluate((controls) => {
+    const sc = document.querySelector(".scroller") as HTMLElement;
+    sc.scrollLeft = 0;
+    const s = sc.getBoundingClientRect();
+    return Object.fromEntries(
+      Object.entries(controls).map(([name, sel]) => {
+        const r = (sc.querySelector(sel) as HTMLElement).getBoundingClientRect();
+        return [name, { contentX: r.left - s.left + sc.scrollLeft, width: r.width }];
+      }),
+    );
+  }, DRAWER_CONTROLS);
+  for (const [name, box] of Object.entries(reach)) {
+    expect(
+      box.contentX + box.width,
+      `${name} is reachable without scrolling the region`,
+    ).toBeLessThanOrEqual(open.regionWidth + 0.5);
+  }
+
+  // ...and the pin the region keeps does not pay for it: 0% of each control's
+  // area is under a pinned first cell, at rest, mid-scroll and fully right.
+  //
+  // `covered: 0` has two ways to be true for nothing: the control could be
+  // off-screen, or there could be no pinned cell to be under. `inRegion`
+  // closes the first. This closes the second — `coveredByPin` sums over the
+  // sticky first cells it finds, so with none found every `covered` is 0 and
+  // the whole loop below would pass against a table that had lost its pin.
+  const pinnedCells = await page.evaluate(() => {
+    const table = document.querySelector(".scroller table") as HTMLElement;
+    return Array.from(
+      table.querySelectorAll(":scope > tbody > tr > td:first-child"),
+    ).filter((c) => getComputedStyle(c).position === "sticky").length;
+  });
+  expect(
+    pinnedCells,
+    "there is a pin for the drawer to be measured against",
+  ).toBeGreaterThan(0);
+
+  const offsets = [0, Math.round(open.maxScrollLeft / 2), open.maxScrollLeft];
+  for (const [name, sel] of Object.entries(DRAWER_CONTROLS)) {
+    for (const at of offsets) {
+      const m = await coveredByPin(page, ".scroller", sel, at);
+      expect(m.covered, `${name} is not under the pin at scrollLeft ${at}`).toBe(0);
+      expect(m.inRegion, `${name} is on screen at scrollLeft ${at}`).toBeCloseTo(1, 2);
+    }
+  }
 });
 
 test("the start fade never paints over the pinned column", async ({ page, context }) => {
@@ -502,7 +807,7 @@ test("the empty-state row does not inherit the pinned column", async ({
   await page.goto("/admin/accounts?status=cryo");
 
   const empty = page.locator("td.log__empty");
-  await expect(empty).toHaveText("No accounts match this filter.");
+  await expect(empty).toHaveText("No members match this filter.");
   // It spans the whole table, so pinning it would give a full-width cell an
   // opaque ground and a hairline hanging off the table's right edge.
   const style = await empty.evaluate((el) => {
@@ -539,10 +844,15 @@ test("an account with no main is still identified in the pinned column", async (
   // Visible text: the character name plus a marker, not a bare "no main" that
   // every such row would share.
   await expect(toggleOf(samRow)).toHaveText(/^Sam Alt ·no main \(\+1\)$/);
-  // Accessible name: RowDisclosure puts the label in aria-label, which
+  // Accessible name: Disclosure's row shape puts the label in aria-label, which
   // overrides the visible text for a screen reader, so the character name has
   // to survive there too rather than being spoken as a bare "no main".
-  await expect(toggleOf(samRow)).toHaveAccessibleName(/^Sam Alt ·no main/);
+  // Anchored on the full visible string, not a prefix: a prefix regex passes
+  // whether or not the "(+1)" count survives into the name, which is exactly
+  // the WCAG 2.5.3 gap it is supposed to be guarding.
+  await expect(toggleOf(samRow)).toHaveAccessibleName(
+    /^Sam Alt ·no main \(\+1\) — crew and controls$/,
+  );
   await expect(rowFor(page, `acct ${orphan.id.slice(0, 8)}`)).toHaveCount(1);
   // The old fallback was a bare <em>no main</em>, identical on every such row.
   await expect(page.locator(`${ROWS} em`)).toHaveCount(0);
@@ -616,10 +926,12 @@ test("a blank character name never becomes a row's identity", async ({
   for (const l of labels) expect(l).not.toMatch(/^\s*—/);
 
   // Falls through to the non-blank character, not to "". The "·no main" marker
-  // still applies: the row is named by a character that is not its main.
+  // still applies: the row is named by a character that is not its main. The
+  // "(+1)" is the blank-named sibling being counted, and it has to be in the
+  // accessible name too — it is in the visible label (WCAG 2.5.3).
   await expect(page.getByLabel("Note for Real Name", { exact: true })).toHaveCount(1);
   await expect(summaries.filter({ hasText: "Real Name" })).toHaveAccessibleName(
-    /^Real Name ·no main —/,
+    /^Real Name ·no main \(\+1\) — crew and controls$/,
   );
 
   // Nothing non-blank to borrow, so the account id has to be used, not skipped.
@@ -633,7 +945,7 @@ test("a blank character name never becomes a row's identity", async ({
   // name, so the row borrows its alt and is marked as having no main...
   await expect(page.getByLabel("Note for Spaced Alt", { exact: true })).toHaveCount(1);
   await expect(summaries.filter({ hasText: "Spaced Alt" })).toHaveAccessibleName(
-    /^Spaced Alt ·no main —/,
+    /^Spaced Alt ·no main \(\+1\) — crew and controls$/,
   );
   // ...and with nothing to borrow it falls all the way to the account id rather
   // than pinning a cell that looks empty.
@@ -670,7 +982,7 @@ test("every per-account control names the row it acts on", async ({ page, contex
 
   // The lock-releasing control is in the same group and had the same gap.
   await zedDrawer.getByRole("button", { name: "Set Zed to blue", exact: true }).click();
-  await expect(zedRow.getByText("🔒")).toBeVisible();
+  await expect(zedRow.locator(".tier__lock")).toBeVisible();
   await expect(
     zedDrawer.getByRole("button", { name: "return Zed to auto tier", exact: true }),
   ).toHaveText("auto");
