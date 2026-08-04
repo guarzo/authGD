@@ -121,7 +121,9 @@ describe("returnTierToAuto", () => {
 
   it("records the tier automation was handed back", async () => {
     const admin = await seedAdmin();
-    const target = await seedAccount(ctx.db, { tier: "blue" });
+    // Seeded and locked tiers differ, so the assertion picks between two live
+    // values rather than passing against a hardcoded literal.
+    const target = await seedAccount(ctx.db, { tier: "flygd" });
     await ctx.db.transaction((tx) => setTierManual(tx, admin.id, target.id, "blue"));
     await ctx.db.transaction((tx) => returnTierToAuto(tx, admin.id, target.id));
     const audit = await lastAudit();
