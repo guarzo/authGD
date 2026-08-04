@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
-import { redirect } from "next/navigation";
 import { getDb } from "@/db";
-import { getAdminContext } from "@/lib/admin-guard";
+import { requireAdminPage } from "@/lib/admin-guard";
 import { getSyncStatus } from "@/services/sync-status";
 import { newestSyncRun } from "@/services/health";
 import { evaluateFreshness } from "@/core/health";
@@ -13,7 +12,7 @@ import {
   humanizeKey,
   isNoChange,
 } from "@/core/run-summary";
-import { Json, Scroller, Status } from "@/app/_components/ui";
+import { Json, Notice, Scroller, Status } from "@/app/_components/ui";
 import { Disclosure } from "@/app/_components/disclosure";
 import { Submit } from "@/app/_components/submit";
 import { elapsedShort, formatAgo } from "@/app/_components/format-ago";
@@ -52,8 +51,7 @@ export default async function AdminSyncPage({
 }: {
   searchParams: Promise<{ queued?: string }>;
 }) {
-  const ctx = await getAdminContext();
-  if (!ctx) redirect("/login");
+  await requireAdminPage();
   const { queued } = await searchParams;
   const db = getDb();
   const [groups, newest] = await Promise.all([getSyncStatus(db), newestSyncRun(db)]);
@@ -85,12 +83,13 @@ export default async function AdminSyncPage({
         </p>
       </div>
 
-      {/* role="status" because a server action redirect re-renders without a
-          document load: without it the outcome of the press is visible but
-          never announced. The element is always in the tree and only its text
-          changes — a live region *inserted* with its content already in place
-          is announced unreliably, NVDA and JAWS especially, because the region
-          has to be registered before the mutation it is meant to report. */}
+      {/* Deliberately not <Notice>: that renders only when there is something
+          to say, and a live region *inserted* with its content already in
+          place is announced unreliably, NVDA and JAWS especially, because the
+          region has to be registered before the mutation it is meant to
+          report. A server action redirect re-renders without a document load,
+          so this element stays in the tree across the press and only its text
+          changes. It matches Notice's role and glyph derivation by hand. */}
       <p
         role="status"
         className={notice ? "notice" : "notice-slot"}
@@ -106,9 +105,9 @@ export default async function AdminSyncPage({
       {worker.fresh ? (
         <p className="worker">{workerLine}</p>
       ) : (
-        <p className="notice notice--bad" data-glyph="!">
+        <Notice tone="bad">
           <span className="worker">{workerLine}</span>
-        </p>
+        </Notice>
       )}
 
       {/* No empty state above this: `getSyncStatus` seeds a row for every key

@@ -3,6 +3,7 @@ import { getConfig } from "@/config";
 import { getDb } from "@/db";
 import { exchangeEveCode, verifyEveAccessToken } from "@/lib/esi/sso";
 import { getRequestAccount } from "@/lib/request-session";
+import { sessionCookieAttrs } from "@/lib/session-cookie";
 import {
   handleEveLogin,
   linkCharacter,
@@ -59,10 +60,7 @@ export async function GET(req: NextRequest) {
   const sid = await createSession(db, accountId);
   const res = NextResponse.redirect(new URL("/account", cfg.appBaseUrl));
   res.cookies.set(cfg.sessionCookieName, sid, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: cfg.appBaseUrl.startsWith("https"),
-    path: "/",
+    ...sessionCookieAttrs(cfg),
     maxAge: 30 * 24 * 60 * 60,
   });
   return res;
