@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { and, eq } from "drizzle-orm";
 import { resetDb, seedMember, sessionCookieFor, testDb } from "./helpers";
 import {
@@ -125,7 +125,10 @@ test("create, add a flat pool, paste a roster, finalize, mark paid", async ({
   // plus whatever the per-share floor left behind (nothing, here).
   await expect(page.getByText("100000.00 ISK")).toBeVisible();
 
+  // Finalize is armed, not one-click: it commits every number on the page, and
+  // only its creator or an admin can undo it.
   await page.getByRole("button", { name: "Finalize" }).click();
+  await page.getByRole("button", { name: /^confirm finalize/ }).click();
   await expect(page.getByRole("button", { name: "Unlock" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Finalize" })).toHaveCount(0);
   // Finalizing freezes the numbers: the edit affordances go away until unlock.
@@ -140,7 +143,12 @@ test("create, add a flat pool, paste a roster, finalize, mark paid", async ({
     .where(and(eq(auditLog.action, "payout.finalized"), eq(auditLog.target, opId)));
   expect(finalized).toHaveLength(1);
 
+  // The first payment is armed, because recording one is what makes the
+  // operation permanently un-editable and un-unlockable. Every later one is a
+  // click behind a door already shut, which is why the assertion below finds a
+  // plain one-click button on the remaining row.
   await page.getByRole("button", { name: "mark paid" }).first().click();
+  await page.getByRole("button", { name: /^confirm mark paid/ }).click();
   // exact: true — "paid" is a substring of the sibling row's "unpaid" status,
   // so a bare getByText matches both.
   await expect(page.getByText("paid", { exact: true })).toBeVisible();
@@ -445,9 +453,256 @@ test("setting shares, excluding, and removing a participant each recompute exact
   await assertReconciles(page, opId);
 
   // removeParticipantAction: removing Carol leaves Alice as the only included
-  // participant, so she draws the whole pool.
+  // participant, so she draws the whole pool. Remove is armed — it drops the
+  // row outright, unlike the `exclude` sitting beside it, which is reversible
+  // and stays one-click.
   await rowFor("Carol Pilot").getByRole("button", { name: "remove" }).click();
+  await rowFor("Carol Pilot")
+    .getByRole("button", { name: /^confirm remove/ })
+    .click();
   await expect(rowFor("Carol Pilot")).toHaveCount(0);
   await expect(rowFor("Alice Pilot")).toContainText("300.00 ISK");
   await assertReconciles(page, opId);
+});
+
+/**
+ * Puts a value into a field the form's own markup would refuse to submit.
+ * The client guards are the first line and they work — which is exactly why
+ * the server-side check standing behind them can only be reached by going
+ * around them, the way a scripted or non-conforming client would. Without
+ * this, the server checks look covered and are not: the browser silently
+ * blocks the submit and the test passes on the wrong page.
+ */
+async function bypassClientGuard(input: Locator, value: string): Promise<void> {
+  await input.evaluate((el, v) => {
+    const field = el as HTMLInputElement;
+    field.removeAttribute("min");
+    field.removeAttribute("max");
+    field.removeAttribute("pattern");
+    field.type = "text";
+    field.value = v;
+  }, value);
+}
+
+/*
+ * Operator input used to `throw`, which landed on error.tsx — "Something broke…
+ * that's a fault on this end, not something you did." For a mistyped share
+ * percentage that copy is a lie, and the form's contents went with it. Same
+ * conversion `requireAdminAction` already went through (see e2e/admin.spec.ts).
+ *
+ * A code with no entry in either ERRORS map renders nothing at all, which is
+ * the one failure these pages cannot show the operator, so each is checked by
+ * name. `p.notice--bad`, never getByRole("alert"): arriving here from a server
+ * action is a soft navigation, so Next's route announcer is populated and also
+ * carries role="alert".
+ */
+for (const [code, phrase] of [
+  ["name_required", "needs a name"],
+  ["date_invalid", "real calendar date"],
+  ["url_invalid", "not a URL"],
+  ["url_scheme", "http:// or https://"],
+  ["share_format", "plain percentage"],
+  ["share_range", "cannot exceed 100%"],
+] as const) {
+  test(`/payouts/new explains ?error=${code}`, async ({ page, context }) => {
+    const operator = await seedMember(db, {
+      name: "FC Codes",
+      tier: "flygd",
+      status: "active",
+    });
+    await context.addCookies([await sessionCookieFor(db, operator.id)]);
+    await page.goto(`/payouts/new?error=${code}`);
+    await expect(page.locator("p.notice--bad")).toContainText(phrase);
+    await expect(page.getByText("Something broke")).toHaveCount(0);
+  });
+}
+
+for (const [code, phrase] of [
+  ["appraisal_failed", "did not answer"],
+  ["pricing_mode", "four pricing modes"],
+  ["location_kind", "exactly one"],
+  ["station_invalid", "60003760"],
+  ["region_invalid", "Region ID must be digits"],
+  ["note_required", "where the number came from"],
+  ["total_invalid", "no commas"],
+  ["shares_required", "cannot be blank"],
+  ["shares_invalid", "plain number like 1"],
+  ["shares_positive", "greater than zero"],
+  ["share_format", "plain percentage"],
+  ["share_range", "cannot exceed 100%"],
+] as const) {
+  test(`the operation page explains ?error=${code}`, async ({ page, context }) => {
+    const operator = await seedMember(db, {
+      name: "FC Codes",
+      tier: "flygd",
+      status: "active",
+    });
+    await context.addCookies([await sessionCookieFor(db, operator.id)]);
+    const [op] = await db
+      .insert(payoutOperation)
+      .values({
+        name: "Error code coverage",
+        occurredAt: new Date("2026-08-01"),
+        corpSharePct: "0",
+        createdBy: operator.id,
+      })
+      .returning();
+    await page.goto(`/payouts/${op.id}?error=${code}`);
+    await expect(page.locator("p.notice--bad")).toContainText(phrase);
+    await expect(page.getByText("Something broke")).toHaveCount(0);
+  });
+}
+
+// An unknown code must degrade to the plain page, never an empty notice box.
+test("payout pages ignore an unrecognised error code", async ({ page, context }) => {
+  const operator = await seedMember(db, {
+    name: "FC Unknown",
+    tier: "flygd",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+  await page.goto("/payouts/new?error=not_a_real_code");
+  await expect(page.locator("p.notice--bad")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Create operation" })).toBeVisible();
+});
+
+/*
+ * The round trip the redirect exists for: a rejected create form comes back
+ * with every other field still filled in. Retyping five fields because the
+ * sixth was wrong is the actual cost of the old throw, and the only way to
+ * catch a regression in it is to submit a bad value and read the good ones
+ * back off the form.
+ */
+test("a rejected create form comes back filled in", async ({ page, context }) => {
+  const operator = await seedMember(db, {
+    name: "FC Roundtrip",
+    tier: "flygd",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+  await page.goto("/payouts/new");
+  await page.getByLabel("Name").fill("Hard-won roam");
+  await page.getByLabel("Date").fill("2026-08-01");
+  await page.getByLabel("Notes (optional)").fill("worth keeping");
+  // max="100" stops 150 in the browser, so reaching the server check at all
+  // means going around the client guard.
+  await bypassClientGuard(page.getByLabel("Corp share %"), "150");
+  await page.getByRole("button", { name: "Create operation" }).click();
+
+  await expect(page).toHaveURL(/\/payouts\/new\?/);
+  await expect(page.locator("p.notice--bad")).toContainText("cannot exceed 100%");
+  await expect(page.getByText("Something broke")).toHaveCount(0);
+  await expect(page.getByLabel("Name")).toHaveValue("Hard-won roam");
+  await expect(page.getByLabel("Date")).toHaveValue("2026-08-01");
+  await expect(page.getByLabel("Notes (optional)")).toHaveValue("worth keeping");
+  await expect(page.getByLabel("Corp share %")).toHaveValue("150");
+
+  // And the corrected submit goes through, so the echoed values are real form
+  // state and not just decoration on an error page.
+  await page.getByLabel("Corp share %").fill("15");
+  await page.getByRole("button", { name: "Create operation" }).click();
+  await expect(page).toHaveURL(/\/payouts\/[0-9a-f-]+$/);
+  await expect(page.getByText("15.00% + remainder")).toBeVisible();
+});
+
+/*
+ * corpSharePct used to be write-once: an operator who accepted the create
+ * form's default committed the whole roster to 0% with no way back short of
+ * deleting the operation. This is the correction path, and the recalculation
+ * that has to follow it — changing the percentage moves every participant's
+ * amount, so a version that only wrote the column would look right on this
+ * page and pay out wrong.
+ */
+test("corp share can be corrected after creation, and the split follows", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "FC Corpshare",
+    tier: "flygd",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+  await page.goto("/payouts/new");
+  await page.getByLabel("Name").fill("Corp share fix");
+  await page.getByLabel("Date").fill("2026-08-01");
+  await page.getByLabel("Corp share %").fill("0");
+  await page.getByRole("button", { name: "Create operation" }).click();
+  await expect(page).toHaveURL(/\/payouts\/[0-9a-f-]+$/);
+  const opId = page.url().split("/").pop()!;
+
+  await page.getByLabel("Total value (ISK)").fill("1000");
+  await page.getByLabel("Note (required — why this number)").fill("flat");
+  await page.getByRole("button", { name: "Add flat pool" }).click();
+  await page
+    .getByLabel("Paste (names separated by /)")
+    .fill("Alice Pilot / Brain Tartare");
+  await page.getByRole("button", { name: "Set roster" }).click();
+  await expect(page.getByText("500.00 ISK").first()).toBeVisible();
+
+  await page.getByLabel("Corp share %").fill("20");
+  await page.getByRole("button", { name: "save corp share" }).click();
+
+  await expect(page.getByText("20.00% + remainder")).toBeVisible();
+  // 20% of 1000 off the top, then an even split of the 800 that remains.
+  await expect(page.getByText("200.00 ISK").first()).toBeVisible();
+  await expect(page.getByText("400.00 ISK").first()).toBeVisible();
+  await assertReconciles(page, opId);
+
+  const changed = await db
+    .select()
+    .from(auditLog)
+    .where(
+      and(eq(auditLog.action, "payout.corp_share_changed"), eq(auditLog.target, opId)),
+    );
+  expect(changed).toHaveLength(1);
+
+  // Out-of-range comes back as a message on the page, not error.tsx, and the
+  // stored value is untouched.
+  await bypassClientGuard(page.getByLabel("Corp share %"), "150");
+  await page.getByRole("button", { name: "save corp share" }).click();
+  await expect(page.locator("p.notice--bad")).toContainText("cannot exceed 100%");
+  await expect(page.getByText("Something broke")).toHaveCount(0);
+  await expect(page.getByText("20.00% + remainder")).toBeVisible();
+});
+
+/*
+ * The shares control is the one an operator touches most, so it gets the
+ * end-to-end version of the check: text and zero both land back on the page
+ * with a specific message rather than on error.tsx. Text is the important one
+ * — iskToCents *throws* on it, so a naive positivity guard would escape past
+ * the redirect it was meant to trigger.
+ */
+test("bad shares land on the page, not the error boundary", async ({ page, context }) => {
+  const operator = await seedMember(db, {
+    name: "FC Shares",
+    tier: "flygd",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+  await page.goto("/payouts/new");
+  await page.getByLabel("Name").fill("Shares guard");
+  await page.getByLabel("Date").fill("2026-08-01");
+  await page.getByLabel("Corp share %").fill("0");
+  await page.getByRole("button", { name: "Create operation" }).click();
+  await expect(page).toHaveURL(/\/payouts\/[0-9a-f-]+$/);
+
+  await page.getByLabel("Total value (ISK)").fill("100");
+  await page.getByLabel("Note (required — why this number)").fill("flat");
+  await page.getByRole("button", { name: "Add flat pool" }).click();
+  await page.getByLabel("Paste (names separated by /)").fill("Alice Pilot");
+  await page.getByRole("button", { name: "Set roster" }).click();
+
+  // type=number, so the browser refuses to submit text at all.
+  await bypassClientGuard(page.getByLabel("Shares for Alice Pilot"), "abc");
+  await page.getByRole("button", { name: "save Alice Pilot shares" }).click();
+  await expect(page.locator("p.notice--bad")).toContainText("plain number like 1");
+  await expect(page.getByText("Something broke")).toHaveCount(0);
+
+  await bypassClientGuard(page.getByLabel("Shares for Alice Pilot"), "0");
+  await page.getByRole("button", { name: "save Alice Pilot shares" }).click();
+  await expect(page.locator("p.notice--bad")).toContainText("greater than zero");
+  await expect(page.getByText("Something broke")).toHaveCount(0);
+  // The stored value survived both rejections.
+  await expect(page.getByLabel("Shares for Alice Pilot")).toHaveValue("1.00");
 });
