@@ -2,7 +2,13 @@ import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import * as schema from "@/db/schema";
-import { character, lootPool, payoutOperation, payoutParticipant } from "@/db/schema";
+import {
+  account,
+  character,
+  lootPool,
+  payoutOperation,
+  payoutParticipant,
+} from "@/db/schema";
 import { iskToCents } from "@/core/payout-split";
 import {
   createOperation,
@@ -18,6 +24,7 @@ import {
   decodePayoutCursor,
   encodePayoutCursor,
   getPayoutOperationDetail,
+  listAccountPayouts,
   listCharacterNames,
   listPayoutOperations,
   type PayoutListCursor,
@@ -412,5 +419,135 @@ describe("listCharacterNames", () => {
   it("returns null past the cap rather than a truncated list", async () => {
     await seedCharacters(CHARACTER_NAME_CAP + 1);
     expect(await listCharacterNames(ctx.db)).toBeNull();
+  });
+});
+
+describe("listAccountPayouts", () => {
+  async function seedForAccount(opts: { excluded?: boolean } = {}) {
+    const member = await seedAccount(ctx.db, { tier: "flygd", status: "active" });
+    const { operationId, operator } = await seedOperation({
+      totalValue: "100.00",
+      names: ["Placeholder"],
+    });
+    await ctx.db
+      .update(payoutParticipant)
+      .set({ accountId: member.id, excluded: opts.excluded ?? false })
+      .where(eq(payoutParticipant.operationId, operationId));
+    return { member, operationId, operator };
+  }
+
+  // A draft's amount is rewritten by `recalculate` on every roster or pool
+  // change, so showing it under "amount owed" states a commitment the
+  // operation has not made — and a member who checks twice sees two different
+  // figures. Finalization is where the numbers stop moving.
+  it("hides a draft and reveals it once finalized", async () => {
+    const { member, operationId, operator } = await seedForAccount();
+    expect(await listAccountPayouts(ctx.db, member.id)).toEqual([]);
+    await ctx.db.transaction((tx) => finalizeOperation(tx, operator.id, operationId));
+    const rows = await listAccountPayouts(ctx.db, member.id);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ operationId, paid: false });
+    expect(iskToCents(rows[0].amount)).toBe(10000n);
+  });
+
+  it("omits an excluded participant, who is owed nothing", async () => {
+    const { member, operationId, operator } = await seedForAccount({ excluded: true });
+    await ctx.db.transaction((tx) => finalizeOperation(tx, operator.id, operationId));
+    expect(await listAccountPayouts(ctx.db, member.id)).toEqual([]);
+  });
+
+  it("reports paid from paidAmount, and unpaid again after a revert", async () => {
+    const { member, operationId, operator } = await seedForAccount();
+    await ctx.db.transaction((tx) => finalizeOperation(tx, operator.id, operationId));
+    const [participant] = await ctx.db
+      .select()
+      .from(payoutParticipant)
+      .where(eq(payoutParticipant.operationId, operationId));
+    await ctx.db.transaction((tx) => recordPayment(tx, operator.id, participant.id));
+    expect((await listAccountPayouts(ctx.db, member.id))[0].paid).toBe(true);
+    await ctx.db.transaction((tx) => revertPayment(tx, operator.id, participant.id));
+    expect((await listAccountPayouts(ctx.db, member.id))[0].paid).toBe(false);
+  });
+
+  it("never returns another member's rows", async () => {
+    const { operationId, operator } = await seedForAccount();
+    await ctx.db.transaction((tx) => finalizeOperation(tx, operator.id, operationId));
+    const stranger = await seedAccount(ctx.db, { tier: "flygd", status: "active" });
+    expect(await listAccountPayouts(ctx.db, stranger.id)).toEqual([]);
+  });
+
+  it("orders newest first", async () => {
+    const member = await seedAccount(ctx.db, { tier: "flygd", status: "active" });
+    for (const day of ["2026-08-01", "2026-08-03", "2026-08-02"]) {
+      const { operationId, operator } = await seedOperation({
+        totalValue: "100.00",
+        names: ["Placeholder"],
+      });
+      await ctx.db
+        .update(payoutOperation)
+        .set({ occurredAt: new Date(`${day}T00:00:00Z`) })
+        .where(eq(payoutOperation.id, operationId));
+      await ctx.db
+        .update(payoutParticipant)
+        .set({ accountId: member.id })
+        .where(eq(payoutParticipant.operationId, operationId));
+      await ctx.db.transaction((tx) => finalizeOperation(tx, operator.id, operationId));
+    }
+    const rows = await listAccountPayouts(ctx.db, member.id);
+    expect(rows.map((r) => r.occurredAt.toISOString().slice(0, 10))).toEqual([
+      "2026-08-03",
+      "2026-08-02",
+      "2026-08-01",
+    ]);
+  });
+});
+
+describe("payment history names the operator who recorded it", () => {
+  it("resolves the actor to their main character's name", async () => {
+    const { operator, operationId, byName } = await seedOperation({
+      totalValue: "300.00",
+      names: ["A"],
+    });
+    // The same shape seedCharacter writes, inserted directly because this file
+    // has no Config to hand that helper and needs no token here.
+    await ctx.db.insert(character).values({
+      id: 900001,
+      accountId: operator.id,
+      name: "FC Prime",
+      ownerHash: "oh-900001",
+      scopes: [],
+    });
+    await ctx.db
+      .update(account)
+      .set({ mainCharacterId: 900001 })
+      .where(eq(account.id, operator.id));
+    await ctx.db.transaction((tx) => finalizeOperation(tx, operator.id, operationId));
+    await ctx.db.transaction((tx) => recordPayment(tx, operator.id, byName.get("A")!.id));
+    await ctx.db.transaction((tx) => revertPayment(tx, operator.id, byName.get("A")!.id));
+
+    const detail = await getPayoutOperationDetail(ctx.db, operationId);
+    const a = detail!.participants.find((p) => p.displayName === "A")!;
+    expect(a.payments.map((ev) => [ev.kind, ev.actorName])).toEqual([
+      ["paid", "FC Prime"],
+      ["reverted", "FC Prime"],
+    ]);
+  });
+
+  // Both nulls are reachable and neither is an error: `payout_payment.actor`
+  // is `on delete set null`, and an account need not have a main character at
+  // all. The row must still come back — history is append-only, and losing an
+  // event because nobody can be named would be the worse failure.
+  it("leaves actorName null when there is no main character to name the actor by", async () => {
+    const { operator, operationId, byName } = await seedOperation({
+      totalValue: "300.00",
+      names: ["A"],
+    });
+    await ctx.db.transaction((tx) => finalizeOperation(tx, operator.id, operationId));
+    await ctx.db.transaction((tx) => recordPayment(tx, operator.id, byName.get("A")!.id));
+
+    const detail = await getPayoutOperationDetail(ctx.db, operationId);
+    const a = detail!.participants.find((p) => p.displayName === "A")!;
+    expect(a.payments).toHaveLength(1);
+    expect(a.payments[0].actorName).toBeNull();
   });
 });

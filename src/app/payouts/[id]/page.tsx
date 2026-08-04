@@ -14,7 +14,9 @@ import {
   deletePoolAction,
   finalizeAction,
   markPaidAction,
+  openInfoAction,
   removeParticipantAction,
+  revertPaymentAction,
   setCorpShareAction,
   setItemPriceAction,
   setParticipantExcludedAction,
@@ -24,6 +26,7 @@ import {
 } from "../actions";
 import { DROPPED_REASONS, decodeDropped } from "../dropped";
 import { CopyAmountButton } from "./copy-amount-button";
+import { PaymentHistory } from "./payment-history";
 import { PRICING_MODES, type PricingMode } from "@/core/pricing";
 import { iskToCents } from "@/core/payout-split";
 
@@ -172,11 +175,17 @@ export default async function PayoutOperationPage({
     .map(([key]) => unresolvedByLowerName.get(key)!);
 
   // Only the *first* payment is worth an arm step. Recording one is what shuts
-  // the door permanently — `hasPayments` makes the operation un-editable and
-  // un-unlockable from then on (Recalculation safety, mechanism 3). Every later
-  // "mark paid" is a click behind a door already shut, so gating those would be
-  // friction with nothing behind it.
-  const anyPaid = participants.some((p) => p.paymentState === "paid");
+  // the door permanently — `locked` (hasPayments) makes the operation
+  // un-editable and un-unlockable from then on (Recalculation safety,
+  // mechanism 3), and this task's revert deliberately does NOT reopen it.
+  // Every later "mark paid" is a click behind a door already shut, so gating
+  // those would be friction with nothing behind it.
+  //
+  // Derived from `locked` rather than from "somebody is currently paid":
+  // reverting the only payment leaves the operation frozen, because
+  // `hasPayments` counts payment rows and a reverted payment still left one.
+  // Keying the arm on current paid-ness would re-arm after a full revert.
+  const firstPayment = !locked;
 
   return (
     <>
@@ -288,6 +297,18 @@ export default async function PayoutOperationPage({
             </>
           )}
         </dl>
+
+        {locked && (
+          <Notice tone="warn">
+            <span>
+              <strong>This operation is frozen.</strong> A payment has been recorded, so
+              the loot pools, the roster, shares and the corp share are fixed permanently.
+              Reverting a payment does not reopen editing — it corrects who has been paid,
+              and nothing else. If the wrong person was marked paid, revert them and pay
+              the right one; both work while frozen.
+            </span>
+          </Notice>
+        )}
 
         {access.isOperator && (
           <ConfirmArmScope>
@@ -728,11 +749,23 @@ export default async function PayoutOperationPage({
                     </td>
                     <td className="mono nowrap">{p.amount} ISK</td>
                     <td>
-                      {p.paymentState === "excluded" && (
-                        <Status tone="off">excluded</Status>
-                      )}
-                      {p.paymentState === "unpaid" && <Status tone="warn">unpaid</Status>}
-                      {p.paymentState === "paid" && <Status tone="ok">paid</Status>}
+                      <div className="stack">
+                        {p.paymentState === "excluded" && (
+                          <Status tone="off">excluded</Status>
+                        )}
+                        {p.paymentState === "unpaid" && (
+                          <Status tone="warn">unpaid</Status>
+                        )}
+                        {p.paymentState === "paid" && <Status tone="ok">paid</Status>}
+                        {/* Stored since phase 1 and never shown until now — and
+                            the actor with it, so the list says who, not just
+                            what and when. Renders nothing when there is no
+                            history. */}
+                        <PaymentHistory
+                          payments={p.payments}
+                          participantName={p.displayName}
+                        />
+                      </div>
                     </td>
                     <td>
                       <div className="btn-row btn-row--tight btn-row--end">
@@ -740,20 +773,54 @@ export default async function PayoutOperationPage({
                           p.paymentState !== "excluded" && (
                             <>
                               <CopyAmountButton amount={p.amount} />
+                              {access.canOpenInfo && p.recipientCharacterId !== null && (
+                                <form
+                                  action={openInfoAction.bind(null, operation.id, p.id)}
+                                >
+                                  <Submit
+                                    className="btn btn--quiet btn--micro"
+                                    pendingLabel="opening…"
+                                    aria-label={`open info for ${p.displayName}`}
+                                  >
+                                    open info
+                                  </Submit>
+                                </form>
+                              )}
                               {p.paymentState !== "paid" && access.isOperator && (
                                 <form
                                   action={markPaidAction.bind(null, operation.id, p.id)}
                                 >
-                                  {anyPaid ? (
-                                    <Submit className="btn btn--micro">mark paid</Submit>
-                                  ) : (
+                                  {firstPayment ? (
                                     <ConfirmSubmit
                                       className="btn btn--micro"
                                       label="mark paid"
                                       restName={`mark paid ${p.displayName}`}
                                       confirmName={`confirm mark paid ${p.displayName}`}
                                     />
+                                  ) : (
+                                    <Submit className="btn btn--micro">mark paid</Submit>
                                   )}
+                                </form>
+                              )}
+                              {/* Reverting money is not a one-click action, so
+                                  it arms first — the same step `remove` and
+                                  `delete` already carry in this table, sharing
+                                  the one `ConfirmArmScope` around this tbody. */}
+                              {p.paymentState === "paid" && access.isOperator && (
+                                <form
+                                  action={revertPaymentAction.bind(
+                                    null,
+                                    operation.id,
+                                    p.id,
+                                  )}
+                                >
+                                  <ConfirmSubmit
+                                    className="btn btn--quiet btn--micro btn--danger-quiet"
+                                    armedClassName="btn btn--micro btn--danger"
+                                    label="revert"
+                                    restName={`revert payment for ${p.displayName}`}
+                                    confirmName={`confirm revert payment for ${p.displayName}`}
+                                  />
                                 </form>
                               )}
                             </>

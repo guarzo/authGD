@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, inArray, lt, or } from "drizzle-orm";
 import type { Dbx } from "@/db";
 import {
+  account,
   character,
   lootItem,
   lootPool,
@@ -186,11 +187,24 @@ export type PayoutPoolView = typeof lootPool.$inferSelect & {
 
 export type ParticipantPaymentState = "excluded" | "unpaid" | "paid";
 
+export type PayoutPaymentView = typeof payoutPayment.$inferSelect & {
+  /** The operator who recorded this event, resolved to their main character's
+   *  name — the same account-id → main-character → name rule
+   *  `src/services/audit.ts` and `src/services/account-view.ts` already use, so
+   *  one person is named identically wherever authGD names them.
+   *
+   *  Null in two cases this cannot tell apart, and does not try to: `actor` is
+   *  `on delete set null`, so a deleted account leaves the row behind with
+   *  nobody to name, and an account that never set a main character has no name
+   *  to resolve to. The view layer words both, once. */
+  actorName: string | null;
+};
+
 export type PayoutParticipantView = typeof payoutParticipant.$inferSelect & {
   paymentState: ParticipantPaymentState;
   /** Append-only history for this participant, `(at asc, id asc)`. Rendered,
    *  never folded — `paymentState` comes from `paidAmount`. */
-  payments: Array<typeof payoutPayment.$inferSelect>;
+  payments: PayoutPaymentView[];
 };
 
 export type PayoutOperationDetail = {
@@ -247,10 +261,49 @@ export async function getPayoutOperationDetail(
         .where(inArray(payoutPayment.participantId, participantIds))
         .orderBy(asc(payoutPayment.at), asc(payoutPayment.id))
     : [];
-  const paymentsByParticipant = new Map<string, typeof payments>();
+  // Who did it. `payout_payment.actor` has been written since phase 1 and never
+  // read, and the design defines history as who did what and when — an event
+  // list with no actor answers two thirds of that. Resolved with the rule
+  // src/services/audit.ts and src/services/account-view.ts already use:
+  // account → mainCharacterId → character.name. A second naming rule here would
+  // eventually disagree with the audit log about who someone is.
+  //
+  // Two extra round trips, both skipped when there is no history, and both
+  // `inArray` over the handful of operators this one operation used. Not folded
+  // into the payments query: it is two joins to fetch one string, on the page's
+  // cheapest read.
+  const actorIds = [...new Set(payments.map((p) => p.actor).filter((a) => a !== null))];
+  const actorAccounts = actorIds.length
+    ? await dbx
+        .select({ id: account.id, mainCharacterId: account.mainCharacterId })
+        .from(account)
+        .where(inArray(account.id, actorIds))
+    : [];
+  const mainIds = actorAccounts.map((a) => a.mainCharacterId).filter((id) => id !== null);
+  const mainCharacters = mainIds.length
+    ? await dbx
+        .select({ id: character.id, name: character.name })
+        .from(character)
+        .where(inArray(character.id, mainIds))
+    : [];
+  const nameByCharacterId = new Map(mainCharacters.map((c) => [c.id, c.name]));
+  const actorNameById = new Map(
+    actorAccounts.map((a) => [
+      a.id,
+      a.mainCharacterId === null
+        ? null
+        : (nameByCharacterId.get(a.mainCharacterId) ?? null),
+    ]),
+  );
+
+  const paymentsByParticipant = new Map<string, PayoutPaymentView[]>();
   for (const payment of payments) {
     const list = paymentsByParticipant.get(payment.participantId) ?? [];
-    list.push(payment);
+    list.push({
+      ...payment,
+      actorName:
+        payment.actor === null ? null : (actorNameById.get(payment.actor) ?? null),
+    });
     paymentsByParticipant.set(payment.participantId, list);
   }
 
@@ -310,4 +363,71 @@ export async function listCharacterNames(dbx: Dbx): Promise<string[] | null> {
     .limit(CHARACTER_NAME_CAP + 1);
   if (rows.length > CHARACTER_NAME_CAP) return null;
   return rows.map((r) => r.name);
+}
+
+export type AccountPayoutRow = {
+  operationId: string;
+  operationName: string;
+  occurredAt: Date;
+  amount: string;
+  paid: boolean;
+};
+
+/**
+ * The viewer's own payout rows for the account page. Unguarded like every read
+ * in this module, and safe to be: it is scoped to one `accountId` by its own
+ * where clause, so there is nothing here a caller could widen.
+ *
+ * FINALIZED ONLY. A draft's `amount` is rewritten by `recalculate` on every
+ * roster or pool change, so presenting it to a member under "amount owed"
+ * states a commitment the operation has not made — and a member who checks
+ * twice would see two different figures with no explanation. Finalization is
+ * already where the numbers stop moving and already the precondition for
+ * payment, so it is the honest cutoff. The cost is that a member cannot see a
+ * payout coming before it is final, which is the correct trade: nothing is
+ * owed yet.
+ *
+ * KNOWN LIMITATION, by construction: this matches on
+ * `payout_participant.account_id`, which is NULL for anyone whose name did not
+ * resolve at paste time. A member pasted under an unlinked alt spelling will
+ * not see their own payout here. That is inherent to a model which must also
+ * record people who have no authGD account at all; phase 2 does not change it.
+ */
+export async function listAccountPayouts(
+  dbx: Dbx,
+  accountId: string,
+): Promise<AccountPayoutRow[]> {
+  const rows = await dbx
+    .select({
+      operationId: payoutOperation.id,
+      operationName: payoutOperation.name,
+      occurredAt: payoutOperation.occurredAt,
+      amount: payoutParticipant.amount,
+      paidAmount: payoutParticipant.paidAmount,
+    })
+    .from(payoutParticipant)
+    .innerJoin(payoutOperation, eq(payoutParticipant.operationId, payoutOperation.id))
+    .where(
+      and(
+        eq(payoutParticipant.accountId, accountId),
+        // Excluded means owed nothing. A 0.00 row under "amount owed" reads as
+        // a payout that went wrong rather than one that never applied.
+        eq(payoutParticipant.excluded, false),
+        eq(payoutOperation.status, "finalized"),
+      ),
+    )
+    // occurredAt is not unique — two operations can share a night — so it is
+    // no stable sort on its own. The uuid tiebreak is arbitrary but stable,
+    // which is all this needs to stop rows swapping between loads.
+    .orderBy(desc(payoutOperation.occurredAt), desc(payoutOperation.id));
+
+  return rows.map((r) => ({
+    operationId: r.operationId,
+    operationName: r.operationName,
+    occurredAt: r.occurredAt,
+    amount: r.amount,
+    // Never Number(): amount stays the exact numeric(20,2) string the column
+    // holds, all the way to the screen.
+    paid: r.paidAmount !== null,
+  }));
 }

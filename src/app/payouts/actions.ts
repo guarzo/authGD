@@ -23,6 +23,7 @@ import {
   removeParticipant,
   requirePayoutOperator,
   resolveRosterNames,
+  revertPayment,
   setCorpSharePct,
   setParticipantExcluded,
   setParticipantShares,
@@ -509,4 +510,25 @@ export async function openInfoAction(
     if (failure === null) throw err;
     operationFailed(operationId, OPEN_INFO_ERROR_BY_FAILURE[failure]);
   }
+}
+
+/**
+ * Takes back a payment an operator recorded wrongly. `revertPayment` clears
+ * `paidAmount` and appends a `reverted` event, so the participant can be paid
+ * again; the operation stays frozen either way, because money did move.
+ *
+ * Nothing is caught. Every failure `revertPayment` can raise is authorization
+ * (PayoutForbiddenError) or lifecycle state (PayoutLockedError,
+ * PayoutNotFoundError) — none of them is something the operator typed, and none
+ * of them has a field to hand back. That is exactly the line the ?error=
+ * conversion drew across this file: input rejections redirect, and everything
+ * else belongs on error.tsx. This action has no input to reject.
+ */
+export async function revertPaymentAction(
+  operationId: string,
+  participantId: string,
+): Promise<void> {
+  const actor = await requireOperatorAccount();
+  await getDb().transaction((dbtx) => revertPayment(dbtx, actor, participantId));
+  revalidateOperation(operationId);
 }
