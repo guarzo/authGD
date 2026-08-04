@@ -1,5 +1,5 @@
 import type { Dbx } from "@/db";
-import { account, auditLog, character, discordLink } from "@/db/schema";
+import { account, auditLog, character, discordLink, payoutOperation } from "@/db/schema";
 import { and, desc, eq, inArray, like, lt } from "drizzle-orm";
 
 export const AUDIT_PAGE_SIZE = 100;
@@ -20,7 +20,7 @@ export type ResolvedAuditRow = typeof auditLog.$inferSelect & {
   actorName: string | null;
   actorKind: "system" | "account" | "unresolved";
   targetName: string | null;
-  targetKind: "account" | "character" | "discord" | "literal" | "unresolved";
+  targetKind: "account" | "character" | "discord" | "payout" | "literal" | "unresolved";
 };
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -35,15 +35,16 @@ const DIGITS_RE = /^\d+$/;
  * and character ids are ~9-10) would work only by coincidence today and
  * silently rot the day either numbering scheme changes. `discord.*` actions
  * only ever target a Discord user id; `character.*` / `token.*` /
- * `wanderer.*` only ever target an EVE character id; everything else
- * (`tier.*`, `status.*`, `account.*`, `admin.*`, `sync.*`) targets an account.
- * The literal broadcast target `"all"` (used by `sync.*`) is short-circuited by
+ * `wanderer.*` only ever target an EVE character id; `payout.*` actions only
+ * ever target a `payout_operation` uuid; everything else (`tier.*`,
+ * `status.*`, `account.*`, `admin.*`, `sync.*`) targets an account. The
+ * literal broadcast target `"all"` (used by `sync.*`) is short-circuited by
  * the caller before this function is consulted, so `sync.*` reaching here
  * always means the account-uuid form.
  */
 function targetKindFromAction(
   action: string,
-): "account" | "character" | "discord" | null {
+): "account" | "character" | "discord" | "payout" | null {
   if (action.startsWith("discord.")) return "discord";
   if (
     action.startsWith("character.") ||
@@ -51,6 +52,7 @@ function targetKindFromAction(
     action.startsWith("wanderer.")
   )
     return "character";
+  if (action.startsWith("payout.")) return "payout";
   if (
     action.startsWith("tier.") ||
     action.startsWith("status.") ||
@@ -66,7 +68,8 @@ function targetKindFromAction(
  * Resolves actor/target ids to human (main character) names in a fixed,
  * small number of batched queries, independent of row count:
  *   1. accounts referenced directly (as actor or an account-shaped target)
- *      + discord links referenced as a target, in parallel
+ *      + discord links referenced as a target + payout operations referenced
+ *      as a target, all in parallel
  *   2. accounts reached only via a discord link (to get *their*
  *      mainCharacterId) — skipped entirely if no discord targets resolved
  *   3. every character name needed (target characters + all main characters
@@ -83,6 +86,7 @@ export async function resolveAuditIdentities(
   const accountIds = new Set<string>();
   const targetCharacterIds = new Set<number>();
   const targetDiscordIds = new Set<string>();
+  const targetPayoutIds = new Set<string>();
 
   for (const r of rows) {
     if (r.actor !== "system" && UUID_RE.test(r.actor)) accountIds.add(r.actor);
@@ -93,9 +97,10 @@ export async function resolveAuditIdentities(
       targetCharacterIds.add(Number(r.target));
     else if (kind === "discord" && DIGITS_RE.test(r.target))
       targetDiscordIds.add(r.target);
+    else if (kind === "payout" && UUID_RE.test(r.target)) targetPayoutIds.add(r.target);
   }
 
-  const [directAccounts, links] = await Promise.all([
+  const [directAccounts, links, payoutOperations] = await Promise.all([
     accountIds.size
       ? dbx
           .select({ id: account.id, mainCharacterId: account.mainCharacterId })
@@ -110,6 +115,12 @@ export async function resolveAuditIdentities(
           })
           .from(discordLink)
           .where(inArray(discordLink.discordUserId, [...targetDiscordIds]))
+      : Promise.resolve([]),
+    targetPayoutIds.size
+      ? dbx
+          .select({ id: payoutOperation.id, name: payoutOperation.name })
+          .from(payoutOperation)
+          .where(inArray(payoutOperation.id, [...targetPayoutIds]))
       : Promise.resolve([]),
   ]);
 
@@ -128,6 +139,7 @@ export async function resolveAuditIdentities(
   const discordUserToAccountId = new Map(
     links.map((l) => [l.discordUserId, l.accountId]),
   );
+  const nameByPayoutId = new Map(payoutOperations.map((o) => [o.id, o.name]));
 
   const characterIds = new Set<number>(targetCharacterIds);
   for (const a of accountById.values()) {
@@ -184,6 +196,12 @@ export async function resolveAuditIdentities(
         if (name !== null) {
           targetName = name;
           targetKind = "discord";
+        }
+      } else if (kind === "payout" && UUID_RE.test(r.target)) {
+        const name = nameByPayoutId.get(r.target) ?? null;
+        if (name !== null) {
+          targetName = name;
+          targetKind = "payout";
         }
       }
     }
