@@ -1,6 +1,8 @@
 import { eq } from "drizzle-orm";
+import { drizzle } from "drizzle-orm/node-postgres";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { lootPool, payoutParticipant } from "@/db/schema";
+import * as schema from "@/db/schema";
+import { lootPool, payoutOperation, payoutParticipant } from "@/db/schema";
 import { iskToCents } from "@/core/payout-split";
 import {
   createOperation,
@@ -11,7 +13,13 @@ import {
   setRoster,
   type RosterEntry,
 } from "@/services/payouts";
-import { getPayoutOperationDetail, listPayoutOperations } from "@/services/payout-view";
+import {
+  decodePayoutCursor,
+  encodePayoutCursor,
+  getPayoutOperationDetail,
+  listPayoutOperations,
+  type PayoutListCursor,
+} from "@/services/payout-view";
 import { setupTestDb, truncateAll } from "./helpers/db";
 import { seedAccount } from "./helpers/seed";
 
@@ -86,7 +94,7 @@ describe("listPayoutOperations", () => {
     await ctx.db.transaction((tx) => finalizeOperation(tx, operator.id, operationId));
     await ctx.db.transaction((tx) => recordPayment(tx, operator.id, byName.get("B")!.id));
 
-    const [summary] = (await listPayoutOperations(ctx.db)).filter(
+    const [summary] = (await listPayoutOperations(ctx.db)).operations.filter(
       (o) => o.id === operationId,
     );
     // A is excluded (not owed anything, not counted); B and C are owed, and
@@ -152,7 +160,7 @@ describe("getPayoutOperationDetail — exact money on the read side", () => {
     // listPayoutOperations sums the same pools in its own separate loop
     // (src/services/payout-view.ts) — a Number() regression there wouldn't
     // show up in getPayoutOperationDetail's assertion above.
-    const [summary] = await listPayoutOperations(ctx.db);
+    const [summary] = (await listPayoutOperations(ctx.db)).operations;
     expect(summary.totalValue).toBe("18014398509481984.02");
   });
 
@@ -210,7 +218,7 @@ describe("derived payment state comes from paidAmount, not from a paid row", () 
 
     // A still has a `paid` row in payout_payment; an existence check would
     // count it. paidAmount is null, and that is what decides.
-    const [summary] = (await listPayoutOperations(ctx.db)).filter(
+    const [summary] = (await listPayoutOperations(ctx.db)).operations.filter(
       (o) => o.id === operationId,
     );
     expect(summary.paidCount).toBe(1);
@@ -239,5 +247,131 @@ describe("derived payment state comes from paidAmount, not from a paid row", () 
     const a = detail!.participants.find((p) => p.displayName === "A")!;
     expect(a.payments.map((p) => p.kind)).toEqual(["paid", "reverted", "paid"]);
     expect(a.paymentState).toBe("paid");
+  });
+});
+
+/** Operations with controlled `occurredAt` values, inserted directly: these
+ *  tests are about ordering and query scoping, not about createOperation. */
+async function seedOps(specs: Array<{ name: string; occurredAt: string }>) {
+  return ctx.db
+    .insert(payoutOperation)
+    .values(specs.map((s) => ({ name: s.name, occurredAt: new Date(s.occurredAt) })))
+    .returning({ id: payoutOperation.id, name: payoutOperation.name });
+}
+
+/** A second drizzle handle over the SAME pool that records every statement it
+ *  issues. The point of this task is which rows are read, and the returned
+ *  shape cannot tell a scoped query from an unscoped one that was filtered in
+ *  memory afterwards. */
+function recordingDb() {
+  const queries: Array<{ sql: string; params: unknown[] }> = [];
+  const db = drizzle(ctx.pool, {
+    schema,
+    logger: { logQuery: (sql, params) => queries.push({ sql, params }) },
+  });
+  return { db, queries };
+}
+
+describe("listPayoutOperations — pagination", () => {
+  it("pages through operations sharing an occurredAt without skipping or repeating", async () => {
+    // Three operations share one date and two share another. A bare-timestamp
+    // cursor pages past the whole tied group and loses the third, which a
+    // "page 2 differs from page 1" assertion would not notice.
+    await seedOps([
+      { name: "A", occurredAt: "2026-08-01T00:00:00Z" },
+      { name: "B", occurredAt: "2026-08-01T00:00:00Z" },
+      { name: "C", occurredAt: "2026-08-01T00:00:00Z" },
+      { name: "D", occurredAt: "2026-07-01T00:00:00Z" },
+      { name: "E", occurredAt: "2026-07-01T00:00:00Z" },
+    ]);
+
+    const seen: string[] = [];
+    let cursor: PayoutListCursor | undefined;
+    for (let guard = 0; guard < 10; guard++) {
+      const page = await listPayoutOperations(ctx.db, { before: cursor, limit: 2 });
+      seen.push(...page.operations.map((o) => o.name));
+      if (!page.nextCursor) break;
+      cursor = page.nextCursor;
+    }
+
+    expect(seen).toHaveLength(5);
+    expect([...seen].sort()).toEqual(["A", "B", "C", "D", "E"]);
+  });
+
+  it("never reads pools, participants or payments outside the requested page", async () => {
+    const ops = await seedOps([
+      { name: "Newest", occurredAt: "2026-08-03T00:00:00Z" },
+      { name: "Middle", occurredAt: "2026-08-02T00:00:00Z" },
+      { name: "Oldest", occurredAt: "2026-08-01T00:00:00Z" },
+    ]);
+    const idOf = new Map(ops.map((o) => [o.name, o.id]));
+
+    const first = await listPayoutOperations(ctx.db, { limit: 1 });
+    expect(first.operations.map((o) => o.name)).toEqual(["Newest"]);
+    expect(first.nextCursor).not.toBeNull();
+
+    const { db, queries } = recordingDb();
+    const second = await listPayoutOperations(db, {
+      before: first.nextCursor!,
+      limit: 1,
+    });
+    expect(second.operations.map((o) => o.name)).toEqual(["Middle"]);
+
+    // Only the child queries are inspected: the operation query legitimately
+    // binds the cursor, which carries page 1's id.
+    const childParams = queries
+      .filter((q) => q.sql.includes("loot_pool") || q.sql.includes("payout_participant"))
+      .flatMap((q) => q.params.map(String));
+    expect(childParams).toContain(idOf.get("Middle"));
+    expect(childParams).not.toContain(idOf.get("Newest"));
+    expect(childParams).not.toContain(idOf.get("Oldest"));
+
+    // The payment query is gone entirely, not merely narrowed.
+    expect(queries.filter((q) => q.sql.includes("payout_payment"))).toHaveLength(0);
+  });
+
+  it("reads a paid-then-reverted participant as unpaid", async () => {
+    // The exact case the deleted payment query got wrong: a `paid` row still
+    // exists, so "has a paid row" answers 1/2 where paidAmount answers 0/2.
+    const { operator, operationId, byName } = await seedOperation({
+      totalValue: "300.00",
+      names: ["A", "B"],
+    });
+    await ctx.db.transaction((tx) => finalizeOperation(tx, operator.id, operationId));
+    await ctx.db.transaction((tx) => recordPayment(tx, operator.id, byName.get("A")!.id));
+    await ctx.db.transaction((tx) => revertPayment(tx, operator.id, byName.get("A")!.id));
+
+    const { operations } = await listPayoutOperations(ctx.db);
+    const summary = operations.find((o) => o.id === operationId)!;
+    expect(summary.participantCount).toBe(2);
+    expect(summary.paidCount).toBe(0);
+  });
+});
+
+describe("payout list cursor encoding", () => {
+  it("round-trips a cursor through the query param", () => {
+    const cursor = {
+      occurredAt: new Date("2026-08-01T12:34:56.000Z"),
+      id: "11111111-2222-3333-4444-555555555555",
+    };
+    const decoded = decodePayoutCursor(encodePayoutCursor(cursor));
+    expect(decoded?.id).toBe(cursor.id);
+    expect(decoded?.occurredAt.toISOString()).toBe("2026-08-01T12:34:56.000Z");
+  });
+
+  it("returns undefined for anything malformed rather than throwing", () => {
+    // `before` is a hand-editable URL param. A bad one must render page 1, not
+    // reach Postgres as a non-uuid comparison and 500 the list.
+    for (const raw of [
+      undefined,
+      "",
+      "not-a-cursor",
+      "2026-08-01T00:00:00.000Z",
+      "2026-08-01T00:00:00.000Z|not-a-uuid",
+      "nonsense|11111111-2222-3333-4444-555555555555",
+      "2026-08-01T00:00:00.000Z|11111111-2222-3333-4444-555555555555|extra",
+    ]) {
+      expect(decodePayoutCursor(raw)).toBeUndefined();
+    }
   });
 });
