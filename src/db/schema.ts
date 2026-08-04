@@ -30,6 +30,13 @@ export const oauthIntentEnum = pgEnum("oauth_intent", [
 ]);
 export const syncRunStatusEnum = pgEnum("sync_run_status", ["ok", "partial", "failed"]);
 
+/**
+ * The recorded outcome of one sync run. Exported here rather than re-derived at
+ * each use site: two private copies of `(typeof syncRunStatusEnum.enumValues)[number]`
+ * are two places to forget when the enum grows.
+ */
+export type SyncRunStatus = (typeof syncRunStatusEnum.enumValues)[number];
+
 export const account = pgTable("account", {
   id: uuid("id").primaryKey().defaultRandom(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -110,6 +117,10 @@ export const outbox = pgTable(
         | { kind: "discord-user"; discordUserId: string }
         | { kind: "membership-recheck" }
         | { kind: "all" }
+        // one named job, re-run on demand; jobType is validated against QUEUES
+        // at dispatch time, so an unknown value drops rather than enqueueing
+        // to an arbitrary queue name
+        | { kind: "job"; jobType: string }
       >()
       .notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

@@ -7,7 +7,7 @@
  * pg-boss evaluates schedules in UTC unless a timezone is passed, and
  * `scheduleJobs` passes none, so every wall-clock label here says UTC.
  */
-export const JOB_CRON: Record<string, string> = {
+export const JOB_CRON = {
   membership: "*/30 * * * *",
   "membership-recheck": "0 4 * * 0",
   contacts: "5 * * * *",
@@ -15,7 +15,27 @@ export const JOB_CRON: Record<string, string> = {
   "discord-roles": "15 * * * *",
   "token-health": "0 3 * * *",
   purge: "30 3 * * *",
-};
+} as const satisfies Record<string, string>;
+
+/**
+ * The job types this table schedules. `as const` above is what makes this a
+ * union of the seven literals rather than `string`: indexing `JOB_CRON` with an
+ * arbitrary string is now a compile error, so every lookup has to come through
+ * `cronFor` and prove it handled the absent case. Typing the table as
+ * `Record<string, string>` instead made `JOB_CRON[x] ?? fallback` typecheck
+ * with a fallback arm TypeScript believed was unreachable and the runtime
+ * needed — a reader could not tell those from genuinely dead code.
+ */
+export type JobType = keyof typeof JOB_CRON;
+
+export function isJobType(value: unknown): value is JobType {
+  return typeof value === "string" && Object.hasOwn(JOB_CRON, value);
+}
+
+/** The cron for a job type, or null when nothing schedules it. */
+export function cronFor(jobType: string): string | null {
+  return isJobType(jobType) ? JOB_CRON[jobType] : null;
+}
 
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -57,7 +77,7 @@ export function formatCadence(cron: string): string {
 
 /** The cadence for a job type, or null when nothing schedules it. */
 export function cadenceFor(jobType: string): string | null {
-  const cron = JOB_CRON[jobType];
+  const cron = cronFor(jobType);
   return cron ? formatCadence(cron) : null;
 }
 
@@ -148,21 +168,62 @@ export function parseCron(expression: string): CronFields {
   return { minute, hour, dayOfMonth, month, dayOfWeek };
 }
 
-/** Longest gap we will search before giving up: covers weekly schedules. */
+/** Longest gap we will search minute-by-minute before giving up on a match. */
 const MAX_SCAN_MINUTES = 8 * 24 * 60;
 
+/** The scan window as a duration, so callers can use it as a cadence floor. */
+export const SCAN_WINDOW_MS = MAX_SCAN_MINUTES * 60 * 1000;
+
 /**
- * The first UTC minute strictly after `from` that matches `expression`.
+ * Why `nextOccurrence` produced no time.
+ *
+ * "no match inside eight days" and "this expression can never fire" are very
+ * different facts and used to arrive as the same null. A caller that treats
+ * both as "cadence unknown" renders the first monthly cron anyone adds as
+ * permanently on-time, in the calmest colour, while also dropping its
+ * stuck-run threshold to the 15-minute floor. Separating them lets a caller
+ * treat `beyond-window` as "at least eight days" — a real lower bound — and
+ * `unsatisfiable` as the configuration error it is.
+ */
+export type NextFire =
+  { kind: "at"; at: Date } | { kind: "beyond-window" } | { kind: "unsatisfiable" };
+
+/**
+ * Whether any calendar day inside a four-year window satisfies the date fields.
+ * Four years covers the leap-day cycle, which is the only reason a date-only
+ * expression can be satisfiable but rare (`0 0 29 2 *`).
+ *
+ * Day granularity on purpose: the minute and hour sets are non-empty by
+ * construction (`parseField` throws rather than returning an empty set), so if
+ * a matching *day* exists the expression fires on it.
+ */
+function hasMatchingDay(f: CronFields, from: Date): boolean {
+  const cursor = new Date(from);
+  cursor.setUTCHours(0, 0, 0, 0);
+  for (let i = 0; i < 4 * 366; i++) {
+    if (
+      f.dayOfMonth.has(cursor.getUTCDate()) &&
+      f.month.has(cursor.getUTCMonth() + 1) &&
+      f.dayOfWeek.has(cursor.getUTCDay())
+    ) {
+      return true;
+    }
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return false;
+}
+
+/**
+ * The first UTC minute strictly after `from` that matches `expression`, or why
+ * there isn't one.
  *
  * Scans minute by minute rather than solving in closed form. At most ~11.5k
  * iterations for the weekly expression and ~30 for the common ones, which is
- * far cheaper than the bugs a hand-rolled closed form would cost.
- *
- * Returns null if nothing matches within the scan window, which for the
- * supported grammar means the expression is unsatisfiable (e.g. Feb 30).
- * Callers render that as "unknown" rather than crashing the page.
+ * far cheaper than the bugs a hand-rolled closed form would cost. The day-level
+ * probe that classifies a miss runs only when the minute scan found nothing —
+ * i.e. never for any expression in `JOB_CRON`.
  */
-export function nextOccurrence(expression: string, from: Date): Date | null {
+export function nextFire(expression: string, from: Date): NextFire {
   const f = parseCron(expression);
 
   // Start at the next whole minute: "strictly after" means a schedule that
@@ -179,10 +240,41 @@ export function nextOccurrence(expression: string, from: Date): Date | null {
       f.month.has(cursor.getUTCMonth() + 1) &&
       f.dayOfWeek.has(cursor.getUTCDay())
     ) {
-      return cursor;
+      return { kind: "at", at: cursor };
     }
     cursor.setUTCMinutes(cursor.getUTCMinutes() + 1);
   }
 
-  return null;
+  return hasMatchingDay(f, cursor)
+    ? { kind: "beyond-window" }
+    : { kind: "unsatisfiable" };
+}
+
+/**
+ * The first UTC minute strictly after `from` that matches `expression`, or null
+ * when there is none inside the scan window. Callers that need to tell a
+ * monthly cadence from an impossible one want `nextFire` instead.
+ */
+export function nextOccurrence(expression: string, from: Date): Date | null {
+  const fire = nextFire(expression, from);
+  return fire.kind === "at" ? fire.at : null;
+}
+
+/**
+ * Next scheduled fire for a job type, or null when we cannot say — unscheduled,
+ * unsupported grammar, or further out than the scan window.
+ *
+ * The one implementation of "when does this job next run". Both the account
+ * page's "next check" line and the admin sync strip's next-run decoration are
+ * renders of a schedule that must not throw and take a page down, and having
+ * each own its try/catch meant one of the two copies had no test.
+ */
+export function nextRunAt(jobType: string, now: Date): Date | null {
+  const cron = cronFor(jobType);
+  if (cron === null) return null;
+  try {
+    return nextOccurrence(cron, now);
+  } catch {
+    return null;
+  }
 }

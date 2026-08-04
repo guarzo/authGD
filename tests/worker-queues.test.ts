@@ -2,7 +2,7 @@ import { sql } from "drizzle-orm";
 import PgBoss from "pg-boss";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDb } from "@/db";
-import { QUEUES, createQueues, scheduleJobs } from "@/worker/queues";
+import { QUEUES, createQueues, globalSingletonKey, scheduleJobs } from "@/worker/queues";
 import { TEST_URL } from "./helpers/db";
 
 let boss: PgBoss;
@@ -44,12 +44,18 @@ describe("worker queues", () => {
     expect(byName.get(QUEUES.discordRoles)?.cron).toBe("15 * * * *");
     expect(byName.get(QUEUES.tokenHealth)?.cron).toBe("0 3 * * *");
     expect(byName.get(QUEUES.purge)?.cron).toBe("30 3 * * *");
-    // scheduled ticks coalesce with dispatcher-emitted global sends
-    expect(byName.get(QUEUES.contacts)?.options).toMatchObject({
-      singletonKey: "contacts:all",
-    });
-    expect(byName.get(QUEUES.wanderer)?.options).toMatchObject({
-      singletonKey: "wanderer:all",
+    // Scheduled ticks coalesce with dispatcher-emitted global sends only if
+    // both name the same key. This asserts the registered schedule against
+    // `globalSingletonKey` for EVERY queue rather than spot-checking two:
+    // that function is the one definition the dispatcher also calls, so a
+    // rename there now has to survive both sides or this fails. It used to be
+    // four hand-copied literals across two files with nothing cross-checking
+    // them, and discord-roles is the one that does not follow the pattern.
+    for (const [name, s] of byName) {
+      expect(s.options, name).toMatchObject({ singletonKey: globalSingletonKey(name) });
+    }
+    expect(byName.get(QUEUES.discordRoles)?.options).toMatchObject({
+      singletonKey: "roles:all",
     });
   });
 
