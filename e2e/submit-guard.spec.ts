@@ -68,17 +68,58 @@ test("the pressed button keeps focus while its form is in flight", async ({
   await page.getByLabel("Date").fill("2026-08-01");
   await page.getByLabel("Corp share %").fill("0");
 
+  // Recorded rather than sampled. Reading `document.activeElement` once after
+  // the press races the client navigation: land after it and focus is already
+  // on the operation page's h1, which passes whether or not the button was
+  // blurred on the way there. These two listeners are installed before the
+  // press and survive it, because a server-action redirect is a client
+  // navigation in the same document.
+  await page.evaluate(() => {
+    const w = window as unknown as { busy: boolean; lost: boolean };
+    w.busy = false;
+    w.lost = false;
+    // Proves the form actually reached its pending state, so a submit that
+    // never fired can't pass this test vacuously.
+    new MutationObserver((records) => {
+      for (const r of records) {
+        if ((r.target as Element).getAttribute("aria-busy") === "true") w.busy = true;
+      }
+    }).observe(document, {
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["aria-busy"],
+    });
+    // The regression itself, and only it. Focus reaching `<body>` is not on its
+    // own a defect: the navigation unmounts this whole form, and there is an
+    // unavoidable moment between React removing the button and `FocusHeading`
+    // taking the operation page's h1. What must never happen is focus leaving a
+    // control that is *still there* — that is what `disabled` does, and it
+    // strands the member on a nameless body for the whole round trip, on a page
+    // that has not navigated yet. So the blurred element is checked for still
+    // being in the document.
+    document.addEventListener(
+      "focusout",
+      (e) => {
+        const from = e.target as Element;
+        queueMicrotask(() => {
+          if (document.activeElement === document.body && from.isConnected) {
+            w.lost = true;
+          }
+        });
+      },
+      true,
+    );
+  });
+
   const create = page.getByRole("button", { name: "Create operation" });
   await create.focus();
   await create.press("Enter");
-
-  // Whichever side of the navigation this lands on, focus must never have been
-  // dumped on <body>: before it, the button is busy and still focused; after
-  // it, `FocusHeading` on the operation page has taken focus to the h1.
-  const focused = await page.evaluate(() => {
-    const el = document.activeElement;
-    return el ? `${el.tagName}:${el.getAttribute("aria-busy") ?? ""}` : "none";
-  });
-  expect(focused).not.toBe("BODY:");
   await expect(page).toHaveURL(/\/payouts\/[0-9a-f-]+$/);
+
+  const { busy, lost } = await page.evaluate(() => {
+    const w = window as unknown as { busy: boolean; lost: boolean };
+    return { busy: w.busy, lost: w.lost };
+  });
+  expect(busy).toBe(true);
+  expect(lost).toBe(false);
 });
