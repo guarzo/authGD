@@ -185,7 +185,10 @@ Separately: the table has no `<caption>`, no `aria-label` and no
 
 ## Testing
 
-**Unit** — `src/app/admin/audit/summarize.test.ts`, new:
+**Unit** — `tests/audit-summarize.test.ts`, new. Vitest collects
+`tests/**/*.test.ts` only (`vitest.config.ts:6`), so unit tests are not
+colocated; this sits alongside the existing `audit-filter`, `audit-query` and
+`audit-resolve` suites:
 
 - one case per declared action, asserting the rendered line
 - `status.changed` with and without `from` (the regression this exists to hold)
