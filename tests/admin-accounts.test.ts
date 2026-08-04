@@ -2,6 +2,7 @@ import { desc, eq } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { account, auditLog, outbox } from "@/db/schema";
 import {
+  approveAccount,
   returnTierToAuto,
   setAccountStatus,
   setStatusNote,
@@ -137,5 +138,74 @@ describe("setAccountStatus / setStatusNote", () => {
     await ctx.db.transaction((tx) => setStatusNote(tx, admin.id, target.id, "   "));
     expect((await getAcc(target.id)).statusNote).toBeNull();
     expect(await outboxRows()).toHaveLength(0);
+  });
+});
+
+describe("approveAccount", () => {
+  it("approves to green WITHOUT locking, so the member can still auto-promote", async () => {
+    const admin = await seedAccount(ctx.db, { isAdmin: true });
+    const target = await seedAccount(ctx.db, { tier: "pending" });
+
+    const res = await ctx.db.transaction((tx) =>
+      approveAccount(tx, admin.id, target.id, "green"),
+    );
+
+    expect(res).toEqual({ ok: true });
+    const [after] = await ctx.db.select().from(account).where(eq(account.id, target.id));
+    expect(after.tier).toBe("green");
+    expect(after.tierLocked).toBe(false);
+    expect(after.tierChangedBy).toBe(admin.id);
+  });
+
+  it("approves to blue WITH a lock, since an unlocked blue converges to green", async () => {
+    const admin = await seedAccount(ctx.db, { isAdmin: true });
+    const target = await seedAccount(ctx.db, { tier: "pending" });
+
+    await ctx.db.transaction((tx) => approveAccount(tx, admin.id, target.id, "blue"));
+
+    const [after] = await ctx.db.select().from(account).where(eq(account.id, target.id));
+    expect(after.tier).toBe("blue");
+    expect(after.tierLocked).toBe(true);
+  });
+
+  it("refuses an account that is not pending", async () => {
+    const admin = await seedAccount(ctx.db, { isAdmin: true });
+    const target = await seedAccount(ctx.db, { tier: "flygd" });
+
+    const res = await ctx.db.transaction((tx) =>
+      approveAccount(tx, admin.id, target.id, "green"),
+    );
+
+    expect(res).toEqual({ ok: false, error: "not_pending" });
+    const [after] = await ctx.db.select().from(account).where(eq(account.id, target.id));
+    expect(after.tier).toBe("flygd");
+  });
+
+  it("refuses a non-admin actor", async () => {
+    const nobody = await seedAccount(ctx.db, {});
+    const target = await seedAccount(ctx.db, { tier: "pending" });
+
+    const res = await ctx.db.transaction((tx) =>
+      approveAccount(tx, nobody.id, target.id, "green"),
+    );
+
+    expect(res).toEqual({ ok: false, error: "not_authorized" });
+  });
+
+  it("audits the approval and enqueues a sync", async () => {
+    const admin = await seedAccount(ctx.db, { isAdmin: true });
+    const target = await seedAccount(ctx.db, { tier: "pending" });
+
+    await ctx.db.transaction((tx) => approveAccount(tx, admin.id, target.id, "green"));
+
+    const rows = await ctx.db
+      .select()
+      .from(auditLog)
+      .where(eq(auditLog.action, "tier.approved"));
+    expect(rows).toHaveLength(1);
+    expect(rows[0].actor).toBe(admin.id);
+    expect(rows[0].target).toBe(target.id);
+    expect(rows[0].details).toEqual({ to: "green", locked: false });
+    expect(await ctx.db.select().from(outbox)).toHaveLength(1);
   });
 });
