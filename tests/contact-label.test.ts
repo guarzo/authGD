@@ -12,9 +12,9 @@ describe("matchContactLabel", () => {
   });
 
   it("prefers an exact match over a fold-equal sibling", () => {
-    expect(
-      matchContactLabel([label(1, "AUTHGD"), label(2, "AuthGD")], "AuthGD"),
-    ).toEqual({ kind: "exact", labelId: 2 });
+    expect(matchContactLabel([label(1, "AUTHGD"), label(2, "AuthGD")], "AuthGD")).toEqual(
+      { kind: "exact", labelId: 2 },
+    );
   });
 
   it("reports a case-only difference as a near miss", () => {
@@ -43,9 +43,9 @@ describe("matchContactLabel", () => {
   });
 
   it("returns every fold-equal candidate, sorted, rather than picking one", () => {
-    expect(
-      matchContactLabel([label(1, "authgd"), label(2, "AUTHGD")], "AuthGD"),
-    ).toEqual({ kind: "near_miss", candidates: ["AUTHGD", "authgd"] });
+    expect(matchContactLabel([label(1, "authgd"), label(2, "AUTHGD")], "AuthGD")).toEqual(
+      { kind: "near_miss", candidates: ["AUTHGD", "authgd"] },
+    );
   });
 
   it("tolerates whitespace in the configured value", () => {

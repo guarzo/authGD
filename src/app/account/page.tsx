@@ -95,8 +95,8 @@ function ContactState({
           ) : (
             <>
               A label differing only in capitalization or spacing exists. It must be
-              exactly <code className="literal">{`"${label}"`}</code> — rename it in
-              game, then re-sync.
+              exactly <code className="literal">{`"${label}"`}</code> — rename it in game,
+              then re-sync.
             </>
           )}
         </span>
