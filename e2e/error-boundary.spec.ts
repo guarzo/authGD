@@ -28,15 +28,23 @@ test.beforeEach(() => resetDb(db));
  * quietly turn these tests into assertions about a 404 page.
  */
 
-/** `/payouts` reads loot_pool in its body, after `requirePayoutReader`, and
- *  exports a static `metadata: { title: "Payouts" }` that resolves either way.
- *  `resetDb` truncates the table, so the rename is always undone. */
+/** `/payouts` reads payout_operation in its body, after `requirePayoutReader`
+ *  (which reads neither payouts table), and exports a static
+ *  `metadata: { title: "Payouts" }` that resolves either way. `resetDb`
+ *  truncates the table, so the rename is always undone.
+ *
+ *  payout_operation rather than loot_pool: `listPayoutOperations` skips its
+ *  loot_pool and payout_participant child queries when the first page comes
+ *  back empty (`payout-view.ts:125`), and these tests seed no operations — so
+ *  renaming loot_pool stopped making the page throw at all. The operations
+ *  query itself has no such short-circuit, which is the property this helper
+ *  needs. */
 async function breakPayoutsList<T>(run: () => Promise<T>): Promise<T> {
-  await db.execute(sql`ALTER TABLE loot_pool RENAME TO loot_pool_probe`);
+  await db.execute(sql`ALTER TABLE payout_operation RENAME TO payout_operation_probe`);
   try {
     return await run();
   } finally {
-    await db.execute(sql`ALTER TABLE loot_pool_probe RENAME TO loot_pool`);
+    await db.execute(sql`ALTER TABLE payout_operation_probe RENAME TO payout_operation`);
   }
 }
 
