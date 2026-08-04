@@ -96,7 +96,7 @@ export async function wakeSelf(
     actor: accountId,
     action: "status.changed",
     target: accountId,
-    details: { to: "active", self: true },
+    details: { from: acc.status, to: "active", self: true },
   });
   await enqueueSync(dbx, { kind: "account", accountId });
   return { ok: true };
@@ -156,7 +156,7 @@ async function applyNoMainRule(dbx: DbTx, accountId: string, cause: string) {
       actor: "system",
       action: "tier.changed",
       target: accountId,
-      details: { to: "green", cause },
+      details: { from: acc.tier, to: "green", cause },
     });
   }
   await enqueueSync(dbx, { kind: "account", accountId });

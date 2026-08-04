@@ -73,6 +73,19 @@ describe("setTierManual", () => {
     );
     expect(r).toEqual({ ok: false, error: "not_authorized" });
   });
+
+  it("records the tier it moved from, so the transition reads both ways", async () => {
+    const admin = await seedAdmin();
+    const target = await seedAccount(ctx.db, { tier: "flygd" });
+    await ctx.db.transaction((tx) => setTierManual(tx, admin.id, target.id, "blue"));
+    const audit = await lastAudit();
+    expect(audit.details).toMatchObject({
+      from: "flygd",
+      to: "blue",
+      locked: true,
+      cause: "manual",
+    });
+  });
 });
 
 describe("setAccountStatus not_found", () => {
@@ -137,5 +150,13 @@ describe("setAccountStatus / setStatusNote", () => {
     await ctx.db.transaction((tx) => setStatusNote(tx, admin.id, target.id, "   "));
     expect((await getAcc(target.id)).statusNote).toBeNull();
     expect(await outboxRows()).toHaveLength(0);
+  });
+
+  it("records the status it moved from", async () => {
+    const admin = await seedAdmin();
+    const target = await seedAccount(ctx.db);
+    await ctx.db.transaction((tx) => setAccountStatus(tx, admin.id, target.id, "cryo"));
+    const audit = await lastAudit();
+    expect(audit.details).toMatchObject({ from: "active", to: "cryo" });
   });
 });

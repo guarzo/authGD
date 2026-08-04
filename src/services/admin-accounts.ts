@@ -46,7 +46,7 @@ export async function setTierManual(
     actor,
     action: "tier.changed",
     target: accountId,
-    details: { to: tier, locked: true, cause: "manual" },
+    details: { from: acc.tier, to: tier, locked: true, cause: "manual" },
   });
   await enqueueSync(dbx, { kind: "account", accountId });
   return { ok: true };
@@ -89,7 +89,7 @@ export async function setAccountStatus(
     actor,
     action: "status.changed",
     target: accountId,
-    details: { to: status },
+    details: { from: acc.status, to: status },
   });
   await enqueueSync(dbx, { kind: "account", accountId });
   return { ok: true };

@@ -327,6 +327,14 @@ describe("wakeSelf", () => {
     const r = await wake("00000000-0000-0000-0000-000000000000");
     expect(r).toEqual({ ok: false, error: "not_found" });
   });
+
+  it("records the status wakeSelf moved from", async () => {
+    const acc = await seedAccount(ctx.db, { status: "cryo" });
+    await wake(acc.id);
+    const audits = await ctx.db.select().from(auditLog);
+    const row = audits.find((a) => a.action === "status.changed");
+    expect(row?.details).toMatchObject({ from: "cryo", to: "active", self: true });
+  });
 });
 
 describe("bootstrap admin", () => {
