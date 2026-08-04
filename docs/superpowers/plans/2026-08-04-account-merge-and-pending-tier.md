@@ -26,7 +26,7 @@
 No behaviour changes. This task only widens types and the enum so later tasks compile. `tier` unions are hand-copied into seven files; a missed one is a typecheck failure, which is the gate.
 
 **Files:**
-- Modify: `src/db/schema.ts:19`, `src/core/tier.ts:1`, `src/core/role-diff.ts:5`, `src/services/account-view.ts:99,212,230,236`, `src/services/admin-accounts.ts:35`, `src/app/admin/accounts/actions.ts:30`, `src/app/_components/ui.tsx:204`, `tests/helpers/seed.ts:10`, `e2e/helpers.ts:26`
+- Modify: `src/db/schema.ts:19`, `src/core/tier.ts:1`, `src/core/role-diff.ts:5`, `src/services/account-view.ts:99,212,230,236`, `src/app/_components/ui.tsx:204`, `tests/helpers/seed.ts:10`, `e2e/helpers.ts:26`
 - Create: `drizzle/<generated>.sql`
 
 **Interfaces:**
@@ -69,7 +69,7 @@ export type Tier = "pending" | "flygd" | "blue" | "green";
 const TIER_RANK = { pending: 0, flygd: 1, blue: 2, green: 3 } as const;
 ```
 
-`src/services/admin-accounts.ts:35`, `src/app/admin/accounts/actions.ts:30` — widen the `tier` parameter unions.
+`src/services/admin-accounts.ts:35` and `src/app/admin/accounts/actions.ts:30` — **leave these alone.** They are `setTierManual` and `setTierAction`, whose union is the set of tiers an admin may manually *assign*. Pending is not one: `setTierManual` locks whatever it sets, so widening it would let an admin push an established account back to pending and freeze it there — `decideTier` never moves a locked account, and the approval queue would then be the only way out of a state the member never chose. Pending is a state accounts are *born* in, not one they can be sent to. The only writer is `createAccountWithCharacter` (Task 11).
 
 `src/app/_components/ui.tsx:204`:
 
@@ -489,7 +489,7 @@ because an unlocked blue converges back to green on the next membership run."
 The accounts table defaults to name sort (`page.tsx:89`), so `TIER_RANK` alone leaves pending accounts scattered alphabetically. The queue gets its own entry point instead of hijacking everyone's default sort.
 
 **Files:**
-- Modify: `src/app/admin/accounts/page.tsx`, `src/app/admin/accounts/actions.ts`, `src/app/globals.css`
+- Modify: `src/app/admin/accounts/page.tsx`, `src/app/admin/accounts/actions.ts`, `src/services/account-view.ts` (`AdminListFilters["tier"]`), `src/app/globals.css`
 - Test: `tests/account-view.test.ts`, `tests/admin-accounts.test.ts`
 
 **Interfaces:**
@@ -538,24 +538,38 @@ export async function approveAction(
   accountId: string,
   tier: "green" | "blue",
 ): Promise<void> {
-  const actor = await requireAdminAction();
-  const res = await getDb().transaction((tx) =>
+  const { accountId: actor } = await requireAdminAction();
+  const result = await getDb().transaction((tx) =>
     approveAccount(tx, actor, accountId, tier),
   );
-  if (!res.ok) redirect(`/admin/accounts?error=${res.error}`);
+  if (!result.ok && result.error === "not_authorized") redirectNotAdmin();
+  // not_pending is a race, not a bug: two admins working the queue, or one
+  // with a stale tab. Send them back to the queue with a notice rather than
+  // the error boundary — the account is approved, just not by them.
+  if (!result.ok && result.error === "not_pending") {
+    redirect("/admin/accounts?tier=pending&error=not_pending");
+  }
+  if (!result.ok) throw new Error(result.error);
   revalidatePath("/admin/accounts");
 }
 ```
 
-Match the surrounding functions exactly — read `setTierAction` at `actions.ts:28` and mirror its guard call and redirect style rather than inventing one.
+`requireAdminAction()` returns an `AdminContext` object, not a string — destructure `{ accountId: actor }` exactly as every other action in this file does (`actions.ts:32`). `not_found` stays a `throw`: the file's header comment records that it has no reachable path today, so if it ever fires it should land on the error boundary rather than become copy.
 
 - [ ] **Step 4: Wire the page**
 
-In `src/app/admin/accounts/page.tsx`:
+In `src/app/admin/accounts/page.tsx`, **do not add pending to `TIERS`.** That array feeds two different things: the filter chips at line 145 *and* the "Set tier" buttons in the row drawer at line 478, which post to `setTierAction`. One entry would silently mint a "Pending" manual-set button that locks an established account into the queue. Split the two uses:
 
 ```ts
-const TIERS = ["pending", "flygd", "blue", "green"] as const;
+// What an admin may manually assign. Pending is deliberately absent: it is a
+// state accounts are born in, and setTierManual locks whatever it sets.
+const TIERS = ["flygd", "blue", "green"] as const;
+// What an admin may filter by — a superset, since pending accounts exist and
+// have to be findable. Drives the ?tier= whitelist and the filter chips only.
+const TIER_FILTERS = ["pending", ...TIERS] as const;
 ```
+
+Point the query whitelist at line 93 and the chips at line 145 at `TIER_FILTERS`; leave the drawer's buttons at line 478 on `TIERS`. Widen `AdminListFilters["tier"]` to accept `(typeof TIER_FILTERS)[number]`.
 
 Add to the `ERRORS` map:
 
@@ -575,9 +589,17 @@ Above the table, render a queue link shown only when there is something to do:
 )}
 ```
 
-Derive `pendingCount` from the rows the page already fetches when no tier filter is applied; when a filter *is* applied, count with a separate `getAdminAccountsList(db, cfg, { tier: "pending" })` call so the banner does not vanish while you are inside a different filter.
+Compute `pendingCount` with its own query, **never** by counting the rows the page already fetched:
 
-For a row whose `tier` is `pending`, render two `Submit` buttons bound to `approveAction` — "Approve as Green" and "Approve as Blue" — in place of the tier `<select>`. Leave every non-pending row exactly as it is today.
+```ts
+// Independent of every active filter. `rows` is narrowed by tier AND status
+// (page.tsx:93-97), so counting it would hide the queue from an admin who is
+// looking at ?status=cryo — precisely when a standing reminder is most useful.
+const pendingCount = (await getAdminAccountsList(getDb(), cfg, { tier: "pending" }))
+  .length;
+```
+
+For a row whose `tier` is `pending`, render two `Submit` buttons bound to `approveAction` — "Approve as Green" and "Approve as Blue" — in the drawer's "Set tier" group in place of the `TIERS` buttons. Leave every non-pending row exactly as it is today.
 
 - [ ] **Step 5: Style the badge**
 
@@ -615,57 +637,81 @@ reordering every admin's table."
 ### Task 7: The member sees that approval is pending
 
 **Files:**
-- Modify: `src/app/account/page.tsx`
+- Create: `src/app/account/standing.tsx`
+- Modify: `src/app/account/page.tsx:238-264`
 - Test: `tests/account-page.test.ts`
 
 **Interfaces:**
-- Consumes: `tier` on the account view (Task 1).
-- Produces: no exported signature change.
+- Consumes: `Tier` type (Task 1), the `Tier` and `Status` components from `@/app/_components/ui`.
+- Produces: `export function StandingTier({ tier }: { tier: Tier }): JSX.Element` from `@/app/account/standing`.
 
 - [ ] **Step 1: Write the failing test**
 
-Add to `tests/account-page.test.ts`, following the file's existing render idiom:
+`tests/account-page.test.ts` has no database and no page renderer — it renders exported leaf components with `renderToStaticMarkup` (see the `ContactRemedy` suite at the top of the file). Follow that idiom rather than inventing a page-level helper:
 
 ```ts
-it("tells a pending member their access is awaiting approval", async () => {
-  const acc = await seedAccount(ctx.db, { tier: "pending" });
-  await seedCharacter(ctx.db, cfg, { id: 90000201, accountId: acc.id, main: true });
+describe("StandingTier", () => {
+  const render = (tier: Tier) =>
+    renderToStaticMarkup(createElement(StandingTier, { tier }));
 
-  const html = await renderAccountPage(acc.id);
+  it("tells a pending member their access is awaiting approval", () => {
+    const html = render("pending");
+    expect(html).toContain("awaiting approval");
+    // No tier badge: pending is the absence of a granted tier, and a badge
+    // would imply the member holds one.
+    expect(html).not.toContain("tier--");
+  });
 
-  expect(html).toContain("awaiting approval");
-  // Not a tier badge: pending is the absence of a granted tier, and showing a
-  // badge would imply they hold one.
-  expect(html).not.toContain("tier--lead");
+  it("still renders a badge for a granted tier", () => {
+    expect(render("green")).toContain("tier--green");
+  });
 });
 ```
 
-Use whatever render helper the file already defines rather than adding one.
+Add `import { StandingTier } from "@/app/account/standing";` and the `Tier` type import at the top of the file.
 
 - [ ] **Step 2: Run to verify failure**
 
 Run: `npx vitest run tests/account-page.test.ts -t "awaiting approval"`
 
-Expected: FAIL.
+Expected: FAIL — `@/app/account/standing` does not resolve.
 
 - [ ] **Step 3: Implement**
 
-In `src/app/account/page.tsx`, where the tier badge renders, branch on pending:
+Create `src/app/account/standing.tsx`:
 
 ```tsx
-{acc.tier === "pending" ? (
-  <Notice>
-    Your access is awaiting approval from an admin. Nothing is wrong — someone
-    on the team will review your account.
-  </Notice>
-) : (
-  <Tier tier={acc.tier} />
-)}
+import { Status, Tier } from "@/app/_components/ui";
+import type { Tier as TierValue } from "@/core/tier";
+
+/**
+ * The Standing row's tier value. Extracted from page.tsx as its own module so
+ * it can be rendered in a unit test without a database, matching
+ * account/contact-state.tsx.
+ *
+ * Pending gets cryo's treatment — a neutral token plus a dim sentence — rather
+ * than a Notice: this renders inside the `.facts` grid's dd, where a block-level
+ * callout would break the two-column tracks, and DESIGN.md reserves warning
+ * colour for the admin table. Nothing here reads as a fault (PRODUCT.md); the
+ * member has done nothing wrong and is waiting on someone else.
+ */
+export function StandingTier({ tier }: { tier: TierValue }) {
+  if (tier === "pending") {
+    return (
+      <>
+        <Status>pending</Status>
+        <span className="dim">
+          Your access is awaiting approval from an admin. Nothing is wrong —
+          someone on the team will review your account.
+        </span>
+      </>
+    );
+  }
+  return <Tier tier={tier} size="lead" />;
+}
 ```
 
-Use the page's existing `Notice` and `Tier` imports and its own variable name
-for the account row. No error styling and no red: nothing here reads as
-punishment (PRODUCT.md), and a pending account has done nothing wrong.
+In `src/app/account/page.tsx:240`, replace `<Tier tier={view.tier} size="lead" />` with `<StandingTier tier={view.tier} />`. Leave the cryo block and its grid comment below it untouched — the two compose in the same dd. Drop the now-unused `Tier` import if nothing else on the page uses it.
 
 - [ ] **Step 4: Run to verify pass**
 
@@ -841,6 +887,43 @@ describe("linkCharacter refusing a real account", () => {
       await ctx.db.insert(discordLink).values({ accountId: id, discordUserId: "d-1" });
     }));
 
+  // One case per payout table. All three are set-null FKs, so the database
+  // would happily delete the account and silently detach the history.
+  const seedOperation = async (createdBy: string | null) => {
+    const [op] = await ctx.db
+      .insert(payoutOperation)
+      .values({ name: "Op", occurredAt: new Date(), createdBy })
+      .returning();
+    return op;
+  };
+
+  it("refuses an account that created a payout operation", () =>
+    refuses(async (id) => {
+      await seedOperation(id);
+    }));
+
+  it("refuses an account that is a payout participant", () =>
+    refuses(async (id) => {
+      const op = await seedOperation(null);
+      await ctx.db
+        .insert(payoutParticipant)
+        .values({ operationId: op.id, accountId: id, displayName: "Someone" });
+    }));
+
+  it("refuses an account that recorded a payment", () =>
+    refuses(async (id) => {
+      const op = await seedOperation(null);
+      const [p] = await ctx.db
+        .insert(payoutParticipant)
+        .values({ operationId: op.id, displayName: "Someone" })
+        .returning();
+      // The account is neither the operation's creator nor its participant —
+      // only its actor. This is the case the first two checks miss.
+      await ctx.db
+        .insert(payoutPayment)
+        .values({ participantId: p.id, kind: "paid", amount: "1000", actor: id });
+    }));
+
   it("refuses an account holding a second character", () =>
     refuses(async (id) => {
       await seedCharacter(ctx.db, cfg, { id: 90000403, accountId: id });
@@ -856,18 +939,26 @@ Expected: FAIL — every absorb test returns `{ ok: false, error: "already_linke
 
 - [ ] **Step 3: Implement the predicate**
 
-Add to `src/services/accounts.ts`, above `linkCharacter`. Import `discordLink`, `payoutOperation`, `payoutParticipant`, `session` from `@/db/schema`.
+Add to `src/services/accounts.ts`, above `linkCharacter`. Import `discordLink`, `payoutOperation`, `payoutParticipant`, `payoutPayment`, `session` from `@/db/schema`.
 
 ```ts
 /**
  * Is this account nothing but the character being moved?
  *
  * An account created by an accidental SSO login holds exactly one character
- * and no other trace: no admin bit, no Discord link, no payout history, no
- * admin-set tier, and no status or note an admin curated. Cryo and a status
- * note are each reachable on their own (setAccountStatus / setStatusNote), so
- * both are checked — an established account must never be dissolved, and its
- * note destroyed, by someone clicking "link character".
+ * and no other trace: no admin bit, no Discord link, no payout history of any
+ * kind, no admin-set tier, and no status or note an admin curated. Cryo and a
+ * status note are each reachable on their own (setAccountStatus /
+ * setStatusNote), so both are checked — an established account must never be
+ * dissolved, and its note destroyed, by someone clicking "link character".
+ *
+ * "Payout history" means all three tables, not just the two that name the
+ * account as a subject. payout_payment.actor is a set-null FK (schema.ts:320),
+ * so deleting an account that recorded a payment silently detaches financial
+ * attribution. Note this is reachable WITHOUT the account being flygd now:
+ * recordPayment requires active flygd (payouts.ts:445), but a derole to green
+ * is automatic and unlocked, and nothing below inspects tier. A one-character
+ * ex-operator with no Discord link would otherwise pass every other check.
  *
  * Callers must already hold the source account row FOR UPDATE.
  */
@@ -898,6 +989,11 @@ async function isAbsorbable(
     .from(payoutOperation)
     .where(eq(payoutOperation.createdBy, acc.id));
   if (operation) return false;
+  const [payment] = await dbx
+    .select()
+    .from(payoutPayment)
+    .where(eq(payoutPayment.actor, acc.id));
+  if (payment) return false;
   return true;
 }
 
@@ -1060,6 +1156,21 @@ test("an admin reaches the queue from the count link and approves", async ({ pag
   await page.getByRole("button", { name: "Approve as Green" }).click();
 
   await expect(page.getByRole("link", { name: /awaiting approval/i })).toHaveCount(0);
+});
+
+test("pending is never offered as a manual tier an admin can assign", async ({ page, context }) => {
+  const { account: admin } = await seedMember(db, { name: "Admin Two", isAdmin: true, tier: "flygd" });
+  const { account: member } = await seedMember(db, { name: "Settled Pilot", tier: "green" });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+
+  await page.goto("/admin/accounts");
+  await page.getByRole("button", { name: /Settled Pilot/ }).click();
+
+  // The TIERS / TIER_FILTERS split is not type-enforced — both are plain
+  // arrays — so this is the only thing standing between a one-word edit and an
+  // admin locking an established account into the approval queue forever.
+  await expect(page.getByRole("button", { name: "pending", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "green", exact: true })).toBeVisible();
 });
 ```
 
