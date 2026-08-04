@@ -364,7 +364,7 @@ current FlyGD member (`src/core/contacts-diff.ts`). Point it at a label created
 for authGD; never at one people also curate by hand, or their contacts are
 deleted on the first run.
 
-Three properties worth knowing before changing it:
+Four properties worth knowing before changing it:
 
 - **ESI cannot create labels.** Create it in the client first. Until it exists
   the job records `missing_label` and skips every write — safe, but inert.
