@@ -114,6 +114,43 @@ export async function createOperation(
   return { id: op.id };
 }
 
+/**
+ * The corp share was previously set once at creation and never again: an
+ * operator who left the field at its default committed every participant to a
+ * 0% corp share, with no way back short of deleting the operation and rebuilding
+ * it. This is the correction path.
+ *
+ * Same gate as every other edit — `assertEditable`, holding the row lock — and
+ * it recalculates, because the percentage is an input to `computeSplit` and
+ * changing it changes every participant's amount. Audited as a distinct action
+ * rather than folded into `payout.created`, since "the split moved after the
+ * roster saw it" is exactly the kind of thing the log exists to answer.
+ */
+export async function setCorpSharePct(
+  dbtx: DbTx,
+  actor: string,
+  operationId: string,
+  corpSharePct: string,
+): Promise<void> {
+  await requirePayoutOperator(dbtx, actor);
+  await lockOperation(dbtx, operationId);
+  await assertEditable(dbtx, operationId);
+  await dbtx
+    .update(payoutOperation)
+    .set({ corpSharePct })
+    .where(eq(payoutOperation.id, operationId));
+  await logAudit(dbtx, {
+    actor,
+    action: "payout.corp_share_changed",
+    // The operation uuid, never a sub-object id: audit.ts resolves every
+    // `payout.*` target against payoutOperation, so anything else renders
+    // as unresolved. Sub-object identity goes in `details`.
+    target: operationId,
+    details: { corpSharePct },
+  });
+  await recalculate(dbtx, operationId);
+}
+
 export type RosterEntry = {
   displayName: string;
   accountId: string | null;

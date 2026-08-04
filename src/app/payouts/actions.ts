@@ -14,6 +14,7 @@ import {
   removeParticipant,
   requirePayoutOperator,
   resolveRosterNames,
+  setCorpSharePct,
   setParticipantExcluded,
   setParticipantShares,
   setRoster,
@@ -52,12 +53,49 @@ function revalidateOperation(operationId: string): void {
   revalidatePath("/payouts");
 }
 
+/** Every input rejection below is an operator typo, not a fault on our end.
+ *  Throwing would land on error.tsx, which renders `error.digest` and never
+ *  `error.message` — so the operator gets "Something broke… that's a fault on
+ *  this end, not something you did" with no idea which field, and loses the
+ *  form. `requireAdminAction` went through exactly this conversion already
+ *  (see e2e/admin.spec.ts's docblock); these are the sites that never did.
+ *
+ *  Both helpers return `never` because `redirect` throws NEXT_REDIRECT, which
+ *  is also why no call to either may sit inside a `try` — an enclosing catch
+ *  swallows the redirect and the operator lands back on error.tsx anyway. */
+function operationFailed(operationId: string, code: string): never {
+  redirect(`/payouts/${operationId}?error=${code}`);
+}
+
+/** The create form has nowhere to fall back to — a rejected operation does not
+ *  exist yet, so /payouts/new is both the origin and the destination. Echo the
+ *  submitted values back so the operator corrects one field instead of retyping
+ *  five. Values over 500 chars are dropped rather than round-tripped: only
+ *  `notes` can realistically reach that, and a redirect URL is the wrong place
+ *  to discover a header-size limit. */
+const CREATE_FIELDS = [
+  "name",
+  "occurredAt",
+  "battleReportUrl",
+  "corpSharePct",
+  "notes",
+] as const;
+
+function createFailed(formData: FormData, code: string): never {
+  const params = new URLSearchParams({ error: code });
+  for (const key of CREATE_FIELDS) {
+    const value = field(formData, key);
+    if (value && value.length <= 500) params.set(key, value);
+  }
+  redirect(`/payouts/new?${params.toString()}`);
+}
+
 export async function createOperationAction(formData: FormData): Promise<void> {
   const actor = await requireOperatorAccount();
   const name = field(formData, "name").trim();
-  if (!name) throw new Error("name is required");
+  if (!name) createFailed(formData, "name_required");
   const occurredAt = new Date(field(formData, "occurredAt"));
-  if (Number.isNaN(occurredAt.getTime())) throw new Error("invalid date");
+  if (Number.isNaN(occurredAt.getTime())) createFailed(formData, "date_invalid");
   const battleReportUrlRaw = field(formData, "battleReportUrl").trim() || null;
   // Rendered as a plain `<a href>` on the detail page — reject anything but
   // http(s) here so a `javascript:` or other scheme can never reach that link.
@@ -66,10 +104,10 @@ export async function createOperationAction(formData: FormData): Promise<void> {
     try {
       scheme = new URL(battleReportUrlRaw).protocol;
     } catch {
-      throw new Error("battle report URL is not a valid URL");
+      createFailed(formData, "url_invalid");
     }
     if (scheme !== "http:" && scheme !== "https:") {
-      throw new Error("battle report URL must be http or https");
+      createFailed(formData, "url_scheme");
     }
   }
   const battleReportUrl = battleReportUrlRaw;
@@ -79,10 +117,10 @@ export async function createOperationAction(formData: FormData): Promise<void> {
   // the raw string reaches the numeric(5,2) column, same precedent addFlatPool
   // sets for its totalValue field.
   if (!/^\d+(\.\d{1,2})?$/.test(corpSharePct)) {
-    throw new Error("corp share must be a plain number like 10 or 10.5");
+    createFailed(formData, "share_format");
   }
   if (Number(corpSharePct) > 100) {
-    throw new Error("corp share cannot exceed 100%");
+    createFailed(formData, "share_range");
   }
   const notes = field(formData, "notes").trim() || null;
 
@@ -107,23 +145,31 @@ export async function addAppraisedPoolAction(
   const rawPaste = field(formData, "rawPaste");
   const pricingModeRaw = field(formData, "pricingMode");
   if (!PRICING_MODES.includes(pricingModeRaw as PricingMode)) {
-    throw new Error("invalid pricing mode");
+    operationFailed(operationId, "pricing_mode");
   }
   const pricingMode = pricingModeRaw as PricingMode;
-  const stationRaw = field(formData, "stationId").trim();
-  const regionRaw = field(formData, "regionId").trim();
+  // The form posts a location *kind* plus a single id, so "exactly one of
+  // station or region" — loot_pool_appraised_fields_ck, and triff's own rule —
+  // is structurally true rather than checked after the fact. That matters more
+  // here than anywhere else on the page: a redirect cannot carry the loot paste
+  // back, so the only acceptable place to catch a mis-filled location is before
+  // the form submits at all.
+  const locationKind = field(formData, "locationKind");
+  const locationRaw = field(formData, "locationId").trim();
+  if (locationKind !== "station" && locationKind !== "region") {
+    operationFailed(operationId, "location_kind");
+  }
   // A non-numeric id must reject here, not travel to triff as a query param
   // or reach the lootPool insert's bigint column as NaN.
-  if (stationRaw && !/^\d+$/.test(stationRaw)) throw new Error("invalid station id");
-  if (regionRaw && !/^\d+$/.test(regionRaw)) throw new Error("invalid region id");
-  const stationId = stationRaw ? Number(stationRaw) : undefined;
-  const regionId = regionRaw ? Number(regionRaw) : undefined;
-  if ((stationId === undefined) === (regionId === undefined)) {
-    // triff accepts exactly one of station_id/region_id; this mirrors
-    // loot_pool_appraised_fields_ck so the operator sees the same rule the
-    // database would otherwise enforce with a much less useful error.
-    throw new Error("provide exactly one of station or region");
+  if (!/^\d+$/.test(locationRaw)) {
+    operationFailed(
+      operationId,
+      locationKind === "station" ? "station_invalid" : "region_invalid",
+    );
   }
+  const locationId = Number(locationRaw);
+  const stationId = locationKind === "station" ? locationId : undefined;
+  const regionId = locationKind === "region" ? locationId : undefined;
 
   // ARCHITECTURAL EXCEPTION to "enqueue, don't execute" (see the design doc's
   // "An architectural exception, stated plainly"): appraisal is interactive —
@@ -171,14 +217,14 @@ export async function addFlatPoolAction(
   const actor = await requireOperatorAccount();
   const totalValue = field(formData, "totalValue").trim();
   const notes = field(formData, "notes").trim();
-  if (!notes) throw new Error("a flat pool requires a note explaining the number");
+  if (!notes) operationFailed(operationId, "note_required");
   const rawPaste = field(formData, "rawPaste").trim() || null;
   // <input type="number"> accepts scientific notation like "1e5" client-side;
   // iskToCents' regex rejects it, but let this action fail with the same
   // readable message the other numeric fields above use, rather than relying
   // solely on addFlatPool's deeper (also correct) check.
   if (!/^-?\d+(\.\d{1,2})?$/.test(totalValue)) {
-    throw new Error("total must be a plain number like 12345.67");
+    operationFailed(operationId, "total_invalid");
   }
 
   await getDb().transaction((dbtx) =>
@@ -217,15 +263,43 @@ export async function setParticipantSharesAction(
 ): Promise<void> {
   const actor = await requireOperatorAccount();
   const shares = field(formData, "shares").trim();
-  if (!shares) throw new Error("shares is required");
+  if (!shares) operationFailed(operationId, "shares_required");
+  // Format first, positivity second, and in that order deliberately: iskToCents
+  // *throws* on anything its regex rejects (core/payout-split.ts), so calling it
+  // on "abc" would escape to error.tsx past the redirect below — and text in a
+  // numeric field is the likeliest bad input this control gets. Mirrors the
+  // regex-then-parse order addFlatPoolAction already uses for totalValue.
+  if (!/^-?\d+(\.\d{1,2})?$/.test(shares)) {
+    operationFailed(operationId, "shares_invalid");
+  }
   // Mirrors payout_participant_shares_ck (shares > 0) with a readable message
-  // before the raw string reaches the numeric(6,2) column — "abc" or "1e5"
-  // would otherwise die as a raw Postgres invalid-input-syntax error.
+  // before the raw string reaches the numeric(6,2) column.
   if (iskToCents(shares) <= 0n) {
-    throw new Error("shares must be a positive number");
+    operationFailed(operationId, "shares_positive");
   }
   await getDb().transaction((dbtx) =>
     setParticipantShares(dbtx, actor, participantId, shares),
+  );
+  revalidateOperation(operationId);
+}
+
+/** The one operation-level field with an edit path. Same codes as the create
+ *  form's share checks, so both surfaces reject identically; they land on
+ *  different pages, which is why each page carries its own copy. */
+export async function setCorpShareAction(
+  operationId: string,
+  formData: FormData,
+): Promise<void> {
+  const actor = await requireOperatorAccount();
+  const corpSharePct = field(formData, "corpSharePct").trim();
+  if (!/^\d+(\.\d{1,2})?$/.test(corpSharePct)) {
+    operationFailed(operationId, "share_format");
+  }
+  if (Number(corpSharePct) > 100) {
+    operationFailed(operationId, "share_range");
+  }
+  await getDb().transaction((dbtx) =>
+    setCorpSharePct(dbtx, actor, operationId, corpSharePct),
   );
   revalidateOperation(operationId);
 }
