@@ -610,6 +610,13 @@ describe("the service layer is the authorization boundary", () => {
         appraisal: { items: [], totalValue: "0.00" },
       }),
     );
+    // Finalized (not draft) so the recordPayment case below tests the
+    // authorization guard itself rather than the unrelated "operation must be
+    // finalized before paying" PayoutLockedError a draft operation would throw
+    // first if the guard were ever removed -- that error is real, but it is
+    // not this test's signal, and a reader chasing a broken guard here would
+    // be misled by it.
+    await ctx.db.transaction((tx) => finalizeOperation(tx, operator.id, operationId));
 
     for (const actor of [green.id, cryo.id]) {
       await expect(
@@ -643,6 +650,7 @@ describe("the service layer is the authorization boundary", () => {
           addAppraisedPool(tx, actor, operationId, {
             rawPaste: "1x Tritanium",
             pricingMode: "sell_best",
+            stationId: 60003760,
             appraisal: { items: [], totalValue: "0.00" },
           }),
         ),
