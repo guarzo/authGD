@@ -18,7 +18,7 @@ fly secrets set \
   ALLIANCE_ID=... \
   BOOTSTRAP_ADMIN_CHARACTER_IDS=... \
   EVE_SSO_CLIENT_ID=... EVE_SSO_CLIENT_SECRET=... \
-  EVE_SSO_SCOPES="esi-characters.read_contacts.v1 esi-characters.write_contacts.v1" \
+  EVE_SSO_SCOPES="esi-characters.read_contacts.v1 esi-characters.write_contacts.v1 esi-ui.open_window.v1" \
   DISCORD_CLIENT_ID=... DISCORD_CLIENT_SECRET=... DISCORD_BOT_TOKEN=... \
   DISCORD_GUILD_ID=... DISCORD_ROLE_ID_FLYGD=... DISCORD_ROLE_ID_BLUE=... \
   DISCORD_ROLE_ID_GREEN=... DISCORD_OPS_WEBHOOK_URL=... \
@@ -169,7 +169,7 @@ character already on the ACL.
 | `ALLIANCE_ID` | yes | membership anchor: main in this alliance ⇒ FlyGD |
 | `BOOTSTRAP_ADMIN_CHARACTER_IDS` | no | comma-separated; see recovery caveat below |
 | `EVE_SSO_CLIENT_ID` / `EVE_SSO_CLIENT_SECRET` | yes | EVE application credentials |
-| `EVE_SSO_SCOPES` | yes | space-separated full scope set requested at every login |
+| `EVE_SSO_SCOPES` | yes | space-separated full scope set requested at every login. Adding a scope flips every existing character to `needs_reauth` until its holder logs in again — a capability warning, not an outage: `src/jobs/contacts.ts` gates per job on the scopes it actually needs |
 | `DISCORD_CLIENT_ID` / `DISCORD_CLIENT_SECRET` | yes | Discord OAuth (identify only) |
 | `DISCORD_BOT_TOKEN` | yes | bot with Manage Roles above the three managed roles |
 | `DISCORD_GUILD_ID` | yes | the guild whose roles are managed |
@@ -181,6 +181,19 @@ character already on the ACL.
 | `STANDINGS_VALUE` | no (default 5) | standing pushed for members |
 | `ESI_CONTACT` | yes | operator contact sent in the ESI User-Agent (CCP requirement) |
 | `SYNC_MODE` | **yes, no default** | `live` \| `dry-run`. `dry-run` suppresses every outbound mutation (see below). Production MUST be `live` |
+
+### Adding an SSO scope
+
+Every character's granted scopes are compared against `EVE_SSO_SCOPES` in four
+places — `tokenFields` (`src/services/accounts.ts`), the token-health job
+(`src/jobs/token-health.ts`), the member account view and the admin accounts
+view (both `src/services/account-view.ts`). Adding a scope therefore flips
+**every** existing character to `needs_reauth` on the first token-health run
+after deploy, and writes one `token.needs_reauth` audit row per character.
+
+Sync keeps working throughout: each job gates on the scopes it actually needs,
+so a character missing only the new scope still syncs. The warning clears
+per member as they log in again.
 
 ## SYNC_MODE — the dry-run safety guard
 

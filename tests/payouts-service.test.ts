@@ -19,6 +19,7 @@ import {
   canReadPayouts,
   createOperation,
   finalizeOperation,
+  getOpenInfoTarget,
   recalculate,
   recordPayment,
   removeParticipant,
@@ -1140,5 +1141,98 @@ describe("addParticipant", () => {
         addParticipant(tx, operator.id, operationId, "Latecomer"),
       ),
     ).rejects.toThrow(PayoutLockedError);
+  });
+});
+
+/** A finalized operation with one participant who has a real recipient
+ *  character. The roster is inserted directly rather than through `setRoster`
+ *  so the fixture states the recipient outright — the only field under test. */
+async function seedTargetableParticipant(
+  opts: {
+    excluded?: boolean;
+    recipientCharacterId?: number | null;
+    finalize?: boolean;
+  } = {},
+) {
+  const operator = await seedOperator();
+  if (opts.recipientCharacterId) {
+    await seedCharacter(ctx.db, cfg, {
+      id: opts.recipientCharacterId,
+      accountId: operator.id,
+    });
+  }
+  const { id: operationId } = await ctx.db.transaction((tx) =>
+    createOperation(tx, operator.id, {
+      name: "Friday roam",
+      occurredAt: new Date(),
+      corpSharePct: "0",
+    }),
+  );
+  const [participant] = await ctx.db
+    .insert(payoutParticipant)
+    .values({
+      operationId,
+      displayName: "Line Member",
+      recipientCharacterId: opts.recipientCharacterId ?? null,
+      excluded: opts.excluded ?? false,
+    })
+    .returning();
+  if (opts.finalize !== false) {
+    await ctx.db.transaction((tx) => finalizeOperation(tx, operator.id, operationId));
+  }
+  return { operator, operationId, participantId: participant.id };
+}
+
+describe("getOpenInfoTarget", () => {
+  it("returns the STORED recipient character id", async () => {
+    const { operationId, participantId } = await seedTargetableParticipant({
+      recipientCharacterId: 510001,
+    });
+    expect(await getOpenInfoTarget(ctx.db, operationId, participantId)).toBe(510001);
+  });
+
+  it("refuses a participant belonging to a DIFFERENT operation", async () => {
+    // The attack this whole helper exists to stop: an operator may operate
+    // payouts, which says nothing about whose window they may open. Without
+    // the operation/participant join the operation id would be decoration.
+    const mine = await seedTargetableParticipant({ recipientCharacterId: 510002 });
+    const theirs = await seedTargetableParticipant({ recipientCharacterId: 510003 });
+    expect(
+      await getOpenInfoTarget(ctx.db, mine.operationId, theirs.participantId),
+    ).toBeNull();
+  });
+
+  it("refuses a participant on an operation that is still a draft", async () => {
+    const { operationId, participantId } = await seedTargetableParticipant({
+      recipientCharacterId: 510004,
+      finalize: false,
+    });
+    expect(await getOpenInfoTarget(ctx.db, operationId, participantId)).toBeNull();
+  });
+
+  it("refuses an excluded participant", async () => {
+    const { operationId, participantId } = await seedTargetableParticipant({
+      recipientCharacterId: 510005,
+      excluded: true,
+    });
+    expect(await getOpenInfoTarget(ctx.db, operationId, participantId)).toBeNull();
+  });
+
+  it("returns null for an unresolved roster name with no recipient", async () => {
+    const { operationId, participantId } = await seedTargetableParticipant();
+    expect(await getOpenInfoTarget(ctx.db, operationId, participantId)).toBeNull();
+  });
+
+  it("returns null for a participant id that does not exist", async () => {
+    const { operationId } = await seedTargetableParticipant({
+      recipientCharacterId: 510006,
+    });
+    expect(
+      await getOpenInfoTarget(
+        ctx.db,
+        operationId,
+        "00000000-0000-0000-0000-000000000000",
+      ),
+    ).toBeNull();
   });
 });

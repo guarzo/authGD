@@ -1,4 +1,4 @@
-import { eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Dbx, DbTx } from "@/db";
 import {
   account,
@@ -727,4 +727,53 @@ export async function revertPayment(
     target: op.id,
     details: { participantId, amount },
   });
+}
+
+/**
+ * Resolves the character whose in-game information window an operator may open
+ * for `participantId`, re-reading every condition server-side.
+ *
+ * Both ids arrive from a bound form action, so neither is trusted. Four
+ * conditions, and the last one is the point: the ESI target is the STORED
+ * `recipientCharacterId`, never a value the caller supplied, so a hand-made
+ * request cannot aim the operator's own token at an arbitrary character.
+ *
+ *   1. the participant must belong to THIS operation — otherwise the operation
+ *      id is decoration and any participant id in the database would work;
+ *   2. the operation must be `finalized` — open-info is a payment-time control
+ *      and the page only renders it then;
+ *   3. the participant must not be excluded — they are owed nothing, so there
+ *      is no one to pay and nothing to look up;
+ *   4. the row must carry a recipient — an unresolved roster name has no
+ *      character to open.
+ *
+ * Returns null rather than throwing for all four: every one of them is a stale
+ * page away, and the action turns null into a message.
+ *
+ * No `lockOperation` here, deliberately: this reads state to decide whether to
+ * make an external call that persists nothing. There is no write to serialize
+ * against, and taking a row lock for a window-opening request would put `FOR
+ * UPDATE` contention on the payout path for no gain.
+ */
+export async function getOpenInfoTarget(
+  dbx: Dbx,
+  operationId: string,
+  participantId: string,
+): Promise<number | null> {
+  const [row] = await dbx
+    .select({
+      recipientCharacterId: payoutParticipant.recipientCharacterId,
+      excluded: payoutParticipant.excluded,
+      status: payoutOperation.status,
+    })
+    .from(payoutParticipant)
+    .innerJoin(payoutOperation, eq(payoutOperation.id, payoutParticipant.operationId))
+    .where(
+      and(
+        eq(payoutParticipant.id, participantId),
+        eq(payoutParticipant.operationId, operationId),
+      ),
+    );
+  if (!row || row.status !== "finalized" || row.excluded) return null;
+  return row.recipientCharacterId;
 }

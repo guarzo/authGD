@@ -18,6 +18,7 @@ import {
   addParticipant,
   createOperation,
   finalizeOperation,
+  getOpenInfoTarget,
   recordPayment,
   removeParticipant,
   requirePayoutOperator,
@@ -29,7 +30,9 @@ import {
   unlockOperation,
 } from "@/services/payouts";
 import { getSessionAccount } from "@/services/session";
-import { createEsiClient, EsiError } from "@/lib/esi/client";
+import { getFreshAccessToken, getMainCharacterWithScope } from "@/services/tokens";
+import { createEsiClient, EsiError, OPEN_WINDOW_SCOPE } from "@/lib/esi/client";
+import { classifyOpenInfoFailure } from "@/core/open-info-error";
 import { createTriffClient, TriffError } from "@/lib/triff/client";
 import { PRICING_MODES, type PricingMode } from "@/core/pricing";
 import { parseRosterPaste } from "@/core/roster-paste";
@@ -406,4 +409,92 @@ export async function markPaidAction(
   const actor = await requireOperatorAccount();
   await getDb().transaction((dbtx) => recordPayment(dbtx, actor, participantId));
   revalidateOperation(operationId);
+}
+
+/** getFreshAccessToken's four failure reasons, mapped to the `?error=` codes
+ *  the detail page renders. Every branch has a message: an operator who clicks
+ *  a control and sees nothing happen cannot tell a dead token from a client
+ *  they forgot to log into. */
+const OPEN_INFO_ERROR_BY_REASON = {
+  no_token: "open_info_reauth",
+  invalid: "open_info_reauth",
+  transient: "open_info_failed",
+  dry_run: "open_info_dry_run",
+} as const;
+
+/** classifyOpenInfoFailure's verdicts, mapped to the same `?error=` codes.
+ *  Kept next to the map above so the page's ERRORS keys have exactly two
+ *  producers and both are visible at once. */
+const OPEN_INFO_ERROR_BY_FAILURE = {
+  reauth: "open_info_reauth",
+  offline: "open_info_offline",
+  busy: "open_info_busy",
+  timeout: "open_info_timeout",
+  failed: "open_info_failed",
+} as const;
+
+/**
+ * Opens the in-game information window for a participant's stored recipient
+ * character on the operator's own client, so they can right-click through to a
+ * transfer without retyping a name.
+ *
+ * ARCHITECTURAL EXCEPTION to "enqueue, don't execute" — the second one, after
+ * interactive appraisal above. The original justification was "read-only and
+ * idempotent", and this is a POST, so it needs its own: the call persists NO
+ * state, at CCP or here. Its entire effect is a window appearing on a game
+ * client. A duplicated call opens it twice, a lost call opens nothing and the
+ * operator clicks again, and there is no record to corrupt. Queueing it would
+ * be actively worse — the window would surface minutes later on a client that
+ * has moved on.
+ *
+ * Takes a participant id, never a character id: the target is re-read from the
+ * database inside the action (see getOpenInfoTarget). Nothing changed, so
+ * nothing is revalidated.
+ *
+ * Every failure below goes out through `operationFailed`, the module's own
+ * `: never`-typed redirect helper, for the reasons argued at the top of this
+ * task: these are upstream and grant failures on a control that persists
+ * nothing, and error.tsx can only call them a fault on our end. What does NOT
+ * redirect is requireOperatorAccount's throw above and an unclassifiable error
+ * below — a forged request and a bug, both of which want a stack trace.
+ */
+export async function openInfoAction(
+  operationId: string,
+  participantId: string,
+): Promise<void> {
+  const actor = await requireOperatorAccount();
+  const cfg = getConfig();
+  const db = getDb();
+
+  // Gated on what this operator GRANTED, not on what config asks for. The
+  // control should already be hidden for them; reaching here means a stale
+  // page or a hand-made request, and it gets a message, not a 500.
+  const main = await getMainCharacterWithScope(db, actor, OPEN_WINDOW_SCOPE);
+  if (!main) operationFailed(operationId, "open_info_reauth");
+
+  // The authorization that matters. requireOperatorAccount above proves this
+  // caller may operate payouts; it proves nothing about WHOSE window opens.
+  // The id that reaches ESI comes from this row, not from the arguments.
+  const targetId = await getOpenInfoTarget(db, operationId, participantId);
+  if (targetId === null) operationFailed(operationId, "open_info_target");
+
+  const token = await getFreshAccessToken(db, cfg, main);
+  if (!token.ok) operationFailed(operationId, OPEN_INFO_ERROR_BY_REASON[token.reason]);
+
+  const esi = createEsiClient({
+    userAgent: `authgd/0.1.0 (${cfg.esiContact})`,
+    // Unlike appraisal (a read), this is a write and must honour dry-run. In
+    // practice getFreshAccessToken already refuses above in dry-run mode; this
+    // is the boundary guard sync-mode.ts asks every write to pass through.
+    syncMode: cfg.syncMode,
+  });
+  try {
+    await esi.openInformationWindow(main.id, token.accessToken, targetId);
+  } catch (err) {
+    const failure = classifyOpenInfoFailure(err);
+    // null means we cannot describe it honestly — a bug, a DNS failure, a
+    // malformed response. Those get a stack trace, not a reassuring sentence.
+    if (failure === null) throw err;
+    operationFailed(operationId, OPEN_INFO_ERROR_BY_FAILURE[failure]);
+  }
 }

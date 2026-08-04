@@ -74,6 +74,30 @@ const ERRORS: Record<string, string> = {
     "Type a character name to add someone to the roster. Nothing was added.",
   participant_duplicate:
     "Someone is already on this roster under that name. Nothing was added — two rows under one unresolved name pay two full shares to whoever answers to it.",
+  // The expected outcome on a busy night, not a fault, and the ONLY message
+  // here that claims to know why: it is used only when ESI's own error body
+  // said so. Worded as a fact about the game, because the fallback — copy the
+  // amount, pay by hand — is exactly what operators did before this control.
+  open_info_offline:
+    "EVE says that character is not logged in, so there was nowhere to open the window. Nothing else changed — copy the amount and pay them when they are next online.",
+  // Distinct from offline because the fix is different, and is the operator's
+  // own to make: the grant is missing from THEIR login, not the recipient's.
+  open_info_reauth:
+    "Opening a window in EVE needs a permission your login does not carry yet. Add your character again from your account page to grant it — everything else here keeps working without it.",
+  open_info_busy:
+    "EVE is rate-limiting us right now. Nothing changed — wait a minute and try again, or copy the amount and pay by hand.",
+  // The one failure where the call may actually have SUCCEEDED, so it must not
+  // tell the operator to click again without looking first.
+  open_info_timeout:
+    "EVE took too long to answer. The window may still have opened, so check your client before trying again.",
+  // The honest catch-all. It says what happened and what to do next, and
+  // deliberately does not guess at a cause we cannot prove.
+  open_info_failed:
+    "Could not open that window just then. Nothing changed — try again in a moment, or copy the amount and pay by hand.",
+  open_info_target:
+    "That line cannot be opened: it is excluded, has no linked character, or the operation is no longer finalized. Reload the page to see where it stands.",
+  open_info_dry_run:
+    "This deployment is in dry-run mode, so nothing is sent to EVE. The amounts and the payment controls are real; only the in-game window is suppressed.",
 };
 
 function fmtDate(d: Date): string {
