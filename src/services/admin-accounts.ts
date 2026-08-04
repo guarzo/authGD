@@ -66,7 +66,12 @@ export async function returnTierToAuto(
   if (!acc) return { ok: false, error: "not_found" };
   if (!acc.tierLocked) return { ok: true };
   await dbx.update(account).set({ tierLocked: false }).where(eq(account.id, accountId));
-  await logAudit(dbx, { actor, action: "tier.unlocked", target: accountId });
+  await logAudit(dbx, {
+    actor,
+    action: "tier.unlocked",
+    target: accountId,
+    details: { tier: acc.tier },
+  });
   await enqueueSync(dbx, { kind: "account", accountId });
   return { ok: true };
 }
@@ -107,6 +112,13 @@ export async function setStatusNote(
   const value = note.trim() || null;
   if (acc.statusNote === value) return { ok: true };
   await dbx.update(account).set({ statusNote: value }).where(eq(account.id, accountId));
-  await logAudit(dbx, { actor, action: "status.note_changed", target: accountId });
+  await logAudit(dbx, {
+    actor,
+    action: "status.note_changed",
+    target: accountId,
+    // Whether a note changed, not what it says: the text lives on the account
+    // where it is current, rather than frozen here at write time.
+    details: { had: acc.statusNote !== null, has: value !== null },
+  });
   return { ok: true };
 }
