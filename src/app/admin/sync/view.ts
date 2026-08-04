@@ -1,0 +1,208 @@
+import type { RowHealth } from "@/core/run-health";
+import type { SyncRunStatus } from "@/db/schema";
+import { cronFor, isJobType, nextRunAt } from "@/core/schedules";
+import type { Tone } from "@/app/_components/ui";
+
+/**
+ * The pure decisions behind the admin sync strip.
+ *
+ * Separate from `page.tsx` only so they can be unit-tested: five of these lived
+ * as module-private functions inside a server component, where the only way to
+ * reach them was to render the page, seed a database and drive a browser. Two
+ * of them (`queuedNotice`, `nextRunFor`) validate or degrade untrusted input,
+ * which is precisely the kind of branch that wants a cheap test per case.
+ */
+
+/**
+ * Colour for one *recorded* historical run in the drawer's table, which is a
+ * different question from the summary row's live health: this one has no model
+ * of time and is not supposed to have one. Typed against the schema enum, so
+ * adding a status there is a compile error here rather than a silently grey
+ * badge. A null status is a run still in flight: not a failure and not inactive
+ * either, so it stays neutral rather than borrowing the warn colour PRODUCT.md
+ * reserves for things the admin can and should fix.
+ */
+export function tone(status: SyncRunStatus | null): Tone {
+  switch (status) {
+    case "ok":
+      return "ok";
+    case "partial":
+      return "warn";
+    case "failed":
+      return "bad";
+    case null:
+      return "neutral"; // still running
+  }
+}
+
+/**
+ * Colour for a row's live health. Keyed off `RowHealth` and not off the run
+ * status, so "the last run succeeded six hours ago on a 30-minute cadence" can
+ * be amber while "the last run succeeded four minutes ago" is green.
+ *
+ * `overdue`, `stuck` and `missing` are warn, not bad: nothing has reported a
+ * failure, the schedule has simply not been kept. `never` is off rather than
+ * warn for the same reason PRODUCT.md keeps green tier and a dead token out of
+ * alarm colour — a job that has not run yet, on a worker too young to say it
+ * should have, is a state and not a fault.
+ */
+export const HEALTH_TONE: Record<RowHealth, Tone> = {
+  fresh: "ok",
+  degraded: "warn",
+  failing: "bad",
+  inflight: "neutral",
+  stuck: "warn",
+  overdue: "warn",
+  missing: "warn",
+  never: "off",
+  unknown: "warn",
+};
+
+/**
+ * The word beside the glyph, so colour is never the only carrier. Deliberately
+ * only the word: `inflight` and `stuck` differ from each other only in how long
+ * they have held the same shape, and the obvious answer — baking the elapsed
+ * time into the label — puts a second, frozen clock on a row that already
+ * carries a ticking one. The `.ago` beside this reads the *start* time of an
+ * in-flight run (`latestAt` falls back to `startedAt` when `finishedAt` is
+ * null) and re-renders every 30s, so it is already the duration this label
+ * would have restated. One number per row, and it stays true on a tab left
+ * open for an hour.
+ *
+ * A `Record` rather than a switch: a new `RowHealth` member is a compile error
+ * here and in `HEALTH_TONE` and `NEEDS_ATTENTION`, so the three cannot fall out
+ * of step with the type or with each other.
+ */
+export const HEALTH_LABEL: Record<RowHealth, string> = {
+  fresh: "ok",
+  degraded: "partial",
+  failing: "failed",
+  inflight: "running",
+  stuck: "stuck",
+  overdue: "overdue",
+  missing: "not running",
+  never: "no runs",
+  unknown: "cadence unknown",
+};
+
+/**
+ * Which rows open on their own. "Not healthy" is read as "actionable", which
+ * rules out three states that look unhealthy but are not one job's problem:
+ *
+ * `inflight` resolves on its own within seconds, and expanding on it would mean
+ * the page flaps open and shut through every sweep instead of pointing at the
+ * one job that needs an admin. `stuck` is the same shape held far too long, so
+ * that one does open.
+ *
+ * `overdue` is excluded for a bigger reason: when the worker dies, every row
+ * goes overdue at once, so opening on it would expand all seven drawers
+ * together and destroy exactly the "this one job needs you" signal auto-open
+ * exists to create. A dead worker is a page-level condition and it is the
+ * worker line above the strip that says so. `missing` is safe to open despite
+ * that, because `rowHealth` only reaches it when the worker is demonstrably
+ * alive and recording other jobs.
+ *
+ * `unknown` stays shut: the fault is in the cron expression, and the drawer
+ * holds run history, which has nothing to say about it.
+ */
+const NEEDS_ATTENTION: Record<RowHealth, boolean> = {
+  fresh: false,
+  degraded: true,
+  failing: true,
+  inflight: false,
+  stuck: true,
+  overdue: false,
+  missing: true,
+  never: false,
+  unknown: false,
+};
+
+export function healthLabel(health: RowHealth): string {
+  return HEALTH_LABEL[health];
+}
+
+export function needsAttention(health: RowHealth): boolean {
+  return NEEDS_ATTENTION[health];
+}
+
+/**
+ * True when the cron's hour field is a fixed number rather than `*` or a
+ * step. When it is, the cadence string `formatCadence` prints already names a
+ * wall-clock time (`daily 03:00 UTC`, `Sun 04:00 UTC`) and a next-run line
+ * under it would either repeat that number or, worse, read as "soon" for a job
+ * that only fires once a week. Read off the raw expression rather than the
+ * humanized cadence string, so a rewording of `formatCadence` can't silently
+ * break this.
+ *
+ * Deliberately looser than `formatCadence`'s own test, which also requires a
+ * numeric minute: for a stepped minute on a fixed hour that function falls
+ * back to printing the raw expression while this one still suppresses the
+ * next-run line. Nothing in JOB_CRON has that shape, and suppressing a
+ * decoration is the safe side to err on.
+ */
+export function cadenceNamesTime(cron: string): boolean {
+  const hour = cron.trim().split(/\s+/)[1];
+  return /^\d+$/.test(hour ?? "");
+}
+
+/**
+ * The "next HH:MM" decoration under a cadence, or null when it would say
+ * nothing the cadence has not already said. `nextRunAt` owns the degradation:
+ * an unsupported or absent cadence is "we don't know when", never a throw that
+ * takes the whole page down over a decoration.
+ */
+export function nextRunFor(jobType: string, now: Date): Date | null {
+  const cron = cronFor(jobType);
+  if (cron === null || cadenceNamesTime(cron)) return null;
+  return nextRunAt(jobType, now);
+}
+
+/**
+ * The one-line outcome of the press that got us here. Per-job re-runs redirect
+ * with the job type itself, and that value is checked against the schedules
+ * table before it is echoed: a hand-typed `?queued=` is untrusted input, and
+ * this is copy, not a lookup that fails safe on its own.
+ */
+export function queuedNotice(queued: string | undefined): string {
+  if (queued === "all") {
+    return "Membership, contacts, map and Discord queued for every account. The worker picks them up within a few seconds; use Refresh to see the runs land.";
+  }
+  if (queued === "recheck") {
+    return "Affiliation recheck queued. The worker picks it up within a few seconds; use Refresh to see the run land.";
+  }
+  if (isJobType(queued)) {
+    return `${queued} queued. The worker picks it up within a few seconds; use Refresh to see the run land.`;
+  }
+  return "";
+}
+
+/**
+ * The earliest instant the worker is known to have been recording runs, or null
+ * when nothing says it currently is.
+ *
+ * `rowHealth` needs this to tell "this job has not run yet" from "this job is
+ * not running": the second is only knowable by seeing the worker do other work
+ * for longer than this job's own cadence. The oldest run in the page's window
+ * is a LOWER bound on that uptime (the window holds a handful of runs per job,
+ * not all of history), which errs toward saying "never" for longer — the quiet
+ * side.
+ *
+ * Null when the worker is not fresh, deliberately: a dead worker would
+ * otherwise flip every never-run row to `missing` at once, and that is the
+ * page-level condition the worker line already reports.
+ */
+export function evidenceSince(
+  workerFresh: boolean,
+  groups: Array<{ runs: Array<{ startedAt: Date | null }> }>,
+): Date | null {
+  if (!workerFresh) return null;
+  let oldest: Date | null = null;
+  for (const g of groups) {
+    for (const r of g.runs) {
+      if (r.startedAt !== null && (oldest === null || r.startedAt < oldest)) {
+        oldest = r.startedAt;
+      }
+    }
+  }
+  return oldest;
+}
