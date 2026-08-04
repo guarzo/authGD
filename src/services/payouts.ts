@@ -17,6 +17,11 @@ export class PayoutLockedError extends Error {}
  *  exist. Distinguishable by callers from a programming error, the same way
  *  PayoutForbiddenError and PayoutLockedError already are. */
 export class PayoutNotFoundError extends Error {}
+/** A manual roster addition names someone already on the roster. Named rather
+ *  than a bare Error because `addParticipantAction` has to tell it from a real
+ *  fault: the operator typed this name and can retype it, so it earns a message
+ *  on the page rather than error.tsx's "a fault on this end". */
+export class PayoutDuplicateParticipantError extends Error {}
 
 /**
  * `getSessionAccount` (src/services/session.ts) resolves a session to an
@@ -278,6 +283,95 @@ export async function setRoster(
     target: operationId,
     details: { count: entries.length },
   });
+  await recalculate(dbtx, operationId);
+}
+
+/**
+ * Manual roster entry, one name at a time. Additive by necessity: `setRoster`
+ * deletes the whole roster and reinserts it, which would discard every share
+ * edit already made, so adding one person cannot go through it.
+ *
+ * The name goes through `resolveRosterNames` so alt-collapsing and main-naming
+ * behave identically to the paste path — the difference is only that the
+ * collapse is against rows already in the table rather than within one paste.
+ */
+export async function addParticipant(
+  dbtx: DbTx,
+  actor: string,
+  operationId: string,
+  name: string,
+): Promise<void> {
+  await requirePayoutOperator(dbtx, actor);
+  await lockOperation(dbtx, operationId);
+  await assertEditable(dbtx, operationId);
+  const [entry] = await resolveRosterNames(dbtx, [name]);
+  if (!entry) throw new Error("a character name is required");
+
+  const existing = await dbtx
+    .select()
+    .from(payoutParticipant)
+    .where(eq(payoutParticipant.operationId, operationId));
+  const twin =
+    entry.accountId !== null
+      ? existing.find((p) => p.accountId === entry.accountId)
+      : undefined;
+
+  if (twin) {
+    // Same human, different character. Record the spelling that was typed and
+    // leave the share count alone — a second row here is a second full share.
+    const alreadyListed = twin.sourceCharacters.some(
+      (c) => c.toLowerCase() === name.toLowerCase(),
+    );
+    if (!alreadyListed) {
+      await dbtx
+        .update(payoutParticipant)
+        .set({ sourceCharacters: [...twin.sourceCharacters, name] })
+        .where(eq(payoutParticipant.id, twin.id));
+    }
+    await logAudit(dbtx, {
+      actor,
+      action: "payout.participant_added",
+      target: operationId,
+      details: { participantId: twin.id, name, collapsedInto: twin.displayName },
+    });
+  } else {
+    if (entry.accountId === null) {
+      // Two unresolved rows sharing a name are two full shares going out under
+      // one name, and nothing downstream can tell them apart. The detail page
+      // has warned about this since phase 1 but could not prevent it, because
+      // the paste path is itself deduped — manual entry is what makes the case
+      // reachable, so manual entry is where it gets refused. The page warning
+      // stays as a backstop for rosters written before this guard existed.
+      const clash = existing.find(
+        (p) =>
+          p.accountId === null &&
+          p.displayName.toLowerCase() === entry.displayName.toLowerCase(),
+      );
+      if (clash) {
+        throw new PayoutDuplicateParticipantError(
+          `"${clash.displayName}" is already on this roster`,
+        );
+      }
+    }
+    const [inserted] = await dbtx
+      .insert(payoutParticipant)
+      .values({
+        operationId,
+        accountId: entry.accountId,
+        recipientCharacterId: entry.recipientCharacterId,
+        displayName: entry.displayName,
+        sourceCharacters: entry.sourceCharacters,
+        shares: entry.shares,
+        excluded: entry.excluded,
+      })
+      .returning();
+    await logAudit(dbtx, {
+      actor,
+      action: "payout.participant_added",
+      target: operationId,
+      details: { participantId: inserted.id, name, displayName: entry.displayName },
+    });
+  }
   await recalculate(dbtx, operationId);
 }
 

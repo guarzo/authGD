@@ -9,6 +9,8 @@ import { appraiseLoot } from "@/services/appraisal";
 import { addAppraisedPool, addFlatPool, deletePool } from "@/services/payout-loot";
 import {
   MAX_SHARES_HUNDREDTHS,
+  PayoutDuplicateParticipantError,
+  addParticipant,
   createOperation,
   finalizeOperation,
   recordPayment,
@@ -254,6 +256,32 @@ export async function setRosterAction(
     const entries = await resolveRosterNames(dbtx, names);
     await setRoster(dbtx, actor, operationId, entries);
   });
+  revalidateOperation(operationId);
+}
+
+/** Both rejections here are things the operator typed, so both redirect rather
+ *  than throw — the conversion #74 applied to every other input rejection in
+ *  this file. A throw would land on error.tsx, which renders `error.digest` and
+ *  never `error.message`, telling them a blank name box was a fault on our end.
+ *
+ *  `operationFailed` returns `never` and must not be called from inside a `try`
+ *  — `redirect` signals by throwing NEXT_REDIRECT, and an enclosing catch would
+ *  swallow it. The call below sits in the `catch`, not the `try`. */
+export async function addParticipantAction(
+  operationId: string,
+  formData: FormData,
+): Promise<void> {
+  const actor = await requireOperatorAccount();
+  const name = field(formData, "name").trim();
+  if (!name) operationFailed(operationId, "participant_name_required");
+  try {
+    await getDb().transaction((dbtx) => addParticipant(dbtx, actor, operationId, name));
+  } catch (err) {
+    if (err instanceof PayoutDuplicateParticipantError) {
+      operationFailed(operationId, "participant_duplicate");
+    }
+    throw err;
+  }
   revalidateOperation(operationId);
 }
 

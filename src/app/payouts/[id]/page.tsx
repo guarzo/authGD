@@ -70,6 +70,10 @@ const ERRORS: Record<string, string> = {
     "Corp share must be a plain percentage like 10 or 12.5. The old value is unchanged.",
   share_range:
     "Corp share cannot exceed 100% — that would leave the roster nothing to split. The old value is unchanged.",
+  participant_name_required:
+    "Type a character name to add someone to the roster. Nothing was added.",
+  participant_duplicate:
+    "Someone is already on this roster under that name. Nothing was added — two rows under one unresolved name pay two full shares to whoever answers to it.",
 };
 
 function fmtDate(d: Date): string {

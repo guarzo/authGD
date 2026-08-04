@@ -14,6 +14,7 @@ import {
   PayoutForbiddenError,
   PayoutLockedError,
   PayoutNotFoundError,
+  addParticipant,
   canReadPayouts,
   createOperation,
   finalizeOperation,
@@ -579,11 +580,11 @@ describe("the service layer is the authorization boundary", () => {
    * re-checks inside its own transaction. If any of these stop throwing, the
    * guard was dropped from that function.
    *
-   * All thirteen mutating exports are exercised here: createOperation, setRoster,
+   * All fourteen mutating exports are exercised here: createOperation, setRoster,
    * finalizeOperation, unlockOperation, setParticipantShares,
    * setParticipantExcluded, removeParticipant, recordPayment, addAppraisedPool,
-   * deletePool, setCorpSharePct, revertPayment. addFlatPool is covered separately
-   * in payout-loot.test.ts.
+   * deletePool, setCorpSharePct, revertPayment, addParticipant. addFlatPool is
+   * covered separately in payout-loot.test.ts.
    */
   it("rejects every mutation when the actor is not an active flygd account", async () => {
     const operator = await seedOperator();
@@ -679,6 +680,9 @@ describe("the service layer is the authorization boundary", () => {
       ).rejects.toThrow(PayoutForbiddenError);
       await expect(
         ctx.db.transaction((tx) => unlockOperation(tx, actor, operationId)),
+      ).rejects.toThrow(PayoutForbiddenError);
+      await expect(
+        ctx.db.transaction((tx) => addParticipant(tx, actor, operationId, "Nope")),
       ).rejects.toThrow(PayoutForbiddenError);
     }
 
@@ -1010,5 +1014,115 @@ describe("setParticipantShares bounds", () => {
       .from(payoutParticipant)
       .where(eq(payoutParticipant.id, participant.id));
     expect(after.shares).toBe("9999.99");
+  });
+});
+
+describe("addParticipant", () => {
+  async function seedDraftWithRoster(names: string[]) {
+    const operator = await seedOperator();
+    const { id: operationId } = await ctx.db.transaction((tx) =>
+      createOperation(tx, operator.id, {
+        name: "Manual entry",
+        occurredAt: new Date(),
+        corpSharePct: "0",
+      }),
+    );
+    await ctx.db.insert(lootPool).values({
+      operationId,
+      valuationSource: "flat",
+      totalValue: "300.00",
+      notes: "sold privately",
+    });
+    if (names.length > 0) {
+      const entries = await resolveRosterNames(ctx.db, names);
+      await ctx.db.transaction((tx) => setRoster(tx, operator.id, operationId, entries));
+    }
+    return { operator, operationId };
+  }
+
+  it("adds a new unresolved name as its own participant and recalculates", async () => {
+    const { operator, operationId } = await seedDraftWithRoster(["Pilot One"]);
+
+    await ctx.db.transaction((tx) =>
+      addParticipant(tx, operator.id, operationId, "Pilot Two"),
+    );
+
+    const rows = await ctx.db
+      .select()
+      .from(payoutParticipant)
+      .where(eq(payoutParticipant.operationId, operationId));
+    expect(rows).toHaveLength(2);
+    // 300.00 over two equal shares — proof recalculate ran, not just that the
+    // row landed.
+    expect(rows.map((r) => r.amount).sort()).toEqual(["150.00", "150.00"]);
+    const added = rows.find((r) => r.displayName === "Pilot Two")!;
+    expect(added.accountId).toBeNull();
+    expect(added.sourceCharacters).toEqual(["Pilot Two"]);
+    expect(added.shares).toBe("1.00");
+
+    const audits = await ctx.db
+      .select()
+      .from(auditLog)
+      .where(eq(auditLog.action, "payout.participant_added"));
+    expect(audits).toHaveLength(1);
+    expect(audits[0].target).toBe(operationId);
+  });
+
+  /**
+   * The paste path collapses alts inside one paste via entryByAccountId. Manual
+   * entry has to reproduce that against rows already in the table, or one human
+   * pasted as their main and typed in as their alt draws two full shares.
+   */
+  it("collapses an alt into the existing participant rather than adding a second share", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    await seedCharacter(ctx.db, cfg, {
+      id: 700001,
+      accountId: acc.id,
+      name: "Fleet Main",
+      main: true,
+    });
+    await seedCharacter(ctx.db, cfg, {
+      id: 700002,
+      accountId: acc.id,
+      name: "Fleet Alt",
+    });
+    const { operator, operationId } = await seedDraftWithRoster(["Fleet Main"]);
+
+    await ctx.db.transaction((tx) =>
+      addParticipant(tx, operator.id, operationId, "Fleet Alt"),
+    );
+
+    const rows = await ctx.db
+      .select()
+      .from(payoutParticipant)
+      .where(eq(payoutParticipant.operationId, operationId));
+    expect(rows).toHaveLength(1);
+    expect(rows[0].displayName).toBe("Fleet Main");
+    expect(rows[0].sourceCharacters).toEqual(["Fleet Main", "Fleet Alt"]);
+    expect(rows[0].amount).toBe("300.00"); // one share, not two
+  });
+
+  it("rejects a case-insensitively duplicate unresolved name", async () => {
+    const { operator, operationId } = await seedDraftWithRoster(["Pilot One"]);
+    await expect(
+      ctx.db.transaction((tx) =>
+        addParticipant(tx, operator.id, operationId, "pilot one"),
+      ),
+    ).rejects.toThrow(/already on this roster/);
+    const rows = await ctx.db
+      .select()
+      .from(payoutParticipant)
+      .where(eq(payoutParticipant.operationId, operationId));
+    expect(rows).toHaveLength(1);
+  });
+
+  it("refuses once the operation is finalized", async () => {
+    const { operator, operationId } = await seedDraftWithRoster(["Pilot One"]);
+    await ctx.db.transaction((tx) => finalizeOperation(tx, operator.id, operationId));
+    await expect(
+      ctx.db.transaction((tx) =>
+        addParticipant(tx, operator.id, operationId, "Latecomer"),
+      ),
+    ).rejects.toThrow(PayoutLockedError);
   });
 });
