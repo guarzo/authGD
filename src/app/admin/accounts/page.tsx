@@ -4,6 +4,7 @@ import { getDb } from "@/db";
 import { requireAdminPage } from "@/lib/admin-guard";
 import { isContactsTarget } from "@/services/desired";
 import {
+  countAccountsByTier,
   getAdminAccountsList,
   type AdminAccountRow,
   type AdminCharacterRow,
@@ -118,9 +119,11 @@ export default async function AdminAccountsPage({
   });
   // Independent of every active filter. `rows` is narrowed by tier AND status
   // (above), so counting it would hide the queue from an admin who is looking
-  // at ?status=cryo — precisely when a standing reminder is most useful.
-  const pendingCount = (await getAdminAccountsList(getDb(), cfg, { tier: "pending" }))
-    .length;
+  // at ?status=cryo — precisely when a standing reminder is most useful. A
+  // single `count(*)` rather than another getAdminAccountsList call: that
+  // call assembles a full row (five unbounded scans plus per-character work)
+  // for every account just to get thrown away for a length.
+  const pendingCount = await countAccountsByTier(getDb(), "pending");
 
   const qs = (over: Record<string, string | undefined>) => {
     const p = new URLSearchParams();

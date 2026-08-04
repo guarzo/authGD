@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNotNull, or } from "drizzle-orm";
+import { and, count, desc, eq, inArray, isNotNull, or } from "drizzle-orm";
 import type { Config } from "@/config";
 import { nextRunAt } from "@/core/schedules";
 import type { Dbx } from "@/db";
@@ -352,4 +352,25 @@ export async function getAdminAccountsList(
     return cmp * dir || nameCompare(a, b);
   });
   return rows;
+}
+
+/**
+ * A single `count(*)` for one tier, in place of calling getAdminAccountsList
+ * again and taking `.length`: that call assembles a full AdminAccountRow per
+ * account — five unbounded table scans plus per-character token/scope/ACL
+ * work — to answer a question that needs exactly one integer. The admin page
+ * uses this for the standing "N awaiting approval" count, which is why it
+ * exists as tier-only rather than accepting the full AdminListFilters: that
+ * count is deliberately independent of the page's active status/sort
+ * filters.
+ */
+export async function countAccountsByTier(
+  dbx: Dbx,
+  tier: "pending" | "flygd" | "blue" | "green",
+): Promise<number> {
+  const [row] = await dbx
+    .select({ n: count() })
+    .from(account)
+    .where(eq(account.tier, tier));
+  return row?.n ?? 0;
 }

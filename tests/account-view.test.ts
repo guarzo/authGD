@@ -10,6 +10,7 @@ import {
   wandererAclObservation,
 } from "@/db/schema";
 import {
+  countAccountsByTier,
   getAccountView,
   getAdminAccountsList,
   getPushStatus,
@@ -359,5 +360,23 @@ describe("getAdminAccountsList", () => {
     });
     const [row] = await getAdminAccountsList(ctx.db, cfg);
     expect(row.tokenSummary).toEqual({ total: 4, healthy: 1, needsReauth: 2, dead: 1 });
+  });
+});
+
+describe("countAccountsByTier", () => {
+  it("counts only the requested tier, ignoring other rows", async () => {
+    await seedAccount(ctx.db, { tier: "pending" });
+    await seedAccount(ctx.db, { tier: "pending" });
+    await seedAccount(ctx.db, { tier: "green" });
+    await seedAccount(ctx.db, { tier: "flygd" });
+
+    expect(await countAccountsByTier(ctx.db, "pending")).toBe(2);
+    expect(await countAccountsByTier(ctx.db, "green")).toBe(1);
+  });
+
+  it("returns 0 rather than a falsy non-number when a tier has no rows", async () => {
+    await seedAccount(ctx.db, { tier: "green" });
+
+    expect(await countAccountsByTier(ctx.db, "blue")).toBe(0);
   });
 });
