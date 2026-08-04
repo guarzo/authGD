@@ -41,7 +41,7 @@ surface wants declarations of its own is a real question and a separate one.
 
 Seven payload-free actions are access-relevant, each verified at this call site:
 
-```
+```text
 admin.demoted         src/services/accounts.ts:429
 admin.promoted        src/services/accounts.ts:457
 character.unlinked    src/services/accounts.ts:313
@@ -254,7 +254,7 @@ Three new combinators alongside the existing four:
 
 - `flag(key, word)` renders `word` when the value is truthy, nothing when
   falsy. Serves `locked`, `wasMain`, `self`.
-- `list(key, word)` renders `missing esi-skills.read_skills.v1` for one value
+- `list(key, word, noun)` renders `missing esi-skills.read_skills.v1` for one value
   and `missing esi-skills.read_skills.v1, esi-clones.read_clones.v1` for two.
   At three or more it collapses to `missing 4 scopes`, since a full EVE scope
   string is long and the column is narrow. Serves `missingScopes`, and keeps a
@@ -275,12 +275,12 @@ Three new combinators alongside the existing four:
 - `noteChange(hadKey, hasKey)` renders `note added`, `note replaced`, or
   `note cleared`.
 
-```
+```ts
   "tier.changed":         [transition("from","to"), scalar("cause"), flag("locked","locked")]
   "status.changed":       [transition("from","to"), flag("self","self-service")]
   "discord.role_changed": [roles("added","removed"), labelled("tier","tier"), scalar("cause")]
   "character.unlinked":   [scalar("name"), flag("wasMain","was main")]
-  "token.needs_reauth":   [list("missingScopes","missing")]
+  "token.needs_reauth":   [list("missingScopes","missing","scopes")]
   "tier.unlocked":        [labelled("was","tier")]
   "status.note_changed":  [noteChange("had","has")]
   "wanderer.removed":     [labelled("role","role")]

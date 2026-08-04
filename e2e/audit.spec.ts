@@ -762,7 +762,7 @@ test("paging past the end with an active filter keeps that filter on the exit li
   await expect(page.locator("tbody tr")).toHaveCount(2);
 });
 
-test("a demotion row shows why it happened without opening the payload", async ({
+test("a tier demotion row shows why it happened without opening the payload", async ({
   page,
   context,
 }) => {

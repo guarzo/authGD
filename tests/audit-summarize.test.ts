@@ -185,6 +185,12 @@ describe("summarizeDetails, declared fields and role rendering", () => {
     expect(
       summarizeDetails("token.needs_reauth", { missingScopes: ["esi-a.v1", "esi-b.v1"] }),
     ).toBe("missing esi-a.v1, esi-b.v1");
+    // Three is the boundary itself, so an off-by-one would still pass on four.
+    expect(
+      summarizeDetails("token.needs_reauth", {
+        missingScopes: ["esi-a.v1", "esi-b.v1", "esi-c.v1"],
+      }),
+    ).toBe("missing 3 scopes");
     expect(
       summarizeDetails("token.needs_reauth", {
         missingScopes: ["esi-a.v1", "esi-b.v1", "esi-c.v1", "esi-d.v1"],
