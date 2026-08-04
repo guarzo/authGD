@@ -46,3 +46,11 @@ export async function getSessionAccount(
 export async function revokeAccountSessions(dbx: Dbx, accountId: string): Promise<void> {
   await dbx.delete(session).where(eq(session.accountId, accountId));
 }
+
+/** Sign-out is "this device only": delete the one session row the caller's
+ * cookie names, and leave the account's other sessions alone. A missing or
+ * already-expired id is a no-op, not an error — the caller is signed out
+ * either way. */
+export async function endSession(dbx: Dbx, sessionId: string): Promise<void> {
+  await dbx.delete(session).where(eq(session.id, sessionKey(sessionId)));
+}

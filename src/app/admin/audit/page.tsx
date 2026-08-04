@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
-import { redirect } from "next/navigation";
 import { getDb } from "@/db";
-import { getAdminContext } from "@/lib/admin-guard";
+import { requireAdminPage } from "@/lib/admin-guard";
 import { AUDIT_PAGE_SIZE, queryAuditLog, resolveFilterIdentity } from "@/services/audit";
 import type { FilterResolution, ResolvedAuditRow } from "@/services/audit";
 import { RuleHead, Json, Scroller } from "@/app/_components/ui";
@@ -226,8 +225,7 @@ export default async function AdminAuditPage({
     before?: string;
   }>;
 }) {
-  const ctx = await getAdminContext();
-  if (!ctx) redirect("/login");
+  await requireAdminPage();
   const raw = await searchParams;
   // Trim the two name-resolvable filters. They are typed or pasted by hand,
   // and a trailing space off a copied uuid or name would otherwise fall

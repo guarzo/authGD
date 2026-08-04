@@ -1,11 +1,29 @@
 import type { ReactNode } from "react";
 
-export type NavItem = { href: string; label: string; key: string };
+/**
+ * `href` is the only identity a nav item has — there used to be a separate
+ * `key` field too, and nothing stopped one caller from keying it to the route
+ * (`"/admin/accounts"`) while another keyed it to an arbitrary label
+ * (`"account"`). Two conventions that happened to both typecheck, matched by
+ * bare `===`, and silently produced no active tab the moment they disagreed.
+ * Matching on `href` — the one value every item already carries and every
+ * caller already knows the true form of, its own route — removes the second,
+ * duplicated identity, so there is one string per item instead of two that had
+ * to be kept in agreement. That kills the key-vs-href divergence by
+ * construction. It does not make every mismatch impossible: `current` is a
+ * plain `string`, so a typo'd `current="/acount"` still compiles and still
+ * shows no active tab. `e2e/shell.spec.ts` covers that residual gap by
+ * asserting exactly one `aria-current` on every shell route.
+ */
+export type NavItem = { href: string; label: string };
 
 /**
  * The ruled header bar. `current` is passed in rather than read from a hook so
  * this stays a server component — every page that renders it is already
- * force-dynamic and knows its own route.
+ * force-dynamic and knows its own route. It must be the item's `href` — see
+ * the `NavItem` comment — and is optional: `error.tsx` renders this with no
+ * route of its own to claim, and every item then correctly shows as inactive
+ * rather than matching `undefined` against itself.
  *
  * The `.shell__bar` wrapper is what carries the layout: the bar's ground and
  * bottom hairline stay full-bleed, while the contents sit on the same measure
@@ -14,15 +32,26 @@ export type NavItem = { href: string; label: string; key: string };
  * is — the page knows which column it uses, and deriving it here would cost
  * either a hook or a `:has()` bet on Next's DOM shape. A page rendering
  * `.page--narrow` must pass `measure="narrow"` to stay aligned.
+ *
+ * `admin` names which register the bar is framing. It drives three things
+ * together rather than three separate props, because all three answer the
+ * same question: the mark's destination (the admin index, not `/account`,
+ * so the one link that promises "home" doesn't quietly walk an admin out of
+ * the admin section), the nav's accessible name (so a screen reader user can
+ * tell the two bars apart by more than which links happen to be in them), and
+ * the `ADMIN` marker after the wordmark (the only on-screen signal that isn't
+ * "which tab happens to be lit").
  */
 export function SiteHeader({
   items,
   current,
   measure = "wide",
+  admin = false,
 }: {
   items: NavItem[];
   current?: string;
   measure?: "wide" | "narrow";
+  admin?: boolean;
 }) {
   return (
     <header className="shell">
@@ -32,23 +61,34 @@ export function SiteHeader({
       <div
         className={measure === "narrow" ? "shell__bar shell__bar--narrow" : "shell__bar"}
       >
-        <a className="shell__mark" href="/account">
+        <a className="shell__mark" href={admin ? "/admin/accounts" : "/account"}>
           <img src="/brand/seal-sm.webp" alt="" width={34} height={34} />
           <span className="shell__wordmark">
             <b>Zoo Landers</b>
             <span>Flight Ops</span>
           </span>
         </a>
-        <nav className="shell__nav" aria-label="Main">
+        {admin && <span className="shell__register">Admin</span>}
+        <nav className="shell__nav" aria-label={admin ? "Admin" : "Main"}>
           {items.map((i) => (
             <a
-              key={i.key}
+              key={i.href}
               href={i.href}
-              aria-current={i.key === current ? "page" : undefined}
+              aria-current={i.href === current ? "page" : undefined}
             >
               {i.label}
             </a>
           ))}
+          {/* The one control in the bar that isn't a destination, so it's a
+              form/POST rather than a link — see auth/signout/route.ts for why
+              a GET here would be CSRF-triggerable. Quiet grade, reused rather
+              than invented: it has to sit among the nav's own text links
+              without out-shouting them or the page's one primary action. */}
+          <form action="/auth/signout" method="post" className="inline-form">
+            <button type="submit" className="btn btn--quiet btn--micro">
+              sign out
+            </button>
+          </form>
         </nav>
       </div>
     </header>

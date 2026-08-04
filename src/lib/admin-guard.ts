@@ -1,5 +1,6 @@
 import { eq } from "drizzle-orm";
 import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
 import { getConfig } from "@/config";
 import { getDb, type Db } from "@/db";
 import { account } from "@/db/schema";
@@ -7,32 +8,102 @@ import { getSessionAccount } from "@/services/session";
 
 export type AdminContext = { accountId: string };
 
-/** Testable core: session id → admin account id, or null. */
+/** Distinguishes "not signed in" from "signed in but not an admin" so callers
+ * can react differently — a de-roled admin is still logged in and should not
+ * be bounced to a login screen. */
+export type AdminDenial = "no-session" | "not-admin";
+
+export type AdminResolution =
+  { ok: true; ctx: AdminContext } | { ok: false; reason: AdminDenial };
+
+/** Testable core: session id → admin resolution. */
 export async function resolveAdmin(
   db: Db,
   sessionId: string | undefined,
-): Promise<AdminContext | null> {
-  if (!sessionId) return null;
+): Promise<AdminResolution> {
+  if (!sessionId) return { ok: false, reason: "no-session" };
   const sess = await getSessionAccount(db, sessionId);
-  if (!sess) return null;
+  if (!sess) return { ok: false, reason: "no-session" };
   const [acc] = await db.select().from(account).where(eq(account.id, sess.accountId));
-  if (!acc?.isAdmin) return null;
-  return { accountId: sess.accountId };
+  if (!acc?.isAdmin) return { ok: false, reason: "not-admin" };
+  return { ok: true, ctx: { accountId: sess.accountId } };
 }
 
-/** For admin PAGES: caller redirects on null. */
-export async function getAdminContext(): Promise<AdminContext | null> {
+/**
+ * Cookie-reading wrapper around resolveAdmin. Deliberately NOT exported: it
+ * used to return `AdminContext | null`, and every admin page guarded itself
+ * with `const ctx = await getAdminContext(); if (!ctx) redirect("/login")`.
+ * An `AdminResolution` is always truthy, so that exact line still compiles
+ * against the new signature and simply never redirects — an unguarded admin
+ * page with no type error and no failing test. Keeping this private means a
+ * page resurrecting the old pattern (a stale branch, a bad merge, a copied
+ * file) fails to compile instead of failing open. Pages use requireAdminPage;
+ * actions use requireAdminAction.
+ */
+async function getAdminContext(): Promise<AdminResolution> {
   const cfg = getConfig();
   const sid = (await cookies()).get(cfg.sessionCookieName)?.value;
   return resolveAdmin(getDb(), sid);
 }
 
 /**
- * For admin SERVER ACTIONS: throws on failure. Layouts do not protect actions
- * and do not re-run on soft navigation — every action gates itself with this.
+ * The single place a denial turns into a destination. A `switch` rather than
+ * an `if` chain on purpose: each case returns a `redirect`, which `next/
+ * navigation` declares as returning `never`, so this compiles clean today —
+ * and the moment a third `AdminDenial` member is added it fails to compile
+ * with `TS2534: A function returning 'never' cannot have a reachable end
+ * point` (verified by adding one) instead of silently falling through to the
+ * login redirect and telling a user their session expired when it hadn't.
+ * That silent fallthrough is the exact bug this union was introduced to
+ * prevent, so the union is worth little without an exhaustive branch on it.
+ *
+ * Annotated `: never` explicitly, and each case `return`s rather than just
+ * calling: TS only treats a call as terminating control flow when the callee
+ * is a plain identifier with a declared `never` return, and eslint's
+ * `no-fallthrough` is not type-aware, so a bare `redirect(...)` per case
+ * type-checks but fails lint.
+ */
+function denyAdmin(reason: AdminDenial): never {
+  switch (reason) {
+    case "not-admin":
+      // A de-roled admin is still signed in. Sending them to a login screen
+      // would be a lie; /account states what changed. Same destination as
+      // admin/accounts/actions.ts's `redirectNotAdmin`, whose comment records
+      // the same reasoning for the mid-session race.
+      return redirect("/account?error=not_admin");
+    case "no-session":
+      return redirect("/login?error=session_expired");
+  }
+}
+
+/**
+ * For admin PAGES: redirects and never returns on failure, so pages just call
+ * it.
+ */
+export async function requireAdminPage(): Promise<AdminContext> {
+  const res = await getAdminContext();
+  if (!res.ok) denyAdmin(res.reason);
+  return res.ctx;
+}
+
+/**
+ * For admin SERVER ACTIONS: layouts do not protect actions and do not re-run
+ * on soft navigation, so every action gates itself with this.
+ *
+ * This used to `throw new Error("not authorized")`, which landed on the route
+ * error boundary — copy that reads "Something broke… a fault on this end."
+ * For the case that actually happens, that was simply wrong: another admin
+ * clearing your admin bit between the row rendering and your click is a race
+ * the app expects, not a server fault. admin/accounts/actions.ts:24 already
+ * redirected rather than threw for exactly this reason; this now matches it.
+ *
+ * NOTE: with that change this function's body is identical to
+ * requireAdminPage's. The two names are kept because their call sites read
+ * differently and collapsing them would touch twelve unrelated files; if a
+ * future change gives them no divergent behavior either, merge them.
  */
 export async function requireAdminAction(): Promise<AdminContext> {
-  const ctx = await getAdminContext();
-  if (!ctx) throw new Error("not authorized");
-  return ctx;
+  const res = await getAdminContext();
+  if (!res.ok) denyAdmin(res.reason);
+  return res.ctx;
 }

@@ -1,8 +1,7 @@
 import type { Metadata } from "next";
-import { redirect } from "next/navigation";
 import { getDb } from "@/db";
 import type { syncRunStatusEnum } from "@/db/schema";
-import { getAdminContext } from "@/lib/admin-guard";
+import { requireAdminPage } from "@/lib/admin-guard";
 import { getSyncStatus } from "@/services/sync-status";
 import { cadenceFor, JOB_CRON, nextOccurrence } from "@/core/schedules";
 import {
@@ -100,8 +99,7 @@ export default async function AdminSyncPage({
 }: {
   searchParams: Promise<{ queued?: string }>;
 }) {
-  const ctx = await getAdminContext();
-  if (!ctx) redirect("/login");
+  await requireAdminPage();
   const { queued } = await searchParams;
   const groups = await getSyncStatus(getDb());
   const now = Date.now();

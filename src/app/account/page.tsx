@@ -29,6 +29,7 @@ const ERRORS: Record<string, string> = {
   discord_denied: "Discord authorization was cancelled.",
   stale_character:
     "That character isn't on this account anymore. The page below is current.",
+  not_admin: "Your admin access was removed. This is your account page.",
 };
 
 /**
@@ -85,12 +86,13 @@ export default async function AccountPage({
   const now = Date.now();
 
   const nav = [
-    // "Your account", not "Account", everywhere it appears: the admin nav
-    // already carries "Accounts" for the roster, and the two read as the same
-    // destination at a glance. The possessive is what distinguishes them, so
-    // it has to be the name on both navs rather than only the admin one.
-    { key: "account", href: "/account", label: "Your account" },
-    ...(view.isAdmin ? [{ key: "admin", href: "/admin/accounts", label: "Admin" }] : []),
+    // These two sit side by side for an admin, so they must not share a word.
+    // The roster is "Members", not "Accounts", for exactly that reason — see
+    // admin-nav.tsx. "Your account" keeps the possessive because this page is
+    // genuinely the reader's own, and nothing else in either bar competes
+    // with it now.
+    { href: "/account", label: "Your account" },
+    ...(view.isAdmin ? [{ href: "/admin/accounts", label: "Members" }] : []),
   ];
 
   // Shown once above the manifest rather than repeated in every affected cell:
@@ -106,7 +108,7 @@ export default async function AccountPage({
 
   return (
     <>
-      <SiteHeader items={nav} current="account" measure="narrow" />
+      <SiteHeader items={nav} current="/account" measure="narrow" />
       <main id="main" tabIndex={-1} className="page page--narrow">
         <div className="page__head">
           <h1>Your account</h1>

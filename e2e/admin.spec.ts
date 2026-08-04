@@ -42,11 +42,59 @@ async function seedDenseWorld() {
   return admin;
 }
 
-test("non-admins are redirected away from /admin", async ({ page, context }) => {
+test("an unauthenticated visitor is redirected to login", async ({ page }) => {
+  await page.goto("/admin/accounts");
+  await expect(page).toHaveURL(/\/login\?error=session_expired/);
+});
+
+// resolveAdmin distinguishes "no session" from "signed in but not an admin" —
+// see lib/admin-guard.ts — so a de-roled member lands on their own account
+// page with an explanation, not back at the login screen as if they'd never
+// signed in.
+test("a signed-in non-admin is sent to their account page, not login", async ({
+  page,
+  context,
+}) => {
   const member = await seedMember(db, { name: "Pleb" });
   await context.addCookies([await sessionCookieFor(db, member.id)]);
   await page.goto("/admin/accounts");
-  await expect(page).toHaveURL(/\/login/);
+  await expect(page).toHaveURL(/\/account\?error=not_admin/);
+  await expect(page.getByRole("alert")).toContainText("admin access was removed");
+});
+
+/**
+ * The same distinction, on the server-action path rather than the page path.
+ * These are separate guards: a layout does not protect an action and does not
+ * re-run on soft navigation, so requireAdminAction is what actually gates the
+ * click. It used to `throw`, which landed on error.tsx — "Something broke…
+ * that's a fault on this end, not something you did." For the case that
+ * actually occurs, that copy was a lie: another admin clearing your admin bit
+ * while you had the page open is a race the app expects.
+ *
+ * De-roling *after* the page renders is the whole point. The button only
+ * exists because the page was rendered by an admin; flipping the bit behind it
+ * reproduces the real race rather than a state no user can reach.
+ */
+test("an admin de-roled after the page loaded gets the notice, not the error boundary", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedMember(db, { name: "Boss", isAdmin: true });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.goto("/admin/sync");
+  await expect(page.getByRole("button", { name: "Sync everything now" })).toBeVisible();
+
+  await db.update(account).set({ isAdmin: false }).where(eq(account.id, admin.id));
+
+  await page.getByRole("button", { name: "Sync everything now" }).click();
+  await expect(page).toHaveURL(/\/account\?error=not_admin/);
+  // Scoped to the page's own notice rather than `getByRole("alert")`: this
+  // arrival is a client-side navigation, so Next's `__next-route-announcer__`
+  // — also `role="alert"` — is populated and a bare role query matches two
+  // elements. The sibling test above can use the role because a full
+  // `page.goto` leaves the announcer empty.
+  await expect(page.locator("p.notice--bad")).toContainText("admin access was removed");
+  await expect(page.getByText("Something broke")).toHaveCount(0);
 });
 
 test("admin list sorts by name and by tier, and filters cryo", async ({
@@ -276,7 +324,7 @@ test("pinned cells keep the scroll region's tab stop and the row's focus order",
   await page.keyboard.press("Tab");
   expect(
     await page.evaluate(() => document.activeElement?.getAttribute("aria-label")),
-  ).toBe("Accounts");
+  ).toBe("Members");
 
   // Ten stops covers the four header sort links plus the first two rows: the
   // tier, cryo and note controls all sit inside each row's closed drawer, so a
@@ -502,7 +550,7 @@ test("the empty-state row does not inherit the pinned column", async ({
   await page.goto("/admin/accounts?status=cryo");
 
   const empty = page.locator("td.log__empty");
-  await expect(empty).toHaveText("No accounts match this filter.");
+  await expect(empty).toHaveText("No members match this filter.");
   // It spans the whole table, so pinning it would give a full-width cell an
   // opaque ground and a hairline hanging off the table's right edge.
   const style = await empty.evaluate((el) => {
