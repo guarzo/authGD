@@ -6,6 +6,8 @@ import { AUDIT_PAGE_SIZE, queryAuditLog, resolveFilterIdentity } from "@/service
 import type { FilterResolution, ResolvedAuditRow } from "@/services/audit";
 import { RuleHead, Json, Scroller } from "@/app/_components/ui";
 import { Submit } from "@/app/_components/submit";
+import { formatAgo } from "@/app/_components/format-ago";
+import { RelativeTime } from "@/app/_components/relative-time";
 
 export const dynamic = "force-dynamic";
 
@@ -78,6 +80,11 @@ function summarizeDetails(action: string, details: unknown): string {
   } catch {
     return "(unreadable)";
   }
+}
+
+/** The exact UTC instant, `2026-08-03 22:19:24`. */
+function stamp(d: Date): string {
+  return d.toISOString().replace("T", " ").slice(0, 19);
 }
 
 /**
@@ -267,6 +274,8 @@ export default async function AdminAuditPage({
   for (const [k, v] of Object.entries(params)) if (v && k !== "before") older.set(k, v);
   if (rows.length > 0) older.set("before", String(rows[rows.length - 1].id));
 
+  const now = Date.now();
+
   const filtered = Boolean(params.actor || params.action || params.target);
   const activeFilters = [
     params.actor && `actor: ${params.actor}`,
@@ -371,26 +380,29 @@ export default async function AdminAuditPage({
       >
         {countLabel}
       </RuleHead>
-      <Scroller label="Audit entries">
-        <table className="log log--audit">
+      <Scroller label="Audit entries" tall>
+        <table className="log log--audit log--sticky-head log--sticky-col">
           <colgroup>
-            {/* Sized to the widest value each column can actually hold, in mono
-                at --t-data plus the 2 x --s-4 cell padding. Under
-                `table-layout: fixed` an undersized column doesn't shrink its
-                content, it lets a `nowrap` cell paint straight over its
-                neighbour: the timestamp (19ch ~= 162px) needed 194px and had
-                160, and the longest action (`character.affiliation_invalid`,
-                29ch ~= 247px) needed 279px and had 168. Both were bleeding into
-                the column to their right. */}
-            <col style={{ width: "12.25rem" }} />
-            <col style={{ width: "9rem" }} />
-            <col style={{ width: "17.5rem" }} />
-            <col style={{ width: "9rem" }} />
+            {/* Widths live in globals.css, not in `style` here: they have to
+                change at the narrow breakpoint, and an inline width outranks a
+                media query without `!important`. Five bare cols so the
+                `col:nth-child()` rules have something to bind to. */}
+            <col />
+            <col />
+            <col />
+            <col />
             <col />
           </colgroup>
           <thead>
             <tr>
-              <th>At (UTC)</th>
+              {/* "(UTC)" qualifies an absolute stamp; below 40rem the cells
+                  below read as elapsed time instead, and a heading claiming UTC
+                  over "12h ago" is simply wrong. The exact instant is still in
+                  each cell for assistive tech. */}
+              <th>
+                <span className="only-wide">At (UTC)</span>
+                <span className="only-narrow">At</span>
+              </th>
               <th>Actor</th>
               <th>Action</th>
               <th>Target</th>
@@ -400,10 +412,24 @@ export default async function AdminAuditPage({
           <tbody>
             {rows.map((r) => {
               const dot = r.action.indexOf(".");
+              const iso = r.at.toISOString();
               return (
                 <tr key={r.id}>
+                  {/* At 320px the 19ch ISO stamp was 196px of a 286px region —
+                      69% — and it is the pinned column, so it painted over
+                      whatever the scroll had brought alongside it. Below 40rem
+                      it reads as elapsed time instead, which is the question a
+                      phone-sized audit read is actually asking. The exact
+                      instant may not leave the accessibility tree for that, so
+                      it is restated in text a screen reader reads out; `title`
+                      would not do, since VoiceOver and TalkBack do not announce
+                      it and touch cannot reach it. */}
                   <td className="mono nowrap">
-                    {r.at.toISOString().replace("T", " ").slice(0, 19)}
+                    <span className="only-wide">{stamp(r.at)}</span>
+                    <span className="only-narrow">
+                      <RelativeTime iso={iso} initial={formatAgo(iso, now)} />
+                      <span className="visually-hidden">{`at ${stamp(r.at)} UTC`}</span>
+                    </span>
                   </td>
                   <td>
                     <ActorCell r={r} params={params} />

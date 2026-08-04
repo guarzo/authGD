@@ -191,75 +191,102 @@ export default async function AdminSyncPage({
                           </tr>
                         </thead>
                         <tbody>
-                          {g.runs.map((r) => (
-                            <tr key={r.id}>
-                              <td className="mono nowrap">{fmt(r.startedAt)}</td>
-                              <td className="mono nowrap num">
-                                {formatDuration(r.startedAt, r.finishedAt) ?? (
-                                  <span className="dim">…</span>
-                                )}
-                              </td>
-                              {/* The error lives here rather than in a column of
-                                  its own: it is populated on a small minority
-                                  of runs, and a column that is an em-dash on
-                                  every row is width spent on nothing. */}
-                              <td>
-                                <Status tone={tone(r.status)}>
-                                  {r.status ?? "running"}
-                                </Status>
-                                {r.errorSummary && (
-                                  <span className="detail strip__err">
-                                    {r.errorSummary}
+                          {g.runs.map((r) => {
+                            const startedIso = r.startedAt
+                              ? r.startedAt.toISOString()
+                              : null;
+                            return (
+                              <tr key={r.id}>
+                                {/* At 320px the 19ch ISO stamp is the widest
+                                    cell in the row and the least of its
+                                    meaning, and it is most of what the table's
+                                    44rem floor was buying. Below 40rem it reads
+                                    as elapsed time instead — but the exact
+                                    value may not leave the accessibility tree
+                                    for that, so it is restated in text a screen
+                                    reader reads out. `title` would not do:
+                                    VoiceOver and TalkBack do not announce it
+                                    and touch cannot reach it. */}
+                                <td className="mono nowrap">
+                                  <span className="only-wide">{fmt(r.startedAt)}</span>
+                                  <span className="only-narrow">
+                                    <RelativeTime
+                                      iso={startedIso}
+                                      initial={formatAgo(startedIso, now)}
+                                    />
+                                    <span className="visually-hidden">
+                                      {`started ${fmt(r.startedAt)} UTC`}
+                                    </span>
                                   </span>
-                                )}
-                              </td>
-                              {!r.counts || cols.length === 0 ? (
-                                // Three absences that read differently: a run
-                                // still in flight has not reported yet, a
-                                // finished one that recorded nothing never
-                                // will, and a recorded all-zero result is a
-                                // real answer. cols is empty only when no run
-                                // in the window moved a counter, so there is
-                                // one header cell to span.
-                                <td colSpan={span} className="dim">
-                                  {!r.counts ? (
-                                    r.finishedAt ? (
-                                      <>&mdash;</>
-                                    ) : (
-                                      <>&hellip;</>
-                                    )
-                                  ) : isNoChange(r.counts) ? (
-                                    "no change"
-                                  ) : (
-                                    <>&mdash;</>
+                                </td>
+                                <td className="mono nowrap num">
+                                  {formatDuration(r.startedAt, r.finishedAt) ?? (
+                                    <span className="dim">…</span>
                                   )}
                                 </td>
-                              ) : isNoChange(r.counts) ? (
-                                <td colSpan={span} className="dim">
-                                  no change
+                                {/* The error lives here rather than in a column
+                                    of its own: it is populated on a small
+                                    minority of runs, and a column that is an
+                                    em-dash on every row is width spent on
+                                    nothing. */}
+                                <td>
+                                  <Status tone={tone(r.status)}>
+                                    {r.status ?? "running"}
+                                  </Status>
+                                  {r.errorSummary && (
+                                    <span className="detail strip__err">
+                                      {r.errorSummary}
+                                    </span>
+                                  )}
                                 </td>
-                              ) : (
-                                cols.map((k) => {
-                                  const v = r.counts?.[k];
-                                  return (
-                                    <td
-                                      key={k}
-                                      className={v ? "mono num" : "mono num dim"}
-                                    >
-                                      {v ?? "—"}
-                                    </td>
-                                  );
-                                })
-                              )}
-                              <td>
-                                {r.counts ? (
-                                  <Json value={r.counts} summary="json" />
+                                {!r.counts || cols.length === 0 ? (
+                                  // Three absences that read differently: a run
+                                  // still in flight has not reported yet, a
+                                  // finished one that recorded nothing never
+                                  // will, and a recorded all-zero result is a
+                                  // real answer. cols is empty only when no run
+                                  // in the window moved a counter, so there is
+                                  // one header cell to span.
+                                  <td colSpan={span} className="dim">
+                                    {!r.counts ? (
+                                      r.finishedAt ? (
+                                        <>&mdash;</>
+                                      ) : (
+                                        <>&hellip;</>
+                                      )
+                                    ) : isNoChange(r.counts) ? (
+                                      "no change"
+                                    ) : (
+                                      <>&mdash;</>
+                                    )}
+                                  </td>
+                                ) : isNoChange(r.counts) ? (
+                                  <td colSpan={span} className="dim">
+                                    no change
+                                  </td>
                                 ) : (
-                                  <span className="dim">&mdash;</span>
+                                  cols.map((k) => {
+                                    const v = r.counts?.[k];
+                                    return (
+                                      <td
+                                        key={k}
+                                        className={v ? "mono num" : "mono num dim"}
+                                      >
+                                        {v ?? "—"}
+                                      </td>
+                                    );
+                                  })
                                 )}
-                              </td>
-                            </tr>
-                          ))}
+                                <td>
+                                  {r.counts ? (
+                                    <Json value={r.counts} summary="json" />
+                                  ) : (
+                                    <span className="dim">&mdash;</span>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
                         </tbody>
                       </table>
                     </Scroller>

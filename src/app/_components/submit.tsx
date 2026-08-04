@@ -20,12 +20,17 @@ export function Submit({
   disabled,
   pendingLabel,
   "aria-pressed": ariaPressed,
+  // Opt-in only: a button whose visible text already names the thing it acts on
+  // should not carry one. The admin row drawer needs it because "blue" and
+  // "freeze" say nothing about whose tier is about to change.
+  "aria-label": ariaLabel,
 }: {
   className?: string;
   children: ReactNode;
   disabled?: boolean;
   pendingLabel?: ReactNode;
   "aria-pressed"?: boolean;
+  "aria-label"?: string;
 }) {
   const { pending } = useFormStatus();
   return (
@@ -35,6 +40,7 @@ export function Submit({
       disabled={disabled || pending}
       aria-busy={pending}
       aria-pressed={ariaPressed}
+      aria-label={ariaLabel}
     >
       {pending && pendingLabel ? pendingLabel : children}
     </button>

@@ -15,9 +15,20 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
  * containing `.visually-hidden` (see globals.css). `atStart`/`atEnd` mirror
  * whether the region is scrolled all the way to that edge, so a side fades
  * out once you've reached it rather than lingering once it's told the truth.
+ *
+ * `tall` caps the height, which is what gives a sticky header a scroll range to
+ * travel over; the two long admin tables set it.
  */
 
-export function Scroller({ label, children }: { label: string; children: ReactNode }) {
+export function Scroller({
+  label,
+  tall,
+  children,
+}: {
+  label: string;
+  tall?: boolean;
+  children: ReactNode;
+}) {
   const [atStart, setAtStart] = useState(true);
   const [atEnd, setAtEnd] = useState(true);
 
@@ -52,7 +63,7 @@ export function Scroller({ label, children }: { label: string; children: ReactNo
     <div className="scroller-frame">
       <div
         ref={ref}
-        className="scroller"
+        className={tall ? "scroller scroller--tall" : "scroller"}
         role="region"
         aria-label={label}
         tabIndex={0}
