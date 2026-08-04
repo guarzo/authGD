@@ -1,7 +1,7 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { eq } from "drizzle-orm";
 import { account } from "../src/db/schema";
-import { clearOfPin, pinGeometry } from "./geometry";
+import { clearOfPin, coveredByPin, pinGeometry } from "./geometry";
 import { resetDb, seedMember, sessionCookieFor, testDb } from "./helpers";
 
 /**
@@ -393,11 +393,18 @@ test("pinned cells keep the scroll region's tab stop and the row's focus order",
  * trade available.
  *
  * The drawer is its own full-width `<tr>` now, so it cannot touch column 1's
- * width and the trade is off. The assertions are inverted rather than deleted:
- * the pin surviving an open drawer is the better end of that trade — the name
- * stays on screen through exactly the scroll the drawer's own controls make
- * necessary — and it is worth a test saying so, because the way to lose it
- * again is for the drawer to drift back inside the first cell.
+ * width and the trade is off. Re-measured at 320px on the current DOM, region
+ * 286px: the pinned cell is 97px — 34% of the region — and identical open and
+ * closed, where the rule this replaced was written against 279.5px/98%. The
+ * pin costs the drawer nothing, because the drawer is in another row: measured
+ * across the full scroll range, no drawer control has any of its area under a
+ * pinned cell, including at the offsets where it shares the pin's x-band.
+ *
+ * The assertions are inverted rather than deleted: the pin surviving an open
+ * drawer is the better end of that trade — the name stays on screen through
+ * exactly the scroll the drawer's own controls make necessary — and it is worth
+ * a test saying so, because the way to lose it again is for the drawer to drift
+ * back inside the first cell.
  */
 test("an open row drawer keeps the pin, and is not itself pinned", async ({
   page,
@@ -409,6 +416,16 @@ test("an open row drawer keeps the pin, and is not itself pinned", async ({
   await page.goto("/admin/accounts");
 
   const first = page.locator(ROWS).first();
+  // Closed first: what the pin costs the region with no drawer open is the
+  // baseline the rule this test replaced was measured against, and the whole
+  // reason that rule is gone is that opening a drawer no longer moves it.
+  const closed = await pinGeometry(
+    page,
+    ".scroller",
+    `${ROWS}:first-child > td:first-child`,
+    "right",
+  );
+
   await toggleOf(first).click();
   await expect(drawerOf(first)).toBeVisible();
 
@@ -420,6 +437,20 @@ test("an open row drawer keeps the pin, and is not itself pinned", async ({
   );
   // There has to be something to scroll past, or the geometry below is vacuous.
   expect(open.maxScrollLeft).toBeGreaterThan(0);
+
+  // The old rule existed because opening a drawer widened column 1 for the
+  // whole table. That coupling is what the drawer's own `<tr>` broke, and it is
+  // the fact the rule's absence rests on — so assert the width, not the CSS.
+  expect(open.cellWidth, "an open drawer does not widen column 1").toBeCloseTo(
+    closed.cellWidth,
+    1,
+  );
+  // 97px of a 286px region as measured; the rule this replaced was written
+  // against 279.5px of 286px, which is what made unpinning the better trade.
+  expect(
+    open.cellWidth / open.regionWidth,
+    "the pin leaves most of the region to the other columns",
+  ).toBeLessThan(0.5);
 
   // The claim is the footprint, not the computed value: scrolled fully right,
   // the name is still wholly on screen.
@@ -457,6 +488,29 @@ test("an open row drawer keeps the pin, and is not itself pinned", async ({
     });
   expect(drawerCell.position).toBe("static");
   expect(drawerCell.borderRight).toBe("0px");
+
+  // Not sticky is not the same as not painted over: the pinned cells above and
+  // below the drawer row are opaque and outrank it, so "the drawer scrolls
+  // freely underneath" has to be measured against them, not inferred from the
+  // drawer's own `position`. Three offsets — at rest, mid-scroll, and fully
+  // right — because the drawer's controls pass through the pin's x-band on the
+  // way, and that is the only span where a regression could show.
+  const tier = ".drawer-row:not([hidden]) .drawer__controls button";
+  for (const at of [0, Math.round(open.maxScrollLeft / 4), open.maxScrollLeft]) {
+    const m = await coveredByPin(page, ".scroller", tier, at);
+    expect(m.covered, `no pinned cell paints over the drawer at scrollLeft ${at}`).toBe(
+      0,
+    );
+  }
+  // ...and that zero is a real result, not one offset that happened to miss:
+  // at rest the first tier button sits squarely inside the pin's x-band and on
+  // screen, so an x-only measure — `clearOfPin` — would call it fully occluded.
+  const rest = await coveredByPin(page, ".scroller", tier, 0);
+  expect(rest.xOverlap, "the drawer's first control shares the pin's x-band").toBeCloseTo(
+    1,
+    1,
+  );
+  expect(rest.inRegion, "...and is on screen while it does").toBeCloseTo(1, 1);
 });
 
 /**
