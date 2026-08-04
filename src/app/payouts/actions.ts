@@ -57,7 +57,21 @@ export async function createOperationAction(formData: FormData): Promise<void> {
   if (!name) throw new Error("name is required");
   const occurredAt = new Date(field(formData, "occurredAt"));
   if (Number.isNaN(occurredAt.getTime())) throw new Error("invalid date");
-  const battleReportUrl = field(formData, "battleReportUrl").trim() || null;
+  const battleReportUrlRaw = field(formData, "battleReportUrl").trim() || null;
+  // Rendered as a plain `<a href>` on the detail page — reject anything but
+  // http(s) here so a `javascript:` or other scheme can never reach that link.
+  if (battleReportUrlRaw) {
+    let scheme: string;
+    try {
+      scheme = new URL(battleReportUrlRaw).protocol;
+    } catch {
+      throw new Error("battle report URL is not a valid URL");
+    }
+    if (scheme !== "http:" && scheme !== "https:") {
+      throw new Error("battle report URL must be http or https");
+    }
+  }
+  const battleReportUrl = battleReportUrlRaw;
   const corpSharePct = field(formData, "corpSharePct").trim() || "0";
   const notes = field(formData, "notes").trim() || null;
 
@@ -87,6 +101,10 @@ export async function addAppraisedPoolAction(
   const pricingMode = pricingModeRaw as PricingMode;
   const stationRaw = field(formData, "stationId").trim();
   const regionRaw = field(formData, "regionId").trim();
+  // A non-numeric id must reject here, not travel to triff as a query param
+  // or reach the lootPool insert's bigint column as NaN.
+  if (stationRaw && !/^\d+$/.test(stationRaw)) throw new Error("invalid station id");
+  if (regionRaw && !/^\d+$/.test(regionRaw)) throw new Error("invalid region id");
   const stationId = stationRaw ? Number(stationRaw) : undefined;
   const regionId = regionRaw ? Number(regionRaw) : undefined;
   if ((stationId === undefined) === (regionId === undefined)) {

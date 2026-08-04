@@ -72,7 +72,7 @@ export default async function PayoutsPage() {
               {ops.map((op) => (
                 <tr key={op.id}>
                   <td>
-                    <a href={`/payouts/${op.id}`}>{op.name}</a>
+                    <Link href={`/payouts/${op.id}`}>{op.name}</Link>
                   </td>
                   <td className="mono nowrap">{fmtDate(op.occurredAt)}</td>
                   <td>

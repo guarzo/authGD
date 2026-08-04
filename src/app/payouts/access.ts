@@ -3,7 +3,11 @@ import { eq } from "drizzle-orm";
 import { getConfig } from "@/config";
 import { getDb } from "@/db";
 import { account } from "@/db/schema";
-import { canReadPayouts, requirePayoutOperator } from "@/services/payouts";
+import {
+  canReadPayouts,
+  PayoutForbiddenError,
+  requirePayoutOperator,
+} from "@/services/payouts";
 import { getSessionAccount } from "@/services/session";
 
 export type PayoutAccess = {
@@ -31,8 +35,16 @@ export async function requirePayoutReader(): Promise<PayoutAccess | null> {
   if (!(await canReadPayouts(db, sess.accountId))) return null;
 
   const [acc] = await db.select().from(account).where(eq(account.id, sess.accountId));
-  const isOperator = await requirePayoutOperator(db, sess.accountId)
-    .then(() => true)
-    .catch(() => false);
+  let isOperator: boolean;
+  try {
+    await requirePayoutOperator(db, sess.accountId);
+    isOperator = true;
+  } catch (err) {
+    // Only "not an active flygd account" means "reader, not operator" — any
+    // other failure (DB error, etc.) must surface, not be silently read as
+    // "just hide the operator controls".
+    if (!(err instanceof PayoutForbiddenError)) throw err;
+    isOperator = false;
+  }
   return { accountId: sess.accountId, isOperator, isAdmin: acc?.isAdmin ?? false };
 }

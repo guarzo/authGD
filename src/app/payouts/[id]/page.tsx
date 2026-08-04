@@ -19,6 +19,7 @@ import {
 } from "../actions";
 import { CopyAmountButton } from "./copy-amount-button";
 import { PRICING_MODES, type PricingMode } from "@/core/pricing";
+import { iskToCents } from "@/core/payout-split";
 
 export const dynamic = "force-dynamic";
 
@@ -77,9 +78,13 @@ export default async function PayoutOperationPage({
 
   // A name with no accountId is an unresolved roster entry (resolveRosterNames
   // never dedupes those against each other, on purpose — see its own comment).
-  // Two of them sharing a display name is not evidence of one person; it means
-  // two full shares are being paid out under a name the FC should double-check
-  // before finalizing, so it is surfaced here rather than silently merged.
+  // Unreachable today: PR 1's only roster input is setRosterAction, which goes
+  // through parseRosterPaste (itself case-insensitively deduped) once per
+  // paste, so no single roster can produce two rows with the same name. This
+  // stays wired up because PR 2 adds manual participant entry outside that
+  // paste path, and the day it lands, two rows sharing a display name are two
+  // full shares going out under one name — this is what keeps the FC from
+  // finding out only after finalizing.
   const unresolvedByLowerName = new Map<string, string>(); // key -> first-seen spelling
   const unresolvedNameCounts = new Map<string, number>();
   for (const p of participants) {
@@ -104,7 +109,9 @@ export default async function PayoutOperationPage({
             {operation.battleReportUrl && (
               <>
                 {" · "}
-                <a href={operation.battleReportUrl}>battle report</a>
+                <a href={operation.battleReportUrl} target="_blank" rel="noreferrer">
+                  battle report
+                </a>
               </>
             )}
           </p>
@@ -189,8 +196,8 @@ export default async function PayoutOperationPage({
                 const subCentPriced = pool.items.filter(
                   (i) =>
                     i.priceSource === "triff" &&
-                    i.unitPrice === "0.00" &&
-                    i.totalValue !== "0.00",
+                    iskToCents(i.unitPrice) === 0n &&
+                    iskToCents(i.totalValue) !== 0n,
                 );
                 return (
                   <tr key={pool.id}>
@@ -198,7 +205,8 @@ export default async function PayoutOperationPage({
                       {pool.valuationSource === "appraised" ? (
                         <Status tone="ok">
                           appraised
-                          {pool.pricingMode && ` · ${pool.pricingMode}`}
+                          {pool.pricingMode &&
+                            ` · ${PRICING_LABELS[pool.pricingMode as PricingMode] ?? pool.pricingMode}`}
                         </Status>
                       ) : (
                         <Status tone="warn">flat (manual)</Status>

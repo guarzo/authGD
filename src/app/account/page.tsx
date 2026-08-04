@@ -4,6 +4,7 @@ import { cookies } from "next/headers";
 import { getConfig } from "@/config";
 import { getDb } from "@/db";
 import { getAccountView, type PushStatus } from "@/services/account-view";
+import { canReadPayouts } from "@/services/payouts";
 import { getSessionAccount } from "@/services/session";
 import { RuleHead, Scroller, SiteHeader, Status, Tier } from "@/app/_components/ui";
 import { RelativeTime } from "@/app/_components/relative-time";
@@ -125,9 +126,13 @@ export default async function AccountPage({
   const { error } = await searchParams;
   const message = error ? ERRORS[error] : undefined;
   const now = Date.now();
+  // Same tier-only gate the payouts pages themselves re-check — this only
+  // decides whether the link appears, never whether the route is reachable.
+  const showPayoutsLink = await canReadPayouts(getDb(), sess.accountId);
 
   const nav = [
     { key: "account", href: "/account", label: "Account" },
+    ...(showPayoutsLink ? [{ key: "payouts", href: "/payouts", label: "Payouts" }] : []),
     ...(view.isAdmin ? [{ key: "admin", href: "/admin/accounts", label: "Admin" }] : []),
   ];
 
