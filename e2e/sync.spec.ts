@@ -288,6 +288,12 @@ test("an overdue job is flagged amber but does not open itself", async ({
 /**
  * A run that started and never came back. It used to read `running` in neutral
  * grey identically at four seconds and at four days.
+ *
+ * How long it has been wedged still has to be on the row — but it is the
+ * ticking `.ago` that carries it, not the status word. The label deliberately
+ * holds no number: a server-rendered "stuck 2h" beside a client-ticking "2h
+ * ago" is two clocks describing one instant, and they disagree within the
+ * hour on a tab left open.
  */
 test("a wedged run reads stuck, with its elapsed time, and opens", async ({
   page,
@@ -315,11 +321,15 @@ test("a wedged run reads stuck, with its elapsed time, and opens", async ({
   await page.goto("/admin/sync");
 
   const membership = summaryFor(page, "membership");
-  await expect(membership).toContainText("stuck 2h");
+  await expect(membership.locator(".st")).toHaveText("stuck");
+  // The duration is not optional — it is the whole finding. An unfinished run
+  // has no finishedAt, so the row's time element is the age of its start.
+  await expect(membership.locator(".ago")).toHaveText("2h ago");
   await expect(membership).toHaveAttribute("aria-expanded", "true");
 
   const contacts = summaryFor(page, "contacts");
-  await expect(contacts).toContainText(/running \d+s/);
+  await expect(contacts.locator(".st")).toHaveText("running");
+  await expect(contacts.locator(".ago")).toHaveText(/^\d+s ago$/);
   await expect(contacts).toHaveAttribute("aria-expanded", "false");
 });
 

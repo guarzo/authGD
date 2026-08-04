@@ -117,18 +117,18 @@ const HEALTH_TONE: Record<RowHealth, Tone> = {
 };
 
 /**
- * The word beside the glyph, so colour is never the only carrier. `running`
- * and `stuck` take their elapsed time into the label: those two states are the
- * same shape and differ only in how long they have held it, and "running 42m"
- * answers that without opening the row.
+ * The word beside the glyph, so colour is never the only carrier. Deliberately
+ * only the word: `running` and `stuck` differ from each other only in how long
+ * they have held the same shape, and the obvious answer — baking the elapsed
+ * time into the label — puts a second, frozen clock on a row that already
+ * carries a ticking one. The `.ago` beside this reads the *start* time of an
+ * in-flight run (`latestAt` falls back to `startedAt` when `finishedAt` is
+ * null) and re-renders every 30s, so it is already the duration this label
+ * would have restated. One number per row, and it stays true on a tab left
+ * open for an hour.
  */
-function healthLabel(health: RowHealth, startedAt: Date | null, now: number): string {
-  if (health === "never") return "no runs";
-  if (health === "running" || health === "stuck") {
-    if (!startedAt) return health;
-    return `${health} ${elapsedShort(now - startedAt.getTime())}`;
-  }
-  return health;
+function healthLabel(health: RowHealth): string {
+  return health === "never" ? "no runs" : health;
 }
 
 /**
@@ -193,10 +193,6 @@ export default async function AdminSyncPage({
         ? `worker · last run ${workerAge} ago`
         : `worker · no run in ${workerAge}`;
   const notice = queuedNotice(queued);
-  // The cadence column is dropped entirely rather than filled with dashes when
-  // nothing on the page is scheduled — an empty column is exactly the noise
-  // this page is being cleaned of.
-  const anyCadence = groups.some((g) => cadenceFor(g.jobType) !== null);
 
   return (
     <main id="main" tabIndex={-1} className="page">
@@ -234,217 +230,212 @@ export default async function AdminSyncPage({
         </p>
       )}
 
-      {groups.length === 0 && (
-        <p className="notice" data-glyph="·">
-          No runs recorded yet. Either the worker has not started, or nothing has come
-          due.
-        </p>
-      )}
-
-      {groups.length > 0 && (
-        <ul className={anyCadence ? "strip strip--cadence" : "strip"}>
-          {/* aria-hidden: these label the summary rows visually, but each row
-              is a single disclosure control whose accessible name already
-              carries job, health and age in that order. */}
-          <li className="strip__head" aria-hidden="true">
-            <span />
-            <span>Job</span>
-            <span>Health</span>
-            <span>Last run</span>
-            {anyCadence && <span>Cadence</span>}
-          </li>
-          {groups.map((g) => {
-            const latest = g.runs[0];
-            const startedAt = latest?.startedAt ?? null;
-            const finishedAt = latest?.finishedAt ?? null;
-            // finish-time for a completed run, start-time for one in flight:
-            // in both cases the last moment this job is known to have been
-            // doing something.
-            const latestAt = finishedAt ?? startedAt;
-            const latestIso = latestAt ? latestAt.toISOString() : null;
-            const health = rowHealth({
-              status: latest?.status ?? null,
-              startedAt,
-              finishedAt,
-              cron: JOB_CRON[g.jobType] ?? null,
-              now: renderedAt,
-            });
-            const cadence = cadenceFor(g.jobType);
-            const nextRun = nextRunFor(g.jobType, renderedAt);
-            const cols = countColumns(g.jobType, g.runs);
-            const span = cols.length || 1;
-            return (
-              <li key={g.jobType} className="strip__job">
-                <Disclosure
-                  className="strip__disc"
-                  defaultOpen={needsAttention(health)}
-                  summary={
-                    <>
-                      <h2 className="strip__name">{g.jobType}</h2>
-                      <Status tone={HEALTH_TONE[health]}>
-                        {healthLabel(health, startedAt, now)}
-                      </Status>
-                      <RelativeTime iso={latestIso} initial={formatAgo(latestIso, now)} />
-                      {anyCadence && (
-                        <span className="strip__cadence mono">
-                          {cadence ?? "on demand"}
-                          {nextRun && (
-                            <>
-                              <br />
-                              next {utcHhmm(nextRun)}
-                            </>
-                          )}
-                        </span>
+      {/* No empty state above this: `getSyncStatus` seeds a row for every key
+          in JOB_CRON whether or not it has ever run, so the list is never
+          empty and a "nothing has come due" message could only ever be a lie
+          about a state the page cannot reach. */}
+      <ul className="strip">
+        {/* aria-hidden: these label the summary rows visually, but each row
+            is a single disclosure control whose accessible name already
+            carries job, health and age in that order. */}
+        <li className="strip__head" aria-hidden="true">
+          <span />
+          <span>Job</span>
+          <span>Health</span>
+          <span>Last run</span>
+          <span>Cadence</span>
+        </li>
+        {groups.map((g) => {
+          const latest = g.runs[0];
+          const startedAt = latest?.startedAt ?? null;
+          const finishedAt = latest?.finishedAt ?? null;
+          // finish-time for a completed run, start-time for one in flight:
+          // in both cases the last moment this job is known to have been
+          // doing something.
+          const latestAt = finishedAt ?? startedAt;
+          const latestIso = latestAt ? latestAt.toISOString() : null;
+          const health = rowHealth({
+            status: latest?.status ?? null,
+            startedAt,
+            finishedAt,
+            cron: JOB_CRON[g.jobType] ?? null,
+            now: renderedAt,
+          });
+          // Null for a job type found in `sync_run` but absent from JOB_CRON —
+          // a retired or hand-queued job. Every *seeded* row has a cadence by
+          // construction, so the column always earns its width, but that one
+          // still has to say something.
+          const cadence = cadenceFor(g.jobType);
+          const nextRun = nextRunFor(g.jobType, renderedAt);
+          const cols = countColumns(g.jobType, g.runs);
+          const span = cols.length || 1;
+          return (
+            <li key={g.jobType} className="strip__job">
+              <Disclosure
+                className="strip__disc"
+                defaultOpen={needsAttention(health)}
+                summary={
+                  <>
+                    <h2 className="strip__name">{g.jobType}</h2>
+                    <Status tone={HEALTH_TONE[health]}>{healthLabel(health)}</Status>
+                    <RelativeTime iso={latestIso} initial={formatAgo(latestIso, now)} />
+                    <span className="strip__cadence mono">
+                      {cadence ?? "on demand"}
+                      {nextRun && (
+                        <>
+                          <br />
+                          next {utcHhmm(nextRun)}
+                        </>
                       )}
-                    </>
-                  }
-                >
-                  {g.runs.length === 0 ? (
-                    <p className="dim strip__empty">No runs recorded for this job yet.</p>
-                  ) : (
-                    <Scroller label={`${g.jobType} runs`}>
-                      {/* No colgroup: each job now shows only the counters it
-                          actually moves, so the tables deliberately no longer
-                          share a column set and cannot be aligned to each
-                          other. Widths come from content. */}
-                      <table className="log log--runs">
-                        <thead>
-                          <tr>
-                            <th scope="col">Started</th>
-                            <th scope="col">Took</th>
-                            <th scope="col">Status</th>
-                            {cols.length > 0 ? (
-                              cols.map((k) => (
-                                <th key={k} scope="col" className="num">
-                                  {humanizeKey(k)}
-                                </th>
-                              ))
-                            ) : (
-                              <th scope="col">Counts</th>
-                            )}
-                            <th scope="col">Raw</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {g.runs.map((r) => {
-                            const startedIso = r.startedAt
-                              ? r.startedAt.toISOString()
-                              : null;
-                            return (
-                              <tr key={r.id}>
-                                {/* At 320px the 19ch ISO stamp is the widest
-                                    cell in the row and the least of its
-                                    meaning, and it is most of what the table's
-                                    44rem floor was buying. Below 40rem it reads
-                                    as elapsed time instead — but the exact
-                                    value may not leave the accessibility tree
-                                    for that, so it is restated in text a screen
-                                    reader reads out. `title` would not do:
-                                    VoiceOver and TalkBack do not announce it
-                                    and touch cannot reach it. */}
-                                <td className="mono nowrap">
-                                  <span className="only-wide">{fmt(r.startedAt)}</span>
-                                  <span className="only-narrow">
-                                    <RelativeTime
-                                      iso={startedIso}
-                                      initial={formatAgo(startedIso, now)}
-                                    />
-                                    <span className="visually-hidden">
-                                      {`started ${fmt(r.startedAt)} UTC`}
-                                    </span>
+                    </span>
+                  </>
+                }
+              >
+                {g.runs.length === 0 ? (
+                  <p className="dim strip__empty">No runs recorded for this job yet.</p>
+                ) : (
+                  <Scroller label={`${g.jobType} runs`}>
+                    {/* No colgroup: each job now shows only the counters it
+                        actually moves, so the tables deliberately no longer
+                        share a column set and cannot be aligned to each
+                        other. Widths come from content. */}
+                    <table className="log log--runs">
+                      <thead>
+                        <tr>
+                          <th scope="col">Started</th>
+                          <th scope="col">Took</th>
+                          <th scope="col">Status</th>
+                          {cols.length > 0 ? (
+                            cols.map((k) => (
+                              <th key={k} scope="col" className="num">
+                                {humanizeKey(k)}
+                              </th>
+                            ))
+                          ) : (
+                            <th scope="col">Counts</th>
+                          )}
+                          <th scope="col">Raw</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {g.runs.map((r) => {
+                          const startedIso = r.startedAt
+                            ? r.startedAt.toISOString()
+                            : null;
+                          return (
+                            <tr key={r.id}>
+                              {/* At 320px the 19ch ISO stamp is the widest
+                                  cell in the row and the least of its
+                                  meaning, and it is most of what the table's
+                                  44rem floor was buying. Below 40rem it reads
+                                  as elapsed time instead — but the exact
+                                  value may not leave the accessibility tree
+                                  for that, so it is restated in text a screen
+                                  reader reads out. `title` would not do:
+                                  VoiceOver and TalkBack do not announce it
+                                  and touch cannot reach it. */}
+                              <td className="mono nowrap">
+                                <span className="only-wide">{fmt(r.startedAt)}</span>
+                                <span className="only-narrow">
+                                  <RelativeTime
+                                    iso={startedIso}
+                                    initial={formatAgo(startedIso, now)}
+                                  />
+                                  <span className="visually-hidden">
+                                    {`started ${fmt(r.startedAt)} UTC`}
                                   </span>
-                                </td>
-                                <td className="mono nowrap num">
-                                  {formatDuration(r.startedAt, r.finishedAt) ?? (
-                                    <span className="dim">…</span>
-                                  )}
-                                </td>
-                                {/* The error lives here rather than in a column
-                                    of its own: it is populated on a small
-                                    minority of runs, and a column that is an
-                                    em-dash on every row is width spent on
-                                    nothing. */}
-                                <td>
-                                  <Status tone={tone(r.status)}>
-                                    {r.status ?? "running"}
-                                  </Status>
-                                  {r.errorSummary && (
-                                    <span className="detail strip__err">
-                                      {r.errorSummary}
-                                    </span>
-                                  )}
-                                </td>
-                                {!r.counts || cols.length === 0 ? (
-                                  // Three absences that read differently: a run
-                                  // still in flight has not reported yet, a
-                                  // finished one that recorded nothing never
-                                  // will, and a recorded all-zero result is a
-                                  // real answer. cols is empty only when no run
-                                  // in the window moved a counter, so there is
-                                  // one header cell to span.
-                                  <td colSpan={span} className="dim">
-                                    {!r.counts ? (
-                                      r.finishedAt ? (
-                                        <>&mdash;</>
-                                      ) : (
-                                        <>&hellip;</>
-                                      )
-                                    ) : isNoChange(r.counts) ? (
-                                      "no change"
-                                    ) : (
-                                      <>&mdash;</>
-                                    )}
-                                  </td>
-                                ) : isNoChange(r.counts) ? (
-                                  <td colSpan={span} className="dim">
-                                    no change
-                                  </td>
-                                ) : (
-                                  cols.map((k) => {
-                                    const v = r.counts?.[k];
-                                    return (
-                                      <td
-                                        key={k}
-                                        className={v ? "mono num" : "mono num dim"}
-                                      >
-                                        {v ?? "—"}
-                                      </td>
-                                    );
-                                  })
+                                </span>
+                              </td>
+                              <td className="mono nowrap num">
+                                {formatDuration(r.startedAt, r.finishedAt) ?? (
+                                  <span className="dim">…</span>
                                 )}
-                                <td>
-                                  {r.counts ? (
-                                    <Json value={r.counts} summary="json" />
+                              </td>
+                              {/* The error lives here rather than in a column
+                                  of its own: it is populated on a small
+                                  minority of runs, and a column that is an
+                                  em-dash on every row is width spent on
+                                  nothing. */}
+                              <td>
+                                <Status tone={tone(r.status)}>
+                                  {r.status ?? "running"}
+                                </Status>
+                                {r.errorSummary && (
+                                  <span className="detail strip__err">
+                                    {r.errorSummary}
+                                  </span>
+                                )}
+                              </td>
+                              {!r.counts || cols.length === 0 ? (
+                                // Three absences that read differently: a run
+                                // still in flight has not reported yet, a
+                                // finished one that recorded nothing never
+                                // will, and a recorded all-zero result is a
+                                // real answer. cols is empty only when no run
+                                // in the window moved a counter, so there is
+                                // one header cell to span.
+                                <td colSpan={span} className="dim">
+                                  {!r.counts ? (
+                                    r.finishedAt ? (
+                                      <>&mdash;</>
+                                    ) : (
+                                      <>&hellip;</>
+                                    )
+                                  ) : isNoChange(r.counts) ? (
+                                    "no change"
                                   ) : (
-                                    <span className="dim">&mdash;</span>
+                                    <>&mdash;</>
                                   )}
                                 </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </Scroller>
-                  )}
-                  {/* Below the history, not above it: the admin opened this row
-                      to read why it failed, and the error string is the top
-                      row of that table. Only for jobs the worker actually has
-                      a queue for — the action rejects anything else, and a
-                      control that can only fail is worse than none. */}
-                  {JOB_CRON[g.jobType] && (
-                    <form action={syncJobAction} className="btn-row strip__act">
-                      <input type="hidden" name="jobType" value={g.jobType} />
-                      <Submit className="btn btn--micro" pendingLabel="Queueing…">
-                        Re-run {g.jobType}
-                      </Submit>
-                    </form>
-                  )}
-                </Disclosure>
-              </li>
-            );
-          })}
-        </ul>
-      )}
+                              ) : isNoChange(r.counts) ? (
+                                <td colSpan={span} className="dim">
+                                  no change
+                                </td>
+                              ) : (
+                                cols.map((k) => {
+                                  const v = r.counts?.[k];
+                                  return (
+                                    <td
+                                      key={k}
+                                      className={v ? "mono num" : "mono num dim"}
+                                    >
+                                      {v ?? "—"}
+                                    </td>
+                                  );
+                                })
+                              )}
+                              <td>
+                                {r.counts ? (
+                                  <Json value={r.counts} summary="json" />
+                                ) : (
+                                  <span className="dim">&mdash;</span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </Scroller>
+                )}
+                {/* Below the history, not above it: the admin opened this row
+                    to read why it failed, and the error string is the top
+                    row of that table. Only for jobs the worker actually has
+                    a queue for — the action rejects anything else, and a
+                    control that can only fail is worse than none. */}
+                {JOB_CRON[g.jobType] && (
+                  <form action={syncJobAction} className="btn-row strip__act">
+                    <input type="hidden" name="jobType" value={g.jobType} />
+                    <Submit className="btn btn--micro" pendingLabel="Queueing…">
+                      Re-run {g.jobType}
+                    </Submit>
+                  </form>
+                )}
+              </Disclosure>
+            </li>
+          );
+        })}
+      </ul>
 
       {/* State before action (PRODUCT.md principle 2): the strip answers "what
           is true right now" before the gold button, which is the most

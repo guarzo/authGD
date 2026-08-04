@@ -1593,18 +1593,12 @@ h3.rule-head__label {
      row is its own grid container, so content-sized tracks would let a long
      cadence in one row shift that row's health token out of line with the
      rest — which is the single column this whole strip exists to let you
-     scan. The last track is dropped entirely when nothing is scheduled. */
-  grid-template-columns: 1ch minmax(7rem, 1fr) 7.5rem 6.5rem;
+     scan. The cadence track is unconditional: the status service seeds a row
+     for every scheduled job, so there is always something to put in it. */
+  grid-template-columns: 1ch minmax(7rem, 1fr) 7.5rem 6.5rem 9rem;
   align-items: center;
   gap: var(--s-4);
   padding: var(--s-3) var(--s-4);
-}
-
-/* The cadence track exists only when something on the page is scheduled;
-   otherwise the column would be 9rem of nothing at the right edge. */
-.strip--cadence .strip__head,
-.strip--cadence .strip__disc > summary {
-  grid-template-columns: 1ch minmax(7rem, 1fr) 7.5rem 6.5rem 9rem;
 }
 
 /* Header labels sit over their values: health reads from the left edge of its
@@ -1855,8 +1849,12 @@ h3.rule-head__label {
    room for font-fallback drift. A min-width rather than a fixed basis on
    purpose: a state that somehow outgrows it loses the alignment instead of
    being clipped. The e2e spec asserts the two edges match, so this number
-   cannot rot silently. */
-.push > time,
+   cannot rot silently.
+
+   `.ago` and not `time`: RelativeTime drops to a `<span class="ago">` when it
+   has no instant to hang a machine value on, and a type selector would lose
+   the column the day that case reaches this row. */
+.push > .ago,
 .push > .st {
   min-width: 7rem;
 }
