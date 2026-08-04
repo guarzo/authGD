@@ -53,3 +53,25 @@ describe("ContactState (label_mismatch render)", () => {
     expect(html).not.toContain("Labels named");
   });
 });
+
+// STANDINGS_LABEL is operator-supplied and matchContactLabel folds surrounding
+// whitespace off the required name too, so a padded config value is reachable.
+// This branch fires far more often than label_mismatch; if it names the label
+// without the quoted `literal` treatment, a member is told to create a label
+// whose exact characters they cannot see — the incident this feature exists to
+// prevent, one branch over.
+describe("ContactState (missing_label render)", () => {
+  it("quotes the required label so its whitespace is visible", () => {
+    const html = renderToStaticMarkup(
+      createElement(ContactState, {
+        result: "missing_label",
+        detail: null,
+        label: "AuthGD ",
+        target: true,
+      }),
+    );
+    expect(html).toContain("Create a contact label named");
+    expect(html).toContain('class="literal"');
+    expect(html).toContain("&quot;AuthGD &quot;");
+  });
+});

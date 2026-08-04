@@ -368,7 +368,7 @@ Four properties worth knowing before changing it:
 
 - **ESI cannot create labels.** Create it in the client first. Until it exists
   the job records `missing_label` and skips every write — safe, but inert.
-- **The match is exact and case-sensitive** (`src/jobs/contacts.ts`), so
+- **The match is exact and case-sensitive** (`src/core/contact-label.ts`), so
   `authgd` ≠ `AuthGD`. A typo skips rather than deletes. A near-miss typo (case
   or whitespace only) records `label_mismatch` and names both the offending
   label(s) and the required name; an unrelated typo records `missing_label`

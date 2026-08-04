@@ -41,7 +41,8 @@ export function ContactState({
       <>
         <Status tone="warn">label missing</Status>
         <span className="dim">
-          Create a contact label named <code>{label}</code> in game, then re-sync.
+          Create a contact label named <code className="literal">{`"${label}"`}</code> in
+          game, then re-sync.
         </span>
       </>
     );
