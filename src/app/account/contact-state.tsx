@@ -1,4 +1,5 @@
 import { Status } from "@/app/_components/ui";
+import { parseLabelCandidates } from "@/core/contact-label";
 
 /**
  * The contact job records a small set of result codes. "ok", "missing_label",
@@ -48,11 +49,11 @@ export function ContactState({
     );
   }
   if (result === "label_mismatch") {
-    // The job stores near-miss candidates joined with ", " (src/jobs/contacts.ts).
-    // Splitting them back out lets each render as its own quoted literal instead
-    // of one quoted blob that isn't the name of any label the member actually
-    // has — the same defect this feature exists to fix, just moved into the copy.
-    const candidates = detail ? detail.split(", ") : [];
+    // The job stores near-miss candidates as a JSON array
+    // (src/core/contact-label.ts). Rendering each one as its own quoted literal
+    // — rather than the serialized value as a single name — keeps the copy from
+    // naming a label the member does not have.
+    const candidates = parseLabelCandidates(detail);
     return (
       <>
         <Status tone="warn">label mismatch</Status>

@@ -273,7 +273,7 @@ describe("runContactsJob", () => {
 
     const row = await lastResult(1);
     expect(row?.lastResult).toBe("label_mismatch");
-    expect(row?.lastDetail).toBe("FLYGD");
+    expect(row?.lastDetail).toBe(JSON.stringify(["FLYGD"]));
     expect(row?.lastSyncedAt).toBeNull();
     expect(calls.adds).toEqual([]);
     expect(calls.edits).toEqual([]);
@@ -292,7 +292,7 @@ describe("runContactsJob", () => {
       },
     });
     await runContactsJob({ db: ctx.db, cfg, esi, fetchImpl: okToken });
-    expect((await lastResult(1))?.lastDetail).toBe("FLYGD, flygd ");
+    expect((await lastResult(1))?.lastDetail).toBe(JSON.stringify(["FLYGD", "flygd "]));
   });
 
   it("still records missing_label when no label is even close", async () => {
@@ -312,7 +312,7 @@ describe("runContactsJob", () => {
 
     const bad = fakeEsi({ labels: { 1: [{ labelId: LABEL_ID, labelName: "FLYGD" }] } });
     await runContactsJob({ db: ctx.db, cfg, esi: bad.esi, fetchImpl: okToken });
-    expect((await lastResult(1))?.lastDetail).toBe("FLYGD");
+    expect((await lastResult(1))?.lastDetail).toBe(JSON.stringify(["FLYGD"]));
 
     const good = fakeEsi({ labels: { 1: [{ labelId: LABEL_ID, labelName: "flygd" }] } });
     await runContactsJob({ db: ctx.db, cfg, esi: good.esi, fetchImpl: okToken });

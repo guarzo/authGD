@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { getConfig } from "@/config";
 import { getDb } from "@/db";
+import { parseLabelCandidates } from "@/core/contact-label";
 import { getAdminContext } from "@/lib/admin-guard";
 import {
   getAdminAccountsList,
@@ -258,18 +259,26 @@ function AccountRow({
                   {c.tokenStatus}
                   {c.needsReauthForScopes && " (scope shortfall)"}
                   {c.affiliationInvalid && " · affiliation invalid"}
-                  {c.contactSyncResult &&
-                    ` · contacts: ${c.contactSyncResult}${
-                      c.contactSyncDetail
-                        ? // The job joins near-miss candidates with ", " (src/jobs/contacts.ts).
-                          // Quoting each one separately keeps this from reading as one
-                          // (wrong) label name when there are two or more.
-                          ` (${c.contactSyncDetail
-                            .split(", ")
-                            .map((name) => `"${name}"`)
-                            .join(", ")})`
-                        : ""
-                    }`}
+                  {c.contactSyncResult && ` · contacts: ${c.contactSyncResult}`}
+                  {c.contactSyncResult && c.contactSyncDetail && (
+                    // Each candidate gets its own `literal` code element, for the
+                    // same reason the member page does it (src/app/globals.css):
+                    // HTML collapses runs of whitespace, so a label that differs
+                    // from STANDINGS_LABEL only by a trailing space renders here
+                    // identically to the correct one unless `white-space: pre`
+                    // is in force. An admin reading this drawer is usually the
+                    // person told "but it looks right to me".
+                    <>
+                      {" ("}
+                      {parseLabelCandidates(c.contactSyncDetail).map((name, i) => (
+                        <span key={`${name}-${i}`}>
+                          {i > 0 && ", "}
+                          <code className="literal">{`"${name}"`}</code>
+                        </span>
+                      ))}
+                      {")"}
+                    </>
+                  )}
                   {c.mapObservedAt &&
                     ` · on map (observed ${c.mapObservedAt.toISOString().slice(0, 16)}Z)`}
                 </li>
