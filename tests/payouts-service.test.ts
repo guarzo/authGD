@@ -3,6 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { loadConfig, type Config } from "@/config";
 import {
   auditLog,
+  character,
   lootItem,
   lootPool,
   payoutOperation,
@@ -1131,6 +1132,132 @@ describe("addParticipant", () => {
       .from(payoutParticipant)
       .where(eq(payoutParticipant.operationId, operationId));
     expect(rows).toHaveLength(1);
+  });
+
+  /**
+   * Case 2 from the roster-warnings design (see `crossStateClashes` in
+   * `@/app/payouts/[id]/roster-warnings`): a new RESOLVED entry lands on a
+   * roster that already carries an UNRESOLVED row under the same display
+   * name. This is the ordinary path, not an edge case — a roster pasted on
+   * the night leaves "Bob" unresolved because his character wasn't linked
+   * yet, and Bob gets added again later once his ESI link exists.
+   *
+   * The guard in `addParticipant` only fires inside `entry.accountId ===
+   * null`, so a resolved entry never reaches it — deliberately. Refusing
+   * here would mean the operator can never add the linked, payable "Bob"
+   * without first deleting the unresolved "Bob" row, which may turn out to
+   * be a different human entirely. The resolved row carries accountId and
+   * recipientCharacterId, so payment and "open info" target it unambiguously
+   * regardless of what the unresolved row is also called — the shared
+   * string is a display label, not an identity.
+   */
+  it("inserts a resolved entry alongside an existing unresolved row with the same name", async () => {
+    // The roster is set before "Bob"'s character exists, so
+    // resolveRosterNames finds no character match and the row is seeded
+    // unresolved (accountId null) — exactly like a roster pasted before
+    // everyone's ESI link is in place.
+    const { operator, operationId } = await seedDraftWithRoster(["Bob"]);
+
+    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    await seedCharacter(ctx.db, cfg, {
+      id: 700101,
+      accountId: acc.id,
+      name: "Bob",
+      main: true,
+    });
+
+    // Different case than the seeded roster name and the seeded character's
+    // stored spelling ("bob" vs "Bob" vs "Bob") — resolution is
+    // case-insensitive, and so is the (non-firing) cross-state guard, so a
+    // casing mismatch cannot be why this is let through.
+    await ctx.db.transaction((tx) => addParticipant(tx, operator.id, operationId, "bob"));
+
+    const rows = await ctx.db
+      .select()
+      .from(payoutParticipant)
+      .where(eq(payoutParticipant.operationId, operationId));
+    expect(rows).toHaveLength(2);
+    // 300.00 over two equal shares — proof recalculate ran on the
+    // pass-through insert, not just that the row landed.
+    expect(rows.map((r) => r.amount).sort()).toEqual(["150.00", "150.00"]);
+
+    const unresolvedRow = rows.find((r) => r.accountId === null)!;
+    expect(unresolvedRow.displayName).toBe("Bob");
+
+    const resolvedRow = rows.find((r) => r.accountId !== null)!;
+    expect(resolvedRow.accountId).toBe(acc.id);
+    expect(resolvedRow.recipientCharacterId).toBe(700101);
+
+    const audits = await ctx.db
+      .select()
+      .from(auditLog)
+      .where(eq(auditLog.action, "payout.participant_added"));
+    expect(audits).toHaveLength(1);
+    // Target is always the operation uuid, never the participant uuid —
+    // audit.ts resolves every `payout.*` target against payoutOperation.
+    expect(audits[0].target).toBe(operationId);
+  });
+
+  /**
+   * Case 1 from the roster-warnings design: a new UNRESOLVED entry lands on
+   * a roster that already carries a RESOLVED row under the same display
+   * name. This is a staleness path, not an everyday one — it requires a
+   * resolved row whose displayName was frozen at resolution time to have
+   * drifted from what the same name resolves to now. Here that's modeled
+   * honestly by renaming the character in the database out from under the
+   * already-resolved row, the same way an EVE character rename would: the
+   * roster still shows the old label because `payoutParticipant.displayName`
+   * is a snapshot, not a live join.
+   *
+   * If the rename hadn't happened, "Old Name" would still resolve to the
+   * same account and the second `addParticipant` call would hit the
+   * alt-collapse branch (`twin`) instead of this one — the staleness is
+   * exactly what keeps the two cases distinct.
+   */
+  it("inserts an unresolved entry alongside an existing resolved row whose name has gone stale", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    await seedCharacter(ctx.db, cfg, {
+      id: 700102,
+      accountId: acc.id,
+      name: "Old Name",
+      main: true,
+    });
+    const { operator, operationId } = await seedDraftWithRoster(["Old Name"]);
+
+    // Simulate an EVE character rename: nobody resolves under "Old Name"
+    // anymore, but the participant row inserted by setRoster still carries
+    // it as its frozen displayName.
+    await ctx.db
+      .update(character)
+      .set({ name: "New Name" })
+      .where(eq(character.id, 700102));
+
+    await ctx.db.transaction((tx) =>
+      addParticipant(tx, operator.id, operationId, "old name"),
+    );
+
+    const rows = await ctx.db
+      .select()
+      .from(payoutParticipant)
+      .where(eq(payoutParticipant.operationId, operationId));
+    expect(rows).toHaveLength(2);
+    // 300.00 over two equal shares — proof recalculate ran on the
+    // pass-through insert, not just that the row landed.
+    expect(rows.map((r) => r.amount).sort()).toEqual(["150.00", "150.00"]);
+
+    const resolvedRow = rows.find((r) => r.accountId !== null)!;
+    expect(resolvedRow.accountId).toBe(acc.id);
+    expect(resolvedRow.displayName).toBe("Old Name");
+
+    const unresolvedRow = rows.find((r) => r.accountId === null)!;
+    expect(unresolvedRow.displayName).toBe("old name");
+
+    const audits = await ctx.db
+      .select()
+      .from(auditLog)
+      .where(eq(auditLog.action, "payout.participant_added"));
+    expect(audits).toHaveLength(1);
+    expect(audits[0].target).toBe(operationId);
   });
 
   it("refuses once the operation is finalized", async () => {
