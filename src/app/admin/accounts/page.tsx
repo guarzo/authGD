@@ -49,10 +49,21 @@ const ERRORS: Record<string, string> = {
     "Your admin access changed since this page loaded. Refresh to see the current state.",
 };
 
-// The sortable columns plus the six fixed ones (Tokens, Discord, Map, Last
-// login, Admin, Actions). Shared with the drawer row's colSpan and the
-// empty-state row's, so widening the table can't leave one of them stale.
-const COLUMN_COUNT = SORTS.length + 6;
+// The columns after the sortable ones, in render order. A list rather than a
+// count because three separate things depend on the table's width — the
+// header row, the empty-state row's colSpan, and the drawer row's — and a
+// hand-kept number drifts the moment someone adds a column and updates two of
+// the three. Adding a label here is the only edit a new column needs.
+const FIXED_COLUMNS = [
+  "Tokens",
+  "Discord",
+  "Map",
+  "Last login",
+  "Admin",
+  "Actions",
+] as const;
+
+const COLUMN_COUNT = SORTS.length + FIXED_COLUMNS.length;
 
 function fmt(d: Date | null): string {
   return d ? d.toISOString().slice(0, 10) : "—";
@@ -183,7 +194,7 @@ export default async function AdminAccountsPage({
               the table purely because it carried a stack of buttons. */}
           <colgroup>
             <col />
-            <col className="log__col--fit" span={9} />
+            <col className="log__col--fit" span={COLUMN_COUNT - 1} />
           </colgroup>
           <thead>
             <tr>
@@ -211,12 +222,11 @@ export default async function AdminAccountsPage({
                   </a>
                 </th>
               ))}
-              <th scope="col">Tokens</th>
-              <th scope="col">Discord</th>
-              <th scope="col">Map</th>
-              <th scope="col">Last login</th>
-              <th scope="col">Admin</th>
-              <th scope="col">Actions</th>
+              {FIXED_COLUMNS.map((label) => (
+                <th key={label} scope="col">
+                  {label}
+                </th>
+              ))}
             </tr>
           </thead>
           <tbody>
