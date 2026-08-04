@@ -154,8 +154,8 @@ export default async function AdminAccountsPage({
       <RuleHead as="h2">
         {rows.length === 1 ? "1 account" : `${rows.length} accounts`}
       </RuleHead>
-      <Scroller label="Accounts">
-        <table className="log log--dense">
+      <Scroller label="Accounts" tall>
+        <table className="log log--dense log--sticky-head log--sticky-col">
           {/* The scanning anchor gets the surplus. Every other column holds a
               single badge, date, or button pair, so `width: 1%` collapses it to
               its own content and hands the leftover width to Name. Before the
@@ -235,14 +235,57 @@ function AccountRow({
           ? "off"
           : "ok";
 
+  // The pinned first column exists so a 28px tier control is never pressed with
+  // nothing on screen saying whose it is, and "no main" was the same string on
+  // every account that lacks one — identifying the row as well as no pin at all.
+  // Fall through to something that actually names it.
+  //
+  // Every name here reaches this page as a character's `name` — `mainName` is
+  // one too (services/account-view.ts) — and ESI has handed back names that are
+  // empty or whitespace. Whitespace is the dangerous shape: it is truthy, so it
+  // takes the identity slot and then renders as nothing, which is the one
+  // outcome this column exists to prevent. Normalize once here so the pick, the
+  // visible label and the accessible name cannot disagree about whether a name
+  // names anything.
+  const named = (n: string | null | undefined) => n?.trim() || null;
+  const mainName = named(r.mainName);
+  // The service returns characters unordered, so pick by name rather than by
+  // array position, or the identity of a row changes between two renders of the
+  // same data. Blank names are dropped rather than sorted: "" sorts first, so a
+  // whitespace-only name would otherwise win the pick.
+  const firstName = mainName
+    ? null
+    : [...r.characters]
+        .flatMap((c) => named(c.name) ?? [])
+        .sort((a, b) => a.localeCompare(b))[0];
+  const idLabel = `acct ${r.accountId.slice(0, 8)}`;
+  // The same identity as one string, for accessible names with nowhere to put
+  // markup. Both operands are already normalized to a real name or null, so the
+  // fallback cannot walk past a blank into `aria-label="Note for "` — a row
+  // with no identity at all, in the column whose whole job is saying whose tier
+  // is about to change.
+  const identity = mainName ?? firstName ?? idLabel;
+  // RowDisclosure puts its label on the summary as `aria-label`, which
+  // overrides the visible text, so this mirrors that text verbatim — an
+  // accessible name has to stay a superset of its visible label (WCAG 2.5.3).
+  const pinLabel = firstName ? `${identity} ·no main` : identity;
+
   return (
     <tr>
       <td>
         <RowDisclosure
-          label={r.mainName ?? "Account with no main"}
+          label={pinLabel}
           summary={
             <>
-              {r.mainName ?? <em>no main</em>}
+              {mainName || (
+                <>
+                  {firstName || <span className="mono">{idLabel}</span>}
+                  {/* Marked in text, not by styling: the row is named by a
+                      character that is not its main, and that distinction has
+                      to be perceivable without seeing the dimming. */}
+                  {firstName && <span className="mono dim"> ·no main</span>}
+                </>
+              )}
               {r.characters.length > 1 && ` (+${r.characters.length - 1})`}
             </>
           }
@@ -286,10 +329,17 @@ function AccountRow({
                   action={setTierAction.bind(null, r.accountId, t)}
                   className="inline-form"
                 >
+                  {/* Same principle as the note field, and the same reason: a
+                      speech-input or screen-reader user reaches this control
+                      with only the tier word to go on, and this is the control
+                      derole-don't-boot turns on. The visible text stays the bare
+                      tier word, so the accessible name keeps it verbatim (WCAG
+                      2.5.3) and adds the row in front of it. */}
                   <Submit
                     className="btn btn--micro"
                     disabled={r.tierLocked && r.tier === t}
                     aria-pressed={r.tier === t}
+                    aria-label={`Set ${identity} to ${t}`}
                   >
                     {t}
                   </Submit>
@@ -300,7 +350,12 @@ function AccountRow({
                   action={returnToAutoAction.bind(null, r.accountId)}
                   className="inline-form"
                 >
-                  <Submit className="btn btn--micro">auto</Submit>
+                  <Submit
+                    className="btn btn--micro"
+                    aria-label={`return ${identity} to auto tier`}
+                  >
+                    auto
+                  </Submit>
                 </form>
               )}
             </div>
@@ -318,7 +373,10 @@ function AccountRow({
                 r.status === "cryo" ? "active" : "cryo",
               )}
             >
-              <Submit className="btn btn--micro">
+              <Submit
+                className="btn btn--micro"
+                aria-label={`${r.status === "cryo" ? "wake" : "freeze"} ${identity}`}
+              >
                 {r.status === "cryo" ? "wake" : "freeze"}
               </Submit>
             </form>
@@ -335,7 +393,7 @@ function AccountRow({
                 name="note"
                 defaultValue={r.statusNote ?? ""}
                 placeholder="notes"
-                aria-label={`Note for ${r.mainName ?? "account"}`}
+                aria-label={`Note for ${identity}`}
               />
               <Submit className="btn btn--micro">save note</Submit>
             </form>
