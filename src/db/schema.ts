@@ -181,7 +181,10 @@ export const payoutOperationStatusEnum = pgEnum("payout_operation_status", [
   "draft",
   "finalized",
 ]);
-export const lootValuationSourceEnum = pgEnum("loot_valuation_source", ["appraised", "flat"]);
+export const lootValuationSourceEnum = pgEnum("loot_valuation_source", [
+  "appraised",
+  "flat",
+]);
 export const lootPriceSourceEnum = pgEnum("loot_price_source", [
   "triff",
   "manual",
@@ -197,7 +200,9 @@ export const payoutOperation = pgTable(
     occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
     battleReportUrl: text("battle_report_url"),
     createdBy: uuid("created_by").references(() => account.id, { onDelete: "set null" }),
-    corpSharePct: numeric("corp_share_pct", { precision: 5, scale: 2 }).notNull().default("0"),
+    corpSharePct: numeric("corp_share_pct", { precision: 5, scale: 2 })
+      .notNull()
+      .default("0"),
     status: payoutOperationStatusEnum("status").notNull().default("draft"),
     notes: text("notes"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -222,7 +227,9 @@ export const lootPool = pgTable(
     pricingMode: text("pricing_mode"),
     stationId: bigint("station_id", { mode: "number" }),
     regionId: bigint("region_id", { mode: "number" }),
-    totalValue: numeric("total_value", { precision: 20, scale: 2 }).notNull().default("0"),
+    totalValue: numeric("total_value", { precision: 20, scale: 2 })
+      .notNull()
+      .default("0"),
     notes: text("notes"),
     appraisedAt: timestamp("appraised_at", { withTimezone: true }),
   },
@@ -250,7 +257,9 @@ export const lootItem = pgTable(
     name: text("name").notNull(),
     qty: bigint("qty", { mode: "number" }).notNull(),
     unitPrice: numeric("unit_price", { precision: 20, scale: 2 }).notNull().default("0"),
-    totalValue: numeric("total_value", { precision: 20, scale: 2 }).notNull().default("0"),
+    totalValue: numeric("total_value", { precision: 20, scale: 2 })
+      .notNull()
+      .default("0"),
     priceSource: lootPriceSourceEnum("price_source").notNull(),
   },
   (t) => [

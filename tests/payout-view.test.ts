@@ -183,7 +183,7 @@ describe("getPayoutOperationDetail — exact money on the read side", () => {
     // 3 equal ways after a 10% corp share is 30.00 ISK per participant and
     // 10.01 ISK to the corp (the extra cent is the undistributed remainder).
     expect(detail!.corpAmount).toBe("10.01");
-    expect(detail!.participants[0]!.amount).toBe("30.00");
+    expect(detail!.participants[0].amount).toBe("30.00");
     // A naive total * pct / 100 would give 10.00, not the derived remainder
     // that also swallows the assignment rounding — pin the two disagree.
     // Basis points derived from the same constant the fixture uses above, so

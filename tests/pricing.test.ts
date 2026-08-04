@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { selectPrice, PRICING_MODES, type PricingMode, type QuoteSides } from "@/core/pricing";
+import {
+  selectPrice,
+  PRICING_MODES,
+  type PricingMode,
+  type QuoteSides,
+} from "@/core/pricing";
 
 describe("PRICING_MODES", () => {
   it("lists all four modes", () => {
@@ -47,7 +52,12 @@ describe("selectPrice", () => {
       mode: "sell_p05",
       expected: null,
     },
-    { label: "undefined quote returns null", quote: undefined, mode: "sell_best", expected: null },
+    {
+      label: "undefined quote returns null",
+      quote: undefined,
+      mode: "sell_best",
+      expected: null,
+    },
   ];
 
   it.each(cases)("$label", ({ quote, mode, expected }) => {

@@ -134,21 +134,24 @@ describe("computeSplit", () => {
     },
   ];
 
-  it.each(cases)("$name", ({ totalCents, corpSharePct, participants, expectAmounts, expectCorp }) => {
-    const result = computeSplit({ totalCents, corpSharePct, participants });
+  it.each(cases)(
+    "$name",
+    ({ totalCents, corpSharePct, participants, expectAmounts, expectCorp }) => {
+      const result = computeSplit({ totalCents, corpSharePct, participants });
 
-    for (const [id, expected] of Object.entries(expectAmounts)) {
-      const p = participants.find((x) => x.id === id)!;
-      if (p.excluded) {
-        expect(result.amounts.has(id)).toBe(false);
-      } else {
-        expect(result.amounts.get(id)).toBe(expected);
+      for (const [id, expected] of Object.entries(expectAmounts)) {
+        const p = participants.find((x) => x.id === id)!;
+        if (p.excluded) {
+          expect(result.amounts.has(id)).toBe(false);
+        } else {
+          expect(result.amounts.get(id)).toBe(expected);
+        }
       }
-    }
-    expect(result.corpAmountCents).toBe(expectCorp);
+      expect(result.corpAmountCents).toBe(expectCorp);
 
-    // Invariant: nothing is created or destroyed by the split, for every case.
-    const sumAmounts = [...result.amounts.values()].reduce((sum, a) => sum + a, 0n);
-    expect(result.corpAmountCents + sumAmounts).toBe(totalCents);
-  });
+      // Invariant: nothing is created or destroyed by the split, for every case.
+      const sumAmounts = [...result.amounts.values()].reduce((sum, a) => sum + a, 0n);
+      expect(result.corpAmountCents + sumAmounts).toBe(totalCents);
+    },
+  );
 });

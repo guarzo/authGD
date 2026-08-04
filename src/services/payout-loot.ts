@@ -118,7 +118,11 @@ export async function addFlatPool(
   return { poolId: pool.id };
 }
 
-export async function deletePool(dbtx: DbTx, actor: string, poolId: string): Promise<void> {
+export async function deletePool(
+  dbtx: DbTx,
+  actor: string,
+  poolId: string,
+): Promise<void> {
   await requirePayoutOperator(dbtx, actor);
   const [pool] = await dbtx.select().from(lootPool).where(eq(lootPool.id, poolId));
   if (!pool) throw new Error("pool not found");

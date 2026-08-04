@@ -140,10 +140,7 @@ test("create, add a flat pool, paste a roster, finalize, mark paid", async ({
     .where(and(eq(auditLog.action, "payout.finalized"), eq(auditLog.target, opId)));
   expect(finalized).toHaveLength(1);
 
-  await page
-    .getByRole("button", { name: "mark paid" })
-    .first()
-    .click();
+  await page.getByRole("button", { name: "mark paid" }).first().click();
   // exact: true — "paid" is a substring of the sibling row's "unpaid" status,
   // so a bare getByText matches both.
   await expect(page.getByText("paid", { exact: true })).toBeVisible();
@@ -165,9 +162,7 @@ test("create, add a flat pool, paste a roster, finalize, mark paid", async ({
 
   // No DOM-nesting console error anywhere in this run — the operator controls
   // (Finalize, then Unlock) rendered on every one of this test's page loads.
-  expect(consoleErrors.filter((e) => e.includes("cannot be a descendant"))).toEqual(
-    [],
-  );
+  expect(consoleErrors.filter((e) => e.includes("cannot be a descendant"))).toEqual([]);
 });
 
 test("pasting two alts of one account collapses them into one participant row", async ({
@@ -382,7 +377,10 @@ test("two participant rows sharing an unresolved name trigger the duplicate-name
 async function assertReconciles(page: Page, operationId: string): Promise<void> {
   const [pools, participants] = await Promise.all([
     db.select().from(lootPool).where(eq(lootPool.operationId, operationId)),
-    db.select().from(payoutParticipant).where(eq(payoutParticipant.operationId, operationId)),
+    db
+      .select()
+      .from(payoutParticipant)
+      .where(eq(payoutParticipant.operationId, operationId)),
   ]);
   const totalCents = pools.reduce((sum, p) => sum + iskToCents(p.totalValue), 0n);
   const assignedCents = participants.reduce((sum, p) => sum + iskToCents(p.amount), 0n);

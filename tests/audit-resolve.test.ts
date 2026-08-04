@@ -281,7 +281,11 @@ describe("resolveAuditIdentities: payout target kind", () => {
       .insert(payoutOperation)
       .values({ name: "Roster test", occurredAt: new Date(), corpSharePct: "0" })
       .returning();
-    await logAudit(ctx.db, { actor: "system", action: "payout.roster_set", target: op.id });
+    await logAudit(ctx.db, {
+      actor: "system",
+      action: "payout.roster_set",
+      target: op.id,
+    });
     const [row] = await queryAuditLog(ctx.db);
     expect(row.targetKind).toBe("payout");
     expect(row.targetName).toBe("Roster test");

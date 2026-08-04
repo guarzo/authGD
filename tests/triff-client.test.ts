@@ -62,7 +62,11 @@ describe("createTriffClient", () => {
       http.get(BASE, () =>
         HttpResponse.json({
           types: [
-            { type_id: 34, sell: { best: 5.1, p05: 5.44 }, buy: { best: 4.9, p05: 4.61 } },
+            {
+              type_id: 34,
+              sell: { best: 5.1, p05: 5.44 },
+              buy: { best: 4.9, p05: 4.61 },
+            },
             { type_id: 35, sell: { best: 10, p05: 10.5 }, buy: { best: 9.5, p05: 9.1 } },
           ],
         }),
@@ -79,7 +83,9 @@ describe("createTriffClient", () => {
   });
 
   it("throws TriffError on a non-2xx response", async () => {
-    server.use(http.get(BASE, () => HttpResponse.json({ error: "boom" }, { status: 500 })));
+    server.use(
+      http.get(BASE, () => HttpResponse.json({ error: "boom" }, { status: 500 })),
+    );
     const triff = createTriffClient();
     const err = await triff.quote([34], { stationId: 60003760 }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(TriffError);

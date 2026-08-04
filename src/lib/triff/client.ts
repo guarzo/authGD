@@ -109,7 +109,9 @@ export function createTriffClient(opts: TriffClientOptions = {}) {
     const hasStation = loc.stationId !== undefined;
     const hasRegion = loc.regionId !== undefined;
     if (hasStation === hasRegion) {
-      throw new TriffError("triff quote: exactly one of stationId or regionId is required");
+      throw new TriffError(
+        "triff quote: exactly one of stationId or regionId is required",
+      );
     }
     if (typeIds.length === 0) return new Map();
 

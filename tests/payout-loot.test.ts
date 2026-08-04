@@ -194,7 +194,10 @@ describe("addFlatPool", () => {
         notes: "capital sold privately",
       }),
     );
-    const pools = await ctx.db.select().from(lootPool).where(eq(lootPool.operationId, operationId));
+    const pools = await ctx.db
+      .select()
+      .from(lootPool)
+      .where(eq(lootPool.operationId, operationId));
     expect(pools).toHaveLength(2);
     expect(await soleParticipantAmount(operationId)).toBe("150.00");
   });
@@ -210,7 +213,9 @@ describe("deletePool", () => {
 
     await ctx.db.transaction((tx) => deletePool(tx, operatorId, poolId));
     expect(await soleParticipantAmount(operationId)).toBe("0.00");
-    expect(await ctx.db.select().from(lootPool).where(eq(lootPool.id, poolId))).toHaveLength(0);
+    expect(
+      await ctx.db.select().from(lootPool).where(eq(lootPool.id, poolId)),
+    ).toHaveLength(0);
   });
 });
 
@@ -229,7 +234,10 @@ describe("payment lock", () => {
 
     await expect(
       ctx.db.transaction((tx) =>
-        addFlatPool(tx, operatorId, operationId, { totalValue: "999.00", notes: "too late" }),
+        addFlatPool(tx, operatorId, operationId, {
+          totalValue: "999.00",
+          notes: "too late",
+        }),
       ),
     ).rejects.toThrow(PayoutLockedError);
   });

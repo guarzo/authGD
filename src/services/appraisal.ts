@@ -37,12 +37,21 @@ export async function appraiseLoot(
   const idByLowerName = await deps.esi.resolveIds(lines.map((l) => l.name));
   const typeIds = [...new Set(idByLowerName.values())];
   const quotes = typeIds.length
-    ? await deps.triff.quote(typeIds, { stationId: opts.stationId, regionId: opts.regionId })
-    : new Map<number, Awaited<ReturnType<typeof deps.triff.quote>> extends Map<number, infer V> ? V : never>();
+    ? await deps.triff.quote(typeIds, {
+        stationId: opts.stationId,
+        regionId: opts.regionId,
+      })
+    : new Map<
+        number,
+        Awaited<ReturnType<typeof deps.triff.quote>> extends Map<number, infer V>
+          ? V
+          : never
+      >();
 
   const items: AppraisedItem[] = lines.map((line) => {
     const typeId = idByLowerName.get(line.name.toLowerCase()) ?? null;
-    const price = typeId !== null ? selectPrice(quotes.get(typeId), opts.pricingMode) : null;
+    const price =
+      typeId !== null ? selectPrice(quotes.get(typeId), opts.pricingMode) : null;
     if (typeId === null || price === null) {
       return {
         typeId,

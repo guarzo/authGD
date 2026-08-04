@@ -43,7 +43,10 @@ describe("appraiseLoot", () => {
     const result = await appraiseLoot(
       "10x Tritanium",
       { pricingMode: "sell_best", stationId: 60003760 },
-      { esi: fakeEsi({ tritanium: 34 }), triff: fakeTriff({ 34: { sell: { best: 5.1 } } }) },
+      {
+        esi: fakeEsi({ tritanium: 34 }),
+        triff: fakeTriff({ 34: { sell: { best: 5.1 } } }),
+      },
     );
     expect(result.items).toEqual([
       {
@@ -63,7 +66,10 @@ describe("appraiseLoot", () => {
     const result = await appraiseLoot(
       raw,
       { pricingMode: "sell_best", stationId: 60003760 },
-      { esi: fakeEsi({ tritanium: 34 }), triff: fakeTriff({ 34: { sell: { best: 5 } } }) },
+      {
+        esi: fakeEsi({ tritanium: 34 }),
+        triff: fakeTriff({ 34: { sell: { best: 5 } } }),
+      },
     );
     expect(result.items).toHaveLength(2);
     const junk = result.items.find((i) => i.name === "Unknown Junk")!;
@@ -85,7 +91,10 @@ describe("appraiseLoot", () => {
     const result = await appraiseLoot(
       "1x Plex",
       { pricingMode: "buy_best", stationId: 60003760 },
-      { esi: fakeEsi({ plex: 44992 }), triff: fakeTriff({ 44992: { sell: { best: 3000 } } }) },
+      {
+        esi: fakeEsi({ plex: 44992 }),
+        triff: fakeTriff({ 44992: { sell: { best: 3000 } } }),
+      },
     );
     expect(result.items[0]).toMatchObject({
       typeId: 44992,
@@ -95,36 +104,33 @@ describe("appraiseLoot", () => {
     });
   });
 
-  it(
-    // Rounding once at the line total rather than once per unit is the
-    // point of this test: rounding the unit price to cents FIRST (naive:
-    // 0.13 x 5,000,000 = 650,000.00) discriminates from rounding once at
-    // the line total (correct: round(0.125 x 5,000,000) cents = 625,000.00)
-    // by a visible, non-rounding-noise amount. A prior version of this test
-    // asserted a plain sum of three lines and passed under BOTH the naive
-    // and the correct implementation, so it never actually guarded the
-    // rounding order — see design doc discussion in the task-8 fix round.
-    // A second, differently-scaled line (small qty, ordinary 2dp price) is
-    // included so this is also the only test with two nonzero-priced lines,
-    // checking each line total AND the combined pool total.
-    "rounds once at the line total, not once per unit before multiplying by qty",
-    async () => {
-      const raw = "5000000x Widget\n3x Tritanium";
-      const result = await appraiseLoot(
-        raw,
-        { pricingMode: "sell_best", stationId: 1 },
-        {
-          esi: fakeEsi({ widget: 1, tritanium: 34 }),
-          triff: fakeTriff({ 1: { sell: { best: 0.125 } }, 34: { sell: { best: 5.1 } } }),
-        },
-      );
-      const widget = result.items.find((i) => i.name === "Widget")!;
-      const tri = result.items.find((i) => i.name === "Tritanium")!;
-      expect(widget.totalValue).toBe("625000.00");
-      expect(tri.totalValue).toBe("15.30");
-      expect(result.totalValue).toBe("625015.30");
-    },
-  );
+  it(// Rounding once at the line total rather than once per unit is the
+  // point of this test: rounding the unit price to cents FIRST (naive:
+  // 0.13 x 5,000,000 = 650,000.00) discriminates from rounding once at
+  // the line total (correct: round(0.125 x 5,000,000) cents = 625,000.00)
+  // by a visible, non-rounding-noise amount. A prior version of this test
+  // asserted a plain sum of three lines and passed under BOTH the naive
+  // and the correct implementation, so it never actually guarded the
+  // rounding order — see design doc discussion in the task-8 fix round.
+  // A second, differently-scaled line (small qty, ordinary 2dp price) is
+  // included so this is also the only test with two nonzero-priced lines,
+  // checking each line total AND the combined pool total.
+  "rounds once at the line total, not once per unit before multiplying by qty", async () => {
+    const raw = "5000000x Widget\n3x Tritanium";
+    const result = await appraiseLoot(
+      raw,
+      { pricingMode: "sell_best", stationId: 1 },
+      {
+        esi: fakeEsi({ widget: 1, tritanium: 34 }),
+        triff: fakeTriff({ 1: { sell: { best: 0.125 } }, 34: { sell: { best: 5.1 } } }),
+      },
+    );
+    const widget = result.items.find((i) => i.name === "Widget")!;
+    const tri = result.items.find((i) => i.name === "Tritanium")!;
+    expect(widget.totalValue).toBe("625000.00");
+    expect(tri.totalValue).toBe("15.30");
+    expect(result.totalValue).toBe("625015.30");
+  });
 
   it("does not let a half-cent unit price scale its rounding error with a large quantity", async () => {
     // Rounding 5.005 to a 2dp unit price ("5.00") and then multiplying by
