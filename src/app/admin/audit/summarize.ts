@@ -19,19 +19,31 @@ function shortId(id: string): string {
   return id.length > 6 ? `${id.slice(0, 6)}…` : id;
 }
 
-type Part = (
+type Render = (
   d: Record<string, unknown>,
   roleNames: ReadonlyMap<string, string>,
 ) => string;
+
+/**
+ * A renderer that knows which payload keys it reads. The tag is what lets
+ * summarizeDetails tell "declared and deliberately silent" apart from "nobody
+ * looked at this key", so only the second earns a `+N more`. Tagging at the
+ * combinator keeps the key names in one place: they are already arguments.
+ */
+type Part = Render & { readonly keys: readonly string[] };
+
+const part = (keys: readonly string[], render: Render): Part =>
+  Object.assign(render, { keys });
 
 /** `flygd → green`, or `→ green` when the payload has no prior value. One
  * renderer shared by every transition action, so the two can't drift apart
  * the way tier.changed and status.changed did. */
 function transition(fromKey: string, toKey: string): Part {
-  return (d) =>
+  return part([fromKey, toKey], (d) =>
     d[fromKey] !== undefined
       ? `${fmt(d[fromKey])} → ${fmt(d[toKey])}`
-      : `→ ${fmt(d[toKey])}`;
+      : `→ ${fmt(d[toKey])}`,
+  );
 }
 
 /** `+green −flygd`. Ids the app manages resolve to their tier name; anything
@@ -39,7 +51,7 @@ function transition(fromKey: string, toKey: string): Part {
  * operator asking which roles changed gets an answer, and an id that changed
  * since the row was written degrades instead of lying. */
 function roles(addedKey: string, removedKey: string): Part {
-  return (d, roleNames) => {
+  return part([addedKey, removedKey], (d, roleNames) => {
     const side = (key: string, sign: string): string => {
       const raw = d[key];
       if (!Array.isArray(raw) || raw.length === 0) return "";
@@ -55,41 +67,89 @@ function roles(addedKey: string, removedKey: string): Part {
       return parts.join(", ");
     };
     return [side(addedKey, "+"), side(removedKey, "−")].filter(Boolean).join(" ");
-  };
+  });
 }
 
 /** A single payload value, rendered bare. */
 function scalar(key: string): Part {
-  return (d) => (d[key] === undefined ? "" : fmt(d[key]));
+  return part([key], (d) => (d[key] === undefined ? "" : fmt(d[key])));
 }
 
 /** A payload value behind a fixed word, e.g. `character 90000001`. */
 function labelled(word: string, key: string): Part {
-  return (d) => (d[key] === undefined ? "" : `${word} ${fmt(d[key])}`);
+  return part([key], (d) => (d[key] === undefined ? "" : `${word} ${fmt(d[key])}`));
+}
+
+/** A boolean that is only worth words when it is true: `locked`, `was main`.
+ * A false flag renders nothing but still counts as read, so it never shows up
+ * as an unexplained `+1 more`. */
+function flag(key: string, word: string): Part {
+  return part([key], (d) => (d[key] ? word : ""));
+}
+
+/** `missing esi-a.v1, esi-b.v1` up to two values, `missing 4 scopes` beyond
+ * that: a full EVE scope string is long and this column is narrow.
+ *
+ * Guards with Array.isArray because the DB does not enforce payload shape, so
+ * a legacy row, a hand-inserted row, or a future writer bug can put a bare
+ * string or null here. A malformed value renders nothing rather than mapping
+ * into per-character garbage or throwing into the (unreadable) catch, and the
+ * key still counts as read so the line does not claim a hidden key it is
+ * actually refusing to guess at. The payload stays one disclosure click away. */
+function list(key: string, word: string, noun: string): Part {
+  return part([key], (d) => {
+    const raw = d[key];
+    if (!Array.isArray(raw) || raw.length === 0) return "";
+    if (raw.length > 2) return `${word} ${raw.length} ${noun}`;
+    return `${word} ${raw.map(fmt).join(", ")}`;
+  });
+}
+
+/** Whether a note was added, replaced, or cleared. Deliberately not the note
+ * text: the audit log records that a note changed, and the note itself lives
+ * on the account where it is current rather than frozen at write time. */
+function noteChange(hadKey: string, hasKey: string): Part {
+  return part([hadKey, hasKey], (d) => {
+    const had = Boolean(d[hadKey]);
+    const has = Boolean(d[hasKey]);
+    if (had && has) return "note replaced";
+    if (has) return "note added";
+    if (had) return "note cleared";
+    return "";
+  });
 }
 
 /**
  * Which payload keys matter, per action, and how they read. Adding an action
- * means adding a row here. A key nobody declared for a declared action is
- * dropped from the summary line silently, e.g. `tier.changed`'s `locked`
- * never shows up next to `to`: the full payload is still one click away
- * behind the JSON disclosure, so nothing here is actually lost, just not
- * surfaced in the one-line read.
+ * means adding a row here; adding a key to an existing action without adding
+ * it here means the summary says `+1 more` rather than dropping it in silence.
+ *
+ * `admin.promoted` is deliberately absent. It was declared here with a scope
+ * and a note that no writer produces: the app has no admin-scope concept, and
+ * the declaration described seeded test data.
  */
 const PARTS: Record<string, readonly Part[]> = {
-  "tier.changed": [transition("from", "to")],
-  "status.changed": [transition("from", "to")],
-  "admin.promoted": [scalar("scope"), scalar("note")],
+  "tier.changed": [transition("from", "to"), scalar("cause"), flag("locked", "locked")],
+  "status.changed": [transition("from", "to"), flag("self", "self-service")],
   "admin.bootstrap_granted": [labelled("character", "characterId")],
   "account.created": [labelled("main", "mainCharacterId")],
   "account.main_changed": [labelled("main →", "mainCharacterId")],
   "character.reclaimed": [labelled("from", "fromAccount")],
+  "character.unlinked": [scalar("name"), flag("wasMain", "was main")],
   "token.invalidated": [scalar("reason")],
   "token.verify_failed": [scalar("error")],
   "token.subject_mismatch": [labelled("subject", "subjectCharacterId")],
+  "token.needs_reauth": [list("missingScopes", "missing", "scopes")],
+  "tier.unlocked": [labelled("was", "tier")],
+  "status.note_changed": [noteChange("had", "has")],
   "character.owner_mismatch": [labelled("detected by", "detectedBy")],
   "discord.unlinked": [scalar("reason")],
-  "discord.role_changed": [roles("added", "removed")],
+  "discord.role_changed": [
+    roles("added", "removed"),
+    labelled("tier", "tier"),
+    scalar("cause"),
+  ],
+  "wanderer.removed": [labelled("role", "role")],
 };
 
 /** How many key=value pairs the fallback shows before it says so. */
@@ -122,8 +182,14 @@ export function summarizeDetails(
     const parts = PARTS[action];
     if (parts) {
       const rendered = parts.map((p) => p(d, roleNames)).filter(Boolean);
-      if (rendered.length) return rendered.join(", ");
-      return "—";
+      const declared = new Set(parts.flatMap((p) => p.keys));
+      const hidden = Object.keys(d).filter((k) => !declared.has(k)).length;
+      const line = rendered.join(", ");
+      // Declared parts are never truncated: the cap below is for the
+      // machine-generated fallback, and truncating a hand-curated declaration
+      // would be second-guessing whoever wrote it.
+      if (hidden > 0) return line ? `${line}, +${hidden} more` : `+${hidden} more`;
+      return line || "—";
     }
     const entries = Object.entries(d);
     const shown = entries.slice(0, FALLBACK_KEYS).map(([k, v]) => `${k}=${fmt(v)}`);

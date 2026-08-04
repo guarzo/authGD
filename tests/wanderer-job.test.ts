@@ -207,6 +207,37 @@ describe("runWandererJob", () => {
     expect(result.retry).toBeUndefined();
   });
 
+  it("records the role a removed member held", async () => {
+    // 1 is desired (a flygd main); 2 is not, and holds an elevated grant.
+    await seedFlygdChar(1);
+    const w = fakeWanderer([
+      { characterId: 1, role: "member" },
+      { characterId: 2, role: "manager" },
+    ]);
+    await runWandererJob({ db: ctx.db, cfg, wanderer: w.client });
+    const audits = await ctx.db.select().from(auditLog);
+    const row = audits.find((a) => a.action === "wanderer.removed");
+    expect(row?.target).toBe("2");
+    expect(row?.details).toMatchObject({ role: "manager" });
+  });
+
+  it("never records a removal of an admin or blocked entry", async () => {
+    // The invariant, asserted where the payload is written: diffAcl excludes
+    // both roles from `remove` (src/core/acl-diff.ts:23-27), so no
+    // wanderer.removed row can carry either. Removing a blocked entry would be
+    // equivalent to un-banning. This is what stops a later "record a cause"
+    // change from quietly widening what a removal row can say.
+    await seedFlygdChar(1);
+    const w = fakeWanderer([
+      { characterId: 1, role: "member" },
+      { characterId: 2, role: "admin" },
+      { characterId: 3, role: "blocked" },
+    ]);
+    await runWandererJob({ db: ctx.db, cfg, wanderer: w.client });
+    const audits = await ctx.db.select().from(auditLog);
+    expect(audits.filter((a) => a.action === "wanderer.removed")).toHaveLength(0);
+  });
+
   it("leaves the previous observation untouched when the re-read fails", async () => {
     await seedFlygdChar(1);
     await ctx.db.insert(wandererAclObservation).values({
