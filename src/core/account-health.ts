@@ -6,6 +6,8 @@
  * rule instead of three copies drifting apart.
  */
 
+import type { ContactSyncResult } from "@/core/contact-result";
+
 /** The subset of `AccountView`'s character shape this derivation reads. A
  *  structural `Pick`-style interface rather than importing `AccountView`
  *  itself, so this stays a leaf module with no dependency on the service
@@ -14,6 +16,9 @@ export interface CharacterHealthInput {
   tokenStatus: "valid" | "invalid" | "needs_reauth" | "missing";
   needsReauthForScopes: boolean;
   contactsTarget: boolean;
+  /** `string`, not `ContactSyncResult`: this value crossed the database
+   *  boundary, so a code from an older deployment is reachable here and must
+   *  fall through to `stalled` rather than fail to type-check. */
   contactSyncResult: string | null;
 }
 
@@ -52,10 +57,22 @@ export interface AccountHealth {
 
 /**
  * Contacts result codes the member can clear without an admin: each one is
- * fixed by re-linking the character or renaming a label in game. The codes are
- * src/jobs/contacts.ts's vocabulary — read it before adding to this set.
+ * fixed by re-linking the character or renaming a label in game.
+ *
+ * Typed `ReadonlySet<ContactSyncResult>` rather than the inferred `Set<string>`
+ * so a typo here is a compile error. Untyped, `"missing_labl"` compiled
+ * happily and its only symptom was a verdict that quietly under-counted
+ * forever: the character still showed LABEL MISSING in its own row, so nothing
+ * about the page looked broken. That is the failure this union exists to
+ * prevent. See src/core/contact-result.ts for why the codes are a compile-time
+ * union and not a pgEnum.
+ *
+ * Declared `ReadonlySet<string>` but CONSTRUCTED `Set<ContactSyncResult>`. The
+ * construction is where the typo check happens; the declaration is what lets
+ * `.has()` take the widened value a reader actually holds, without an `as`
+ * cast that would defeat the point.
  */
-const MEMBER_FIXABLE = new Set([
+const MEMBER_FIXABLE: ReadonlySet<string> = new Set<ContactSyncResult>([
   "missing_label",
   "label_mismatch",
   "token_invalid",

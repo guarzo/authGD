@@ -3,6 +3,7 @@ import type { Config } from "@/config";
 import type { Db, Dbx } from "@/db";
 import { character, contactSyncState } from "@/db/schema";
 import { encodeLabelCandidates, matchContactLabel } from "@/core/contact-label";
+import type { ContactSyncResult } from "@/core/contact-result";
 import { diffContacts } from "@/core/contacts-diff";
 import { EsiError, type EsiClient } from "@/lib/esi/client";
 import { getFlygdCharacters, type FlygdCharacter } from "@/services/desired";
@@ -40,11 +41,17 @@ export type ContactsEsi = Pick<
  * `detail` is written on EVERY path, null included. The upsert sets only the
  * columns named here, so omitting it on the success path would leave a fixed
  * member staring at the name they already corrected.
+ *
+ * `result` is the union, not a bare string: this function is the only writer
+ * of the vocabulary, so a typo'd literal here would otherwise reach the UI as
+ * an unrecognized code and read as a job fault rather than a code fault.
+ * Adding a genuine new code means adding it to CONTACT_SYNC_RESULTS first,
+ * which is also what makes tests/contact-result.test.ts demand UI copy for it.
  */
 async function recordResult(
   dbx: Dbx,
   characterId: number,
-  result: string,
+  result: ContactSyncResult,
   synced: boolean,
   detail: string | null = null,
 ): Promise<void> {
