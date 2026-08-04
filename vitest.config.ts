@@ -6,6 +6,7 @@ export default defineConfig({
     environment: "node",
     include: ["tests/**/*.test.ts"],
     fileParallelism: false,
+    globalSetup: ["tests/helpers/global-setup.ts"],
   },
   resolve: {
     alias: { "@": path.resolve(__dirname, "src") },
