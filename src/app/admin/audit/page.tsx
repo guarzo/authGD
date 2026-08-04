@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import type { ReactNode } from "react";
 import { redirect } from "next/navigation";
 import { getDb } from "@/db";
 import { getConfig } from "@/config";
@@ -259,13 +260,23 @@ export default async function AdminAuditPage({
           filtered ? "matching entries" : "entries"
         }`;
 
-  const emptyMessage = unmatched.length
-    ? `No account or character named ${unmatched
-        .map(([field, r]) => `"${r.name}" (${field})`)
-        .join(" or ")}.`
-    : filtered
-      ? "Nothing matches this filter."
-      : "Nothing has happened yet.";
+  const emptyMessage: ReactNode = unmatched.length ? (
+    `No account or character named ${unmatched
+      .map(([field, r]) => `"${r.name}" (${field})`)
+      .join(" or ")}.`
+  ) : beforeId !== undefined && Number.isFinite(beforeId) ? (
+    // The log is not empty, the cursor is simply past its end. Saying
+    // "nothing has happened yet" here is false, and the `Older ->` button
+    // is gone (it renders only on a full page), so this state had no exit
+    // at all.
+    <>
+      Nothing older than this point. <a href="/admin/audit">Back to the latest entries</a>
+    </>
+  ) : filtered ? (
+    "Nothing matches this filter."
+  ) : (
+    "Nothing has happened yet."
+  );
 
   return (
     <main id="main" tabIndex={-1} className="page">
@@ -337,6 +348,7 @@ export default async function AdminAuditPage({
       </RuleHead>
       <Scroller label="Audit entries" tall>
         <table className="log log--audit log--sticky-head log--sticky-col">
+          <caption className="visually-hidden">Audit log entries</caption>
           <colgroup>
             {/* Widths live in globals.css, not in `style` here: they have to
                 change at the narrow breakpoint, and an inline width outranks a

@@ -689,3 +689,35 @@ test("the empty state does not pick up the row hover tint", async ({ page, conte
   expect(hoveredEmptyBackground).toBe(restBackground);
   expect(hoveredEmptyBackground).not.toBe(hoveredDataBackground);
 });
+
+test("paging past the end says so instead of claiming an empty log", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  await db.insert(auditLog).values([
+    {
+      actor: "system",
+      action: "tier.changed",
+      target: admin.id,
+      details: { to: "green" },
+    },
+    {
+      actor: "system",
+      action: "tier.changed",
+      target: admin.id,
+      details: { to: "blue" },
+    },
+  ]);
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+
+  // Serial ids restart at 1 per resetDb, so `before=1` is guaranteed to be at
+  // or past the oldest row while the log itself is not empty.
+  await page.goto("/admin/audit?before=1");
+
+  await expect(page.locator(".log__empty")).toContainText("older");
+  await expect(page.locator(".log__empty").getByRole("link")).toHaveAttribute(
+    "href",
+    "/admin/audit",
+  );
+});
