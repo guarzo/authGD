@@ -73,7 +73,18 @@ test("a signed-in non-admin is sent to their account page, not login", async ({
   await context.addCookies([await sessionCookieFor(db, member.id)]);
   await page.goto("/admin/accounts");
   await expect(page).toHaveURL(/\/account\?error=not_admin/);
-  await expect(page.getByRole("alert")).toContainText("admin access was removed");
+  // Filtered, not bare: Next's dev-only `__next-route-announcer__` is also
+  // `role="alert"`, so a bare role query intermittently resolves to two
+  // elements and fails on strict mode. A `page.goto` does not reliably leave
+  // the announcer empty — this arrival is a server redirect to a *different*
+  // route, which the App Router announces like any other route change, and
+  // whether the announcer has been cleared again by the time the assertion
+  // runs is a race. Filtering keeps the role assertion, which is the property
+  // worth holding: `<Notice tone="bad">` derives `role="alert"` from the tone,
+  // so a notice demoted to `warn` (role="status") must still fail here.
+  await expect(
+    page.getByRole("alert").filter({ hasText: "admin access was removed" }),
+  ).toContainText("admin access was removed");
 });
 
 /**
@@ -106,11 +117,12 @@ test("an admin de-roled after the page loaded gets the notice, not the error bou
     .getByRole("button", { name: "Sync membership, contacts, map, Discord" })
     .click();
   await expect(page).toHaveURL(/\/account\?error=not_admin/);
-  // Scoped to the page's own notice rather than `getByRole("alert")`: this
-  // arrival is a client-side navigation, so Next's `__next-route-announcer__`
-  // — also `role="alert"` — is populated and a bare role query matches two
-  // elements. The sibling test above can use the role because a full
-  // `page.goto` leaves the announcer empty.
+  // Scoped rather than a bare `getByRole("alert")`: Next's
+  // `__next-route-announcer__` is also `role="alert"`, so a bare role query
+  // matches two elements. This was once believed to be specific to
+  // client-side navigation, with a full `page.goto` leaving the announcer
+  // empty — it isn't. The sibling test above flaked the same way on a plain
+  // `goto`, and it now filters by text for the same reason.
   await expect(page.locator("p.notice--bad")).toContainText("admin access was removed");
   await expect(page.getByText("Something broke")).toHaveCount(0);
 });
