@@ -4433,8 +4433,14 @@ precisely because nothing complains.
 - Create: `tests/payout-dropped.test.ts`
 - Modify: `src/services/payout-view.ts:1-11` (imports), append `listCharacterNames`
 - Modify: `src/app/payouts/actions.ts:140-211` (`addAppraisedPoolAction`; #74 rewrote it — the two free location-id inputs became a location-*kind* select plus one pattern-guarded id, and its four new rejections redirect with `pricing_mode` / `location_kind` / `station_invalid` / `region_invalid` before the appraisal call. Keep all four; this task edits only the `try`/`catch` around `appraiseLoot`.)
-- Modify: `src/app/payouts/[id]/page.tsx` — imports `:1-22`, `searchParams` type `:51`, error
-  notice block `:118-122`, pools table `:167-273`, roster forms `:351-359`
+- Modify: `src/app/payouts/[id]/page.tsx` — imports `:1-24`, `searchParams` type `:83`, error
+  notice `:158`, pools table `:246-368`, roster form `:466-474`. **Every line number in this
+  task is against the merged tree (post-#74, which rewrote this file +347 −197), not the
+  pre-#74 file the first draft was written on.** The appraisal form (`:396-446`) is
+  deliberately **not** touched: #74 replaced its two free location-id inputs with a
+  location-_kind_ `<select>` plus one pattern-guarded id, which is what makes
+  `loot_pool_appraised_fields_ck`'s exactly-one rule structurally unrepresentable rather than
+  merely checked, and that prevention must survive this task intact.
 - Test: `tests/payout-dropped.test.ts`, `tests/payout-view.test.ts`
 
 **Interfaces:**
@@ -4850,13 +4856,18 @@ template" and deliberately left as it found it.
 
 In `src/app/payouts/[id]/page.tsx`:
 
-Replace the import block (lines 4-22) with:
+Replace the import block (lines 4-24 — **not** the pre-#74 4-22; #74 added the
+`ConfirmArmScope`/`ConfirmSubmit` import, `setCorpShareAction`, and `iskToCents`, and all
+three are load-bearing on the merged page: dropping any of them deletes the arm step from
+delete-pool / remove-participant / Finalize / first-mark-paid, the corp-share correction
+form, or the sub-cent price notice) with:
 
 ```ts
 import { getPayoutOperationDetail, listCharacterNames } from "@/services/payout-view";
 import { Notice, RuleHead, Scroller, SiteHeader, Status } from "@/app/_components/ui";
 import { Disclosure } from "@/app/_components/disclosure";
 import { Submit } from "@/app/_components/submit";
+import { ConfirmArmScope, ConfirmSubmit } from "@/app/_components/confirm-submit";
 import { requirePayoutReader } from "../access";
 import {
   addAppraisedPoolAction,
@@ -4866,6 +4877,7 @@ import {
   finalizeAction,
   markPaidAction,
   removeParticipantAction,
+  setCorpShareAction,
   setItemPriceAction,
   setParticipantExcludedAction,
   setParticipantSharesAction,
@@ -4886,26 +4898,26 @@ Add immediately below the `ERRORS` map (its last line, whatever number that is b
 const CHARACTER_LIST_ID = "known-character-names";
 ```
 
-Change the `searchParams` type on line 51 to:
+Change the `searchParams` type on line 83 to:
 
 ```ts
   searchParams: Promise<{ error?: string; dropped?: string }>;
 ```
 
-and line 56 to:
+and line 88 to:
 
 ```ts
   const { error, dropped } = await searchParams;
 ```
 
-Add after line 59 (the `detail` destructure) — note the datalist read is skipped entirely for
+Add after line 92 (the `detail` destructure) — note the datalist read is skipped entirely for
 a non-editing viewer, so a cryo reader never pays for a list they cannot use:
 
 ```ts
   const droppedReport = decodeDropped(dropped);
 ```
 
-and after `canUnlock` is computed (line 75), add:
+and after `canUnlock` is computed (lines 107-108), add:
 
 ```ts
   // null when there are more characters than the datalist cap — the field then
@@ -4913,7 +4925,7 @@ and after `canUnlock` is computed (line 75), add:
   const characterNames = canEdit ? await listCharacterNames(getDb()) : null;
 ```
 
-Insert after the existing error notice block (after line 122):
+Insert after the existing error notice (line 158, `{errorMessage && <Notice tone="bad">…`):
 
 ```tsx
         {/* "items", not "lines": parseLootPaste sums by item name before it
@@ -4947,23 +4959,27 @@ Insert after the existing error notice block (after line 122):
         )}
 ```
 
-In the pools table, add a leading `#` column header (before `Source` at line 171):
+In the pools table, add a leading `#` column header (before the `Source` header at line 253):
 
 ```tsx
                 <th scope="col">#</th>
 ```
 
-change the map signature on line 180 to `{pools.map((pool, index) => {`, add the numbering
-cell as the row's first `<td>` (before the `Source` cell at line 202):
+change the map signature on line 266 to `{pools.map((pool, index) => {`, add the numbering
+cell as the row's first `<td>` (before the `Source` cell at line 288):
 
 ```tsx
-                    <td className="mono nowrap">{index + 1}</td>
+                      <td className="mono nowrap">{index + 1}</td>
 ```
 
-and change the empty-state `colSpan={4}` on line 266 to `colSpan={5}`.
+and change the empty-state `colSpan={4}` on line 360 to `colSpan={5}`.
 
-Then insert the item tables immediately after `</Scroller>` (line 273), before the
-`{canEdit && (` block:
+The `<ConfirmArmScope>` #74 wrapped this `<tbody>` in (lines 264-366) stays exactly where it
+is, and so does the `ConfirmSubmit` delete control inside it — this task adds a column to
+the row, nothing else.
+
+Then insert the item tables immediately after `</Scroller>` (line 368), before the
+`{canEdit && (` block that holds the flat-pool and appraisal forms:
 
 ```tsx
         {/* The two warnings above stay exactly as they are. They are the fast
@@ -5053,7 +5069,8 @@ Then insert the item tables immediately after `</Scroller>` (line 273), before t
         )}
 ```
 
-Replace the roster form block (lines 351-359) with:
+Replace the roster form block (lines 466-474 — the `{canEdit && (<form action={setRosterAction…}`
+block; the duplicate-unresolved-name warning above it at `:451-465` is untouched) with:
 
 ```tsx
         {canEdit && (
@@ -5128,12 +5145,14 @@ git commit -m "feat(payouts): show every pasted item, name what the parser ignor
 - Modify: `src/app/payouts/access.ts:1-50`
 - Modify: `src/app/payouts/actions.ts` — imports, and `revertPaymentAction` at the end of the file
 - Modify: `src/app/payouts/[id]/page.tsx` — imports, `ERRORS` map (verify only: this task
-  adds no codes to it — see Step 6), freeze notice after `:147`, participants table
-  `:361-464` — **those two line ranges are pre-#74 and #74 rewrote this file (+347 −197);
-  re-derive them before editing**
+  adds no codes to it — see Step 6), freeze notice after the operation `</dl>` at `:218`,
+  the `anyPaid` const at `:132-137`, participants table `:476-614` (State cell `:535-541`,
+  finalized branch of the actions cell `:544-565`). **All post-#74, re-derived against the
+  merged file; add Task 11's insertions before using them as absolute offsets.**
 - Create: `src/app/payouts/[id]/payment-history.tsx`
 - Create: `src/app/account/account-payouts.tsx`
-- Modify: `src/app/account/page.tsx:1-30` (imports), `:110-140` (data), after `:471`
+- Modify: `src/app/account/page.tsx:1-25` (imports), `:129` (data), after `:471` — verified
+  against the merged tree; #71 (`c688880`) touched this file and left all three intact.
 - Test: `tests/payout-view.test.ts`, `tests/payment-history.test.ts`, `tests/account-payouts.test.ts`
 
 **Interfaces:**
@@ -6058,11 +6077,17 @@ In `src/app/payouts/[id]/page.tsx`, extend the actions import with `openInfoActi
 `revertPaymentAction`, and add:
 
 ```ts
-import { ConfirmArmScope, ConfirmSubmit } from "@/app/_components/confirm-submit";
 import { PaymentHistory } from "./payment-history";
 ```
 
-Insert the freeze notice immediately after the operation `</dl>` (after line 147):
+`ConfirmArmScope` and `ConfirmSubmit` are **already imported** — #74 introduced both to this
+file, and Task 11's import block keeps them. Do not re-add the import, and do not "introduce"
+the confirm pattern to this page: it is already on `delete pool`, `remove <name>`, `Finalize`
+and the first `mark paid`. The revert control below joins that set inside the roster table's
+existing scope.
+
+Insert the freeze notice immediately after the operation `</dl>` (line 218 post-#74, before
+the `{access.isOperator && (<ConfirmArmScope>` Finalize/Unlock row):
 
 ```tsx
         {locked && (
@@ -6078,78 +6103,121 @@ Insert the freeze notice immediately after the operation `</dl>` (after line 147
         )}
 ```
 
-Wrap the participants `<tbody>` contents in `<ConfirmArmScope>` (required — `ConfirmSubmit`
-throws outside one), replace the State cell (lines 402-408) with:
+**Re-derive `anyPaid` from `locked`.** #74 arms only the *first* `mark paid`, because
+recording one is what shuts the door permanently, and it detects "first" with
+`participants.some((p) => p.paymentState === "paid")` (line 137). Revert breaks that
+detection: reverting the only payment makes `anyPaid` false again while the operation stays
+frozen — `locked` counts payment *rows*, and a reverted row is still a row — so the next
+`mark paid` would re-arm a door that is already shut, which is precisely the friction #74's
+comment says it is avoiding. `locked` is the condition that actually means "the freeze has
+not happened yet". Replace lines 132-137 with:
 
-```tsx
-                  <td>
-                    <div className="stack">
-                      {p.paymentState === "excluded" && (
-                        <Status tone="off">excluded</Status>
-                      )}
-                      {p.paymentState === "unpaid" && <Status tone="warn">unpaid</Status>}
-                      {p.paymentState === "paid" && <Status tone="ok">paid</Status>}
-                      {/* Stored since phase 1 and never shown until now — and
-                          the actor with it, so the list says who, not just
-                          what and when. Renders nothing when there is no
-                          history. */}
-                      <PaymentHistory
-                        payments={p.payments}
-                        participantName={p.displayName}
-                      />
-                    </div>
-                  </td>
+```ts
+  // Only the *first* payment is worth an arm step. Recording one is what shuts
+  // the door permanently — `locked` (hasPayments) makes the operation
+  // un-editable and un-unlockable from then on (Recalculation safety,
+  // mechanism 3), and this task's revert deliberately does NOT reopen it.
+  // Every later "mark paid" is a click behind a door already shut, so gating
+  // those would be friction with nothing behind it.
+  //
+  // Derived from `locked` rather than from "somebody is currently paid":
+  // reverting the only payment leaves the operation frozen, because
+  // `hasPayments` counts payment rows and a reverted payment still left one.
+  // Keying the arm on current paid-ness would re-arm after a full revert.
+  const firstPayment = !locked;
 ```
 
-and the finalized branch of the actions cell (lines 411-423) with:
+Wrap: nothing. #74 already wraps this `<tbody>` in `<ConfirmArmScope>` (lines 492-612), which
+is what the revert control needs — `ConfirmSubmit` throws outside one. Verify it is there
+rather than adding a second, nested scope: two scopes means two independently armed controls
+in one table, which is the exact failure the shared scope exists to prevent.
+
+Replace the State cell (lines 535-541) with:
 
 ```tsx
-                      {operation.status === "finalized" &&
-                        p.paymentState !== "excluded" && (
-                          <>
-                            <CopyAmountButton amount={p.amount} />
-                            {access.canOpenInfo && p.recipientCharacterId !== null && (
-                              <form
-                                action={openInfoAction.bind(null, operation.id, p.id)}
-                              >
-                                <Submit
-                                  className="btn btn--quiet btn--micro"
-                                  pendingLabel="opening…"
-                                  aria-label={`open info for ${p.displayName}`}
-                                >
-                                  open info
-                                </Submit>
-                              </form>
-                            )}
-                            {p.paymentState !== "paid" && access.isOperator && (
-                              <form
-                                action={markPaidAction.bind(null, operation.id, p.id)}
-                              >
-                                <Submit className="btn btn--micro">mark paid</Submit>
-                              </form>
-                            )}
-                            {/* Reverting money is not a one-click action, so it
-                                arms first, like the admin table's destructive
-                                row controls. */}
-                            {p.paymentState === "paid" && access.isOperator && (
-                              <form
-                                action={revertPaymentAction.bind(
-                                  null,
-                                  operation.id,
-                                  p.id,
-                                )}
-                              >
-                                <ConfirmSubmit
-                                  className="btn btn--quiet btn--micro btn--danger-quiet"
-                                  armedClassName="btn btn--micro btn--danger"
-                                  label="revert"
-                                  restName={`revert payment for ${p.displayName}`}
-                                  confirmName={`confirm revert payment for ${p.displayName}`}
-                                />
-                              </form>
-                            )}
-                          </>
+                    <td>
+                      <div className="stack">
+                        {p.paymentState === "excluded" && (
+                          <Status tone="off">excluded</Status>
                         )}
+                        {p.paymentState === "unpaid" && (
+                          <Status tone="warn">unpaid</Status>
+                        )}
+                        {p.paymentState === "paid" && <Status tone="ok">paid</Status>}
+                        {/* Stored since phase 1 and never shown until now — and
+                            the actor with it, so the list says who, not just
+                            what and when. Renders nothing when there is no
+                            history. */}
+                        <PaymentHistory
+                          payments={p.payments}
+                          participantName={p.displayName}
+                        />
+                      </div>
+                    </td>
+```
+
+and the finalized branch of the actions cell (lines 544-565) with — note the `mark paid`
+control keeps #74's two-state shape verbatim, now keyed on `firstPayment`; flattening it back
+to a bare `<Submit>` would silently delete the arm step from the one click that freezes the
+operation for good:
+
+```tsx
+                        {operation.status === "finalized" &&
+                          p.paymentState !== "excluded" && (
+                            <>
+                              <CopyAmountButton amount={p.amount} />
+                              {access.canOpenInfo && p.recipientCharacterId !== null && (
+                                <form
+                                  action={openInfoAction.bind(null, operation.id, p.id)}
+                                >
+                                  <Submit
+                                    className="btn btn--quiet btn--micro"
+                                    pendingLabel="opening…"
+                                    aria-label={`open info for ${p.displayName}`}
+                                  >
+                                    open info
+                                  </Submit>
+                                </form>
+                              )}
+                              {p.paymentState !== "paid" && access.isOperator && (
+                                <form
+                                  action={markPaidAction.bind(null, operation.id, p.id)}
+                                >
+                                  {firstPayment ? (
+                                    <ConfirmSubmit
+                                      className="btn btn--micro"
+                                      label="mark paid"
+                                      restName={`mark paid ${p.displayName}`}
+                                      confirmName={`confirm mark paid ${p.displayName}`}
+                                    />
+                                  ) : (
+                                    <Submit className="btn btn--micro">mark paid</Submit>
+                                  )}
+                                </form>
+                              )}
+                              {/* Reverting money is not a one-click action, so
+                                  it arms first — the same step `remove` and
+                                  `delete` already carry in this table, sharing
+                                  the one `ConfirmArmScope` around this tbody. */}
+                              {p.paymentState === "paid" && access.isOperator && (
+                                <form
+                                  action={revertPaymentAction.bind(
+                                    null,
+                                    operation.id,
+                                    p.id,
+                                  )}
+                                >
+                                  <ConfirmSubmit
+                                    className="btn btn--quiet btn--micro btn--danger-quiet"
+                                    armedClassName="btn btn--micro btn--danger"
+                                    label="revert"
+                                    restName={`revert payment for ${p.displayName}`}
+                                    confirmName={`confirm revert payment for ${p.displayName}`}
+                                  />
+                                </form>
+                              )}
+                            </>
+                          )}
 ```
 
 **Render guard kept exactly as written: `access.canOpenInfo && p.recipientCharacterId !== null`.**
@@ -6214,10 +6282,15 @@ column already existed, so nothing migrates. It renders 'unknown' when the
 actor's account was deleted (the FK is on delete set null) or has no main
 character, which are indistinguishable here.
 
-revertPaymentAction turns the service's three failures into ?error= codes
-rather than an error screen: the control is armed and confirmed against a row
-the operator rendered seconds earlier, and every failure it can hit is someone
-else having changed that row first."
+revertPaymentAction catches nothing. Every failure revertPayment can raise is
+authorization or lifecycle state, never something the operator typed, and #74
+drew exactly that line across this file: input rejections redirect with an
+?error= code, everything else belongs on error.tsx. This action has no input
+to reject, so it adds no code to the page's ERRORS map.
+
+The revert control arms before it fires, joining the delete-pool, remove-
+participant, Finalize and first-mark-paid controls #74 already armed inside
+this table's ConfirmArmScope."
 ```
 
 ---
@@ -6226,13 +6299,43 @@ else having changed that row first."
 
 **Files:**
 
-- Modify: `e2e/payouts.spec.ts` (append three tests)
+- Modify: `e2e/payouts.spec.ts` — extend the operation-page error-code table at `:520-554`,
+  then append four tests
 - Modify: `e2e/account.spec.ts` (append one test)
 
 **Interfaces:**
 
 - Consumes: everything Tasks 1-12 produced. No new exports.
 - Produces: nothing importable.
+
+**Two conventions this file already has, which every test below follows.**
+
+1. **`page.locator("p.notice--bad")`, never `getByRole("alert")`.** Arriving on a payout page
+   from a server action is a soft navigation, so Next's route announcer is populated and also
+   carries `role="alert"` — an alert-role assertion matches the announcer and passes whether
+   or not the notice rendered. #74's suite uses the class locator throughout and this task
+   does not introduce a second style. (`e2e/account.spec.ts` still uses `getByRole("alert")`
+   for the *login* page, where the copy is asserted with `.filter({ hasText })` and the
+   navigation is hard — that is not a precedent for these pages.)
+2. **`bypassClientGuard(input, value)`** — `e2e/payouts.spec.ts:476-485`, added by #74:
+
+   ```ts
+   async function bypassClientGuard(input: Locator, value: string): Promise<void>;
+   ```
+
+   It strips `min`, `max` and `pattern` and sets `type = "text"` before writing the value, so
+   a server-side check standing behind a working client guard can be reached at all. Any new
+   test that needs one uses this helper — do not hand-roll a second `evaluate` block, and do
+   not weaken the page's markup to make a test pass. Note what it does **not** strip:
+   `required`. A blank-field server check cannot be reached through the browser at all, which
+   is why `participant_name_required` below is covered by rendering its code rather than by
+   submitting an empty form.
+
+**Three existing assertions in this file now click twice.** #74 added `ConfirmSubmit` arming
+to `Finalize`, `remove <name>` and the *first* `mark paid`, so those three are already
+written as click-then-confirm at `:130-131`, `:150-151` and `:459-462`. The new tests below
+match that shape; a single click on any of them arms the control and asserts against a page
+that never submitted.
 
 **Environment hazards — read before running anything in this task.**
 
@@ -6250,15 +6353,67 @@ else having changed that row first."
    (`E2E_PORT` does the same for the app port). A collision fails loudly and names the
    variable to set — it does not silently share a database.
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Extend the error-code table**
+
+#74 left this file with two table-driven loops — six cases over `/payouts/new`'s own map
+(`:499-518`) and twelve over the operation page's (`:520-554`) — for a stated reason that
+applies with more force now than it did then:
+
+> A code with no entry in either ERRORS map renders nothing at all, which is the one failure
+> these pages cannot show the operator, so each is checked by name.
+
+Tasks 5, 6 and 10 add ten codes to the operation page's map — one from Task 5, two from Task
+6, seven from Task 10 — taking it to twenty-two. Ten new codes landing at once is exactly the
+condition that made #74 write the loop, so they go into the same loop rather than into new
+bespoke tests. Replace the operation-page loop's array (lines 520-533: the
+`for (const [code, phrase] of [` header through its closing `] as const) {`) with:
+
+```ts
+for (const [code, phrase] of [
+  ["appraisal_failed", "did not answer"],
+  ["pricing_mode", "four pricing modes"],
+  ["location_kind", "exactly one"],
+  ["station_invalid", "60003760"],
+  ["region_invalid", "Region ID must be digits"],
+  ["note_required", "where the number came from"],
+  ["total_invalid", "no commas"],
+  ["shares_required", "cannot be blank"],
+  ["shares_invalid", "plain number like 1"],
+  ["shares_positive", "greater than zero"],
+  ["shares_range", "cannot exceed 9999.99"],
+  ["share_format", "plain percentage"],
+  ["share_range", "cannot exceed 100%"],
+  ["participant_name_required", "Type a character name"],
+  ["participant_duplicate", "already on this roster"],
+  ["open_info_reauth", "permission your login does not carry"],
+  ["open_info_target", "cannot be opened"],
+  ["open_info_offline", "not logged in"],
+  ["open_info_busy", "rate-limiting"],
+  ["open_info_timeout", "took too long"],
+  ["open_info_failed", "Could not open that window"],
+  ["open_info_dry_run", "dry-run mode"],
+] as const) {
+```
+
+The loop body underneath (`page.goto`, the `p.notice--bad` assertion, the "Something broke"
+assertion) is unchanged — that is the whole point of extending the table rather than writing
+twenty-two tests. Every phrase above is a substring of the copy in Task 12's pasted `ERRORS`
+map; if one does not match, the map is what changed, and the map is what gets checked against
+this table, not the assertion loosened.
+
+`/payouts/new`'s six-case loop above it is untouched: nothing in this plan adds a code to
+`src/app/payouts/new/page.tsx`'s separate map.
+
+- [ ] **Step 2: Write the failing tests**
 
 Append to `e2e/payouts.spec.ts` (its imports already cover `lootItem`, `lootPool`,
 `payoutOperation`, `payoutParticipant`; add `character` and `payoutPayment` to the schema
 import, and add `import { OPEN_WINDOW_SCOPE } from "../src/lib/esi/client";`).
 
 **Append at the end of the file.** Task 9 has already added two pagination specs to this same
-file; these three go after them. Do not overwrite the file or re-declare its `testDb()` /
-`afterAll` / `beforeEach` preamble — it is shared by every test in it.
+file; these four go after them, and after the two error-code loops. Do not overwrite the file
+or re-declare its `testDb()` / `afterAll` / `beforeEach` preamble, its `assertReconciles`
+helper or its `bypassClientGuard` helper — all of them are shared by every test in it.
 
 ```ts
 /**
@@ -6335,8 +6490,13 @@ test("override an item price, finalize, pay, revert, and pay again", async ({
   const rowFor = (name: string) => page.getByRole("row").filter({ hasText: name });
   await expect(rowFor("Brain Tartare")).toContainText("125.00 ISK");
 
+  // Finalize and the FIRST mark-paid are both armed (#74): one click arms, the
+  // second submits. The first payment is what freezes the operation for good,
+  // which is what the arm step is guarding.
   await page.getByRole("button", { name: "Finalize" }).click();
+  await page.getByRole("button", { name: /^confirm finalize/ }).click();
   await page.getByRole("button", { name: "mark paid" }).first().click();
+  await page.getByRole("button", { name: /^confirm mark paid/ }).click();
   await expect(rowFor("Brain Tartare")).toContainText("paid");
 
   // The freeze is permanent, and the page has to say so where the operator is
@@ -6357,6 +6517,12 @@ test("override an item price, finalize, pay, revert, and pay again", async ({
 
   // Paying again is the whole point of clearing paidAmount — without it a
   // reverted participant could never be paid, which defeats the feature.
+  //
+  // ONE click, not two: the arm step is keyed on `firstPayment` (`!locked`),
+  // and the operation is still frozen — `hasPayments` counts payment rows, and
+  // reverting appended a row rather than deleting one. This assertion is what
+  // pins that: if the arm were keyed on "somebody is currently paid" instead,
+  // this click would only arm the control and the row would still read unpaid.
   await rowFor("Brain Tartare").getByRole("button", { name: "mark paid" }).click();
   await expect(rowFor("Brain Tartare")).toContainText("paid");
 
@@ -6425,6 +6591,52 @@ test("manual participant entry offers known character names and adds one", async
   await expect(page.getByRole("row").filter({ hasText: "Latecomer Pilot" })).toHaveCount(
     1,
   );
+});
+
+/**
+ * The one new rejection an operator can actually reach by using the form
+ * normally, so it gets the round trip rather than only a rendered `?error=`
+ * case: nothing in the markup stops a name being typed twice, and two rows
+ * under one name pay two full shares to whoever answers to it.
+ *
+ * `participant_name_required` has no round trip because it cannot have one —
+ * the field is `required`, and `bypassClientGuard` deliberately does not strip
+ * that. Its coverage is the table-driven case in Step 1.
+ */
+test("adding the same name twice is refused on the page, not on the error boundary", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "FC Prime",
+    tier: "flygd",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+
+  const [op] = await db
+    .insert(payoutOperation)
+    .values({
+      name: "Double add",
+      occurredAt: new Date("2026-08-01"),
+      corpSharePct: "0",
+      createdBy: operator.id,
+    })
+    .returning();
+
+  await page.goto(`/payouts/${op.id}`);
+  await page.getByLabel("Character name").fill("Twice Pilot");
+  await page.getByRole("button", { name: "Add participant" }).click();
+  await expect(page.getByRole("row").filter({ hasText: "Twice Pilot" })).toHaveCount(1);
+
+  await page.getByLabel("Character name").fill("Twice Pilot");
+  await page.getByRole("button", { name: "Add participant" }).click();
+  // p.notice--bad, never getByRole("alert"): this is a soft navigation, so
+  // Next's route announcer carries role="alert" too.
+  await expect(page.locator("p.notice--bad")).toContainText("already on this roster");
+  await expect(page.getByText("Something broke")).toHaveCount(0);
+  // And the roster is unchanged — the rejection added nothing.
+  await expect(page.getByRole("row").filter({ hasText: "Twice Pilot" })).toHaveCount(1);
 });
 
 /**
@@ -6555,7 +6767,7 @@ test("a member who is no longer flygd sees their payout row with no link to the 
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 3: Run test to verify it fails**
 
 ```
 npm run test:e2e -- e2e/payouts.spec.ts -g "override an item price"
@@ -6569,12 +6781,12 @@ If it fails with a database-port error instead, re-run with the override:
 
 Then, immediately: `git checkout tsconfig.json AGENTS.md`.
 
-- [ ] **Step 3: Write minimal implementation**
+- [ ] **Step 4: Write minimal implementation**
 
 No implementation — Tasks 1-12 are the implementation. If a test above fails, fix the source
 it exercises, never the assertion, unless the assertion is provably wrong about the design.
 
-- [ ] **Step 4: Run test to verify it passes — the full gate**
+- [ ] **Step 5: Run test to verify it passes — the full gate**
 
 Run all four, in this order, and **quote the real output** in any completion claim. A claim
 that a suite passed is only as good as the output pasted beside it; never assert a result
@@ -6598,7 +6810,7 @@ Also run `npm run lint` — CI runs ESLint too, and the new client-component bou
 (`Disclosure`, `ConfirmSubmit`, `ConfirmArmScope`) are exactly where a rule like
 `@next/next` or `react-hooks` catches a mistake typecheck does not.
 
-- [ ] **Step 5: Code review, before anything is committed**
+- [ ] **Step 6: Code review, before anything is committed**
 
 Dispatch the `code-reviewer` agent over the full branch diff (`git diff main...HEAD`). It
 is read-only and reports with `file:line` citations; it does not edit. This runs **first**,
@@ -6615,10 +6827,10 @@ Point it at the surfaces this PR actually moves, which are the ones its rules co
 - migration safety — this PR must generate **none**;
 - secret and token handling around the new `esi-ui.open_window.v1` scope.
 
-Fix what it finds, or write down why a finding is being declined. Do not proceed to Step 6
+Fix what it finds, or write down why a finding is being declined. Do not proceed to Step 7
 with unresolved findings still open.
 
-- [ ] **Step 6: `my:polish-core --fix`, then inspect its edits, then re-run the gate**
+- [ ] **Step 7: `my:polish-core --fix`, then inspect its edits, then re-run the gate**
 
 Run:
 
@@ -6639,7 +6851,7 @@ decision (the `nextPaymentAt` doc block, the `MAX_EXACT_LINE_CENTS` doc block, a
 a cleanup pass has no basis to rewrite), or reaches a file this plan never asked about.
 
 Then **re-run the verification the edits could have invalidated** — which is all of it,
-because polish-core is not scoped to one suite. The same four commands from Step 4, in the
+because polish-core is not scoped to one suite. The same four commands from Step 5, in the
 same order, plus lint:
 
 ```
@@ -6655,7 +6867,7 @@ time.
 
 If polish-core changed nothing, say so and skip the re-run; a no-op needs no re-verification.
 
-- [ ] **Step 7: `my:change-explainer`**
+- [ ] **Step 8: `my:change-explainer`**
 
 Run:
 
@@ -6681,7 +6893,7 @@ should probe the parts of this PR a reviewer is most likely to have taken on tru
 Answer them honestly. A question you cannot answer is a part of the change that is not
 finished being understood, not a question to skip.
 
-- [ ] **Step 8: Dispose of `implementation-notes.md`**
+- [ ] **Step 9: Dispose of `implementation-notes.md`**
 
 The temporary notes file kept during implementation is not a deliverable. Apply one
 criterion and act on it:
@@ -6695,10 +6907,10 @@ criterion and act on it:
   operational note belongs in `docs/ops.md`, and anything that only matters to a reviewer
   of this change belongs in the PR body.
 
-Either way, `implementation-notes.md` must not exist when Step 9 runs. Confirm with
+Either way, `implementation-notes.md` must not exist when Step 10 runs. Confirm with
 `git status` — it should not appear as tracked, staged, or untracked.
 
-- [ ] **Step 9: Commit, and open a PR — never merge locally**
+- [ ] **Step 10: Commit, and open a PR — never merge locally**
 
 ```
 git add e2e/payouts.spec.ts e2e/account.spec.ts
