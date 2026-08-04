@@ -610,3 +610,154 @@ test("expanding an audit payload keeps the timestamp column pinned at 320px", as
   expect(open.overlapX).toBeCloseTo(open.cellWidth, 0);
   expect(open.text).toMatch(/\d+[smhd] ago/);
 });
+
+test("a repeated filter param does not break the page", async ({ page, context }) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+
+  const res = await page.goto("/admin/audit?actor=alpha&actor=beta");
+  expect(res?.status()).toBe(200);
+
+  // Last value wins: appending &actor=beta to a URL that already has an actor
+  // is how a duplicate arises, so the appended one is the intent. Active
+  // filters render as a dim aside on the Filter `RuleHead` (its `aside` prop),
+  // not chips.
+  await expect(page.getByText("actor: beta")).toBeVisible();
+});
+
+test("the empty state is readable at 320px", async ({ page, context }) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+
+  await page.setViewportSize({ width: 320, height: 800 });
+  await page.goto("/admin/audit?actor=nobody-by-this-name");
+
+  const geometry = await page.evaluate(() => {
+    const cell = document.querySelector(".log__empty");
+    const scroller = document.querySelector(".scroller");
+    if (!cell || !scroller) return null;
+    const inner = cell.firstElementChild ?? cell;
+    return {
+      innerRight: Math.round(inner.getBoundingClientRect().right),
+      scrollerRight: Math.round(scroller.getBoundingClientRect().right),
+    };
+  });
+
+  expect(geometry).not.toBeNull();
+  expect(geometry!.innerRight).toBeLessThanOrEqual(geometry!.scrollerRight);
+});
+
+test("the empty state does not pick up the row hover tint", async ({ page, context }) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+
+  await db
+    .insert(auditLog)
+    .values([{ actor: admin.id, action: "sync.requested", target: "all" }]);
+
+  // One matching row plus a filter that yields none, so both a real row and
+  // the empty row are on screen and can be compared under the same hover
+  // rule. Colour assertions are brittle (a token rename would break this
+  // without changing behavior), but it is the only way to automate "hovering
+  // this row must not look like hovering a real one", which is the actual
+  // regression this task fixes, so it is worth keeping.
+  //
+  // Background-color transitions over --dur-color (140ms). Reading
+  // getComputedStyle right after a hover can catch that mid-transition value
+  // instead of the settled one. globals.css already collapses all
+  // transitions to 0.01ms under prefers-reduced-motion (an accessibility
+  // feature, not a test-only mechanism), so emulating it here makes the
+  // hover-driven background deterministic without a sleep.
+  await page.emulateMedia({ reducedMotion: "reduce" });
+
+  await page.goto("/admin/audit?actor=nobody-by-this-name");
+  const emptyRow = page.locator("tbody tr").filter({ has: page.locator(".log__empty") });
+  const restBackground = await emptyRow.evaluate(
+    (el) => getComputedStyle(el).backgroundColor,
+  );
+  await emptyRow.hover();
+  const hoveredEmptyBackground = await emptyRow.evaluate(
+    (el) => getComputedStyle(el).backgroundColor,
+  );
+
+  await page.goto("/admin/audit");
+  const dataRow = page.locator("tbody tr").first();
+  await dataRow.hover();
+  const hoveredDataBackground = await dataRow.evaluate(
+    (el) => getComputedStyle(el).backgroundColor,
+  );
+
+  expect(hoveredEmptyBackground).toBe(restBackground);
+  expect(hoveredEmptyBackground).not.toBe(hoveredDataBackground);
+});
+
+test("paging past the end says so instead of claiming an empty log", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  await db.insert(auditLog).values([
+    {
+      actor: "system",
+      action: "tier.changed",
+      target: admin.id,
+      details: { to: "green" },
+    },
+    {
+      actor: "system",
+      action: "tier.changed",
+      target: admin.id,
+      details: { to: "blue" },
+    },
+  ]);
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+
+  // Serial ids restart at 1 per resetDb, so `before=1` is guaranteed to be at
+  // or past the oldest row while the log itself is not empty.
+  await page.goto("/admin/audit?before=1");
+
+  await expect(page.locator(".log__empty")).toContainText("older");
+  await expect(page.locator(".log__empty").getByRole("link")).toHaveAttribute(
+    "href",
+    "/admin/audit",
+  );
+
+  // The count heading must not contradict the row's own "still has entries,
+  // just past the cursor" message by claiming the log is empty.
+  await expect(page.getByRole("heading", { name: "No older entries" })).toBeVisible();
+});
+
+test("paging past the end with an active filter keeps that filter on the exit link", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  await db.insert(auditLog).values([
+    {
+      actor: admin.id,
+      action: "tier.changed",
+      target: admin.id,
+      details: { to: "green" },
+    },
+    {
+      actor: admin.id,
+      action: "tier.changed",
+      target: admin.id,
+      details: { to: "blue" },
+    },
+  ]);
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+
+  // Same guaranteed-past-the-oldest cursor as above, but with a filter active:
+  // the exit link this state offers is the page's only way out, and it must
+  // not silently drop the filter that got the admin here.
+  await page.goto("/admin/audit?actor=Boss&before=1");
+
+  await expect(page.locator(".log__empty")).toContainText("older");
+  const exitLink = page.locator(".log__empty").getByRole("link");
+  await expect(exitLink).toHaveAttribute("href", "/admin/audit?actor=Boss");
+
+  await exitLink.click();
+  await expect(page).toHaveURL(/[?&]actor=Boss/);
+  await expect(page.locator("tbody tr")).toHaveCount(2);
+});

@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
+import type { ReactNode } from "react";
 import { getDb } from "@/db";
+import { getConfig } from "@/config";
 import { requireAdminPage } from "@/lib/admin-guard";
 import { AUDIT_PAGE_SIZE, queryAuditLog, resolveFilterIdentity } from "@/services/audit";
 import type { FilterResolution, ResolvedAuditRow } from "@/services/audit";
@@ -8,6 +10,7 @@ import { Submit } from "@/app/_components/submit";
 import { formatAgo } from "@/app/_components/format-ago";
 import { RelativeTime } from "@/app/_components/relative-time";
 import { renderedAt } from "@/app/_components/utc-time";
+import { summarizeDetails } from "@/app/admin/audit/summarize";
 
 export const dynamic = "force-dynamic";
 
@@ -15,76 +18,16 @@ export const metadata: Metadata = {
   title: "Audit log",
 };
 
-/** Renders a JSON value inline where it can't throw: a string/number/boolean
- * as itself, anything else as compact JSON. Never lets a malformed payload
- * take the whole row down. */
-function fmt(v: unknown): string {
-  if (v === null || v === undefined) return "?";
-  if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") {
-    return String(v);
-  }
-  try {
-    return JSON.stringify(v);
-  } catch {
-    return "?";
-  }
-}
-
-/**
- * One factual line per action, e.g. `tier.changed` -> `green → flygd`. This is
- * what a scanning admin actually reads; the full payload stays behind the `+`
- * disclosure. Total and defensive: an unknown action or a malformed payload
- * falls through to a generic key=value rendering rather than throwing, since
- * new action names appear over time and the DB does not enforce a shape.
- */
-function summarizeDetails(action: string, details: unknown): string {
-  const d = (details && typeof details === "object" ? details : {}) as Record<
-    string,
-    unknown
-  >;
-  try {
-    switch (action) {
-      case "tier.changed":
-        return d.from !== undefined ? `${fmt(d.from)} → ${fmt(d.to)}` : `→ ${fmt(d.to)}`;
-      case "status.changed":
-        return `→ ${fmt(d.to)}`;
-      case "admin.bootstrap_granted":
-        return `character ${fmt(d.characterId)}`;
-      case "account.created":
-        return `main ${fmt(d.mainCharacterId)}`;
-      case "account.main_changed":
-        return `main → ${fmt(d.mainCharacterId)}`;
-      case "character.reclaimed":
-        return `from ${fmt(d.fromAccount)}`;
-      case "token.invalidated":
-        return fmt(d.reason);
-      case "token.verify_failed":
-        return fmt(d.error);
-      case "token.subject_mismatch":
-        return `subject ${fmt(d.subjectCharacterId)}`;
-      case "character.owner_mismatch":
-        return `detected by ${fmt(d.detectedBy)}`;
-      case "discord.unlinked":
-        return fmt(d.reason);
-      case "discord.role_changed":
-        return d.added !== undefined
-          ? `+${fmt(d.added)} -${fmt(d.removed)} (${fmt(d.tier)})`
-          : `-${fmt(d.removed)} (${fmt(d.cause)})`;
-      default: {
-        const entries = Object.entries(d)
-          .slice(0, 3)
-          .map(([k, v]) => `${k}=${fmt(v)}`);
-        return entries.length ? entries.join(", ") : "—";
-      }
-    }
-  } catch {
-    return "(unreadable)";
-  }
-}
-
 /** The exact UTC instant, `2026-08-03 22:19:24`. */
 function stamp(d: Date): string {
   return d.toISOString().replace("T", " ").slice(0, 19);
+}
+
+/** Collapses a possibly-repeated query param to one value, last wins: a
+ * duplicate arises in practice by appending `&actor=x` to a URL that already
+ * has one, so the appended value is the intent. */
+function one(v: string | string[] | undefined): string | undefined {
+  return Array.isArray(v) ? v[v.length - 1] : v;
 }
 
 /**
@@ -218,11 +161,14 @@ function idsOf(r: FilterResolution | null): string[] | undefined {
 export default async function AdminAuditPage({
   searchParams,
 }: {
+  // Next passes `string | string[]` for any param, and the page used to
+  // declare only `string`. A repeated param (`?actor=a&actor=b`) then reached
+  // `.trim()` on an array and took the whole page down with a 500.
   searchParams: Promise<{
-    actor?: string;
-    action?: string;
-    target?: string;
-    before?: string;
+    actor?: string | string[];
+    action?: string | string[];
+    target?: string | string[];
+    before?: string | string[];
   }>;
 }) {
   await requireAdminPage();
@@ -235,11 +181,12 @@ export default async function AdminAuditPage({
   // `action` is deliberately untouched: it is a prefix match whose semantics
   // are out of scope for this branch.
   const params = {
-    ...raw,
-    actor: raw.actor?.trim() || undefined,
-    target: raw.target?.trim() || undefined,
+    actor: one(raw.actor)?.trim() || undefined,
+    action: one(raw.action) || undefined,
+    target: one(raw.target)?.trim() || undefined,
+    before: one(raw.before),
   };
-  const beforeId = raw.before ? Number(raw.before) : undefined;
+  const beforeId = params.before ? Number(params.before) : undefined;
 
   const db = getDb();
   // Both filters resolve concurrently; each costs 0 queries when absent or
@@ -269,11 +216,25 @@ export default async function AdminAuditPage({
         beforeId: Number.isFinite(beforeId) ? beforeId : undefined,
       });
 
-  const older = new URLSearchParams();
-  for (const [k, v] of Object.entries(params)) if (v && k !== "before") older.set(k, v);
+  // The active filters, cursor dropped. Shared by the pager (which then adds
+  // its own `before`) and the past-the-end exit link (which must not), so the
+  // two round-trip through the same params instead of drifting apart.
+  const filterParams = new URLSearchParams();
+  for (const [k, v] of Object.entries(params))
+    if (v && k !== "before") filterParams.set(k, v);
+  const filterHrefBase = filterParams.toString()
+    ? `/admin/audit?${filterParams.toString()}`
+    : "/admin/audit";
+
+  const older = new URLSearchParams(filterParams);
   if (rows.length > 0) older.set("before", String(rows[rows.length - 1].id));
 
   const now = Date.now();
+
+  // tier -> role id in config; this table needs role id -> tier.
+  const roleNames = new Map(
+    Object.entries(getConfig().discord.roleIds).map(([tier, id]) => [id, tier]),
+  );
 
   const filtered = Boolean(params.actor || params.action || params.target);
   const activeFilters = [
@@ -297,22 +258,45 @@ export default async function AdminAuditPage({
     )
     .filter(Boolean) as string[];
 
+  // The cursor ran past the end of a non-empty log, distinct from the log
+  // (or the filtered subset of it) genuinely having zero rows. Mirrors the
+  // priority `emptyMessage` below uses: an unmatched name still names the
+  // field that failed, even if `before` also happens to be set.
+  const pastEnd =
+    !unmatched.length &&
+    beforeId !== undefined &&
+    Number.isFinite(beforeId) &&
+    rows.length === 0;
+
   const countLabel =
     rows.length === 0
-      ? filtered
-        ? "No matching entries"
-        : "No entries"
+      ? pastEnd
+        ? "No older entries"
+        : filtered
+          ? "No matching entries"
+          : "No entries"
       : `${rows.length}${rows.length === AUDIT_PAGE_SIZE ? "+" : ""} ${
           filtered ? "matching entries" : "entries"
         }`;
 
-  const emptyMessage = unmatched.length
-    ? `No account or character named ${unmatched
-        .map(([field, r]) => `"${r.name}" (${field})`)
-        .join(" or ")}.`
-    : filtered
-      ? "Nothing matches this filter."
-      : "Nothing has happened yet.";
+  const emptyMessage: ReactNode = unmatched.length ? (
+    `No account or character named ${unmatched
+      .map(([field, r]) => `"${r.name}" (${field})`)
+      .join(" or ")}.`
+  ) : pastEnd ? (
+    // The log is not empty, the cursor is simply past its end. Saying
+    // "nothing has happened yet" here is false, and the `Older ->` button
+    // is gone (it renders only on a full page), so this state had no exit
+    // at all. The exit link keeps whatever filter got the admin here.
+    <>
+      Nothing older than this point.{" "}
+      <a href={filterHrefBase}>Back to the latest entries</a>
+    </>
+  ) : filtered ? (
+    "Nothing matches this filter."
+  ) : (
+    "Nothing has happened yet."
+  );
 
   return (
     <main id="main" tabIndex={-1} className="page">
@@ -384,6 +368,7 @@ export default async function AdminAuditPage({
       </RuleHead>
       <Scroller label="Audit entries" tall>
         <table className="log log--audit log--sticky-head log--sticky-col">
+          <caption className="visually-hidden">Audit log entries</caption>
           <colgroup>
             {/* Widths live in globals.css, not in `style` here: they have to
                 change at the narrow breakpoint, and an inline width outranks a
@@ -459,7 +444,7 @@ export default async function AdminAuditPage({
                     {r.details ? (
                       <Json
                         value={r.details}
-                        summary={summarizeDetails(r.action, r.details)}
+                        summary={summarizeDetails(r.action, r.details, roleNames)}
                       />
                     ) : (
                       <span className="dim">&mdash;</span>
@@ -470,8 +455,13 @@ export default async function AdminAuditPage({
             })}
             {rows.length === 0 && (
               <tr>
+                {/* The cell spans five fixed-width columns, so at 320px its box
+                    is far wider than the scroller and the text used to wrap
+                    out of view. The inner span pins to the scroller's visible
+                    left edge and wraps within it; the cell keeps its layout
+                    width. */}
                 <td className="log__empty" colSpan={5}>
-                  {emptyMessage}
+                  <span className="log__empty-text">{emptyMessage}</span>
                 </td>
               </tr>
             )}
