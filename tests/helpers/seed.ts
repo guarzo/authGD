@@ -9,12 +9,19 @@ export async function seedAccount(
   opts: {
     tier?: "flygd" | "blue" | "green";
     tierLocked?: boolean;
+    status?: "active" | "cryo";
+    isAdmin?: boolean;
     discordUserId?: string;
   } = {},
 ) {
   const [acc] = await db
     .insert(account)
-    .values({ tier: opts.tier ?? "green", tierLocked: opts.tierLocked ?? false })
+    .values({
+      tier: opts.tier ?? "green",
+      tierLocked: opts.tierLocked ?? false,
+      status: opts.status ?? "active",
+      isAdmin: opts.isAdmin ?? false,
+    })
     .returning();
   if (opts.discordUserId) {
     await db
