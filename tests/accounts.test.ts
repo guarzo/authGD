@@ -10,6 +10,7 @@ import {
   promoteAdmin,
   setMainCharacter,
   unlinkCharacter,
+  wakeSelf,
   type EveCallbackCharacter,
 } from "@/services/accounts";
 import { createSession, getSessionAccount } from "@/services/session";
@@ -69,6 +70,7 @@ const setMain = (accountId: string, characterId: number) =>
   ctx.db.transaction((tx) => setMainCharacter(tx, accountId, characterId));
 const demote = (actor: string, accountId: string) =>
   ctx.db.transaction((tx) => demoteAdmin(tx, actor, accountId));
+const wake = (accountId: string) => ctx.db.transaction((tx) => wakeSelf(tx, accountId));
 
 describe("handleEveLogin", () => {
   it("creates a pessimistic green account with outbox + audit", async () => {
@@ -291,6 +293,39 @@ describe("re-auth side effects", () => {
     expect(await ctx.db.select().from(outbox)).toHaveLength(1);
     const audits = await ctx.db.select().from(auditLog);
     expect(audits.some((x) => x.action === "character.reauthed")).toBe(true);
+  });
+});
+
+describe("wakeSelf", () => {
+  it("wakes a cryo account: status active, audited (self-actor), enqueued", async () => {
+    const target = await seedAccount(ctx.db);
+    await ctx.db.update(account).set({ status: "cryo" }).where(eq(account.id, target.id));
+    await ctx.db.delete(outbox);
+    const r = await wake(target.id);
+    expect(r).toEqual({ ok: true });
+    const [acc] = await ctx.db.select().from(account).where(eq(account.id, target.id));
+    expect(acc.status).toBe("active");
+    expect(acc.statusChangedAt).not.toBeNull();
+    const [audit] = await ctx.db.select().from(auditLog).orderBy(auditLog.id);
+    expect(audit.actor).toBe(target.id);
+    expect(audit.action).toBe("status.changed");
+    expect(audit.target).toBe(target.id);
+    expect(audit.details).toMatchObject({ to: "active", self: true });
+    expect(await ctx.db.select().from(outbox)).toHaveLength(1);
+  });
+
+  it("is a no-op when already active: no audit row, nothing enqueued", async () => {
+    const target = await seedAccount(ctx.db);
+    await ctx.db.delete(outbox);
+    const r = await wake(target.id);
+    expect(r).toEqual({ ok: true });
+    expect(await ctx.db.select().from(auditLog)).toHaveLength(0);
+    expect(await ctx.db.select().from(outbox)).toHaveLength(0);
+  });
+
+  it("returns not_found for a missing account", async () => {
+    const r = await wake("00000000-0000-0000-0000-000000000000");
+    expect(r).toEqual({ ok: false, error: "not_found" });
   });
 });
 

@@ -6,7 +6,7 @@ import { cookies } from "next/headers";
 import { getConfig } from "@/config";
 import { getDb } from "@/db";
 import { character } from "@/db/schema";
-import { setMainCharacter, unlinkCharacter } from "@/services/accounts";
+import { setMainCharacter, unlinkCharacter, wakeSelf } from "@/services/accounts";
 import { getSessionAccount } from "@/services/session";
 
 async function requireAccount(): Promise<string> {
@@ -47,5 +47,15 @@ export async function unlinkAction(characterId: number): Promise<void> {
       expectedAccountId: accountId,
     });
   });
+  revalidatePath("/account");
+}
+
+/** Member self-serve: leave cryo. Only ever moves the caller's own account,
+ * and only in this direction — see `wakeSelf`'s own doc comment for why a
+ * member freezing themselves would be a policy bypass rather than a feature. */
+export async function wakeSelfAction(): Promise<void> {
+  const accountId = await requireAccount();
+  const result = await getDb().transaction((dbtx) => wakeSelf(dbtx, accountId));
+  if (!result.ok) throw new Error(result.error);
   revalidatePath("/account");
 }

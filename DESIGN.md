@@ -48,7 +48,7 @@ Gold is identity and emphasis. The three signals are semantic and never decorati
 | `--gold` | `oklch(0.83 0.155 88)` | Brand mark, active nav, primary action, FlyGD tier. |
 | `--gold-dim` | `oklch(0.72 0.14 84)` | Gold borders, hover on gold surfaces. |
 | `--signal-ok` | `oklch(0.76 0.13 158)` | Healthy token, present on map, linked. |
-| `--signal-warn` | `oklch(0.80 0.15 70)` | Needs re-auth, scope shortfall, cryo. |
+| `--signal-warn` | `oklch(0.80 0.15 70)` | Needs re-auth, scope shortfall, cryo (admin table only — an admin scans for it; the member's own account page reads cryo in `--ink-dim` instead, since it's a pause the member asked for, not a fault). |
 | `--signal-bad` | `oklch(0.68 0.19 25)` | Dead token, failed sync, destructive action. |
 
 ### Tier colours

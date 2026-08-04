@@ -409,7 +409,11 @@ h3.rule-head__label {
   /* Not decoration: .visually-hidden is position:absolute, and without a
      positioned ancestor its containing block is the viewport, so a hidden
      label inside a 1200px-wide table escapes this scroll box and stretches
-     the whole document. Containing it here is what keeps mobile at 390px. */
+     the whole document. Containing it here is what keeps mobile at 390px.
+     The edge fades live one level up, on `.scroller-frame`: an
+     absolutely-positioned descendant of *this* element would be part of its
+     own scrollable overflow and would ride off with the table instead of
+     staying pinned to the viewport edge. */
   position: relative;
   overflow-x: auto;
   border: 1px solid var(--rule);
@@ -419,6 +423,61 @@ h3.rule-head__label {
 .scroller:focus-visible {
   outline: 2px solid var(--gold);
   outline-offset: 2px;
+}
+
+/* The non-scrolling frame the edge fades are pinned to. `.scroller`'s own
+   `position: relative` doesn't help here on purpose: a child positioned
+   against a box that itself scrolls scrolls with it. This wrapper never
+   scrolls, so its children stay put while `.scroller` inside it moves. */
+.scroller-frame {
+  position: relative;
+}
+
+/* Scroll affordance: nothing at rest told a narrow viewport that the table
+   underneath scrolls, and the mobile columns were clipped with no cue to
+   look sideways. `Scroller` (scroller.tsx) tracks the actual scroll position
+   and toggles `data-visible` on these; a side fades in while there's more
+   content that way and out once the region is scrolled all the way to that
+   edge. `--rule-strong` fading to transparent, not `--hull-hi`: a first pass
+   with `--hull-hi` measured 1.2:1 against `--void` — real on a screenshot but
+   not on a screen — where `--rule-strong` is the token DESIGN.md picked to
+   read against `--void`, `--hull`, and `--hull-hi` alike, so the affordance
+   holds up on every ground the table can put behind it. Mixed to 75% it
+   measures 2.55:1, deliberately under WCAG 1.4.11's 3:1: this reinforces a
+   scrollbar that is already visible and carries no information of its own,
+   so it is styled to stay quiet rather than to pass as the affordance.
+   Decorative and inert — pointer-events: none keeps it clear of scrolling
+   and any hit-testing. */
+.scroller-fade {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1.5rem;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--dur-color) var(--ease);
+}
+
+.scroller-fade[data-visible] {
+  opacity: 1;
+}
+
+.scroller-fade--start {
+  left: 0;
+  background: linear-gradient(
+    to right,
+    color-mix(in oklab, var(--rule-strong) 75%, transparent),
+    transparent
+  );
+}
+
+.scroller-fade--end {
+  right: 0;
+  background: linear-gradient(
+    to left,
+    color-mix(in oklab, var(--rule-strong) 75%, transparent),
+    transparent
+  );
 }
 
 .log {
@@ -1506,6 +1565,13 @@ h3.rule-head__label {
   width: min(560px, 100%);
   height: auto;
   margin-inline: auto;
+}
+
+/* A sparse account (one character, little above the fold) let the artwork
+   outweigh everything else on the page. Same asset, same technique, a
+   smaller frame — not a crop, not a downscaled fragment. */
+.closing--compact img {
+  width: min(320px, 100%);
 }
 
 .skip {

@@ -60,6 +60,48 @@ async function lockAccounts(dbx: DbTx, ids: string[]) {
   }
 }
 
+/** Lock a single account row and return it (or undefined if missing). */
+async function lockAccount(dbx: DbTx, accountId: string) {
+  const rows = await dbx
+    .select()
+    .from(account)
+    .where(eq(account.id, accountId))
+    .for("update");
+  return rows[0];
+}
+
+/**
+ * Member self-service: wake the caller's OWN account out of cryo. This is
+ * intentionally the only direction a member can move status themselves — a
+ * member must never be able to freeze their own account, since that would
+ * let them dodge the corp's inactivity policy. Freezing stays admin-only via
+ * `setAccountStatus` in admin-accounts.ts.
+ *
+ * No authorization check here: the caller's identity is the account itself,
+ * proven by session upstream (route layer), not by an actor/target split
+ * like the admin mutations above. There is nothing to authorize against.
+ */
+export async function wakeSelf(
+  dbx: DbTx,
+  accountId: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const acc = await lockAccount(dbx, accountId);
+  if (!acc) return { ok: false, error: "not_found" };
+  if (acc.status !== "cryo") return { ok: true }; // already active: idempotent no-op
+  await dbx
+    .update(account)
+    .set({ status: "active", statusChangedAt: new Date() })
+    .where(eq(account.id, accountId));
+  await logAudit(dbx, {
+    actor: accountId,
+    action: "status.changed",
+    target: accountId,
+    details: { to: "active", self: true },
+  });
+  await enqueueSync(dbx, { kind: "account", accountId });
+  return { ok: true };
+}
+
 function tokenFields(cfg: Config, ch: EveCallbackCharacter) {
   const hasAllScopes = cfg.eveSso.scopes.every((s) => ch.scopes.includes(s));
   return {
