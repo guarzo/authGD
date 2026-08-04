@@ -1,8 +1,7 @@
 import type { Metadata } from "next";
-import { redirect } from "next/navigation";
 import { getDb } from "@/db";
 import type { syncRunStatusEnum } from "@/db/schema";
-import { getAdminContext } from "@/lib/admin-guard";
+import { requireAdminPage } from "@/lib/admin-guard";
 import { getSyncStatus } from "@/services/sync-status";
 import { cadenceFor, JOB_CRON, nextOccurrence } from "@/core/schedules";
 import {
@@ -11,7 +10,7 @@ import {
   humanizeKey,
   isNoChange,
 } from "@/core/run-summary";
-import { Json, Scroller, Status, type Tone } from "@/app/_components/ui";
+import { Json, Notice, Scroller, Status, type Tone } from "@/app/_components/ui";
 import { Disclosure } from "@/app/_components/disclosure";
 import { Submit } from "@/app/_components/submit";
 import { formatAgo } from "@/app/_components/format-ago";
@@ -100,8 +99,7 @@ export default async function AdminSyncPage({
 }: {
   searchParams: Promise<{ queued?: string }>;
 }) {
-  const ctx = await getAdminContext();
-  if (!ctx) redirect("/login");
+  await requireAdminPage();
   const { queued } = await searchParams;
   const groups = await getSyncStatus(getDb());
   const now = Date.now();
@@ -120,19 +118,19 @@ export default async function AdminSyncPage({
         </p>
       </div>
 
-      {/* role="status" because a server action redirect re-renders without a
-          document load: without it the outcome of the press is visible but
-          never announced. */}
+      {/* Notice's default tone derives role="status": a server action redirect
+          re-renders without a document load, so without it the outcome of
+          the press is visible but never announced. */}
       {queued === "all" && (
-        <p className="notice" role="status" data-glyph="·">
+        <Notice>
           Sync queued for every account. The worker picks it up within a few seconds; the
           strip below updates as runs finish.
-        </p>
+        </Notice>
       )}
       {queued === "recheck" && (
-        <p className="notice" role="status" data-glyph="·">
+        <Notice>
           Affiliation recheck queued. The worker picks it up within a few seconds.
-        </p>
+        </Notice>
       )}
 
       <div className="btn-row">
@@ -149,10 +147,10 @@ export default async function AdminSyncPage({
       </div>
 
       {groups.length === 0 && (
-        <p className="notice" data-glyph="·">
+        <Notice>
           No runs recorded yet. Either the worker has not started, or nothing has come
           due.
-        </p>
+        </Notice>
       )}
 
       {groups.length > 0 && (

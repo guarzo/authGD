@@ -21,11 +21,9 @@ export default async function NewPayoutPage() {
   if (!access.isOperator) redirect("/payouts");
 
   const nav = [
-    { key: "account", href: "/account", label: "Account" },
-    { key: "payouts", href: "/payouts", label: "Payouts" },
-    ...(access.isAdmin
-      ? [{ key: "admin", href: "/admin/accounts", label: "Admin" }]
-      : []),
+    { href: "/account", label: "Your account" },
+    { href: "/payouts", label: "Payouts" },
+    ...(access.isAdmin ? [{ href: "/admin/accounts", label: "Members" }] : []),
   ];
 
   return (

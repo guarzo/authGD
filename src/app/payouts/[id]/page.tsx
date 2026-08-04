@@ -59,11 +59,9 @@ export default async function PayoutOperationPage({
   const { operation, pools, participants, totalValue, corpAmount, locked } = detail;
 
   const nav = [
-    { key: "account", href: "/account", label: "Account" },
-    { key: "payouts", href: "/payouts", label: "Payouts" },
-    ...(access.isAdmin
-      ? [{ key: "admin", href: "/admin/accounts", label: "Admin" }]
-      : []),
+    { href: "/account", label: "Your account" },
+    { href: "/payouts", label: "Payouts" },
+    ...(access.isAdmin ? [{ href: "/admin/accounts", label: "Members" }] : []),
   ];
   // Mirrors `assertEditable` exactly, so an operator discovers the freeze by the
   // controls being absent rather than by a failed submit. Both halves matter:
