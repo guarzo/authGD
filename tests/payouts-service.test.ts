@@ -3,6 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { loadConfig, type Config } from "@/config";
 import { lootPool, payoutOperation, payoutParticipant, payoutPayment } from "@/db/schema";
 import { unlinkCharacter } from "@/services/accounts";
+import { addAppraisedPool, deletePool } from "@/services/payout-loot";
 import {
   PayoutForbiddenError,
   PayoutLockedError,
@@ -330,6 +331,50 @@ describe("recordPayment", () => {
     ).rejects.toThrow(PayoutLockedError);
   });
 
+  it("refuses to pay an excluded participant", async () => {
+    // An excluded participant's amount is pinned at "0.00" by recalculate, but
+    // paying them anyway would still insert a payout_payment row -- making
+    // hasPayments() true and freezing the operation permanently, since
+    // assertEditable and unlockOperation both refuse forever once any payment
+    // exists.
+    const operator = await seedOperator();
+    const { id: operationId } = await ctx.db.transaction((tx) =>
+      createOperation(tx, operator.id, {
+        name: "Has an excluded pilot",
+        occurredAt: new Date(),
+        corpSharePct: "0",
+      }),
+    );
+    await ctx.db
+      .insert(lootPool)
+      .values({ operationId, valuationSource: "flat", totalValue: "100.00", notes: "n" });
+    await ctx.db.transaction((tx) =>
+      setRoster(tx, operator.id, operationId, [
+        {
+          displayName: "Excluded Pilot",
+          accountId: null,
+          recipientCharacterId: null,
+          sourceCharacters: ["Excluded Pilot"],
+          shares: "1",
+          excluded: true,
+        },
+      ]),
+    );
+    const [participant] = await ctx.db
+      .select()
+      .from(payoutParticipant)
+      .where(eq(payoutParticipant.operationId, operationId));
+    await ctx.db.transaction((tx) => finalizeOperation(tx, operator.id, operationId));
+    await expect(
+      ctx.db.transaction((tx) => recordPayment(tx, operator.id, participant.id)),
+    ).rejects.toThrow(PayoutLockedError);
+    const payments = await ctx.db
+      .select()
+      .from(payoutPayment)
+      .where(eq(payoutPayment.participantId, participant.id));
+    expect(payments).toHaveLength(0);
+  });
+
   it("is idempotent: paying twice writes one payment row and doesn't move paidAmount", async () => {
     const { participantId, operator, operationId } =
       await seedFightWithOnePaidParticipant();
@@ -524,6 +569,11 @@ describe("the service layer is the authorization boundary", () => {
    * between the action's check and the transaction's write. Each mutation
    * re-checks inside its own transaction. If any of these stop throwing, the
    * guard was dropped from that function.
+   *
+   * All eleven mutating exports are exercised here: createOperation, setRoster,
+   * finalizeOperation, unlockOperation, setParticipantShares,
+   * setParticipantExcluded, removeParticipant, recordPayment, addAppraisedPool,
+   * deletePool. addFlatPool is covered separately in payout-loot.test.ts.
    */
   it("rejects every mutation when the actor is not an active flygd account", async () => {
     const operator = await seedOperator();
@@ -534,6 +584,30 @@ describe("the service layer is the authorization boundary", () => {
         name: "Guarded",
         occurredAt: new Date(),
         corpSharePct: "0",
+      }),
+    );
+    await ctx.db.transaction((tx) =>
+      setRoster(tx, operator.id, operationId, [
+        {
+          displayName: "Guarded Pilot",
+          accountId: null,
+          recipientCharacterId: null,
+          sourceCharacters: ["Guarded Pilot"],
+          shares: "1",
+          excluded: false,
+        },
+      ]),
+    );
+    const [participant] = await ctx.db
+      .select()
+      .from(payoutParticipant)
+      .where(eq(payoutParticipant.operationId, operationId));
+    const { poolId } = await ctx.db.transaction((tx) =>
+      addAppraisedPool(tx, operator.id, operationId, {
+        rawPaste: "1x Tritanium",
+        pricingMode: "sell_best",
+        stationId: 60003760,
+        appraisal: { items: [], totalValue: "0.00" },
       }),
     );
 
@@ -551,11 +625,51 @@ describe("the service layer is the authorization boundary", () => {
         ctx.db.transaction((tx) => setRoster(tx, actor, operationId, [])),
       ).rejects.toThrow(PayoutForbiddenError);
       await expect(
+        ctx.db.transaction((tx) => setParticipantShares(tx, actor, participant.id, "2")),
+      ).rejects.toThrow(PayoutForbiddenError);
+      await expect(
+        ctx.db.transaction((tx) =>
+          setParticipantExcluded(tx, actor, participant.id, true),
+        ),
+      ).rejects.toThrow(PayoutForbiddenError);
+      await expect(
+        ctx.db.transaction((tx) => removeParticipant(tx, actor, participant.id)),
+      ).rejects.toThrow(PayoutForbiddenError);
+      await expect(
+        ctx.db.transaction((tx) => recordPayment(tx, actor, participant.id)),
+      ).rejects.toThrow(PayoutForbiddenError);
+      await expect(
+        ctx.db.transaction((tx) =>
+          addAppraisedPool(tx, actor, operationId, {
+            rawPaste: "1x Tritanium",
+            pricingMode: "sell_best",
+            appraisal: { items: [], totalValue: "0.00" },
+          }),
+        ),
+      ).rejects.toThrow(PayoutForbiddenError);
+      await expect(
+        ctx.db.transaction((tx) => deletePool(tx, actor, poolId)),
+      ).rejects.toThrow(PayoutForbiddenError);
+      await expect(
         ctx.db.transaction((tx) => finalizeOperation(tx, actor, operationId)),
       ).rejects.toThrow(PayoutForbiddenError);
       await expect(
         ctx.db.transaction((tx) => unlockOperation(tx, actor, operationId)),
       ).rejects.toThrow(PayoutForbiddenError);
     }
+
+    // Confirm none of the forbidden attempts actually mutated anything: the
+    // participant is untouched and the pool is still there.
+    const [stillThere] = await ctx.db
+      .select()
+      .from(payoutParticipant)
+      .where(eq(payoutParticipant.id, participant.id));
+    expect(stillThere.shares).toBe("1.00");
+    expect(stillThere.excluded).toBe(false);
+    const [poolStillThere] = await ctx.db
+      .select()
+      .from(lootPool)
+      .where(eq(lootPool.id, poolId));
+    expect(poolStillThere).toBeDefined();
   });
 });

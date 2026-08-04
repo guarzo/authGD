@@ -430,6 +430,13 @@ export async function recordPayment(
     .from(payoutParticipant)
     .where(eq(payoutParticipant.id, participantId));
   if (!participant) throw new Error("participant not found");
+  if (participant.excluded) {
+    // Excluded participants carry amount = "0.00"; recording a payment for one
+    // would still insert a payout_payment row, making hasPayments() true and
+    // freezing the operation permanently (assertEditable and unlockOperation
+    // both refuse forever once any payment exists).
+    throw new PayoutLockedError("participant is excluded and cannot be paid");
+  }
   if (participant.paidAmount !== null) return; // already paid: idempotent, no duplicate event
   await dbtx
     .update(payoutParticipant)
