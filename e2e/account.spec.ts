@@ -1,6 +1,13 @@
 import { expect, test } from "@playwright/test";
 import { eq, sql } from "drizzle-orm";
-import { account, character, discordLink, syncRun } from "../src/db/schema";
+import {
+  account,
+  character,
+  discordLink,
+  payoutOperation,
+  payoutParticipant,
+  syncRun,
+} from "../src/db/schema";
 import { resetDb, seedMember, sessionCookieFor, testDb } from "./helpers";
 
 const { db, pool } = testDb();
@@ -381,4 +388,51 @@ test("unlinking a character that already left the account lands on a styled noti
   await expect(
     page.getByRole("alert").filter({ hasText: "isn't on this account anymore" }),
   ).toBeVisible();
+});
+
+/**
+ * Reading your own history needs only a session; reading an OPERATION needs
+ * tier flygd. A member demoted out of flygd still gets the answer to "did I
+ * get paid for that Thursday roam" — as plain text, because a link would
+ * silently redirect them straight back to this page.
+ */
+test("a member who is no longer flygd sees their payout row with no link to the operation", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "FC Prime",
+    tier: "flygd",
+    status: "active",
+  });
+  const member = await seedMember(db, { name: "Demoted Pilot", tier: "green" });
+
+  const [op] = await db
+    .insert(payoutOperation)
+    .values({
+      name: "Thursday roam",
+      occurredAt: new Date("2026-08-01"),
+      corpSharePct: "0",
+      status: "finalized",
+      createdBy: operator.id,
+    })
+    .returning();
+  await db.insert(payoutParticipant).values({
+    operationId: op.id,
+    accountId: member.id,
+    displayName: "Demoted Pilot",
+    shares: "1",
+    amount: "450000.00",
+  });
+
+  await context.addCookies([await sessionCookieFor(db, member.id)]);
+  await page.goto("/account");
+
+  const row = page.getByRole("row").filter({ hasText: "Thursday roam" });
+  await expect(row).toContainText("450000.00 ISK");
+  await expect(row).toContainText("unpaid");
+  // The name is there; the link is not.
+  await expect(row.getByRole("link")).toHaveCount(0);
+  // And the nav offers no way in either — same tier gate, one control up.
+  await expect(page.getByRole("link", { name: "Payouts" })).toHaveCount(0);
 });

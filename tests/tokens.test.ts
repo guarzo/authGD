@@ -2,7 +2,8 @@ import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { auditLog, character } from "@/db/schema";
 import { decryptToken, encryptToken } from "@/lib/crypto";
-import { getFreshAccessToken } from "@/services/tokens";
+import { getFreshAccessToken, getMainCharacterWithScope } from "@/services/tokens";
+import { OPEN_WINDOW_SCOPE } from "@/lib/esi/client";
 import { setupTestDb, truncateAll } from "./helpers/db";
 import { testConfig } from "./helpers/config";
 import { seedAccount, seedCharacter } from "./helpers/seed";
@@ -126,5 +127,58 @@ describe("getFreshAccessToken", () => {
     const r = await getFreshAccessToken(ctx.db, cfg, stale, fetchImpl);
     expect(r).toMatchObject({ ok: false, reason: "transient" });
     expect((await getChar(90000001)).tokenStatus).toBe("valid"); // NOT invalidated
+  });
+});
+
+describe("getMainCharacterWithScope", () => {
+  it("returns the main character's token row when it granted the scope", async () => {
+    const acc = await seedAccount(ctx.db);
+    await seedCharacter(ctx.db, cfg, {
+      id: 90000001,
+      accountId: acc.id,
+      main: true,
+      scopes: [...cfg.eveSso.scopes, OPEN_WINDOW_SCOPE],
+    });
+    const row = await getMainCharacterWithScope(ctx.db, acc.id, OPEN_WINDOW_SCOPE);
+    expect(row?.id).toBe(90000001);
+    expect(row?.tokenStatus).toBe("valid");
+    expect(row?.refreshTokenEnc).toBeTruthy();
+  });
+
+  it("returns null when the main character authorized before the scope existed", async () => {
+    // The whole reason this gate reads the persisted column and not config:
+    // config says what we ASK for, and this operator has a valid session
+    // whose token predates the ask.
+    const acc = await seedAccount(ctx.db);
+    await seedCharacter(ctx.db, cfg, {
+      id: 90000002,
+      accountId: acc.id,
+      main: true,
+      scopes: [...cfg.eveSso.scopes],
+    });
+    expect(await getMainCharacterWithScope(ctx.db, acc.id, OPEN_WINDOW_SCOPE)).toBeNull();
+  });
+
+  it("ignores a non-main character that has the scope", async () => {
+    // The call goes out on the operator's MAIN token; an alt holding the
+    // scope does not make the control work.
+    const acc = await seedAccount(ctx.db);
+    await seedCharacter(ctx.db, cfg, {
+      id: 90000003,
+      accountId: acc.id,
+      main: true,
+      scopes: [...cfg.eveSso.scopes],
+    });
+    await seedCharacter(ctx.db, cfg, {
+      id: 90000004,
+      accountId: acc.id,
+      scopes: [...cfg.eveSso.scopes, OPEN_WINDOW_SCOPE],
+    });
+    expect(await getMainCharacterWithScope(ctx.db, acc.id, OPEN_WINDOW_SCOPE)).toBeNull();
+  });
+
+  it("returns null for an account with no main character", async () => {
+    const acc = await seedAccount(ctx.db);
+    expect(await getMainCharacterWithScope(ctx.db, acc.id, OPEN_WINDOW_SCOPE)).toBeNull();
   });
 });

@@ -27,11 +27,19 @@ export function centsToIsk(cents: bigint): string {
   return `${sign}${whole.toString()}.${frac.toString().padStart(2, "0")}`;
 }
 
+/**
+ * The largest value `numeric(20,2)` holds: 20 significant digits with 2 after
+ * the point leaves 18 integer digits, so 999999999999999999.99 — which is
+ * 10^20 - 1 in cents. Callers computing a money value (a line total, a pool
+ * total) compare against this before it reaches the column, so an overflow is
+ * a readable message rather than a raw Postgres numeric-field-overflow.
+ */
+export const MAX_MONEY_CENTS = 10n ** 20n - 1n;
+
 export type SplitParticipant = { id: string; shares: string; excluded: boolean };
 
 export type SplitResult = {
   corpAmountCents: bigint;
-  perShareCents: bigint;
   amounts: Map<string, bigint>;
 };
 
@@ -40,7 +48,16 @@ export function computeSplit(input: {
   corpSharePct: string;
   participants: SplitParticipant[];
 }): SplitResult {
+  // Defence in depth: the DB check constraints catch both of these at persist
+  // time, but only after this function has already produced a plausible-looking
+  // split from them, and only as an unreadable Postgres error.
+  if (input.totalCents < 0n) {
+    throw new Error(`total cannot be negative: ${centsToIsk(input.totalCents)}`);
+  }
   const pctBp = iskToCents(input.corpSharePct); // "10.00" -> 1000n basis points
+  if (pctBp < 0n || pctBp > 10000n) {
+    throw new Error(`corp share must be between 0 and 100: ${input.corpSharePct}`);
+  }
   const corpBase = (input.totalCents * pctBp) / 10000n;
   const pool = input.totalCents - corpBase;
 
@@ -59,5 +76,5 @@ export function computeSplit(input: {
   }
 
   const corpAmountCents = corpBase + (pool - distributed);
-  return { corpAmountCents, perShareCents: perShare, amounts };
+  return { corpAmountCents, amounts };
 }

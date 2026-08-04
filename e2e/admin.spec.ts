@@ -222,20 +222,47 @@ test("saving a note keeps the row drawer open and persists the note", async ({
   const zedDrawer = drawerOf(zedRow);
   await toggleOf(zedRow).click();
   await expect(zedDrawer).toBeVisible();
-  await zedDrawer.getByPlaceholder("notes").fill("watch this one");
+  const noteField = zedDrawer.getByPlaceholder("notes");
+  const savedNotice = zedDrawer.locator(".note-form__saved");
+  // Nobody has clicked save yet, so the confirmation must not be showing. The
+  // rest of this test never checks this on its own: the first thing it does
+  // is fill the field, which already flips `dirty` true and would hide a
+  // wrongly-always-on confirmation for free, so this has to run before that.
+  await expect(savedNotice).not.toBeVisible();
+  await noteField.fill("watch this one");
   const save = zedDrawer.getByRole("button", { name: "save note" });
   await save.click();
   // Submit disables itself while the action is in flight; waiting for it to
   // come back is what tells us the write has landed.
   await expect(save).toBeEnabled();
   await expect(zedDrawer).toBeVisible();
+  // The write lands with nothing else on screen changing: the field already
+  // shows the typed text and the drawer stays open by design, so the saved
+  // confirmation is the only proof that survives the action completing.
+  await expect(savedNotice).toBeVisible();
+  await expect(savedNotice).toHaveText(/saved/);
+  // A stale "saved" sitting next to text nobody has saved yet is a lie, so
+  // editing the field again has to clear it immediately, before any submit.
+  await noteField.fill("watch this one, revised");
+  await expect(savedNotice).not.toBeVisible();
+  // A second save has to bring the confirmation back, not just the first.
+  // This pins the repeat-value class of bug: any "just saved" signal that can
+  // return the same value twice (a fixed sentinel, or a clock two saves could
+  // tie on) leaves `state === seen` in note-form.tsx, so `dirty` never clears
+  // and this assertion fails. It does NOT reproduce a millisecond collision
+  // specifically — the two saves here are seconds apart, so a `Date.now()`
+  // implementation would pass. `saveNoteAction`'s counter removes the class
+  // rather than relying on this test to catch one instance of it.
+  await save.click();
+  await expect(save).toBeEnabled();
+  await expect(savedNotice).toBeVisible();
   // Re-read from the server. Asserting the value on the same input the test
   // just typed into would pass whether or not anything was persisted.
   await page.reload();
   const reloaded = rowFor(page, "Zed");
   await toggleOf(reloaded).click();
   await expect(drawerOf(reloaded).getByPlaceholder("notes")).toHaveValue(
-    "watch this one",
+    "watch this one, revised",
   );
 });
 
@@ -471,6 +498,41 @@ test("a de-roled admin's approve click gets the notice, not the error boundary",
   await expect(page).toHaveURL(/\/account\?error=not_admin/);
   await expect(page.locator("p.notice--bad")).toContainText("admin access was removed");
   await expect(page.getByText("Something broke")).toHaveCount(0);
+});
+
+// The three `.drawer__label`s (Set tier / Cryo / Note) top-align, so their
+// control rows should too. `.note-form` used to add its own `margin-top` on
+// top of `.drawer__group`'s `gap`, pushing the note input ~12px below the
+// tier and freeze buttons even though all three labels lined up (measured at
+// 1440x900: labels at y=593.8, tier/freeze controls at y=618.8, note input at
+// y=630.8). Pinned here so a re-added margin regresses this test rather than
+// only being visible on a designer's screen.
+test("the note control aligns with the tier and freeze control rows", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedWorld();
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/admin/accounts");
+  const zedRow = rowFor(page, "Zed");
+  const zedDrawer = drawerOf(zedRow);
+  await toggleOf(zedRow).click();
+  await expect(zedDrawer).toBeVisible();
+
+  const tierBox = await zedDrawer.locator(".btn-group").boundingBox();
+  const freezeBox = await zedDrawer
+    .getByRole("button", { name: "freeze Zed" })
+    .boundingBox();
+  const noteBox = await zedDrawer.locator(".note-form .field").boundingBox();
+  if (!tierBox || !freezeBox || !noteBox) {
+    throw new Error("expected all three control rows to be measurable");
+  }
+  // 4px tolerance for subpixel layout, not a real misalignment: the tier
+  // buttons and freeze sit exactly together already (both are `.btn--micro`),
+  // so the gap under test is only the note row's own offset.
+  expect(Math.abs(tierBox.y - freezeBox.y)).toBeLessThanOrEqual(4);
+  expect(Math.abs(tierBox.y - noteBox.y)).toBeLessThanOrEqual(4);
 });
 
 /* --- Narrow-screen operability ------------------------------------------ */

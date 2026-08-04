@@ -1,4 +1,4 @@
-import { eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Dbx, DbTx } from "@/db";
 import {
   account,
@@ -13,6 +13,15 @@ import { logAudit } from "@/services/audit";
 
 export class PayoutForbiddenError extends Error {}
 export class PayoutLockedError extends Error {}
+/** The operation or participant an operation was asked to act on does not
+ *  exist. Distinguishable by callers from a programming error, the same way
+ *  PayoutForbiddenError and PayoutLockedError already are. */
+export class PayoutNotFoundError extends Error {}
+/** A manual roster addition names someone already on the roster. Named rather
+ *  than a bare Error because `addParticipantAction` has to tell it from a real
+ *  fault: the operator typed this name and can retype it, so it earns a message
+ *  on the page rather than error.tsx's "a fault on this end". */
+export class PayoutDuplicateParticipantError extends Error {}
 
 /**
  * `getSessionAccount` (src/services/session.ts) resolves a session to an
@@ -44,7 +53,7 @@ export async function lockOperation(
     .from(payoutOperation)
     .where(eq(payoutOperation.id, operationId))
     .for("update");
-  if (!op) throw new Error("operation not found");
+  if (!op) throw new PayoutNotFoundError("operation not found");
   return op;
 }
 
@@ -78,7 +87,7 @@ export async function assertEditable(dbtx: DbTx, operationId: string): Promise<v
     .select({ status: payoutOperation.status })
     .from(payoutOperation)
     .where(eq(payoutOperation.id, operationId));
-  if (!op) throw new Error("operation not found");
+  if (!op) throw new PayoutNotFoundError("operation not found");
   if (op.status !== "draft") {
     throw new PayoutLockedError("operation is finalized; unlock it before editing");
   }
@@ -277,6 +286,95 @@ export async function setRoster(
   await recalculate(dbtx, operationId);
 }
 
+/**
+ * Manual roster entry, one name at a time. Additive by necessity: `setRoster`
+ * deletes the whole roster and reinserts it, which would discard every share
+ * edit already made, so adding one person cannot go through it.
+ *
+ * The name goes through `resolveRosterNames` so alt-collapsing and main-naming
+ * behave identically to the paste path — the difference is only that the
+ * collapse is against rows already in the table rather than within one paste.
+ */
+export async function addParticipant(
+  dbtx: DbTx,
+  actor: string,
+  operationId: string,
+  name: string,
+): Promise<void> {
+  await requirePayoutOperator(dbtx, actor);
+  await lockOperation(dbtx, operationId);
+  await assertEditable(dbtx, operationId);
+  const [entry] = await resolveRosterNames(dbtx, [name]);
+  if (!entry) throw new Error("a character name is required");
+
+  const existing = await dbtx
+    .select()
+    .from(payoutParticipant)
+    .where(eq(payoutParticipant.operationId, operationId));
+  const twin =
+    entry.accountId !== null
+      ? existing.find((p) => p.accountId === entry.accountId)
+      : undefined;
+
+  if (twin) {
+    // Same human, different character. Record the spelling that was typed and
+    // leave the share count alone — a second row here is a second full share.
+    const alreadyListed = twin.sourceCharacters.some(
+      (c) => c.toLowerCase() === name.toLowerCase(),
+    );
+    if (!alreadyListed) {
+      await dbtx
+        .update(payoutParticipant)
+        .set({ sourceCharacters: [...twin.sourceCharacters, name] })
+        .where(eq(payoutParticipant.id, twin.id));
+    }
+    await logAudit(dbtx, {
+      actor,
+      action: "payout.participant_added",
+      target: operationId,
+      details: { participantId: twin.id, name, collapsedInto: twin.displayName },
+    });
+  } else {
+    if (entry.accountId === null) {
+      // Two unresolved rows sharing a name are two full shares going out under
+      // one name, and nothing downstream can tell them apart. The detail page
+      // has warned about this since phase 1 but could not prevent it, because
+      // the paste path is itself deduped — manual entry is what makes the case
+      // reachable, so manual entry is where it gets refused. The page warning
+      // stays as a backstop for rosters written before this guard existed.
+      const clash = existing.find(
+        (p) =>
+          p.accountId === null &&
+          p.displayName.toLowerCase() === entry.displayName.toLowerCase(),
+      );
+      if (clash) {
+        throw new PayoutDuplicateParticipantError(
+          `"${clash.displayName}" is already on this roster`,
+        );
+      }
+    }
+    const [inserted] = await dbtx
+      .insert(payoutParticipant)
+      .values({
+        operationId,
+        accountId: entry.accountId,
+        recipientCharacterId: entry.recipientCharacterId,
+        displayName: entry.displayName,
+        sourceCharacters: entry.sourceCharacters,
+        shares: entry.shares,
+        excluded: entry.excluded,
+      })
+      .returning();
+    await logAudit(dbtx, {
+      actor,
+      action: "payout.participant_added",
+      target: operationId,
+      details: { participantId: inserted.id, name, displayName: entry.displayName },
+    });
+  }
+  await recalculate(dbtx, operationId);
+}
+
 async function loadParticipantOperationId(
   dbtx: DbTx,
   participantId: string,
@@ -285,8 +383,33 @@ async function loadParticipantOperationId(
     .select({ operationId: payoutParticipant.operationId })
     .from(payoutParticipant)
     .where(eq(payoutParticipant.id, participantId));
-  if (!p) throw new Error("participant not found");
+  if (!p) throw new PayoutNotFoundError("participant not found");
   return p.operationId;
+}
+
+/**
+ * `payout_participant.shares` is `numeric(6, 2)`, so 9999.99 is the largest
+ * value the column holds and anything above it dies as a raw Postgres numeric
+ * overflow. Mirrored here as a readable message, the same way `addFlatPool`
+ * mirrors `loot_pool_total_ck` and `createOperationAction` mirrors
+ * `payout_operation_corp_share_pct_ck`.
+ *
+ * Deliberately NOT a column widening: widening would mean a migration against
+ * production data purely to improve an error message, and nobody in a fleet
+ * draws ten thousand shares.
+ *
+ * Exported, unlike a plain module constant, because `setParticipantSharesAction`
+ * bounds against the same number to produce a redirect instead of a throw. One
+ * constant, two enforcement points, no drift.
+ */
+export const MAX_SHARES_HUNDREDTHS = 999999n; // 9999.99, in iskToCents' hundredths
+
+export function assertSharesInRange(shares: string): void {
+  const hundredths = iskToCents(shares); // also rejects "abc" / "1e5" outright
+  if (hundredths <= 0n) throw new Error("shares must be a positive number");
+  if (hundredths > MAX_SHARES_HUNDREDTHS) {
+    throw new Error("shares cannot exceed 9999.99");
+  }
 }
 
 export async function setParticipantShares(
@@ -296,6 +419,7 @@ export async function setParticipantShares(
   shares: string,
 ): Promise<void> {
   await requirePayoutOperator(dbtx, actor);
+  assertSharesInRange(shares);
   const operationId = await loadParticipantOperationId(dbtx, participantId);
   await lockOperation(dbtx, operationId);
   await assertEditable(dbtx, operationId);
@@ -442,6 +566,44 @@ export async function unlockOperation(
   await logAudit(dbtx, { actor, action: "payout.unlocked", target: operationId });
 }
 
+/**
+ * The `at` to stamp on this participant's next `payout_payment` row.
+ *
+ * `clock_timestamp()` on its own is not monotonic. It repeats at the clock's
+ * resolution, and an NTP correction can step it backwards; either way two rows
+ * can tie or invert, and `(at asc, id asc)` then breaks the tie on
+ * `defaultRandom()` — arbitrarily, not causally. So the reading is clamped
+ * forward past this participant's latest row, which makes `at` STRICTLY
+ * increasing per participant.
+ *
+ * The subquery is safe because every writer of this table holds
+ * `lockOperation`'s `SELECT … FOR UPDATE` on the parent operation and a
+ * participant belongs to exactly one operation, so "the latest row for this
+ * participant" cannot change under us. Scoped to the PARTICIPANT rather than
+ * the operation on purpose: per-participant is the history the detail page
+ * renders, and it is the property that has to hold.
+ *
+ * The accepted cost, stated rather than hidden: under a backwards clock step
+ * `at` reads later than the true wall clock until the clock catches up. A
+ * human reading a pay -> revert -> pay history is reconstructing ORDER, not
+ * the instant, so a possibly-inaccurate instant is the better trade than an
+ * inverted sequence. Ties at clock resolution — far likelier than an NTP step
+ * — are fixed outright, and distort nothing beyond one microsecond.
+ *
+ * No migration and no column: `payout_payment.at` keeps its `defaultNow()`,
+ * these two writers simply do not use it.
+ */
+function nextPaymentAt(participantId: string) {
+  return sql`greatest(
+    clock_timestamp(),
+    coalesce(
+      (select max(${payoutPayment.at}) from ${payoutPayment}
+        where ${payoutPayment.participantId} = ${participantId}),
+      'epoch'::timestamptz
+    ) + interval '1 microsecond'
+  )`;
+}
+
 export async function recordPayment(
   dbtx: DbTx,
   actor: string,
@@ -457,7 +619,7 @@ export async function recordPayment(
     .select({ operationId: payoutParticipant.operationId })
     .from(payoutParticipant)
     .where(eq(payoutParticipant.id, participantId));
-  if (!ref) throw new Error("participant not found");
+  if (!ref) throw new PayoutNotFoundError("participant not found");
   const op = await lockOperation(dbtx, ref.operationId);
   if (op.status !== "finalized") {
     throw new PayoutLockedError("operation must be finalized before paying");
@@ -466,7 +628,7 @@ export async function recordPayment(
     .select()
     .from(payoutParticipant)
     .where(eq(payoutParticipant.id, participantId));
-  if (!participant) throw new Error("participant not found");
+  if (!participant) throw new PayoutNotFoundError("participant not found");
   if (participant.excluded) {
     // Excluded participants carry amount = "0.00"; recording a payment for one
     // would still insert a payout_payment row, making hasPayments() true and
@@ -484,6 +646,13 @@ export async function recordPayment(
     kind: "paid",
     amount: participant.amount,
     actor,
+    // NOT the column's defaultNow(): now() is TRANSACTION START time, so a
+    // transaction that started earlier can take the operation lock later and
+    // stamp an earlier time than an event that already happened. This reading
+    // is taken after lockOperation, which every writer of this table holds,
+    // and clamped past this participant's latest row. See nextPaymentAt above
+    // and the phase-2 design, "Derived payment state".
+    at: nextPaymentAt(participantId),
   });
   await logAudit(dbtx, {
     actor,
@@ -491,4 +660,124 @@ export async function recordPayment(
     target: op.id,
     details: { participantId, amount: participant.amount },
   });
+}
+
+/**
+ * The one place `paidAmount` is not immutable. Phase 1 called it immutable to
+ * stop *recalculation* rewriting what was paid, and that still holds absolutely
+ * — `recalculate` writes only `amount`. A revert is the deliberate, audited
+ * case where "what was paid" genuinely changed, because it turned out nobody
+ * was paid.
+ *
+ * Deliberately does NOT call `assertEditable`. A revert is not an edit, and the
+ * gate would make it impossible: the first payment freezes the operation
+ * permanently, so every participant who could ever need reverting is behind it.
+ * Reverting does not lift that freeze either — `hasPayments` counts rows of any
+ * kind, so loot, shares and corpSharePct stay frozen forever once money moved.
+ * "I marked the wrong person paid" is fully served by reverting one participant
+ * and paying another, both of which work while frozen.
+ */
+export async function revertPayment(
+  dbtx: DbTx,
+  actor: string,
+  participantId: string,
+): Promise<void> {
+  await requirePayoutOperator(dbtx, actor);
+  // Read ONLY the operation id before the lock, for the same reason
+  // recordPayment does: `status` and `paidAmount` are what this decides on, and
+  // two concurrent reverts that both read paidAmount first would both see it
+  // set and both append a `reverted` row for one payment.
+  const [ref] = await dbtx
+    .select({ operationId: payoutParticipant.operationId })
+    .from(payoutParticipant)
+    .where(eq(payoutParticipant.id, participantId));
+  if (!ref) throw new PayoutNotFoundError("participant not found");
+  const op = await lockOperation(dbtx, ref.operationId);
+  if (op.status !== "finalized") {
+    throw new PayoutLockedError("operation must be finalized to revert a payment");
+  }
+  const [participant] = await dbtx
+    .select()
+    .from(payoutParticipant)
+    .where(eq(payoutParticipant.id, participantId));
+  if (!participant) throw new PayoutNotFoundError("participant not found");
+  if (participant.paidAmount === null) {
+    throw new PayoutLockedError("participant is not marked paid; nothing to revert");
+  }
+  const amount = participant.paidAmount;
+  await dbtx
+    .update(payoutParticipant)
+    .set({ paidAmount: null })
+    .where(eq(payoutParticipant.id, participantId));
+  await dbtx.insert(payoutPayment).values({
+    participantId,
+    kind: "reverted",
+    amount,
+    // The SAME stamp recordPayment uses, and it has to be: a revert that keeps
+    // the column's defaultNow() lands on transaction-start time and can sort
+    // before the payment it reverts, and a bare clock_timestamp() can tie with
+    // it at clock resolution. nextPaymentAt clamps past this participant's
+    // latest row, so pay -> revert -> pay is strictly increasing.
+    at: nextPaymentAt(participantId),
+    actor,
+  });
+  await logAudit(dbtx, {
+    actor,
+    action: "payout.payment_reverted",
+    target: op.id,
+    details: { participantId, amount },
+  });
+}
+
+/**
+ * Resolves the character whose in-game information window an operator may open
+ * for `participantId`, re-reading every condition server-side.
+ *
+ * Both ids arrive from a bound form action, so neither is trusted. Four
+ * conditions, and the last one is the point: the ESI target is the STORED
+ * `recipientCharacterId`, never a value the caller supplied, so a hand-made
+ * request cannot aim the operator's own token at an arbitrary character.
+ *
+ *   1. the participant must belong to THIS operation — otherwise the operation
+ *      id is decoration and any participant id in the database would work;
+ *   2. the operation must be `finalized` — open-info is a payment-time control
+ *      and the page only renders it then;
+ *   3. the participant must not be excluded — they are owed nothing, so there
+ *      is no one to pay and nothing to look up;
+ *   4. the row must carry a recipient — an unresolved roster name has no
+ *      character to open.
+ *
+ * Returns null rather than throwing for all four: every one of them is a stale
+ * page away, and the action turns null into a message.
+ *
+ * No `lockOperation` here, deliberately: this reads state to decide whether to
+ * make an external call that persists nothing. There is no write to serialize
+ * against, and taking a row lock for a window-opening request would put `FOR
+ * UPDATE` contention on the payout path for no gain.
+ *
+ * Takes no `actor` and calls no operator guard: the operator check is the
+ * caller's job (`openInfoAction` calls `requireOperatorAccount` first), so any
+ * future second caller must add its own gate rather than rely on this one.
+ */
+export async function getOpenInfoTarget(
+  dbx: Dbx,
+  operationId: string,
+  participantId: string,
+): Promise<number | null> {
+  const [row] = await dbx
+    .select({
+      recipientCharacterId: payoutParticipant.recipientCharacterId,
+      excluded: payoutParticipant.excluded,
+      status: payoutOperation.status,
+    })
+    .from(payoutParticipant)
+    .innerJoin(payoutOperation, eq(payoutOperation.id, payoutParticipant.operationId))
+    .where(
+      and(
+        eq(payoutParticipant.id, participantId),
+        eq(payoutParticipant.operationId, operationId),
+      ),
+    );
+  if (!row || row.status !== "finalized" || row.excluded) return null;
+  return row.recipientCharacterId;
 }

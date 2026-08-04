@@ -1,7 +1,7 @@
 import { and, eq } from "drizzle-orm";
 import type { Config } from "@/config";
-import type { Db } from "@/db";
-import { character } from "@/db/schema";
+import type { Db, Dbx } from "@/db";
+import { account, character } from "@/db/schema";
 import { classifyOAuthError } from "@/core/errors";
 import { decryptToken, encryptToken } from "@/lib/crypto";
 import { EveSsoError, refreshEveToken } from "@/lib/esi/sso";
@@ -137,4 +137,38 @@ export async function getFreshAccessToken(
       detail: err instanceof Error ? err.message : String(err),
     };
   }
+}
+
+/**
+ * The account's main character, but only if it actually GRANTED `scope`.
+ *
+ * Reads the persisted `character.scopes` column, never `cfg.eveSso.scopes`:
+ * config states what login asks for, and an operator who authorized before a
+ * scope was added has a valid session and a token without it. Gating on config
+ * would offer them a control that fails every time.
+ *
+ * Returns the token row rather than a boolean so the caller that renders the
+ * gate and the caller that makes the call agree by construction.
+ */
+export async function getMainCharacterWithScope(
+  dbx: Dbx,
+  accountId: string,
+  scope: string,
+): Promise<CharacterTokenRow | null> {
+  const [row] = await dbx
+    .select({
+      id: character.id,
+      refreshTokenEnc: character.refreshTokenEnc,
+      tokenStatus: character.tokenStatus,
+      scopes: character.scopes,
+    })
+    .from(account)
+    .innerJoin(character, eq(character.id, account.mainCharacterId))
+    .where(eq(account.id, accountId));
+  if (!row || !row.scopes.includes(scope)) return null;
+  return {
+    id: row.id,
+    refreshTokenEnc: row.refreshTokenEnc,
+    tokenStatus: row.tokenStatus,
+  };
 }

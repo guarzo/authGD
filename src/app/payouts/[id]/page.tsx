@@ -2,25 +2,32 @@ import { cache } from "react";
 import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 import { getDb } from "@/db";
-import { getPayoutOperationDetail } from "@/services/payout-view";
+import { getPayoutOperationDetail, listCharacterNames } from "@/services/payout-view";
 import { Notice, RuleHead, Scroller, SiteHeader, Status } from "@/app/_components/ui";
+import { Disclosure } from "@/app/_components/disclosure";
 import { Submit } from "@/app/_components/submit";
 import { ConfirmArmScope, ConfirmSubmit } from "@/app/_components/confirm-submit";
 import { requirePayoutReader } from "../access";
 import {
   addAppraisedPoolAction,
   addFlatPoolAction,
+  addParticipantAction,
   deletePoolAction,
   finalizeAction,
   markPaidAction,
+  openInfoAction,
   removeParticipantAction,
+  revertPaymentAction,
   setCorpShareAction,
+  setItemPriceAction,
   setParticipantExcludedAction,
   setParticipantSharesAction,
   setRosterAction,
   unlockAction,
 } from "../actions";
+import { DROPPED_REASONS, decodeDropped } from "../dropped";
 import { CopyAmountButton } from "./copy-amount-button";
+import { PaymentHistory } from "./payment-history";
 import { PRICING_MODES, type PricingMode } from "@/core/pricing";
 import { iskToCents } from "@/core/payout-split";
 
@@ -113,16 +120,51 @@ const ERRORS: Record<string, string> = {
     "A flat pool needs a note saying where the number came from. It is the only record of why this total is what it is.",
   total_invalid:
     "Total must be a plain number like 12345.67 — no commas, and no shorthand like 1e5.",
+  price_invalid:
+    "Price must be a plain number like 12.34 — no commas, and at most two decimals. The item price was left as it was.",
   shares_required: "Shares cannot be blank. The roster value was left as it was.",
   shares_invalid:
     "Shares must be a plain number like 1 or 1.5. The roster value was left as it was.",
   shares_positive:
     "Shares must be greater than zero. To pay someone nothing, exclude them instead — that keeps them on the roster and out of the split.",
+  shares_range: "Shares cannot exceed 9999.99. The roster value was left as it was.",
   share_format:
     "Corp share must be a plain percentage like 10 or 12.5. The old value is unchanged.",
   share_range:
     "Corp share cannot exceed 100% — that would leave the roster nothing to split. The old value is unchanged.",
+  participant_name_required:
+    "Type a character name to add someone to the roster. Nothing was added.",
+  participant_duplicate:
+    "Someone is already on this roster under that name. Nothing was added — two rows under one unresolved name pay two full shares to whoever answers to it.",
+  // The expected outcome on a busy night, not a fault, and the ONLY message
+  // here that claims to know why: it is used only when ESI's own error body
+  // said so. Worded as a fact about the game, because the fallback — copy the
+  // amount, pay by hand — is exactly what operators did before this control.
+  open_info_offline:
+    "EVE says that character is not logged in, so there was nowhere to open the window. Nothing else changed — copy the amount and pay them when they are next online.",
+  // Distinct from offline because the fix is different, and is the operator's
+  // own to make: the grant is missing from THEIR login, not the recipient's.
+  open_info_reauth:
+    "Opening a window in EVE needs a permission your login does not carry yet. Add your character again from your account page to grant it — everything else here keeps working without it.",
+  open_info_busy:
+    "EVE is rate-limiting us right now. Nothing changed — wait a minute and try again, or copy the amount and pay by hand.",
+  // The one failure where the call may actually have SUCCEEDED, so it must not
+  // tell the operator to click again without looking first.
+  open_info_timeout:
+    "EVE took too long to answer. The window may still have opened, so check your client before trying again.",
+  // The honest catch-all. It says what happened and what to do next, and
+  // deliberately does not guess at a cause we cannot prove.
+  open_info_failed:
+    "Could not open that window just then. Nothing changed — try again in a moment, or copy the amount and pay by hand.",
+  open_info_target:
+    "That line cannot be opened: it is excluded, has no linked character, or the operation is no longer finalized. Reload the page to see where it stands.",
+  open_info_dry_run:
+    "This deployment is in dry-run mode, so nothing is sent to EVE. The amounts and the payment controls are real; only the in-game window is suppressed.",
 };
+
+/** The `<datalist>` the add-participant field points at. One per page, so a
+ *  constant rather than a `useId` (this is a server component). */
+const CHARACTER_LIST_ID = "known-character-names";
 
 function fmtDate(d: Date): string {
   return d.toISOString().slice(0, 10);
@@ -133,13 +175,14 @@ export default async function PayoutOperationPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ error?: string }>;
+  searchParams: Promise<{ error?: string; dropped?: string }>;
 }) {
   const access = await readAccess();
   if (!access) redirect("/account");
   const { id } = await params;
-  const { error } = await searchParams;
+  const { error, dropped } = await searchParams;
   const errorMessage = error ? ERRORS[error] : undefined;
+  const droppedReport = decodeDropped(dropped);
   const detail = await loadDetail(id);
   if (!detail) notFound();
   const { operation, pools, participants, totalValue, corpAmount, locked } = detail;
@@ -159,6 +202,10 @@ export default async function PayoutOperationPage({
   // else's committed numbers, so it is not shown to every operator.
   const canUnlock =
     access.isOperator && (operation.createdBy === access.accountId || access.isAdmin);
+
+  // null when there are more characters than the datalist cap — the field then
+  // degrades to plain free text (see listCharacterNames).
+  const characterNames = canEdit ? await listCharacterNames(getDb()) : null;
 
   // A name with no accountId is an unresolved roster entry (resolveRosterNames
   // never dedupes those against each other, on purpose — see its own comment).
@@ -183,11 +230,17 @@ export default async function PayoutOperationPage({
     .map(([key]) => unresolvedByLowerName.get(key)!);
 
   // Only the *first* payment is worth an arm step. Recording one is what shuts
-  // the door permanently — `hasPayments` makes the operation un-editable and
-  // un-unlockable from then on (Recalculation safety, mechanism 3). Every later
-  // "mark paid" is a click behind a door already shut, so gating those would be
-  // friction with nothing behind it.
-  const anyPaid = participants.some((p) => p.paymentState === "paid");
+  // the door permanently — `locked` (hasPayments) makes the operation
+  // un-editable and un-unlockable from then on (Recalculation safety,
+  // mechanism 3), and this task's revert deliberately does NOT reopen it.
+  // Every later "mark paid" is a click behind a door already shut, so gating
+  // those would be friction with nothing behind it.
+  //
+  // Derived from `locked` rather than from "somebody is currently paid":
+  // reverting the only payment leaves the operation frozen, because
+  // `hasPayments` counts payment rows and a reverted payment still left one.
+  // Keying the arm on current paid-ness would re-arm after a full revert.
+  const firstPayment = !locked;
 
   return (
     <>
@@ -209,6 +262,36 @@ export default async function PayoutOperationPage({
         </div>
 
         {errorMessage && <Notice tone="bad">{errorMessage}</Notice>}
+
+        {/* "items", not "lines": parseLootPaste sums by item name before it
+            decides what to drop, so one entry is one item quoted from the line
+            it first appeared on, and the count can be smaller than the number
+            of raw lines behind it. */}
+        {droppedReport && (
+          <Notice tone="warn">
+            <span>
+              <strong>
+                {droppedReport.total} item{droppedReport.total === 1 ? "" : "s"} ignored
+              </strong>{" "}
+              — the rest of the paste was appraised and saved. Nothing listed here is in
+              the pool. Re-paste anything that was meant to count.
+              <br />
+              <span className="dim">
+                {droppedReport.sample
+                  .map((d) => `${d.line} (${DROPPED_REASONS[d.reason]})`)
+                  .join("; ")}
+              </span>
+              {droppedReport.total > droppedReport.sample.length && (
+                <>
+                  <br />
+                  <span className="dim">
+                    …and {droppedReport.total - droppedReport.sample.length} more.
+                  </span>
+                </>
+              )}
+            </span>
+          </Notice>
+        )}
 
         <RuleHead as="h2">Operation</RuleHead>
         <dl className="facts">
@@ -270,6 +353,18 @@ export default async function PayoutOperationPage({
           )}
         </dl>
 
+        {locked && (
+          <Notice tone="warn">
+            <span>
+              <strong>This operation is frozen.</strong> A payment has been recorded, so
+              the loot pools, the roster, shares and the corp share are fixed permanently.
+              Reverting a payment does not reopen editing — it corrects who has been paid,
+              and nothing else. If the wrong person was marked paid, revert them and pay
+              the right one; both work while frozen.
+            </span>
+          </Notice>
+        )}
+
         {access.isOperator && (
           <ConfirmArmScope>
             <div className="btn-row btn-row--tight">
@@ -303,6 +398,7 @@ export default async function PayoutOperationPage({
           <table className="log">
             <thead>
               <tr>
+                <th scope="col">#</th>
                 <th scope="col">Source</th>
                 <th scope="col">Value</th>
                 <th scope="col">Notes</th>
@@ -316,7 +412,7 @@ export default async function PayoutOperationPage({
                 arm state. */}
             <ConfirmArmScope>
               <tbody>
-                {pools.map((pool) => {
+                {pools.map((pool, index) => {
                   // An unresolved item priced at 0.00 is the one thing on this page
                   // an operator MUST see before finalizing: it means the total is
                   // quietly low and everyone is about to be underpaid. Naming the
@@ -338,6 +434,7 @@ export default async function PayoutOperationPage({
                   );
                   return (
                     <tr key={pool.id}>
+                      <td className="mono nowrap">{index + 1}</td>
                       <td>
                         {pool.valuationSource === "appraised" ? (
                           <Status tone="ok">
@@ -410,7 +507,7 @@ export default async function PayoutOperationPage({
                 })}
                 {pools.length === 0 && (
                   <tr>
-                    <td className="log__empty" colSpan={4}>
+                    <td className="log__empty" colSpan={5}>
                       No loot recorded yet.
                     </td>
                   </tr>
@@ -419,6 +516,97 @@ export default async function PayoutOperationPage({
             </ConfirmArmScope>
           </table>
         </Scroller>
+
+        {/* The two warnings above stay exactly as they are. They are the fast
+            path for "what needs attention" and are readable without opening
+            anything; this table is the *fix* — the place an operator can see
+            every line they pasted and reprice one. Removing either warning in
+            favour of the table would trade a glance for an expand-and-scan.
+
+            Below the Scroller rather than inside a pool row's cell: a table
+            nested in a horizontally-scrolling cell is unreachable at 320px
+            (the same reason the account page's remediation prose sits outside
+            its Scroller). The disclosure keeps a 200-line paste from burying
+            the roster, and `Pool N` ties it back to the numbered row above —
+            `notes` is optional on an appraised pool and unique on none. */}
+        {pools.map(
+          (pool, index) =>
+            pool.items.length > 0 && (
+              <Disclosure
+                key={pool.id}
+                summary={`Pool ${index + 1} items (${pool.items.length})`}
+                ariaLabel={`Pool ${index + 1} items (${pool.items.length}) — names, prices, and per-item overrides`}
+              >
+                <Scroller label={`Pool ${index + 1} items`}>
+                  <table className="log">
+                    <thead>
+                      <tr>
+                        <th scope="col">Item</th>
+                        <th scope="col">Qty</th>
+                        <th scope="col">Unit price</th>
+                        <th scope="col">Line total</th>
+                        <th scope="col">Price source</th>
+                        <th scope="col">
+                          <span className="visually-hidden">Actions</span>
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {pool.items.map((item) => (
+                        <tr key={item.id}>
+                          <td>{item.name}</td>
+                          <td className="mono nowrap">{item.qty}</td>
+                          <td className="mono nowrap">{item.unitPrice}</td>
+                          <td className="mono nowrap">{item.totalValue} ISK</td>
+                          <td>
+                            {item.priceSource === "unresolved" ? (
+                              <Status tone="warn">unresolved</Status>
+                            ) : (
+                              <Status>{item.priceSource}</Status>
+                            )}
+                          </td>
+                          <td>
+                            {canEdit && (
+                              <form
+                                action={setItemPriceAction.bind(
+                                  null,
+                                  operation.id,
+                                  item.id,
+                                )}
+                                className="inline-form"
+                              >
+                                {/* Named after the row it acts on, like the
+                                    shares input below: "save" alone tells a
+                                    speech-input or screen-reader operator
+                                    which verb, never which of 200 items. */}
+                                <input
+                                  className="field"
+                                  name="unitPrice"
+                                  type="number"
+                                  inputMode="decimal"
+                                  min="0"
+                                  step="0.01"
+                                  required
+                                  defaultValue={item.unitPrice}
+                                  aria-label={`Unit price for ${item.name}`}
+                                />
+                                <Submit
+                                  className="btn btn--micro"
+                                  aria-label={`save unit price for ${item.name}`}
+                                >
+                                  save
+                                </Submit>
+                              </form>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </Scroller>
+              </Disclosure>
+            ),
+        )}
 
         {canEdit && (
           <div className="stack">
@@ -517,13 +705,48 @@ export default async function PayoutOperationPage({
           </p>
         )}
         {canEdit && (
-          <form action={setRosterAction.bind(null, operation.id)} className="stack">
-            <label className="stack">
-              Paste (names separated by /)
-              <textarea className="field" name="paste" rows={3} required />
-            </label>
-            <Submit className="btn">Set roster</Submit>
-          </form>
+          <div className="stack">
+            <form action={setRosterAction.bind(null, operation.id)} className="stack">
+              <RuleHead as="h3">Replace the roster from a paste</RuleHead>
+              <label className="stack">
+                Paste (names separated by /)
+                <textarea className="field" name="paste" rows={3} required />
+              </label>
+              <Submit className="btn">Set roster</Submit>
+            </form>
+
+            {/* A plain `<datalist>`, not a type-ahead: the browser does the
+                filtering, so there is no endpoint, no client component, no new
+                authorization surface, and it works with JavaScript off. The
+                list is omitted entirely past `CHARACTER_NAME_CAP`, and the
+                field then behaves as ordinary free text — `addParticipant`
+                resolves the typed name server-side either way, so a missing
+                suggestion costs a suggestion, not the feature. */}
+            <form
+              action={addParticipantAction.bind(null, operation.id)}
+              className="stack"
+            >
+              <RuleHead as="h3">Add one participant</RuleHead>
+              <label className="stack">
+                Character name
+                <input
+                  className="field"
+                  name="name"
+                  list={characterNames ? CHARACTER_LIST_ID : undefined}
+                  autoComplete="off"
+                  required
+                />
+              </label>
+              {characterNames && (
+                <datalist id={CHARACTER_LIST_ID}>
+                  {characterNames.map((n) => (
+                    <option key={n} value={n} />
+                  ))}
+                </datalist>
+              )}
+              <Submit className="btn">Add participant</Submit>
+            </form>
+          </div>
         )}
 
         <Scroller label="Participants">
@@ -586,11 +809,23 @@ export default async function PayoutOperationPage({
                     </td>
                     <td className="mono nowrap">{p.amount} ISK</td>
                     <td>
-                      {p.paymentState === "excluded" && (
-                        <Status tone="off">excluded</Status>
-                      )}
-                      {p.paymentState === "unpaid" && <Status tone="warn">unpaid</Status>}
-                      {p.paymentState === "paid" && <Status tone="ok">paid</Status>}
+                      <div className="stack">
+                        {p.paymentState === "excluded" && (
+                          <Status tone="off">excluded</Status>
+                        )}
+                        {p.paymentState === "unpaid" && (
+                          <Status tone="warn">unpaid</Status>
+                        )}
+                        {p.paymentState === "paid" && <Status tone="ok">paid</Status>}
+                        {/* Stored since phase 1 and never shown until now — and
+                            the actor with it, so the list says who, not just
+                            what and when. Renders nothing when there is no
+                            history. */}
+                        <PaymentHistory
+                          payments={p.payments}
+                          participantName={p.displayName}
+                        />
+                      </div>
                     </td>
                     <td>
                       <div className="btn-row btn-row--tight btn-row--end">
@@ -598,20 +833,54 @@ export default async function PayoutOperationPage({
                           p.paymentState !== "excluded" && (
                             <>
                               <CopyAmountButton amount={p.amount} />
+                              {access.canOpenInfo && p.recipientCharacterId !== null && (
+                                <form
+                                  action={openInfoAction.bind(null, operation.id, p.id)}
+                                >
+                                  <Submit
+                                    className="btn btn--quiet btn--micro"
+                                    pendingLabel="opening…"
+                                    aria-label={`open info for ${p.displayName}`}
+                                  >
+                                    open info
+                                  </Submit>
+                                </form>
+                              )}
                               {p.paymentState !== "paid" && access.isOperator && (
                                 <form
                                   action={markPaidAction.bind(null, operation.id, p.id)}
                                 >
-                                  {anyPaid ? (
-                                    <Submit className="btn btn--micro">mark paid</Submit>
-                                  ) : (
+                                  {firstPayment ? (
                                     <ConfirmSubmit
                                       className="btn btn--micro"
                                       label="mark paid"
                                       restName={`mark paid ${p.displayName}`}
                                       confirmName={`confirm mark paid ${p.displayName}`}
                                     />
+                                  ) : (
+                                    <Submit className="btn btn--micro">mark paid</Submit>
                                   )}
+                                </form>
+                              )}
+                              {/* Reverting money is not a one-click action, so
+                                  it arms first — the same step `remove` and
+                                  `delete` already carry in this table, sharing
+                                  the one `ConfirmArmScope` around this tbody. */}
+                              {p.paymentState === "paid" && access.isOperator && (
+                                <form
+                                  action={revertPaymentAction.bind(
+                                    null,
+                                    operation.id,
+                                    p.id,
+                                  )}
+                                >
+                                  <ConfirmSubmit
+                                    className="btn btn--quiet btn--micro btn--danger-quiet"
+                                    armedClassName="btn btn--micro btn--danger"
+                                    label="revert"
+                                    restName={`revert payment for ${p.displayName}`}
+                                    confirmName={`confirm revert payment for ${p.displayName}`}
+                                  />
                                 </form>
                               )}
                             </>

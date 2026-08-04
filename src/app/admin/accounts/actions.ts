@@ -112,10 +112,20 @@ export async function setStatusAction(
   revalidatePath("/admin/accounts");
 }
 
+// `useActionState` needs the bound action shaped `(prevState, formData) =>
+// newState`, hence the extra `prevState` param ahead of `formData` — the
+// write itself is a plain overwrite either way, `prevState` only exists to be
+// incremented. Returning `prevState + 1` rather than a clock reading
+// (`Date.now()`) is the point: a monotonic counter can't collide with itself,
+// where a millisecond timestamp can — two saves resolving inside the same
+// millisecond would return the same value, and the client's "did a save just
+// land" check (a `state !== seen` comparison) would never fire for the
+// second one, silently dropping its confirmation.
 export async function saveNoteAction(
   accountId: string,
+  prevState: number,
   formData: FormData,
-): Promise<void> {
+): Promise<number> {
   const { accountId: actor } = await requireAdminAction();
   const raw = formData.get("note");
   // FormData.get() is string | File | null. Coercing a File or a missing field
@@ -131,6 +141,7 @@ export async function saveNoteAction(
   );
   if (!result.ok) redirectOnMutationError(result.error);
   revalidatePath("/admin/accounts");
+  return prevState + 1;
 }
 
 export async function syncAccountAction(
