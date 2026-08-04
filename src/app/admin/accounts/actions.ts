@@ -19,9 +19,11 @@ import { enqueueSync } from "@/services/outbox";
 // cleared by another admin (demoteAdminAction) between this row rendering and
 // the click, since actions don't re-run the page's guard on soft navigation.
 // Redirect to the styled notice rather than throw, same as demoteAdminAction's
-// `last_admin` case below. `not_found` has no reachable path today — there is
-// no account-deletion feature — so it stays a throw: if it ever fires, that's
-// a bug worth landing on the error boundary, not copy worth writing for.
+// `last_admin` case below. `not_found` is now reachable too: mergeAccountInto
+// (services/accounts.ts) deletes the source row outright, and its
+// isAbsorbable check doesn't gate on tier, so a pending account can be merged
+// away out from under an admin who has its approval button on screen. See
+// approveAction's `not_found` branch below for the same reasoning.
 function redirectNotAdmin(): never {
   redirect("/admin/accounts?error=not_admin");
 }
@@ -53,6 +55,14 @@ export async function approveAction(
   // the error boundary — the account is approved, just not by them.
   if (!result.ok && result.error === "not_pending") {
     redirect("/admin/accounts?tier=pending&error=not_pending");
+  }
+  // not_found is a race too, and specifically the merge feature's fault: the
+  // pilot re-authed that character onto their real account, mergeAccountInto
+  // absorbed and deleted the pending row, and this admin's click landed on a
+  // row that's no longer there. Same treatment as not_pending — the queue
+  // with a notice, not the error boundary, since nothing actually broke.
+  if (!result.ok && result.error === "not_found") {
+    redirect("/admin/accounts?tier=pending&error=not_found");
   }
   if (!result.ok) throw new Error(result.error);
   revalidatePath("/admin/accounts");

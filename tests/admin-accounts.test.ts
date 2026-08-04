@@ -192,6 +192,16 @@ describe("approveAccount", () => {
     expect(res).toEqual({ ok: false, error: "not_authorized" });
   });
 
+  it("returns not_found for a target that no longer exists (merged away)", async () => {
+    const admin = await seedAccount(ctx.db, { isAdmin: true });
+
+    const res = await ctx.db.transaction((tx) =>
+      approveAccount(tx, admin.id, "00000000-0000-0000-0000-000000000000", "green"),
+    );
+
+    expect(res).toEqual({ ok: false, error: "not_found" });
+  });
+
   it("audits the approval and enqueues a sync", async () => {
     const admin = await seedAccount(ctx.db, { isAdmin: true });
     const target = await seedAccount(ctx.db, { tier: "pending" });
