@@ -90,6 +90,36 @@ describe("addAppraisedPool", () => {
     expect(junk.totalValue).toBe("0.00");
     expect(await soleParticipantAmount(operationId)).toBe("10.00");
   });
+
+  it("derives the persisted pool total from the item rows, not from a caller-supplied appraisal.totalValue that disagrees with them", async () => {
+    const { operatorId, operationId } = await seedOperation();
+    const { poolId } = await ctx.db.transaction((tx) =>
+      addAppraisedPool(tx, operatorId, operationId, {
+        rawPaste: "2x Tritanium",
+        pricingMode: "sell_best",
+        stationId: 60003760,
+        appraisal: {
+          items: [
+            {
+              typeId: 34,
+              name: "Tritanium",
+              qty: 2,
+              unitPrice: "5.00",
+              totalValue: "10.00",
+              priceSource: "triff",
+            },
+          ],
+          // Deliberately wrong: the sum of items[].totalValue is 10.00, not
+          // 999.00. A caller must not be able to make the persisted pool
+          // total disagree with the rows that back it.
+          totalValue: "999.00",
+        },
+      }),
+    );
+    const [pool] = await ctx.db.select().from(lootPool).where(eq(lootPool.id, poolId));
+    expect(pool.totalValue).toBe("10.00");
+    expect(await soleParticipantAmount(operationId)).toBe("10.00");
+  });
 });
 
 describe("addFlatPool", () => {
@@ -100,6 +130,28 @@ describe("addFlatPool", () => {
         addFlatPool(tx, operatorId, operationId, { totalValue: "500.00", notes: "" }),
       ),
     ).rejects.toThrow(/note/);
+  });
+
+  it("rejects a malformed totalValue before it can reach the database", async () => {
+    const { operatorId, operationId } = await seedOperation();
+    await expect(
+      ctx.db.transaction((tx) =>
+        addFlatPool(tx, operatorId, operationId, {
+          totalValue: "not-a-number",
+          notes: "note",
+        }),
+      ),
+    ).rejects.toThrow(/not a valid ISK amount/);
+  });
+
+  it("rejects requirePayoutOperator before the note check, so a forbidden actor sees the authorization error first", async () => {
+    const { operationId } = await seedOperation();
+    const green = await seedAccount(ctx.db, { tier: "green", status: "active" });
+    await expect(
+      ctx.db.transaction((tx) =>
+        addFlatPool(tx, green.id, operationId, { totalValue: "1.00", notes: "" }),
+      ),
+    ).rejects.toThrow(PayoutForbiddenError);
   });
 
   it("sums with an appraised pool into the operation total", async () => {

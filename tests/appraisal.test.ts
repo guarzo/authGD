@@ -95,20 +95,57 @@ describe("appraiseLoot", () => {
     });
   });
 
-  it("sums many lines in exact cents rather than accumulating float error", async () => {
-    const raw = ["1x A", "1x B", "1x C"].join("\n");
+  it(
+    // Rounding once at the line total rather than once per unit is the
+    // point of this test: rounding the unit price to cents FIRST (naive:
+    // 0.13 x 5,000,000 = 650,000.00) discriminates from rounding once at
+    // the line total (correct: round(0.125 x 5,000,000) cents = 625,000.00)
+    // by a visible, non-rounding-noise amount. A prior version of this test
+    // asserted a plain sum of three lines and passed under BOTH the naive
+    // and the correct implementation, so it never actually guarded the
+    // rounding order — see design doc discussion in the task-8 fix round.
+    "rounds once at the line total, not once per unit before multiplying by qty",
+    async () => {
+      const result = await appraiseLoot(
+        "5000000x Widget",
+        { pricingMode: "sell_best", stationId: 1 },
+        { esi: fakeEsi({ widget: 1 }), triff: fakeTriff({ 1: { sell: { best: 0.125 } } }) },
+      );
+      expect(result.items[0].totalValue).toBe("625000.00");
+      expect(result.totalValue).toBe("625000.00");
+    },
+  );
+
+  it("does not let a half-cent unit price scale its rounding error with a large quantity", async () => {
+    // Rounding 5.005 to a 2dp unit price ("5.00") and then multiplying by
+    // qty loses 10,000,000 ISK on a 2 billion unit line (10,000,000,000.00
+    // instead of the true 10,010,000,000.00). Rounding once at the line
+    // total avoids this entirely.
     const result = await appraiseLoot(
-      raw,
+      "2000000000x Widget",
       { pricingMode: "sell_best", stationId: 1 },
-      {
-        esi: fakeEsi({ a: 1, b: 2, c: 3 }),
-        triff: fakeTriff({
-          1: { sell: { best: 0.1 } },
-          2: { sell: { best: 0.2 } },
-          3: { sell: { best: 0.3 } },
-        }),
-      },
+      { esi: fakeEsi({ widget: 1 }), triff: fakeTriff({ 1: { sell: { best: 5.005 } } }) },
     );
-    expect(result.totalValue).toBe("0.60");
+    expect(result.items[0].totalValue).toBe("10010000000.00");
+    expect(result.totalValue).toBe("10010000000.00");
+  });
+
+  it("does not zero out a sub-cent unit price that is worth real money in bulk", async () => {
+    // 0.004 ISK rounds to "0.00" as a unit price, but 10,000,000 units of it
+    // is a genuine 40,000 ISK line. Rounding once at the line total keeps
+    // that value; rounding the unit price first would store 0.00 for the
+    // whole line while still reporting priceSource: "triff" (a resolved,
+    // "correctly priced" row silently worth nothing).
+    const result = await appraiseLoot(
+      "10000000x Widget",
+      { pricingMode: "sell_best", stationId: 1 },
+      { esi: fakeEsi({ widget: 1 }), triff: fakeTriff({ 1: { sell: { best: 0.004 } } }) },
+    );
+    expect(result.items[0]).toMatchObject({
+      unitPrice: "0.00",
+      totalValue: "40000.00",
+      priceSource: "triff",
+    });
+    expect(result.totalValue).toBe("40000.00");
   });
 });

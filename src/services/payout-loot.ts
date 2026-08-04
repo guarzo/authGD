@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import type { DbTx } from "@/db";
 import { lootItem, lootPool } from "@/db/schema";
 import type { PricingMode } from "@/core/pricing";
+import { centsToIsk, iskToCents } from "@/core/payout-split";
 import { logAudit } from "@/services/audit";
 import {
   assertEditable,
@@ -26,6 +27,14 @@ export async function addAppraisedPool(
   await requirePayoutOperator(dbtx, actor);
   await lockOperation(dbtx, operationId);
   await assertEditable(dbtx, operationId);
+  // The pool's totalValue is derived from the item rows, never trusted from
+  // the caller's appraisal.totalValue — the two are computed by the same
+  // formula today, but only one of them is the row that actually lands in
+  // loot_item, and a caller that passes a stale or edited totalValue must
+  // not be able to make the persisted pool disagree with its own items.
+  const computedTotal = centsToIsk(
+    input.appraisal.items.reduce((sum, it) => sum + iskToCents(it.totalValue), 0n),
+  );
   const [pool] = await dbtx
     .insert(lootPool)
     .values({
@@ -35,7 +44,7 @@ export async function addAppraisedPool(
       pricingMode: input.pricingMode,
       stationId: input.stationId ?? null,
       regionId: input.regionId ?? null,
-      totalValue: input.appraisal.totalValue,
+      totalValue: computedTotal,
       appraisedAt: new Date(),
     })
     .returning();
@@ -70,12 +79,19 @@ export async function addFlatPool(
   operationId: string,
   input: { rawPaste?: string | null; totalValue: string; notes: string },
 ): Promise<{ poolId: string }> {
+  // requirePayoutOperator is the FIRST statement, per the plan's Global
+  // Constraints — an actor who cannot mutate payouts is rejected before any
+  // other validation runs, note-content included.
+  await requirePayoutOperator(dbtx, actor);
   // Mirrors the DB CHECK (loot_pool_flat_note_ck) with a friendlier message,
   // checked before taking any lock since it needs no operation state.
   if (!input.notes.trim()) {
     throw new Error("a flat pool requires a note explaining the negotiated total");
   }
-  await requirePayoutOperator(dbtx, actor);
+  // Validates the same ISK-decimal shape iskToCents enforces everywhere else
+  // money enters the system; the return value is unused here, only the
+  // format check (iskToCents throws on anything else).
+  iskToCents(input.totalValue);
   await lockOperation(dbtx, operationId);
   await assertEditable(dbtx, operationId);
   const [pool] = await dbtx
