@@ -8,6 +8,7 @@ import { RuleHead, Json, Scroller } from "@/app/_components/ui";
 import { Submit } from "@/app/_components/submit";
 import { formatAgo } from "@/app/_components/format-ago";
 import { RelativeTime } from "@/app/_components/relative-time";
+import { renderedAt } from "@/app/_components/utc-time";
 
 export const dynamic = "force-dynamic";
 
@@ -360,7 +361,9 @@ export default async function AdminAuditPage({
         </label>
         <div className="filter-form__cell filter-form__cell--actions">
           <div className="filter-form__actions">
-            <Submit className="btn btn--primary">Filter</Submit>
+            {/* Filter is routine and reversible, not the page's primary act —
+                gold (btn--primary) is rationed for the one thing that is. */}
+            <Submit className="btn">Filter</Submit>
             {filtered && (
               <a className="btn btn--quiet" href="/admin/audit">
                 clear
@@ -373,9 +376,10 @@ export default async function AdminAuditPage({
       <RuleHead
         as="h2"
         aside={
-          ambiguityNotes.length > 0 && (
-            <span className="dim">{ambiguityNotes.join(" · ")}</span>
-          )
+          // The render stamp joins the ambiguity notes on the same rule rather
+          // than taking a line of its own: both answer "how much should I trust
+          // what I'm reading", and the aside is already the slot for that.
+          <span className="dim">{[...ambiguityNotes, renderedAt()].join(" · ")}</span>
         }
       >
         {countLabel}
@@ -399,14 +403,14 @@ export default async function AdminAuditPage({
                   below read as elapsed time instead, and a heading claiming UTC
                   over "12h ago" is simply wrong. The exact instant is still in
                   each cell for assistive tech. */}
-              <th>
+              <th scope="col">
                 <span className="only-wide">At (UTC)</span>
                 <span className="only-narrow">At</span>
               </th>
-              <th>Actor</th>
-              <th>Action</th>
-              <th>Target</th>
-              <th>Details</th>
+              <th scope="col">Actor</th>
+              <th scope="col">Action</th>
+              <th scope="col">Target</th>
+              <th scope="col">Details</th>
             </tr>
           </thead>
           <tbody>

@@ -552,13 +552,17 @@ h3.rule-head__label {
   vertical-align: middle;
 }
 
-/* ...except once a row's `<details>` is open: the Name cell then holds the
-   whole expanded drawer, and centering would float every other cell's badges
-   and buttons down to the middle of that tall row instead of leaving them
-   where the collapsed row had them. Top-align the whole row in that state, the
-   same as every other table. */
-.log--dense tbody tr:has(details[open]) td {
+/* The drawer row is its own `<tr>` now (see row-disclosure.tsx), so opening it
+   no longer grows the row above it — the middle-alignment this table wants
+   for its short, single-purpose cells is safe on every row, including this
+   one, whose lone cell has nothing else to float away from. */
+.log--dense tr.drawer-row td {
   vertical-align: top;
+}
+
+/* The drawer row isn't a data row: no hover tint on the panel it's holding. */
+.log tbody tr.drawer-row:hover {
+  background: none;
 }
 
 .log tbody tr:hover {
@@ -696,10 +700,13 @@ h3.rule-head__label {
   z-index: 2;
 }
 
-/* :not(.log__empty) because the empty-state cell is a colSpan across the whole
-   table: it matches td:first-child, and pinning a full-width cell gives it an
-   opaque ground and a stray hairline out at the table's right edge. */
-.log--sticky-col tbody td:first-child:not(.log__empty) {
+/* Two exclusions, one reason: a cell that spans the whole table still matches
+   `td:first-child`, and pinning a full-width cell gives it an opaque ground
+   and a stray hairline out at the table's right edge. The empty-state cell is
+   one such colSpan; the accounts drawer's cell is the other, since the drawer
+   is its own `<tr>` now (see row-disclosure.tsx) rather than content nested in
+   the name cell. */
+.log--sticky-col tbody tr:not(.drawer-row) > td:first-child:not(.log__empty) {
   position: sticky;
   left: 0;
   z-index: 1;
@@ -712,7 +719,7 @@ h3.rule-head__label {
 /* The pinned edge has to read as an edge once content is sliding under it, and
    a hairline is what this system draws edges with. */
 .log--sticky-col th:first-child,
-.log--sticky-col td:first-child:not(.log__empty) {
+.log--sticky-col tr:not(.drawer-row) > td:first-child:not(.log__empty) {
   border-right: 1px solid var(--rule);
 }
 
@@ -729,7 +736,7 @@ h3.rule-head__label {
    --hull-hi at alpha 0.55, and the cells either side of the pinned one show
    that composited over --void. Mixing the same two colours in sRGB lands on the
    same band — measured at 1/255 on two channels, which is rounding. */
-.log--sticky-col tbody tr:hover td:first-child:not(.log__empty) {
+.log--sticky-col tbody tr:not(.drawer-row):hover > td:first-child:not(.log__empty) {
   background-color: color-mix(in srgb, var(--hull-hi) 55%, var(--void));
 }
 
@@ -1431,6 +1438,41 @@ h3.rule-head__label {
   color: var(--gold);
 }
 
+/* The accounts row toggle: a plain `<button>` rather than `<summary>`, since
+   the drawer it opens is a sibling `<tr>` now, not a child of a `<details>`
+   nested in this cell (see row-disclosure.tsx). It rebuilds the same look —
+   the +/- marker, the hover colour — a `<summary>` gets for free. */
+.row-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-2);
+  width: 100%;
+  padding: 0;
+  background: none;
+  border: none;
+  font: inherit;
+  text-align: left;
+  color: var(--ink);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.row-toggle::before {
+  content: "+";
+  font-family: var(--font-mono), ui-monospace, monospace;
+  color: var(--ink-faint);
+  width: 1ch;
+  flex-shrink: 0;
+}
+
+.row-toggle[aria-expanded="true"]::before {
+  content: "\2212"; /* minus */
+}
+
+.row-toggle:hover {
+  color: var(--gold);
+}
+
 /* --- Sync status strip -------------------------------------------------- */
 /* One row per job carrying the whole answer — name, health, age, cadence —
    with the run history collapsed underneath it. The point of the grid is that
@@ -1601,40 +1643,28 @@ h3.rule-head__label {
   }
 }
 
-.crew {
-  margin: var(--s-3) 0 0;
-  padding: 0;
-  list-style: none;
-  display: grid;
-  gap: var(--s-2);
-}
-
-.crew li {
-  font-family: var(--font-mono), ui-monospace, monospace;
-  font-size: 0.75rem;
-  color: var(--ink-faint);
-  padding-left: var(--s-3);
-  border-top: 1px solid var(--rule);
-  padding-top: var(--s-2);
-}
-
-.crew b {
-  color: var(--ink-dim);
-  font-weight: 600;
-}
-
-/* The row drawer. Everything that acts on the account lives here, so the
-   collapsed row is one line of values and the table can be scanned. Groups are
-   laid out in a wrapping row rather than a stack: at three or four groups a
-   stack pushes the note field a screenful below the row it belongs to. */
+/* The row drawer. Set tier / cryo / note come first since the admin opened
+   the row to act, and the crew table sits below them at full width — this is
+   why the drawer row spans every column instead of just the Name column (see
+   row-disclosure.tsx). */
 .drawer {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--s-4) var(--s-6);
-  align-items: start;
+  display: grid;
+  gap: var(--s-4);
   margin-top: var(--s-3);
   padding-top: var(--s-3);
   border-top: 1px solid var(--rule);
+}
+
+/* The three control groups still want a wrapping row rather than a stack: at
+   three groups, none of them tall, a stack buys nothing but wasted height. */
+.drawer__controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-4) var(--s-6);
+  /* flex-start, not the bare `start` keyword: autoprefixer flags `start` in a
+     flex container as having mixed browser support and needing a vendor path
+     `flex-start` doesn't. */
+  align-items: flex-start;
 }
 
 .drawer__group {
@@ -1643,15 +1673,9 @@ h3.rule-head__label {
   justify-items: start;
 }
 
-/* The crew list is the one group that wants the full width. Its own top margin
-   is redundant here — the group's grid gap already separates it from the
-   label — and doubles up with the first row's hairline. */
-.drawer__group:has(> .crew) {
-  flex: 1 1 100%;
-}
-
-.drawer .crew {
-  margin-top: 0;
+.drawer__crew {
+  display: grid;
+  gap: var(--s-2);
 }
 
 .drawer__label {
@@ -1746,19 +1770,23 @@ h3.rule-head__label {
   margin: var(--s-8) 0 0;
 }
 
-/* The global reset makes images block-level, so centring is a margin, not a
-   text-align — the latter silently does nothing here. */
+/* Left-aligned on the page's own measure, not centred: everything above it —
+   headings, rules, table columns — hangs off the left edge, and an image
+   centred in that column is the one element that doesn't. Aligning it lets the
+   page end on the same vertical it started on. The smaller frame is the other
+   half of the same fix: at 560px the artwork read as the subject of the page
+   rather than its closing beat. */
 .closing img {
-  width: min(560px, 100%);
+  width: min(420px, 100%);
   height: auto;
-  margin-inline: auto;
+  margin-inline: 0;
 }
 
 /* A sparse account (one character, little above the fold) let the artwork
    outweigh everything else on the page. Same asset, same technique, a
    smaller frame — not a crop, not a downscaled fragment. */
 .closing--compact img {
-  width: min(320px, 100%);
+  width: min(260px, 100%);
 }
 
 .skip {
@@ -1878,48 +1906,24 @@ h3.rule-head__label {
     padding: var(--s-2) var(--s-1);
   }
 
-  /* An open row drawer trades the pin away. The pin exists so the name survives
-     the scroll right to the controls — but the accounts drawer lives inside the
-     first cell, and its crew group is `flex: 1 1 100%`, so opening one row
-     widens column 1 for the whole table (table columns are shared). Measured at
-     320px with one drawer open: the first cell takes 279.5px of a 286px scroll
-     region — 98% — i.e. a pinned cell that paints over every other column on
-     every row. Unpinning leaves the region readable; closing the drawer
-     restores the pin.
+  /* There was a rule here that unpinned column 1 whenever an accounts row
+     drawer was open, because the drawer used to live *inside* the first cell:
+     its crew group is `flex: 1 1 100%`, so opening one row widened column 1
+     for the whole table (table columns are shared) and the pinned cell took
+     279.5px of a 286px region — 98% — painting over every other column on
+     every row.
 
-     Two scopes, both measured rather than reasoned:
+     The drawer is its own full-width `<tr>` now (see row-disclosure.tsx), so
+     it no longer touches column 1's width and the trade is off: the pin stays
+     on with a drawer open, which is the better end of the trade anyway. The
+     name an admin is about to change the tier of stays on screen through the
+     scroll right to the controls — including the scroll the open drawer's own
+     controls make necessary. What the drawer row needs instead is only to be
+     excluded from the pin itself, which it is, alongside the empty-state cell
+     and for the same reason (see .log--sticky-col above).
 
-     `td:first-child details[open]` and not a bare `details[open]`, because
-     audit carries .log--sticky-col too and its Details column is a <details> in
-     column 5. A bare selector unpinned audit's At (UTC) timestamp the moment a
-     payload was expanded — dropping the row's anchor exactly when the row got
-     taller and needed it most.
-
-     Inside this breakpoint and not global, because the 98% figure is a 320px
-     figure. Column 1's open-drawer width is a constant ~280px while the region
-     grows with the viewport, so the share the pin would cover falls to ~48% at
-     641px (the first width above this query) and ~33% at 900px. Above 40rem the
-     pin still leaves a usable strip of the other columns beside it. */
-  .log--sticky-col:has(td:first-child details[open]) tbody td:first-child {
-    position: static;
-  }
-
-  /* The header's corner cell shares column 1's width, so it has to go with the
-     body cell: left at `left: 0` while the body scrolls away, it parks an
-     opaque ~280px NAME heading over every other column heading — scrolled fully
-     right you get "sync now" buttons under a header reading NAME. `left` and
-     `z-index` need no unwinding of their own; both are inert on a static box. */
-  .log--sticky-col:has(td:first-child details[open]) thead th:first-child {
-    position: static;
-  }
-
-  /* ...and with nothing pinned, the left edge hides content again, so the cue
-     the rule above suppressed becomes true again. Not nested inside a `:has()`
-     — that is invalid — so this matches the frame by the same open drawer
-     directly. */
-  .scroller-frame:has(td:first-child details[open]) .scroller-fade--start {
-    display: block;
-  }
+     Audit still uses `<details>` in its Details column and was never in scope
+     for the unpin; nothing there changes. */
 
   /* Audit, narrow. Same trade as the runs table above, and for the same
      reason: the At column is the pinned one, and a 19ch ISO stamp is 12.25rem
@@ -1965,4 +1969,11 @@ h3.rule-head__label {
   .log--audit td {
     padding: var(--s-2) var(--s-1);
   }
+}
+
+/* The crew table inside the accounts drawer: four short columns with the
+   whole 1000px+ drawer row to sit in, so nothing here fights for space the
+   way the outer table's ten columns do. */
+.log--crew {
+  width: 100%;
 }
