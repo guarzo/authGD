@@ -58,8 +58,11 @@ const ERRORS: Record<string, string> = {
     "Your admin access changed since this page loaded. Refresh to see the current state.",
   not_pending:
     "That account was already approved by someone else. Refresh to see its current tier.",
+  // Shared by every admin mutation, not just approval (actions.ts): the merge
+  // feature can delete the row an admin's control targeted between page
+  // render and click, regardless of which action they clicked.
   not_found:
-    "That account is gone: its character was linked to another account and merged in. There's nothing left to approve.",
+    "That account is gone: its character was linked to another account and merged in. There's nothing left there to act on.",
 };
 
 // The columns after the sortable ones, in render order. A list rather than a

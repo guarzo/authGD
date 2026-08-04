@@ -19,13 +19,51 @@ import { enqueueSync } from "@/services/outbox";
 // cleared by another admin (demoteAdminAction) between this row rendering and
 // the click, since actions don't re-run the page's guard on soft navigation.
 // Redirect to the styled notice rather than throw, same as demoteAdminAction's
-// `last_admin` case below. `not_found` is now reachable too: mergeAccountInto
-// (services/accounts.ts) deletes the source row outright, and its
-// isAbsorbable check doesn't gate on tier, so a pending account can be merged
-// away out from under an admin who has its approval button on screen. See
-// approveAction's `not_found` branch below for the same reasoning.
+// `last_admin` case below.
 function redirectNotAdmin(): never {
   redirect("/admin/accounts?error=not_admin");
+}
+
+/**
+ * The single place a mutation's error union becomes a redirect destination —
+ * one switch instead of five (going on six) copy-pasted `if` chains, and
+ * exhaustive the same way admin-guard's `denyAdmin` is: annotated `: never`
+ * and returning (not just calling) each `redirect`, so TS only accepts this as
+ * terminating control flow — and the moment a variant is added to
+ * `AdminMutationResult` or `ApproveResult` without a matching case here, the
+ * build fails with "not every code path returns a value" instead of a new
+ * variant silently reaching the old catch-all `throw new Error(result.error)`
+ * and turning into a 500.
+ *
+ * `not_found` is reachable from every action here, not just approval:
+ * mergeAccountInto (services/accounts.ts) deletes the source account outright
+ * on merge, and isAbsorbable deliberately doesn't gate on tier, so any admin
+ * control targeting an account can find the row gone between page render and
+ * the click — a race between two legitimate users, not a server fault.
+ *
+ * `fromQueue` sends `not_found` back to the pending-tier filter rather than
+ * the unfiltered list: only approveAction's callers were looking at that
+ * filter when they clicked. `not_pending` always goes there regardless of the
+ * flag, since it can only ever be produced by approveAccount.
+ */
+function redirectOnMutationError(
+  error: "not_authorized" | "not_found" | "not_pending",
+  opts: { fromQueue?: boolean } = {},
+): never {
+  switch (error) {
+    case "not_authorized":
+      return redirectNotAdmin();
+    case "not_pending":
+      // Two admins working the queue, or one with a stale tab: the account is
+      // approved, just not by them.
+      return redirect("/admin/accounts?tier=pending&error=not_pending");
+    case "not_found":
+      return redirect(
+        opts.fromQueue
+          ? "/admin/accounts?tier=pending&error=not_found"
+          : "/admin/accounts?error=not_found",
+      );
+  }
 }
 
 export async function setTierAction(
@@ -36,8 +74,7 @@ export async function setTierAction(
   const result = await getDb().transaction((tx) =>
     setTierManual(tx, actor, accountId, tier),
   );
-  if (!result.ok && result.error === "not_authorized") redirectNotAdmin();
-  if (!result.ok) throw new Error(result.error);
+  if (!result.ok) redirectOnMutationError(result.error);
   revalidatePath("/admin/accounts");
 }
 
@@ -49,22 +86,7 @@ export async function approveAction(
   const result = await getDb().transaction((tx) =>
     approveAccount(tx, actor, accountId, tier),
   );
-  if (!result.ok && result.error === "not_authorized") redirectNotAdmin();
-  // not_pending is a race, not a bug: two admins working the queue, or one
-  // with a stale tab. Send them back to the queue with a notice rather than
-  // the error boundary — the account is approved, just not by them.
-  if (!result.ok && result.error === "not_pending") {
-    redirect("/admin/accounts?tier=pending&error=not_pending");
-  }
-  // not_found is a race too, and specifically the merge feature's fault: the
-  // pilot re-authed that character onto their real account, mergeAccountInto
-  // absorbed and deleted the pending row, and this admin's click landed on a
-  // row that's no longer there. Same treatment as not_pending — the queue
-  // with a notice, not the error boundary, since nothing actually broke.
-  if (!result.ok && result.error === "not_found") {
-    redirect("/admin/accounts?tier=pending&error=not_found");
-  }
-  if (!result.ok) throw new Error(result.error);
+  if (!result.ok) redirectOnMutationError(result.error, { fromQueue: true });
   revalidatePath("/admin/accounts");
 }
 
@@ -73,8 +95,7 @@ export async function returnToAutoAction(accountId: string): Promise<void> {
   const result = await getDb().transaction((tx) =>
     returnTierToAuto(tx, actor, accountId),
   );
-  if (!result.ok && result.error === "not_authorized") redirectNotAdmin();
-  if (!result.ok) throw new Error(result.error);
+  if (!result.ok) redirectOnMutationError(result.error);
   revalidatePath("/admin/accounts");
 }
 
@@ -86,8 +107,7 @@ export async function setStatusAction(
   const result = await getDb().transaction((tx) =>
     setAccountStatus(tx, actor, accountId, status),
   );
-  if (!result.ok && result.error === "not_authorized") redirectNotAdmin();
-  if (!result.ok) throw new Error(result.error);
+  if (!result.ok) redirectOnMutationError(result.error);
   revalidatePath("/admin/accounts");
 }
 
@@ -108,8 +128,7 @@ export async function saveNoteAction(
   const result = await getDb().transaction((tx) =>
     setStatusNote(tx, actor, accountId, raw),
   );
-  if (!result.ok && result.error === "not_authorized") redirectNotAdmin();
-  if (!result.ok) throw new Error(result.error);
+  if (!result.ok) redirectOnMutationError(result.error);
   revalidatePath("/admin/accounts");
 }
 
@@ -132,8 +151,16 @@ export async function syncAccountAction(
 export async function promoteAdminAction(accountId: string): Promise<void> {
   const { accountId: actor } = await requireAdminAction();
   const result = await getDb().transaction((tx) => promoteAdmin(tx, actor, accountId));
-  if (!result.ok && result.error === "not_authorized") redirectNotAdmin();
-  if (!result.ok) throw new Error(result.error);
+  if (!result.ok) {
+    // promoteAdmin predates AdminMutationResult and returns `error` as
+    // optional rather than discriminated on `ok` (accounts.ts is out of scope
+    // for this fix); both of its `ok: false` returns set it, so this can only
+    // fire if a future change to promoteAdmin forgets to.
+    if (result.error === undefined) {
+      throw new Error("promoteAdmin: ok:false without an error code");
+    }
+    redirectOnMutationError(result.error);
+  }
   revalidatePath("/admin/accounts");
 }
 
