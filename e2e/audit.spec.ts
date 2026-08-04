@@ -312,6 +312,22 @@ test("raw ids and the literal 'all' target stay filterable", async ({
   await expect(page.locator("tbody tr")).toHaveCount(1);
   await expect(page.getByText(`target: ${member.id}`)).toBeVisible();
 
+  // A trailing space off a copy-paste is trimmed before matching, not treated
+  // as part of the id -- an untrimmed value falls through to the empty state,
+  // which is also exactly one <tr>, so the assertion has to rule that out by
+  // content rather than just count.
+  await page.goto(`/admin/audit?target=${member.id}%20`);
+  await expect(page.locator(".log__empty")).toHaveCount(0);
+  await expect(page.locator("tbody tr")).toHaveCount(1);
+  await expect(page.locator("tbody tr")).toContainText("tier.changed");
+
+  // Same for a typed name with a trailing space -- it must still resolve
+  // rather than falling through to the "no such name" empty state.
+  await page.goto("/admin/audit?target=Zed%20");
+  await expect(page.locator(".log__empty")).toHaveCount(0);
+  await expect(page.locator("tbody tr")).toHaveCount(1);
+  await expect(page.locator("tbody tr")).toContainText("tier.changed");
+
   // "all" is a real stored target, not a name -- it must not resolve to nothing.
   await page.goto("/admin/audit?target=all");
   await expect(page.locator("tbody tr")).toHaveCount(1);

@@ -215,8 +215,20 @@ export default async function AdminAuditPage({
 }) {
   const ctx = await getAdminContext();
   if (!ctx) redirect("/login");
-  const params = await searchParams;
-  const beforeId = params.before ? Number(params.before) : undefined;
+  const raw = await searchParams;
+  // Trim the two name-resolvable filters. They are typed or pasted by hand,
+  // and a trailing space off a copied uuid or name would otherwise fall
+  // through to "no such name" rather than matching. Whitespace-only collapses
+  // to absent. Normalized here, before anything reads `params`, so the chips,
+  // the filter links and the pager all carry the same value the query used.
+  // `action` is deliberately untouched: it is a prefix match whose semantics
+  // are out of scope for this branch.
+  const params = {
+    ...raw,
+    actor: raw.actor?.trim() || undefined,
+    target: raw.target?.trim() || undefined,
+  };
+  const beforeId = raw.before ? Number(raw.before) : undefined;
 
   const db = getDb();
   // Both filters resolve concurrently; each costs 0 queries when absent or
