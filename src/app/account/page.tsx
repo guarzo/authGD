@@ -9,8 +9,11 @@ import { getSessionAccount } from "@/services/session";
 import { RuleHead, Scroller, SiteHeader, Status, Tier } from "@/app/_components/ui";
 import { RelativeTime } from "@/app/_components/relative-time";
 import { formatAgo } from "@/app/_components/format-ago";
+import { utcHhmm } from "@/app/_components/utc-time";
 import { Submit } from "@/app/_components/submit";
-import { setMainAction, unlinkAction } from "./actions";
+import { ConfirmArmScope, ConfirmSubmit } from "@/app/_components/confirm-submit";
+import { ContactState } from "./contact-state";
+import { setMainAction, unlinkAction, wakeSelfAction } from "./actions";
 
 // Reads the session cookie and hits the DB on every request; getConfig() also
 // requires env vars that aren't present at build time, so this route must
@@ -25,6 +28,8 @@ const ERRORS: Record<string, string> = {
   already_linked: "That character is already linked to another account.",
   discord_already_linked: "That Discord account is already linked to another account.",
   discord_denied: "Discord authorization was cancelled.",
+  stale_character:
+    "That character isn't on this account anymore. The page below is current.",
 };
 
 /**
@@ -35,57 +40,10 @@ const ERRORS: Record<string, string> = {
 const CONTACTS_NOTE_ID = "contacts-note";
 
 /** A contacts state the note actually explains. "ok" needs no explanation, and
- *  "missing_label" already carries more specific instructions than the generic
- *  note would add — so neither surfaces it. */
+ *  "missing_label" and "label_mismatch" already carry more specific instructions
+ *  than the generic note would add — so neither surfaces it. */
 function contactsNoteApplies(result: string | null) {
-  return result !== "ok" && result !== "missing_label";
-}
-
-/**
- * The contact job records a small set of result codes. "ok" and "missing_label"
- * get bespoke treatment; anything else is a failure the member can act on by
- * re-authing, so it reads as bad rather than as noise.
- *
- * A character the job never targets has no code and never will: blue and green
- * members are the *content* of a FLYGD member's contact list, not a list that
- * gets written. Reading that structural absence as "not yet run" told most of
- * the corp their first sync was pending, permanently. Their standing is still
- * being pushed; the LAST PUSHED section is where that question is answered.
- */
-function ContactState({
-  result,
-  label,
-  target,
-}: {
-  result: string | null;
-  label: string;
-  target: boolean;
-}) {
-  if (!target) {
-    return (
-      <span className="dim" aria-label="not applicable">
-        —
-      </span>
-    );
-  }
-  if (result === null) return <Status tone="off">not yet run</Status>;
-  if (result === "ok") return <Status tone="ok">ok</Status>;
-  if (result === "missing_label") {
-    return (
-      <>
-        <Status tone="warn">label missing</Status>
-        <span className="dim">
-          Create a contact label named <code>{label}</code> in game, then re-sync.
-        </span>
-      </>
-    );
-  }
-  return <Status tone="bad">{result.replace(/_/g, " ")}</Status>;
-}
-
-/** Wall-clock UTC, the timezone every EVE player already reads schedules in. */
-function utcHhmm(d: Date): string {
-  return `${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}`;
+  return result !== "ok" && result !== "missing_label" && result !== "label_mismatch";
 }
 
 /**
@@ -131,7 +89,11 @@ export default async function AccountPage({
   const showPayoutsLink = await canReadPayouts(getDb(), sess.accountId);
 
   const nav = [
-    { key: "account", href: "/account", label: "Account" },
+    // "Your account", not "Account", everywhere it appears: the admin nav
+    // already carries "Accounts" for the roster, and the two read as the same
+    // destination at a glance. The possessive is what distinguishes them, so
+    // it has to be the name on both navs rather than only the admin one.
+    { key: "account", href: "/account", label: "Your account" },
     ...(showPayoutsLink ? [{ key: "payouts", href: "/payouts", label: "Payouts" }] : []),
     ...(view.isAdmin ? [{ key: "admin", href: "/admin/accounts", label: "Admin" }] : []),
   ];
@@ -140,8 +102,8 @@ export default async function AccountPage({
   // two identical four-line paragraphs in a table column is noise, and the note
   // is about the column as a whole, not about one character.
   //
-  // Non-targets are excluded: their cell reads "—", not a state the note
-  // explains. Telling a blue member authGD manages a contact label on their
+  // Non-targets are excluded: their cell reads "— not managed", not a state the
+  // note explains. Telling a blue member authGD manages a contact label on their
   // characters describes something that never happens to them.
   const showContactsNote = view.characters.some(
     (c) => c.contactsTarget && contactsNoteApplies(c.contactSyncResult),
@@ -184,7 +146,30 @@ export default async function AccountPage({
           <dt>Tier</dt>
           <dd data-field="tier" className="facts__lead">
             <Tier tier={view.tier} size="lead" />
-            {view.status === "cryo" && <Status tone="warn">cryo</Status>}
+            {/* Cryo's copy and its "wake me" control fold into this same dd
+                rather than a row of their own: `.facts` is a grid, and a
+                `.visually-hidden` dt in that grid is taken out of flow by its
+                own `position: absolute`, which shifts every dt/dd after it
+                into the wrong track. `.facts__lead` already wraps, so the
+                sentence and button land on a second line within the value
+                column instead of inventing a row the grid can't place. */}
+            {view.status === "cryo" && (
+              <>
+                {/* Neutral, not --signal-warn: cryo is a pause the member
+                    asked for, not a fault. DESIGN.md's amber stays on the
+                    admin table, where cryo is a scanning target rather than a
+                    fact about the member's own state. */}
+                <Status>cryo</Status>
+                <span className="dim">
+                  Paused at your request. Tier is retained while you&rsquo;re away.
+                </span>
+                <form action={wakeSelfAction} className="inline-form">
+                  <Submit className="btn" pendingLabel="waking…">
+                    wake me
+                  </Submit>
+                </form>
+              </>
+            )}
           </dd>
 
           <dt>Discord</dt>
@@ -195,7 +180,12 @@ export default async function AccountPage({
               // with the tier badge for the eye.
               <Status>linked</Status>
             ) : (
-              <a href="/auth/discord/link">Link Discord</a>
+              // Raised to the default button grade: high-value but was the
+              // weakest affordance on the page. Not gold — DESIGN.md rations
+              // that to one primary action per view, "Add character" below.
+              <a className="btn" href="/auth/discord/link">
+                Link Discord
+              </a>
             )}
           </dd>
         </dl>
@@ -226,7 +216,7 @@ export default async function AccountPage({
                 <th scope="col">Name</th>
                 <th scope="col">Token</th>
                 <th scope="col" aria-describedby={CONTACTS_NOTE_ID}>
-                  Standings
+                  Contacts
                 </th>
                 <th scope="col">Map</th>
                 <th scope="col">
@@ -235,73 +225,84 @@ export default async function AccountPage({
               </tr>
             </thead>
             <tbody>
-              {view.characters.map((c) => (
-                <tr key={c.id}>
-                  <td>
-                    <img
-                      className="portrait"
-                      src={`https://images.evetech.net/characters/${c.id}/portrait?size=64`}
-                      alt=""
-                      width={32}
-                      height={32}
-                      loading="lazy"
-                    />
-                  </td>
-                  <td>
-                    <span className="char">
-                      {c.name}{" "}
-                      {c.isMain && <strong className="char__main">(main)</strong>}
-                    </span>
-                  </td>
-                  <td>
-                    {c.tokenStatus === "valid" && !c.needsReauthForScopes ? (
-                      <Status tone="ok">ok</Status>
-                    ) : (
-                      <a href="/auth/eve/link">
-                        <Status tone="warn">re-auth needed</Status>
-                      </a>
-                    )}
-                  </td>
-                  <td>
-                    <div className="stack">
-                      <ContactState
-                        result={c.contactSyncResult}
-                        label={cfg.standings.label}
-                        target={c.contactsTarget}
+              <ConfirmArmScope>
+                {view.characters.map((c) => (
+                  <tr key={c.id}>
+                    <td>
+                      <img
+                        className="portrait"
+                        src={`https://images.evetech.net/characters/${c.id}/portrait?size=64`}
+                        alt=""
+                        width={32}
+                        height={32}
+                        loading="lazy"
                       />
-                    </div>
-                  </td>
-                  <td>
-                    {c.onMapAcl ? (
-                      <Status tone="ok">on</Status>
-                    ) : (
-                      <Status tone="off">off</Status>
-                    )}
-                  </td>
-                  <td>
-                    <div className="btn-row btn-row--tight btn-row--end">
-                      {!c.isMain && (
-                        <form
-                          action={setMainAction.bind(null, c.id)}
-                          className="inline-form"
-                        >
-                          <Submit className="btn btn--quiet btn--micro">make main</Submit>
-                        </form>
+                    </td>
+                    <td>
+                      <span className="char">
+                        {c.name}{" "}
+                        {c.isMain && <strong className="char__main">(main)</strong>}
+                      </span>
+                    </td>
+                    <td>
+                      {c.tokenStatus === "valid" && !c.needsReauthForScopes ? (
+                        <Status tone="ok">ok</Status>
+                      ) : (
+                        <a href="/auth/eve/link">
+                          <Status tone="warn">re-auth needed</Status>
+                        </a>
                       )}
-                      {view.characters.length > 1 && (
-                        <form
-                          action={unlinkAction.bind(null, c.id)}
-                          className="inline-form"
-                        >
-                          <Submit className="btn btn--quiet btn--micro btn--danger-quiet">
-                            unlink
-                          </Submit>
-                        </form>
+                    </td>
+                    <td>
+                      <div className="stack">
+                        <ContactState
+                          result={c.contactSyncResult}
+                          detail={c.contactSyncDetail}
+                          label={cfg.standings.label}
+                          target={c.contactsTarget}
+                        />
+                      </div>
+                    </td>
+                    <td>
+                      {c.onMapAcl ? (
+                        <Status tone="ok">on</Status>
+                      ) : (
+                        <Status tone="off">off</Status>
                       )}
-                    </div>
-                  </td>
-                </tr>
-              ))}
+                    </td>
+                    <td>
+                      <div className="btn-row btn-row--tight btn-row--end">
+                        {!c.isMain && (
+                          <form
+                            action={setMainAction.bind(null, c.id)}
+                            className="inline-form"
+                          >
+                            <Submit
+                              className="btn btn--quiet btn--micro"
+                              pendingLabel="setting…"
+                            >
+                              make main
+                            </Submit>
+                          </form>
+                        )}
+                        {view.characters.length > 1 && (
+                          <form
+                            action={unlinkAction.bind(null, c.id)}
+                            className="inline-form"
+                          >
+                            <ConfirmSubmit
+                              className="btn btn--quiet btn--micro btn--danger-quiet"
+                              armedClassName="btn btn--micro btn--danger"
+                              label="unlink"
+                              confirmName={`confirm unlink ${c.name}`}
+                            />
+                          </form>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </ConfirmArmScope>
             </tbody>
           </table>
         </Scroller>
@@ -339,9 +340,13 @@ export default async function AccountPage({
           </>
         )}
 
-        {/* The closing beat. Decorative, so alt is empty; drawn at 560px from a
-            1120px asset cut for exactly this, never a scaled-down master. */}
-        <p className="closing">
+        {/* The closing beat. Decorative, so alt is empty; drawn from a
+            1120px asset cut for exactly this, never a scaled-down master.
+            A single-character account has little content above it, and the
+            full-size artwork dwarfed it; `.closing--compact` asks the same
+            asset for a smaller frame rather than cropping or downscaling it,
+            same technique the full size already uses, just a smaller target. */}
+        <p className={`closing${view.characters.length <= 1 ? " closing--compact" : ""}`}>
           <img
             src="/brand/lander-moon.webp"
             alt=""

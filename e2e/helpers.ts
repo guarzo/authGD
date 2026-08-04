@@ -28,6 +28,8 @@ export async function seedMember(
     status?: "active" | "cryo";
     isAdmin?: boolean;
     alts?: string[];
+    /** Link the characters but leave account.main_character_id null. */
+    mainless?: boolean;
   },
 ) {
   const mainId = nextCharId++;
@@ -42,7 +44,7 @@ export async function seedMember(
         tierLocked: opts.tierLocked ?? false,
         status: opts.status ?? "active",
         isAdmin: opts.isAdmin ?? false,
-        mainCharacterId: mainId,
+        mainCharacterId: opts.mainless ? null : mainId,
       })
       .returning();
     await tx.insert(character).values({

@@ -133,6 +133,14 @@ code {
   font-size: 0.9em;
 }
 
+/* A string quoted back to the member for character-by-character comparison.
+   `pre` is load-bearing: HTML collapses whitespace, so without it "AuthGD "
+   and "AuthGD" render identically and a trailing-space member sees two
+   strings that look the same — the exact bug this message exists to fix. */
+code.literal {
+  white-space: pre;
+}
+
 a {
   color: var(--ink);
   text-decoration-color: var(--rule-strong);
@@ -409,7 +417,11 @@ h3.rule-head__label {
   /* Not decoration: .visually-hidden is position:absolute, and without a
      positioned ancestor its containing block is the viewport, so a hidden
      label inside a 1200px-wide table escapes this scroll box and stretches
-     the whole document. Containing it here is what keeps mobile at 390px. */
+     the whole document. Containing it here is what keeps mobile at 390px.
+     The edge fades live one level up, on `.scroller-frame`: an
+     absolutely-positioned descendant of *this* element would be part of its
+     own scrollable overflow and would ride off with the table instead of
+     staying pinned to the viewport edge. */
   position: relative;
   overflow-x: auto;
   border: 1px solid var(--rule);
@@ -419,6 +431,71 @@ h3.rule-head__label {
 .scroller:focus-visible {
   outline: 2px solid var(--gold);
   outline-offset: 2px;
+}
+
+/* The non-scrolling frame the edge fades are pinned to. `.scroller`'s own
+   `position: relative` doesn't help here on purpose: a child positioned
+   against a box that itself scrolls scrolls with it. This wrapper never
+   scrolls, so its children stay put while `.scroller` inside it moves. */
+.scroller-frame {
+  position: relative;
+}
+
+/* Scroll affordance: nothing at rest told a narrow viewport that the table
+   underneath scrolls, and the mobile columns were clipped with no cue to
+   look sideways. `Scroller` (scroller.tsx) tracks the actual scroll position
+   and toggles `data-visible` on these; a side fades in while there's more
+   content that way and out once the region is scrolled all the way to that
+   edge. `--rule-strong` fading to transparent, not `--hull-hi`: a first pass
+   with `--hull-hi` measured 1.2:1 against `--void` — real on a screenshot but
+   not on a screen — where `--rule-strong` is the token DESIGN.md picked to
+   read against `--void`, `--hull`, and `--hull-hi` alike, so the affordance
+   holds up on every ground the table can put behind it. Mixed to 75% it
+   measures 2.55:1, deliberately under WCAG 1.4.11's 3:1: this reinforces a
+   scrollbar that is already visible and carries no information of its own,
+   so it is styled to stay quiet rather than to pass as the affordance.
+   Decorative and inert — pointer-events: none keeps it clear of scrolling
+   and any hit-testing. */
+.scroller-fade {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1.5rem;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--dur-color) var(--ease);
+}
+
+.scroller-fade[data-visible] {
+  opacity: 1;
+}
+
+.scroller-fade--start {
+  left: 0;
+  background: linear-gradient(
+    to right,
+    color-mix(in oklab, var(--rule-strong) 75%, transparent),
+    transparent
+  );
+}
+
+.scroller-fade--end {
+  right: 0;
+  background: linear-gradient(
+    to left,
+    color-mix(in oklab, var(--rule-strong) 75%, transparent),
+    transparent
+  );
+}
+
+/* A pinned first column and a start fade contradict each other. The fade says
+   "there is content hidden past this edge"; the pin's whole job is that there
+   never is — column 1 is at the left edge at every scroll position. So the cue
+   is false, and its 1.5rem lands squarely on the one column the pin exists to
+   keep legible while a 28px tier control is pressed. The end fade is untouched:
+   these tables really do have more to the right. */
+.scroller-frame:has(.log--sticky-col) .scroller-fade--start {
+  display: none;
 }
 
 .log {
@@ -475,13 +552,17 @@ h3.rule-head__label {
   vertical-align: middle;
 }
 
-/* ...except once a row's `<details>` is open: the Name cell then holds the
-   whole expanded drawer, and centering would float every other cell's badges
-   and buttons down to the middle of that tall row instead of leaving them
-   where the collapsed row had them. Top-align the whole row in that state, the
-   same as every other table. */
-.log--dense tbody tr:has(details[open]) td {
+/* The drawer row is its own `<tr>` now (see row-disclosure.tsx), so opening it
+   no longer grows the row above it — the middle-alignment this table wants
+   for its short, single-purpose cells is safe on every row, including this
+   one, whose lone cell has nothing else to float away from. */
+.log--dense tr.drawer-row td {
   vertical-align: top;
+}
+
+/* The drawer row isn't a data row: no hover tint on the panel it's holding. */
+.log tbody tr.drawer-row:hover {
+  background: none;
 }
 
 .log tbody tr:hover {
@@ -498,6 +579,165 @@ h3.rule-head__label {
    one that should absorb the leftover width. */
 .log__col--fit {
   width: 1%;
+}
+
+/* Ten columns of state per row: the standard cell padding pushes the accounts
+   table past the container and clips the last action. Tighten it rather than
+   drop a column, since every column here answers a real admin question. */
+.log--dense th,
+.log--dense td {
+  padding: var(--s-2) var(--s-3);
+}
+
+/* Sync run tables: no fixed layout, and a width floor set by legibility rather
+   than by alignment. The old 60rem existed so the five per-job sections shared
+   one grid, which stopped being true when each job started showing only the
+   counters it actually moves. What remains is the point below which the status
+   cell crushes an error string into a one-word column — under that the Scroller
+   takes over. Column widths otherwise come from content.
+
+   These three blocks sit here, above the narrow media query, rather than at the
+   end of the file where they used to: the query releases both floors at 40rem,
+   and same-specificity rules declared after it would win regardless. */
+.log--runs {
+  width: 100%;
+  min-width: 44rem;
+}
+
+/* Third column is Status by construction (Started, Took, Status, …). It is the
+   one cell that can carry prose — the folded-in error string — and without a
+   floor the auto layout is free to hand it a one-word width and turn a failure
+   into a tall ragged stack exactly where an admin is trying to read it. */
+.log--runs th:nth-child(3),
+.log--runs td:nth-child(3) {
+  min-width: 26ch;
+}
+
+/* Audit log: fixed layout so a bare id in the actor column can't wrap and
+   inflate every row to match it (was ~90px tall; a UUID has hyphens to break
+   on, everything else in the row doesn't). Details is the one flexible column,
+   left unset here, since it's the one field with no natural cap.
+
+   Under `table-layout: fixed` an undersized column doesn't shrink its content,
+   it lets a `nowrap` cell paint straight over its neighbour, so each width is
+   the widest value the column can actually hold in mono at --t-data plus the
+   2 x --s-4 cell padding: the timestamp (19ch ~= 162px) needed 194px and had
+   160, and the longest action (`character.affiliation_invalid`, 29ch ~= 247px)
+   needed 279px and had 168. Both were bleeding right.
+
+   The floor is what stops "flexible" from meaning "zero". The four sized
+   columns come to 47.75rem, and a fixed-layout table is at least the sum of
+   its columns — so inside a region narrower than 764px the table was exactly
+   764px and Details got nothing at all: measured 0px wide at 320px, 390px and
+   768px, with its payload disclosure unclickable at every one of them. 62rem
+   leaves Details ~14rem to open into and only bites below ~1000px, where the
+   region already scrolls and now pins its timestamp column while it does.
+
+   This block sits above the narrow media query, not at the end of the file
+   where it used to: the query overrides every width below, and a
+   same-specificity rule declared after it would win regardless of the query. */
+.log--audit {
+  table-layout: fixed;
+  min-width: 62rem;
+}
+
+.log--audit col:nth-child(1) {
+  width: 12.25rem;
+}
+
+.log--audit col:nth-child(2) {
+  width: 9rem;
+}
+
+.log--audit col:nth-child(3) {
+  width: 17.5rem;
+}
+
+.log--audit col:nth-child(4) {
+  width: 9rem;
+}
+
+/* --- Pinned table edges -------------------------------------------------- */
+
+/* The admin problem these solve: to reach a row's tier controls you scroll the
+   region right, which takes the character's name off the left edge — and then
+   you press a 28px control that changes someone's tier with nothing on screen
+   saying whose. "Derole, don't boot" makes a wrong-person-deroled press the
+   thing to prevent, so this is a correctness device, not polish.
+
+   Under `border-collapse: collapse` the rules belong to the table box, not to
+   the cell, so they stay put while a sticky cell moves and the hairline under a
+   pinned header detaches on the first scroll. Separate borders at zero spacing
+   keep the ruled look and travel with the cell. Collapse merged the header's
+   bottom rule with the first body row's top rule into one line; separate would
+   draw both, so the body's is dropped. */
+.log--sticky-head,
+.log--sticky-col {
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.log--sticky-head tbody tr:first-child td,
+.log--sticky-col tbody tr:first-child td {
+  border-top: 0;
+}
+
+/* Sticky needs a scroll range to travel over. .scroller is already a two-axis
+   scroll container — overflow-y computes to auto once overflow-x is not
+   visible — but it is unbounded in height, so scrollHeight equals clientHeight
+   and `top: 0` has nowhere to go. The cap is opt-in per table; a short one
+   never reaches it, so nothing else on the site changes. */
+.scroller--tall {
+  /* svh is the honest unit — the cap has to survive the mobile URL bar
+     collapsing — but the vh line keeps the behaviour on engines without it. */
+  max-height: 80vh;
+  max-height: 80svh;
+}
+
+.log--sticky-head thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+/* Two exclusions, one reason: a cell that spans the whole table still matches
+   `td:first-child`, and pinning a full-width cell gives it an opaque ground
+   and a stray hairline out at the table's right edge. The empty-state cell is
+   one such colSpan; the accounts drawer's cell is the other, since the drawer
+   is its own `<tr>` now (see row-disclosure.tsx) rather than content nested in
+   the name cell. */
+.log--sticky-col tbody tr:not(.drawer-row) > td:first-child:not(.log__empty) {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  /* Opaque, or the cells scrolling past show through it. --void is what a
+     normal cell already sits on, so the pinned one keeps the same ground. */
+  background-color: var(--void);
+  transition: background-color var(--dur-color) var(--ease);
+}
+
+/* The pinned edge has to read as an edge once content is sliding under it, and
+   a hairline is what this system draws edges with. */
+.log--sticky-col th:first-child,
+.log--sticky-col tr:not(.drawer-row) > td:first-child:not(.log__empty) {
+  border-right: 1px solid var(--rule);
+}
+
+/* The corner cell overlaps both the pinned header row and the pinned column,
+   so it has to outrank both. */
+.log--sticky-col thead th:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 3;
+}
+
+/* Row hover is deliberately translucent, which an opaque cell cannot inherit.
+   Flatten it instead: `color-mix(in oklab, --hull-hi 55%, transparent)` is
+   --hull-hi at alpha 0.55, and the cells either side of the pinned one show
+   that composited over --void. Mixing the same two colours in sRGB lands on the
+   same band — measured at 1/255 on two channels, which is rounding. */
+.log--sticky-col tbody tr:not(.drawer-row):hover > td:first-child:not(.log__empty) {
+  background-color: color-mix(in srgb, var(--hull-hi) 55%, var(--void));
 }
 
 /* Data that should read as machine output. */
@@ -520,6 +760,19 @@ h3.rule-head__label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Audit log: a resolved name is its own filter control. `color: inherit`
+   keeps the base `a` rule from repainting the cells that are deliberately
+   dimmed mono -- `system` and the literal `all` read as machine values, and
+   that treatment is the point. Everything else about the link (underline,
+   offset, gold on hover) is inherited, so a name behaves exactly like every
+   other link on the page rather than inventing a second affordance.
+
+   Must stay ABOVE `.dim`: equal specificity, so `.dim` wins the resting
+   colour only by being later in the file. */
+.cell-link {
+  color: inherit;
 }
 
 /* Raw JSON payloads in the audit and sync tables. The collapsed line is capped
@@ -1185,6 +1438,41 @@ h3.rule-head__label {
   color: var(--gold);
 }
 
+/* The accounts row toggle: a plain `<button>` rather than `<summary>`, since
+   the drawer it opens is a sibling `<tr>` now, not a child of a `<details>`
+   nested in this cell (see row-disclosure.tsx). It rebuilds the same look —
+   the +/- marker, the hover colour — a `<summary>` gets for free. */
+.row-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-2);
+  width: 100%;
+  padding: 0;
+  background: none;
+  border: none;
+  font: inherit;
+  text-align: left;
+  color: var(--ink);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.row-toggle::before {
+  content: "+";
+  font-family: var(--font-mono), ui-monospace, monospace;
+  color: var(--ink-faint);
+  width: 1ch;
+  flex-shrink: 0;
+}
+
+.row-toggle[aria-expanded="true"]::before {
+  content: "\2212"; /* minus */
+}
+
+.row-toggle:hover {
+  color: var(--gold);
+}
+
 /* --- Sync status strip -------------------------------------------------- */
 /* One row per job carrying the whole answer — name, health, age, cadence —
    with the run history collapsed underneath it. The point of the grid is that
@@ -1355,40 +1643,28 @@ h3.rule-head__label {
   }
 }
 
-.crew {
-  margin: var(--s-3) 0 0;
-  padding: 0;
-  list-style: none;
-  display: grid;
-  gap: var(--s-2);
-}
-
-.crew li {
-  font-family: var(--font-mono), ui-monospace, monospace;
-  font-size: 0.75rem;
-  color: var(--ink-faint);
-  padding-left: var(--s-3);
-  border-top: 1px solid var(--rule);
-  padding-top: var(--s-2);
-}
-
-.crew b {
-  color: var(--ink-dim);
-  font-weight: 600;
-}
-
-/* The row drawer. Everything that acts on the account lives here, so the
-   collapsed row is one line of values and the table can be scanned. Groups are
-   laid out in a wrapping row rather than a stack: at three or four groups a
-   stack pushes the note field a screenful below the row it belongs to. */
+/* The row drawer. Set tier / cryo / note come first since the admin opened
+   the row to act, and the crew table sits below them at full width — this is
+   why the drawer row spans every column instead of just the Name column (see
+   row-disclosure.tsx). */
 .drawer {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--s-4) var(--s-6);
-  align-items: start;
+  display: grid;
+  gap: var(--s-4);
   margin-top: var(--s-3);
   padding-top: var(--s-3);
   border-top: 1px solid var(--rule);
+}
+
+/* The three control groups still want a wrapping row rather than a stack: at
+   three groups, none of them tall, a stack buys nothing but wasted height. */
+.drawer__controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-4) var(--s-6);
+  /* flex-start, not the bare `start` keyword: autoprefixer flags `start` in a
+     flex container as having mixed browser support and needing a vendor path
+     `flex-start` doesn't. */
+  align-items: flex-start;
 }
 
 .drawer__group {
@@ -1397,15 +1673,9 @@ h3.rule-head__label {
   justify-items: start;
 }
 
-/* The crew list is the one group that wants the full width. Its own top margin
-   is redundant here — the group's grid gap already separates it from the
-   label — and doubles up with the first row's hairline. */
-.drawer__group:has(> .crew) {
-  flex: 1 1 100%;
-}
-
-.drawer .crew {
-  margin-top: 0;
+.drawer__crew {
+  display: grid;
+  gap: var(--s-2);
 }
 
 .drawer__label {
@@ -1500,12 +1770,23 @@ h3.rule-head__label {
   margin: var(--s-8) 0 0;
 }
 
-/* The global reset makes images block-level, so centring is a margin, not a
-   text-align — the latter silently does nothing here. */
+/* Left-aligned on the page's own measure, not centred: everything above it —
+   headings, rules, table columns — hangs off the left edge, and an image
+   centred in that column is the one element that doesn't. Aligning it lets the
+   page end on the same vertical it started on. The smaller frame is the other
+   half of the same fix: at 560px the artwork read as the subject of the page
+   rather than its closing beat. */
 .closing img {
-  width: min(560px, 100%);
+  width: min(420px, 100%);
   height: auto;
-  margin-inline: auto;
+  margin-inline: 0;
+}
+
+/* A sparse account (one character, little above the fold) let the artwork
+   outweigh everything else on the page. Same asset, same technique, a
+   smaller frame — not a crop, not a downscaled fragment. */
+.closing--compact img {
+  width: min(260px, 100%);
 }
 
 .skip {
@@ -1531,6 +1812,12 @@ h3.rule-head__label {
   overflow: hidden;
   clip-path: inset(50%);
   white-space: nowrap;
+}
+
+/* Two renderings of one value, picked by width. Both are in the markup at both
+   widths, so nothing has to be measured or scripted to choose between them. */
+.only-narrow {
+  display: none;
 }
 
 /* --- Narrow ------------------------------------------------------------- */
@@ -1582,41 +1869,111 @@ h3.rule-head__label {
   .launch__panel {
     padding: var(--s-6) var(--s-4) var(--s-5);
   }
+
+  .only-wide {
+    display: none;
+  }
+
+  .only-narrow {
+    display: inline;
+  }
+
+  /* The runs table's 44rem floor is a 704px floor, i.e. ~384px of forced
+     horizontal scroll at 320px, and the Started column is most of what buys it:
+     a 19ch ISO stamp is the widest cell in the row and the least of its meaning
+     when the question is "did this run recently". Below this width Started
+     reads as elapsed time (the exact stamp stays in the accessibility tree —
+     see the markup), so the floor is no longer earning anything and comes off.
+     Reflow (WCAG 1.4.10) is not permission to destroy data. */
+  .log--runs {
+    min-width: 0;
+  }
+
+  /* The 26ch floor on Status exists so a folded-in error string is not crushed
+     into a one-word column. At 320px there is no width to spend on that: 26ch
+     is most of the screen, and holding it would put the counter columns back
+     off-screen. The error wraps instead, which is what reflow asks for. */
+  .log--runs th:nth-child(3),
+  .log--runs td:nth-child(3) {
+    min-width: 0;
+  }
+
+  /* Six columns and their mono uppercase labels need every pixel of a 320px
+     screen; 8px of side padding is what stops STARTED / TOOK / STATUS from
+     clipping. The vertical rhythm is unchanged. */
+  .log--runs th,
+  .log--runs td {
+    padding: var(--s-2) var(--s-1);
+  }
+
+  /* There was a rule here that unpinned column 1 whenever an accounts row
+     drawer was open, because the drawer used to live *inside* the first cell:
+     its crew group is `flex: 1 1 100%`, so opening one row widened column 1
+     for the whole table (table columns are shared) and the pinned cell took
+     279.5px of a 286px region — 98% — painting over every other column on
+     every row.
+
+     The drawer is its own full-width `<tr>` now (see row-disclosure.tsx), so
+     it no longer touches column 1's width and the trade is off: the pin stays
+     on with a drawer open, which is the better end of the trade anyway. The
+     name an admin is about to change the tier of stays on screen through the
+     scroll right to the controls — including the scroll the open drawer's own
+     controls make necessary. What the drawer row needs instead is only to be
+     excluded from the pin itself, which it is, alongside the empty-state cell
+     and for the same reason (see .log--sticky-col above).
+
+     Audit still uses `<details>` in its Details column and was never in scope
+     for the unpin; nothing there changes. */
+
+  /* Audit, narrow. Same trade as the runs table above, and for the same
+     reason: the At column is the pinned one, and a 19ch ISO stamp is 12.25rem
+     of a 286px region — 69% at 320px — spent on the least of the row's
+     meaning. Below this width it renders as elapsed time (the exact instant
+     stays in the accessibility tree; see the markup), which "365d ago" caps at
+     8ch, so 5rem holds it with the tightened padding below.
+
+     The other three sized columns come down to what an ellipsised value can
+     still be recognised by rather than to what it can be read in full: every
+     one of them is an `.ellipsis-cell` with the full value in `title`, so
+     shrinking them truncates rather than paints over. Action keeps the most,
+     since it is the column an admin scans down.
+
+     Measured at 320px, region 286px: 992px table / 706px forced scroll / 196px
+     pin before, 544px / 258px / 80px after — a pin at 28% of the region rather
+     than 69%, and less forced scroll than the 764px this table had before the
+     Details floor existed at all. */
+  .log--audit {
+    min-width: 34rem;
+  }
+
+  .log--audit col:nth-child(1) {
+    width: 5rem;
+  }
+
+  .log--audit col:nth-child(2) {
+    width: 6rem;
+  }
+
+  .log--audit col:nth-child(3) {
+    width: 9.5rem;
+  }
+
+  .log--audit col:nth-child(4) {
+    width: 6rem;
+  }
+
+  /* 4px of side padding, as on the runs table: at this width padding is the
+     one thing on the row costing width and carrying nothing. 34rem minus the
+     26.5rem of sized columns leaves Details 7.5rem (120px) to open into. */
+  .log--audit th,
+  .log--audit td {
+    padding: var(--s-2) var(--s-1);
+  }
 }
 
-/* Ten columns of state per row: the standard cell padding pushes the accounts
-   table past the container and clips the last action. Tighten it rather than
-   drop a column, since every column here answers a real admin question. */
-.log--dense th,
-.log--dense td {
-  padding: var(--s-2) var(--s-3);
-}
-
-/* Sync run tables: no fixed layout, and a width floor set by legibility rather
-   than by alignment. The old 60rem existed so the five per-job sections shared
-   one grid, which stopped being true when each job started showing only the
-   counters it actually moves. What remains is the point below which the status
-   cell crushes an error string into a one-word column — under that the Scroller
-   takes over. Column widths otherwise come from content. */
-.log--runs {
+/* The crew table inside the accounts drawer: four short columns with the
+   whole 1000px+ drawer row to sit in, so nothing here fights for space the
+   way the outer table's ten columns do. */
+.log--crew {
   width: 100%;
-  min-width: 44rem;
-}
-
-/* Third column is Status by construction (Started, Took, Status, …). It is the
-   one cell that can carry prose — the folded-in error string — and without a
-   floor the auto layout is free to hand it a one-word width and turn a failure
-   into a tall ragged stack exactly where an admin is trying to read it. */
-.log--runs th:nth-child(3),
-.log--runs td:nth-child(3) {
-  min-width: 26ch;
-}
-
-/* Audit log: fixed layout so a bare id in the actor column can't wrap and
-   inflate every row to match it (was ~90px tall; a UUID has hyphens to break
-   on, everything else in the row doesn't). Details is the one flexible
-   column, left unset in the colgroup, since it's the one field with no
-   natural cap. */
-.log--audit {
-  table-layout: fixed;
 }

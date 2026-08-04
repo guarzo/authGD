@@ -1,16 +1,24 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
-import { getConfig } from "@/config";
+import { getConfig, type Config } from "@/config";
 import { getDb } from "@/db";
 import { getAdminContext } from "@/lib/admin-guard";
+import { isContactsTarget } from "@/services/desired";
 import {
   getAdminAccountsList,
   type AdminAccountRow,
+  type AdminCharacterRow,
   type AdminListSort,
 } from "@/services/account-view";
 import { RuleHead, Scroller, Status, Tier } from "@/app/_components/ui";
+// Shared with the member's own character table rather than reimplemented here:
+// the near-miss label copy and the "not managed" wording are the same question
+// asked about the same character, and two copies drift.
+import { ContactState } from "@/app/account/contact-state";
 import { RowDisclosure } from "@/app/_components/row-disclosure";
 import { Submit } from "@/app/_components/submit";
+import { ConfirmArmScope, ConfirmSubmit } from "@/app/_components/confirm-submit";
+import { renderedAt } from "@/app/_components/utc-time";
 import {
   demoteAdminAction,
   promoteAdminAction,
@@ -34,6 +42,28 @@ const SORTS: Array<{ key: AdminListSort; label: string }> = [
   { key: "tierChangedAt", label: "Tier changed" },
 ];
 const TIERS = ["flygd", "blue", "green"] as const;
+
+const ERRORS: Record<string, string> = {
+  last_admin: "Cannot demote the last admin.",
+  not_admin:
+    "Your admin access changed since this page loaded. Refresh to see the current state.",
+};
+
+// The columns after the sortable ones, in render order. A list rather than a
+// count because three separate things depend on the table's width — the
+// header row, the empty-state row's colSpan, and the drawer row's — and a
+// hand-kept number drifts the moment someone adds a column and updates two of
+// the three. Adding a label here is the only edit a new column needs.
+const FIXED_COLUMNS = [
+  "Tokens",
+  "Discord",
+  "Map",
+  "Last login",
+  "Admin",
+  "Actions",
+] as const;
+
+const COLUMN_COUNT = SORTS.length + FIXED_COLUMNS.length;
 
 function fmt(d: Date | null): string {
   return d ? d.toISOString().slice(0, 10) : "—";
@@ -64,7 +94,8 @@ export default async function AdminAccountsPage({
   const status =
     params.status === "cryo" || params.status === "active" ? params.status : undefined;
   const filtered = Boolean(tier || status);
-  const rows = await getAdminAccountsList(getDb(), getConfig(), {
+  const cfg = getConfig();
+  const rows = await getAdminAccountsList(getDb(), cfg, {
     tier,
     status,
     sort,
@@ -90,9 +121,9 @@ export default async function AdminAccountsPage({
         </p>
       </div>
 
-      {params.error === "last_admin" && (
+      {params.error && ERRORS[params.error] && (
         <p className="notice notice--bad" data-glyph="!" role="alert">
-          Cannot demote the last admin.
+          {ERRORS[params.error]}
         </p>
       )}
 
@@ -151,11 +182,11 @@ export default async function AdminAccountsPage({
         </div>
       </div>
 
-      <RuleHead as="h2">
+      <RuleHead as="h2" aside={<span className="dim mono">{renderedAt()}</span>}>
         {rows.length === 1 ? "1 account" : `${rows.length} accounts`}
       </RuleHead>
-      <Scroller label="Accounts">
-        <table className="log log--dense">
+      <Scroller label="Accounts" tall>
+        <table className="log log--dense log--sticky-head log--sticky-col">
           {/* The scanning anchor gets the surplus. Every other column holds a
               single badge, date, or button pair, so `width: 1%` collapses it to
               its own content and hands the leftover width to Name. Before the
@@ -163,13 +194,14 @@ export default async function AdminAccountsPage({
               the table purely because it carried a stack of buttons. */}
           <colgroup>
             <col />
-            <col className="log__col--fit" span={9} />
+            <col className="log__col--fit" span={COLUMN_COUNT - 1} />
           </colgroup>
           <thead>
             <tr>
               {SORTS.map((s) => (
                 <th
                   key={s.key}
+                  scope="col"
                   aria-sort={
                     sort === s.key ? (dir === "asc" ? "ascending" : "descending") : "none"
                   }
@@ -190,27 +222,33 @@ export default async function AdminAccountsPage({
                   </a>
                 </th>
               ))}
-              <th>Tokens</th>
-              <th>Discord</th>
-              <th>Map</th>
-              <th>Last login</th>
-              <th>Admin</th>
-              <th>Actions</th>
+              {FIXED_COLUMNS.map((label) => (
+                <th key={label} scope="col">
+                  {label}
+                </th>
+              ))}
             </tr>
           </thead>
           <tbody>
-            {rows.map((r) => (
-              <AccountRow key={r.accountId} r={r} syncQueuedHref={syncQueuedHref} />
-            ))}
-            {rows.length === 0 && (
-              <tr>
-                <td className="log__empty" colSpan={10}>
-                  {filtered
-                    ? "No accounts match this filter."
-                    : "No accounts yet. They appear here after someone signs in with EVE."}
-                </td>
-              </tr>
-            )}
+            <ConfirmArmScope>
+              {rows.map((r) => (
+                <AccountRow
+                  key={r.accountId}
+                  r={r}
+                  cfg={cfg}
+                  syncQueuedHref={syncQueuedHref}
+                />
+              ))}
+              {rows.length === 0 && (
+                <tr>
+                  <td className="log__empty" colSpan={COLUMN_COUNT}>
+                    {filtered
+                      ? "No accounts match this filter."
+                      : "No accounts yet. They appear here after someone signs in with EVE."}
+                  </td>
+                </tr>
+              )}
+            </ConfirmArmScope>
           </tbody>
         </table>
       </Scroller>
@@ -218,190 +256,364 @@ export default async function AdminAccountsPage({
   );
 }
 
+/**
+ * Token colour is proportional, not absolute. A long-dead token on a
+ * forgotten alt is a routine standing state, not an alarm; the one case that
+ * actually means the account is cut off is the main going dark, so that is
+ * the only thing that forces red on its own. Short of that, red is reserved
+ * for zero healthy tokens (every character is dead or needs re-auth), and
+ * amber covers everything short of that. "nothing reads as punishment"
+ * (PRODUCT.md) otherwise fails on any account with one stale alt.
+ */
+function tokenTone(r: AdminAccountRow): "ok" | "warn" | "bad" | "off" {
+  const tokens = r.tokenSummary;
+  if (tokens.total === 0) return "off";
+  const main = r.characters.find((c) => c.isMain);
+  const mainDead =
+    main !== undefined &&
+    (main.tokenStatus === "invalid" || main.tokenStatus === "missing");
+  if (tokens.healthy === 0 || mainDead) return "bad";
+  if (tokens.dead > 0 || tokens.needsReauth > 0) return "warn";
+  return "ok";
+}
+
+/** The token cell's per-character badge, admin's finer-grained view of the
+ *  same states the member page's Token column shows in summary. */
+function TokenState({ c }: { c: AdminCharacterRow }) {
+  if (c.tokenStatus === "invalid") return <Status tone="bad">invalid</Status>;
+  if (c.tokenStatus === "missing") return <Status tone="bad">missing</Status>;
+  if (c.tokenStatus === "needs_reauth")
+    return <Status tone="warn">re-auth needed</Status>;
+  if (c.needsReauthForScopes) return <Status tone="warn">scope shortfall</Status>;
+  return <Status tone="ok">valid</Status>;
+}
+
 function AccountRow({
   r,
+  cfg,
   syncQueuedHref,
 }: {
   r: AdminAccountRow;
+  cfg: Config;
   syncQueuedHref: string;
 }) {
   const tokens = r.tokenSummary;
-  const tokenTone =
-    tokens.dead > 0
-      ? "bad"
-      : tokens.needsReauth > 0
-        ? "warn"
-        : tokens.total === 0
-          ? "off"
-          : "ok";
+
+  // Shown once above the crew table rather than once per character on the map:
+  // the ACL observation is a single job run, so every character on it shares
+  // the same timestamp, and repeating it per row is the same information N
+  // times over.
+  const mapObservedAt = r.characters.reduce<Date | null>(
+    (latest, c) =>
+      c.mapObservedAt && (!latest || c.mapObservedAt > latest) ? c.mapObservedAt : latest,
+    null,
+  );
+
+  // The pinned first column exists so a 28px tier control is never pressed with
+  // nothing on screen saying whose it is, and "no main" was the same string on
+  // every account that lacks one — identifying the row as well as no pin at all.
+  // Fall through to something that actually names it.
+  //
+  // Every name here reaches this page as a character's `name` — `mainName` is
+  // one too (services/account-view.ts) — and ESI has handed back names that are
+  // empty or whitespace. Whitespace is the dangerous shape: it is truthy, so it
+  // takes the identity slot and then renders as nothing, which is the one
+  // outcome this column exists to prevent. Normalize once here so the pick, the
+  // visible label and the accessible name cannot disagree about whether a name
+  // names anything.
+  const named = (n: string | null | undefined) => n?.trim() || null;
+  const mainName = named(r.mainName);
+  // The service returns characters unordered, so pick by name rather than by
+  // array position, or the identity of a row changes between two renders of the
+  // same data. Blank names are dropped rather than sorted: "" sorts first, so a
+  // whitespace-only name would otherwise win the pick.
+  const firstName = mainName
+    ? null
+    : [...r.characters]
+        .flatMap((c) => named(c.name) ?? [])
+        .sort((a, b) => a.localeCompare(b))[0];
+  const idLabel = `acct ${r.accountId.slice(0, 8)}`;
+  // The same identity as one string, for accessible names with nowhere to put
+  // markup. Both operands are already normalized to a real name or null, so the
+  // fallback cannot walk past a blank into `aria-label="Note for "` — a row
+  // with no identity at all, in the column whose whole job is saying whose tier
+  // is about to change.
+  const identity = mainName ?? firstName ?? idLabel;
+  // RowDisclosure puts its label on the summary as `aria-label`, which
+  // overrides the visible text, so this mirrors that text verbatim — an
+  // accessible name has to stay a superset of its visible label (WCAG 2.5.3).
+  const pinLabel = firstName ? `${identity} ·no main` : identity;
 
   return (
-    <tr>
-      <td>
-        <RowDisclosure
-          label={r.mainName ?? "Account with no main"}
-          summary={
+    <RowDisclosure
+      label={pinLabel}
+      colSpan={COLUMN_COUNT}
+      summary={
+        <>
+          {mainName || (
             <>
-              {r.mainName ?? <em>no main</em>}
-              {r.characters.length > 1 && ` (+${r.characters.length - 1})`}
+              {firstName || <span className="mono">{idLabel}</span>}
+              {/* Marked in text, not by styling: the row is named by a
+                  character that is not its main, and that distinction has
+                  to be perceivable without seeing the dimming. */}
+              {firstName && <span className="mono dim"> ·no main</span>}
             </>
-          }
-        >
-          <section className="drawer__group">
-            <span className="drawer__label">Crew</span>
-            <ul className="crew">
-              {r.characters.map((c) => (
-                <li key={c.id}>
-                  <b>{c.name}</b>
-                  {c.isMain && " (main)"}
-                  {" — token: "}
-                  {c.tokenStatus}
-                  {c.needsReauthForScopes && " (scope shortfall)"}
-                  {c.affiliationInvalid && " · affiliation invalid"}
-                  {c.contactSyncResult && ` · contacts: ${c.contactSyncResult}`}
-                  {c.mapObservedAt &&
-                    ` · on map (observed ${c.mapObservedAt.toISOString().slice(0, 16)}Z)`}
-                </li>
-              ))}
-            </ul>
-          </section>
+          )}
+          {r.characters.length > 1 && ` (+${r.characters.length - 1})`}
+        </>
+      }
+      cells={
+        <>
+          <td>
+            <Tier tier={r.tier} locked={r.tierLocked} />
+          </td>
 
-          <section className="drawer__group">
-            <span className="drawer__label">Set tier</span>
-            <div className="btn-group">
-              {TIERS.map((t) => (
-                <form
-                  key={t}
-                  action={setTierAction.bind(null, r.accountId, t)}
-                  className="inline-form"
-                >
-                  <Submit
-                    className="btn btn--micro"
-                    disabled={r.tierLocked && r.tier === t}
-                    aria-pressed={r.tier === t}
-                  >
-                    {t}
-                  </Submit>
-                </form>
-              ))}
-              {r.tierLocked && (
-                <form
-                  action={returnToAutoAction.bind(null, r.accountId)}
-                  className="inline-form"
-                >
-                  <Submit className="btn btn--micro">auto</Submit>
-                </form>
+          <td>
+            {r.status === "cryo" ? (
+              <Status tone="warn">cryo</Status>
+            ) : (
+              <Status tone="off">active</Status>
+            )}
+          </td>
+
+          <td className="mono nowrap">{fmt(r.tierChangedAt)}</td>
+
+          <td>
+            <div className="stack">
+              <Status tone={tokenTone(r)}>
+                {tokens.healthy}/{tokens.total} ok
+              </Status>
+              {tokens.needsReauth > 0 && (
+                <span className="dim mono nowrap">{tokens.needsReauth} re-auth</span>
+              )}
+              {tokens.dead > 0 && (
+                <span className="dim mono nowrap">{tokens.dead} dead</span>
               )}
             </div>
-            {r.tierChangedByName && (
-              <span className="dim mono">set by {r.tierChangedByName}</span>
-            )}
-          </section>
+          </td>
 
-          <section className="drawer__group">
-            <span className="drawer__label">Cryo</span>
-            <form
-              action={setStatusAction.bind(
-                null,
-                r.accountId,
-                r.status === "cryo" ? "active" : "cryo",
+          <td>
+            {r.discordLinked ? (
+              <Status tone="ok">linked</Status>
+            ) : (
+              <Status tone="off">none</Status>
+            )}
+          </td>
+
+          <td>
+            {/* Every character of a flygd account is meant to be on the map ACL, so
+                a partial count is a gap to chase, not a healthy state. Non-flygd
+                accounts have none by design, which is the "off" case. */}
+            {r.mapCount === 0 ? (
+              <Status tone="off">off</Status>
+            ) : (
+              <Status tone={r.mapCount === tokens.total ? "ok" : "warn"}>
+                {r.mapCount}/{tokens.total}
+              </Status>
+            )}
+          </td>
+
+          <td className="mono nowrap">{fmt(r.lastLoginAt)}</td>
+
+          <td>
+            {r.isAdmin ? <Status>admin</Status> : <Status tone="off">member</Status>}
+          </td>
+
+          {/* One grade, one group. Revoke and sync now are both row actions; before,
+              revoke was a bordered danger button and sync now was bare text, which
+              read as one button with a broken half rather than two peers. */}
+          <td>
+            <div className="btn-row btn-row--tight">
+              {r.isAdmin ? (
+                <form action={demoteAdminAction.bind(null, r.accountId)}>
+                  <ConfirmSubmit
+                    className="btn btn--micro btn--danger"
+                    label="revoke"
+                    restName={`revoke admin for ${identity}`}
+                    confirmName={`confirm revoke admin for ${identity}`}
+                  />
+                </form>
+              ) : (
+                <form action={promoteAdminAction.bind(null, r.accountId)}>
+                  <Submit className="btn btn--micro" pendingLabel="granting…">
+                    grant
+                  </Submit>
+                </form>
               )}
-            >
-              <Submit className="btn btn--micro">
-                {r.status === "cryo" ? "wake" : "freeze"}
-              </Submit>
-            </form>
-            {r.status === "cryo" && (
-              <span className="dim mono nowrap">since {fmt(r.statusChangedAt)}</span>
+              <form action={syncAccountAction.bind(null, r.accountId, syncQueuedHref)}>
+                <Submit className="btn btn--micro nowrap" pendingLabel="queueing…">
+                  sync now
+                </Submit>
+              </form>
+            </div>
+          </td>
+        </>
+      }
+    >
+      {/* The admin opened the row to act, not to read a manifest: tier, cryo,
+          and note come first, and the crew list — the thing that scrolls
+          longest on an eight-alt account — sits below them. */}
+      <div className="drawer__controls">
+        <section className="drawer__group">
+          <span className="drawer__label">Set tier</span>
+          <div className="btn-group">
+            {TIERS.map((t) => (
+              <form
+                key={t}
+                action={setTierAction.bind(null, r.accountId, t)}
+                className="inline-form"
+              >
+                {/* No `pendingLabel` here, unlike every other control in this
+                    drawer: the label is the tier itself, and swapping it for
+                    "setting…" would erase which of the three was pressed at
+                    exactly the moment the admin is checking. `disabled` plus
+                    `aria-busy` still report the in-flight state.
+
+                    Same principle as the note field for the accessible name: a
+                    speech-input or screen-reader user reaches this control with
+                    only the tier word to go on, and this is the control
+                    derole-don't-boot turns on. The visible text stays the bare
+                    tier word, so the accessible name keeps it verbatim (WCAG
+                    2.5.3) and adds the row in front of it. */}
+                <Submit
+                  className="btn btn--micro"
+                  disabled={r.tierLocked && r.tier === t}
+                  aria-pressed={r.tier === t}
+                  aria-label={`Set ${identity} to ${t}`}
+                >
+                  {t}
+                </Submit>
+              </form>
+            ))}
+            {r.tierLocked && (
+              <form
+                action={returnToAutoAction.bind(null, r.accountId)}
+                className="inline-form"
+              >
+                <Submit
+                  className="btn btn--micro"
+                  pendingLabel="resetting…"
+                  aria-label={`return ${identity} to auto tier`}
+                >
+                  auto
+                </Submit>
+              </form>
             )}
-          </section>
+          </div>
+          {r.tierChangedByName && (
+            <span className="dim mono">set by {r.tierChangedByName}</span>
+          )}
+        </section>
 
-          <section className="drawer__group">
-            <span className="drawer__label">Note</span>
-            <form action={saveNoteAction.bind(null, r.accountId)} className="note-form">
-              <input
-                className="field"
-                name="note"
-                defaultValue={r.statusNote ?? ""}
-                placeholder="notes"
-                aria-label={`Note for ${r.mainName ?? "account"}`}
+        <section className="drawer__group">
+          <span className="drawer__label">Cryo</span>
+          <form
+            action={setStatusAction.bind(
+              null,
+              r.accountId,
+              r.status === "cryo" ? "active" : "cryo",
+            )}
+          >
+            {r.status === "cryo" ? (
+              <Submit
+                className="btn btn--micro"
+                pendingLabel="waking…"
+                aria-label={`wake ${identity}`}
+              >
+                wake
+              </Submit>
+            ) : (
+              <ConfirmSubmit
+                className="btn btn--micro"
+                armedClassName="btn btn--micro btn--danger"
+                label="freeze"
+                restName={`freeze ${identity}`}
+                confirmName={`confirm freeze ${identity}`}
               />
-              <Submit className="btn btn--micro">save note</Submit>
-            </form>
-          </section>
-        </RowDisclosure>
-      </td>
-
-      <td>
-        <Tier tier={r.tier} locked={r.tierLocked} />
-      </td>
-
-      <td>
-        {r.status === "cryo" ? (
-          <Status tone="warn">cryo</Status>
-        ) : (
-          <Status tone="off">active</Status>
-        )}
-      </td>
-
-      <td className="mono nowrap">{fmt(r.tierChangedAt)}</td>
-
-      <td>
-        <div className="stack">
-          <Status tone={tokenTone}>
-            {tokens.healthy}/{tokens.total} ok
-          </Status>
-          {tokens.needsReauth > 0 && (
-            <span className="dim mono nowrap">{tokens.needsReauth} re-auth</span>
-          )}
-          {tokens.dead > 0 && <span className="dim mono nowrap">{tokens.dead} dead</span>}
-        </div>
-      </td>
-
-      <td>
-        {r.discordLinked ? (
-          <Status tone="ok">linked</Status>
-        ) : (
-          <Status tone="off">none</Status>
-        )}
-      </td>
-
-      <td>
-        {/* Every character of a flygd account is meant to be on the map ACL, so
-            a partial count is a gap to chase, not a healthy state. Non-flygd
-            accounts have none by design, which is the "off" case. */}
-        {r.mapCount === 0 ? (
-          <Status tone="off">off</Status>
-        ) : (
-          <Status tone={r.mapCount === tokens.total ? "ok" : "warn"}>
-            {r.mapCount}/{tokens.total}
-          </Status>
-        )}
-      </td>
-
-      <td className="mono nowrap">{fmt(r.lastLoginAt)}</td>
-
-      <td>{r.isAdmin ? <Status>admin</Status> : <Status tone="off">member</Status>}</td>
-
-      {/* One grade, one group. Revoke and sync now are both row actions; before,
-          revoke was a bordered danger button and sync now was bare text, which
-          read as one button with a broken half rather than two peers. */}
-      <td>
-        <div className="btn-row btn-row--tight">
-          {r.isAdmin ? (
-            <form action={demoteAdminAction.bind(null, r.accountId)}>
-              <Submit className="btn btn--micro btn--danger">revoke</Submit>
-            </form>
-          ) : (
-            <form action={promoteAdminAction.bind(null, r.accountId)}>
-              <Submit className="btn btn--micro">grant</Submit>
-            </form>
-          )}
-          <form action={syncAccountAction.bind(null, r.accountId, syncQueuedHref)}>
-            <Submit className="btn btn--micro nowrap">sync now</Submit>
+            )}
           </form>
-        </div>
-      </td>
-    </tr>
+          {r.status === "cryo" && (
+            <span className="dim mono nowrap">since {fmt(r.statusChangedAt)}</span>
+          )}
+        </section>
+
+        <section className="drawer__group">
+          <span className="drawer__label">Note</span>
+          <form action={saveNoteAction.bind(null, r.accountId)} className="note-form">
+            <input
+              className="field"
+              name="note"
+              defaultValue={r.statusNote ?? ""}
+              placeholder="notes"
+              aria-label={`Note for ${identity}`}
+            />
+            <Submit className="btn btn--micro" pendingLabel="saving…">
+              save note
+            </Submit>
+          </form>
+        </section>
+      </div>
+
+      <section className="drawer__crew">
+        <span className="drawer__label">Crew</span>
+        {mapObservedAt && (
+          <span className="dim mono">
+            Map observed {mapObservedAt.toISOString().slice(0, 16)}Z
+          </span>
+        )}
+        <Scroller label={`${identity} crew`}>
+          <table className="log log--crew">
+            <thead>
+              <tr>
+                <th scope="col">Name</th>
+                <th scope="col">Token</th>
+                <th scope="col">Standings</th>
+                <th scope="col">Map</th>
+              </tr>
+            </thead>
+            <tbody>
+              {r.characters.map((c) => (
+                <tr key={c.id}>
+                  <td>
+                    <span className="char">
+                      {c.name}{" "}
+                      {c.isMain && <strong className="char__main">(main)</strong>}
+                    </span>
+                  </td>
+                  <td>
+                    <div className="stack">
+                      <TokenState c={c} />
+                      {c.affiliationInvalid && (
+                        <span className="dim">affiliation invalid</span>
+                      )}
+                    </div>
+                  </td>
+                  <td>
+                    <div className="stack">
+                      <ContactState
+                        result={c.contactSyncResult}
+                        detail={c.contactSyncDetail}
+                        label={cfg.standings.label}
+                        target={isContactsTarget({
+                          tier: r.tier,
+                          affiliationInvalid: c.affiliationInvalid,
+                        })}
+                      />
+                    </div>
+                  </td>
+                  <td>
+                    {c.mapObservedAt ? (
+                      <Status tone="ok">on</Status>
+                    ) : (
+                      <Status tone="off">off</Status>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Scroller>
+      </section>
+    </RowDisclosure>
   );
 }

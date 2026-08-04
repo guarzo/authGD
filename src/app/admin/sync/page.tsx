@@ -4,7 +4,7 @@ import { getDb } from "@/db";
 import type { syncRunStatusEnum } from "@/db/schema";
 import { getAdminContext } from "@/lib/admin-guard";
 import { getSyncStatus } from "@/services/sync-status";
-import { cadenceFor } from "@/core/schedules";
+import { cadenceFor, JOB_CRON, nextOccurrence } from "@/core/schedules";
 import {
   countColumns,
   formatDuration,
@@ -26,6 +26,40 @@ export const metadata: Metadata = {
 
 function fmt(d: Date | null): string {
   return d ? d.toISOString().replace("T", " ").slice(0, 19) : "…";
+}
+
+function utcHhmm(d: Date): string {
+  return d.toISOString().slice(11, 16);
+}
+
+/**
+ * True when the cron's hour field is a fixed number rather than `*` or a
+ * step — the same test `formatCadence` uses to decide whether it can print a
+ * wall-clock time itself. When it's fixed, the cadence string already names
+ * the time (`daily 03:00 UTC`, `Sun 04:00 UTC`) and a next-run line under it
+ * would either repeat that number or, worse, read as "soon" for a job that
+ * only fires once a week. Read off the raw expression rather than the
+ * humanized cadence string, so a rewording of `formatCadence` can't silently
+ * break this.
+ */
+function cadenceNamesTime(cron: string): boolean {
+  const hour = cron.trim().split(/\s+/)[1];
+  return /^\d+$/.test(hour ?? "");
+}
+
+/**
+ * Mirrors `nextCheck` in account-view.ts: a missing or unsupported cadence
+ * degrades to "we don't know when" rather than throwing and taking the whole
+ * sync page down over a decoration.
+ */
+function nextRunFor(jobType: string, now: Date): Date | null {
+  const cron = JOB_CRON[jobType];
+  if (!cron || cadenceNamesTime(cron)) return null;
+  try {
+    return nextOccurrence(cron, now);
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -138,6 +172,7 @@ export default async function AdminSyncPage({
             const latestAt = latest ? (latest.finishedAt ?? latest.startedAt) : null;
             const latestIso = latestAt ? latestAt.toISOString() : null;
             const cadence = cadenceFor(g.jobType);
+            const nextRun = nextRunFor(g.jobType, new Date(now));
             const cols = countColumns(g.jobType, g.runs);
             const span = cols.length || 1;
             return (
@@ -159,6 +194,12 @@ export default async function AdminSyncPage({
                       {anyCadence && (
                         <span className="strip__cadence mono">
                           {cadence ?? "on demand"}
+                          {nextRun && (
+                            <>
+                              <br />
+                              next {utcHhmm(nextRun)}
+                            </>
+                          )}
                         </span>
                       )}
                     </>
@@ -175,91 +216,118 @@ export default async function AdminSyncPage({
                       <table className="log log--runs">
                         <thead>
                           <tr>
-                            <th>Started</th>
-                            <th>Took</th>
-                            <th>Status</th>
+                            <th scope="col">Started</th>
+                            <th scope="col">Took</th>
+                            <th scope="col">Status</th>
                             {cols.length > 0 ? (
                               cols.map((k) => (
-                                <th key={k} className="num">
+                                <th key={k} scope="col" className="num">
                                   {humanizeKey(k)}
                                 </th>
                               ))
                             ) : (
-                              <th>Counts</th>
+                              <th scope="col">Counts</th>
                             )}
-                            <th>Raw</th>
+                            <th scope="col">Raw</th>
                           </tr>
                         </thead>
                         <tbody>
-                          {g.runs.map((r) => (
-                            <tr key={r.id}>
-                              <td className="mono nowrap">{fmt(r.startedAt)}</td>
-                              <td className="mono nowrap num">
-                                {formatDuration(r.startedAt, r.finishedAt) ?? (
-                                  <span className="dim">…</span>
-                                )}
-                              </td>
-                              {/* The error lives here rather than in a column of
-                                  its own: it is populated on a small minority
-                                  of runs, and a column that is an em-dash on
-                                  every row is width spent on nothing. */}
-                              <td>
-                                <Status tone={tone(r.status)}>
-                                  {r.status ?? "running"}
-                                </Status>
-                                {r.errorSummary && (
-                                  <span className="detail strip__err">
-                                    {r.errorSummary}
+                          {g.runs.map((r) => {
+                            const startedIso = r.startedAt
+                              ? r.startedAt.toISOString()
+                              : null;
+                            return (
+                              <tr key={r.id}>
+                                {/* At 320px the 19ch ISO stamp is the widest
+                                    cell in the row and the least of its
+                                    meaning, and it is most of what the table's
+                                    44rem floor was buying. Below 40rem it reads
+                                    as elapsed time instead — but the exact
+                                    value may not leave the accessibility tree
+                                    for that, so it is restated in text a screen
+                                    reader reads out. `title` would not do:
+                                    VoiceOver and TalkBack do not announce it
+                                    and touch cannot reach it. */}
+                                <td className="mono nowrap">
+                                  <span className="only-wide">{fmt(r.startedAt)}</span>
+                                  <span className="only-narrow">
+                                    <RelativeTime
+                                      iso={startedIso}
+                                      initial={formatAgo(startedIso, now)}
+                                    />
+                                    <span className="visually-hidden">
+                                      {`started ${fmt(r.startedAt)} UTC`}
+                                    </span>
                                   </span>
-                                )}
-                              </td>
-                              {!r.counts || cols.length === 0 ? (
-                                // Three absences that read differently: a run
-                                // still in flight has not reported yet, a
-                                // finished one that recorded nothing never
-                                // will, and a recorded all-zero result is a
-                                // real answer. cols is empty only when no run
-                                // in the window moved a counter, so there is
-                                // one header cell to span.
-                                <td colSpan={span} className="dim">
-                                  {!r.counts ? (
-                                    r.finishedAt ? (
-                                      <>&mdash;</>
-                                    ) : (
-                                      <>&hellip;</>
-                                    )
-                                  ) : isNoChange(r.counts) ? (
-                                    "no change"
-                                  ) : (
-                                    <>&mdash;</>
+                                </td>
+                                <td className="mono nowrap num">
+                                  {formatDuration(r.startedAt, r.finishedAt) ?? (
+                                    <span className="dim">…</span>
                                   )}
                                 </td>
-                              ) : isNoChange(r.counts) ? (
-                                <td colSpan={span} className="dim">
-                                  no change
+                                {/* The error lives here rather than in a column
+                                    of its own: it is populated on a small
+                                    minority of runs, and a column that is an
+                                    em-dash on every row is width spent on
+                                    nothing. */}
+                                <td>
+                                  <Status tone={tone(r.status)}>
+                                    {r.status ?? "running"}
+                                  </Status>
+                                  {r.errorSummary && (
+                                    <span className="detail strip__err">
+                                      {r.errorSummary}
+                                    </span>
+                                  )}
                                 </td>
-                              ) : (
-                                cols.map((k) => {
-                                  const v = r.counts?.[k];
-                                  return (
-                                    <td
-                                      key={k}
-                                      className={v ? "mono num" : "mono num dim"}
-                                    >
-                                      {v ?? "—"}
-                                    </td>
-                                  );
-                                })
-                              )}
-                              <td>
-                                {r.counts ? (
-                                  <Json value={r.counts} summary="json" />
+                                {!r.counts || cols.length === 0 ? (
+                                  // Three absences that read differently: a run
+                                  // still in flight has not reported yet, a
+                                  // finished one that recorded nothing never
+                                  // will, and a recorded all-zero result is a
+                                  // real answer. cols is empty only when no run
+                                  // in the window moved a counter, so there is
+                                  // one header cell to span.
+                                  <td colSpan={span} className="dim">
+                                    {!r.counts ? (
+                                      r.finishedAt ? (
+                                        <>&mdash;</>
+                                      ) : (
+                                        <>&hellip;</>
+                                      )
+                                    ) : isNoChange(r.counts) ? (
+                                      "no change"
+                                    ) : (
+                                      <>&mdash;</>
+                                    )}
+                                  </td>
+                                ) : isNoChange(r.counts) ? (
+                                  <td colSpan={span} className="dim">
+                                    no change
+                                  </td>
                                 ) : (
-                                  <span className="dim">&mdash;</span>
+                                  cols.map((k) => {
+                                    const v = r.counts?.[k];
+                                    return (
+                                      <td
+                                        key={k}
+                                        className={v ? "mono num" : "mono num dim"}
+                                      >
+                                        {v ?? "—"}
+                                      </td>
+                                    );
+                                  })
                                 )}
-                              </td>
-                            </tr>
-                          ))}
+                                <td>
+                                  {r.counts ? (
+                                    <Json value={r.counts} summary="json" />
+                                  ) : (
+                                    <span className="dim">&mdash;</span>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
                         </tbody>
                       </table>
                     </Scroller>

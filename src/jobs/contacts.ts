@@ -2,6 +2,7 @@ import { and, eq } from "drizzle-orm";
 import type { Config } from "@/config";
 import type { Db, Dbx } from "@/db";
 import { character, contactSyncState } from "@/db/schema";
+import { encodeLabelCandidates, matchContactLabel } from "@/core/contact-label";
 import { diffContacts } from "@/core/contacts-diff";
 import { EsiError, type EsiClient } from "@/lib/esi/client";
 import { getFlygdCharacters, type FlygdCharacter } from "@/services/desired";
@@ -35,15 +36,21 @@ export type ContactsEsi = Pick<
   | "deleteContacts"
 >;
 
+/**
+ * `detail` is written on EVERY path, null included. The upsert sets only the
+ * columns named here, so omitting it on the success path would leave a fixed
+ * member staring at the name they already corrected.
+ */
 async function recordResult(
   dbx: Dbx,
   characterId: number,
   result: string,
   synced: boolean,
+  detail: string | null = null,
 ): Promise<void> {
   const set = synced
-    ? { lastResult: result, lastSyncedAt: new Date() }
-    : { lastResult: result };
+    ? { lastResult: result, lastDetail: detail, lastSyncedAt: new Date() }
+    : { lastResult: result, lastDetail: detail };
   await dbx
     .insert(contactSyncState)
     .values({ characterId, ...set })
@@ -119,10 +126,19 @@ export async function runContactsJob(deps: {
         // Labels first: ESI cannot create labels, so a missing label is a
         // user-remediation state — record it and skip ALL writes (spec job 2).
         const labels = await esi.getContactLabels(target.characterId, token.accessToken);
-        const label = labels.find((l) => l.labelName === cfg.standings.label);
-        if (!label) {
+        const match = matchContactLabel(labels, cfg.standings.label);
+        if (match.kind !== "exact") {
           counts.skipped++;
-          await recordResult(db, target.characterId, "missing_label", false);
+          // A near miss is reported, never accepted: diffContacts DELETES every
+          // contact under the matched label that leaves the desired set, so that
+          // authority stays bound to the exact configured name.
+          await recordResult(
+            db,
+            target.characterId,
+            match.kind === "near_miss" ? "label_mismatch" : "missing_label",
+            false,
+            match.kind === "near_miss" ? encodeLabelCandidates(match.candidates) : null,
+          );
           continue;
         }
         // Read ALL pages before any destructive diff; getAllContacts rejects
@@ -131,7 +147,7 @@ export async function runContactsJob(deps: {
         const diff = diffContacts({
           desiredIds: desiredAll.filter((id) => id !== target.characterId),
           standing: cfg.standings.value,
-          labelId: label.labelId,
+          labelId: match.labelId,
           contacts,
         });
         // Add/edit failures (e.g. ESI 400-rejecting a since-biomassed desired
@@ -145,7 +161,7 @@ export async function runContactsJob(deps: {
               token.accessToken,
               diff.add,
               cfg.standings.value,
-              [label.labelId],
+              [match.labelId],
             );
           }
           // Group takeovers by their preserved label set — PUT replaces

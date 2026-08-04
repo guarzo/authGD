@@ -1,6 +1,6 @@
 {
-  "id": "c8931230-34da-46e0-8092-c3b60b36a57d",
-  "prevId": "4627330e-dabc-4043-98f3-6dfcc431ed93",
+  "id": "ded903f8-2d31-46fd-8967-9d810b8621ae",
+  "prevId": "c8931230-34da-46e0-8092-c3b60b36a57d",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -426,6 +426,197 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.loot_item": {
+      "name": "loot_item",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "pool_id": {
+          "name": "pool_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "type_id": {
+          "name": "type_id",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "qty": {
+          "name": "qty",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "unit_price": {
+          "name": "unit_price",
+          "type": "numeric(20, 2)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'0'"
+        },
+        "total_value": {
+          "name": "total_value",
+          "type": "numeric(20, 2)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'0'"
+        },
+        "price_source": {
+          "name": "price_source",
+          "type": "loot_price_source",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "loot_item_pool_id_loot_pool_id_fk": {
+          "name": "loot_item_pool_id_loot_pool_id_fk",
+          "tableFrom": "loot_item",
+          "tableTo": "loot_pool",
+          "columnsFrom": [
+            "pool_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "loot_item_qty_ck": {
+          "name": "loot_item_qty_ck",
+          "value": "\"loot_item\".\"qty\" > 0"
+        },
+        "loot_item_price_ck": {
+          "name": "loot_item_price_ck",
+          "value": "\"loot_item\".\"unit_price\" >= 0 AND \"loot_item\".\"total_value\" >= 0"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.loot_pool": {
+      "name": "loot_pool",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "operation_id": {
+          "name": "operation_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "raw_paste": {
+          "name": "raw_paste",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "valuation_source": {
+          "name": "valuation_source",
+          "type": "loot_valuation_source",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "pricing_mode": {
+          "name": "pricing_mode",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "station_id": {
+          "name": "station_id",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "region_id": {
+          "name": "region_id",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "total_value": {
+          "name": "total_value",
+          "type": "numeric(20, 2)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'0'"
+        },
+        "notes": {
+          "name": "notes",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "appraised_at": {
+          "name": "appraised_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "loot_pool_operation_id_payout_operation_id_fk": {
+          "name": "loot_pool_operation_id_payout_operation_id_fk",
+          "tableFrom": "loot_pool",
+          "tableTo": "payout_operation",
+          "columnsFrom": [
+            "operation_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "loot_pool_total_ck": {
+          "name": "loot_pool_total_ck",
+          "value": "\"loot_pool\".\"total_value\" >= 0"
+        },
+        "loot_pool_flat_note_ck": {
+          "name": "loot_pool_flat_note_ck",
+          "value": "\"loot_pool\".\"valuation_source\" <> 'flat' OR (\"loot_pool\".\"notes\" IS NOT NULL AND \"loot_pool\".\"notes\" <> '')"
+        },
+        "loot_pool_appraised_fields_ck": {
+          "name": "loot_pool_appraised_fields_ck",
+          "value": "\"loot_pool\".\"valuation_source\" <> 'appraised' OR (\"loot_pool\".\"pricing_mode\" IS NOT NULL AND (\"loot_pool\".\"station_id\" IS NOT NULL) <> (\"loot_pool\".\"region_id\" IS NOT NULL))"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "public.oauth_transaction": {
       "name": "oauth_transaction",
       "schema": "",
@@ -553,6 +744,313 @@
         }
       },
       "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.payout_operation": {
+      "name": "payout_operation",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "occurred_at": {
+          "name": "occurred_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "battle_report_url": {
+          "name": "battle_report_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_by": {
+          "name": "created_by",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "corp_share_pct": {
+          "name": "corp_share_pct",
+          "type": "numeric(5, 2)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'0'"
+        },
+        "status": {
+          "name": "status",
+          "type": "payout_operation_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'draft'"
+        },
+        "notes": {
+          "name": "notes",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "payout_operation_created_by_account_id_fk": {
+          "name": "payout_operation_created_by_account_id_fk",
+          "tableFrom": "payout_operation",
+          "tableTo": "account",
+          "columnsFrom": [
+            "created_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "payout_operation_corp_pct_ck": {
+          "name": "payout_operation_corp_pct_ck",
+          "value": "\"payout_operation\".\"corp_share_pct\" >= 0 AND \"payout_operation\".\"corp_share_pct\" <= 100"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.payout_participant": {
+      "name": "payout_participant",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "operation_id": {
+          "name": "operation_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "account_id": {
+          "name": "account_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "recipient_character_id": {
+          "name": "recipient_character_id",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "display_name": {
+          "name": "display_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_characters": {
+          "name": "source_characters",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'[]'::jsonb"
+        },
+        "shares": {
+          "name": "shares",
+          "type": "numeric(6, 2)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'1'"
+        },
+        "excluded": {
+          "name": "excluded",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "amount": {
+          "name": "amount",
+          "type": "numeric(20, 2)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'0'"
+        },
+        "paid_amount": {
+          "name": "paid_amount",
+          "type": "numeric(20, 2)",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "payout_participant_operation_id_payout_operation_id_fk": {
+          "name": "payout_participant_operation_id_payout_operation_id_fk",
+          "tableFrom": "payout_participant",
+          "tableTo": "payout_operation",
+          "columnsFrom": [
+            "operation_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "payout_participant_account_id_account_id_fk": {
+          "name": "payout_participant_account_id_account_id_fk",
+          "tableFrom": "payout_participant",
+          "tableTo": "account",
+          "columnsFrom": [
+            "account_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "payout_participant_recipient_character_id_character_id_fk": {
+          "name": "payout_participant_recipient_character_id_character_id_fk",
+          "tableFrom": "payout_participant",
+          "tableTo": "character",
+          "columnsFrom": [
+            "recipient_character_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "payout_participant_shares_ck": {
+          "name": "payout_participant_shares_ck",
+          "value": "\"payout_participant\".\"shares\" > 0"
+        },
+        "payout_participant_amount_ck": {
+          "name": "payout_participant_amount_ck",
+          "value": "\"payout_participant\".\"amount\" >= 0"
+        },
+        "payout_participant_paid_amount_ck": {
+          "name": "payout_participant_paid_amount_ck",
+          "value": "\"payout_participant\".\"paid_amount\" IS NULL OR \"payout_participant\".\"paid_amount\" >= 0"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.payout_payment": {
+      "name": "payout_payment",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "participant_id": {
+          "name": "participant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "kind": {
+          "name": "kind",
+          "type": "payout_payment_kind",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "amount": {
+          "name": "amount",
+          "type": "numeric(20, 2)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "at": {
+          "name": "at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "actor": {
+          "name": "actor",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "note": {
+          "name": "note",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "payout_payment_participant_id_payout_participant_id_fk": {
+          "name": "payout_payment_participant_id_payout_participant_id_fk",
+          "tableFrom": "payout_payment",
+          "tableTo": "payout_participant",
+          "columnsFrom": [
+            "participant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "payout_payment_actor_account_id_fk": {
+          "name": "payout_payment_actor_account_id_fk",
+          "tableFrom": "payout_payment",
+          "tableTo": "account",
+          "columnsFrom": [
+            "actor"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
@@ -754,6 +1252,23 @@
         "cryo"
       ]
     },
+    "public.loot_price_source": {
+      "name": "loot_price_source",
+      "schema": "public",
+      "values": [
+        "triff",
+        "manual",
+        "unresolved"
+      ]
+    },
+    "public.loot_valuation_source": {
+      "name": "loot_valuation_source",
+      "schema": "public",
+      "values": [
+        "appraised",
+        "flat"
+      ]
+    },
     "public.oauth_intent": {
       "name": "oauth_intent",
       "schema": "public",
@@ -761,6 +1276,22 @@
         "login",
         "link-character",
         "link-discord"
+      ]
+    },
+    "public.payout_operation_status": {
+      "name": "payout_operation_status",
+      "schema": "public",
+      "values": [
+        "draft",
+        "finalized"
+      ]
+    },
+    "public.payout_payment_kind": {
+      "name": "payout_payment_kind",
+      "schema": "public",
+      "values": [
+        "paid",
+        "reverted"
       ]
     },
     "public.sync_run_status": {

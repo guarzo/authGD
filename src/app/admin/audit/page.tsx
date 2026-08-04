@@ -2,10 +2,13 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { getDb } from "@/db";
 import { getAdminContext } from "@/lib/admin-guard";
-import { AUDIT_PAGE_SIZE, queryAuditLog } from "@/services/audit";
-import type { ResolvedAuditRow } from "@/services/audit";
+import { AUDIT_PAGE_SIZE, queryAuditLog, resolveFilterIdentity } from "@/services/audit";
+import type { FilterResolution, ResolvedAuditRow } from "@/services/audit";
 import { RuleHead, Json, Scroller } from "@/app/_components/ui";
 import { Submit } from "@/app/_components/submit";
+import { formatAgo } from "@/app/_components/format-ago";
+import { RelativeTime } from "@/app/_components/relative-time";
+import { renderedAt } from "@/app/_components/utc-time";
 
 export const dynamic = "force-dynamic";
 
@@ -80,26 +83,69 @@ function summarizeDetails(action: string, details: unknown): string {
   }
 }
 
+/** The exact UTC instant, `2026-08-03 22:19:24`. */
+function stamp(d: Date): string {
+  return d.toISOString().replace("T", " ").slice(0, 19);
+}
+
+/**
+ * A link that sets one filter field to `value`, keeps every other active
+ * filter, and drops `before` -- clicking a name narrows the query, so the
+ * keyset cursor from the previous, wider query is meaningless and would page
+ * into the middle of the new result set.
+ */
+function filterHref(
+  params: Record<string, string | undefined>,
+  field: "actor" | "target",
+  value: string,
+): string {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v && k !== "before" && k !== field) q.set(k, v);
+  }
+  q.set(field, value);
+  return `/admin/audit?${q.toString()}`;
+}
+
 /**
  * The actor column. `system` is a job, not a person, so it gets the monospace
- * dimmed treatment used for machine output elsewhere in this table — a
+ * dimmed treatment used for machine output elsewhere in this table -- a
  * font-family signal, not a colour-only one. A resolved human name renders
  * plain; an unresolved actor falls back to the raw id in mono so it still
  * reads as "an id", not as a name that happened not to load.
+ *
+ * Resolved values (and `system`) link to themselves as a filter, so the admin
+ * never retypes what is already on screen. Unresolved ids stay inert: they are
+ * already exactly filterable by pasting, and linking them would add a tab stop
+ * per row for nothing.
  */
-function ActorCell({ r }: { r: ResolvedAuditRow }) {
+function ActorCell({
+  r,
+  params,
+}: {
+  r: ResolvedAuditRow;
+  params: Record<string, string | undefined>;
+}) {
   if (r.actorKind === "system") {
     return (
-      <span className="mono dim" title={r.actor}>
+      <a
+        className="mono dim cell-link"
+        href={filterHref(params, "actor", "system")}
+        title={r.actor}
+      >
         system
-      </span>
+      </a>
     );
   }
   if (r.actorName) {
     return (
-      <span className="ellipsis-cell" title={r.actor}>
+      <a
+        className="ellipsis-cell cell-link"
+        href={filterHref(params, "actor", r.actorName)}
+        title={r.actor}
+      >
         {r.actorName}
-      </span>
+      </a>
     );
   }
   return (
@@ -116,20 +162,39 @@ function ActorCell({ r }: { r: ResolvedAuditRow }) {
  * `ellipsis-cell`: a resolved display name, a raw UUID, and a Discord
  * snowflake all lack natural break points, and any of them left unbounded
  * wraps and inflates the row height exactly like the actor column used to.
+ *
+ * A name links to the NAME, not to this row's raw id -- one person's target
+ * rows are spread across an account uuid, a character id and a discord
+ * snowflake, and filtering by whichever one this row happens to carry would
+ * hide the other two thirds of their history.
  */
-function TargetCell({ r }: { r: ResolvedAuditRow }) {
+function TargetCell({
+  r,
+  params,
+}: {
+  r: ResolvedAuditRow;
+  params: Record<string, string | undefined>;
+}) {
   if (r.targetName) {
     return (
-      <span className="ellipsis-cell" title={r.target}>
+      <a
+        className="ellipsis-cell cell-link"
+        href={filterHref(params, "target", r.targetName)}
+        title={r.target}
+      >
         {r.targetName}
-      </span>
+      </a>
     );
   }
   if (r.targetKind === "literal") {
     return (
-      <span className="mono dim ellipsis-cell" title={r.target}>
+      <a
+        className="mono dim ellipsis-cell cell-link"
+        href={filterHref(params, "target", r.target)}
+        title={r.target}
+      >
         {r.target}
-      </span>
+      </a>
     );
   }
   return (
@@ -137,6 +202,18 @@ function TargetCell({ r }: { r: ResolvedAuditRow }) {
       {r.target}
     </span>
   );
+}
+
+/** The ids to filter by, or undefined when the field isn't filtered at all.
+ * A `kind: "none"` resolution yields an EMPTY list, never `undefined`:
+ * `queryAuditLog` reads `undefined` as "this field is unfiltered" and an empty
+ * list as "resolved to nothing", so failing closed here keeps an unmatched name
+ * returning zero rows even if the caller's short-circuit below is ever
+ * refactored away. The alternative failure mode is the bad one -- a filter the
+ * admin believes is applied silently showing them everything. */
+function idsOf(r: FilterResolution | null): string[] | undefined {
+  if (!r) return undefined;
+  return r.kind === "none" ? [] : r.ids;
 }
 
 export default async function AdminAuditPage({
@@ -151,17 +228,54 @@ export default async function AdminAuditPage({
 }) {
   const ctx = await getAdminContext();
   if (!ctx) redirect("/login");
-  const params = await searchParams;
-  const beforeId = params.before ? Number(params.before) : undefined;
-  const rows: ResolvedAuditRow[] = await queryAuditLog(getDb(), {
-    actor: params.actor || undefined,
-    action: params.action || undefined,
-    target: params.target || undefined,
-    beforeId: Number.isFinite(beforeId) ? beforeId : undefined,
-  });
+  const raw = await searchParams;
+  // Trim the two name-resolvable filters. They are typed or pasted by hand,
+  // and a trailing space off a copied uuid or name would otherwise fall
+  // through to "no such name" rather than matching. Whitespace-only collapses
+  // to absent. Normalized here, before anything reads `params`, so the chips,
+  // the filter links and the pager all carry the same value the query used.
+  // `action` is deliberately untouched: it is a prefix match whose semantics
+  // are out of scope for this branch.
+  const params = {
+    ...raw,
+    actor: raw.actor?.trim() || undefined,
+    target: raw.target?.trim() || undefined,
+  };
+  const beforeId = raw.before ? Number(raw.before) : undefined;
+
+  const db = getDb();
+  // Both filters resolve concurrently; each costs 0 queries when absent or
+  // when the admin pasted a raw id.
+  const [actorRes, targetRes] = await Promise.all([
+    params.actor ? resolveFilterIdentity(db, "actor", params.actor) : null,
+    params.target ? resolveFilterIdentity(db, "target", params.target) : null,
+  ]);
+
+  // A name that matched nothing guarantees zero rows, so don't scan audit_log
+  // at all -- and remember WHICH field failed, since the fix differs.
+  const unmatched = (
+    [
+      ["actor", actorRes],
+      ["target", targetRes],
+    ] as const
+  ).filter(([, r]) => r?.kind === "none") as ReadonlyArray<
+    readonly [string, { kind: "none"; name: string }]
+  >;
+
+  const rows: ResolvedAuditRow[] = unmatched.length
+    ? []
+    : await queryAuditLog(db, {
+        actorIds: idsOf(actorRes),
+        action: params.action || undefined,
+        targetIds: idsOf(targetRes),
+        beforeId: Number.isFinite(beforeId) ? beforeId : undefined,
+      });
+
   const older = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) if (v && k !== "before") older.set(k, v);
   if (rows.length > 0) older.set("before", String(rows[rows.length - 1].id));
+
+  const now = Date.now();
 
   const filtered = Boolean(params.actor || params.action || params.target);
   const activeFilters = [
@@ -169,6 +283,38 @@ export default async function AdminAuditPage({
     params.action && `action: ${params.action}`,
     params.target && `target: ${params.target}`,
   ].filter(Boolean) as string[];
+
+  // One note per field whose name spans more than one account, so a widened
+  // result never looks like a narrow one. Text, not colour.
+  const ambiguityNotes = (
+    [
+      ["actor", actorRes],
+      ["target", targetRes],
+    ] as const
+  )
+    .map(([field, r]) =>
+      r && r.kind === "name" && r.accountCount > 1
+        ? `${field} "${r.name}" matches ${r.accountCount} accounts`
+        : null,
+    )
+    .filter(Boolean) as string[];
+
+  const countLabel =
+    rows.length === 0
+      ? filtered
+        ? "No matching entries"
+        : "No entries"
+      : `${rows.length}${rows.length === AUDIT_PAGE_SIZE ? "+" : ""} ${
+          filtered ? "matching entries" : "entries"
+        }`;
+
+  const emptyMessage = unmatched.length
+    ? `No account or character named ${unmatched
+        .map(([field, r]) => `"${r.name}" (${field})`)
+        .join(" or ")}.`
+    : filtered
+      ? "Nothing matches this filter."
+      : "Nothing has happened yet.";
 
   return (
     <main id="main" tabIndex={-1} className="page">
@@ -215,7 +361,9 @@ export default async function AdminAuditPage({
         </label>
         <div className="filter-form__cell filter-form__cell--actions">
           <div className="filter-form__actions">
-            <Submit className="btn btn--primary">Filter</Submit>
+            {/* Filter is routine and reversible, not the page's primary act —
+                gold (btn--primary) is rationed for the one thing that is. */}
+            <Submit className="btn">Filter</Submit>
             {filtered && (
               <a className="btn btn--quiet" href="/admin/audit">
                 clear
@@ -225,51 +373,70 @@ export default async function AdminAuditPage({
         </div>
       </form>
 
-      <RuleHead as="h2">
-        {rows.length === 0
-          ? filtered
-            ? "No matching entries"
-            : "No entries"
-          : `${rows.length}${rows.length === AUDIT_PAGE_SIZE ? "+" : ""} ${
-              filtered ? "matching entries" : "entries"
-            }`}
+      <RuleHead
+        as="h2"
+        aside={
+          // The render stamp joins the ambiguity notes on the same rule rather
+          // than taking a line of its own: both answer "how much should I trust
+          // what I'm reading", and the aside is already the slot for that.
+          <span className="dim">{[...ambiguityNotes, renderedAt()].join(" · ")}</span>
+        }
+      >
+        {countLabel}
       </RuleHead>
-      <Scroller label="Audit entries">
-        <table className="log log--audit">
+      <Scroller label="Audit entries" tall>
+        <table className="log log--audit log--sticky-head log--sticky-col">
           <colgroup>
-            {/* Sized to the widest value each column can actually hold, in mono
-                at --t-data plus the 2 x --s-4 cell padding. Under
-                `table-layout: fixed` an undersized column doesn't shrink its
-                content, it lets a `nowrap` cell paint straight over its
-                neighbour: the timestamp (19ch ~= 162px) needed 194px and had
-                160, and the longest action (`character.affiliation_invalid`,
-                29ch ~= 247px) needed 279px and had 168. Both were bleeding into
-                the column to their right. */}
-            <col style={{ width: "12.25rem" }} />
-            <col style={{ width: "9rem" }} />
-            <col style={{ width: "17.5rem" }} />
-            <col style={{ width: "9rem" }} />
+            {/* Widths live in globals.css, not in `style` here: they have to
+                change at the narrow breakpoint, and an inline width outranks a
+                media query without `!important`. Five bare cols so the
+                `col:nth-child()` rules have something to bind to. */}
+            <col />
+            <col />
+            <col />
+            <col />
             <col />
           </colgroup>
           <thead>
             <tr>
-              <th>At (UTC)</th>
-              <th>Actor</th>
-              <th>Action</th>
-              <th>Target</th>
-              <th>Details</th>
+              {/* "(UTC)" qualifies an absolute stamp; below 40rem the cells
+                  below read as elapsed time instead, and a heading claiming UTC
+                  over "12h ago" is simply wrong. The exact instant is still in
+                  each cell for assistive tech. */}
+              <th scope="col">
+                <span className="only-wide">At (UTC)</span>
+                <span className="only-narrow">At</span>
+              </th>
+              <th scope="col">Actor</th>
+              <th scope="col">Action</th>
+              <th scope="col">Target</th>
+              <th scope="col">Details</th>
             </tr>
           </thead>
           <tbody>
             {rows.map((r) => {
               const dot = r.action.indexOf(".");
+              const iso = r.at.toISOString();
               return (
                 <tr key={r.id}>
+                  {/* At 320px the 19ch ISO stamp was 196px of a 286px region —
+                      69% — and it is the pinned column, so it painted over
+                      whatever the scroll had brought alongside it. Below 40rem
+                      it reads as elapsed time instead, which is the question a
+                      phone-sized audit read is actually asking. The exact
+                      instant may not leave the accessibility tree for that, so
+                      it is restated in text a screen reader reads out; `title`
+                      would not do, since VoiceOver and TalkBack do not announce
+                      it and touch cannot reach it. */}
                   <td className="mono nowrap">
-                    {r.at.toISOString().replace("T", " ").slice(0, 19)}
+                    <span className="only-wide">{stamp(r.at)}</span>
+                    <span className="only-narrow">
+                      <RelativeTime iso={iso} initial={formatAgo(iso, now)} />
+                      <span className="visually-hidden">{`at ${stamp(r.at)} UTC`}</span>
+                    </span>
                   </td>
                   <td>
-                    <ActorCell r={r} />
+                    <ActorCell r={r} params={params} />
                   </td>
                   <td className="mono">
                     {/* Sized to fit the current action vocabulary, but bounded
@@ -288,7 +455,7 @@ export default async function AdminAuditPage({
                     </span>
                   </td>
                   <td>
-                    <TargetCell r={r} />
+                    <TargetCell r={r} params={params} />
                   </td>
                   <td>
                     {r.details ? (
@@ -306,9 +473,7 @@ export default async function AdminAuditPage({
             {rows.length === 0 && (
               <tr>
                 <td className="log__empty" colSpan={5}>
-                  {filtered
-                    ? "Nothing matches this filter."
-                    : "Nothing has happened yet."}
+                  {emptyMessage}
                 </td>
               </tr>
             )}

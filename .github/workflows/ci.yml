@@ -52,6 +52,19 @@ jobs:
       - name: Build
         run: npm run build
 
+  docker:
+    name: Docker image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # The `Next build` job above builds the full checkout; this one builds
+      # what Fly actually ships, where .dockerignore has pruned the context.
+      # Without this gate, a file that reaches into an ignored directory type
+      # checks clean on every PR and only fails at `flyctl deploy`. No Node
+      # setup or npm ci: the Dockerfile installs its own dependencies.
+      - name: Build image
+        run: docker build .
+
   test:
     name: Tests (unit, then e2e)
     runs-on: ubuntu-latest

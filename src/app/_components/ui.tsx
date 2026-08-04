@@ -145,14 +145,7 @@ export function Json({ value, summary }: { value: unknown; summary?: string }) {
   );
 }
 
-/**
- * A horizontally scrollable region for wide tables. tabIndex makes the
- * overflow reachable by keyboard, which a plain overflow container is not.
- */
-export function Scroller({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div className="scroller" role="region" aria-label={label} tabIndex={0}>
-      {children}
-    </div>
-  );
-}
+// Scroller needs scroll-position state, which means a client component; kept
+// in its own file so this one doesn't drag "use client" onto SiteHeader,
+// Status, Tier and Json, none of which need it.
+export { Scroller } from "./scroller";
