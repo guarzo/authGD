@@ -260,7 +260,7 @@ export default async function AdminAuditPage({
     )
     .filter(Boolean) as string[];
 
-  // The cursor ran past the end of a non-empty log -- distinct from the log
+  // The cursor ran past the end of a non-empty log, distinct from the log
   // (or the filtered subset of it) genuinely having zero rows. Mirrors the
   // priority `emptyMessage` below uses: an unmatched name still names the
   // field that failed, even if `before` also happens to be set.
