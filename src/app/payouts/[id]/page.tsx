@@ -175,7 +175,7 @@ export default async function PayoutOperationPage({
 
   return (
     <>
-      <SiteHeader items={nav} current="/payouts" />
+      <SiteHeader items={nav} current="/payouts" section />
       <main id="main" tabIndex={-1} className="page">
         <div className="page__head">
           <h1>{operation.name}</h1>

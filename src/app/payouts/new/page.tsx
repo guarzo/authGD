@@ -47,7 +47,7 @@ export default async function NewPayoutPage({
 
   return (
     <>
-      <SiteHeader items={nav} current="/payouts" />
+      <SiteHeader items={nav} current="/payouts" section />
       <main id="main" tabIndex={-1} className="page page--narrow">
         <div className="page__head">
           <h1>New operation</h1>

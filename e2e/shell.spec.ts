@@ -33,23 +33,29 @@ test("aria-current lands on the right tab on every shell route", async ({
     "page",
   );
 
-  for (const [path, label] of [
-    ["/admin/accounts", "Members"],
-    ["/admin/audit", "Audit log"],
-    ["/admin/sync", "Sync"],
-    ["/payouts", "Payouts"],
-    ["/payouts/new", "Payouts"],
+  for (const [path, label, token] of [
+    ["/admin/accounts", "Members", "page"],
+    ["/admin/audit", "Audit log", "page"],
+    ["/admin/sync", "Sync", "page"],
+    ["/payouts", "Payouts", "page"],
+    // `/payouts/new` sits under the Payouts tab without being it, so the tab
+    // is current-within-the-set rather than the page you are on. Asserting the
+    // exact token, not just its presence: "page" here is the bug — a screen
+    // reader is told the link's target is this document when it is not.
+    ["/payouts/new", "Payouts", "true"],
   ] as const) {
     await page.goto(path);
     await expect(page.getByRole("link", { name: label })).toHaveAttribute(
       "aria-current",
-      "page",
+      token,
     );
-    // Exactly one, counted across the whole bar. Asserting only that "Your
-    // account" is dark leaves the other two admin tabs unchecked, and a
-    // matcher like `i.href.startsWith("/admin")` would then light all three
-    // on every admin route with this test still green.
-    await expect(page.locator('[aria-current="page"]')).toHaveCount(1);
+    // Exactly one tab lit, counted across the whole bar in either token.
+    // Asserting only that "Your account" is dark leaves the other two admin
+    // tabs unchecked, and a matcher like `i.href.startsWith("/admin")` would
+    // then light all three on every admin route with this test still green.
+    // Scoped to the nav rather than the document: /admin/accounts' filter chips
+    // carry their own, correct, `aria-current="true"` for the selected filter.
+    await expect(page.locator(".shell__nav [aria-current]")).toHaveCount(1);
   }
 });
 
