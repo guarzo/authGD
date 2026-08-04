@@ -113,6 +113,7 @@ describe("addAppraisedPool", () => {
             },
           ],
           totalValue: "10.00",
+          dropped: [],
         },
       }),
     );
@@ -146,6 +147,7 @@ describe("addAppraisedPool", () => {
           // 999.00. A caller must not be able to make the persisted pool
           // total disagree with the rows that back it.
           totalValue: "999.00",
+          dropped: [],
         },
       }),
     );
@@ -218,6 +220,7 @@ describe("addFlatPool", () => {
             },
           ],
           totalValue: "100.00",
+          dropped: [],
         },
       }),
     );
@@ -392,6 +395,7 @@ describe("loot_item CHECK constraints", () => {
               },
             ],
             totalValue: "0.00",
+            dropped: [],
           },
         }),
       ),
@@ -419,6 +423,7 @@ describe("loot_item CHECK constraints", () => {
               },
             ],
             totalValue: "0.00",
+            dropped: [],
           },
         }),
       ),

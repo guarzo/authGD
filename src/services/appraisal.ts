@@ -1,7 +1,11 @@
 import type { createEsiClient } from "@/lib/esi/client";
 import type { createTriffClient, TriffQuote } from "@/lib/triff/client";
 import { centsToIsk, iskToCents } from "@/core/payout-split";
-import { parseLootPaste } from "@/core/loot-paste";
+import {
+  assertExactLineTotal,
+  parseLootPaste,
+  type DroppedLootLine,
+} from "@/core/loot-paste";
 import { selectPrice, type PricingMode } from "@/core/pricing";
 
 export type AppraisedItem = {
@@ -12,7 +16,13 @@ export type AppraisedItem = {
   totalValue: string; // "1234.00"
   priceSource: "triff" | "unresolved";
 };
-export type AppraisalResult = { items: AppraisedItem[]; totalValue: string };
+export type AppraisalResult = {
+  items: AppraisedItem[];
+  totalValue: string;
+  /** Lines the parser refused. Carried, never persisted: the pool total comes
+   *  from `items` alone, and the form names these back to the operator. */
+  dropped: DroppedLootLine[];
+};
 
 const ZERO_PRICE = { unitPrice: "0.00", totalValue: "0.00" } as const;
 
@@ -33,7 +43,7 @@ export async function appraiseLoot(
     triff: ReturnType<typeof createTriffClient>;
   },
 ): Promise<AppraisalResult> {
-  const lines = parseLootPaste(raw);
+  const { items: lines, dropped } = parseLootPaste(raw);
   const idByLowerName = await deps.esi.resolveIds(lines.map((l) => l.name));
   const typeIds = [...new Set(idByLowerName.values())];
   const quotes = typeIds.length
@@ -63,10 +73,17 @@ export async function appraiseLoot(
     // 0.004 ISK x 10,000,000 units stores 0.00 for a line genuinely worth
     // 40,000 ISK. p05 is an interpolated percentile, so sub-cent and
     // half-cent unit prices are ordinary, not hypothetical.
-    // What is left is IEEE-754's ~1.1e-16 RELATIVE error on the product —
-    // under a cent for any line total below ~9e13 ISK, well inside
-    // numeric(20,2).
-    const totalCents = BigInt(Math.round(price * line.qty * 100));
+    // What is left is IEEE-754's ~1.1e-16 RELATIVE error on the product, and
+    // bounding qty does NOT remove it: at 1e17 cents the representable values
+    // are 16 cents apart, so 1000000.01 ISK x 1,000,000,000 units rounds a
+    // cent low. So the PRODUCT is bounded too, and the bound is ENFORCED here
+    // rather than merely observed — at or below MAX_EXACT_LINE_CENTS the cent
+    // grid has spacing one and Math.round returns the true cent total to
+    // within half of one. A line worth more than ~90 trillion ISK is refused
+    // by name instead of being stored on the wrong cent.
+    const productCents = price * line.qty * 100;
+    assertExactLineTotal(productCents, `the line total for ${line.name}`);
+    const totalCents = BigInt(Math.round(productCents));
     // The stored unit price stays 2dp because that is the column's type. It
     // is a DISPLAY value: unitPrice * qty deliberately need not equal
     // totalValue, and for a sub-cent price it will not. A row where
@@ -85,5 +102,5 @@ export async function appraiseLoot(
   });
 
   const totalCents = items.reduce((sum, it) => sum + iskToCents(it.totalValue), 0n);
-  return { items, totalValue: centsToIsk(totalCents) };
+  return { items, totalValue: centsToIsk(totalCents), dropped };
 }

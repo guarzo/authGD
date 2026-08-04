@@ -607,7 +607,7 @@ describe("the service layer is the authorization boundary", () => {
         rawPaste: "1x Tritanium",
         pricingMode: "sell_best",
         stationId: 60003760,
-        appraisal: { items: [], totalValue: "0.00" },
+        appraisal: { items: [], totalValue: "0.00", dropped: [] },
       }),
     );
     // Finalized (not draft) so the recordPayment case below tests the
@@ -651,7 +651,7 @@ describe("the service layer is the authorization boundary", () => {
             rawPaste: "1x Tritanium",
             pricingMode: "sell_best",
             stationId: 60003760,
-            appraisal: { items: [], totalValue: "0.00" },
+            appraisal: { items: [], totalValue: "0.00", dropped: [] },
           }),
         ),
       ).rejects.toThrow(PayoutForbiddenError);

@@ -164,4 +164,74 @@ describe("appraiseLoot", () => {
     });
     expect(result.totalValue).toBe("40000.00");
   });
+
+  it("carries the parser's dropped lines through and still appraises the rest", async () => {
+    // "12" alone is dropped; "0x Tritanium" is NOT, because the later line
+    // makes that item's total positive. Nothing is rejected wholesale.
+    const result = await appraiseLoot(
+      "12\n0x Tritanium\n2x Tritanium",
+      { pricingMode: "sell_best", stationId: 60003760 },
+      {
+        esi: fakeEsi({ tritanium: 34 }),
+        triff: fakeTriff({ 34: { sell: { best: 5 } } }),
+      },
+    );
+    expect(result.dropped).toEqual([{ line: "12", reason: "quantity-only" }]);
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]).toMatchObject({ name: "Tritanium", qty: 2 });
+    expect(result.totalValue).toBe("10.00");
+  });
+
+  /**
+   * Bounding QUANTITY does not make the line total exact — the total is still
+   * a float product. Both rows below are an ordinary market price at an
+   * ordinary mineral quantity, and both land on the wrong cent: the float
+   * route gives 100000001000000000 where the exact product is
+   * 100000001000000001, and 111111110099999984 where the exact product is
+   * 111111110099999991. Both fit numeric(20,2) with room to spare, so
+   * MAX_MONEY_CENTS never catches them — the product bound is what does.
+   */
+  const imprecise: Array<{ label: string; price: number; qty: number }> = [
+    {
+      label: "a line total one cent past what the float route gets right",
+      price: 1000000.01,
+      qty: 1000000000,
+    },
+    {
+      label: "a line total seven cents past what the float route gets right",
+      price: 1234567.89,
+      qty: 900000000,
+    },
+  ];
+
+  it.each(imprecise)("refuses $label", async ({ price, qty }) => {
+    await expect(
+      appraiseLoot(
+        `${qty}x Tritanium`,
+        { pricingMode: "sell_best", stationId: 60003760 },
+        {
+          esi: fakeEsi({ tritanium: 34 }),
+          triff: fakeTriff({ 34: { sell: { best: price } } }),
+        },
+      ),
+    ).rejects.toThrow(
+      "the line total for Tritanium exceeds the largest value this system can compute exactly",
+    );
+  });
+
+  it("still appraises a line just under the exactness bound", async () => {
+    // 9,007,199,000,000,000 cents, against a bound of 9,007,199,254,740,991 —
+    // a single line worth 90,071,990,000,000 ISK. The bound rejects only lines
+    // past ~90 trillion ISK, which is far above any real loot line.
+    const result = await appraiseLoot(
+      "1000000000x Tritanium",
+      { pricingMode: "sell_best", stationId: 60003760 },
+      {
+        esi: fakeEsi({ tritanium: 34 }),
+        triff: fakeTriff({ 34: { sell: { best: 90071.99 } } }),
+      },
+    );
+    expect(result.items[0].totalValue).toBe("90071990000000.00");
+    expect(result.totalValue).toBe("90071990000000.00");
+  });
 });
