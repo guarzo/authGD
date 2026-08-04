@@ -39,6 +39,7 @@ import { PRICING_MODES, type PricingMode } from "@/core/pricing";
 import { parseRosterPaste } from "@/core/roster-paste";
 import { iskToCents } from "@/core/payout-split";
 import { encodeDropped } from "./dropped";
+import type { NewOperationErrorCode, OperationErrorCode } from "./errors";
 
 /** FormData.get() is string | File | null; a File coerced with String() would
  *  stringify to "[object File]" rather than fail loudly, so every text field
@@ -75,8 +76,15 @@ function revalidateOperation(operationId: string): void {
  *
  *  Both helpers return `never` because `redirect` throws NEXT_REDIRECT, which
  *  is also why no call to either may sit inside a `try` — an enclosing catch
- *  swallows the redirect and the operator lands back on error.tsx anyway. */
-function operationFailed(operationId: string, code: string): never {
+ *  swallows the redirect and the operator lands back on error.tsx anyway.
+ *
+ *  `code` is the destination page's own union, not `string`. A code the page's
+ *  map has no entry for renders nothing at all — an unchanged form and no
+ *  explanation, the one failure these pages cannot show an operator — so it
+ *  fails typecheck here instead of deploying. The two unions are separate on
+ *  purpose: `share_format` and `share_range` exist in both maps with copy
+ *  worded for their own page (see `./errors`). */
+function operationFailed(operationId: string, code: OperationErrorCode): never {
   redirect(`/payouts/${operationId}?error=${code}`);
 }
 
@@ -94,7 +102,7 @@ const CREATE_FIELDS = [
   "notes",
 ] as const;
 
-function createFailed(formData: FormData, code: string): never {
+function createFailed(formData: FormData, code: NewOperationErrorCode): never {
   const params = new URLSearchParams({ error: code });
   for (const key of CREATE_FIELDS) {
     const value = field(formData, key);
@@ -226,7 +234,11 @@ export async function addAppraisedPoolAction(
       // ESI failure (name resolution inside appraiseLoot's resolveIds) is just
       // as much a transient upstream failure as a triff failure and deserves
       // the same friendly path, not an uncaught exit past this catch.
-      redirect(`/payouts/${operationId}?error=appraisal_failed`);
+      // Goes through `operationFailed` rather than a hand-written redirect so
+      // this code is checked against the page's map like every other one. Safe
+      // despite the "never inside a try" rule above: this is the CATCH block,
+      // and a throw from here propagates past its own try rather than into it.
+      operationFailed(operationId, "appraisal_failed");
     }
     throw err;
   }
@@ -436,8 +448,10 @@ const OPEN_INFO_ERROR_BY_REASON = {
 } as const;
 
 /** classifyOpenInfoFailure's verdicts, mapped to the same `?error=` codes.
- *  Kept next to the map above so the page's ERRORS keys have exactly two
- *  producers and both are visible at once. */
+ *  Kept next to the map above so the `open_info_*` keys of OPERATION_ERRORS
+ *  have exactly two producers and both are visible at once. Neither map is
+ *  annotated: both feed `operationFailed`, so an entry naming a code that
+ *  OPERATION_ERRORS has no message for fails typecheck at the call site. */
 const OPEN_INFO_ERROR_BY_FAILURE = {
   reauth: "open_info_reauth",
   offline: "open_info_offline",
