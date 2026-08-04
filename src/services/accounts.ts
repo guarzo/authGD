@@ -141,7 +141,10 @@ async function applyNoMainRule(dbx: DbTx, accountId: string, cause: string) {
     .where(eq(account.id, accountId))
     .for("update");
   if (!acc) return;
-  const demote = !acc.tierLocked && acc.tier !== "green";
+  // Demote only from an earned tier. Green is already the floor, and pending
+  // is BELOW it — demoting a pending account to green would turn losing your
+  // main into an automatic approval.
+  const demote = !acc.tierLocked && acc.tier !== "green" && acc.tier !== "pending";
   await dbx
     .update(account)
     .set({

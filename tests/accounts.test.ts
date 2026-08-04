@@ -16,7 +16,7 @@ import {
 import { createSession, getSessionAccount } from "@/services/session";
 import { decryptToken } from "@/lib/crypto";
 import { setupTestDb, truncateAll } from "./helpers/db";
-import { seedAccount } from "./helpers/seed";
+import { seedAccount, seedCharacter } from "./helpers/seed";
 
 let ctx: Awaited<ReturnType<typeof setupTestDb>>;
 let cfg: Config;
@@ -154,6 +154,21 @@ describe("linkCharacter", () => {
     const [acc] = await ctx.db.select().from(account);
     expect(acc.tier).toBe("blue");
     expect(acc.mainCharacterId).toBeNull();
+  });
+
+  it("unlinking the main of a pending account leaves it pending", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "pending" });
+    await seedCharacter(ctx.db, cfg, { id: 90000101, accountId: acc.id, main: true });
+    await seedCharacter(ctx.db, cfg, { id: 90000102, accountId: acc.id });
+
+    const res = await ctx.db.transaction((tx) =>
+      unlinkCharacter(tx, cfg, acc.id, 90000101),
+    );
+
+    expect(res).toEqual({ ok: true });
+    const [after] = await ctx.db.select().from(account).where(eq(account.id, acc.id));
+    expect(after.tier).toBe("pending");
+    expect(after.mainCharacterId).toBeNull();
   });
 
   it("refuses to unlink an account's last character", async () => {
