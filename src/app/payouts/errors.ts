@@ -101,15 +101,13 @@ export const OPERATION_ERRORS = {
 export type NewOperationErrorCode = keyof typeof NEW_OPERATION_ERRORS;
 export type OperationErrorCode = keyof typeof OPERATION_ERRORS;
 
-/** Reads a code that came off the query string, where it is a `string` and not
- *  yet one of ours — anyone can type `?error=nonsense`. An unrecognized code
- *  yields no message and the page renders without a notice, exactly as it does
- *  today (`src/app/payouts/dropped.ts` takes the same stance on its payload).
- *  What changed is that a code WE emit can no longer be the unrecognized one:
- *  `operationFailed` and `createFailed` only accept keys of these maps. */
-export function lookupErrorMessage(
-  map: Readonly<Record<string, string>>,
-  code: string | undefined,
-): string | undefined {
-  return code !== undefined && Object.hasOwn(map, code) ? map[code] : undefined;
-}
+/** Re-exported so the payout pages keep importing it from beside their own
+ *  maps. It lives in `src/lib/error-redirects.ts` because `/login`, `/account`
+ *  and `/admin/accounts` need the same reader and one of their producers is
+ *  itself under `src/lib/` — see that file for why the codes could not follow
+ *  the payouts precedent and colocate. An unrecognized code still yields no
+ *  message and the page renders without a notice, exactly as it does today
+ *  (`src/app/payouts/dropped.ts` takes the same stance on its payload); what
+ *  the types add is that a code WE emit can no longer be the unrecognized one,
+ *  since `operationFailed` and `createFailed` only accept keys of these maps. */
+export { lookupErrorMessage } from "@/lib/error-redirects";

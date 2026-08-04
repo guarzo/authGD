@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getDb } from "@/db";
 import { requireAdminAction } from "@/lib/admin-guard";
+import { adminAccountsErrorUrl } from "@/lib/error-redirects";
 import { demoteAdmin, promoteAdmin } from "@/services/accounts";
 import {
   approveAccount,
@@ -21,7 +22,7 @@ import { enqueueSync } from "@/services/outbox";
 // Redirect to the styled notice rather than throw, same as demoteAdminAction's
 // `last_admin` case below.
 function redirectNotAdmin(): never {
-  redirect("/admin/accounts?error=not_admin");
+  redirect(adminAccountsErrorUrl("not_admin"));
 }
 
 /**
@@ -46,6 +47,13 @@ function redirectNotAdmin(): never {
  * the unfiltered list: only approveAction's callers were looking at that
  * filter when they clicked. `not_pending` always goes there regardless of the
  * flag, since it can only ever be produced by approveAccount.
+ *
+ * Exhaustive on a SECOND axis since the destination URLs moved behind
+ * `adminAccountsErrorUrl`: the `?error=` codes below are `keyof
+ * ADMIN_ACCOUNTS_ERRORS`, so a code with no entry in the page's map — which
+ * would redirect and then render nothing at all — fails typecheck here too.
+ * The two axes are independent: the service union says which failures exist,
+ * the code union says which ones the page can explain.
  */
 function redirectOnMutationError(
   error: "not_authorized" | "not_found" | "not_pending",
@@ -57,12 +65,10 @@ function redirectOnMutationError(
     case "not_pending":
       // Two admins working the queue, or one with a stale tab: the account is
       // approved, just not by them.
-      return redirect("/admin/accounts?tier=pending&error=not_pending");
+      return redirect(adminAccountsErrorUrl("not_pending", { tier: "pending" }));
     case "not_found":
       return redirect(
-        opts.fromQueue
-          ? "/admin/accounts?tier=pending&error=not_found"
-          : "/admin/accounts?error=not_found",
+        adminAccountsErrorUrl("not_found", opts.fromQueue ? { tier: "pending" } : {}),
       );
   }
 }
@@ -181,7 +187,7 @@ export async function demoteAdminAction(accountId: string): Promise<void> {
   const result = await getDb().transaction((tx) => demoteAdmin(tx, actor, accountId));
   if (!result.ok && result.error === "last_admin") {
     // Surface the service's protection instead of a 500 (carry-over).
-    redirect("/admin/accounts?error=last_admin");
+    redirect(adminAccountsErrorUrl("last_admin"));
   }
   if (!result.ok && result.error === "not_authorized") redirectNotAdmin();
   if (!result.ok) throw new Error(result.error);

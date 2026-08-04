@@ -7,6 +7,7 @@ import { cookies } from "next/headers";
 import { getConfig } from "@/config";
 import { getDb } from "@/db";
 import { character } from "@/db/schema";
+import { accountErrorUrl, loginErrorUrl } from "@/lib/error-redirects";
 import { setMainCharacter, unlinkCharacter, wakeSelf } from "@/services/accounts";
 import { getSessionAccount } from "@/services/session";
 
@@ -18,7 +19,7 @@ async function requireAccount(): Promise<string> {
   // while this page is still open — the exact "alt-tabbed at 1am" session
   // PRODUCT.md describes. That is an expected end state, not a bug: send the
   // member back to sign in instead of throwing to the error boundary for it.
-  if (!sess) redirect("/login?error=session_expired");
+  if (!sess) redirect(loginErrorUrl("session_expired"));
   return sess.accountId;
 }
 
@@ -32,7 +33,7 @@ export async function setMainAction(characterId: number): Promise<void> {
     // reclaim (background token-health job) can pull this character off the
     // account first. That is a race the member just needs a fresh render for,
     // not a bug worth an error boundary.
-    redirect("/account?error=stale_character");
+    redirect(accountErrorUrl("stale_character"));
   }
   revalidatePath("/account");
 }
@@ -50,7 +51,7 @@ export async function unlinkAction(characterId: number): Promise<void> {
     .select()
     .from(character)
     .where(and(eq(character.id, characterId), eq(character.accountId, accountId)));
-  if (owned.length === 0) redirect("/account?error=stale_character");
+  if (owned.length === 0) redirect(accountErrorUrl("stale_character"));
   await db.transaction(async (dbtx) => {
     // A last_character / not_owned rejection is a silent no-op here: the page
     // hides the unlink control for the final character, and a reclaim race

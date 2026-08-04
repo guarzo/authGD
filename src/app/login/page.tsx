@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Notice } from "@/app/_components/ui";
 import { getConfig } from "@/config";
+import { LOGIN_ERRORS, lookupErrorMessage } from "@/lib/error-redirects";
 
 // `await searchParams` below already forces dynamic rendering, so the
 // getConfig() call cannot run at build time today. Declared anyway, matching
@@ -15,16 +16,9 @@ export const metadata: Metadata = {
 
 // Codes reaching this page: oauth_denied / oauth_expired / oauth_failed from
 // the EVE callback, session_expired from account/actions.ts, account/page.tsx,
-// and either callback when the session is gone mid-link. Sign-in links expire
-// 10 minutes after you start them (src/services/oauth-tx.ts).
-const ERRORS: Record<string, string> = {
-  oauth_denied: "Nothing changed. No access was granted. Sign in whenever you're ready.",
-  oauth_expired:
-    "That sign-in link expired before you finished. They last 10 minutes. Start again below.",
-  oauth_failed:
-    "EVE couldn't be reached, so sign-in didn't finish. Nothing changed. Try again.",
-  session_expired: "Your session ended. Sign in again to pick up where you left off.",
-};
+// admin-guard.ts, and either callback when the session is gone mid-link. The
+// map itself lives in src/lib/error-redirects.ts, beside the builder every one
+// of those producers now goes through — see that file for why.
 
 export default async function LoginPage({
   searchParams,
@@ -32,7 +26,7 @@ export default async function LoginPage({
   searchParams: Promise<{ error?: string }>;
 }) {
   const { error } = await searchParams;
-  const message = error ? ERRORS[error] : undefined;
+  const message = lookupErrorMessage(LOGIN_ERRORS, error);
   const cfg = getConfig();
   const scopes = cfg.eveSso.scopes;
   const label = cfg.standings.label;

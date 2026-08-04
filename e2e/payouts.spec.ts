@@ -597,9 +597,10 @@ async function bypassClientGuard(input: Locator, value: string): Promise<void> {
  * percentage that copy is a lie, and the form's contents went with it. Same
  * conversion `requireAdminAction` already went through (see e2e/admin.spec.ts).
  *
- * A code with no entry in either ERRORS map renders nothing at all, which is
- * the one failure these pages cannot show the operator, so each is checked by
- * name. `p.notice--bad`, never getByRole("alert"): arriving here from a server
+ * A code with no entry in either error map (NEW_OPERATION_ERRORS /
+ * OPERATION_ERRORS) renders nothing at all, which is the one failure these
+ * pages cannot show the operator, so each is checked by name. `p.notice--bad`,
+ * never getByRole("alert"): arriving here from a server
  * action is a soft navigation, so Next's route announcer is populated and also
  * carries role="alert".
  */

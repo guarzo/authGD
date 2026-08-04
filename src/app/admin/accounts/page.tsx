@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { getConfig, type Config } from "@/config";
 import { getDb } from "@/db";
 import { requireAdminPage } from "@/lib/admin-guard";
+import { ADMIN_ACCOUNTS_ERRORS, lookupErrorMessage } from "@/lib/error-redirects";
 import { isContactsTarget } from "@/services/desired";
 import {
   countAccountsByTier,
@@ -54,18 +55,10 @@ const TIERS = ["flygd", "blue", "green"] as const;
 // have to be findable. Drives the ?tier= whitelist and the filter chips only.
 const TIER_FILTERS = ["pending", ...TIERS] as const;
 
-const ERRORS: Record<string, string> = {
-  last_admin: "Cannot demote the last admin.",
-  not_admin:
-    "Your admin access changed since this page loaded. Refresh to see the current state.",
-  not_pending:
-    "That account was already approved by someone else. Refresh to see its current tier.",
-  // Shared by every admin mutation, not just approval (actions.ts): the merge
-  // feature can delete the row an admin's control targeted between page
-  // render and click, regardless of which action they clicked.
-  not_found:
-    "That account is gone: its character was linked to another account and merged in. There's nothing left to act on.",
-};
+// Every code this page renders lives in src/lib/error-redirects.ts, beside the
+// builder actions.ts and admin-guard.ts go through. All of them are races
+// between two legitimate admins rather than faults, which is why they are
+// notices on a refreshed list and not error-boundary throws.
 
 // The columns after the sortable ones, in render order. A list rather than a
 // count because three separate things depend on the table's width — the
@@ -125,6 +118,7 @@ export default async function AdminAccountsPage({
   // call assembles a full row (five unbounded scans plus per-character work)
   // for every account just to get thrown away for a length.
   const pendingCount = await countAccountsByTier(getDb(), "pending");
+  const errorMessage = lookupErrorMessage(ADMIN_ACCOUNTS_ERRORS, params.error);
 
   const qs = (over: Record<string, string | undefined>) => {
     const p = new URLSearchParams();
@@ -145,9 +139,7 @@ export default async function AdminAccountsPage({
         </p>
       </div>
 
-      {params.error && ERRORS[params.error] && (
-        <Notice tone="bad">{ERRORS[params.error]}</Notice>
-      )}
+      {errorMessage && <Notice tone="bad">{errorMessage}</Notice>}
 
       {params.queued === "account" && (
         <Notice>Sync queued. The worker picks it up within a few seconds.</Notice>
