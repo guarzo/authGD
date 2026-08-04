@@ -453,10 +453,10 @@ export default async function PayoutOperationPage({
           );
         })}
 
-        {/* The two warnings above stay exactly as they are. They are the fast
-            path for "what needs attention" and are readable without opening
-            anything; this table is the *fix* — the place an operator can see
-            every line they pasted and reprice one. Removing either warning in
+        {/* The two warnings above keep their place ahead of this table. They are
+            the fast path for "what needs attention" and are readable without
+            opening anything; this table is the *fix* — the place an operator can
+            see every line they pasted and reprice one. Removing either warning in
             favour of the table would trade a glance for an expand-and-scan. */}
         {pools.map(
           (pool, index) =>

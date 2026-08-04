@@ -24,8 +24,10 @@ import { useState } from "react";
  * getting: a failed clipboard write is exactly the case where a sighted
  * operator must not be left looking at a button that appears dead. It is a
  * live region as well, so both audiences learn the same thing — `role="status"`,
- * never `role="alert"`, since Next's own route announcer already uses `alert`
- * on every soft navigation this page does.
+ * never `role="alert"`, since Next's own route announcer claims `alert` for
+ * itself (`app-router-announcer.js` sets `role = "alert"`). It stays quiet on
+ * this page's soft navigations, which all land back on the same title, but a
+ * second assertive region is not a thing to add on that technicality.
  */
 export function CopyAmountButton({
   amount,
