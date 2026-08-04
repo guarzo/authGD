@@ -34,16 +34,16 @@ const ERRORS: Record<string, string> = {
 const CONTACTS_NOTE_ID = "contacts-note";
 
 /** A contacts state the note actually explains. "ok" needs no explanation, and
- *  "missing_label" already carries more specific instructions than the generic
- *  note would add — so neither surfaces it. */
+ *  "missing_label" and "label_mismatch" already carry more specific instructions
+ *  than the generic note would add — so neither surfaces it. */
 function contactsNoteApplies(result: string | null) {
-  return result !== "ok" && result !== "missing_label";
+  return result !== "ok" && result !== "missing_label" && result !== "label_mismatch";
 }
 
 /**
- * The contact job records a small set of result codes. "ok" and "missing_label"
- * get bespoke treatment; anything else is a failure the member can act on by
- * re-authing, so it reads as bad rather than as noise.
+ * The contact job records a small set of result codes. "ok", "missing_label",
+ * and "label_mismatch" get bespoke treatment; anything else is a failure the
+ * member can act on by re-authing, so it reads as bad rather than as noise.
  *
  * A character the job never targets has no code and never will: blue and green
  * members are the *content* of a FLYGD member's contact list, not a list that
@@ -53,10 +53,12 @@ function contactsNoteApplies(result: string | null) {
  */
 function ContactState({
   result,
+  detail,
   label,
   target,
 }: {
   result: string | null;
+  detail: string | null;
   label: string;
   target: boolean;
 }) {
@@ -75,6 +77,28 @@ function ContactState({
         <Status tone="warn">label missing</Status>
         <span className="dim">
           Create a contact label named <code>{label}</code> in game, then re-sync.
+        </span>
+      </>
+    );
+  }
+  if (result === "label_mismatch") {
+    return (
+      <>
+        <Status tone="warn">label mismatch</Status>
+        <span className="dim">
+          {detail ? (
+            <>
+              Your label is named <code className="literal">{`"${detail}"`}</code>. It
+              must be exactly <code className="literal">{`"${label}"`}</code> —
+              capitalization and spaces both count. Rename it in game, then re-sync.
+            </>
+          ) : (
+            <>
+              A label differing only in capitalization or spacing exists. It must be
+              exactly <code className="literal">{`"${label}"`}</code> — rename it in
+              game, then re-sync.
+            </>
+          )}
         </span>
       </>
     );
@@ -261,6 +285,7 @@ export default async function AccountPage({
                     <div className="stack">
                       <ContactState
                         result={c.contactSyncResult}
+                        detail={c.contactSyncDetail}
                         label={cfg.standings.label}
                         target={c.contactsTarget}
                       />

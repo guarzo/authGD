@@ -258,7 +258,10 @@ function AccountRow({
                   {c.tokenStatus}
                   {c.needsReauthForScopes && " (scope shortfall)"}
                   {c.affiliationInvalid && " · affiliation invalid"}
-                  {c.contactSyncResult && ` · contacts: ${c.contactSyncResult}`}
+                  {c.contactSyncResult &&
+                    ` · contacts: ${c.contactSyncResult}${
+                      c.contactSyncDetail ? ` ("${c.contactSyncDetail}")` : ""
+                    }`}
                   {c.mapObservedAt &&
                     ` · on map (observed ${c.mapObservedAt.toISOString().slice(0, 16)}Z)`}
                 </li>
