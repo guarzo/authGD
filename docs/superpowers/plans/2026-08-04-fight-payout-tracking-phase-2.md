@@ -869,18 +869,30 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 **Files:**
 
-- Modify: `src/services/payouts.ts:14-15` (add the class), `:47`, `:81`, `:251`, `:423`,
-  `:432` (throw it), `:445-450` (explicit `at`)
+- Modify: `src/services/payouts.ts:14-15` (add the class), `:47`, `:81`, `:288`, `:460`,
+  `:469` (throw it), `:482-487` (explicit `at`)
 - Test: `tests/payouts-service.test.ts`
+
+**Line numbers here are post-#74** (`fix/payouts-operator-errors`, "stop reporting
+operator typos as server faults"), which inserts `setCorpSharePct` — 37 lines — between
+`createOperation` and `RosterEntry`, ending at `:151`. Everything at or below `:114` kept
+its number; everything after it moved down by 37 (`:251`→`:288`, `:423`→`:460`,
+`:432`→`:469`, `:445-450`→`:482-487`).
 
 **Interfaces:**
 
 - Consumes: nothing from Tasks 1-2.
 - Produces:
   - `export class PayoutNotFoundError extends Error {}` in `@/services/payouts`.
-    Part B's `revertPayment` throws it for a missing participant, and Part C's
-    actions/pages discriminate it from a programming error the same way they
-    already discriminate `PayoutForbiddenError` / `PayoutLockedError`.
+    Part B's `revertPayment` throws it for a missing participant, and it sits in
+    the same tier as `PayoutForbiddenError` / `PayoutLockedError`: named so a
+    caller can tell it from a programming mistake, and — post-#74 — **left to
+    throw**, not converted to a `?error=` redirect. #74's rule for
+    `src/app/payouts/actions.ts` is that operator *typos* redirect and everything
+    else lands on `error.tsx`; nobody types a participant id, so a missing one is
+    a stale page or a forged request, exactly the category #74 kept throwing.
+    Task 12 states this ruling in full where `revertPaymentAction` would have
+    caught it.
   - `recordPayment` writes `payout_payment.at` from inside the operation row lock as a
     **clamp-forward** reading — `greatest(clock_timestamp(), <this participant's latest
     at> + 1 microsecond)` — so a participant's payment rows are **strictly increasing in
@@ -1055,13 +1067,13 @@ Replace line 81 (`assertEditable`):
   if (!op) throw new PayoutNotFoundError("operation not found");
 ```
 
-Replace line 251 (`loadParticipantOperationId`):
+Replace line 288 (`loadParticipantOperationId`):
 
 ```ts
   if (!p) throw new PayoutNotFoundError("participant not found");
 ```
 
-Replace lines 423 and 432 (both in `recordPayment`):
+Replace lines 460 and 469 (both in `recordPayment`):
 
 ```ts
   if (!ref) throw new PayoutNotFoundError("participant not found");
@@ -1114,7 +1126,7 @@ function nextPaymentAt(participantId: string) {
 }
 ```
 
-Replace the insert at lines 445-450 with:
+Replace the insert at lines 482-487 with:
 
 ```ts
   await dbtx.insert(payoutPayment).values({
@@ -1358,17 +1370,32 @@ Extend that file's imports: add `asc` and `sql` to the `drizzle-orm` import,
 `auditLog` to the `@/db/schema` import, and `revertPayment` to the
 `@/services/payouts` import.
 
-Add `revertPayment` to the authorization loop in the same file. Inside
-`for (const actor of [green.id, cryo.id]) { … }`, after the `recordPayment` case:
+Add `revertPayment` **and `setCorpSharePct`** to the authorization loop in the same
+file. Inside `for (const actor of [green.id, cryo.id]) { … }`, after the
+`recordPayment` case:
 
 ```ts
       await expect(
         ctx.db.transaction((tx) => revertPayment(tx, actor, participant.id)),
       ).rejects.toThrow(PayoutForbiddenError);
+      await expect(
+        ctx.db.transaction((tx) => setCorpSharePct(tx, actor, operationId, "10")),
+      ).rejects.toThrow(PayoutForbiddenError);
 ```
 
-and update that describe block's doc comment count from "All eleven mutating
-exports" to "All twelve mutating exports", naming `revertPayment`.
+and add `setCorpSharePct` to that file's `@/services/payouts` import alongside
+`revertPayment`.
+
+**Why `setCorpSharePct` lands here and not in its own task.** #74 added it as a new
+mutating export of `src/services/payouts.ts` and did not touch
+`tests/payouts-service.test.ts`, so it is the one mutating export the loop does not
+cover. The Global Constraint above ("new exports go in it") is the plan's invariant,
+this is the first task that edits the loop, and a guard nobody asserts on is a guard
+that can be deleted silently. It costs three lines.
+
+Update that describe block's doc comment count from "All eleven mutating exports" to
+"All thirteen mutating exports", naming `setCorpSharePct` and `revertPayment` — eleven
+was the pre-#74 count, #74's `setCorpSharePct` makes twelve, `revertPayment` thirteen.
 
 Append to `tests/payout-view.test.ts`:
 
@@ -1611,17 +1638,42 @@ not reopen the operation's numbers."
 
 **Files:**
 
-- Modify: `src/services/payouts.ts:255-276` (`setParticipantShares`, plus a new
-  exported guard above it)
-- Modify: `src/app/payouts/actions.ts:213-231` (`setParticipantSharesAction`)
+- Modify: `src/services/payouts.ts:292-313` (`setParticipantShares`, plus a new
+  exported guard and constant above it)
+- Modify: `src/app/payouts/actions.ts:259-284` (`setParticipantSharesAction`)
+- Modify: `src/app/payouts/[id]/page.tsx` — one entry added to the `ERRORS` map
 - Test: `tests/payouts-service.test.ts`
+
+**Reconciled with #74.** #74 found and fixed a defect in this exact action: it guarded
+positivity with `iskToCents(shares)`, which **throws** on anything its regex rejects
+(`src/core/payout-split.ts`), so typing `abc` escaped to `error.tsx` from inside the
+guard meant to redirect. The action now runs, in order: blank → `shares_required`,
+regex → `shares_invalid`, `iskToCents(...) <= 0n` → `shares_positive`. **That ordering
+is load-bearing and this task does not disturb it.** The plan originally replaced all of
+it with a single `assertSharesInRange(shares)` call — which *throws*, and would have
+reinstated the defect #74 just removed, on the same control. So:
+
+- the service keeps `assertSharesInRange` (throwing is right there — the service is the
+  boundary, and its callers are not all web tiers);
+- the action **appends a fourth check** in #74's style, redirecting with a new
+  `shares_range` code, and keeps its `iskToCents` import;
+- the two share one exported constant, so they cannot drift.
+
+This is the same two-layer arrangement #74 documents for `totalValue` in
+`addFlatPoolAction`: "let this action fail with the same readable message the other
+numeric fields use, rather than relying solely on addFlatPool's deeper (also correct)
+check."
 
 **Interfaces:**
 
-- Consumes: `iskToCents` from `@/core/payout-split`
-- Produces: `export function assertSharesInRange(shares: string): void` — throws a
-  plain `Error` for `<= 0` or `> 9999.99`. `setParticipantSharesAction` calls it
-  instead of its inline `iskToCents(shares) <= 0n` check.
+- Consumes: `iskToCents` from `@/core/payout-split`, `operationFailed(operationId, code)`
+  from `src/app/payouts/actions.ts` (#74's `: never`-typed redirect helper)
+- Produces:
+  - `export const MAX_SHARES_HUNDREDTHS = 999999n;` in `@/services/payouts` — 9999.99 in
+    the hundredths `iskToCents` returns. Exported so the action bounds identically.
+  - `export function assertSharesInRange(shares: string): void` — throws a plain `Error`
+    for `<= 0` or `> 9999.99`. Called by `setParticipantShares`, **not** by the action.
+  - `shares_range` in the detail page's `ERRORS` map.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1707,8 +1759,12 @@ In `src/services/payouts.ts`, insert above `setParticipantShares`:
  * Deliberately NOT a column widening: widening would mean a migration against
  * production data purely to improve an error message, and nobody in a fleet
  * draws ten thousand shares.
+ *
+ * Exported, unlike a plain module constant, because `setParticipantSharesAction`
+ * bounds against the same number to produce a redirect instead of a throw. One
+ * constant, two enforcement points, no drift.
  */
-const MAX_SHARES_HUNDREDTHS = 999999n; // 9999.99, in the hundredths iskToCents returns
+export const MAX_SHARES_HUNDREDTHS = 999999n; // 9999.99, in iskToCents' hundredths
 
 export function assertSharesInRange(shares: string): void {
   const hundredths = iskToCents(shares); // also rejects "abc" / "1e5" outright
@@ -1734,20 +1790,40 @@ export async function setParticipantShares(
   const operationId = await loadParticipantOperationId(dbtx, participantId);
 ```
 
-In `src/app/payouts/actions.ts`, replace the inline guard at `:221-226`:
+In `src/app/payouts/actions.ts`, **leave #74's three existing checks exactly as they
+are** — blank → `shares_required`, regex → `shares_invalid`, `iskToCents(shares) <= 0n`
+→ `shares_positive`, in that order — and insert a fourth immediately after the
+`shares_positive` check at `:277-279`, before the transaction:
 
 ```ts
-  // Mirrors payout_participant_shares_ck (shares > 0) and the numeric(6,2)
-  // column's own range with readable messages, before the raw string reaches
-  // the database — "abc", "1e5" and "10000" would each otherwise surface as a
-  // raw Postgres error. Same guard the service runs, so neither caller can
-  // drift from the other.
-  assertSharesInRange(shares);
+  // The numeric(6, 2) column's own range, mirrored here for the same reason the
+  // three checks above mirror the format and payout_participant_shares_ck: an
+  // unbounded "10000" reaches Postgres as a raw numeric overflow and lands the
+  // operator on error.tsx. assertSharesInRange in the service enforces this for
+  // every caller; this copy is the one that can give the operator a page with
+  // their roster still on it. Same constant, so the two cannot drift.
+  if (iskToCents(shares) > MAX_SHARES_HUNDREDTHS) {
+    operationFailed(operationId, "shares_range");
+  }
 ```
 
-Add `assertSharesInRange` to that file's `@/services/payouts` import (alphabetically
-first in the list), and drop the now-unused
-`import { iskToCents } from "@/core/payout-split";` at `:27`.
+Add `MAX_SHARES_HUNDREDTHS` to that file's `@/services/payouts` import — it sorts first
+in the block, ahead of the lowercase function names. **Keep**
+`import { iskToCents } from "@/core/payout-split";` at `:28`: #74's `shares_positive`
+check and the range check above both use it. (The pre-#74 version of this plan told you
+to delete that import; that was written when `assertSharesInRange` replaced the only use.)
+
+Finally, add one entry to the detail page's `ERRORS` map in
+`src/app/payouts/[id]/page.tsx`, keeping the file's alphabetically-loose,
+grouped-by-form ordering — put it directly after `shares_positive`:
+
+```ts
+  shares_range: "Shares cannot exceed 9999.99. The roster value was left as it was.",
+```
+
+A code with no entry in that map renders **nothing at all** — #74's own docblock says so
+— which is the one failure this page cannot show an operator, so the entry is not
+optional decoration.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -1756,19 +1832,23 @@ Run:
 ```
 TEST_DATABASE_URL=postgres://authgd:authgd@localhost:5433/authgd_test_payouts2 npx vitest run tests/payouts-service.test.ts
 npx tsc --noEmit
+npx prettier --check src/services/payouts.ts src/app/payouts/actions.ts "src/app/payouts/[id]/page.tsx"
 ```
 
-Expected: PASS, and no unused-import type error from `actions.ts`.
+Expected: PASS, and `tsc` clean.
 
 - [ ] **Step 5: Commit**
 
 ```
-git add src/services/payouts.ts src/app/payouts/actions.ts tests/payouts-service.test.ts
+git add src/services/payouts.ts src/app/payouts/actions.ts "src/app/payouts/[id]/page.tsx" tests/payouts-service.test.ts
 git commit -m "fix(payouts): say what the share limit is instead of leaking a numeric overflow
 
 shares is numeric(6,2); 10000 was a raw Postgres error. Bounded with a
 readable message in the service and the action rather than widening the
-column, which would cost a migration for the sake of a sentence."
+column, which would cost a migration for the sake of a sentence. The action
+appends its bound to the format/positivity order #74 established rather than
+replacing it: the guard it would have replaced throws, and throwing from that
+control is the defect #74 removed."
 ```
 
 ---
@@ -1777,19 +1857,37 @@ column, which would cost a migration for the sake of a sentence."
 
 **Files:**
 
-- Modify: `src/services/payouts.ts` (new export after `setRoster`)
-- Modify: `src/app/payouts/actions.ts` (new action after `setRosterAction`)
+- Modify: `src/services/payouts.ts` (new error class beside the existing two at `:14-15`,
+  new export after `setRoster`)
+- Modify: `src/app/payouts/actions.ts` (new action after `setRosterAction` at `:245-257`)
+- Modify: `src/app/payouts/[id]/page.tsx` — two entries added to the `ERRORS` map
 - Test: `tests/payouts-service.test.ts`
 
 **Interfaces:**
 
 - Consumes: `resolveRosterNames(dbx, names): Promise<RosterEntry[]>`,
   `assertEditable`, `lockOperation`, `recalculate`, `field(formData, name)`,
-  `requireOperatorAccount()`, `revalidateOperation(operationId)`
+  `requireOperatorAccount()`, `revalidateOperation(operationId)`,
+  `operationFailed(operationId, code)` (#74's `: never`-typed redirect helper,
+  `src/app/payouts/actions.ts:66-68`)
 - Produces:
+  - `export class PayoutDuplicateParticipantError extends Error {}` in
+    `@/services/payouts`
   - `export async function addParticipant(dbtx: DbTx, actor: string, operationId: string, name: string): Promise<void>`
   - `export async function addParticipantAction(operationId: string, formData: FormData): Promise<void>`
     — the form field is named `name`.
+  - `participant_name_required` and `participant_duplicate` in the detail page's
+    `ERRORS` map.
+
+**Both failures this action can hit are operator typos, so both redirect.** #74 converted
+fourteen sites in `src/app/payouts/actions.ts` from `throw` to
+`redirect(?error=code)`, because a throw lands on `src/app/error.tsx`, which renders
+`error.digest` and never `error.message` — the operator is told "that's a fault on this
+end, not something you did" about their own empty field. A blank name box and a name
+already on the roster are exactly that: things the operator typed, in a field they can
+retype. The pre-#74 version of this task threw a bare `Error` for both. Hence the new
+error class — the action cannot tell a duplicate from a genuine fault without one, and
+`instanceof` on a message string is not a contract.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1916,8 +2014,9 @@ the authorization loop inside `for (const actor of [green.id, cryo.id]) { … }`
       ).rejects.toThrow(PayoutForbiddenError);
 ```
 
-Update the describe block's doc comment to "All thirteen mutating exports",
-naming `addParticipant`.
+Update the describe block's doc comment to "All fourteen mutating exports",
+naming `addParticipant` (Task 4 raised it to thirteen — eleven pre-#74, plus #74's
+`setCorpSharePct`, plus `revertPayment`).
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -1932,7 +2031,17 @@ Expected: FAIL —
 
 - [ ] **Step 3: Write minimal implementation**
 
-Append to `src/services/payouts.ts`, after `setRoster`:
+In `src/services/payouts.ts`, add the error class beside the existing two at `:14-15`:
+
+```ts
+/** A manual roster addition names someone already on the roster. Named rather
+ *  than a bare Error because `addParticipantAction` has to tell it from a real
+ *  fault: the operator typed this name and can retype it, so it earns a message
+ *  on the page rather than error.tsx's "a fault on this end". */
+export class PayoutDuplicateParticipantError extends Error {}
+```
+
+and append after `setRoster`:
 
 ```ts
 /**
@@ -1997,7 +2106,9 @@ export async function addParticipant(
           p.displayName.toLowerCase() === entry.displayName.toLowerCase(),
       );
       if (clash) {
-        throw new Error(`"${clash.displayName}" is already on this roster`);
+        throw new PayoutDuplicateParticipantError(
+          `"${clash.displayName}" is already on this roster`,
+        );
       }
     }
     const [inserted] = await dbtx
@@ -2023,22 +2134,52 @@ export async function addParticipant(
 }
 ```
 
-Append to `src/app/payouts/actions.ts`, after `setRosterAction`:
+Append to `src/app/payouts/actions.ts`, after `setRosterAction` (`:245-257`):
 
 ```ts
+/** Both rejections here are things the operator typed, so both redirect rather
+ *  than throw — the conversion #74 applied to every other input rejection in
+ *  this file. A throw would land on error.tsx, which renders `error.digest` and
+ *  never `error.message`, telling them a blank name box was a fault on our end.
+ *
+ *  `operationFailed` returns `never` and must not be called from inside a `try`
+ *  — `redirect` signals by throwing NEXT_REDIRECT, and an enclosing catch would
+ *  swallow it. The call below sits in the `catch`, not the `try`. */
 export async function addParticipantAction(
   operationId: string,
   formData: FormData,
 ): Promise<void> {
   const actor = await requireOperatorAccount();
   const name = field(formData, "name").trim();
-  if (!name) throw new Error("a character name is required");
-  await getDb().transaction((dbtx) => addParticipant(dbtx, actor, operationId, name));
+  if (!name) operationFailed(operationId, "participant_name_required");
+  try {
+    await getDb().transaction((dbtx) => addParticipant(dbtx, actor, operationId, name));
+  } catch (err) {
+    if (err instanceof PayoutDuplicateParticipantError) {
+      operationFailed(operationId, "participant_duplicate");
+    }
+    throw err;
+  }
   revalidateOperation(operationId);
 }
 ```
 
-Add `addParticipant` to that file's `@/services/payouts` import.
+Add `addParticipant` and `PayoutDuplicateParticipantError` to that file's
+`@/services/payouts` import — the block sorts uppercase before lowercase, so the class
+goes above `createOperation` and `addParticipant` immediately below it.
+
+Then add two entries to the detail page's `ERRORS` map in
+`src/app/payouts/[id]/page.tsx`, after `share_range`:
+
+```ts
+  participant_name_required:
+    "Type a character name to add someone to the roster. Nothing was added.",
+  participant_duplicate:
+    "Someone is already on this roster under that name. Nothing was added — two rows under one unresolved name pay two full shares to whoever answers to it.",
+```
+
+A code with no entry in that map renders **nothing at all**, so an action that redirects
+with a code the page does not carry is an action that silently does nothing visible.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -2046,6 +2187,7 @@ Run:
 
 ```
 TEST_DATABASE_URL=postgres://authgd:authgd@localhost:5433/authgd_test_payouts2 npx vitest run tests/payouts-service.test.ts
+npx prettier --check src/services/payouts.ts src/app/payouts/actions.ts "src/app/payouts/[id]/page.tsx"
 ```
 
 Expected: PASS, including the authorization loop.
@@ -2053,13 +2195,15 @@ Expected: PASS, including the authorization loop.
 - [ ] **Step 5: Commit**
 
 ```
-git add src/services/payouts.ts src/app/payouts/actions.ts tests/payouts-service.test.ts
+git add src/services/payouts.ts src/app/payouts/actions.ts "src/app/payouts/[id]/page.tsx" tests/payouts-service.test.ts
 git commit -m "feat(payouts): add one pilot to a roster without retyping the fleet
 
 Additive, unlike setRoster, so share edits survive. Resolves through the same
 path the paste does, so an alt collapses into their main instead of drawing a
 second share, and a repeated unresolved name is refused rather than warned
-about after the fact."
+about after the fact. Both refusals redirect with a code the page renders,
+following the conversion #74 made across this file: a blank name box is not a
+fault on our end, and error.tsx is the only thing a throw can say."
 ```
 
 ---
@@ -2260,7 +2404,7 @@ and inside `for (const actor of [green.id, cryo.id]) { … }`:
 
 Extend that file's `@/db/schema` import with `lootItem` and its
 `@/services/payout-loot` import with `setItemPrice`; update the describe block's
-doc comment to "All fourteen mutating exports", naming `setItemPrice`.
+doc comment to "All fifteen mutating exports", naming `setItemPrice`.
 
 Append to `tests/payout-schema.test.ts`, inside the existing `describe("payout schema")`:
 
@@ -3222,8 +3366,9 @@ like an empty database."
 - Modify: `src/services/tokens.ts:1-10` (imports), end of file
 - Create: `src/core/open-info-error.ts`
 - Modify: `src/services/payouts.ts:1` (imports), end of file
-- Modify: `src/app/payouts/actions.ts:1-27` (imports), end of file
-- Modify: `src/app/payouts/[id]/page.tsx:37-40` (the `ERRORS` map)
+- Modify: `src/app/payouts/actions.ts:23-24` (imports), end of file
+- Modify: `src/app/payouts/[id]/page.tsx:50-72` (the `ERRORS` map) — **an addition, not a
+  replacement**; see Step 19
 - Modify: `docs/ops.md:21`, `docs/ops.md:172`
 - Modify: `.env.example:41`
 - Test: `tests/esi-client.test.ts`, `tests/tokens.test.ts`, `tests/open-info-error.test.ts` (new), `tests/payouts-service.test.ts`
@@ -3231,7 +3376,7 @@ like an empty database."
 
 **Interfaces:**
 
-- Consumes: `getFreshAccessToken(db, cfg, ch, fetchImpl?)` and `AccessTokenResult` from `src/services/tokens.ts`; `requireOperatorAccount()` (module-private in `src/app/payouts/actions.ts:37-48`); `classifyEsiError`/`EsiErrorClass` from `src/core/errors.ts` (already used by `EsiError`, which carries `status: number` and `kind: EsiErrorClass` and nothing else).
+- Consumes: `getFreshAccessToken(db, cfg, ch, fetchImpl?)` and `AccessTokenResult` from `src/services/tokens.ts`; `requireOperatorAccount()` (module-private in `src/app/payouts/actions.ts:38-49` — still module-private and unchanged in shape post-#74: it resolves the session cookie, throws a bare `Error("not signed in")` twice, and calls `requirePayoutOperator`, which throws `PayoutForbiddenError`; #74 deliberately left all three throwing); `operationFailed(operationId, code): never` (module-private at `src/app/payouts/actions.ts:66-68`, #74's redirect helper); `classifyEsiError`/`EsiErrorClass` from `src/core/errors.ts` (already used by `EsiError`, which carries `status: number` and `kind: EsiErrorClass` and nothing else).
 - Produces:
   ```ts
   // src/lib/esi/client.ts
@@ -3289,7 +3434,15 @@ That is **four** comparison sites, not the three the design doc names (`account-
 
 **Scope gating is on the persisted column, never on config.** `cfg.eveSso.scopes` says what we *ask* for; `character.scopes` (`src/db/schema.ts:69`) says what this operator actually *granted*. An operator who authorized before the scope existed has a perfectly valid session and no `open_window` scope, and a config-based gate would show them a control that always fails.
 
-**Second documented exception to "enqueue, don't execute".** The first is interactive appraisal (`src/app/payouts/actions.ts:128-133`). Opening a window in the operator's own client is interactive and pointless to queue: a lost call is a re-click, a duplicated call opens the window twice, and a queued one would surface minutes later on a client that has moved on. It persists no state at CCP or here. That justification goes in the code comment, or a reviewer will correctly flag it as a rule violation.
+**Second documented exception to "enqueue, don't execute".** The first is interactive appraisal (`src/app/payouts/actions.ts:174-179`, the `ARCHITECTURAL EXCEPTION` comment inside `addAppraisedPoolAction`). Opening a window in the operator's own client is interactive and pointless to queue: a lost call is a re-click, a duplicated call opens the window twice, and a queued one would surface minutes later on a client that has moved on. It persists no state at CCP or here. That justification goes in the code comment, or a reviewer will correctly flag it as a rule violation.
+
+**Why this action redirects at all, when #74 says most failures should throw.** #74's rule is that operator *typos* redirect and everything else — `TriffError`, `EsiError`, `PayoutForbiddenError`, `PayoutLockedError` — is left to `error.tsx`. None of `openInfoAction`'s failures is a typo, so the bar has to be cleared explicitly rather than assumed:
+
+- The precedent is already in the file. `addAppraisedPoolAction`'s `catch` redirects `?error=appraisal_failed` for `TriffError` **and** `EsiError`, and #74 calls that path "exactly one path in that file did it right… and it was the template." An upstream call that persists nothing and failed transiently is the case that redirects; it is not a fault on our end, and `error.tsx` would claim it was. Every `open_info_offline` / `open_info_busy` / `open_info_timeout` / `open_info_failed` code is that same class of failure — CCP's servers, not ours.
+- `open_info_reauth` clears the bar the most cleanly of all: **the operator can act on it.** The grant is missing from *their* login, and the message names the fix (re-add your character from your account page). #74's whole complaint about `error.tsx` is that it tells someone "not something you did" and gives them nowhere to go. This one is something they did and can undo.
+- `open_info_dry_run` is a deployment mode, not a failure. Nothing broke; the control is suppressed on purpose, and the message says so.
+- `open_info_target` is the one worth arguing about, because a stale page is the same shape as the `PayoutLockedError` #74 leaves throwing. It redirects anyway, for two reasons: `getOpenInfoTarget` returns `null` rather than throwing, so there is no exception to leave alone; and one of its three causes — "this roster row has no linked character" — is not stale at all, it is a permanent property the operator fixes by resolving the name. Nothing was attempted and nothing changed, so there is no fault to report.
+- What still throws, unchanged: `requireOperatorAccount()`'s `Error("not signed in")` and `PayoutForbiddenError`, and `classifyOpenInfoFailure` returning `null`. Reaching an action you may not call is a forged request, and an unclassifiable error is a bug — both want a stack trace, which is exactly #74's position.
 
 **We cannot prove a status code means "not logged in", so we do not claim it.**
 The official ESI Swagger (`https://esi.evetech.net/latest/swagger.json`, fetched
@@ -3833,7 +3986,10 @@ In `src/services/payouts.ts`, widen the drizzle import at `:1`:
 import { and, eq, inArray, sql } from "drizzle-orm";
 ```
 
-and append to the end of the file:
+and append to the end of the file. (#74's `setCorpSharePct` sits mid-file, between
+`createOperation` and `RosterEntry` at `:117-152`, so it does not move the append point;
+by the time this task runs, Task 4's `revertPayment` is the last export and
+`getOpenInfoTarget` goes after it.)
 
 ```ts
 /**
@@ -3900,7 +4056,9 @@ plus `getFreshAccessToken`, which `tests/tokens.test.ts` already covers for all
 four failure reasons, and the repo has no harness for invoking a server action
 outside a browser. Its end-to-end behaviour belongs in the e2e task in Part D.
 
-In `src/app/payouts/actions.ts`, extend the imports at `:22-23`:
+In `src/app/payouts/actions.ts`, replace the two import lines at `:23-24`
+(`@/services/session` and `@/lib/esi/client`) with four — `:25`'s
+`createTriffClient` import stays where it is:
 
 ```ts
 import { getSessionAccount } from "@/services/session";
@@ -3953,8 +4111,14 @@ const OPEN_INFO_ERROR_BY_FAILURE = {
  *
  * Takes a participant id, never a character id: the target is re-read from the
  * database inside the action (see getOpenInfoTarget). Nothing changed, so
- * nothing is revalidated; failures redirect with a code rather than throwing a
- * raw ESI error at the operator.
+ * nothing is revalidated.
+ *
+ * Every failure below goes out through `operationFailed`, the module's own
+ * `: never`-typed redirect helper, for the reasons argued at the top of this
+ * task: these are upstream and grant failures on a control that persists
+ * nothing, and error.tsx can only call them a fault on our end. What does NOT
+ * redirect is requireOperatorAccount's throw above and an unclassifiable error
+ * below — a forged request and a bug, both of which want a stack trace.
  */
 export async function openInfoAction(
   operationId: string,
@@ -3968,18 +4132,16 @@ export async function openInfoAction(
   // control should already be hidden for them; reaching here means a stale
   // page or a hand-made request, and it gets a message, not a 500.
   const main = await getMainCharacterWithScope(db, actor, OPEN_WINDOW_SCOPE);
-  if (!main) redirect(`/payouts/${operationId}?error=open_info_reauth`);
+  if (!main) operationFailed(operationId, "open_info_reauth");
 
   // The authorization that matters. requireOperatorAccount above proves this
   // caller may operate payouts; it proves nothing about WHOSE window opens.
   // The id that reaches ESI comes from this row, not from the arguments.
   const targetId = await getOpenInfoTarget(db, operationId, participantId);
-  if (targetId === null) redirect(`/payouts/${operationId}?error=open_info_target`);
+  if (targetId === null) operationFailed(operationId, "open_info_target");
 
   const token = await getFreshAccessToken(db, cfg, main);
-  if (!token.ok) {
-    redirect(`/payouts/${operationId}?error=${OPEN_INFO_ERROR_BY_REASON[token.reason]}`);
-  }
+  if (!token.ok) operationFailed(operationId, OPEN_INFO_ERROR_BY_REASON[token.reason]);
 
   const esi = createEsiClient({
     userAgent: `authgd/0.1.0 (${cfg.esiContact})`,
@@ -3995,24 +4157,76 @@ export async function openInfoAction(
     // null means we cannot describe it honestly — a bug, a DNS failure, a
     // malformed response. Those get a stack trace, not a reassuring sentence.
     if (failure === null) throw err;
-    redirect(`/payouts/${operationId}?error=${OPEN_INFO_ERROR_BY_FAILURE[failure]}`);
+    operationFailed(operationId, OPEN_INFO_ERROR_BY_FAILURE[failure]);
   }
 }
 ```
 
 `EsiError` stays in the import list — `addAppraisedPoolAction` above still uses
-it. Every `redirect` call sits outside the `try`, or inside the `catch`, so the
-`NEXT_REDIRECT` control-flow exception is never swallowed by this handler.
+it. Every `operationFailed` call sits outside the `try`, or inside the `catch`,
+which is the rule #74's docblock states for both helpers: `redirect` signals by
+throwing `NEXT_REDIRECT`, so a call from inside a `try` would be swallowed by the
+enclosing `catch` and land the operator on `error.tsx` anyway. Its `: never`
+return is also what narrows `main` and `token` for the lines below it — writing
+`redirect(...)` inline here would work but would put a fourteenth spelling of the
+same URL in a file that now has exactly one.
 
-- [ ] **Step 19: Add the seven `?error=` messages to the detail page**
+- [ ] **Step 19: Add the seven `open_info_*` messages to the detail page**
 
-`src/app/payouts/[id]/page.tsx:37-40` currently carries one entry. Replace the
-whole `ERRORS` map with:
+**This is an ADDITION to an existing map, not a replacement.** #74 rewrote
+`src/app/payouts/[id]/page.tsx`'s `ERRORS` map from one key to twelve
+(`:50-72`), because it converted fourteen throwing sites in `actions.ts` into
+`?error=` redirects. Its own docblock states the stake: a code with no entry
+"renders nothing at all, which is the one failure this page cannot show the
+operator". Deleting any of its twelve keys to install seven of ours would turn
+twelve specific messages into twelve silent no-ops, and #74's e2e suite checks
+each of them by name.
+
+Tasks 5 and 6 have already added three more keys to that map by the time this
+step runs (`shares_range`, `participant_name_required`, `participant_duplicate`),
+so the map you are editing carries fifteen. Add the seven `open_info_*` codes to
+the end of it. Paste the whole map, so the file ends in this state regardless of
+which keys are currently present — twenty-two in all:
 
 ```ts
+/** Every code an action on this page can redirect with. A code with no entry
+ *  renders nothing at all, which is the one failure this page cannot show the
+ *  operator, so e2e checks each by name.
+ *
+ *  Several of these are backstops rather than everyday errors: the appraisal
+ *  form's pricing mode and location kind are <select>s and its location id is
+ *  pattern-guarded, so `pricing_mode`, `location_kind`, `station_invalid` and
+ *  `region_invalid` are unreachable by filling the form in. That is deliberate
+ *  — a redirect cannot carry the loot paste back, so those failures are
+ *  prevented at the input rather than explained after the fact. None of these
+ *  messages claims the paste survived, because on those paths it did not. */
 const ERRORS: Record<string, string> = {
   appraisal_failed:
     "Could not price that paste right now (triff.tools did not answer). Nothing was saved — adjust and try again, or use a flat pool.",
+  pricing_mode: "That is not one of the four pricing modes. Nothing was saved.",
+  location_kind:
+    "Price against a station or a region — triff accepts exactly one. Nothing was saved.",
+  station_invalid:
+    "Station ID must be digits only — Jita 4-4 is 60003760. Nothing was saved.",
+  region_invalid: "Region ID must be digits only. Nothing was saved.",
+  note_required:
+    "A flat pool needs a note saying where the number came from. It is the only record of why this total is what it is.",
+  total_invalid:
+    "Total must be a plain number like 12345.67 — no commas, and no shorthand like 1e5.",
+  shares_required: "Shares cannot be blank. The roster value was left as it was.",
+  shares_invalid:
+    "Shares must be a plain number like 1 or 1.5. The roster value was left as it was.",
+  shares_positive:
+    "Shares must be greater than zero. To pay someone nothing, exclude them instead — that keeps them on the roster and out of the split.",
+  shares_range: "Shares cannot exceed 9999.99. The roster value was left as it was.",
+  share_format:
+    "Corp share must be a plain percentage like 10 or 12.5. The old value is unchanged.",
+  share_range:
+    "Corp share cannot exceed 100% — that would leave the roster nothing to split. The old value is unchanged.",
+  participant_name_required:
+    "Type a character name to add someone to the roster. Nothing was added.",
+  participant_duplicate:
+    "Someone is already on this roster under that name. Nothing was added — two rows under one unresolved name pay two full shares to whoever answers to it.",
   // The expected outcome on a busy night, not a fault, and the ONLY message
   // here that claims to know why: it is used only when ESI's own error body
   // said so. Worded as a fact about the game, because the fallback — copy the
@@ -4040,14 +4254,18 @@ const ERRORS: Record<string, string> = {
 };
 ```
 
-The map lands here rather than in Task 12 because Task 10 is what *produces*
-these codes: `openInfoAction` can redirect with any of them the moment it
-exists, and a code with no entry renders nothing at all. **Task 12 restates this
-map too**, as an explicit EXTENSION of these eight keys: its block is the same
-eight plus `revert_forbidden`, `revert_missing` and `revert_not_paid`, eleven in
-all. So these eight are the floor — Task 12 adds to them and drops none of them.
-Nothing else on the page changes in this task; the control that produces the
-codes is Task 12's.
+The seven land here rather than in Task 12 because Task 10 is what *produces*
+them: `openInfoAction` can redirect with any of them the moment it exists.
+**Task 12 restates this map**, and it restates exactly these twenty-two keys —
+it adds none. `revertPaymentAction` produces no codes at all; see the ruling
+recorded there. Nothing else on the page changes in this task; the control that
+calls `openInfoAction` is Task 12's.
+
+Verify the paste:
+
+```
+npx prettier --check "src/app/payouts/[id]/page.tsx"
+```
 
 - [ ] **Step 20: Add the scope to the deployment values and the docs**
 
@@ -4214,7 +4432,7 @@ precisely because nothing complains.
 - Create: `src/app/payouts/dropped.ts`
 - Create: `tests/payout-dropped.test.ts`
 - Modify: `src/services/payout-view.ts:1-11` (imports), append `listCharacterNames`
-- Modify: `src/app/payouts/actions.ts:102-165` (`addAppraisedPoolAction`)
+- Modify: `src/app/payouts/actions.ts:140-211` (`addAppraisedPoolAction`; #74 rewrote it — the two free location-id inputs became a location-*kind* select plus one pattern-guarded id, and its four new rejections redirect with `pricing_mode` / `location_kind` / `station_invalid` / `region_invalid` before the appraisal call. Keep all four; this task edits only the `try`/`catch` around `appraiseLoot`.)
 - Modify: `src/app/payouts/[id]/page.tsx` — imports `:1-22`, `searchParams` type `:51`, error
   notice block `:118-122`, pools table `:167-273`, roster forms `:351-359`
 - Test: `tests/payout-dropped.test.ts`, `tests/payout-view.test.ts`
@@ -4255,7 +4473,7 @@ from `appraisal.items` alone, so nothing about the drops survives the write. It 
 the pool never will. So the page cannot re-derive them on the next render, and there is no
 client state to hold them in.
 
-The existing `?error=` + `ERRORS` map (`[id]/page.tsx:37-40`, `actions.ts:160`) is the right
+The existing `?error=` + `ERRORS` map (`[id]/page.tsx:50-72` post-#74, twenty-two keys by the time this task runs; the `appraisal_failed` redirect is at `actions.ts:206`) is the right
 *mechanism* — a server action hands the next render a fact through the query string — but the
 `ERRORS` map itself does not fit: it maps a fixed code to fixed copy, and dropped lines are
 variable content that must be named individually. So this follows the redirect-with-a-param
@@ -4578,7 +4796,10 @@ In `src/app/payouts/actions.ts`, add the import beside the other local ones:
 import { encodeDropped } from "./dropped";
 ```
 
-and rewrite `addAppraisedPoolAction`'s body from line 138 (`try {`) to line 165 as:
+and rewrite `addAppraisedPoolAction`'s body from line 184 (`try {`) to line 211 (the
+closing `}` of the function) as — post-#74 line numbers; everything above the `try`,
+including the four new `operationFailed` rejections and the `ARCHITECTURAL EXCEPTION`
+comment, is untouched:
 
 ```ts
   // Carried out of the try so the redirect below runs after it: `redirect()`
@@ -4622,6 +4843,11 @@ and rewrite `addAppraisedPoolAction`'s body from line 138 (`try {`) to line 165 
 }
 ```
 
+Both `redirect` calls stay raw rather than going through `operationFailed`: that helper
+appends `?error=`, and neither of these carries an error code — the `?dropped=` one is a
+success path with a payload, and the `appraisal_failed` one is the line #74 called "the
+template" and deliberately left as it found it.
+
 In `src/app/payouts/[id]/page.tsx`:
 
 Replace the import block (lines 4-22) with:
@@ -4652,7 +4878,7 @@ import { PRICING_MODES, type PricingMode } from "@/core/pricing";
 import { iskToCents } from "@/core/payout-split";
 ```
 
-Add below the `ERRORS` map (after line 40):
+Add immediately below the `ERRORS` map (its last line, whatever number that is by now — Tasks 5, 6 and 10 all grew it):
 
 ```ts
 /** The `<datalist>` the add-participant field points at. One per page, so a
@@ -4901,7 +5127,10 @@ git commit -m "feat(payouts): show every pasted item, name what the parser ignor
 - Modify: `src/services/payout-view.ts` — append `listAccountPayouts`, and resolve each payment's actor to a name inside `getPayoutOperationDetail` (Task 4 added the `payments` array and its ordering; this task adds only the actor's name to each row)
 - Modify: `src/app/payouts/access.ts:1-50`
 - Modify: `src/app/payouts/actions.ts` — imports, and `revertPaymentAction` at the end of the file
-- Modify: `src/app/payouts/[id]/page.tsx` — imports, `ERRORS` map, freeze notice after `:147`, participants table `:361-464`
+- Modify: `src/app/payouts/[id]/page.tsx` — imports, `ERRORS` map (verify only: this task
+  adds no codes to it — see Step 6), freeze notice after `:147`, participants table
+  `:361-464` — **those two line ranges are pre-#74 and #74 rewrote this file (+347 −197);
+  re-derive them before editing**
 - Create: `src/app/payouts/[id]/payment-history.tsx`
 - Create: `src/app/account/account-payouts.tsx`
 - Modify: `src/app/account/page.tsx:1-30` (imports), `:110-140` (data), after `:471`
@@ -4915,9 +5144,10 @@ git commit -m "feat(payouts): show every pasted item, name what the parser ignor
     id** — it re-reads the stored `recipient_character_id` server-side through
     `getOpenInfoTarget`, so an operator cannot aim their own token at an arbitrary
     character by editing the posted number. The binding below passes `p.id`.
-  - `revertPayment(dbtx, actor, participantId)` from `@/services/payouts` (Task 4),
-    plus `PayoutForbiddenError`, `PayoutLockedError` and `PayoutNotFoundError` from the
-    same module — `revertPaymentAction` below is the web-tier wrapper this task adds.
+  - `revertPayment(dbtx, actor, participantId)` from `@/services/payouts` (Task 4).
+    Its `PayoutForbiddenError` / `PayoutLockedError` / `PayoutNotFoundError` are
+    **not** imported here and **not** caught — `revertPaymentAction` below lets all
+    three throw, matching #74's rule for this file; see the ruling at Step 5.
   - `PayoutParticipantView` **already carries** its events — Task 4 added
     `payments: Array<typeof payoutPayment.$inferSelect>`, ordered `(at asc, id asc)`, because
     flipping the state check to `paidAmount !== null` would otherwise have left the payments
@@ -5585,15 +5815,49 @@ itself is covered exhaustively in Task 4 (`tests/payouts-service.test.ts`), incl
 `PayoutForbiddenError` / `PayoutLockedError` / `PayoutNotFoundError` branches, and the
 end-to-end behaviour of the button is Task 13's arm-then-confirm revert test.
 
-In `src/app/payouts/actions.ts`, extend the `@/services/payouts` import block. It is
-alphabetised with the error classes first, matching `tests/payouts-service.test.ts`, and
-`getOpenInfoTarget` is already there from Task 10:
+**RULING: this action catches nothing.** An earlier draft caught all three service errors
+and redirected with `revert_forbidden` / `revert_not_paid` / `revert_missing`. #74 settled
+the question in the other direction, in this exact file, and its reasoning is binding
+here:
+
+> `TriffError`, `EsiError`, `PayoutForbiddenError` and `PayoutLockedError` are untouched:
+> those aren't typos, and `error.tsx` is the right destination for them.
+
+Applied one error at a time:
+
+- **`PayoutForbiddenError` — throws.** #74 names it explicitly. It fires only if the
+  operator's tier or status changed between `requireOperatorAccount` and `revertPayment`'s
+  own re-check; the same class already escapes `markPaidAction`, `finalizeAction`,
+  `unlockAction` and every other sibling in this file, and giving revert a private
+  softer path would make it the one control that disagrees with the rest of the page.
+- **`PayoutLockedError` — throws.** #74 names it explicitly too. "Not marked paid" and
+  "no longer finalized" are lifecycle state, not something anyone typed.
+- **`PayoutNotFoundError` — throws.** This is new in this plan; #74 never saw it, so it
+  is decided from #74's principle rather than its letter. The principle is that a
+  redirect exists to hand an operator back a field they can retype. **Nobody types a
+  participant id** — it is bound into the form action server-side. A missing participant
+  therefore means the row was deleted between render and click (a stale page) or the
+  request was forged. Neither is a typo, neither has a field to correct, and the first
+  is structurally identical to the `PayoutLockedError` #74 chose to leave throwing. It
+  throws.
+
+So `revert_forbidden`, `revert_missing` and `revert_not_paid` do not exist, and no key is
+added to the detail page's `ERRORS` map by this task. The action becomes a plain sibling
+of `markPaidAction` — which is the point: after #74, "wrap the transaction and revalidate"
+*is* the house shape for a control whose only failures are state, and the earlier draft's
+try/catch was the deviation.
+
+In `src/app/payouts/actions.ts`, extend the `@/services/payouts` import block. Uppercase
+sorts before lowercase, matching the order in `tests/payouts-service.test.ts`;
+`setCorpSharePct` arrived with #74, `MAX_SHARES_HUNDREDTHS` with Task 5,
+`PayoutDuplicateParticipantError` and `addParticipant` with Task 6, and
+`getOpenInfoTarget` with Task 10:
 
 ```ts
 import {
-  PayoutForbiddenError,
-  PayoutLockedError,
-  PayoutNotFoundError,
+  MAX_SHARES_HUNDREDTHS,
+  PayoutDuplicateParticipantError,
+  addParticipant,
   createOperation,
   finalizeOperation,
   getOpenInfoTarget,
@@ -5602,6 +5866,7 @@ import {
   requirePayoutOperator,
   resolveRosterNames,
   revertPayment,
+  setCorpSharePct,
   setParticipantExcluded,
   setParticipantShares,
   setRoster,
@@ -5617,47 +5882,22 @@ Append to the end of the file:
  * `paidAmount` and appends a `reverted` event, so the participant can be paid
  * again; the operation stays frozen either way, because money did move.
  *
- * Unlike every sibling above, the service failures are caught and turned into
- * `?error=` codes rather than thrown. They have to be: this control is armed
- * and confirmed against a row the operator rendered seconds earlier, and every
- * failure it can hit is somebody else having changed that row first. A raw
- * exception would replace the whole page with an error screen over a race whose
- * only correct answer is "reload and look again". `requireOperatorAccount`
- * stays outside the try and still throws, exactly like every sibling — reaching
- * an action you may not call is not a race, it is a forged request.
+ * Nothing is caught. Every failure `revertPayment` can raise is authorization
+ * (PayoutForbiddenError) or lifecycle state (PayoutLockedError,
+ * PayoutNotFoundError) — none of them is something the operator typed, and none
+ * of them has a field to hand back. That is exactly the line the ?error=
+ * conversion drew across this file: input rejections redirect, and everything
+ * else belongs on error.tsx. This action has no input to reject.
  */
 export async function revertPaymentAction(
   operationId: string,
   participantId: string,
 ): Promise<void> {
   const actor = await requireOperatorAccount();
-  try {
-    await getDb().transaction((dbtx) => revertPayment(dbtx, actor, participantId));
-  } catch (err) {
-    // This one is reachable only if the operator's tier or status changed
-    // between requireOperatorAccount above and revertPayment's own re-check.
-    // Rare, but it is the guard doing its job, not a fault to log as a 500.
-    if (err instanceof PayoutForbiddenError) {
-      redirect(`/payouts/${operationId}?error=revert_forbidden`);
-    }
-    if (err instanceof PayoutNotFoundError) {
-      redirect(`/payouts/${operationId}?error=revert_missing`);
-    }
-    // Either "the operation is no longer finalized" or "this participant is not
-    // marked paid" — one message covers both, because the operator's next move
-    // is the same and the page they reload states which it was.
-    if (err instanceof PayoutLockedError) {
-      redirect(`/payouts/${operationId}?error=revert_not_paid`);
-    }
-    throw err;
-  }
+  await getDb().transaction((dbtx) => revertPayment(dbtx, actor, participantId));
   revalidateOperation(operationId);
 }
 ```
-
-Every `redirect` sits inside the `catch`, never inside the `try`, so the `NEXT_REDIRECT`
-control-flow exception is never swallowed by this handler — the same rule Task 10's action
-follows.
 
 - [ ] **Step 6: Wire the page**
 
@@ -5712,31 +5952,50 @@ and inside `requirePayoutReader`, after the `isOperator` try/catch (before the r
   };
 ```
 
-Then extend the `ERRORS` map with the three codes `revertPaymentAction` redirects with.
+Then **verify** the `ERRORS` map — this task adds nothing to it, and that is a decision,
+not an omission.
 
-**This is an extension, not a rewrite.** Task 10 Step 19 already replaced this map with an
-eight-key version (`appraisal_failed` plus the seven `open_info_*` codes `openInfoAction`
-can produce). Do not reinstate an earlier, shorter map: a code with no entry renders
-nothing at all, so dropping one turns a specific message into a silent no-op. Task 10's
-step ends with a note saying "Task 12 also rewrites this map … carry all eight keys
-forward" — written before this task gained a revert action. Read it as: eight keys are the
-floor, and the three below are added on top. Skipping this step entirely would leave
-`revertPaymentAction`'s failures silent. After both tasks have run the map must hold
-exactly these eleven keys, and every one of them is reachable:
+**Do not shrink it.** #74 grew this map from one key to twelve; Tasks 5, 6 and 10 added
+ten more. A code with no entry renders nothing at all, so reinstating any earlier,
+shorter version turns a specific message into a silent no-op — and #74's e2e suite is
+eighteen table-driven cases, one per code, precisely because "eighteen codes landing at
+once makes that the likely regression". `revertPaymentAction` contributes no codes
+because it catches nothing (Step 5's ruling).
 
-| Code | Emitted by |
-|---|---|
-| `appraisal_failed` | `addAppraisedPoolAction` (`actions.ts`, phase 1, retained by Task 11) |
-| `open_info_reauth` | `openInfoAction` — no persisted grant, or `getFreshAccessToken` returned `no_token`/`invalid` (Task 10) |
-| `open_info_target` | `openInfoAction` — `getOpenInfoTarget` returned null (Task 10) |
-| `open_info_offline` | `openInfoAction` — ESI's own body said the character is not online (Task 10) |
-| `open_info_busy` | `openInfoAction` — `classifyOpenInfoFailure` → `busy` (420/429) (Task 10) |
-| `open_info_timeout` | `openInfoAction` — `classifyOpenInfoFailure` → `timeout` (Task 10) |
-| `open_info_failed` | `openInfoAction` — `classifyOpenInfoFailure` → `failed`, or `getFreshAccessToken` returned `transient` (Task 10) |
-| `open_info_dry_run` | `openInfoAction` — `getFreshAccessToken` returned `dry_run` (Task 10) |
-| `revert_forbidden` | `revertPaymentAction` — `PayoutForbiddenError` (Task 12) |
-| `revert_missing` | `revertPaymentAction` — `PayoutNotFoundError` (Task 12) |
-| `revert_not_paid` | `revertPaymentAction` — `PayoutLockedError` (Task 12) |
+After every task has run, the map holds exactly these twenty-two keys, and every one of
+them is reachable:
+
+| Code | Emitted by | Introduced by |
+|---|---|---|
+| `appraisal_failed` | `addAppraisedPoolAction` — `TriffError` or `EsiError` from `appraiseLoot` | phase 1; kept by #74, retained by Task 11 |
+| `pricing_mode` | `addAppraisedPoolAction` — not one of `PRICING_MODES` | #74 |
+| `location_kind` | `addAppraisedPoolAction` — `locationKind` is neither `station` nor `region` | #74 |
+| `station_invalid` | `addAppraisedPoolAction` — non-numeric id, kind `station` | #74 |
+| `region_invalid` | `addAppraisedPoolAction` — non-numeric id, kind `region` | #74 |
+| `note_required` | `addFlatPoolAction` — blank note | #74 |
+| `total_invalid` | `addFlatPoolAction` — `totalValue` fails the money regex | #74 |
+| `shares_required` | `setParticipantSharesAction` — blank shares | #74 |
+| `shares_invalid` | `setParticipantSharesAction` — shares fail the money regex | #74 |
+| `shares_positive` | `setParticipantSharesAction` — `iskToCents(shares) <= 0n` | #74 |
+| `shares_range` | `setParticipantSharesAction` — `iskToCents(shares) > MAX_SHARES_HUNDREDTHS` | Task 5 |
+| `share_format` | `setCorpShareAction` — percentage fails the regex | #74 |
+| `share_range` | `setCorpShareAction` — percentage over 100 | #74 |
+| `participant_name_required` | `addParticipantAction` — blank name | Task 6 |
+| `participant_duplicate` | `addParticipantAction` — `PayoutDuplicateParticipantError` | Task 6 |
+| `open_info_reauth` | `openInfoAction` — no persisted grant, or `getFreshAccessToken` returned `no_token`/`invalid` | Task 10 |
+| `open_info_target` | `openInfoAction` — `getOpenInfoTarget` returned null | Task 10 |
+| `open_info_offline` | `openInfoAction` — ESI's own body said the character is not online | Task 10 |
+| `open_info_busy` | `openInfoAction` — `classifyOpenInfoFailure` → `busy` (420/429) | Task 10 |
+| `open_info_timeout` | `openInfoAction` — `classifyOpenInfoFailure` → `timeout` | Task 10 |
+| `open_info_failed` | `openInfoAction` — `classifyOpenInfoFailure` → `failed`, or `getFreshAccessToken` returned `transient` | Task 10 |
+| `open_info_dry_run` | `openInfoAction` — `getFreshAccessToken` returned `dry_run` | Task 10 |
+
+`/payouts/new` carries its **own, separate** map (`src/app/payouts/new/page.tsx:21-30`)
+with six keys — `name_required`, `date_invalid`, `url_invalid`, `url_scheme`,
+`share_format`, `share_range` — all produced by `createOperationAction` through
+`createFailed`. Nothing in this plan touches it. `share_format` and `share_range` appear
+in both maps deliberately: `createOperationAction` and `setCorpShareAction` reject
+identically but land on different pages, which is why each page carries its own copy.
 
 Paste the whole map, so the file ends in that state whichever version is currently there:
 
@@ -5744,6 +6003,30 @@ Paste the whole map, so the file ends in that state whichever version is current
 const ERRORS: Record<string, string> = {
   appraisal_failed:
     "Could not price that paste right now (triff.tools did not answer). Nothing was saved — adjust and try again, or use a flat pool.",
+  pricing_mode: "That is not one of the four pricing modes. Nothing was saved.",
+  location_kind:
+    "Price against a station or a region — triff accepts exactly one. Nothing was saved.",
+  station_invalid:
+    "Station ID must be digits only — Jita 4-4 is 60003760. Nothing was saved.",
+  region_invalid: "Region ID must be digits only. Nothing was saved.",
+  note_required:
+    "A flat pool needs a note saying where the number came from. It is the only record of why this total is what it is.",
+  total_invalid:
+    "Total must be a plain number like 12345.67 — no commas, and no shorthand like 1e5.",
+  shares_required: "Shares cannot be blank. The roster value was left as it was.",
+  shares_invalid:
+    "Shares must be a plain number like 1 or 1.5. The roster value was left as it was.",
+  shares_positive:
+    "Shares must be greater than zero. To pay someone nothing, exclude them instead — that keeps them on the roster and out of the split.",
+  shares_range: "Shares cannot exceed 9999.99. The roster value was left as it was.",
+  share_format:
+    "Corp share must be a plain percentage like 10 or 12.5. The old value is unchanged.",
+  share_range:
+    "Corp share cannot exceed 100% — that would leave the roster nothing to split. The old value is unchanged.",
+  participant_name_required:
+    "Type a character name to add someone to the roster. Nothing was added.",
+  participant_duplicate:
+    "Someone is already on this roster under that name. Nothing was added — two rows under one unresolved name pay two full shares to whoever answers to it.",
   // The expected outcome on a busy night, not a fault, and the ONLY message
   // here that claims to know why: it is used only when ESI's own error body
   // said so. Worded as a fact about the game, because the fallback — copy the
@@ -5768,15 +6051,6 @@ const ERRORS: Record<string, string> = {
     "That line cannot be opened: it is excluded, has no linked character, or the operation is no longer finalized. Reload the page to see where it stands.",
   open_info_dry_run:
     "This deployment is in dry-run mode, so nothing is sent to EVE. The amounts and the payment controls are real; only the in-game window is suppressed.",
-  // The three below are all "somebody else changed this row first". Each says
-  // what did not happen, because the operator armed and confirmed a
-  // destructive control and deserves to know money did not move.
-  revert_not_paid:
-    "That payment was already reverted, or the operation is no longer finalized — so there was nothing to take back. Nothing changed; reload the page to see where it stands.",
-  revert_missing:
-    "That participant is no longer on this roster, so there was nothing to revert. Nothing changed; reload the page to see the current roster.",
-  revert_forbidden:
-    "Your account can no longer operate payouts, so the revert was not applied. Nothing changed.",
 };
 ```
 
