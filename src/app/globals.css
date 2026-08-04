@@ -593,8 +593,8 @@ h3.rule-head__label {
    box a little just narrows the message, where overshooting it is the
    overflow this rule exists to prevent.
 
-   This constant is derived from `.page`'s own gutter (globals.css:311,1895)
-   and nothing ties the two together structurally: the measured slack here is
+   This constant is derived from `.page`'s own gutter (its base rule, plus the
+   `max-width: 40rem` override) and nothing ties the two together structurally: the measured slack here is
    about 11px against a 304px scroller at 320px, so a future change to either
    gutter value, or a page-level horizontal scrollbar eating into the
    viewport, could erode that margin silently. Revisit this calc if `.page`'s
