@@ -214,8 +214,17 @@ export default async function AccountPage({
             broken — must survive the verdict leading with the fault. */}
         {health.firstSyncPending && (
           <Notice>
-            First sync has not run yet. Standings, map access and Discord roles update
-            within a few minutes of linking a character.
+            First sync has not run yet.{" "}
+            {/* The Discord clause is conditional because this notice renders
+                directly above a "Link Discord" button on an unlinked account.
+                Promising Discord roles there is both false (nothing pushes to
+                Discord until the link exists) and quietly costly: it tells a
+                member the one thing they still have to do is already handled.
+                The unlinked branch spends the same clause pointing at the
+                control instead. */}
+            {view.discordLinked
+              ? "Standings, map access and Discord roles update within a few minutes of linking a character."
+              : "Standings and map access update within a few minutes of linking a character. Discord roles start once you link Discord below."}
           </Notice>
         )}
 

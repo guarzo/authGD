@@ -177,7 +177,13 @@ export function ContactRemedy({
         {result === "token_refresh_failed"
           ? "Refreshing this character's token failed."
           : "The last sync for this character failed."}{" "}
-        authGD retries automatically. Nothing to do here.
+        {/* Not "nothing to do here": #53 and #60 already spent that phrase on
+            the label remedies, where it means "nothing more to do *in authGD*"
+            and sits after an explicit "rename it in game". Reusing it for a
+            code that genuinely asks nothing of anyone gives one phrase two
+            readings, and the weaker one teaches members to skim past the
+            imperative that precedes it. */}
+        authGD retries automatically. No action needed.
       </span>
     );
   }

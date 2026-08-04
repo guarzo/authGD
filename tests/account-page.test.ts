@@ -153,7 +153,11 @@ describe("ContactRemedy (job-failure codes)", () => {
     (result) => {
       const html = render(result);
       expect(html).toContain("automatically");
-      expect(html).toContain("Nothing to do here");
+      expect(html).toContain("No action needed");
+      // The label remedies own "nothing to do here", where it means "nothing
+      // more to do in authGD" and follows an imperative to act in game. These
+      // codes ask nothing of anyone, so they must not borrow that phrase.
+      expect(html).not.toContain("othing to do here");
       expect(html).not.toContain("re-authorize");
     },
   );
