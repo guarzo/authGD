@@ -3,13 +3,14 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { loadConfig, type Config } from "@/config";
 import {
   auditLog,
+  lootItem,
   lootPool,
   payoutOperation,
   payoutParticipant,
   payoutPayment,
 } from "@/db/schema";
 import { unlinkCharacter } from "@/services/accounts";
-import { addAppraisedPool, deletePool } from "@/services/payout-loot";
+import { addAppraisedPool, deletePool, setItemPrice } from "@/services/payout-loot";
 import {
   PayoutForbiddenError,
   PayoutLockedError,
@@ -580,11 +581,11 @@ describe("the service layer is the authorization boundary", () => {
    * re-checks inside its own transaction. If any of these stop throwing, the
    * guard was dropped from that function.
    *
-   * All fourteen mutating exports are exercised here: createOperation, setRoster,
+   * All fifteen mutating exports are exercised here: createOperation, setRoster,
    * finalizeOperation, unlockOperation, setParticipantShares,
    * setParticipantExcluded, removeParticipant, recordPayment, addAppraisedPool,
-   * deletePool, setCorpSharePct, revertPayment, addParticipant. addFlatPool is
-   * covered separately in payout-loot.test.ts.
+   * deletePool, setCorpSharePct, revertPayment, addParticipant, setItemPrice.
+   * addFlatPool is covered separately in payout-loot.test.ts.
    */
   it("rejects every mutation when the actor is not an active flygd account", async () => {
     const operator = await seedOperator();
@@ -621,6 +622,18 @@ describe("the service layer is the authorization boundary", () => {
         appraisal: { items: [], totalValue: "0.00", dropped: [] },
       }),
     );
+    const [loopItem] = await ctx.db
+      .insert(lootItem)
+      .values({
+        poolId,
+        typeId: 34,
+        name: "Tritanium",
+        qty: 1,
+        unitPrice: "1.00",
+        totalValue: "1.00",
+        priceSource: "triff",
+      })
+      .returning();
     // Finalized (not draft) so the recordPayment case below tests the
     // authorization guard itself rather than the unrelated "operation must be
     // finalized before paying" PayoutLockedError a draft operation would throw
@@ -683,6 +696,9 @@ describe("the service layer is the authorization boundary", () => {
       ).rejects.toThrow(PayoutForbiddenError);
       await expect(
         ctx.db.transaction((tx) => addParticipant(tx, actor, operationId, "Nope")),
+      ).rejects.toThrow(PayoutForbiddenError);
+      await expect(
+        ctx.db.transaction((tx) => setItemPrice(tx, actor, loopItem.id, "2.00")),
       ).rejects.toThrow(PayoutForbiddenError);
     }
 

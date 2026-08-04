@@ -6,7 +6,12 @@ import { redirect } from "next/navigation";
 import { getConfig } from "@/config";
 import { getDb } from "@/db";
 import { appraiseLoot } from "@/services/appraisal";
-import { addAppraisedPool, addFlatPool, deletePool } from "@/services/payout-loot";
+import {
+  addAppraisedPool,
+  addFlatPool,
+  deletePool,
+  setItemPrice,
+} from "@/services/payout-loot";
 import {
   MAX_SHARES_HUNDREDTHS,
   PayoutDuplicateParticipantError,
@@ -242,6 +247,25 @@ export async function deletePoolAction(
 ): Promise<void> {
   const actor = await requireOperatorAccount();
   await getDb().transaction((dbtx) => deletePool(dbtx, actor, poolId));
+  revalidateOperation(operationId);
+}
+
+export async function setItemPriceAction(
+  operationId: string,
+  itemId: string,
+  formData: FormData,
+): Promise<void> {
+  const actor = await requireOperatorAccount();
+  const unitPrice = field(formData, "unitPrice").trim();
+  // Two decimals is what numeric(20,2) holds. A third is refused rather than
+  // rounded: an operator who typed 0.004 meant something specific, and a
+  // silent round to 0.01 would inflate the line 2.5x with no sign of it. The
+  // escape hatch for genuinely sub-cent heaps is the flat-total pool, which
+  // takes a pool value directly and skips per-item pricing.
+  if (!/^\d+(\.\d{1,2})?$/.test(unitPrice)) {
+    throw new Error("a price must be a plain number with at most 2 decimals, like 12.34");
+  }
+  await getDb().transaction((dbtx) => setItemPrice(dbtx, actor, itemId, unitPrice));
   revalidateOperation(operationId);
 }
 
