@@ -45,7 +45,31 @@ This is one task rather than three because the pieces cannot land separately wit
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `tests/audit-summarize.test.ts`, inside the existing `describe("summarizeDetails", ...)` block, before its closing `});`:
+Two parts. Do the replacement first, because appending around it would leave the file asserting both a fictional `admin.promoted` shape and its removal.
+
+**1a. Replace the one existing test this change contradicts.** `tests/audit-summarize.test.ts:60-64` currently reads (shown de-indented; in the file it sits one level in, inside `describe`):
+
+```ts
+it("shows scope on a privilege grant", () => {
+  expect(
+    summarizeDetails("admin.promoted", { scope: "full", note: "shift lead" }),
+  ).toBe("full, shift lead");
+});
+```
+
+That test pins the speculative declaration this task deletes. It is the only existing case that changes. Replace those five lines in place with:
+
+```ts
+it("no longer declares admin.promoted, which writes no payload", () => {
+  // The declaration described seeded test data: the app has no admin scope
+  // or note. An admin.promoted row has no details at all, so page.tsx
+  // short-circuits before this function; a payload from anywhere else falls
+  // through to the generic fallback rather than to a fictional shape.
+  expect(summarizeDetails("admin.promoted", { scope: "all" })).toBe("scope=all");
+});
+```
+
+**1b. Append the new cases.** In the same file, inside the existing `describe("summarizeDetails", ...)` block, before its closing `});`:
 
 ```ts
 it("surfaces the cause a tier change was written with", () => {
@@ -165,14 +189,6 @@ it("surfaces the tier and cause a discord role change was written with", () => {
   ).toBe("+green, tier green, tier change");
 });
 
-it("no longer declares admin.promoted, which writes no payload", () => {
-  // The declaration described seeded test data: the app has no admin scope
-  // or note. An admin.promoted row has no details at all, so page.tsx
-  // short-circuits before this function; a payload from anywhere else falls
-  // through to the generic fallback rather than to a fictional shape.
-  expect(summarizeDetails("admin.promoted", { scope: "all" })).toBe("scope=all");
-});
-
 it("still degrades on rows written before this change", () => {
   // The no-migration guarantee, expressed as tests.
   expect(summarizeDetails("tier.changed", { to: "green", cause: "main unlinked" })).toBe(
@@ -187,7 +203,7 @@ it("still degrades on rows written before this change", () => {
 
 Run: `npx vitest run tests/audit-summarize.test.ts`
 
-Expected: FAIL. Representative failures: `"flygd → green"` received where `"flygd → green, main unlinked"` was expected, and `"—"` received for `token.needs_reauth` because no such declaration exists yet.
+Expected: FAIL. Representative failures: `"flygd → green"` received where `"flygd → green, main unlinked"` was expected, and `"—"` received for `token.needs_reauth` because no such declaration exists yet. The replaced test from 1a also fails, receiving `"all"` rather than `"scope=all"`, because the speculative declaration is still present.
 
 - [ ] **Step 3: Add the key-tagging type and helper**
 
@@ -401,7 +417,15 @@ Replace with:
   await expect(systemDetails.locator(".json__peek")).toHaveText("→ green, membership");
 ```
 
-**These two are the change working, not the change overreaching.** PR #73's plan carried a standing instruction not to change assertions in this file. The line: structural assertions stay untouched (the 29 `tbody tr` references, the eleven count assertions, the three `.log__empty` assertions, and `e2e/admin.spec.ts:504`). If one of those breaks, that rule applies unchanged: stop. **Exactly two `.json__peek` text assertions change.** A third one changing means a declaration went further than the table in Step 6.
+**These two are the change working, not the change overreaching.** PR #73's plan carried a standing instruction not to change assertions in this file. The line: **exactly two `.json__peek` text assertions change, and nothing structural changes at all.** A third changed `.json__peek` means a declaration went further than the table in Step 6; stop and reconcile the table rather than editing the assertion.
+
+Do not count the structural assertions and do not encode a total here; totals go stale. Check the diff instead. After the two edits above, run:
+
+```bash
+git diff -U0 -- e2e/ | grep -E '^-[^-]' | grep -E 'toHaveCount|tbody tr|log__empty' || echo "(empty = no structural assertion touched)"
+```
+
+Only removed lines are inspected, so Step 10's new test may add its own `tbody tr` locator freely. Expected: `(empty = no structural assertion touched)`. Any output means a structural assertion was modified or deleted, which this task has no business doing.
 
 - [ ] **Step 10: Add the end-to-end product-question test**
 
@@ -638,7 +662,19 @@ built has been rendering a bare arrow on four writers out of five."
 
 - [ ] **Step 1: Write the failing tests**
 
-Add to `tests/accounts.test.ts`. The file already wraps the call as `unlink(actor, characterId)` (line 67):
+These are the first tests in this file to seed a character directly, so widen the import first. `tests/accounts.test.ts:19` currently reads:
+
+```ts
+import { seedAccount } from "./helpers/seed";
+```
+
+Replace it with:
+
+```ts
+import { seedAccount, seedCharacter } from "./helpers/seed";
+```
+
+Then add to `tests/accounts.test.ts`. The file already wraps the call as `unlink(actor, characterId)` (line 67):
 
 ```ts
 it("records the unlinked character's name, which the row deletion destroys", async () => {
@@ -1104,7 +1140,14 @@ Confirm against `docs/superpowers/specs/2026-08-04-audit-access-payloads-design.
 - No change under `src/core/`.
 - No change to any route, guard, or `page.tsx`.
 - Exactly two `.json__peek` text assertions changed in `e2e/audit.spec.ts`, plus one added test. A third changed text assertion means a declaration went further than Task 1's table.
-- No structural e2e assertion changed: the 29 `tbody tr` references, the eleven count assertions, the three `.log__empty` assertions, and `e2e/admin.spec.ts:504`.
+- No structural e2e assertion was modified or deleted. Verify from the diff rather than from a remembered total:
+
+```bash
+git diff main...HEAD -- e2e/ | grep -E '^-[^-]' | grep -E 'toHaveCount|tbody tr|log__empty' || echo "(empty = none touched)"
+```
+
+  Expected: `(empty = none touched)`. Only removed lines are inspected, so Task 1's added test is free to use its own `tbody tr` locator. `e2e/admin.spec.ts` should not appear in the diff at all.
+
 - No em dashes in comments or user-visible copy, and no `--` as a dash substitute.
 
 - [ ] **Step 2: Run the full suite and quote every result**
@@ -1135,4 +1178,12 @@ Grep the diff for placeholders, `console.log`, `.only`, and `.skip`.
 
 - [ ] **Step 4: Run the project's post-implementation gates**
 
-Per `CLAUDE.md`: `code-reviewer`, then `my:polish-core --fix`. Inspect the edits polish makes and re-run whatever verification they affect before any completion claim. Then `my:change-explainer`.
+This worktree contains no `CLAUDE.md`. The only instruction file checked in here is `AGENTS.md`, and it holds nothing but the Next.js rules block that `next dev` writes; it declares no gates. The gates below are therefore stated in full rather than referenced.
+
+**Review.** Dispatch the repository's own reviewer, `.claude/agents/code-reviewer.md`, via the Agent tool with `subagent_type: "code-reviewer"`, over `git diff main...HEAD`. It is read-only and reports with `file:line` citations. It checks the invariants this branch sits closest to: an audit write on every state change, purity of `src/core/`, admin-guard coverage, migration safety, and the enqueue-don't-execute boundary. Two of those are live here. Every writer this branch touches already logged an audit row and must still log exactly one, with the payload as the only change; and no task may reach into `src/core/`.
+
+**Then fix and re-verify.** Address whatever the review raises, then re-run the affected commands from Step 2 and quote their output. A review finding that is deliberate rather than a defect gets a one-line justification in the PR body, not a silent dismissal.
+
+**Then write the completion explanation** covering: what changed, how a payload reaches the audit cell, the design decisions (undeclared-key remainder, the three combinator additions, deleting `admin.promoted` rather than emptying it, the `character.unlinked` lock ordering), deviations from this plan, the backward-compatibility behavior on rows written before the change, the exact verification run, and where a reviewer should look first. Task 1 is the highest-risk file, because it is the one change that alters what every already-persisted row renders as.
+
+Do not claim completion until Step 2's five commands have been run and quoted.
