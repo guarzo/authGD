@@ -4,7 +4,7 @@ import { decideTier } from "@/core/tier";
 describe("decideTier", () => {
   const cases: Array<{
     name: string;
-    tier: "flygd" | "blue" | "green";
+    tier: "pending" | "flygd" | "blue" | "green";
     tierLocked: boolean;
     mainConfirmed: boolean;
     mainInAlliance: boolean;
@@ -88,6 +88,22 @@ describe("decideTier", () => {
       tierLocked: false,
       mainConfirmed: false,
       mainInAlliance: true,
+      expected: null,
+    },
+    {
+      name: "pending + main in alliance → flygd (real members skip the queue)",
+      tier: "pending",
+      tierLocked: false,
+      mainConfirmed: true,
+      mainInAlliance: true,
+      expected: "flygd",
+    },
+    {
+      name: "pending + main out of alliance → stays pending, never auto-green",
+      tier: "pending",
+      tierLocked: false,
+      mainConfirmed: true,
+      mainInAlliance: false,
       expected: null,
     },
   ];
