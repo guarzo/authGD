@@ -19,7 +19,11 @@ test("aria-current lands on the right tab on every shell route", async ({
   page,
   context,
 }) => {
-  const admin = await seedMember(db, { name: "Boss", isAdmin: true });
+  // tier flygd so the payout routes render too — they carry their own nav,
+  // built independently of the account and admin ones, and were the first
+  // thing to reintroduce exactly the key-vs-href mismatch this test exists
+  // for (they passed `current="payouts"` against an `href` of `/payouts`).
+  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
   await context.addCookies([await sessionCookieFor(db, admin.id)]);
 
   await page.goto("/account");
@@ -32,6 +36,8 @@ test("aria-current lands on the right tab on every shell route", async ({
     ["/admin/accounts", "Members"],
     ["/admin/audit", "Audit log"],
     ["/admin/sync", "Sync"],
+    ["/payouts", "Payouts"],
+    ["/payouts/new", "Payouts"],
   ] as const) {
     await page.goto(path);
     await expect(page.getByRole("link", { name: label })).toHaveAttribute(

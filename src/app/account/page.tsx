@@ -4,6 +4,7 @@ import { cookies } from "next/headers";
 import { getConfig } from "@/config";
 import { getDb } from "@/db";
 import { getAccountView, type PushStatus } from "@/services/account-view";
+import { canReadPayouts } from "@/services/payouts";
 import { getSessionAccount } from "@/services/session";
 import {
   Notice,
@@ -108,6 +109,9 @@ export default async function AccountPage({
   const { error } = await searchParams;
   const message = error ? ERRORS[error] : undefined;
   const now = Date.now();
+  // Same tier-only gate the payouts pages themselves re-check — this only
+  // decides whether the link appears, never whether the route is reachable.
+  const showPayoutsLink = await canReadPayouts(getDb(), sess.accountId);
 
   const nav = [
     // These two sit side by side for an admin, so they must not share a word.
@@ -116,6 +120,7 @@ export default async function AccountPage({
     // genuinely the reader's own, and nothing else in either bar competes
     // with it now.
     { href: "/account", label: "Your account" },
+    ...(showPayoutsLink ? [{ href: "/payouts", label: "Payouts" }] : []),
     ...(view.isAdmin ? [{ href: "/admin/accounts", label: "Members" }] : []),
   ];
 

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { auditLog, discordLink } from "@/db/schema";
+import { auditLog, discordLink, payoutOperation } from "@/db/schema";
 import { logAudit, queryAuditLog, resolveAuditIdentities } from "@/services/audit";
 import { setupTestDb, truncateAll } from "./helpers/db";
 import { testConfig } from "./helpers/config";
@@ -248,5 +248,63 @@ describe("resolveAuditIdentities / queryAuditLog resolution", () => {
     // Fixed, small number of batched queries regardless of 220 rows:
     // accounts + discordLinks (parallel) + discordAccounts + characters.
     expect(calls).toBeLessThanOrEqual(4);
+  });
+});
+
+describe("resolveAuditIdentities: payout target kind", () => {
+  it("resolves a payout.paid row's target to the operation's name", async () => {
+    const [op] = await ctx.db
+      .insert(payoutOperation)
+      .values({ name: "Thursday roam", occurredAt: new Date(), corpSharePct: "10.00" })
+      .returning();
+    await logAudit(ctx.db, {
+      actor: "system",
+      action: "payout.paid",
+      target: op.id,
+      details: { participantId: "irrelevant-here" },
+    });
+    const [row] = await queryAuditLog(ctx.db);
+    expect(row.targetKind).toBe("payout");
+    expect(row.targetName).toBe("Thursday roam");
+    expect(row.target).toBe(op.id); // raw uuid preserved
+  });
+
+  it("leaves an unknown operation uuid unresolved, raw target preserved", async () => {
+    const fakeUuid = "00000000-0000-0000-0000-000000000000";
+    await logAudit(ctx.db, {
+      actor: "system",
+      action: "payout.finalized",
+      target: fakeUuid,
+    });
+    const [row] = await queryAuditLog(ctx.db);
+    expect(row.targetKind).toBe("unresolved");
+    expect(row.targetName).toBeNull();
+    expect(row.target).toBe(fakeUuid);
+  });
+
+  it("does not misclassify a payout row as an account, even though both target uuids", async () => {
+    // Same uuid shape as an account id, seeded as a payout operation only —
+    // if targetKindFromAction ever fell back to "account" for payout.* this
+    // would spuriously resolve via the account/character join instead.
+    const acc = await seedAccount(ctx.db);
+    await seedCharacter(ctx.db, cfg, {
+      id: 90101,
+      accountId: acc.id,
+      name: "Should Not Appear",
+      main: true,
+    });
+    const [op] = await ctx.db
+      .insert(payoutOperation)
+      .values({ name: "Roster test", occurredAt: new Date(), corpSharePct: "0" })
+      .returning();
+    await logAudit(ctx.db, {
+      actor: "system",
+      action: "payout.roster_set",
+      target: op.id,
+    });
+    const [row] = await queryAuditLog(ctx.db);
+    expect(row.targetKind).toBe("payout");
+    expect(row.targetName).toBe("Roster test");
+    expect(row.targetName).not.toBe("Should Not Appear");
   });
 });

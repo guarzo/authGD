@@ -7,6 +7,7 @@ const ESI_BASE = "https://esi.evetech.net/latest";
 const WRITE_CHUNK = 100; // ESI POST/PUT contacts body limit
 const DELETE_CHUNK = 20; // ESI DELETE contacts query limit
 const AFFILIATION_MAX = 500;
+const RESOLVE_IDS_CHUNK = 500; // ESI POST /universe/ids/ body limit
 
 export class EsiError extends Error {
   status: number;
@@ -36,6 +37,11 @@ const contactsSchema = z.array(
     label_ids: z.array(z.number().int()).nullish(),
   }),
 );
+const universeIdsSchema = z.object({
+  inventory_types: z
+    .array(z.object({ id: z.number().int(), name: z.string() }))
+    .optional(),
+});
 
 export type Affiliation = {
   characterId: number;
@@ -159,6 +165,33 @@ export function createEsiClient(opts: EsiClientOptions = {}) {
     }));
   }
 
+  /**
+   * Unauthenticated. Names ESI doesn't recognize are simply absent from the
+   * map — appraiseLoot turns that into a visible "unresolved" line, never a
+   * thrown error, so a partial paste never blocks the rest of it.
+   */
+  async function resolveIds(names: string[]): Promise<Map<string, number>> {
+    const out = new Map<string, number>();
+    for (const namesChunk of chunk(names, RESOLVE_IDS_CHUNK)) {
+      const res = await request("/universe/ids/", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(namesChunk),
+      });
+      const parsed = safeParse(
+        universeIdsSchema,
+        await res.json(),
+        "POST",
+        "/universe/ids/",
+        res.status,
+      );
+      for (const t of parsed.inventory_types ?? []) {
+        out.set(t.name.toLowerCase(), t.id);
+      }
+    }
+    return out;
+  }
+
   async function getContactLabels(
     characterId: number,
     accessToken: string,
@@ -260,6 +293,7 @@ export function createEsiClient(opts: EsiClientOptions = {}) {
 
   return {
     postAffiliation,
+    resolveIds,
     getContactLabels,
     getAllContacts,
     addContacts: (
