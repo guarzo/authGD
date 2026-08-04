@@ -3,6 +3,7 @@ import type { createTriffClient, TriffQuote } from "@/lib/triff/client";
 import { centsToIsk, iskToCents } from "@/core/payout-split";
 import {
   assertExactLineTotal,
+  lineTotalCents,
   parseLootPaste,
   type DroppedLootLine,
 } from "@/core/loot-paste";
@@ -76,14 +77,15 @@ export async function appraiseLoot(
     // What is left is IEEE-754's ~1.1e-16 RELATIVE error on the product, and
     // bounding qty does NOT remove it: at 1e17 cents the representable values
     // are 16 cents apart, so 1000000.01 ISK x 1,000,000,000 units rounds a
-    // cent low. So the PRODUCT is bounded too, and the bound is ENFORCED here
-    // rather than merely observed — at or below MAX_EXACT_LINE_CENTS the cent
-    // grid has spacing one and Math.round returns the true cent total to
-    // within half of one. A line worth more than ~90 trillion ISK is refused
-    // by name instead of being stored on the wrong cent.
+    // cent low. Bounding the PRODUCT does not remove it either — that only
+    // makes the answer representable, not correct: 48804.84 ISK x
+    // 1,845,177,173 units is under MAX_EXACT_LINE_CENTS and still computed a
+    // cent low in a float. So the multiply itself is done in bigint, over the
+    // price's decimal expansion, and the bound below is what it says it is: a
+    // ceiling on a single line, refused by name rather than stored wrong.
     const productCents = price * line.qty * 100;
     assertExactLineTotal(productCents, `the line total for ${line.name}`);
-    const totalCents = BigInt(Math.round(productCents));
+    const totalCents = lineTotalCents(price, line.qty);
     // The stored unit price stays 2dp because that is the column's type. It
     // is a DISPLAY value: unitPrice * qty deliberately need not equal
     // totalValue, and for a sub-cent price it will not. A row where

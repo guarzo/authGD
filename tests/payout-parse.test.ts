@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { parseRosterPaste } from "@/core/roster-paste";
 import {
+  lineTotalCents,
   MAX_LOOT_QTY,
   parseLootPaste,
   type DroppedLootLine,
@@ -64,9 +65,8 @@ describe("parseLootPaste", () => {
     // already wrong before Postgres sees it. This is a correctness bound.
     //
     // It bounds the COUNT and nothing else. It does NOT make `price * qty`
-    // exact — that needs MAX_EXACT_LINE_CENTS, enforced in appraiseLoot and
-    // covered in tests/appraisal.test.ts. Do not read one as covering the
-    // other.
+    // exact — `lineTotalCents` does, and MAX_EXACT_LINE_CENTS only caps how
+    // large a single line may be. Do not read any one as covering another.
     expect(MAX_LOOT_QTY).toBe(Number.MAX_SAFE_INTEGER);
   });
 
@@ -201,5 +201,49 @@ describe("parseLootPaste", () => {
       items: expected,
       dropped: expectedDropped ?? [],
     });
+  });
+});
+
+describe("lineTotalCents", () => {
+  const cases: Array<{ label: string; price: number; qty: number; expected: bigint }> = [
+    {
+      // The case a float gets wrong: `48804.84 * 1845177173 * 100` is
+      // 9005357669991731 in IEEE-754, one cent under the true total, and it
+      // sits below MAX_EXACT_LINE_CENTS so no bound catches it.
+      label: "a total the float multiply rounds a cent low",
+      price: 48804.84,
+      qty: 1845177173,
+      expected: 9005357669991732n,
+    },
+    {
+      // Rounding happens once, at the line total — not per unit. Per-unit
+      // rounding would store 0.00 for a line genuinely worth 40,000 ISK.
+      label: "a sub-cent unit price over a large quantity",
+      price: 0.004,
+      qty: 10000000,
+      expected: 4000000n,
+    },
+    {
+      // Small enough that JavaScript prints it in exponential form, which a
+      // naive split on "." misparses into a wildly wrong integer.
+      label: "a price JavaScript prints as an exponent",
+      price: 1e-7,
+      qty: 1000000000,
+      expected: 10000n,
+    },
+    {
+      // Half away from zero, matching the Math.round tie-break it replaced, so
+      // the only totals that move are the ones the float got wrong.
+      label: "a half-cent total, rounded away from zero",
+      price: 0.005,
+      qty: 1,
+      expected: 1n,
+    },
+    { label: "an exact whole-cent total", price: 12.34, qty: 3, expected: 3702n },
+    { label: "a zero price", price: 0, qty: 5, expected: 0n },
+  ];
+
+  it.each(cases)("computes $label", ({ price, qty, expected }) => {
+    expect(lineTotalCents(price, qty)).toBe(expected);
   });
 });

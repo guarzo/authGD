@@ -859,7 +859,7 @@ test("override an item price, finalize, pay, revert, and pay again", async ({
   // which is what the arm step is guarding.
   await page.getByRole("button", { name: "Finalize" }).click();
   await page.getByRole("button", { name: /^confirm finalize/ }).click();
-  await page.getByRole("button", { name: "mark paid" }).first().click();
+  await rowFor("Brain Tartare").getByRole("button", { name: "mark paid" }).click();
   await page.getByRole("button", { name: /^confirm mark paid/ }).click();
   // exact: true — "unpaid" contains "paid" as a substring, so a plain
   // toContainText("paid") is satisfied by the row's PRIOR "unpaid" status and

@@ -18,45 +18,88 @@ export type LootPasteResult = { items: ParsedLootLine[]; dropped: DroppedLootLin
 export const MAX_LOOT_QTY = Number.MAX_SAFE_INTEGER;
 
 /**
- * The largest line total, IN CENTS, that this system can compute exactly.
+ * The largest line total, IN CENTS, that this system records for one line.
  *
- * Bounding `qty` is not enough. An appraised line total is `price * qty * 100`
- * evaluated in a float, and above 2^53 cents the representable values are 2,
- * then 4, then 16 cents apart — so `Math.round` returns a neighbouring cent
- * rather than the true one. Two ordinary market prices at ordinary mineral
- * quantities: 1000000.01 ISK x 1,000,000,000 units computes
- * 100000001000000000 where the exact product is 100000001000000001, and
- * 1234567.89 ISK x 900,000,000 units computes 111111110099999984 where the
- * exact product is 111111110099999991. Both fit `numeric(20, 2)` with room to
- * spare, so the column bound never sees them.
- *
- * At or below this bound every integer is representable, so the cent grid has
- * spacing one and `Math.round` returns the true cent total to within half of
- * one — the floor of doing the multiply in a float at all.
+ * Bounding `qty` is not enough: a line total is a price times a quantity, and
+ * both can be ordinary while the product is enormous. 1000000.01 ISK x
+ * 1,000,000,000 units is 100000001000000001 cents, and 1234567.89 ISK x
+ * 900,000,000 units is 111111110099999991. Both fit `numeric(20, 2)` with room
+ * to spare, so the column bound never sees them, and a line worth more than
+ * ~90 trillion ISK is a typo far more often than it is loot.
  *
  * It coincides numerically with `MAX_LOOT_QTY` because both fall out of 2^53,
  * but it is a different bound on a different quantity: that one counts units,
  * this one counts cents. Neither implies the other.
+ *
+ * It is NOT what makes the arithmetic exact — `lineTotalCents` is. An earlier
+ * version of this comment claimed that at or below 2^53 the cent grid has
+ * spacing one and so `Math.round(price * qty * 100)` lands on the true cent.
+ * That confuses the magnitude of the product with the error in computing it.
+ * The bound makes the RESULT representable; it does nothing about the ~1.1e-16
+ * relative error the float `price` carries into the multiply, which at 9e15
+ * cents is already about a whole cent. 48804.84 ISK x 1,845,177,173 units sits
+ * under this bound and still computed 9005357669991731 where the exact total
+ * is 9005357669991732.
  */
 export const MAX_EXACT_LINE_CENTS = Number.MAX_SAFE_INTEGER;
 
 /**
- * Checked BEFORE the `BigInt(Math.round(...))` conversion, because that
- * conversion launders a wrong number into an exact-looking one and there is no
+ * Checked BEFORE the line total is converted to a bigint, because a bigint
+ * launders whatever it is handed into an exact-looking number and there is no
  * later check that can tell.
  *
  * A sibling of `assertWithinMoneyRange` in `src/services/payout-loot.ts` — same
  * plain `Error`, same "<what> exceeds ..." sentence — rather than the same
- * function, because it bounds a different thing: that one bounds a bigint
- * against the `numeric(20, 2)` COLUMN, this one bounds a float against what
- * IEEE-754 multiplies exactly. `MAX_EXACT_LINE_CENTS` is roughly ten thousand
- * times smaller than `MAX_MONEY_CENTS`, so the column check can never fire
- * first and merging the two would silently widen this one.
+ * function, because it bounds a different thing: that one bounds the total
+ * against the `numeric(20, 2)` COLUMN, this one bounds a single line.
+ * `MAX_EXACT_LINE_CENTS` is roughly ten thousand times smaller than
+ * `MAX_MONEY_CENTS`, so the column check can never fire first and merging the
+ * two would silently widen this one.
  */
 export function assertExactLineTotal(productCents: number, what: string): void {
   if (productCents > MAX_EXACT_LINE_CENTS) {
-    throw new Error(`${what} exceeds the largest value this system can compute exactly`);
+    throw new Error(`${what} exceeds the largest line total this system records`);
   }
+}
+
+/**
+ * The exact cent total for `qty` units at `price` ISK each, rounded ONCE, half
+ * away from zero — the same tie-break `Math.round` uses, so the only values
+ * that move are the ones the float got wrong.
+ *
+ * `price` arrives as a double (it is an interpolated percentile from the
+ * appraisal service, so sub-cent and half-cent unit prices are ordinary), and
+ * `price * qty * 100` inherits that double's ~1.1e-16 relative error. Near the
+ * top of the recordable range that error exceeds half a cent, so the multiply
+ * happens in bigint over the price's own decimal expansion instead: whatever
+ * decimal JavaScript prints for the double is scaled to an integer, and the
+ * rest is integer arithmetic that cannot drift.
+ *
+ * This does not recover precision the double never had — it makes the stored
+ * total the correctly rounded total OF THAT PRICE, which is the most any
+ * caller holding a double can ask for.
+ */
+export function lineTotalCents(price: number, qty: number): bigint {
+  const { digits, scale } = decimalParts(price);
+  const denominator = 10n ** BigInt(scale);
+  const numerator = digits * BigInt(qty) * 100n;
+  const whole = numerator / denominator;
+  const remainder = numerator % denominator;
+  return remainder * 2n >= denominator ? whole + 1n : whole;
+}
+
+/** A non-negative finite double as `digits / 10^scale`, exactly. Reads the
+ *  shortest round-trip decimal JavaScript prints for the value, including the
+ *  exponential forms it switches to for very small and very large magnitudes
+ *  ("1e-7", "1e+21"), which a naive split on "." would silently misparse. */
+function decimalParts(value: number): { digits: bigint; scale: number } {
+  const [mantissa, exponent] = value.toString().split(/e/i);
+  const [whole, fraction = ""] = mantissa.split(".");
+  const digits = BigInt(whole + fraction);
+  const scale = fraction.length - (exponent ? Number(exponent) : 0);
+  return scale < 0
+    ? { digits: digits * 10n ** BigInt(-scale), scale: 0 }
+    : { digits, scale };
 }
 
 // "12x Foo", "12 Foo" — qty (with optional comma grouping) leads the line.

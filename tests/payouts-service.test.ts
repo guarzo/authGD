@@ -582,7 +582,7 @@ describe("the service layer is the authorization boundary", () => {
    * re-checks inside its own transaction. If any of these stop throwing, the
    * guard was dropped from that function.
    *
-   * All fifteen mutating exports are exercised here: createOperation, setRoster,
+   * All fourteen mutating exports are exercised here: createOperation, setRoster,
    * finalizeOperation, unlockOperation, setParticipantShares,
    * setParticipantExcluded, removeParticipant, recordPayment, addAppraisedPool,
    * deletePool, setCorpSharePct, revertPayment, addParticipant, setItemPrice.

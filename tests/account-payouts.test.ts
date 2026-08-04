@@ -51,8 +51,11 @@ describe("AccountPayouts", () => {
     const html = render(false);
     expect(html).toContain("450000.00 ISK");
     expect(html).toContain("1200.50 ISK");
-    expect(html).toContain("paid");
-    expect(html).toContain("unpaid");
+    // Anchored on the element boundary: "unpaid" contains "paid", so a bare
+    // toContain("paid") passes on a render where every row is unpaid and this
+    // test would never notice the paid badge going missing.
+    expect(html).toContain(">paid<");
+    expect(html).toContain(">unpaid<");
   });
 
   it("renders the operation date, not a relative time", () => {

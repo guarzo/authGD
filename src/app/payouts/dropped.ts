@@ -75,7 +75,11 @@ export function decodeDropped(raw: string | undefined): DroppedReport | null {
         d !== null &&
         typeof (d as { line?: unknown }).line === "string" &&
         typeof (d as { reason?: unknown }).reason === "string" &&
-        (d as { reason: string }).reason in DROPPED_REASONS,
+        // `Object.hasOwn`, not `in`: this string comes off the query param, and
+        // `in` walks the prototype chain, so "constructor" and "toString" pass
+        // an `in` check and then render whatever `DROPPED_REASONS[reason]`
+        // resolves to on Object.prototype.
+        Object.hasOwn(DROPPED_REASONS, (d as { reason: string }).reason),
     )
     .slice(0, DROPPED_SAMPLE_LIMIT)
     .map((d) => ({ line: d.line.slice(0, DROPPED_LINE_CHARS), reason: d.reason }));

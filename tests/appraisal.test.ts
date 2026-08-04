@@ -215,7 +215,7 @@ describe("appraiseLoot", () => {
         },
       ),
     ).rejects.toThrow(
-      "the line total for Tritanium exceeds the largest value this system can compute exactly",
+      "the line total for Tritanium exceeds the largest line total this system records",
     );
   });
 
@@ -233,5 +233,24 @@ describe("appraiseLoot", () => {
     );
     expect(result.items[0].totalValue).toBe("90071990000000.00");
     expect(result.totalValue).toBe("90071990000000.00");
+  });
+
+  it("stores the true cent on a line the float multiply gets wrong", async () => {
+    // Under MAX_EXACT_LINE_CENTS, so the guard does not fire — and that guard
+    // was never what made this exact. `48804.84 * 1845177173 * 100` evaluates
+    // to 9005357669991731 in a float; the true total is 9005357669991732.
+    // Bounding the product only makes the answer representable; the price's
+    // own ~1.1e-16 representation error is already about a cent at this
+    // magnitude, which is why the multiply is done in bigint.
+    const result = await appraiseLoot(
+      "1845177173x Tritanium",
+      { pricingMode: "sell_best", stationId: 60003760 },
+      {
+        esi: fakeEsi({ tritanium: 34 }),
+        triff: fakeTriff({ 34: { sell: { best: 48804.84 } } }),
+      },
+    );
+    expect(result.items[0].totalValue).toBe("90053576699917.32");
+    expect(result.totalValue).toBe("90053576699917.32");
   });
 });
