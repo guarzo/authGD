@@ -4,7 +4,7 @@
 
 **Goal:** Make the payout tool usable end to end — operators can see and reprice the loot they pasted, add participants by hand, revert a mistaken payment, and open a recipient's info window in-game; members can see what they are owed; and the list page stops reading the whole table.
 
-**Architecture:** No new subsystems and no migration. Phase 2 works inside the boundaries phase 1 drew: `src/core/` stays pure, `src/services/payouts.ts` stays the authorization boundary (`requirePayoutOperator` first, then `lockOperation`, then re-read), `src/services/payout-view.ts` stays the unguarded read layer, and pages stay server components driving server actions through progressive-enhancement forms. Three things change shape. Derived payment state moves from "has a paid row" to the `paidAmount` column, which is what makes revert expressible at all. `payout_payment.at` is written as `clock_timestamp()` from inside the operation lock instead of defaulting to `now()`, which makes the event history causally ordered without a sequence column. And `listPayoutOperations` drops one query and scopes the other two behind a keyset cursor.
+**Architecture:** No new subsystems and no migration. Phase 2 works inside the boundaries phase 1 drew: `src/core/` stays pure, `src/services/payouts.ts` stays the authorization boundary (`requirePayoutOperator` first, then `lockOperation`, then re-read), `src/services/payout-view.ts` stays the unguarded read layer, and pages stay server components driving server actions through progressive-enhancement forms. Three things change shape. Derived payment state moves from "has a paid row" to the `paidAmount` column, which is what makes revert expressible at all. `payout_payment.at` is written from inside the operation lock as a clock reading clamped forward past that participant's latest row, instead of defaulting to `now()`, which makes a participant's event history strictly ordered without a sequence column and without a migration. And `listPayoutOperations` drops one query and scopes the other two behind a keyset cursor.
 
 **Tech Stack:** Next.js 15 (App Router, server components, server actions), TypeScript, Drizzle ORM, PostgreSQL, pg-boss, Vitest, Playwright, msw, Zod.
 
@@ -20,7 +20,7 @@ Every task's requirements implicitly include this section.
 
 **Money is exact.** ISK is `numeric(20,2)` in the database and native `bigint` cents in TypeScript, converted with `iskToCents` / `centsToIsk` from `src/core/payout-split.ts`. `Number()` never touches a money value, on the write side or the read side. `MAX_MONEY_CENTS = 10n ** 20n - 1n` is the largest value the column holds.
 
-**Round once, at the line total.** Never round a per-unit price before multiplying by quantity — the error would scale with quantity instead of staying bounded at half a cent per line. A manual price is already at cent precision, so for manual items per-unit and line-total rounding coincide and the product is exact.
+**Round once, at the line total.** Never round a per-unit price before multiplying by quantity — the error would scale with quantity instead of being confined to the single rounding at the line total. A manual price is already at cent precision, so for manual items per-unit and line-total rounding coincide and the product is exact — it is a `bigint` multiply with nothing to round. An **appraised** line total is not exact by the same argument: it is a float product, and rounding once removes the per-unit error but not IEEE-754's own. That is what `MAX_EXACT_LINE_CENTS` (Task 2) bounds, and bounding `MAX_LOOT_QTY` does not substitute for it.
 
 **`src/core/` is pure.** No database, no network, no imports outside `src/core/`.
 
@@ -236,12 +236,12 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 ---
 
-### Task 2: loot paste reports the lines it dropped, and bounds absurd quantities
+### Task 2: loot paste reports the lines it dropped, and bounds absurd quantities and inexact line totals
 
 **Files:**
 
 - Modify: `src/core/loot-paste.ts:1-78` (whole file)
-- Modify: `src/services/appraisal.ts:4`, `:15`, `:36-37`, `:88`
+- Modify: `src/services/appraisal.ts:4`, `:15`, `:36-37`, `:66-69`, `:88`
 - Modify: `tests/payout-loot.test.ts:96`, `:134`, `:209`, `:383`, `:410` (add
   `dropped: []` to each `appraisal:` literal)
 - Modify: `tests/payouts-service.test.ts:610`, `:654` (same)
@@ -261,6 +261,8 @@ export type DroppedLootLine = {
 };
 export type LootPasteResult = { items: ParsedLootLine[]; dropped: DroppedLootLine[] };
 export const MAX_LOOT_QTY = Number.MAX_SAFE_INTEGER;
+export const MAX_EXACT_LINE_CENTS = Number.MAX_SAFE_INTEGER;
+export function assertExactLineTotal(productCents: number, what: string): void;
 export function parseLootPaste(raw: string): LootPasteResult;
 ```
 
@@ -279,6 +281,47 @@ first raw line that produced it. `addAppraisedPool` does **not** persist dropped
 the pool total stays derived from `appraisal.items` only (`payout-loot.ts:35-37`,
 unchanged by this task).
 
+**Two bounds, not one, and the second is the one that was missing.** `MAX_LOOT_QTY`
+bounds the **quantity**, because `lootItem.qty` is `bigint(… { mode: "number" })` and past
+2^53 the count itself is already the wrong number. That bound does **not** make the line
+total exact, and the plan must not be read as saying it does. An appraised line total is
+`price * qty * 100` evaluated in a float, and above 2^53 **cents** the representable
+values are 2, then 4, then 16 cents apart, so `Math.round` returns a neighbouring cent
+rather than the true one. Two verified counterexamples, both an ordinary market price at
+an ordinary mineral quantity, and both inside `MAX_LOOT_QTY`:
+
+| price | qty | float route | exact product | error |
+|---|---|---|---|---|
+| 1000000.01 | 1,000,000,000 | 100000001000000000 | 100000001000000001 | 1 cent |
+| 1234567.89 | 900,000,000 | 111111110099999984 | 111111110099999991 | 7 cents |
+
+Both fit `numeric(20, 2)` with room to spare, so `MAX_MONEY_CENTS` and Task 7's
+`assertWithinMoneyRange` never see them — a column bound cannot catch an arithmetic
+defect. So this task adds `MAX_EXACT_LINE_CENTS = Number.MAX_SAFE_INTEGER`, a bound on the
+**product in cents**, enforced by `assertExactLineTotal` immediately before the
+`BigInt(Math.round(...))` conversion, because that conversion launders a wrong number into
+an exact-looking one and nothing downstream can tell.
+
+**What the bound costs, stated deliberately.** 9,007,199,254,740,991 cents is
+**≈90 trillion ISK (9.007e13) in a single line**, and a line past it is rejected by name
+rather than silently mis-stored. That is orders of magnitude above any real loot line —
+the most expensive single item in EVE is billions, not tens of trillions — so the bound
+was chosen to sit far above production and still well below where the float grid
+coarsens. Unlike a junk paste line, this one is **rejected rather than dropped**: it is
+not malformed input, it is a number this system cannot represent, and the same treatment
+Task 7 gives an over-range pool total is the right one — a readable error naming the line,
+not a silent omission and not a Postgres overflow.
+
+The bound lands in `@/core/loot-paste` rather than `@/services/appraisal` on the
+precedent this plan already set: value bounds are pure constants in `src/core/`
+(`MAX_MONEY_CENTS` in `@/core/payout-split`, `MAX_LOOT_QTY` here), and the service holds
+only the call site. `assertExactLineTotal` is a **sibling** of `assertWithinMoneyRange`
+rather than a reuse of it — same plain `Error`, same `"<what> exceeds …"` sentence, but a
+different bound on a different type (a `number` against IEEE-754's exact range, not a
+`bigint` against the column's range), checked at a different moment (before the `BigInt`,
+not after). Merging them would mean widening this bound by four orders of magnitude,
+which is exactly the defect.
+
 - [ ] **Step 1: Write the failing test**
 
 Replace the whole `describe("parseLootPaste", …)` block in
@@ -289,6 +332,11 @@ describe("parseLootPaste", () => {
   it("bounds quantity at the largest integer JavaScript represents exactly", () => {
     // lootItem.qty is bigint(… { mode: "number" }), so past 2^53 the value is
     // already wrong before Postgres sees it. This is a correctness bound.
+    //
+    // It bounds the COUNT and nothing else. It does NOT make `price * qty`
+    // exact — that needs MAX_EXACT_LINE_CENTS, enforced in appraiseLoot and
+    // covered in tests/appraisal.test.ts. Do not read one as covering the
+    // other.
     expect(MAX_LOOT_QTY).toBe(Number.MAX_SAFE_INTEGER);
   });
 
@@ -459,6 +507,64 @@ Append to `tests/appraisal.test.ts` inside `describe("appraiseLoot", …)`:
   });
 ```
 
+And, in the same `describe("appraiseLoot", …)` block, the product-precision bound. These
+are the tests the quantity bound alone does not pass:
+
+```ts
+  /**
+   * Bounding QUANTITY does not make the line total exact — the total is still
+   * a float product. Both rows below are an ordinary market price at an
+   * ordinary mineral quantity, and both land on the wrong cent: the float
+   * route gives 100000001000000000 where the exact product is
+   * 100000001000000001, and 111111110099999984 where the exact product is
+   * 111111110099999991. Both fit numeric(20,2) with room to spare, so
+   * MAX_MONEY_CENTS never catches them — the product bound is what does.
+   */
+  const imprecise: Array<{ label: string; price: number; qty: number }> = [
+    {
+      label: "a line total one cent past what the float route gets right",
+      price: 1000000.01,
+      qty: 1000000000,
+    },
+    {
+      label: "a line total seven cents past what the float route gets right",
+      price: 1234567.89,
+      qty: 900000000,
+    },
+  ];
+
+  it.each(imprecise)("refuses $label", async ({ price, qty }) => {
+    await expect(
+      appraiseLoot(
+        `${qty}x Tritanium`,
+        { pricingMode: "sell_best", stationId: 60003760 },
+        {
+          esi: fakeEsi({ tritanium: 34 }),
+          triff: fakeTriff({ 34: { sell: { best: price } } }),
+        },
+      ),
+    ).rejects.toThrow(
+      "the line total for Tritanium exceeds the largest value this system can compute exactly",
+    );
+  });
+
+  it("still appraises a line just under the exactness bound", async () => {
+    // 9,007,199,000,000,000 cents, against a bound of 9,007,199,254,740,991 —
+    // a single line worth 90,071,990,000,000 ISK. The bound rejects only lines
+    // past ~90 trillion ISK, which is far above any real loot line.
+    const result = await appraiseLoot(
+      "1000000000x Tritanium",
+      { pricingMode: "sell_best", stationId: 60003760 },
+      {
+        esi: fakeEsi({ tritanium: 34 }),
+        triff: fakeTriff({ 34: { sell: { best: 90071.99 } } }),
+      },
+    );
+    expect(result.items[0].totalValue).toBe("90071990000000.00");
+    expect(result.totalValue).toBe("90071990000000.00");
+  });
+```
+
 - [ ] **Step 2: Run test to verify it fails**
 
 Run:
@@ -471,7 +577,12 @@ Expected: FAIL. `payout-parse.test.ts` fails at import with `"MAX_LOOT_QTY" is n
 exported by "src/core/loot-paste.ts"`; once that is added, every case fails with
 `expected [ { name: 'Foo', qty: 12 } ] to deeply equal { items: [ … ], dropped: [] }`
 because `parseLootPaste` still returns a bare array. `appraisal.test.ts` fails with
-`expected undefined to deeply equal [ { line: '12', reason: 'quantity-only' } ]`.
+`expected undefined to deeply equal [ { line: '12', reason: 'quantity-only' } ]`, and the
+two `refuses a line total …` cases fail with
+`promise resolved instead of rejecting` — today nothing bounds the product, so both
+counterexamples appraise happily and store the wrong cent. `still appraises a line just
+under the exactness bound` passes already; it is there to pin that the bound was not set
+low enough to reject a line the system can represent.
 
 - [ ] **Step 3: Write minimal implementation**
 
@@ -496,6 +607,48 @@ export type LootPasteResult = { items: ParsedLootLine[]; dropped: DroppedLootLin
  * which is why it is this number and not a game-flavoured cap.
  */
 export const MAX_LOOT_QTY = Number.MAX_SAFE_INTEGER;
+
+/**
+ * The largest line total, IN CENTS, that this system can compute exactly.
+ *
+ * Bounding `qty` is not enough. An appraised line total is `price * qty * 100`
+ * evaluated in a float, and above 2^53 cents the representable values are 2,
+ * then 4, then 16 cents apart — so `Math.round` returns a neighbouring cent
+ * rather than the true one. Two ordinary market prices at ordinary mineral
+ * quantities: 1000000.01 ISK x 1,000,000,000 units computes
+ * 100000001000000000 where the exact product is 100000001000000001, and
+ * 1234567.89 ISK x 900,000,000 units computes 111111110099999984 where the
+ * exact product is 111111110099999991. Both fit `numeric(20, 2)` with room to
+ * spare, so the column bound never sees them.
+ *
+ * At or below this bound every integer is representable, so the cent grid has
+ * spacing one and `Math.round` returns the true cent total to within half of
+ * one — the floor of doing the multiply in a float at all.
+ *
+ * It coincides numerically with `MAX_LOOT_QTY` because both fall out of 2^53,
+ * but it is a different bound on a different quantity: that one counts units,
+ * this one counts cents. Neither implies the other.
+ */
+export const MAX_EXACT_LINE_CENTS = Number.MAX_SAFE_INTEGER;
+
+/**
+ * Checked BEFORE the `BigInt(Math.round(...))` conversion, because that
+ * conversion launders a wrong number into an exact-looking one and there is no
+ * later check that can tell.
+ *
+ * A sibling of `assertWithinMoneyRange` in `src/services/payout-loot.ts` — same
+ * plain `Error`, same "<what> exceeds ..." sentence — rather than the same
+ * function, because it bounds a different thing: that one bounds a bigint
+ * against the `numeric(20, 2)` COLUMN, this one bounds a float against what
+ * IEEE-754 multiplies exactly. `MAX_EXACT_LINE_CENTS` is roughly ten thousand
+ * times smaller than `MAX_MONEY_CENTS`, so the column check can never fire
+ * first and merging the two would silently widen this one.
+ */
+export function assertExactLineTotal(productCents: number, what: string): void {
+  if (productCents > MAX_EXACT_LINE_CENTS) {
+    throw new Error(`${what} exceeds the largest value this system can compute exactly`);
+  }
+}
 
 // "12x Foo", "12 Foo" — qty (with optional comma grouping) leads the line.
 const QTY_PREFIX = /^(\d[\d,]*)\s*x?\s+(.+)$/i;
@@ -615,7 +768,11 @@ export function parseLootPaste(raw: string): LootPasteResult {
 In `src/services/appraisal.ts`, change the import on line 4 to:
 
 ```ts
-import { parseLootPaste, type DroppedLootLine } from "@/core/loot-paste";
+import {
+  assertExactLineTotal,
+  parseLootPaste,
+  type DroppedLootLine,
+} from "@/core/loot-paste";
 ```
 
 Replace line 15 with:
@@ -635,6 +792,27 @@ Replace line 36 with:
 ```ts
   const { items: lines, dropped } = parseLootPaste(raw);
 ```
+
+Replace lines 66-69 — the tail of the rounding comment, and the multiplication it
+describes. The comment currently *observes* the float error; it now *names the enforced
+bound*, because an unenforced observation is what let the two counterexamples through:
+
+```ts
+    // What is left is IEEE-754's ~1.1e-16 RELATIVE error on the product, and
+    // bounding qty does NOT remove it: at 1e17 cents the representable values
+    // are 16 cents apart, so 1000000.01 ISK x 1,000,000,000 units rounds a
+    // cent low. So the PRODUCT is bounded too, and the bound is ENFORCED here
+    // rather than merely observed — at or below MAX_EXACT_LINE_CENTS the cent
+    // grid has spacing one and Math.round returns the true cent total to
+    // within half of one. A line worth more than ~90 trillion ISK is refused
+    // by name instead of being stored on the wrong cent.
+    const productCents = price * line.qty * 100;
+    assertExactLineTotal(productCents, `the line total for ${line.name}`);
+    const totalCents = BigInt(Math.round(productCents));
+```
+
+Lines 59-65 — the "Round ONCE, at the line total" paragraph above it — stay exactly as
+they are. They explain a different decision, and it is still correct.
 
 Replace line 88 with:
 
@@ -676,6 +854,12 @@ Postgres error. parseLootPaste now returns those lines with a reason, and
 appraiseLoot carries them to the caller. Nothing is rejected wholesale: a
 mostly-good paste still appraises.
 
+Bounding the quantity did not make the line total exact — the total is a float
+product, and past 2^53 cents the representable values are 16 cents apart, so
+1000000.01 ISK x 1e9 units stored a cent low with nothing to catch it. The
+product is now bounded too, before the BigInt conversion launders it, and a
+line past ~90 trillion ISK says so by name.
+
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
 
@@ -697,13 +881,20 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
     Part B's `revertPayment` throws it for a missing participant, and Part C's
     actions/pages discriminate it from a programming error the same way they
     already discriminate `PayoutForbiddenError` / `PayoutLockedError`.
-  - `recordPayment` writes `payout_payment.at` as `sql\`clock_timestamp()\`` from
-    inside the operation row lock, so any two payment rows on one operation are
-    ordered as they happened. **Part B extends the test below to a
-    pay → revert → pay sequence on ONE participant** (three rows, strictly
-    increasing `at`), and `revertPayment` must supply `at` the same way — a revert
-    that keeps `defaultNow()` reintroduces exactly the inversion this fixes.
-  - Display order everywhere is `(at asc, id asc)`; among exact ties it is arbitrary.
+  - `recordPayment` writes `payout_payment.at` from inside the operation row lock as a
+    **clamp-forward** reading — `greatest(clock_timestamp(), <this participant's latest
+    at> + 1 microsecond)` — so a participant's payment rows are **strictly increasing in
+    `at`, per participant, by construction**. `clock_timestamp()` alone does not deliver
+    that: it repeats at clock resolution and can step backwards under NTP. **Part B
+    extends the test below to a pay → revert → pay sequence on ONE participant** (three
+    rows, three distinct instants), and `revertPayment` must supply `at` the same way — a
+    revert that keeps `defaultNow()` reintroduces exactly the inversion this fixes, and a
+    revert that uses a bare `clock_timestamp()` reintroduces the tie.
+  - Display order everywhere is `(at asc, id asc)`. **Within one participant there are no
+    ties**, so that order is the causal order. **Across** participants `at` is still a
+    bare clock reading, so two rows can tie and `id` (a `defaultRandom()` uuid) breaks it
+    arbitrarily — which is fine, because nothing displays two participants' payments
+    interleaved.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -750,7 +941,14 @@ describe("payment history is ordered as it happened", () => {
    *
    * Inside ONE transaction now() is frozen, which is what makes this test
    * discriminate: under defaultNow() both rows carry the identical instant.
-   * clock_timestamp(), read after the lock, strictly increases.
+   * The reading taken after the lock does not.
+   *
+   * Scope, stated so this test is not read as more than it is: the two rows
+   * here belong to DIFFERENT participants, so the clamp in `nextPaymentAt`
+   * does not apply between them and the separation rests on the clock having
+   * advanced between two round trips. The guaranteed, tie-free case is
+   * per-participant, and Part B's pay -> revert -> pay test is the one that
+   * pins it.
    *
    * The comparison is done in Postgres because `at` has microsecond
    * resolution and a JS Date does not — two inserts a few microseconds apart
@@ -873,6 +1071,49 @@ Replace lines 423 and 432 (both in `recordPayment`):
   if (!participant) throw new PayoutNotFoundError("participant not found");
 ```
 
+Insert above `recordPayment` the one place `payout_payment.at` is computed. Both writers
+of that table use it — `recordPayment` here, `revertPayment` in Task 4:
+
+```ts
+/**
+ * The `at` to stamp on this participant's next `payout_payment` row.
+ *
+ * `clock_timestamp()` on its own is not monotonic. It repeats at the clock's
+ * resolution, and an NTP correction can step it backwards; either way two rows
+ * can tie or invert, and `(at asc, id asc)` then breaks the tie on
+ * `defaultRandom()` — arbitrarily, not causally. So the reading is clamped
+ * forward past this participant's latest row, which makes `at` STRICTLY
+ * increasing per participant.
+ *
+ * The subquery is safe because every writer of this table holds
+ * `lockOperation`'s `SELECT … FOR UPDATE` on the parent operation and a
+ * participant belongs to exactly one operation, so "the latest row for this
+ * participant" cannot change under us. Scoped to the PARTICIPANT rather than
+ * the operation on purpose: per-participant is the history the detail page
+ * renders, and it is the property that has to hold.
+ *
+ * The accepted cost, stated rather than hidden: under a backwards clock step
+ * `at` reads later than the true wall clock until the clock catches up. A
+ * human reading a pay -> revert -> pay history is reconstructing ORDER, not
+ * the instant, so a possibly-inaccurate instant is the better trade than an
+ * inverted sequence. Ties at clock resolution — far likelier than an NTP step
+ * — are fixed outright, and distort nothing beyond one microsecond.
+ *
+ * No migration and no column: `payout_payment.at` keeps its `defaultNow()`,
+ * these two writers simply do not use it.
+ */
+function nextPaymentAt(participantId: string) {
+  return sql`greatest(
+    clock_timestamp(),
+    coalesce(
+      (select max(${payoutPayment.at}) from ${payoutPayment}
+        where ${payoutPayment.participantId} = ${participantId}),
+      'epoch'::timestamptz
+    ) + interval '1 microsecond'
+  )`;
+}
+```
+
 Replace the insert at lines 445-450 with:
 
 ```ts
@@ -884,10 +1125,10 @@ Replace the insert at lines 445-450 with:
     // NOT the column's defaultNow(): now() is TRANSACTION START time, so a
     // transaction that started earlier can take the operation lock later and
     // stamp an earlier time than an event that already happened. This reading
-    // is taken after lockOperation, which every writer of this table holds, so
-    // any two rows on one operation are ordered as they occurred. See the
-    // phase-2 design, "Derived payment state".
-    at: sql`clock_timestamp()`,
+    // is taken after lockOperation, which every writer of this table holds,
+    // and clamped past this participant's latest row. See nextPaymentAt above
+    // and the phase-2 design, "Derived payment state".
+    at: nextPaymentAt(participantId),
   });
 ```
 
@@ -919,8 +1160,13 @@ alongside the existing forbidden/locked pair.
 
 payout_payment.at defaulted to now(), which is transaction START time, so a
 transaction that took the operation lock later could still record an earlier
-instant than the event before it. The insert now supplies clock_timestamp()
-from inside the lock, which makes the history orderable. No migration: the
+instant than the event before it. The insert now supplies a clock reading taken
+from inside the lock and clamped forward past that participant's latest row, so
+a participant's history is strictly increasing rather than merely usually
+increasing — clock_timestamp() alone repeats at clock resolution and can step
+backwards under NTP. The cost is that after a backwards step the timestamp
+reads later than the wall clock until it catches up; order is what a reader of
+this history needs, and the instant is what is traded for it. No migration: the
 column default is untouched, it is simply not what the writer uses.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
@@ -940,8 +1186,8 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 **Interfaces:**
 
-- Consumes: `PayoutNotFoundError` (Task A), `recordPayment` writing
-  `at: sql`clock_timestamp()`` (Task A), `lockOperation(dbtx, operationId)`,
+- Consumes: `PayoutNotFoundError` (Task A), the module-private `nextPaymentAt(participantId)`
+  helper `recordPayment` now stamps `at` with (Task A), `lockOperation(dbtx, operationId)`,
   `hasPayments(dbx, operationId)`, `assertEditable(dbtx, operationId)`,
   `logAudit(dbx, { actor, action, target, details? })`
 - Produces:
@@ -1065,7 +1311,7 @@ describe("revertPayment", () => {
   /**
    * Inside one transaction Postgres freezes `now()`, so under `defaultNow()`
    * all three rows would carry one identical instant. That is what makes this
-   * a pin on `clock_timestamp()` rather than a restatement of it.
+   * a pin on the explicit stamp rather than a restatement of it.
    */
   it("pay -> revert -> pay in one transaction yields three distinct instants", async () => {
     const { participantId, operator } = await seedFightWithOneUnpaidParticipant();
@@ -1080,6 +1326,13 @@ describe("revertPayment", () => {
     // Date truncates to milliseconds, so three inserts microseconds apart read
     // as equal through `.getTime()` and the assertion would pass or fail by
     // luck. Under `defaultNow()` the distinct count here is 1, not 3.
+    //
+    // `instants === 3` is DETERMINISTIC, and it is the clamp in nextPaymentAt
+    // that makes it so — not clock_timestamp() happening to tick between three
+    // statements. A bare clock_timestamp() would make this assertion true on
+    // most hosts and flaky on a coarse clock; the clamp forces each row at
+    // least a microsecond past this participant's previous one, so it cannot
+    // be otherwise.
     const res = await ctx.db.execute(sql`
       select count(*)::int as rows, count(distinct at)::int as instants
       from payout_payment
@@ -1235,10 +1488,12 @@ export async function revertPayment(
     participantId,
     kind: "reverted",
     amount,
-    // Taken from inside the lock, so it is necessarily later than the reading
-    // any already-committed payment on this operation took from inside the
-    // same lock. `now()` is transaction-start time and would not be.
-    at: sql`clock_timestamp()`,
+    // The SAME stamp recordPayment uses, and it has to be: a revert that keeps
+    // the column's defaultNow() lands on transaction-start time and can sort
+    // before the payment it reverts, and a bare clock_timestamp() can tie with
+    // it at clock resolution. nextPaymentAt clamps past this participant's
+    // latest row, so pay -> revert -> pay is strictly increasing.
+    at: nextPaymentAt(participantId),
     actor,
   });
   await logAudit(dbtx, {
@@ -2965,14 +3220,18 @@ like an empty database."
 
 - Modify: `src/lib/esi/client.ts:1-11` (constants), `:294-333` (the returned object)
 - Modify: `src/services/tokens.ts:1-10` (imports), end of file
+- Create: `src/core/open-info-error.ts`
+- Modify: `src/services/payouts.ts:1` (imports), end of file
 - Modify: `src/app/payouts/actions.ts:1-27` (imports), end of file
+- Modify: `src/app/payouts/[id]/page.tsx:37-40` (the `ERRORS` map)
 - Modify: `docs/ops.md:21`, `docs/ops.md:172`
 - Modify: `.env.example:41`
-- Test: `tests/esi-client.test.ts`, `tests/tokens.test.ts`
+- Test: `tests/esi-client.test.ts`, `tests/tokens.test.ts`, `tests/open-info-error.test.ts` (new), `tests/payouts-service.test.ts`
+- Manual, production, not a code change: `fly secrets set EVE_SSO_SCOPES=…` (Step 23)
 
 **Interfaces:**
 
-- Consumes: `getFreshAccessToken(db, cfg, ch, fetchImpl?)` and `AccessTokenResult` from `src/services/tokens.ts`; `requireOperatorAccount()` (module-private in `src/app/payouts/actions.ts:37-48`).
+- Consumes: `getFreshAccessToken(db, cfg, ch, fetchImpl?)` and `AccessTokenResult` from `src/services/tokens.ts`; `requireOperatorAccount()` (module-private in `src/app/payouts/actions.ts:37-48`); `classifyEsiError`/`EsiErrorClass` from `src/core/errors.ts` (already used by `EsiError`, which carries `status: number` and `kind: EsiErrorClass` and nothing else).
 - Produces:
   ```ts
   // src/lib/esi/client.ts
@@ -2991,12 +3250,31 @@ like an empty database."
     scope: string,
   ): Promise<CharacterTokenRow | null>;
 
+  // src/core/open-info-error.ts
+  export type OpenInfoFailure = "reauth" | "offline" | "busy" | "timeout" | "failed";
+  export function classifyOpenInfoFailure(err: unknown): OpenInfoFailure | null;
+
+  // src/services/payouts.ts
+  export async function getOpenInfoTarget(
+    dbx: Dbx,
+    operationId: string,
+    participantId: string,
+  ): Promise<number | null>;
+
   // src/app/payouts/actions.ts
   export async function openInfoAction(
     operationId: string,
-    characterId: number,
+    participantId: string,
   ): Promise<void>;
   ```
+
+**The action takes a PARTICIPANT id, not a character id.** `operationId` is only
+used for redirects, so if the second argument were the ESI target then any
+authenticated operator could aim their own token at any character in EVE by
+posting a different number. Instead the action re-reads the row server-side and
+uses the STORED `payout_participant.recipient_character_id`. Task 12 binds this
+action and **must** pass `p.id`; a binding that still passes
+`p.recipientCharacterId` will not typecheck, which is the intended outcome.
 
 **ROLLOUT CONSEQUENCE — read before starting, this is the surprising part.** Adding `esi-ui.open_window.v1` to the deployed `EVE_SSO_SCOPES` flips **every existing character** to `needs_reauth` on the day it deploys, and the token-health job writes one `token.needs_reauth` audit row per character. Verified against the current source, the comparison sites are:
 
@@ -3012,6 +3290,32 @@ That is **four** comparison sites, not the three the design doc names (`account-
 **Scope gating is on the persisted column, never on config.** `cfg.eveSso.scopes` says what we *ask* for; `character.scopes` (`src/db/schema.ts:69`) says what this operator actually *granted*. An operator who authorized before the scope existed has a perfectly valid session and no `open_window` scope, and a config-based gate would show them a control that always fails.
 
 **Second documented exception to "enqueue, don't execute".** The first is interactive appraisal (`src/app/payouts/actions.ts:128-133`). Opening a window in the operator's own client is interactive and pointless to queue: a lost call is a re-click, a duplicated call opens the window twice, and a queued one would surface minutes later on a client that has moved on. It persists no state at CCP or here. That justification goes in the code comment, or a reviewer will correctly flag it as a rule violation.
+
+**We cannot prove a status code means "not logged in", so we do not claim it.**
+The official ESI Swagger (`https://esi.evetech.net/latest/swagger.json`, fetched
+and read while writing this plan) documents `POST /ui/openwindow/information/`
+with responses `204, 400, 401, 403, 420, 500, 503, 504` and the security
+requirement `evesso: [esi-ui.open_window.v1]`. It defines **no** status whose
+meaning is "the character has no client running" — 403 is documented as plain
+"Forbidden". Mapping every `EsiError` to "that character is offline"
+would therefore print a confident, wrong sentence every time a scope lapsed,
+ESI rate-limited us, or CCP had a bad afternoon. Worse, it would not even fire
+for the one case it was written for that is *not* an `EsiError`: `request` in
+`src/lib/esi/client.ts:121` passes `AbortSignal.timeout(30_000)`, which rejects
+with a `DOMException` named `TimeoutError` that no `instanceof EsiError` branch
+can see, so a slow ESI escapes the action and reaches the operator as a raw 500.
+
+So the classification is evidence-based and lives in one pure, tested function
+(`src/core/open-info-error.ts`):
+
+| Evidence | Verdict | Why it is honest |
+|---|---|---|
+| `err.kind === "needs_reauth"` | `reauth` | `classifyEsiError` already resolved a 403 whose body mentions scope/token/authorization |
+| ESI's own body says "not online" / "offline" | `offline` | CCP's words, not our inference — the only thing that justifies the offline copy |
+| `err.status` is 420 or 429 | `busy` | 420 is ESI's documented "error limited"; 429 is not in the spec but reaches us from the edge, and both mean "wait", which is different advice |
+| any other `EsiError` (incl. a bare 403 and every 5xx) | `failed` | "could not open that window right now" — true regardless of cause |
+| a non-`EsiError` named `TimeoutError`/`AbortError` | `timeout` | the only branch where the call may actually have SUCCEEDED |
+| anything else | `null` → rethrow | a bug deserves a stack trace, not a soothing message |
 
 - [ ] **Step 1: Write the failing tests for the ESI call**
 
@@ -3270,9 +3574,331 @@ asks for, and an operator who authorized before the scope existed has a valid
 session without it."
 ```
 
-- [ ] **Step 10: Add the server action**
+- [ ] **Step 10: Write the failing tests for the failure classifier**
 
-No test: the action is a thin composition of two units that are now covered (`getMainCharacterWithScope`, `openInformationWindow`) plus `getFreshAccessToken`, which `tests/tokens.test.ts` already covers for all four failure reasons, and the repo has no harness for invoking a server action outside a browser. Its end-to-end behaviour belongs in the e2e task in Part D.
+The action itself has no unit harness (the repo cannot invoke a server action
+outside a browser), so the part of it worth testing — deciding *which* failure
+happened — comes out as a pure function first. That is also what makes the
+"is this offline?" question reviewable instead of buried in a catch block.
+
+Create `tests/open-info-error.test.ts`:
+
+```ts
+import { describe, expect, it } from "vitest";
+import { classifyOpenInfoFailure } from "@/core/open-info-error";
+import { EsiError } from "@/lib/esi/client";
+
+/** Shaped exactly like the client's own throw site: the body's `error` string
+ *  is appended to the message, which is the only place ESI's words survive. */
+function esiError(
+  status: number,
+  kind: "needs_reauth" | "permanent" | "transient",
+  body?: string,
+) {
+  return new EsiError(
+    `ESI POST /ui/openwindow/information/ failed (${status}${body ? `: ${body}` : ""})`,
+    status,
+    kind,
+  );
+}
+
+describe("classifyOpenInfoFailure", () => {
+  it("calls it offline only when ESI's own body says the character is not online", () => {
+    expect(
+      classifyOpenInfoFailure(esiError(403, "permanent", "Character not online")),
+    ).toBe("offline");
+  });
+
+  it("does NOT call a bare 403 offline", () => {
+    // The official Swagger defines no status meaning "not logged in", so a 403
+    // with no such body is exactly the case we must not describe confidently.
+    expect(classifyOpenInfoFailure(esiError(403, "permanent"))).toBe("failed");
+  });
+
+  it("maps a missing-scope 403 to reauth, not offline", () => {
+    expect(
+      classifyOpenInfoFailure(esiError(403, "needs_reauth", "insufficient scope")),
+    ).toBe("reauth");
+  });
+
+  it("maps rate limiting to busy", () => {
+    expect(classifyOpenInfoFailure(esiError(420, "transient"))).toBe("busy");
+    expect(classifyOpenInfoFailure(esiError(429, "transient"))).toBe("busy");
+  });
+
+  it("maps a 5xx to the honest catch-all rather than to offline", () => {
+    expect(
+      classifyOpenInfoFailure(esiError(503, "transient", "Service unavailable")),
+    ).toBe("failed");
+  });
+
+  it("maps the client's 30s AbortSignal.timeout rejection to timeout", () => {
+    // AbortSignal.timeout rejects with a DOMException, NOT an EsiError. Before
+    // this branch existed it escaped the action entirely as a raw 500.
+    const err = new DOMException(
+      "The operation was aborted due to timeout",
+      "TimeoutError",
+    );
+    expect(classifyOpenInfoFailure(err)).toBe("timeout");
+  });
+
+  it("returns null for anything it cannot describe, so the caller rethrows", () => {
+    expect(classifyOpenInfoFailure(new TypeError("fetch failed"))).toBeNull();
+    expect(classifyOpenInfoFailure("nope")).toBeNull();
+  });
+});
+```
+
+- [ ] **Step 11: Run to verify they fail**
+
+Run: `TEST_DATABASE_URL=postgres://authgd:authgd@localhost:5433/authgd_test_payouts2 npx vitest run tests/open-info-error.test.ts`
+
+Expected: FAIL — cannot resolve `@/core/open-info-error`.
+
+- [ ] **Step 12: Implement the classifier**
+
+`src/core/` is the pure layer, and importing `EsiError` from `@/lib/esi/client`
+is allowed there — `src/core/affiliation.ts:2` already does exactly this.
+
+Create `src/core/open-info-error.ts`:
+
+```ts
+import { EsiError } from "@/lib/esi/client";
+
+/** Every distinguishable way opening an in-game window can fail. Each one gets
+ *  different advice on the page, which is the whole reason they are separate:
+ *  "they are not logged in" and "EVE rate-limited us" are not the same problem
+ *  and do not have the same fix. */
+export type OpenInfoFailure = "reauth" | "offline" | "busy" | "timeout" | "failed";
+
+/**
+ * ESI's own words for "there is no client to open a window on". This is the
+ * ONLY evidence we accept for the offline message: the official Swagger does
+ * not define a status code that means "character not online", so inferring it
+ * from a bare 403 would put a confident, wrong sentence in front of the
+ * operator every time a scope or a session actually broke.
+ */
+const OFFLINE_BODY = /not online|offline/i;
+
+/**
+ * Classifies a failure from `openInformationWindow`, or returns null for
+ * anything we cannot honestly describe — the caller rethrows those, because a
+ * bug deserves a stack trace and not a soothing message.
+ *
+ * The timeout branch is not decoration: `request` in src/lib/esi/client.ts
+ * passes `AbortSignal.timeout(30_000)`, which rejects with a DOMException named
+ * "TimeoutError" that is NOT an EsiError. Without this branch a slow ESI is the
+ * one failure mode that escapes the action entirely and reaches the operator as
+ * a raw 500.
+ */
+export function classifyOpenInfoFailure(err: unknown): OpenInfoFailure | null {
+  if (
+    err instanceof Error &&
+    (err.name === "TimeoutError" || err.name === "AbortError")
+  ) {
+    return "timeout";
+  }
+  if (!(err instanceof EsiError)) return null;
+  // classifyEsiError already resolved 403-with-a-scope/token/authorization body
+  // into needs_reauth; anything else at 403 is NOT evidence of being offline.
+  if (err.kind === "needs_reauth") return "reauth";
+  if (OFFLINE_BODY.test(err.message)) return "offline";
+  if (err.status === 420 || err.status === 429) return "busy";
+  return "failed";
+}
+```
+
+- [ ] **Step 13: Run to verify they pass**
+
+Run: `TEST_DATABASE_URL=postgres://authgd:authgd@localhost:5433/authgd_test_payouts2 npx vitest run tests/open-info-error.test.ts`
+
+Expected: PASS, all seven cases.
+
+- [ ] **Step 14: Write the failing tests for the target lookup**
+
+This is the authorization test, not a convenience test. `requireOperatorAccount`
+proves the caller may operate payouts; it proves nothing about *whose* window
+opens. Without this lookup the action would send whatever character id the form
+posted straight to ESI.
+
+Append to `tests/payouts-service.test.ts`, adding `getOpenInfoTarget` to its
+existing `@/services/payouts` import list:
+
+```ts
+/** A finalized operation with one participant who has a real recipient
+ *  character. The roster is inserted directly rather than through `setRoster`
+ *  so the fixture states the recipient outright — the only field under test. */
+async function seedTargetableParticipant(
+  opts: {
+    excluded?: boolean;
+    recipientCharacterId?: number | null;
+    finalize?: boolean;
+  } = {},
+) {
+  const operator = await seedOperator();
+  if (opts.recipientCharacterId) {
+    await seedCharacter(ctx.db, cfg, {
+      id: opts.recipientCharacterId,
+      accountId: operator.id,
+    });
+  }
+  const { id: operationId } = await ctx.db.transaction((tx) =>
+    createOperation(tx, operator.id, {
+      name: "Friday roam",
+      occurredAt: new Date(),
+      corpSharePct: "0",
+    }),
+  );
+  const [participant] = await ctx.db
+    .insert(payoutParticipant)
+    .values({
+      operationId,
+      displayName: "Line Member",
+      recipientCharacterId: opts.recipientCharacterId ?? null,
+      excluded: opts.excluded ?? false,
+    })
+    .returning();
+  if (opts.finalize !== false) {
+    await ctx.db.transaction((tx) => finalizeOperation(tx, operator.id, operationId));
+  }
+  return { operator, operationId, participantId: participant.id };
+}
+
+describe("getOpenInfoTarget", () => {
+  it("returns the STORED recipient character id", async () => {
+    const { operationId, participantId } = await seedTargetableParticipant({
+      recipientCharacterId: 510001,
+    });
+    expect(await getOpenInfoTarget(ctx.db, operationId, participantId)).toBe(510001);
+  });
+
+  it("refuses a participant belonging to a DIFFERENT operation", async () => {
+    // The attack this whole helper exists to stop: an operator may operate
+    // payouts, which says nothing about whose window they may open. Without
+    // the operation/participant join the operation id would be decoration.
+    const mine = await seedTargetableParticipant({ recipientCharacterId: 510002 });
+    const theirs = await seedTargetableParticipant({ recipientCharacterId: 510003 });
+    expect(
+      await getOpenInfoTarget(ctx.db, mine.operationId, theirs.participantId),
+    ).toBeNull();
+  });
+
+  it("refuses a participant on an operation that is still a draft", async () => {
+    const { operationId, participantId } = await seedTargetableParticipant({
+      recipientCharacterId: 510004,
+      finalize: false,
+    });
+    expect(await getOpenInfoTarget(ctx.db, operationId, participantId)).toBeNull();
+  });
+
+  it("refuses an excluded participant", async () => {
+    const { operationId, participantId } = await seedTargetableParticipant({
+      recipientCharacterId: 510005,
+      excluded: true,
+    });
+    expect(await getOpenInfoTarget(ctx.db, operationId, participantId)).toBeNull();
+  });
+
+  it("returns null for an unresolved roster name with no recipient", async () => {
+    const { operationId, participantId } = await seedTargetableParticipant();
+    expect(await getOpenInfoTarget(ctx.db, operationId, participantId)).toBeNull();
+  });
+
+  it("returns null for a participant id that does not exist", async () => {
+    const { operationId } = await seedTargetableParticipant({
+      recipientCharacterId: 510006,
+    });
+    expect(
+      await getOpenInfoTarget(
+        ctx.db,
+        operationId,
+        "00000000-0000-0000-0000-000000000000",
+      ),
+    ).toBeNull();
+  });
+});
+```
+
+- [ ] **Step 15: Run to verify they fail**
+
+Run: `TEST_DATABASE_URL=postgres://authgd:authgd@localhost:5433/authgd_test_payouts2 npx vitest run tests/payouts-service.test.ts -t "getOpenInfoTarget"`
+
+Expected: FAIL — `"@/services/payouts" has no exported member 'getOpenInfoTarget'`.
+
+- [ ] **Step 16: Implement the target lookup**
+
+In `src/services/payouts.ts`, widen the drizzle import at `:1`:
+
+```ts
+import { and, eq, inArray, sql } from "drizzle-orm";
+```
+
+and append to the end of the file:
+
+```ts
+/**
+ * Resolves the character whose in-game information window an operator may open
+ * for `participantId`, re-reading every condition server-side.
+ *
+ * Both ids arrive from a bound form action, so neither is trusted. Four
+ * conditions, and the last one is the point: the ESI target is the STORED
+ * `recipientCharacterId`, never a value the caller supplied, so a hand-made
+ * request cannot aim the operator's own token at an arbitrary character.
+ *
+ *   1. the participant must belong to THIS operation — otherwise the operation
+ *      id is decoration and any participant id in the database would work;
+ *   2. the operation must be `finalized` — open-info is a payment-time control
+ *      and the page only renders it then;
+ *   3. the participant must not be excluded — they are owed nothing, so there
+ *      is no one to pay and nothing to look up;
+ *   4. the row must carry a recipient — an unresolved roster name has no
+ *      character to open.
+ *
+ * Returns null rather than throwing for all four: every one of them is a stale
+ * page away, and the action turns null into a message.
+ */
+export async function getOpenInfoTarget(
+  dbx: Dbx,
+  operationId: string,
+  participantId: string,
+): Promise<number | null> {
+  const [row] = await dbx
+    .select({
+      recipientCharacterId: payoutParticipant.recipientCharacterId,
+      excluded: payoutParticipant.excluded,
+      status: payoutOperation.status,
+    })
+    .from(payoutParticipant)
+    .innerJoin(payoutOperation, eq(payoutOperation.id, payoutParticipant.operationId))
+    .where(
+      and(
+        eq(payoutParticipant.id, participantId),
+        eq(payoutParticipant.operationId, operationId),
+      ),
+    );
+  if (!row || row.status !== "finalized" || row.excluded) return null;
+  return row.recipientCharacterId;
+}
+```
+
+No `lockOperation` here, deliberately: this reads state to decide whether to
+make an external call that persists nothing. There is no write to serialize
+against, and taking a row lock for a window-opening request would put `FOR
+UPDATE` contention on the payout path for no gain.
+
+- [ ] **Step 17: Run to verify they pass**
+
+Run: `TEST_DATABASE_URL=postgres://authgd:authgd@localhost:5433/authgd_test_payouts2 npx vitest run tests/payouts-service.test.ts`
+
+Expected: PASS, all suites in the file.
+
+- [ ] **Step 18: Add the server action**
+
+No further test here: the action is now a thin composition of three covered
+units (`getMainCharacterWithScope`, `getOpenInfoTarget`, `classifyOpenInfoFailure`)
+plus `getFreshAccessToken`, which `tests/tokens.test.ts` already covers for all
+four failure reasons, and the repo has no harness for invoking a server action
+outside a browser. Its end-to-end behaviour belongs in the e2e task in Part D.
 
 In `src/app/payouts/actions.ts`, extend the imports at `:22-23`:
 
@@ -3280,9 +3906,13 @@ In `src/app/payouts/actions.ts`, extend the imports at `:22-23`:
 import { getSessionAccount } from "@/services/session";
 import { getFreshAccessToken, getMainCharacterWithScope } from "@/services/tokens";
 import { createEsiClient, EsiError, OPEN_WINDOW_SCOPE } from "@/lib/esi/client";
+import { classifyOpenInfoFailure } from "@/core/open-info-error";
 ```
 
-and append to the end of the file:
+and add `getOpenInfoTarget` to the existing `@/services/payouts` import block
+(it is alphabetised: it goes after `finalizeOperation`).
+
+Append to the end of the file:
 
 ```ts
 /** getFreshAccessToken's four failure reasons, mapped to the `?error=` codes
@@ -3296,10 +3926,21 @@ const OPEN_INFO_ERROR_BY_REASON = {
   dry_run: "open_info_dry_run",
 } as const;
 
+/** classifyOpenInfoFailure's verdicts, mapped to the same `?error=` codes.
+ *  Kept next to the map above so the page's ERRORS keys have exactly two
+ *  producers and both are visible at once. */
+const OPEN_INFO_ERROR_BY_FAILURE = {
+  reauth: "open_info_reauth",
+  offline: "open_info_offline",
+  busy: "open_info_busy",
+  timeout: "open_info_timeout",
+  failed: "open_info_failed",
+} as const;
+
 /**
- * Opens the in-game information window for `characterId` on the operator's own
- * client, so they can right-click through to a transfer without retyping a
- * name.
+ * Opens the in-game information window for a participant's stored recipient
+ * character on the operator's own client, so they can right-click through to a
+ * transfer without retyping a name.
  *
  * ARCHITECTURAL EXCEPTION to "enqueue, don't execute" — the second one, after
  * interactive appraisal above. The original justification was "read-only and
@@ -3310,12 +3951,14 @@ const OPEN_INFO_ERROR_BY_REASON = {
  * be actively worse — the window would surface minutes later on a client that
  * has moved on.
  *
- * Nothing changed, so nothing is revalidated; failures redirect with a code
- * rather than throwing a raw ESI error at the operator.
+ * Takes a participant id, never a character id: the target is re-read from the
+ * database inside the action (see getOpenInfoTarget). Nothing changed, so
+ * nothing is revalidated; failures redirect with a code rather than throwing a
+ * raw ESI error at the operator.
  */
 export async function openInfoAction(
   operationId: string,
-  characterId: number,
+  participantId: string,
 ): Promise<void> {
   const actor = await requireOperatorAccount();
   const cfg = getConfig();
@@ -3326,6 +3969,12 @@ export async function openInfoAction(
   // page or a hand-made request, and it gets a message, not a 500.
   const main = await getMainCharacterWithScope(db, actor, OPEN_WINDOW_SCOPE);
   if (!main) redirect(`/payouts/${operationId}?error=open_info_reauth`);
+
+  // The authorization that matters. requireOperatorAccount above proves this
+  // caller may operate payouts; it proves nothing about WHOSE window opens.
+  // The id that reaches ESI comes from this row, not from the arguments.
+  const targetId = await getOpenInfoTarget(db, operationId, participantId);
+  if (targetId === null) redirect(`/payouts/${operationId}?error=open_info_target`);
 
   const token = await getFreshAccessToken(db, cfg, main);
   if (!token.ok) {
@@ -3340,19 +3989,67 @@ export async function openInfoAction(
     syncMode: cfg.syncMode,
   });
   try {
-    await esi.openInformationWindow(main.id, token.accessToken, characterId);
+    await esi.openInformationWindow(main.id, token.accessToken, targetId);
   } catch (err) {
-    if (err instanceof EsiError) {
-      // The common case by far is "that character is not logged in right now",
-      // which is not a fault to retry or to log as an error.
-      redirect(`/payouts/${operationId}?error=open_info_offline`);
-    }
-    throw err;
+    const failure = classifyOpenInfoFailure(err);
+    // null means we cannot describe it honestly — a bug, a DNS failure, a
+    // malformed response. Those get a stack trace, not a reassuring sentence.
+    if (failure === null) throw err;
+    redirect(`/payouts/${operationId}?error=${OPEN_INFO_ERROR_BY_FAILURE[failure]}`);
   }
 }
 ```
 
-- [ ] **Step 11: Add the scope to the deployment values and the docs**
+`EsiError` stays in the import list — `addAppraisedPoolAction` above still uses
+it. Every `redirect` call sits outside the `try`, or inside the `catch`, so the
+`NEXT_REDIRECT` control-flow exception is never swallowed by this handler.
+
+- [ ] **Step 19: Add the seven `?error=` messages to the detail page**
+
+`src/app/payouts/[id]/page.tsx:37-40` currently carries one entry. Replace the
+whole `ERRORS` map with:
+
+```ts
+const ERRORS: Record<string, string> = {
+  appraisal_failed:
+    "Could not price that paste right now (triff.tools did not answer). Nothing was saved — adjust and try again, or use a flat pool.",
+  // The expected outcome on a busy night, not a fault, and the ONLY message
+  // here that claims to know why: it is used only when ESI's own error body
+  // said so. Worded as a fact about the game, because the fallback — copy the
+  // amount, pay by hand — is exactly what operators did before this control.
+  open_info_offline:
+    "EVE says that character is not logged in, so there was nowhere to open the window. Nothing else changed — copy the amount and pay them when they are next online.",
+  // Distinct from offline because the fix is different, and is the operator's
+  // own to make: the grant is missing from THEIR login, not the recipient's.
+  open_info_reauth:
+    "Opening a window in EVE needs a permission your login does not carry yet. Add your character again from your account page to grant it — everything else here keeps working without it.",
+  open_info_busy:
+    "EVE is rate-limiting us right now. Nothing changed — wait a minute and try again, or copy the amount and pay by hand.",
+  // The one failure where the call may actually have SUCCEEDED, so it must not
+  // tell the operator to click again without looking first.
+  open_info_timeout:
+    "EVE took too long to answer. The window may still have opened, so check your client before trying again.",
+  // The honest catch-all. It says what happened and what to do next, and
+  // deliberately does not guess at a cause we cannot prove.
+  open_info_failed:
+    "Could not open that window just then. Nothing changed — try again in a moment, or copy the amount and pay by hand.",
+  open_info_target:
+    "That line cannot be opened: it is excluded, has no linked character, or the operation is no longer finalized. Reload the page to see where it stands.",
+  open_info_dry_run:
+    "This deployment is in dry-run mode, so nothing is sent to EVE. The amounts and the payment controls are real; only the in-game window is suppressed.",
+};
+```
+
+The map lands here rather than in Task 12 because Task 10 is what *produces*
+these codes: `openInfoAction` can redirect with any of them the moment it
+exists, and a code with no entry renders nothing at all. **Task 12 restates this
+map too**, as an explicit EXTENSION of these eight keys: its block is the same
+eight plus `revert_forbidden`, `revert_missing` and `revert_not_paid`, eleven in
+all. So these eight are the floor — Task 12 adds to them and drops none of them.
+Nothing else on the page changes in this task; the control that produces the
+codes is Task 12's.
+
+- [ ] **Step 20: Add the scope to the deployment values and the docs**
 
 **Contradiction with the brief, resolved in favour of the repo:** `EVE_SSO_SCOPES` has **no default in `src/config.ts`** — it is `z.string().min(1)` at `:66`, deliberately required. There is no default value to edit there. The deployment value lives in `.env.example` and `docs/ops.md`.
 
@@ -3393,32 +4090,120 @@ per member as they log in again.
 
 **Do NOT change the scope string in `tests/helpers/config.ts`, `playwright.config.ts`, `tests/config.test.ts`, or the other test fixtures.** Those fixtures exist to exercise scope-coverage logic against a known set; widening them would flip `needsReauthForScopes` assertions in `tests/account-view.test.ts:73-81` and `tests/accounts.test.ts:289` for reasons that have nothing to do with this change. Tests that need the new scope opt in per character, as Step 5's do.
 
-- [ ] **Step 12: Verify the whole change**
+- [ ] **Step 21: Verify the whole change**
 
 ```bash
 npx tsc --noEmit
 npx eslint .
 npx prettier --check .
-TEST_DATABASE_URL=postgres://authgd:authgd@localhost:5433/authgd_test_payouts2 npx vitest run tests/esi-client.test.ts tests/tokens.test.ts tests/config.test.ts tests/account-view.test.ts tests/accounts.test.ts tests/contacts-job.test.ts tests/token-health-job.test.ts
+TEST_DATABASE_URL=postgres://authgd:authgd@localhost:5433/authgd_test_payouts2 npx vitest run tests/esi-client.test.ts tests/tokens.test.ts tests/open-info-error.test.ts tests/payouts-service.test.ts tests/config.test.ts tests/account-view.test.ts tests/accounts.test.ts tests/contacts-job.test.ts tests/token-health-job.test.ts
 ```
 
 Expected: clean typecheck and lint, `prettier --check` reporting no files, and every listed suite passing — the last four are named specifically because they are the suites that would catch an accidental widening of the shared scope fixtures.
 
-- [ ] **Step 13: Commit**
+- [ ] **Step 22: Commit**
 
 ```bash
-git add src/app/payouts/actions.ts docs/ops.md .env.example
+git add src/app/payouts/actions.ts src/app/payouts/[id]/page.tsx src/core/open-info-error.ts src/services/payouts.ts tests/open-info-error.test.ts tests/payouts-service.test.ts docs/ops.md .env.example
 git commit -m "feat(payouts): open-info server action and the new SSO scope
 
 Second documented exception to enqueue-don't-execute, justified in the code:
 the call persists no state anywhere, so a lost call is a re-click and a
 duplicate opens the window twice.
 
+The action takes a participant id and re-reads the recipient character from
+the database, so an operator cannot aim their own token at an arbitrary
+character by editing the posted id. Failures are classified from what ESI
+actually said -- offline only when its own body says so -- and the 30s client
+timeout, which is a DOMException rather than an EsiError, no longer escapes as
+a raw 500.
+
 EVE_SSO_SCOPES gains esi-ui.open_window.v1. This flips every existing
 character to needs_reauth until its holder logs in again and writes one audit
 row each -- noise, not an outage, since every job gates on the scopes it
 actually needs. docs/ops.md now says so where the variable is documented."
 ```
+
+- [ ] **Step 23: Roll the new scope out to production — MANUAL, OUTWARD-FACING, ASK FIRST**
+
+> **The agent executing this plan must NOT run this step.** It changes live
+> production configuration and causes an outward-facing, member-visible effect
+> (every character shows "re-authorize" until its holder logs in again). It is
+> the maintainer's action, and it must be **confirmed with the user** before
+> anyone runs it. Everything above is code and documentation; this is the only
+> step that touches the running deployment.
+
+It is last on purpose. Step 20 edits `.env.example` and `docs/ops.md`, which
+govern **new** configuration only — the deployed value is a Fly secret and is
+completely unaffected by them. Without this step `esi-ui.open_window.v1` is
+never requested at login, no character ever grants it, and the feature is dead
+on arrival. It is also pointless to run before the code that uses the scope is
+deployed.
+
+Current deployed value, confirmed against `docs/ops.md:21` and `.env.example:41`:
+
+```
+esi-characters.read_contacts.v1 esi-characters.write_contacts.v1
+```
+
+After the PR merges and deploys, the maintainer runs:
+
+```bash
+fly secrets set EVE_SSO_SCOPES="esi-characters.read_contacts.v1 esi-characters.write_contacts.v1 esi-ui.open_window.v1"
+fly deploy   # only if the secret change did not already trigger the rolling restart
+```
+
+(`--stage` is the right flag when a secret must land *before* the code that
+reads it, as `docs/ops.md:222` does for `SYNC_MODE`. Here the code ships first,
+so a plain `fly secrets set` — which restarts the machines itself — is correct.)
+
+**Known, accepted consequence, already documented in the table Step 20 edits.**
+Adding a scope flips **every existing character** to `needs_reauth` until its
+holder logs in again, and the token-health job writes one `token.needs_reauth`
+audit row per character. Contacts sync keeps working throughout: `src/jobs/contacts.ts`
+gates per job on the scopes it actually needs (`CONTACT_SCOPES`), not on the full
+`EVE_SSO_SCOPES` set, so a character missing only the new scope still syncs. The
+warning clears per member as they log back in.
+
+**Verification, in order:**
+
+1. `fly secrets list` shows an updated digest/timestamp for `EVE_SSO_SCOPES`,
+   and the release it triggered is running.
+2. Log in with an operator account at `/login` → the EVE SSO consent screen
+   lists the open-window permission ("Open the information window for a
+   character, corporation or alliance inside the client" — CCP's own wording
+   for `esi-ui.open_window.v1`). If it does not appear, the secret did not
+   reach the running machines; stop here.
+3. On `/account`, that character's **Token** column shows `ok` again rather
+   than the `re-authorize` link. `src/app/account/page.tsx:348` renders `ok`
+   only when `tokenStatus === "valid" && !needsReauthForScopes`, and
+   `needsReauthForScopes` (`src/services/account-view.ts:182`) is computed by
+   comparing the persisted `character.scopes` against `cfg.eveSso.scopes` — so
+   `ok` here *is* the assertion that the new scope was persisted. That is the
+   only scope-related affordance the account page has; there is no list of
+   individual scopes in the UI, so do not go looking for one.
+4. To read the column directly, `docs/ops.md:117` documents that
+   `fly postgres connect -a <pg-app>` opens an interactive psql session (there
+   is no flag for passing SQL — `-c` is the config-file path). At the prompt:
+
+   ```sql
+   SELECT id, name, token_status, scopes FROM character WHERE id = <characterId>;
+   ```
+
+   Expect `esi-ui.open_window.v1` in the `scopes` array and `token_status`
+   `valid`.
+5. On a finalized operation at `/payouts/<id>`, the **open info** control now
+   renders for that operator (Task 12 adds the control; `requirePayoutReader`'s
+   `canOpenInfo` is the same persisted-scope read).
+
+**If this step is skipped or forgotten, nothing breaks.** No character ever
+grants the scope, so `getMainCharacterWithScope` returns null for every
+operator: `canOpenInfo` is false, the button is never rendered, and anyone
+reaching the action through a stale page gets the `open_info_reauth` message.
+That is a graceful no-op — the feature is simply invisible — **not an outage**.
+Every other payout control, and every sync job, is unaffected. The failure mode
+is "the feature we shipped does not exist for anyone", which is easy to miss
+precisely because nothing complains.
 
 ---
 
@@ -4113,34 +4898,62 @@ git commit -m "feat(payouts): show every pasted item, name what the parser ignor
 
 **Files:**
 
-- Modify: `src/services/payout-view.ts` — append `listAccountPayouts` (no change to `PayoutParticipantView` or `getPayoutOperationDetail`; Task 4 already did that)
+- Modify: `src/services/payout-view.ts` — append `listAccountPayouts`, and resolve each payment's actor to a name inside `getPayoutOperationDetail` (Task 4 added the `payments` array and its ordering; this task adds only the actor's name to each row)
 - Modify: `src/app/payouts/access.ts:1-50`
-- Modify: `src/app/payouts/[id]/page.tsx` — imports, freeze notice after `:147`, participants table `:361-464`
+- Modify: `src/app/payouts/actions.ts` — imports, and `revertPaymentAction` at the end of the file
+- Modify: `src/app/payouts/[id]/page.tsx` — imports, `ERRORS` map, freeze notice after `:147`, participants table `:361-464`
+- Create: `src/app/payouts/[id]/payment-history.tsx`
 - Create: `src/app/account/account-payouts.tsx`
 - Modify: `src/app/account/page.tsx:1-30` (imports), `:110-140` (data), after `:471`
-- Test: `tests/payout-view.test.ts`, `tests/account-payouts.test.ts`
+- Test: `tests/payout-view.test.ts`, `tests/payment-history.test.ts`, `tests/account-payouts.test.ts`
 
 **Interfaces:**
 
 - Consumes:
-  - `revertPaymentAction(operationId: string, participantId: string): Promise<void>` and
-    `openInfoAction(operationId: string, characterId: number): Promise<void>` from
-    `@/app/payouts/actions` (Tasks B and C).
+  - `openInfoAction(operationId: string, participantId: string): Promise<void>` from
+    `@/app/payouts/actions` (Task 10). **It takes a participant id, never a character
+    id** — it re-reads the stored `recipient_character_id` server-side through
+    `getOpenInfoTarget`, so an operator cannot aim their own token at an arbitrary
+    character by editing the posted number. The binding below passes `p.id`.
+  - `revertPayment(dbtx, actor, participantId)` from `@/services/payouts` (Task 4),
+    plus `PayoutForbiddenError`, `PayoutLockedError` and `PayoutNotFoundError` from the
+    same module — `revertPaymentAction` below is the web-tier wrapper this task adds.
   - `PayoutParticipantView` **already carries** its events — Task 4 added
     `payments: Array<typeof payoutPayment.$inferSelect>`, ordered `(at asc, id asc)`, because
     flipping the state check to `paidAmount !== null` would otherwise have left the payments
-    query dead. This task only **renders** that field; do not re-add it, re-order it, or
-    re-plan the query.
-  - `revertPayment` clears `paidAmount` and appends a `kind: "reverted"` row written with
-    `clock_timestamp()` (Task B), which is what makes `(at asc, id asc)` causally correct.
+    query dead. This task does not re-add the field, re-order it, or re-plan the query; it
+    widens each element with the actor's resolved name (see Produces) and renders it.
+  - `revertPayment` clears `paidAmount` and appends a `kind: "reverted"` row whose `at`
+    comes from `nextPaymentAt` (Task B) — a clock reading clamped forward past that
+    participant's latest row — which is what makes `(at asc, id asc)` the causal order
+    within a participant, with no ties to break.
   - Derived payment state already comes from `paidAmount !== null` (Task 4).
 - Produces:
   - `src/services/payout-view.ts`:
     `export type AccountPayoutRow = { operationId: string; operationName: string; occurredAt: Date; amount: string; paid: boolean }`,
-    `export async function listAccountPayouts(dbx: Dbx, accountId: string): Promise<AccountPayoutRow[]>`.
+    `export async function listAccountPayouts(dbx: Dbx, accountId: string): Promise<AccountPayoutRow[]>`,
+    `export type PayoutPaymentView = typeof payoutPayment.$inferSelect & { actorName: string | null }`,
+    and `PayoutParticipantView.payments` retyped from
+    `Array<typeof payoutPayment.$inferSelect>` to `PayoutPaymentView[]` — a widening, so
+    every existing reader still compiles.
+  - `src/app/payouts/actions.ts`:
+    `export async function revertPaymentAction(operationId: string, participantId: string): Promise<void>`.
   - `src/app/payouts/access.ts`: `PayoutAccess` gains `canOpenInfo: boolean`.
+  - `src/app/payouts/[id]/payment-history.tsx`:
+    `export function PaymentHistory({ payments, participantName }: { payments: PayoutPaymentView[]; participantName: string })`.
   - `src/app/account/account-payouts.tsx`:
     `export function AccountPayouts({ rows, linkToOperations }: { rows: AccountPayoutRow[]; linkToOperations: boolean })`.
+
+**History means who did what and when — so it resolves the actor.** `payout_payment.actor`
+has been written since phase 1 (`src/db/schema.ts`: `actor: uuid("actor").references(() =>
+account.id, { onDelete: "set null" })`) and never read. No schema change and no migration:
+this task resolves that id the way `src/services/audit.ts` and
+`src/services/account-view.ts` already resolve an account id — account → its
+`mainCharacterId` → that character's `name` — rather than inventing a second naming rule.
+`actorName` is null when the actor column is null (the account was deleted; the FK is
+`set null`) or when the account has no main character to name it by, and the list renders
+`unknown` for both. Not `system`: no job writes a payment row, so naming a machine would
+be a lie.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -4151,8 +4964,10 @@ Task C's config change (if it is, import it rather than re-declaring it):
 rg -n "open_window" src/config.ts src/services src/app
 ```
 
-Append to `tests/payout-view.test.ts`, extending its imports with `payoutOperation` from
-`@/db/schema`, `revertPayment` from `@/services/payouts`, and `listAccountPayouts` from
+Append to `tests/payout-view.test.ts`, extending its imports with `account`,
+`character` and `payoutOperation` from `@/db/schema` (Task 11 already added
+`character` for its `listCharacterNames` suite — add only what is missing),
+`revertPayment` from `@/services/payouts`, and `listAccountPayouts` from
 `@/services/payout-view` (Task 4 already added whatever its own history test needed):
 
 ```ts
@@ -4240,6 +5055,126 @@ describe("listAccountPayouts", () => {
 `seedOperation` in that file must return `operator`; if it does not already, widen its return
 to include it — no behaviour change, only what it hands back.
 
+Append to the same file, for the half of "history" that has never been read — who:
+
+```ts
+describe("payment history names the operator who recorded it", () => {
+  it("resolves the actor to their main character's name", async () => {
+    const { operator, operationId, byName } = await seedOperation({
+      totalValue: "300.00",
+      names: ["A"],
+    });
+    // The same shape seedCharacter writes, inserted directly because this file
+    // has no Config to hand that helper and needs no token here.
+    await ctx.db.insert(character).values({
+      id: 900001,
+      accountId: operator.id,
+      name: "FC Prime",
+      ownerHash: "oh-900001",
+      scopes: [],
+    });
+    await ctx.db
+      .update(account)
+      .set({ mainCharacterId: 900001 })
+      .where(eq(account.id, operator.id));
+    await ctx.db.transaction((tx) => finalizeOperation(tx, operator.id, operationId));
+    await ctx.db.transaction((tx) => recordPayment(tx, operator.id, byName.get("A")!.id));
+    await ctx.db.transaction((tx) => revertPayment(tx, operator.id, byName.get("A")!.id));
+
+    const detail = await getPayoutOperationDetail(ctx.db, operationId);
+    const a = detail!.participants.find((p) => p.displayName === "A")!;
+    expect(a.payments.map((ev) => [ev.kind, ev.actorName])).toEqual([
+      ["paid", "FC Prime"],
+      ["reverted", "FC Prime"],
+    ]);
+  });
+
+  // Both nulls are reachable and neither is an error: `payout_payment.actor`
+  // is `on delete set null`, and an account need not have a main character at
+  // all. The row must still come back — history is append-only, and losing an
+  // event because nobody can be named would be the worse failure.
+  it("leaves actorName null when there is no main character to name the actor by", async () => {
+    const { operator, operationId, byName } = await seedOperation({
+      totalValue: "300.00",
+      names: ["A"],
+    });
+    await ctx.db.transaction((tx) => finalizeOperation(tx, operator.id, operationId));
+    await ctx.db.transaction((tx) => recordPayment(tx, operator.id, byName.get("A")!.id));
+
+    const detail = await getPayoutOperationDetail(ctx.db, operationId);
+    const a = detail!.participants.find((p) => p.displayName === "A")!;
+    expect(a.payments).toHaveLength(1);
+    expect(a.payments[0].actorName).toBeNull();
+  });
+});
+```
+
+Create `tests/payment-history.test.ts`:
+
+```ts
+import { describe, expect, it } from "vitest";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { PaymentHistory } from "@/app/payouts/[id]/payment-history";
+import type { PayoutPaymentView } from "@/services/payout-view";
+
+// Renders the section directly, the way tests/account-page.test.ts renders
+// ContactRemedy: the detail page is an async server component that reads the
+// session cookie and the database, so it cannot be rendered outside a request.
+// What this pins is the rule the design states and the markup could silently
+// drop — history is who did what and when, not just what and when.
+function payment(over: Partial<PayoutPaymentView> = {}): PayoutPaymentView {
+  return {
+    id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    participantId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    kind: "paid",
+    amount: "450000.00",
+    at: new Date("2026-08-01T12:34:56Z"),
+    actor: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+    note: null,
+    actorName: "FC Prime",
+    ...over,
+  };
+}
+
+const render = (payments: PayoutPaymentView[]) =>
+  renderToStaticMarkup(
+    createElement(PaymentHistory, { payments, participantName: "Brain Tartare" }),
+  );
+
+describe("PaymentHistory", () => {
+  it("names the operator who recorded each event, with a full instant", () => {
+    const html = render([
+      payment(),
+      payment({
+        id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        kind: "reverted",
+        actorName: "Second FC",
+      }),
+    ]);
+    expect(html).toContain("2026-08-01 12:34:56 UTC");
+    expect(html).toContain("450000.00 ISK");
+    expect(html).toContain("reverted");
+    expect(html).toContain("FC Prime");
+    expect(html).toContain("Second FC");
+  });
+
+  // The null case, which is reachable in production: the actor's account was
+  // deleted (the FK is `on delete set null`), or it has no main character. The
+  // event still renders, and it must not print "null" or leave a gap where a
+  // name belongs.
+  it("says unknown when the actor no longer resolves", () => {
+    const html = render([payment({ actor: null, actorName: null })]);
+    expect(html).toContain("by unknown");
+    expect(html).not.toContain("null");
+  });
+
+  it("renders nothing at all for a participant with no history", () => {
+    expect(render([])).toBe("");
+  });
+});
+```
+
 Create `tests/account-payouts.test.ts`:
 
 ```ts
@@ -4309,13 +5244,15 @@ describe("AccountPayouts", () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 ```
-TEST_DATABASE_URL=postgres://authgd:authgd@localhost:5433/authgd_test_payouts2 npx vitest run tests/account-payouts.test.ts tests/payout-view.test.ts
+TEST_DATABASE_URL=postgres://authgd:authgd@localhost:5433/authgd_test_payouts2 npx vitest run tests/account-payouts.test.ts tests/payment-history.test.ts tests/payout-view.test.ts
 ```
 
 Expected: FAIL — `Failed to resolve import "@/app/account/account-payouts"` for the first
-suite, and `listAccountPayouts is not a function` for the second.
+suite, `Failed to resolve import "@/app/payouts/[id]/payment-history"` for the second, and
+`listAccountPayouts is not a function` plus `expected undefined to be 'FC Prime'` for the
+third.
 
-- [ ] **Step 3: Write minimal implementation**
+- [ ] **Step 3: Write minimal implementation — the service and the two components**
 
 In `src/services/payout-view.ts`, add `and` to the drizzle import on line 1 — `asc`, `desc`,
 `eq` and `inArray` are already there:
@@ -4324,8 +5261,103 @@ In `src/services/payout-view.ts`, add `and` to the drizzle import on line 1 — 
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
 ```
 
-Append to the same file — `PayoutParticipantView` and `getPayoutOperationDetail` are **not**
-touched here; Task 4 already gave them `payments`:
+and extend the `@/db/schema` import with `account` and `character` (Task 11 already added
+`character` for `listCharacterNames` — add only what is missing):
+
+```ts
+import {
+  account,
+  character,
+  lootItem,
+  lootPool,
+  payoutOperation,
+  payoutParticipant,
+  payoutPayment,
+} from "@/db/schema";
+```
+
+Then give the payment rows the one field they have always carried and never exposed.
+Replace the `PayoutParticipantView` declaration Task 4 wrote with:
+
+```ts
+export type PayoutPaymentView = typeof payoutPayment.$inferSelect & {
+  /** The operator who recorded this event, resolved to their main character's
+   *  name — the same account-id → main-character → name rule
+   *  `src/services/audit.ts` and `src/services/account-view.ts` already use, so
+   *  one person is named identically wherever authGD names them.
+   *
+   *  Null in two cases this cannot tell apart, and does not try to: `actor` is
+   *  `on delete set null`, so a deleted account leaves the row behind with
+   *  nobody to name, and an account that never set a main character has no name
+   *  to resolve to. The view layer words both, once. */
+  actorName: string | null;
+};
+
+export type PayoutParticipantView = typeof payoutParticipant.$inferSelect & {
+  paymentState: ParticipantPaymentState;
+  /** Append-only history for this participant, `(at asc, id asc)`. Rendered,
+   *  never folded — `paymentState` comes from `paidAmount`. */
+  payments: PayoutPaymentView[];
+};
+```
+
+and in `getPayoutOperationDetail`, replace the grouping loop Task 4 wrote (everything from
+the `: [];` that closes the payments query down to the end of that `for` loop) with:
+
+```ts
+    : [];
+
+  // Who did it. `payout_payment.actor` has been written since phase 1 and never
+  // read, and the design defines history as who did what and when — an event
+  // list with no actor answers two thirds of that. Resolved with the rule
+  // src/services/audit.ts and src/services/account-view.ts already use:
+  // account → mainCharacterId → character.name. A second naming rule here would
+  // eventually disagree with the audit log about who someone is.
+  //
+  // Two extra round trips, both skipped when there is no history, and both
+  // `inArray` over the handful of operators this one operation used. Not folded
+  // into the payments query: it is two joins to fetch one string, on the page's
+  // cheapest read.
+  const actorIds = [...new Set(payments.map((p) => p.actor).filter((a) => a !== null))];
+  const actorAccounts = actorIds.length
+    ? await dbx
+        .select({ id: account.id, mainCharacterId: account.mainCharacterId })
+        .from(account)
+        .where(inArray(account.id, actorIds))
+    : [];
+  const mainIds = actorAccounts.map((a) => a.mainCharacterId).filter((id) => id !== null);
+  const mainCharacters = mainIds.length
+    ? await dbx
+        .select({ id: character.id, name: character.name })
+        .from(character)
+        .where(inArray(character.id, mainIds))
+    : [];
+  const nameByCharacterId = new Map(mainCharacters.map((c) => [c.id, c.name]));
+  const actorNameById = new Map(
+    actorAccounts.map((a) => [
+      a.id,
+      a.mainCharacterId === null
+        ? null
+        : (nameByCharacterId.get(a.mainCharacterId) ?? null),
+    ]),
+  );
+
+  const paymentsByParticipant = new Map<string, PayoutPaymentView[]>();
+  for (const payment of payments) {
+    const list = paymentsByParticipant.get(payment.participantId) ?? [];
+    list.push({
+      ...payment,
+      actorName:
+        payment.actor === null ? null : (actorNameById.get(payment.actor) ?? null),
+    });
+    paymentsByParticipant.set(payment.participantId, list);
+  }
+```
+
+The participant mapping below it is unchanged: `payments: paymentsByParticipant.get(p.id) ?? []`
+still type-checks, now yielding `PayoutPaymentView[]`.
+
+Append to the same file:
 
 ```ts
 export type AccountPayoutRow = {
@@ -4396,206 +5428,60 @@ export async function listAccountPayouts(
 }
 ```
 
-In `src/app/payouts/access.ts`, add two imports — `OPEN_WINDOW_SCOPE` from
-`@/lib/esi/client` (Task 10 exports it there, beside the `openInformationWindow` call
-it authorizes — **do not redeclare the string here**; two copies of a scope constant
-drift silently and fail open) and `getMainCharacterWithScope` from `@/services/tokens`
-— then replace the type and the return with:
+Create `src/app/payouts/[id]/payment-history.tsx`:
 
-```ts
-export type PayoutAccess = {
-  accountId: string;
-  /** tier flygd AND status active — the requirePayoutOperator gate, mirrored
-   *  here only to decide what to render; every mutation re-checks itself. */
-  isOperator: boolean;
-  isAdmin: boolean;
-  /** This operator's own main character has granted `OPEN_WINDOW_SCOPE`. Gated
-   *  on the character's PERSISTED grant, never on `cfg.eveSso.scopes`: config
-   *  says what authGD asks for, and an operator who authorized before the scope
-   *  was added has a perfectly valid session and no open-window grant.
-   *
-   *  The control is hidden, not disabled, when false: a disabled button
-   *  advertises a capability this operator does not have and gives them nothing
-   *  to do about it. Copy amount and Mark paid stay scope-free, so an operator
-   *  without the grant loses nothing phase 1 gave them. */
-  canOpenInfo: boolean;
-};
-```
+```tsx
+import { Disclosure } from "@/app/_components/disclosure";
+import type { PayoutPaymentView } from "@/services/payout-view";
 
-and inside `requirePayoutReader`, after the `isOperator` try/catch (before the return):
-
-```ts
-  // Task 10's helper IS the gate — do not hand-roll a second scopes read here.
-  // It already resolves the account's main character and answers only on the
-  // PERSISTED grant, so one source decides both what renders and what runs.
-  // The token making the call belongs to the OPERATOR, not the recipient, which
-  // is why the operator's own account id is the argument.
-  //
-  // It returns the row rather than a boolean because `openInfoAction` needs the
-  // row (`getFreshAccessToken` wants id / refreshTokenEnc / tokenStatus) and
-  // re-checks at call time regardless — a render-time boolean is a rendering
-  // decision, never an authorization one. Here only its presence matters.
-  const canOpenInfo =
-    isOperator &&
-    (await getMainCharacterWithScope(db, sess.accountId, OPEN_WINDOW_SCOPE)) !== null;
-
-  return {
-    accountId: sess.accountId,
-    isOperator,
-    isAdmin: acc?.isAdmin ?? false,
-    canOpenInfo,
-  };
-```
-
-Then replace the `ERRORS` map (lines 37-40 as the file stands — Task 11 leaves it in place
-and adds `CHARACTER_LIST_ID` below it) with the four codes `openInfoAction` redirects with
-(Task 10 maps them: `no_token`/`invalid` → `open_info_reauth`, `transient` →
-`open_info_failed`, `dry_run` → `open_info_dry_run`, and a `404`/no-client answer from ESI →
-`open_info_offline`). They belong to **this** task, not Task 11, because this task is what
-puts a control on the page capable of producing them:
-
-```ts
-const ERRORS: Record<string, string> = {
-  appraisal_failed:
-    "Could not price that paste right now (triff.tools did not answer). Nothing was saved — adjust and try again, or use a flat pool.",
-  // The expected outcome on a busy night, not a fault: EVE can only open a
-  // window on a client that is running. Worded as a fact about the game rather
-  // than a failure, because an operator paying out a fleet will meet this
-  // constantly, and the fallback — copy the amount, pay by hand — is exactly
-  // what they did before this control existed. Nothing is lost.
-  open_info_offline:
-    "That character is not logged in, so EVE had nowhere to open the window. Nothing else changed — copy the amount and pay them when they are next online.",
-  // Distinct from offline because the fix is different, and is the operator's
-  // own to make: the grant is missing from THEIR login, not the recipient's.
-  open_info_reauth:
-    "Opening a window in EVE needs a permission your login does not carry yet. Add your character again from your account page to grant it — everything else here keeps working without it.",
-  open_info_failed:
-    "Could not reach EVE just then. Nothing changed; try again in a moment, or copy the amount and pay by hand.",
-  open_info_dry_run:
-    "This deployment is in dry-run mode, so nothing is sent to EVE. The amounts and the payment controls are real; only the in-game window is suppressed.",
-};
-```
-
-In `src/app/payouts/[id]/page.tsx`, extend the actions import with `openInfoAction` and
-`revertPaymentAction`, and add:
-
-```ts
-import { ConfirmArmScope, ConfirmSubmit } from "@/app/_components/confirm-submit";
-```
-
-Add beside `fmtDate` (after line 44):
-
-```ts
 /** Payment events are audit-grade, so they get a full instant rather than a
- *  relative time — same shape the audit log uses. */
+ *  relative time — the same shape the audit log uses. */
 function fmtAt(d: Date): string {
   return `${d.toISOString().replace("T", " ").slice(0, 19)} UTC`;
 }
-```
 
-Insert the freeze notice immediately after the operation `</dl>` (after line 147):
-
-```tsx
-        {locked && (
-          <Notice tone="warn">
-            <span>
-              <strong>This operation is frozen.</strong> A payment has been recorded, so
-              the loot pools, the roster, shares and the corp share are fixed permanently.
-              Reverting a payment does not reopen editing — it corrects who has been paid,
-              and nothing else. If the wrong person was marked paid, revert them and pay
-              the right one; both work while frozen.
-            </span>
-          </Notice>
-        )}
-```
-
-Wrap the participants `<tbody>` contents in `<ConfirmArmScope>` (required — `ConfirmSubmit`
-throws outside one), replace the State cell (lines 402-408) with:
-
-```tsx
-                  <td>
-                    <div className="stack">
-                      {p.paymentState === "excluded" && (
-                        <Status tone="off">excluded</Status>
-                      )}
-                      {p.paymentState === "unpaid" && <Status tone="warn">unpaid</Status>}
-                      {p.paymentState === "paid" && <Status tone="ok">paid</Status>}
-                      {/* Stored since phase 1 and never shown until now. The
-                          list is `.stack` (a grid), which blockifies the items
-                          so no markers render. */}
-                      {p.payments.length > 0 && (
-                        <Disclosure
-                          summary={`payments (${p.payments.length})`}
-                          ariaLabel={`payments (${p.payments.length}) for ${p.displayName}`}
-                        >
-                          <ul className="stack">
-                            {p.payments.map((ev) => (
-                              <li key={ev.id}>
-                                <span className="mono nowrap">{fmtAt(ev.at)}</span>{" "}
-                                {ev.kind}{" "}
-                                <span className="mono nowrap">{ev.amount} ISK</span>
-                              </li>
-                            ))}
-                          </ul>
-                        </Disclosure>
-                      )}
-                    </div>
-                  </td>
-```
-
-and the finalized branch of the actions cell (lines 411-423) with:
-
-```tsx
-                      {operation.status === "finalized" &&
-                        p.paymentState !== "excluded" && (
-                          <>
-                            <CopyAmountButton amount={p.amount} />
-                            {access.canOpenInfo && p.recipientCharacterId !== null && (
-                              <form
-                                action={openInfoAction.bind(
-                                  null,
-                                  operation.id,
-                                  p.recipientCharacterId,
-                                )}
-                              >
-                                <Submit
-                                  className="btn btn--quiet btn--micro"
-                                  pendingLabel="opening…"
-                                  aria-label={`open info for ${p.displayName}`}
-                                >
-                                  open info
-                                </Submit>
-                              </form>
-                            )}
-                            {p.paymentState !== "paid" && access.isOperator && (
-                              <form
-                                action={markPaidAction.bind(null, operation.id, p.id)}
-                              >
-                                <Submit className="btn btn--micro">mark paid</Submit>
-                              </form>
-                            )}
-                            {/* Reverting money is not a one-click action, so it
-                                arms first, like the admin table's destructive
-                                row controls. */}
-                            {p.paymentState === "paid" && access.isOperator && (
-                              <form
-                                action={revertPaymentAction.bind(
-                                  null,
-                                  operation.id,
-                                  p.id,
-                                )}
-                              >
-                                <ConfirmSubmit
-                                  className="btn btn--quiet btn--micro btn--danger-quiet"
-                                  armedClassName="btn btn--micro btn--danger"
-                                  label="revert"
-                                  restName={`revert payment for ${p.displayName}`}
-                                  confirmName={`confirm revert payment for ${p.displayName}`}
-                                />
-                              </form>
-                            )}
-                          </>
-                        )}
+/**
+ * One participant's payment history: who did what, and when.
+ *
+ * A plain component taking already-read rows, split out of the detail page for
+ * the same reason AccountPayouts is split out of the account page: both pages
+ * are async server components that read the session cookie and the database,
+ * so neither can be rendered in a unit test, and the actor rule below is worth
+ * pinning directly rather than only end-to-end.
+ *
+ * `actorName` is null in two cases this cannot tell apart: `payout_payment.actor`
+ * is `on delete set null`, so a deleted account leaves the row behind with
+ * nobody to name, and an account that never set a main character has no name to
+ * resolve to. "unknown" is the honest word for both, and it is deliberately not
+ * "system": no job writes a payment row — every one of them is an operator
+ * pressing a button — so naming a machine here would be a lie.
+ */
+export function PaymentHistory({
+  payments,
+  participantName,
+}: {
+  payments: PayoutPaymentView[];
+  participantName: string;
+}) {
+  if (payments.length === 0) return null;
+  return (
+    <Disclosure
+      summary={`payments (${payments.length})`}
+      ariaLabel={`payments (${payments.length}) for ${participantName}`}
+    >
+      {/* `.stack` is a grid, which blockifies the items so no markers render. */}
+      <ul className="stack">
+        {payments.map((ev) => (
+          <li key={ev.id}>
+            <span className="mono nowrap">{fmtAt(ev.at)}</span> {ev.kind}{" "}
+            <span className="mono nowrap">{ev.amount} ISK</span> by{" "}
+            {ev.actorName ?? "unknown"}
+          </li>
+        ))}
+      </ul>
+    </Disclosure>
+  );
+}
 ```
 
 Create `src/app/account/account-payouts.tsx`:
@@ -4681,6 +5567,325 @@ export function AccountPayouts({
 }
 ```
 
+- [ ] **Step 4: Run test to verify it passes**
+
+```
+TEST_DATABASE_URL=postgres://authgd:authgd@localhost:5433/authgd_test_payouts2 npx vitest run tests/account-payouts.test.ts tests/payment-history.test.ts tests/payout-view.test.ts
+```
+
+Expected: all three suites pass. Do **not** run `npm run typecheck` yet — the page still
+has no `revertPaymentAction` to bind, and Step 7 is where the whole change is checked.
+
+- [ ] **Step 5: Add the `revertPaymentAction` server action**
+
+No test step here, for the same reason Task 10 gives at its own action step: the repo has
+no harness for invoking a server action outside a browser (every one of them reads the
+session cookie through `cookies()`), and this action is a thin wrapper — `revertPayment`
+itself is covered exhaustively in Task 4 (`tests/payouts-service.test.ts`), including its
+`PayoutForbiddenError` / `PayoutLockedError` / `PayoutNotFoundError` branches, and the
+end-to-end behaviour of the button is Task 13's arm-then-confirm revert test.
+
+In `src/app/payouts/actions.ts`, extend the `@/services/payouts` import block. It is
+alphabetised with the error classes first, matching `tests/payouts-service.test.ts`, and
+`getOpenInfoTarget` is already there from Task 10:
+
+```ts
+import {
+  PayoutForbiddenError,
+  PayoutLockedError,
+  PayoutNotFoundError,
+  createOperation,
+  finalizeOperation,
+  getOpenInfoTarget,
+  recordPayment,
+  removeParticipant,
+  requirePayoutOperator,
+  resolveRosterNames,
+  revertPayment,
+  setParticipantExcluded,
+  setParticipantShares,
+  setRoster,
+  unlockOperation,
+} from "@/services/payouts";
+```
+
+Append to the end of the file:
+
+```ts
+/**
+ * Takes back a payment an operator recorded wrongly. `revertPayment` clears
+ * `paidAmount` and appends a `reverted` event, so the participant can be paid
+ * again; the operation stays frozen either way, because money did move.
+ *
+ * Unlike every sibling above, the service failures are caught and turned into
+ * `?error=` codes rather than thrown. They have to be: this control is armed
+ * and confirmed against a row the operator rendered seconds earlier, and every
+ * failure it can hit is somebody else having changed that row first. A raw
+ * exception would replace the whole page with an error screen over a race whose
+ * only correct answer is "reload and look again". `requireOperatorAccount`
+ * stays outside the try and still throws, exactly like every sibling — reaching
+ * an action you may not call is not a race, it is a forged request.
+ */
+export async function revertPaymentAction(
+  operationId: string,
+  participantId: string,
+): Promise<void> {
+  const actor = await requireOperatorAccount();
+  try {
+    await getDb().transaction((dbtx) => revertPayment(dbtx, actor, participantId));
+  } catch (err) {
+    // This one is reachable only if the operator's tier or status changed
+    // between requireOperatorAccount above and revertPayment's own re-check.
+    // Rare, but it is the guard doing its job, not a fault to log as a 500.
+    if (err instanceof PayoutForbiddenError) {
+      redirect(`/payouts/${operationId}?error=revert_forbidden`);
+    }
+    if (err instanceof PayoutNotFoundError) {
+      redirect(`/payouts/${operationId}?error=revert_missing`);
+    }
+    // Either "the operation is no longer finalized" or "this participant is not
+    // marked paid" — one message covers both, because the operator's next move
+    // is the same and the page they reload states which it was.
+    if (err instanceof PayoutLockedError) {
+      redirect(`/payouts/${operationId}?error=revert_not_paid`);
+    }
+    throw err;
+  }
+  revalidateOperation(operationId);
+}
+```
+
+Every `redirect` sits inside the `catch`, never inside the `try`, so the `NEXT_REDIRECT`
+control-flow exception is never swallowed by this handler — the same rule Task 10's action
+follows.
+
+- [ ] **Step 6: Wire the page**
+
+In `src/app/payouts/access.ts`, add two imports — `OPEN_WINDOW_SCOPE` from
+`@/lib/esi/client` (Task 10 exports it there, beside the `openInformationWindow` call
+it authorizes — **do not redeclare the string here**; two copies of a scope constant
+drift silently and fail open) and `getMainCharacterWithScope` from `@/services/tokens`
+— then replace the type and the return with:
+
+```ts
+export type PayoutAccess = {
+  accountId: string;
+  /** tier flygd AND status active — the requirePayoutOperator gate, mirrored
+   *  here only to decide what to render; every mutation re-checks itself. */
+  isOperator: boolean;
+  isAdmin: boolean;
+  /** This operator's own main character has granted `OPEN_WINDOW_SCOPE`. Gated
+   *  on the character's PERSISTED grant, never on `cfg.eveSso.scopes`: config
+   *  says what authGD asks for, and an operator who authorized before the scope
+   *  was added has a perfectly valid session and no open-window grant.
+   *
+   *  The control is hidden, not disabled, when false: a disabled button
+   *  advertises a capability this operator does not have and gives them nothing
+   *  to do about it. Copy amount and Mark paid stay scope-free, so an operator
+   *  without the grant loses nothing phase 1 gave them. */
+  canOpenInfo: boolean;
+};
+```
+
+and inside `requirePayoutReader`, after the `isOperator` try/catch (before the return):
+
+```ts
+  // Task 10's helper IS the gate — do not hand-roll a second scopes read here.
+  // It already resolves the account's main character and answers only on the
+  // PERSISTED grant, so one source decides both what renders and what runs.
+  // The token making the call belongs to the OPERATOR, not the recipient, which
+  // is why the operator's own account id is the argument.
+  //
+  // It returns the row rather than a boolean because `openInfoAction` needs the
+  // row (`getFreshAccessToken` wants id / refreshTokenEnc / tokenStatus) and
+  // re-checks at call time regardless — a render-time boolean is a rendering
+  // decision, never an authorization one. Here only its presence matters.
+  const canOpenInfo =
+    isOperator &&
+    (await getMainCharacterWithScope(db, sess.accountId, OPEN_WINDOW_SCOPE)) !== null;
+
+  return {
+    accountId: sess.accountId,
+    isOperator,
+    isAdmin: acc?.isAdmin ?? false,
+    canOpenInfo,
+  };
+```
+
+Then extend the `ERRORS` map with the three codes `revertPaymentAction` redirects with.
+
+**This is an extension, not a rewrite.** Task 10 Step 19 already replaced this map with an
+eight-key version (`appraisal_failed` plus the seven `open_info_*` codes `openInfoAction`
+can produce). Do not reinstate an earlier, shorter map: a code with no entry renders
+nothing at all, so dropping one turns a specific message into a silent no-op. Task 10's
+step ends with a note saying "Task 12 also rewrites this map … carry all eight keys
+forward" — written before this task gained a revert action. Read it as: eight keys are the
+floor, and the three below are added on top. Skipping this step entirely would leave
+`revertPaymentAction`'s failures silent. After both tasks have run the map must hold
+exactly these eleven keys, and every one of them is reachable:
+
+| Code | Emitted by |
+|---|---|
+| `appraisal_failed` | `addAppraisedPoolAction` (`actions.ts`, phase 1, retained by Task 11) |
+| `open_info_reauth` | `openInfoAction` — no persisted grant, or `getFreshAccessToken` returned `no_token`/`invalid` (Task 10) |
+| `open_info_target` | `openInfoAction` — `getOpenInfoTarget` returned null (Task 10) |
+| `open_info_offline` | `openInfoAction` — ESI's own body said the character is not online (Task 10) |
+| `open_info_busy` | `openInfoAction` — `classifyOpenInfoFailure` → `busy` (420/429) (Task 10) |
+| `open_info_timeout` | `openInfoAction` — `classifyOpenInfoFailure` → `timeout` (Task 10) |
+| `open_info_failed` | `openInfoAction` — `classifyOpenInfoFailure` → `failed`, or `getFreshAccessToken` returned `transient` (Task 10) |
+| `open_info_dry_run` | `openInfoAction` — `getFreshAccessToken` returned `dry_run` (Task 10) |
+| `revert_forbidden` | `revertPaymentAction` — `PayoutForbiddenError` (Task 12) |
+| `revert_missing` | `revertPaymentAction` — `PayoutNotFoundError` (Task 12) |
+| `revert_not_paid` | `revertPaymentAction` — `PayoutLockedError` (Task 12) |
+
+Paste the whole map, so the file ends in that state whichever version is currently there:
+
+```ts
+const ERRORS: Record<string, string> = {
+  appraisal_failed:
+    "Could not price that paste right now (triff.tools did not answer). Nothing was saved — adjust and try again, or use a flat pool.",
+  // The expected outcome on a busy night, not a fault, and the ONLY message
+  // here that claims to know why: it is used only when ESI's own error body
+  // said so. Worded as a fact about the game, because the fallback — copy the
+  // amount, pay by hand — is exactly what operators did before this control.
+  open_info_offline:
+    "EVE says that character is not logged in, so there was nowhere to open the window. Nothing else changed — copy the amount and pay them when they are next online.",
+  // Distinct from offline because the fix is different, and is the operator's
+  // own to make: the grant is missing from THEIR login, not the recipient's.
+  open_info_reauth:
+    "Opening a window in EVE needs a permission your login does not carry yet. Add your character again from your account page to grant it — everything else here keeps working without it.",
+  open_info_busy:
+    "EVE is rate-limiting us right now. Nothing changed — wait a minute and try again, or copy the amount and pay by hand.",
+  // The one failure where the call may actually have SUCCEEDED, so it must not
+  // tell the operator to click again without looking first.
+  open_info_timeout:
+    "EVE took too long to answer. The window may still have opened, so check your client before trying again.",
+  // The honest catch-all. It says what happened and what to do next, and
+  // deliberately does not guess at a cause we cannot prove.
+  open_info_failed:
+    "Could not open that window just then. Nothing changed — try again in a moment, or copy the amount and pay by hand.",
+  open_info_target:
+    "That line cannot be opened: it is excluded, has no linked character, or the operation is no longer finalized. Reload the page to see where it stands.",
+  open_info_dry_run:
+    "This deployment is in dry-run mode, so nothing is sent to EVE. The amounts and the payment controls are real; only the in-game window is suppressed.",
+  // The three below are all "somebody else changed this row first". Each says
+  // what did not happen, because the operator armed and confirmed a
+  // destructive control and deserves to know money did not move.
+  revert_not_paid:
+    "That payment was already reverted, or the operation is no longer finalized — so there was nothing to take back. Nothing changed; reload the page to see where it stands.",
+  revert_missing:
+    "That participant is no longer on this roster, so there was nothing to revert. Nothing changed; reload the page to see the current roster.",
+  revert_forbidden:
+    "Your account can no longer operate payouts, so the revert was not applied. Nothing changed.",
+};
+```
+
+In `src/app/payouts/[id]/page.tsx`, extend the actions import with `openInfoAction` and
+`revertPaymentAction`, and add:
+
+```ts
+import { ConfirmArmScope, ConfirmSubmit } from "@/app/_components/confirm-submit";
+import { PaymentHistory } from "./payment-history";
+```
+
+Insert the freeze notice immediately after the operation `</dl>` (after line 147):
+
+```tsx
+        {locked && (
+          <Notice tone="warn">
+            <span>
+              <strong>This operation is frozen.</strong> A payment has been recorded, so
+              the loot pools, the roster, shares and the corp share are fixed permanently.
+              Reverting a payment does not reopen editing — it corrects who has been paid,
+              and nothing else. If the wrong person was marked paid, revert them and pay
+              the right one; both work while frozen.
+            </span>
+          </Notice>
+        )}
+```
+
+Wrap the participants `<tbody>` contents in `<ConfirmArmScope>` (required — `ConfirmSubmit`
+throws outside one), replace the State cell (lines 402-408) with:
+
+```tsx
+                  <td>
+                    <div className="stack">
+                      {p.paymentState === "excluded" && (
+                        <Status tone="off">excluded</Status>
+                      )}
+                      {p.paymentState === "unpaid" && <Status tone="warn">unpaid</Status>}
+                      {p.paymentState === "paid" && <Status tone="ok">paid</Status>}
+                      {/* Stored since phase 1 and never shown until now — and
+                          the actor with it, so the list says who, not just
+                          what and when. Renders nothing when there is no
+                          history. */}
+                      <PaymentHistory
+                        payments={p.payments}
+                        participantName={p.displayName}
+                      />
+                    </div>
+                  </td>
+```
+
+and the finalized branch of the actions cell (lines 411-423) with:
+
+```tsx
+                      {operation.status === "finalized" &&
+                        p.paymentState !== "excluded" && (
+                          <>
+                            <CopyAmountButton amount={p.amount} />
+                            {access.canOpenInfo && p.recipientCharacterId !== null && (
+                              <form
+                                action={openInfoAction.bind(null, operation.id, p.id)}
+                              >
+                                <Submit
+                                  className="btn btn--quiet btn--micro"
+                                  pendingLabel="opening…"
+                                  aria-label={`open info for ${p.displayName}`}
+                                >
+                                  open info
+                                </Submit>
+                              </form>
+                            )}
+                            {p.paymentState !== "paid" && access.isOperator && (
+                              <form
+                                action={markPaidAction.bind(null, operation.id, p.id)}
+                              >
+                                <Submit className="btn btn--micro">mark paid</Submit>
+                              </form>
+                            )}
+                            {/* Reverting money is not a one-click action, so it
+                                arms first, like the admin table's destructive
+                                row controls. */}
+                            {p.paymentState === "paid" && access.isOperator && (
+                              <form
+                                action={revertPaymentAction.bind(
+                                  null,
+                                  operation.id,
+                                  p.id,
+                                )}
+                              >
+                                <ConfirmSubmit
+                                  className="btn btn--quiet btn--micro btn--danger-quiet"
+                                  armedClassName="btn btn--micro btn--danger"
+                                  label="revert"
+                                  restName={`revert payment for ${p.displayName}`}
+                                  confirmName={`confirm revert payment for ${p.displayName}`}
+                                />
+                              </form>
+                            )}
+                          </>
+                        )}
+```
+
+**Render guard kept exactly as written: `access.canOpenInfo && p.recipientCharacterId !== null`.**
+Task 10's revision moved the ESI target server-side, so the second clause is no longer what
+supplies the id — but it is still the right thing to hide the button on. `getOpenInfoTarget`
+returns null for a participant with no linked character, so without this check the control
+would render for every unresolved roster name and every one of those clicks would come back
+`?error=open_info_target`. Hiding it is the same call the scope gate makes one clause
+earlier: never offer a control that cannot work.
+
 In `src/app/account/page.tsx`, add to the imports:
 
 ```ts
@@ -4708,20 +5913,37 @@ and insert after the "Add character" `</p>` (after line 471):
         )}
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **Step 7: Verify the whole change**
 
 ```
-TEST_DATABASE_URL=postgres://authgd:authgd@localhost:5433/authgd_test_payouts2 npx vitest run tests/account-payouts.test.ts tests/payout-view.test.ts
-npm run typecheck
+npx tsc --noEmit
+npx eslint .
+npx prettier --check .
+TEST_DATABASE_URL=postgres://authgd:authgd@localhost:5433/authgd_test_payouts2 npx vitest run tests/account-payouts.test.ts tests/payment-history.test.ts tests/payout-view.test.ts tests/payouts-service.test.ts tests/account-page.test.ts
 ```
 
-Expected: both suites pass; `tsc --noEmit` clean.
+Expected: clean typecheck and lint, `prettier --check` reporting no files, and every listed
+suite passing. `tests/payouts-service.test.ts` and `tests/account-page.test.ts` are named
+because they are the suites that would catch the two things this task could break from a
+distance — `revertPayment`'s own contract, and the account page's existing sections.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 8: Commit**
 
 ```
-git add src/services/payout-view.ts src/app/payouts/access.ts "src/app/payouts/[id]/page.tsx" src/app/account/account-payouts.tsx src/app/account/page.tsx tests/account-payouts.test.ts tests/payout-view.test.ts
-git commit -m "feat(payouts): show payment history, allow an audited revert, and tell members what they are owed"
+git add src/services/payout-view.ts src/app/payouts/access.ts src/app/payouts/actions.ts "src/app/payouts/[id]/page.tsx" "src/app/payouts/[id]/payment-history.tsx" src/app/account/account-payouts.tsx src/app/account/page.tsx tests/account-payouts.test.ts tests/payment-history.test.ts tests/payout-view.test.ts
+git commit -m "feat(payouts): show payment history, allow an audited revert, and tell members what they are owed
+
+The history list names the operator who recorded each event, resolved the way
+audit rows resolve an actor -- account id to that account's main character's
+name. payout_payment.actor has been written since phase 1 and never read; the
+column already existed, so nothing migrates. It renders 'unknown' when the
+actor's account was deleted (the FK is on delete set null) or has no main
+character, which are indistinguishable here.
+
+revertPaymentAction turns the service's three failures into ?error= codes
+rather than an error screen: the control is armed and confirmed against a row
+the operator rendered seconds earlier, and every failure it can hit is someone
+else having changed that row first."
 ```
 
 ---
@@ -5102,11 +6324,120 @@ Also run `npm run lint` — CI runs ESLint too, and the new client-component bou
 (`Disclosure`, `ConfirmSubmit`, `ConfirmArmScope`) are exactly where a rule like
 `@next/next` or `react-hooks` catches a mistake typecheck does not.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Code review, before anything is committed**
+
+Dispatch the `code-reviewer` agent over the full branch diff (`git diff main...HEAD`). It
+is read-only and reports with `file:line` citations; it does not edit. This runs **first**,
+while the diff is still the diff you wrote — a review after an automated formatter pass is
+reviewing two changes at once and cannot tell them apart.
+
+Point it at the surfaces this PR actually moves, which are the ones its rules cover:
+
+- the authorization order in every new mutating export (`requirePayoutOperator` →
+  `lockOperation` → re-read) — `setItemPrice`, `addParticipant`, `revertPayment`;
+- an audit write on every state change, targeting the **operation** uuid;
+- the enqueue-don't-execute boundary and its two documented exceptions (interactive
+  appraisal, open-info);
+- migration safety — this PR must generate **none**;
+- secret and token handling around the new `esi-ui.open_window.v1` scope.
+
+Fix what it finds, or write down why a finding is being declined. Do not proceed to Step 6
+with unresolved findings still open.
+
+- [ ] **Step 6: `my:polish-core --fix`, then inspect its edits, then re-run the gate**
+
+Run:
+
+```
+my:polish-core --fix
+```
+
+`--fix` **edits files**. Those edits are not to be trusted blind — read them:
+
+```
+git diff
+```
+
+Confirm every hunk is a formatting, naming or dead-code cleanup and nothing more. Revert
+any hunk that changes behaviour, widens a bound, touches a code comment that carries a
+decision (the `nextPaymentAt` doc block, the `MAX_EXACT_LINE_CENTS` doc block, and the
+"round once, at the line total" comment in `src/services/appraisal.ts` all carry decisions
+a cleanup pass has no basis to rewrite), or reaches a file this plan never asked about.
+
+Then **re-run the verification the edits could have invalidated** — which is all of it,
+because polish-core is not scoped to one suite. The same four commands from Step 4, in the
+same order, plus lint:
+
+```
+TEST_DATABASE_URL=postgres://authgd:authgd@localhost:5433/authgd_test_payouts2 npm test
+npm run typecheck
+npm run lint
+npm run test:e2e
+npm run format:check
+```
+
+Then `git checkout tsconfig.json AGENTS.md` again — the e2e re-run rewrites them a second
+time.
+
+If polish-core changed nothing, say so and skip the re-run; a no-op needs no re-verification.
+
+- [ ] **Step 7: `my:change-explainer`**
+
+Run:
+
+```
+my:change-explainer
+```
+
+This is **substantial** work — thirteen tasks, a new authorization-boundary export, a
+money-arithmetic bound, a timestamp-stamping change, and a new ESI scope rolled out to
+production — so include its **five knowledge-check questions**, do not omit them. They
+should probe the parts of this PR a reviewer is most likely to have taken on trust:
+
+1. why derived payment state moved to `paidAmount` and what breaks if it is folded from
+   `payout_payment` instead;
+2. why `nextPaymentAt` clamps forward rather than trusting `clock_timestamp()`, and what
+   is traded away when the clock steps backwards;
+3. why `MAX_LOOT_QTY` does not make an appraised line total exact, and what
+   `MAX_EXACT_LINE_CENTS` bounds that `MAX_MONEY_CENTS` cannot;
+4. why revert does not un-freeze the operation, and where the UI says so;
+5. why open-info is an exception to enqueue-don't-execute, and what the operator sees for
+   each of its failure codes.
+
+Answer them honestly. A question you cannot answer is a part of the change that is not
+finished being understood, not a question to skip.
+
+- [ ] **Step 8: Dispose of `implementation-notes.md`**
+
+The temporary notes file kept during implementation is not a deliverable. Apply one
+criterion and act on it:
+
+- **Delete it** if everything in it is now visible elsewhere — decisions that ended up in
+  code comments, facts that ended up in tests, steps that ended up in this plan. That is
+  the expected outcome.
+- **Fold it in** otherwise. Durable content goes where the repo already keeps that kind of
+  thing: a design decision belongs in
+  `docs/superpowers/specs/2026-08-04-fight-payout-tracking-phase-2-design.md`, an
+  operational note belongs in `docs/ops.md`, and anything that only matters to a reviewer
+  of this change belongs in the PR body.
+
+Either way, `implementation-notes.md` must not exist when Step 9 runs. Confirm with
+`git status` — it should not appear as tracked, staged, or untracked.
+
+- [ ] **Step 9: Commit, and open a PR — never merge locally**
 
 ```
 git add e2e/payouts.spec.ts e2e/account.spec.ts
 git commit -m "test(payouts): cover the reprice, pay, revert, pay loop and the member payout view end to end"
 ```
+
+Stage explicit paths, never `git add -A` — an e2e run has rewritten `tsconfig.json` and
+`AGENTS.md` and they must not land in the commit.
+
+**This work lands via a GitHub PR.** Push the branch and open the PR with `gh pr create`.
+Do **not** `git merge` into local `main`, and do not commit to `main` directly — every
+change in this repository goes through review on GitHub, and a local merge bypasses the
+CI gate that runs `prettier --check .`, ESLint, typecheck and both test suites over the
+whole repository rather than the files you happened to check.
 
 ---
