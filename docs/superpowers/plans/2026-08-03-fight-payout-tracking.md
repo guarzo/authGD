@@ -3247,8 +3247,24 @@ export async function appraiseLoot(
         ...ZERO_PRICE,
       };
     }
+    // Round ONCE, at the line total. Rounding the per-unit price to cents
+    // first commits the error per unit and then multiplies it by qty, so it
+    // scales with quantity instead of staying bounded at half a cent per
+    // line: 5.005 ISK x 2,000,000,000 units loses 10,000,000 ISK, and
+    // 0.004 ISK x 10,000,000 units stores 0.00 for a line genuinely worth
+    // 40,000 ISK. p05 is an interpolated percentile, so sub-cent and
+    // half-cent unit prices are ordinary, not hypothetical.
+    // What is left is IEEE-754's ~1.1e-16 RELATIVE error on the product —
+    // under a cent for any line total below ~9e13 ISK, well inside
+    // numeric(20,2).
+    const totalCents = BigInt(Math.round(price * line.qty * 100));
+    // The stored unit price stays 2dp because that is the column's type. It
+    // is a DISPLAY value: unitPrice * qty deliberately need not equal
+    // totalValue, and for a sub-cent price it will not. A row where
+    // unitPrice is "0.00" while totalValue is not is exactly that case, and
+    // the detail page marks it rather than showing a bare 0.00 — derivable
+    // from the persisted row, so no column and no migration are needed.
     const unitCents = iskToCents(price.toFixed(2));
-    const totalCents = unitCents * BigInt(line.qty);
     return {
       typeId,
       name: line.name,
