@@ -14,6 +14,48 @@ const { db, pool } = testDb();
 test.afterAll(() => pool.end());
 test.beforeEach(() => resetDb(db));
 
+test("the payouts list pages with an Older link", async ({ page, context }) => {
+  const reader = await seedMember(db, { name: "List Reader", tier: "flygd" });
+  await context.addCookies([await sessionCookieFor(db, reader.id)]);
+
+  // 51 operations: one more than PAYOUTS_PAGE_SIZE, newest first by date.
+  await db.insert(payoutOperation).values(
+    Array.from({ length: 51 }, (_, i) => ({
+      name: `Op ${String(i).padStart(2, "0")}`,
+      occurredAt: new Date(Date.UTC(2026, 6, 1) - i * 86_400_000),
+    })),
+  );
+
+  await page.goto("/payouts");
+  // The count is a page count now, so the heading must not claim a total.
+  await expect(page.getByRole("heading", { name: "Operations" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Op 00", exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Op 49", exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Op 50", exact: true })).toHaveCount(0);
+
+  await page.getByRole("link", { name: "Older" }).click();
+  await expect(page).toHaveURL(/\/payouts\?before=/);
+  await expect(page.getByRole("link", { name: "Op 50", exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Op 00", exact: true })).toHaveCount(0);
+  // Last page: nothing further to walk to.
+  await expect(page.getByRole("link", { name: "Older" })).toHaveCount(0);
+});
+
+test("a malformed before param renders page 1 instead of failing", async ({
+  page,
+  context,
+}) => {
+  const reader = await seedMember(db, { name: "Cursor Reader", tier: "flygd" });
+  await context.addCookies([await sessionCookieFor(db, reader.id)]);
+  await db.insert(payoutOperation).values({
+    name: "Only fight",
+    occurredAt: new Date("2026-07-01T00:00:00Z"),
+  });
+
+  await page.goto("/payouts?before=garbage");
+  await expect(page.getByRole("link", { name: "Only fight" })).toBeVisible();
+});
+
 test("a green member is denied /payouts", async ({ page, context }) => {
   const acc = await seedMember(db, { name: "Green Pilot", tier: "green" });
   await context.addCookies([await sessionCookieFor(db, acc.id)]);
