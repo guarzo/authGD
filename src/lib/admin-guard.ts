@@ -72,9 +72,12 @@ function denyAdmin(reason: AdminDenial): never {
   switch (reason) {
     case "not-admin":
       // A de-roled admin is still signed in. Sending them to a login screen
-      // would be a lie; /account states what changed. Same destination as
-      // admin/accounts/actions.ts's `redirectNotAdmin`, whose comment records
-      // the same reasoning for the mid-session race.
+      // would be a lie; /account states what changed. Not the same
+      // destination as admin/accounts/actions.ts's `redirectNotAdmin`
+      // (`/admin/accounts?error=not_admin`) — they converge here only via a
+      // second hop: requireAdminPage re-guards `/admin/accounts` itself, so a
+      // non-admin who lands there bounces onward to this same `/account`
+      // redirect.
       return redirect("/account?error=not_admin");
     case "session-expired":
       return redirect("/login?error=session_expired");

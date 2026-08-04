@@ -1082,6 +1082,15 @@ h3.rule-head__label {
   --tone: var(--ink-dim);
 }
 
+/* Pending is deliberately achromatic rather than a fourth hue: DESIGN.md tunes
+   the three tier colours as a set against deuteranopia and protanopia, and
+   "not yet approved" reads better as an absence of colour than as a new one.
+   Shares --ink-dim with .tier--unknown, already measured at 5.67:1 on the
+   badge's own tint over a hovered row. */
+.tier--pending {
+  --tone: var(--ink-dim);
+}
+
 /* The account page's tier is the single most consequential fact on the screen,
    and at --t-label it read as exactly as important as the Discord boolean
    beneath it. Size carries the hierarchy: the badge already owns its tier's

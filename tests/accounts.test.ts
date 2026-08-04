@@ -1,7 +1,17 @@
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { loadConfig, type Config } from "@/config";
-import { account, auditLog, character, outbox } from "@/db/schema";
+import {
+  account,
+  auditLog,
+  character,
+  discordLink,
+  outbox,
+  payoutOperation,
+  payoutParticipant,
+  payoutPayment,
+  session,
+} from "@/db/schema";
 import {
   demoteAdmin,
   handleEveLogin,
@@ -156,6 +166,21 @@ describe("linkCharacter", () => {
     expect(acc.mainCharacterId).toBeNull();
   });
 
+  it("unlinking the main of a pending account leaves it pending", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "pending" });
+    await seedCharacter(ctx.db, cfg, { id: 90000101, accountId: acc.id, main: true });
+    await seedCharacter(ctx.db, cfg, { id: 90000102, accountId: acc.id });
+
+    const res = await ctx.db.transaction((tx) =>
+      unlinkCharacter(tx, cfg, acc.id, 90000101),
+    );
+
+    expect(res).toEqual({ ok: true });
+    const [after] = await ctx.db.select().from(account).where(eq(account.id, acc.id));
+    expect(after.tier).toBe("pending");
+    expect(after.mainCharacterId).toBeNull();
+  });
+
   it("refuses to unlink an account's last character", async () => {
     const a = await login(ch());
     expect(await unlink(a.accountId, 90000001)).toEqual({
@@ -252,6 +277,195 @@ describe("linkCharacter", () => {
     });
     expect(unlinked!.id).toBeLessThan(tier!.id);
   });
+});
+
+describe("linkCharacter absorbing an accidental account", () => {
+  it("folds a bare single-character account into the caller's account", async () => {
+    const main = await seedAccount(ctx.db, { tier: "flygd" });
+    await seedCharacter(ctx.db, cfg, { id: 90000301, accountId: main.id, main: true });
+    // The accident: a fresh SSO login created its own account for this char.
+    const stray = await ctx.db.transaction((tx) =>
+      handleEveLogin(tx, cfg, ch({ characterId: 90000302, ownerHash: "oh-302" })),
+    );
+    const strayId = stray.accountId;
+
+    const res = await ctx.db.transaction((tx) =>
+      linkCharacter(tx, cfg, main.id, ch({ characterId: 90000302, ownerHash: "oh-302" })),
+    );
+
+    expect(res).toEqual({ ok: true });
+    const [moved] = await ctx.db
+      .select()
+      .from(character)
+      .where(eq(character.id, 90000302));
+    expect(moved.accountId).toBe(main.id);
+    const gone = await ctx.db.select().from(account).where(eq(account.id, strayId));
+    expect(gone).toHaveLength(0);
+  });
+
+  it("deletes the absorbed account's sessions", async () => {
+    const main = await seedAccount(ctx.db, { tier: "flygd" });
+    await seedCharacter(ctx.db, cfg, { id: 90000311, accountId: main.id, main: true });
+    const stray = await ctx.db.transaction((tx) =>
+      handleEveLogin(tx, cfg, ch({ characterId: 90000312, ownerHash: "oh-312" })),
+    );
+    await createSession(ctx.db, stray.accountId);
+
+    await ctx.db.transaction((tx) =>
+      linkCharacter(tx, cfg, main.id, ch({ characterId: 90000312, ownerHash: "oh-312" })),
+    );
+
+    const sessions = await ctx.db
+      .select()
+      .from(session)
+      .where(eq(session.accountId, stray.accountId));
+    expect(sessions).toHaveLength(0);
+  });
+
+  it("adopts the character as main when the target has none", async () => {
+    const main = await seedAccount(ctx.db, { tier: "green" });
+    await seedCharacter(ctx.db, cfg, { id: 90000321, accountId: main.id });
+    await ctx.db
+      .update(account)
+      .set({ mainCharacterId: null })
+      .where(eq(account.id, main.id));
+    await ctx.db.transaction((tx) =>
+      handleEveLogin(tx, cfg, ch({ characterId: 90000322, ownerHash: "oh-322" })),
+    );
+
+    await ctx.db.transaction((tx) =>
+      linkCharacter(tx, cfg, main.id, ch({ characterId: 90000322, ownerHash: "oh-322" })),
+    );
+
+    const [after] = await ctx.db.select().from(account).where(eq(account.id, main.id));
+    expect(after.mainCharacterId).toBe(90000322);
+  });
+
+  it("audits the merge and leaves the source's own audit rows unresolved", async () => {
+    const main = await seedAccount(ctx.db, { tier: "flygd" });
+    await seedCharacter(ctx.db, cfg, { id: 90000331, accountId: main.id, main: true });
+    const stray = await ctx.db.transaction((tx) =>
+      handleEveLogin(tx, cfg, ch({ characterId: 90000332, ownerHash: "oh-332" })),
+    );
+
+    await ctx.db.transaction((tx) =>
+      linkCharacter(tx, cfg, main.id, ch({ characterId: 90000332, ownerHash: "oh-332" })),
+    );
+
+    const merged = await ctx.db
+      .select()
+      .from(auditLog)
+      .where(eq(auditLog.action, "account.merged"));
+    expect(merged).toHaveLength(1);
+    expect(merged[0].details).toEqual({
+      sourceAccountId: stray.accountId,
+      characterId: 90000332,
+    });
+    // audit_log.actor is plain text with no FK: rows the deleted account wrote
+    // survive with a uuid that resolves to nothing (actorKind "unresolved").
+    const orphaned = await ctx.db
+      .select()
+      .from(auditLog)
+      .where(eq(auditLog.target, stray.accountId));
+    expect(orphaned.length).toBeGreaterThan(0);
+  });
+});
+
+describe("linkCharacter refusing a real account", () => {
+  // One case per absorbability check. Each seeds an otherwise-absorbable
+  // account and flips exactly one attribute, so a loosened predicate fails
+  // exactly one test and names itself.
+  // `mutate` returns Promise<unknown>, not Promise<void>: the one-liner cases
+  // hand back a drizzle query builder, which resolves to a QueryResult.
+  const refuses = async (mutate: (accountId: string) => Promise<unknown>) => {
+    const main = await seedAccount(ctx.db, { tier: "flygd" });
+    await seedCharacter(ctx.db, cfg, { id: 90000401, accountId: main.id, main: true });
+    const stray = await ctx.db.transaction((tx) =>
+      handleEveLogin(tx, cfg, ch({ characterId: 90000402, ownerHash: "oh-402" })),
+    );
+    await mutate(stray.accountId);
+
+    const res = await ctx.db.transaction((tx) =>
+      linkCharacter(tx, cfg, main.id, ch({ characterId: 90000402, ownerHash: "oh-402" })),
+    );
+
+    expect(res).toEqual({ ok: false, error: "already_linked" });
+    const [still] = await ctx.db
+      .select()
+      .from(character)
+      .where(eq(character.id, 90000402));
+    expect(still.accountId).toBe(stray.accountId);
+  };
+
+  it("refuses an admin account", () =>
+    refuses((id) =>
+      ctx.db.update(account).set({ isAdmin: true }).where(eq(account.id, id)),
+    ));
+
+  it("refuses a tier-locked account", () =>
+    refuses((id) =>
+      ctx.db.update(account).set({ tierLocked: true }).where(eq(account.id, id)),
+    ));
+
+  it("refuses a cryo account", () =>
+    refuses((id) =>
+      ctx.db.update(account).set({ status: "cryo" }).where(eq(account.id, id)),
+    ));
+
+  it("refuses an account carrying an admin's status note", () =>
+    refuses((id) =>
+      ctx.db
+        .update(account)
+        .set({ statusNote: "inactive since March, keep the tier" })
+        .where(eq(account.id, id)),
+    ));
+
+  it("refuses an account with a Discord link", () =>
+    refuses(async (id) => {
+      await ctx.db.insert(discordLink).values({ accountId: id, discordUserId: "d-1" });
+    }));
+
+  // One case per payout table. All three are set-null FKs, so the database
+  // would happily delete the account and silently detach the history.
+  const seedOperation = async (createdBy: string | null) => {
+    const [op] = await ctx.db
+      .insert(payoutOperation)
+      .values({ name: "Op", occurredAt: new Date(), createdBy })
+      .returning();
+    return op;
+  };
+
+  it("refuses an account that created a payout operation", () =>
+    refuses(async (id) => {
+      await seedOperation(id);
+    }));
+
+  it("refuses an account that is a payout participant", () =>
+    refuses(async (id) => {
+      const op = await seedOperation(null);
+      await ctx.db
+        .insert(payoutParticipant)
+        .values({ operationId: op.id, accountId: id, displayName: "Someone" });
+    }));
+
+  it("refuses an account that recorded a payment", () =>
+    refuses(async (id) => {
+      const op = await seedOperation(null);
+      const [p] = await ctx.db
+        .insert(payoutParticipant)
+        .values({ operationId: op.id, displayName: "Someone" })
+        .returning();
+      // The account is neither the operation's creator nor its participant —
+      // only its actor. This is the case the first two checks miss.
+      await ctx.db
+        .insert(payoutPayment)
+        .values({ participantId: p.id, kind: "paid", amount: "1000", actor: id });
+    }));
+
+  it("refuses an account holding a second character", () =>
+    refuses(async (id) => {
+      await seedCharacter(ctx.db, cfg, { id: 90000403, accountId: id });
+    }));
 });
 
 describe("transaction rollback", () => {

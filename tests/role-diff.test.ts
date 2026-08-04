@@ -15,6 +15,17 @@ describe("diffRoles", () => {
       remove: [],
     });
   });
+  it("grants a pending account nothing and strips what it has", () => {
+    expect(diffRoles({ tier: "pending", managed, memberRoleIds: ["12", "999"] })).toEqual(
+      { add: [], remove: ["12"] },
+    );
+  });
+  it("is a no-op for a pending account with no managed role", () => {
+    expect(diffRoles({ tier: "pending", managed, memberRoleIds: ["999"] })).toEqual({
+      add: [],
+      remove: [],
+    });
+  });
 });
 
 describe("stripManagedRoles", () => {

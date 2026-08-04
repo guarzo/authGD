@@ -1,7 +1,17 @@
 import { and, asc, eq, sql } from "drizzle-orm";
 import type { Config } from "@/config";
 import type { DbTx } from "@/db";
-import { account, bootstrapAdminGrant, character, contactSyncState } from "@/db/schema";
+import {
+  account,
+  bootstrapAdminGrant,
+  character,
+  contactSyncState,
+  discordLink,
+  payoutOperation,
+  payoutParticipant,
+  payoutPayment,
+  session,
+} from "@/db/schema";
 import { encryptToken } from "@/lib/crypto";
 import { logAudit } from "@/services/audit";
 import { enqueueSync } from "@/services/outbox";
@@ -141,7 +151,10 @@ async function applyNoMainRule(dbx: DbTx, accountId: string, cause: string) {
     .where(eq(account.id, accountId))
     .for("update");
   if (!acc) return;
-  const demote = !acc.tierLocked && acc.tier !== "green";
+  // Demote only from an earned tier. Green is already the floor, and pending
+  // is BELOW it — demoting a pending account to green would turn losing your
+  // main into an automatic approval.
+  const demote = !acc.tierLocked && acc.tier !== "green" && acc.tier !== "pending";
   await dbx
     .update(account)
     .set({
@@ -229,6 +242,106 @@ export async function handleEveLogin(
   return { accountId: await createAccountWithCharacter(dbx, cfg, ch) };
 }
 
+/**
+ * Is this account nothing but the character being moved?
+ *
+ * An account created by an accidental SSO login holds exactly one character
+ * and no other trace: no admin bit, no Discord link, no payout history of any
+ * kind, no admin-set tier, and no status or note an admin curated. Cryo and a
+ * status note are each reachable on their own (setAccountStatus /
+ * setStatusNote), so both are checked — an established account must never be
+ * dissolved, and its note destroyed, by someone clicking "link character".
+ *
+ * "Payout history" means all three tables, not just the two that name the
+ * account as a subject. payout_payment.actor is a set-null FK (schema.ts:320),
+ * so deleting an account that recorded a payment silently detaches financial
+ * attribution. Note this is reachable WITHOUT the account being flygd now:
+ * recordPayment requires active flygd (payouts.ts:445), but a derole to green
+ * is automatic and unlocked, and nothing below inspects tier. A one-character
+ * ex-operator with no Discord link would otherwise pass every other check.
+ *
+ * Callers must already hold the source account row FOR UPDATE.
+ */
+async function isAbsorbable(
+  dbx: DbTx,
+  acc: typeof account.$inferSelect,
+  characterId: number,
+): Promise<boolean> {
+  if (acc.isAdmin || acc.tierLocked) return false;
+  if (acc.status !== "active" || acc.statusNote !== null) return false;
+  const chars = await dbx.select().from(character).where(eq(character.accountId, acc.id));
+  if (chars.length !== 1 || chars[0].id !== characterId) return false;
+  const [linked] = await dbx
+    .select()
+    .from(discordLink)
+    .where(eq(discordLink.accountId, acc.id));
+  if (linked) return false;
+  const [participant] = await dbx
+    .select()
+    .from(payoutParticipant)
+    .where(eq(payoutParticipant.accountId, acc.id));
+  if (participant) return false;
+  const [operation] = await dbx
+    .select()
+    .from(payoutOperation)
+    .where(eq(payoutOperation.createdBy, acc.id));
+  if (operation) return false;
+  const [payment] = await dbx
+    .select()
+    .from(payoutPayment)
+    .where(eq(payoutPayment.actor, acc.id));
+  if (payment) return false;
+  return true;
+}
+
+/**
+ * Fold `sourceId` into `targetId`: the character moves, the source account and
+ * its sessions are deleted. Callers must hold the advisory character lock and
+ * BOTH account rows FOR UPDATE in sorted id order.
+ *
+ * The source's main is cleared first for clarity only — account's composite
+ * main-character FK is DEFERRABLE INITIALLY DEFERRED
+ * (drizzle/0001_main_character_fk.sql), so the reassignment is validated at
+ * COMMIT rather than statement by statement.
+ *
+ * Deleting the sessions is mandatory, not tidiness: session.account_id has no
+ * ON DELETE clause (schema.ts:89), so it defaults to NO ACTION and the account
+ * DELETE below raises a foreign key violation if any session survives. The
+ * stray account's browser session is exactly the one the operator used to make
+ * the accident, so it is very likely to exist.
+ *
+ * Two deletion side effects, both intended. audit_log.actor is plain text with
+ * no FK, so rows the source wrote survive with an id that resolves to nothing
+ * (actorKind "unresolved"); they are NOT rewritten to the target, because
+ * falsifying history to make it read better is worse than an unresolved id,
+ * and the account.merged row records the mapping. bootstrap_admin_grant
+ * .account_id IS a nulling FK and nulls — correct, since the grant must stay
+ * permanently consumed and unearnable through a merge.
+ */
+async function mergeAccountInto(
+  dbx: DbTx,
+  sourceId: string,
+  targetId: string,
+  characterId: number,
+): Promise<void> {
+  await dbx
+    .update(account)
+    .set({ mainCharacterId: null })
+    .where(eq(account.id, sourceId));
+  await dbx
+    .update(character)
+    .set({ accountId: targetId })
+    .where(eq(character.id, characterId));
+  await dbx.delete(session).where(eq(session.accountId, sourceId));
+  await dbx.delete(account).where(eq(account.id, sourceId));
+  await logAudit(dbx, {
+    actor: targetId,
+    action: "account.merged",
+    target: targetId,
+    details: { sourceAccountId: sourceId, characterId },
+  });
+}
+
 export async function linkCharacter(
   dbx: DbTx,
   cfg: Config,
@@ -242,7 +355,37 @@ export async function linkCharacter(
       return { ok: true };
     }
     if (existing.ownerHash === ch.ownerHash) {
-      return { ok: false, error: "already_linked" };
+      // Same character, same owner hash, a different account. EVE rotates the
+      // owner hash on every transfer and handleEveLogin reclaims on mismatch,
+      // so this state is reachable ONLY when the same owner authenticated
+      // twice — an accidental second login, provably the same person as the
+      // caller. Absorb that account if it holds nothing but this character;
+      // anything richer is a real account and still refuses.
+      await lockAccounts(dbx, [existing.accountId, accountId]);
+      const [source] = await dbx
+        .select()
+        .from(account)
+        .where(eq(account.id, existing.accountId));
+      if (!source || !(await isAbsorbable(dbx, source, ch.characterId))) {
+        return { ok: false, error: "already_linked" };
+      }
+      await mergeAccountInto(dbx, existing.accountId, accountId, ch.characterId);
+      // Store the credentials this SSO round just produced, audit the re-auth
+      // and enqueue the target's sync — all three are reauthCharacter's job.
+      await reauthCharacter(dbx, cfg, accountId, ch);
+      // Plain select, no FOR UPDATE: lockAccounts above already holds this row.
+      const [target] = await dbx.select().from(account).where(eq(account.id, accountId));
+      if (target && target.mainCharacterId === null) {
+        await dbx
+          .update(account)
+          .set({ mainCharacterId: ch.characterId })
+          .where(eq(account.id, accountId));
+      }
+      // maybeGrantBootstrapAdmin is deliberately NOT called: the grant for this
+      // character was already consumed when the source account was created, and
+      // the grant row survives that account's deletion precisely so it cannot
+      // be re-earned.
+      return { ok: true };
     }
     // two accounts involved: lock both in sorted order before mutating
     await lockAccounts(dbx, [existing.accountId, accountId]);

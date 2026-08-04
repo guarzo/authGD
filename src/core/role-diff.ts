@@ -2,13 +2,20 @@ export type ManagedRoleIds = { flygd: string; blue: string; green: string };
 
 /** Ensure exactly the tier's role among the three managed roles; all other roles untouched. */
 export function diffRoles(input: {
-  tier: "flygd" | "blue" | "green";
+  tier: "pending" | "flygd" | "blue" | "green";
   managed: ManagedRoleIds;
   memberRoleIds: string[];
 }): { add: string[]; remove: string[] } {
-  const want = input.managed[input.tier];
   const managedAll = [input.managed.flygd, input.managed.blue, input.managed.green];
   const have = new Set(input.memberRoleIds);
+  // Pending is the state of an account nobody has approved, so the guild owes
+  // it nothing: strip whatever it carries and add none. Returning early also
+  // narrows the tier for the managed[] lookup below, which has no pending key
+  // by design — a pending Discord role would be a fourth required secret.
+  if (input.tier === "pending") {
+    return { add: [], remove: managedAll.filter((r) => have.has(r)) };
+  }
+  const want = input.managed[input.tier];
   return {
     add: have.has(want) ? [] : [want],
     remove: managedAll.filter((r) => r !== want && have.has(r)),

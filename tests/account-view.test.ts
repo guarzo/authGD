@@ -10,6 +10,7 @@ import {
   wandererAclObservation,
 } from "@/db/schema";
 import {
+  countAccountsByTier,
   getAccountView,
   getAdminAccountsList,
   getPushStatus,
@@ -312,6 +313,28 @@ describe("getAdminAccountsList", () => {
     expect(byDate[0].tier).toBe("blue");
   });
 
+  it("filters the admin list down to pending accounts", async () => {
+    await seedAccount(ctx.db, { tier: "pending" });
+    await seedAccount(ctx.db, { tier: "green" });
+    await seedAccount(ctx.db, { tier: "flygd" });
+
+    const rows = await getAdminAccountsList(ctx.db, cfg, { tier: "pending" });
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].tier).toBe("pending");
+  });
+
+  it("sorts pending accounts ahead of every other tier when sorting by tier", async () => {
+    await seedAccount(ctx.db, { tier: "green" });
+    await seedAccount(ctx.db, { tier: "pending" });
+    await seedAccount(ctx.db, { tier: "flygd" });
+    await seedAccount(ctx.db, { tier: "blue" });
+
+    const rows = await getAdminAccountsList(ctx.db, cfg, { sort: "tier" });
+
+    expect(rows.map((r) => r.tier)).toEqual(["pending", "flygd", "blue", "green"]);
+  });
+
   it("summarizes token health", async () => {
     const a = await seedAccount(ctx.db, { tier: "flygd" });
     await seedCharacter(ctx.db, cfg, { id: 10, accountId: a.id, main: true, name: "T1" });
@@ -338,5 +361,23 @@ describe("getAdminAccountsList", () => {
     });
     const [row] = await getAdminAccountsList(ctx.db, cfg);
     expect(row.tokenSummary).toEqual({ total: 4, healthy: 1, needsReauth: 2, dead: 1 });
+  });
+});
+
+describe("countAccountsByTier", () => {
+  it("counts only the requested tier, ignoring other rows", async () => {
+    await seedAccount(ctx.db, { tier: "pending" });
+    await seedAccount(ctx.db, { tier: "pending" });
+    await seedAccount(ctx.db, { tier: "green" });
+    await seedAccount(ctx.db, { tier: "flygd" });
+
+    expect(await countAccountsByTier(ctx.db, "pending")).toBe(2);
+    expect(await countAccountsByTier(ctx.db, "green")).toBe(1);
+  });
+
+  it("returns 0 rather than a falsy non-number when a tier has no rows", async () => {
+    await seedAccount(ctx.db, { tier: "green" });
+
+    expect(await countAccountsByTier(ctx.db, "blue")).toBe(0);
   });
 });

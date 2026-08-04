@@ -9,20 +9,14 @@ import { canReadPayouts } from "@/services/payouts";
 import { listAccountPayouts } from "@/services/payout-view";
 import { getSessionAccount } from "@/services/session";
 import { computeAccountHealth } from "@/core/account-health";
-import {
-  Notice,
-  RuleHead,
-  Scroller,
-  SiteHeader,
-  Status,
-  Tier,
-} from "@/app/_components/ui";
+import { Notice, RuleHead, Scroller, SiteHeader, Status } from "@/app/_components/ui";
 import { RelativeTime } from "@/app/_components/relative-time";
 import { formatAgo } from "@/app/_components/format-ago";
 import { utcHhmm } from "@/app/_components/utc-time";
 import { Submit } from "@/app/_components/submit";
 import { ConfirmArmScope, ConfirmSubmit } from "@/app/_components/confirm-submit";
 import { ContactRemedy, ContactState, hasContactRemedy } from "./contact-state";
+import { StandingTier } from "./standing";
 import { setMainAction, unlinkAction, wakeSelfAction } from "./actions";
 import { AccountPayouts } from "./account-payouts";
 
@@ -53,7 +47,8 @@ export const metadata: Metadata = {
 // the same thing" (already_linked). Sign-in links expire 10 minutes after you
 // start them (src/services/oauth-tx.ts).
 const ERRORS: Record<string, string> = {
-  already_linked: "That character is already linked to another account.",
+  already_linked:
+    "That character belongs to an account with its own history, so it can't be merged automatically. Ask an admin.",
   discord_already_linked: "That Discord account is already linked to another account.",
   discord_denied: "Discord authorization was cancelled.",
   discord_expired:
@@ -243,7 +238,7 @@ export default async function AccountPage({
         <dl className="facts">
           <dt>Tier</dt>
           <dd data-field="tier" className="facts__lead">
-            <Tier tier={view.tier} size="lead" />
+            <StandingTier tier={view.tier} />
             {/* Cryo's copy and its "wake me" control fold into this same dd
                 rather than a row of their own: `.facts` is a grid, and a
                 `.visually-hidden` dt in that grid is taken out of flow by its

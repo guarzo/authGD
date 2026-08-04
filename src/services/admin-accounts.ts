@@ -100,6 +100,51 @@ export async function setAccountStatus(
   return { ok: true };
 }
 
+export type ApproveResult =
+  { ok: true } | { ok: false; error: "not_authorized" | "not_found" | "not_pending" };
+
+/**
+ * Approve a pending account onto green or blue. Separate from setTierManual
+ * because the lock differs and the guard differs.
+ *
+ * Green is left UNLOCKED so the account rejoins the automatic state machine:
+ * if the member later joins the alliance, the membership job promotes them to
+ * flygd with no admin involved. An unlocked green is stable, because
+ * decideTier already wants green for a confirmed non-alliance main.
+ *
+ * Blue MUST lock. An unlocked blue is converged straight back to green on the
+ * next membership run, which is why blue is inherently a locked tier.
+ *
+ * flygd is not an approval target — it is the system's to grant, or an admin's
+ * via setTierManual.
+ */
+export async function approveAccount(
+  dbx: DbTx,
+  actor: string,
+  accountId: string,
+  tier: "green" | "blue",
+): Promise<ApproveResult> {
+  if (!(await isAuthorized(dbx, actor))) return { ok: false, error: "not_authorized" };
+  const acc = await lockTarget(dbx, accountId);
+  if (!acc) return { ok: false, error: "not_found" };
+  // Re-checked under the lock: two admins approving the same account race here,
+  // and the second must not re-stamp a tier the first already granted.
+  if (acc.tier !== "pending") return { ok: false, error: "not_pending" };
+  const locked = tier === "blue";
+  await dbx
+    .update(account)
+    .set({ tier, tierLocked: locked, tierChangedAt: new Date(), tierChangedBy: actor })
+    .where(eq(account.id, accountId));
+  await logAudit(dbx, {
+    actor,
+    action: "tier.approved",
+    target: accountId,
+    details: { to: tier, locked },
+  });
+  await enqueueSync(dbx, { kind: "account", accountId });
+  return { ok: true };
+}
+
 export async function setStatusNote(
   dbx: DbTx,
   actor: string,

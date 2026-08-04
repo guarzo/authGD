@@ -201,7 +201,8 @@ export function Tier({
   locked?: boolean;
   size?: "lead";
 }) {
-  const known = tier === "flygd" || tier === "blue" || tier === "green";
+  const known =
+    tier === "flygd" || tier === "blue" || tier === "green" || tier === "pending";
   // An unknown tier is a data problem, not a blue member: give it a neutral
   // badge rather than borrowing another tier's colour and asserting a lie.
   const tone = known ? `tier tier--${tier}` : "tier tier--unknown";
