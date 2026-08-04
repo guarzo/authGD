@@ -10,6 +10,7 @@
  */
 import { expect, test } from "@playwright/test";
 import { auditLog, outbox, syncRun } from "../src/db/schema";
+import { JOB_CRON } from "../src/core/schedules";
 import { resetDb, seedMember, sessionCookieFor, testDb } from "./helpers";
 
 const { db, pool } = testDb();
@@ -19,21 +20,38 @@ test.beforeEach(() => resetDb(db));
 const MIN = 60_000;
 const ago = (ms: number) => new Date(Date.now() - ms);
 
-/** The seven jobs JOB_CRON schedules; every one of them earns a row. */
-const JOB_COUNT = 7;
+/**
+ * Every job JOB_CRON schedules earns a row. Read from the schedules table
+ * itself rather than restated as a number: `getSyncStatus` seeds from that same
+ * table, so a hand-written count here would be a fourth enumeration of the job
+ * list — and one that passes on the day a job is added and fails as an
+ * off-by-one in an unrelated-looking test.
+ */
+const JOB_COUNT = Object.keys(JOB_CRON).length;
+
+/** The page's own Started-column format (see `fmt` in page.tsx). */
+const stamp = (d: Date) => d.toISOString().replace("T", " ").slice(0, 19);
 
 /**
  * A healthy page with exactly one job broken — the state the strip exists to
  * make obvious. membership carries a real change, purge a fully zero result,
  * wanderer the failure. The four jobs with no rows here are the never-run
  * case, and they appear too.
+ *
+ * Returns the instants it seeded, so assertions can pin the exact value a cell
+ * renders instead of a shape regex that any timestamp would satisfy.
  */
 async function seedRuns() {
+  const seeded = {
+    membership: { startedAt: ago(5 * MIN), finishedAt: ago(5 * MIN - 1200) },
+    wanderer: { startedAt: ago(4 * MIN), finishedAt: ago(4 * MIN - 900) },
+    // Newest by insertion order, so this is the row the worker line reports.
+    purge: { startedAt: ago(2 * MIN), finishedAt: ago(2 * MIN - 300) },
+  };
   await db.insert(syncRun).values([
     {
       jobType: "membership",
-      startedAt: ago(5 * MIN),
-      finishedAt: ago(5 * MIN - 1200),
+      ...seeded.membership,
       status: "ok",
       counts: {
         checked: 12,
@@ -46,20 +64,19 @@ async function seedRuns() {
     },
     {
       jobType: "wanderer",
-      startedAt: ago(4 * MIN),
-      finishedAt: ago(4 * MIN - 900),
+      ...seeded.wanderer,
       status: "failed",
       errorSummary: "acl read failed: 502 from wanderer",
       counts: null,
     },
     {
       jobType: "purge",
-      startedAt: ago(2 * MIN),
-      finishedAt: ago(2 * MIN - 300),
+      ...seeded.purge,
       status: "ok",
       counts: { sessions: 0, oauthTransactions: 0, outbox: 0 },
     },
   ]);
+  return seeded;
 }
 
 async function asAdmin(context: import("@playwright/test").BrowserContext) {
@@ -200,7 +217,7 @@ test("no permanently empty error column; the error rides the status cell", async
   context,
 }) => {
   await asAdmin(context);
-  await seedRuns();
+  const seeded = await seedRuns();
   await page.goto("/admin/sync");
 
   const wanderer = page.locator(".strip__job", { hasText: "wanderer" });
@@ -208,12 +225,14 @@ test("no permanently empty error column; the error rides the status cell", async
   await expect(wanderer.locator("tbody tr").first()).toContainText(
     "acl read failed: 502 from wanderer",
   );
-  // One timestamp and a duration, not two timestamps. Asserted on the wide
-  // rendering rather than the cell: the cell also carries the narrow
+  // One timestamp and a duration, not two timestamps. The exact seeded instant,
+  // not a shape: a regex for "some ISO-ish stamp" passes just as happily on the
+  // finished time, on another run's time, or on `Date.now()`. Asserted on the
+  // wide rendering rather than the cell: the cell also carries the narrow
   // rendering (`display: none` above 40rem), and `toHaveText` reads
   // textContent, which includes a subtree that is not being rendered.
   await expect(wanderer.locator("tbody td").first().locator(".only-wide")).toHaveText(
-    /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/,
+    stamp(seeded.wanderer.startedAt),
   );
   await expect(wanderer.locator("tbody td").nth(1)).toHaveText("900ms");
 });
@@ -234,7 +253,11 @@ test("the worker line reports liveness, and a dead worker says so", async ({
   await page.goto("/admin/sync");
 
   const worker = page.locator(".worker");
-  await expect(worker).toHaveText(/worker · last run \d+m ago/i);
+  // "2m", not `\d+m`: purge is the newest seeded run at 2 minutes old, and a
+  // digit-agnostic regex passes just as happily on membership's 5m — which is
+  // exactly the bug this line exists to catch, since reporting the OLDEST run
+  // as the worker's liveness would make a dead worker look alive.
+  await expect(worker).toHaveText("worker · last run 2m ago");
   // Healthy is a quiet line, not a notice.
   await expect(page.locator(".notice--bad")).toHaveCount(0);
 
@@ -369,7 +392,7 @@ test("the fan-out reports back, and Refresh clears the flag", async ({
  * a 502 meant a fan-out that also re-ran three jobs that were fine.
  */
 test("a failed row re-runs its own job", async ({ page, context }) => {
-  await asAdmin(context);
+  const admin = await asAdmin(context);
   await seedRuns();
   await page.goto("/admin/sync");
 
@@ -381,11 +404,14 @@ test("a failed row re-runs its own job", async ({ page, context }) => {
   const queued = await db.select().from(outbox);
   expect(queued.map((r) => r.payload)).toEqual([{ kind: "job", jobType: "wanderer" }]);
 
-  // The audit row names the job rather than the literal "all", and keeps the
-  // action string the audit page's prefix filter already matches.
+  // The audit row names the job rather than the literal "all", keeps the action
+  // string the audit page's prefix filter already matches, and attributes the
+  // press to the admin who made it — dropping the actor from this assertion
+  // would let the row be written as "system" and still pass, which is the one
+  // field an audit log exists for.
   const audit = await db.select().from(auditLog);
-  expect(audit.map((r) => [r.action, r.target])).toEqual([
-    ["sync.requested", "wanderer"],
+  expect(audit.map((r) => [r.actor, r.action, r.target])).toEqual([
+    [admin.id, "sync.requested", "wanderer"],
   ]);
 });
 
@@ -401,7 +427,7 @@ test("the runs table gives up its width floor and its ISO stamp at 320px", async
   context,
 }) => {
   await asAdmin(context);
-  await seedRuns();
+  const seeded = await seedRuns();
   await page.setViewportSize({ width: 320, height: 720 });
   await page.goto("/admin/sync");
 
@@ -422,7 +448,7 @@ test("the runs table gives up its width floor and its ISO stamp at 320px", async
   // `title` would not do — VoiceOver and TalkBack do not announce it, and touch
   // cannot reach it.
   await expect(started.locator(".visually-hidden")).toHaveText(
-    /^started \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC$/,
+    `started ${stamp(seeded.wanderer.startedAt)} UTC`,
   );
 
   // The thing an admin actually feels: the region's overflow at 320px. A 44rem
@@ -458,6 +484,6 @@ test("the runs table gives up its width floor and its ISO stamp at 320px", async
   await expect(started.locator(".only-narrow")).toBeHidden();
   await expect(started.locator(".only-wide")).toBeVisible();
   await expect(started.locator(".only-wide")).toHaveText(
-    /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/,
+    stamp(seeded.wanderer.startedAt),
   );
 });
