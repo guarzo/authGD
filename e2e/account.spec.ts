@@ -11,9 +11,9 @@ test("login page renders the wired error param", async ({ page }) => {
   await page.goto("/login?error=oauth_denied");
   // Next.js dev also renders its own role="alert" route-announcer, so scope
   // to the alert that actually carries our copy.
-  await expect(page.getByRole("alert").filter({ hasText: "cancelled" })).toContainText(
-    "cancelled",
-  );
+  await expect(
+    page.getByRole("alert").filter({ hasText: "No access was granted" }),
+  ).toContainText("No access was granted");
 });
 
 test("unauthenticated /account redirects to login", async ({ page }) => {
