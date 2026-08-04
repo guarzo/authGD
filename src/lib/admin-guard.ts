@@ -10,8 +10,9 @@ export type AdminContext = { accountId: string };
 
 /** Distinguishes "not signed in" from "signed in but not an admin" so callers
  * can react differently — a de-roled admin is still logged in and should not
- * be bounced to a login screen. */
-export type AdminDenial = "no-session" | "not-admin";
+ * be bounced to a login screen. `no-session` and `session-expired` are split
+ * for the same class of reason: only one of them is a session that ended. */
+export type AdminDenial = "no-session" | "session-expired" | "not-admin";
 
 export type AdminResolution =
   { ok: true; ctx: AdminContext } | { ok: false; reason: AdminDenial };
@@ -23,7 +24,10 @@ export async function resolveAdmin(
 ): Promise<AdminResolution> {
   if (!sessionId) return { ok: false, reason: "no-session" };
   const sess = await getSessionAccount(db, sessionId);
-  if (!sess) return { ok: false, reason: "no-session" };
+  // A cookie that no longer resolves is a real expiry. No cookie at all is
+  // someone who has never signed in, and telling them a session ended names an
+  // event that never happened. account/page.tsx draws the same line.
+  if (!sess) return { ok: false, reason: "session-expired" };
   const [acc] = await db.select().from(account).where(eq(account.id, sess.accountId));
   if (!acc?.isAdmin) return { ok: false, reason: "not-admin" };
   return { ok: true, ctx: { accountId: sess.accountId } };
@@ -50,12 +54,13 @@ async function getAdminContext(): Promise<AdminResolution> {
  * The single place a denial turns into a destination. A `switch` rather than
  * an `if` chain on purpose: each case returns a `redirect`, which `next/
  * navigation` declares as returning `never`, so this compiles clean today —
- * and the moment a third `AdminDenial` member is added it fails to compile
+ * and the moment another `AdminDenial` member is added it fails to compile
  * with `TS2534: A function returning 'never' cannot have a reachable end
- * point` (verified by adding one) instead of silently falling through to the
- * login redirect and telling a user their session expired when it hadn't.
- * That silent fallthrough is the exact bug this union was introduced to
- * prevent, so the union is worth little without an exhaustive branch on it.
+ * point` instead of silently falling through to the login redirect and telling
+ * a user their session expired when it hadn't. That silent fallthrough is the
+ * exact bug this union was introduced to prevent, so the union is worth little
+ * without an exhaustive branch on it. Splitting `session-expired` out of
+ * `no-session` is the first time that guard has actually fired.
  *
  * Annotated `: never` explicitly, and each case `return`s rather than just
  * calling: TS only treats a call as terminating control flow when the callee
@@ -71,8 +76,13 @@ function denyAdmin(reason: AdminDenial): never {
       // admin/accounts/actions.ts's `redirectNotAdmin`, whose comment records
       // the same reasoning for the mid-session race.
       return redirect("/account?error=not_admin");
-    case "no-session":
+    case "session-expired":
       return redirect("/login?error=session_expired");
+    case "no-session":
+      // Never signed in — most often someone who guessed /admin, or a crawler.
+      // "Your session ended" would name an event that never happened, so this
+      // one gets the plain login page.
+      return redirect("/login");
   }
 }
 

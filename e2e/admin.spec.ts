@@ -2,6 +2,7 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 import { eq } from "drizzle-orm";
 import { account } from "../src/db/schema";
 import { clearOfPin, coveredByPin, pinGeometry } from "./geometry";
+import { BASE_URL } from "./env";
 import { resetDb, seedMember, sessionCookieFor, testDb } from "./helpers";
 
 /**
@@ -43,7 +44,19 @@ async function seedDenseWorld() {
   return admin;
 }
 
-test("an unauthenticated visitor is redirected to login", async ({ page }) => {
+// Three denials, three destinations. The pair below is the one that reads as a
+// single case and isn't: a visitor with no cookie has never signed in, so
+// "your session ended" would name an event that never happened.
+test("a visitor who has never signed in gets the plain login page", async ({ page }) => {
+  await page.goto("/admin/accounts");
+  await expect(page).toHaveURL(/\/login$/);
+  await expect(page.locator(".notice--bad")).toHaveCount(0);
+});
+
+test("a visitor whose session died is told so", async ({ page, context }) => {
+  await context.addCookies([
+    { name: "authgd_session", value: "long-dead-session", url: BASE_URL },
+  ]);
   await page.goto("/admin/accounts");
   await expect(page).toHaveURL(/\/login\?error=session_expired/);
 });

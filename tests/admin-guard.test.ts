@@ -30,14 +30,17 @@ describe("resolveAdmin", () => {
     expect(await resolveAdmin(ctx.db, sid)).toEqual({ ok: false, reason: "not-admin" });
   });
 
-  it("rejects missing and bogus sessions, distinctly from a non-admin", async () => {
+  it("tells no cookie, a dead cookie, and a non-admin apart", async () => {
+    // No cookie is someone who never signed in. A cookie that no longer
+    // resolves is a real expiry. Collapsing the two tells a first-time visitor
+    // their session ended.
     expect(await resolveAdmin(ctx.db, undefined)).toEqual({
       ok: false,
       reason: "no-session",
     });
     expect(await resolveAdmin(ctx.db, "not-a-session")).toEqual({
       ok: false,
-      reason: "no-session",
+      reason: "session-expired",
     });
   });
 });
