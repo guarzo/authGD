@@ -4,6 +4,7 @@ import { Notice, SiteHeader } from "@/app/_components/ui";
 import { Submit } from "@/app/_components/submit";
 import { requirePayoutReader } from "../access";
 import { createOperationAction } from "../actions";
+import { NEW_OPERATION_ERRORS, lookupErrorMessage } from "../errors";
 
 export const dynamic = "force-dynamic";
 
@@ -11,23 +12,9 @@ export const metadata: Metadata = {
   title: "New payout operation",
 };
 
-/** Every code `createOperationAction` can reject with. A code with no entry
- *  renders nothing at all, which is the one failure this page cannot show the
- *  operator, so e2e checks each by name.
- *
- *  All of these land back here with the submitted values echoed in the query
- *  string and reapplied below, so each message can honestly say the work
- *  survived: the operator fixes one field rather than retyping five. */
-const ERRORS: Record<string, string> = {
-  name_required: "An operation needs a name. Everything else is still filled in.",
-  date_invalid: "Date must be a real calendar date. Everything else is still filled in.",
-  url_invalid:
-    "That battle report is not a URL. Paste the full link, or leave it blank and add it later.",
-  url_scheme: "Battle report links must start with http:// or https://.",
-  share_format: "Corp share must be a plain percentage like 10 or 12.5.",
-  share_range:
-    "Corp share cannot exceed 100% — that would leave the roster nothing to split.",
-};
+/** Every code `createOperationAction` can reject with, and the copy for each,
+ *  lives in `../errors` — with the type that stops the action emitting one the
+ *  map has no entry for. */
 
 export default async function NewPayoutPage({
   searchParams,
@@ -50,7 +37,7 @@ export default async function NewPayoutPage({
   if (!access.isOperator) redirect("/payouts");
 
   const submitted = await searchParams;
-  const errorMessage = submitted.error ? ERRORS[submitted.error] : undefined;
+  const errorMessage = lookupErrorMessage(NEW_OPERATION_ERRORS, submitted.error);
 
   const nav = [
     { href: "/account", label: "Your account" },
