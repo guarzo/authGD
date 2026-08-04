@@ -43,7 +43,7 @@ export function ContactState({
         <Status tone="warn">label missing</Status>
         <span className="dim">
           Create a contact label named <code className="literal">{`"${label}"`}</code> in
-          game, then re-sync.
+          game. The next sync picks it up on its own — nothing to do here.
         </span>
       </>
     );
@@ -62,7 +62,8 @@ export function ContactState({
             <>
               Your label is named <code className="literal">{`"${candidates[0]}"`}</code>.
               It must be exactly <code className="literal">{`"${label}"`}</code> —
-              capitalization and spaces both count. Rename it in game, then re-sync.
+              capitalization and spaces both count. Rename it in game. The next sync picks
+              it up on its own — nothing to do here.
             </>
           ) : candidates.length > 1 ? (
             <>
@@ -79,13 +80,14 @@ export function ContactState({
               ))}{" "}
               {candidates.length === 2 ? "both" : "all"} differ only in capitalization or
               spacing. It must be exactly <code className="literal">{`"${label}"`}</code>{" "}
-              — rename one in game, then re-sync.
+              — rename one in game. The next sync picks it up on its own — nothing to do
+              here.
             </>
           ) : (
             <>
               A label differing only in capitalization or spacing exists. It must be
-              exactly <code className="literal">{`"${label}"`}</code> — rename it in game,
-              then re-sync.
+              exactly <code className="literal">{`"${label}"`}</code> — rename it in game.
+              The next sync picks it up on its own — nothing to do here.
             </>
           )}
         </span>
