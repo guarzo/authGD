@@ -32,12 +32,29 @@ export type NavItem = { href: string; label: string };
  * rather than matching `undefined` against itself.
  *
  * The `.shell__bar` wrapper is what carries the layout: the bar's ground and
- * bottom hairline stay full-bleed, while the contents sit on the same measure
- * as the page's own column, so the seal and the nav land on the H1's verticals
- * instead of the viewport's. `measure` is passed for the same reason `current`
- * is — the page knows which column it uses, and deriving it here would cost
- * either a hook or a `:has()` bet on Next's DOM shape. A page rendering
- * `.page--narrow` must pass `measure="narrow"` to stay aligned.
+ * bottom hairline stay full-bleed, and the contents sit on one fixed measure —
+ * `--measure-page` — on every route.
+ *
+ * The bar used to take a `measure` prop and track whichever column the page
+ * under it used, so the seal and the nav landed on that page's H1 vertical.
+ * That bought alignment at the price of a 288px width change (and so a 144px
+ * lateral jump for the seal and the nav) whenever a route crossed between the
+ * two measures. It was priced as an admin-only cost, on the premise that a
+ * member only ever sees `/account`. Payouts falsified that premise 26 PRs
+ * later: `/payouts` is wide, `/payouts/new` is narrow, and a plain member walks
+ * that list -> form path in sequence, watching the chrome slide under them
+ * mid-task.
+ *
+ * Worth knowing before reopening this: #39 shipped the fixed measure first and
+ * reversed itself to the tracking one within the same PR. This is the third
+ * position, not a fresh idea, so the argument below is the one that has to be
+ * beaten.
+ *
+ * Chrome that holds still beats chrome aligned to the column below it. The
+ * ground was always full-bleed, so the contents were never read as being "in"
+ * the page column to begin with. The cost is symmetric and it is the whole of
+ * it: on the two narrow routes the seal sits 144px outboard of the H1, and the
+ * nav's right edge sits 144px outboard of the content's right edge.
  *
  * `admin` names which register the bar is framing. It drives three things
  * together rather than three separate props, because all three answer the
@@ -51,12 +68,10 @@ export type NavItem = { href: string; label: string };
 export function SiteHeader({
   items,
   current,
-  measure = "wide",
   admin = false,
 }: {
   items: NavItem[];
   current?: string;
-  measure?: "wide" | "narrow";
   admin?: boolean;
 }) {
   return (
@@ -64,9 +79,7 @@ export function SiteHeader({
       <a className="skip" href="#main">
         Skip to content
       </a>
-      <div
-        className={measure === "narrow" ? "shell__bar shell__bar--narrow" : "shell__bar"}
-      >
+      <div className="shell__bar">
         <a className="shell__mark" href={admin ? "/admin/accounts" : "/account"}>
           <img src="/brand/seal-sm.webp" alt="" width={34} height={34} />
           <span className="shell__wordmark">

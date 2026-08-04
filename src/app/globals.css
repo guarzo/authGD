@@ -54,9 +54,10 @@
 
   --radius: 2px;
   --measure: 68ch;
-  /* The two content-column measures. Each is shared by a .page variant and its
-     matching .shell__bar variant, so the header and the page under it cannot
-     drift apart — the alignment is structural rather than matching literals. */
+  /* The two content-column measures. `--measure-page` is also the shell bar's
+     single measure on every route — the bar deliberately does not track the
+     narrow column, so the chrome cannot move between routes. See the SiteHeader
+     comment in _components/ui.tsx. */
   --measure-page: 78rem;
   --measure-page-narrow: 60rem;
 
@@ -182,13 +183,16 @@ a:hover {
   background: var(--hull);
 }
 
-/* Only the contents are measured, and they track the measure of the page under
-   them, so the seal and the nav land on the H1's verticals on every route.
-   The cost is that the header shifts by half the difference between the two
-   measures when an admin crosses between /account and /admin/*. That was the
-   accepted trade: a member only ever sees /account, so for almost everyone the
-   frame is fixed, and admins get alignment on all four screens instead of on
-   three. */
+/* One measure, every route. The bar used to track the page's own column so the
+   seal landed on the H1's vertical; the cost was a 288px width change, and so a
+   144px lateral jump for the seal and the nav, whenever a route crossed between
+   the two measures. Chrome that holds still is worth more than that alignment —
+   the ground is full-bleed anyway, so the contents never read as sitting inside
+   the page column. See the SiteHeader comment in _components/ui.tsx.
+
+   Do not reintroduce a narrow variant here without also changing every page's
+   measure: the property under test in e2e/shell.spec.ts is that the bar's
+   width and centring are identical on every route that renders one. */
 .shell__bar {
   display: flex;
   align-items: center;
@@ -197,14 +201,8 @@ a:hover {
   max-width: var(--measure-page);
   margin: 0 auto;
   /* Matches .page's horizontal padding, so the seal's left edge and the nav's
-     right edge land on the same verticals as the page H1 and the tables. */
+     right edge land on the same verticals as the wide pages' H1 and tables. */
   padding: var(--s-3) var(--s-5);
-}
-
-/* Pairs with .page--narrow. Set by the page rather than derived from the DOM:
-   see the SiteHeader comment in _components/ui.tsx. */
-.shell__bar--narrow {
-  max-width: var(--measure-page-narrow);
 }
 
 .shell__mark {

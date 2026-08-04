@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { resetDb, seedMember, sessionCookieFor, testDb } from "./helpers";
+import { payoutOperation } from "../src/db/schema";
 
 const { db, pool } = testDb();
 test.afterAll(() => pool.end());
@@ -69,6 +70,88 @@ test("the admin header names its own register, and the two navs get distinct acc
   // The home mark follows the admin register rather than always going to
   // /account, so it doesn't quietly walk an admin out of the admin section.
   await expect(page.locator(".shell__mark")).toHaveAttribute("href", "/admin/accounts");
+});
+
+/**
+ * The bar used to take a `measure` prop and track the page's own column, which
+ * made it 960px on /account and /payouts/new and 1248px everywhere else — a
+ * 144px lateral jump for the seal and the nav on every crossing, including the
+ * /payouts -> /payouts/new step a plain member walks in sequence.
+ *
+ * Asserting the rect rather than the absence of a class name: the class was one
+ * of several ways to reintroduce the shift (a `--narrow` variant, a `:has()`
+ * rule, a per-page override), and only the geometry is the property that
+ * matters. Width alone would also miss a bar that stayed 1248px wide but
+ * stopped being centred, so the slack either side is pinned too.
+ */
+test("the header bar occupies the same rect on every shell route", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.setViewportSize({ width: 1440, height: 900 });
+
+  const [op] = await db
+    .insert(payoutOperation)
+    .values({
+      name: "Header rect",
+      occurredAt: new Date("2026-08-01"),
+      corpSharePct: "0",
+      createdBy: admin.id,
+    })
+    .returning();
+
+  // Every route that renders a SiteHeader and can be reached with a session.
+  // `/payouts/new` and `/account` are the two that used to render the narrow
+  // bar, so dropping either from this list guts the test.
+  const routes = [
+    "/account",
+    "/admin/accounts",
+    "/admin/audit",
+    "/admin/sync",
+    "/payouts",
+    "/payouts/new",
+    `/payouts/${op.id}`,
+  ];
+
+  const rects: Record<string, { slack: number; width: number }> = {};
+  for (const path of routes) {
+    await test.step(path, async () => {
+      await page.goto(path);
+      // Three guards against measuring a bar that isn't the one asked for,
+      // because all three failure modes end in a *passing* assertion below:
+      // an access redirect lands on /account (bar already 1248), the error
+      // boundary renders its own SiteHeader (and this very commit dropped its
+      // `measure="narrow"`, so its bar is now exactly 1248 too), and a missing
+      // bar makes boundingBox() null — a bare `box!.x` would throw a TypeError
+      // naming neither the route nor the reason.
+      expect(new URL(page.url()).pathname).toBe(path);
+      await expect(page.getByRole("heading", { name: "Something broke" })).toHaveCount(0);
+      const bar = page.locator(".shell__bar");
+      await expect(bar).toBeVisible();
+
+      const box = (await bar.boundingBox())!;
+      // Against the layout viewport, not the hardcoded 1440: nothing sets
+      // `scrollbar-gutter: stable`, so a route whose fixtures ever grow past
+      // one screenful takes a vertical scrollbar and shifts a centred box's
+      // `left` by half its width. Pinning the raw x would then fail for a
+      // reason that has nothing to do with the header measure guarded here.
+      const vw = await page.evaluate(() => document.documentElement.clientWidth);
+      rects[path] = {
+        slack: Math.round(box.x - (vw - box.width) / 2),
+        width: Math.round(box.width),
+      };
+    });
+  }
+
+  // 78rem at the default root font size, centred (zero slack). Spelled out
+  // rather than compared to rects["/account"] so a regression that moved
+  // *every* route to the narrow measure together still fails here. Keyed off
+  // `routes` rather than `Object.keys(rects)` so a route that silently stopped
+  // being measured fails as a missing key instead of passing vacuously.
+  const expected = { slack: 0, width: 1248 };
+  expect(rects).toEqual(Object.fromEntries(routes.map((p) => [p, expected])));
 });
 
 test("sign-out ends the session and a subsequent protected request bounces to login", async ({
