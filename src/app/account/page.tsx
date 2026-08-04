@@ -140,15 +140,17 @@ export default async function AccountPage({
           </p>
           {/* One line, above everything else: whether there is anything to
               read past this point before the member can leave. Quiet states
-              stay text-only; the loud ones reuse the same Status token the
-              manifest below uses for its own warn states, rather than
-              inventing a colour DESIGN.md doesn't already ration for this.
+              stay text-only at the token's own size; the loud ones reuse the
+              same Status token the manifest below uses for its own warn
+              states, at size="lead" so they outrank the gold tier badge a
+              block down — otherwise the loudest thing on a degraded page is
+              the one fact that needs no action. No new colour either way.
               Suppressed entirely at zero characters — "nominal" would be true
               and useless, and the manifest's empty state says the real thing. */}
           {view.characters.length > 0 &&
             (health.verdict === "degraded" ? (
               <p className="verdict">
-                <Status tone="warn">
+                <Status tone="warn" size="lead">
                   {health.attention} character{health.attention === 1 ? "" : "s"} need
                   {health.attention === 1 ? "s" : ""} attention
                 </Status>
@@ -159,7 +161,7 @@ export default async function AccountPage({
               // action — ask an admin — which is why the wording is about who
               // owns the fix rather than claiming there is nothing to do.
               <p className="verdict">
-                <Status tone="warn">
+                <Status tone="warn" size="lead">
                   {health.stalled} character{health.stalled === 1 ? "" : "s"} not syncing
                 </Status>
               </p>

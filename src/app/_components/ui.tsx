@@ -84,14 +84,25 @@ export type Tone = "ok" | "warn" | "bad" | "off" | "neutral";
  * Machine state. The glyph and the word both carry the meaning, so colour is
  * never the only signal.
  */
+/**
+ * `size="lead"` is for a status that is the subject of the page rather than a
+ * cell in a list — the account page's verdict line. Reserve it for states that
+ * ask something of the reader: a large token saying everything is fine is a
+ * page shouting its own silence.
+ */
 export function Status({
   tone = "neutral",
+  size,
   children,
 }: {
   tone?: Tone;
+  size?: "lead";
   children: ReactNode;
 }) {
-  return <span className={tone === "neutral" ? "st" : `st st--${tone}`}>{children}</span>;
+  const classes = ["st"];
+  if (tone !== "neutral") classes.push(`st--${tone}`);
+  if (size === "lead") classes.push("st--lead");
+  return <span className={classes.join(" ")}>{children}</span>;
 }
 
 /**

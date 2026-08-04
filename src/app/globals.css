@@ -922,6 +922,32 @@ h3.rule-head__label {
   border: 1px solid currentColor;
 }
 
+/* The account page's verdict in its loud states, and only there. At --t-label
+   the verdict read quieter than the .tier--lead badge a block below it, which
+   is 14px inside a gold border and fill — so on a degraded account the loudest
+   thing above the fold was the one fact that needs no action. This outranks it
+   on size while spending no extra colour.
+
+   Uppercase and the wide tracking come off deliberately: they are legible
+   devices at 11px, where they mark a value in a table, but at this size they
+   turn a sentence into what reads like a section heading. Sentence case keeps
+   it a statement about the account. The quiet verdicts (nominal, first sync
+   pending) keep the plain token — a page with nothing wrong should not open
+   with a large line saying so.
+
+   `.st` is nowrap and inline-flex, so this copy cannot wrap: at 320px the
+   content box is 288px and the longest current verdict measures ~250px in
+   mono at this size. That is the budget. Lengthening the copy overflows
+   rather than wraps, so measure before rewording it. */
+.st--lead {
+  font-size: var(--t-body);
+  /* The badge it has to outrank is 600 inside a border and a tint. Matching
+     its weight, one size step above it, gets there without a fill of its own. */
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
 /* --- Tier badge --------------------------------------------------------- */
 
 .tier {
