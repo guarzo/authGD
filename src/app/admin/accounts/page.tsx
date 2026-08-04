@@ -421,7 +421,14 @@ function AccountRow({
 
           {/* One grade, one group. Revoke and sync now are both row actions; before,
               revoke was a bordered danger button and sync now was bare text, which
-              read as one button with a broken half rather than two peers. */}
+              read as one button with a broken half rather than two peers.
+
+              All four names here name their row, the way the drawer's controls
+              already do: on a table with one row per account the visible word
+              names the verb and nothing else, and "grant" read out of its row
+              does not say whose admin is about to change. Each name leads with
+              the visible label, so speech input still reaches the control by
+              what is written on it (WCAG 2.5.3). */}
           <td>
             <div className="btn-row btn-row--tight">
               {r.isAdmin ? (
@@ -435,13 +442,21 @@ function AccountRow({
                 </form>
               ) : (
                 <form action={promoteAdminAction.bind(null, r.accountId)}>
-                  <Submit className="btn btn--micro" pendingLabel="granting…">
+                  <Submit
+                    className="btn btn--micro"
+                    pendingLabel="granting…"
+                    aria-label={`grant admin to ${identity}`}
+                  >
                     grant
                   </Submit>
                 </form>
               )}
               <form action={syncAccountAction.bind(null, r.accountId, syncQueuedHref)}>
-                <Submit className="btn btn--micro nowrap" pendingLabel="queueing…">
+                <Submit
+                  className="btn btn--micro nowrap"
+                  pendingLabel="queueing…"
+                  aria-label={`sync now for ${identity}`}
+                >
                   sync now
                 </Submit>
               </form>
@@ -547,7 +562,11 @@ function AccountRow({
               placeholder="notes"
               aria-label={`Note for ${identity}`}
             />
-            <Submit className="btn btn--micro" pendingLabel="saving…">
+            <Submit
+              className="btn btn--micro"
+              pendingLabel="saving…"
+              aria-label={`save note for ${identity}`}
+            >
               save note
             </Submit>
           </form>
