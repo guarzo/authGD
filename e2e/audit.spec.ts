@@ -654,19 +654,23 @@ test("the empty state does not pick up the row hover tint", async ({ page, conte
 
   // One matching row plus a filter that yields none, so both a real row and
   // the empty row are on screen and can be compared under the same hover
-  // rule. Colour assertions are brittle -- a token rename would break this
-  // without changing behavior -- but it is the only way to automate "hovering
+  // rule. Colour assertions are brittle (a token rename would break this
+  // without changing behavior), but it is the only way to automate "hovering
   // this row must not look like hovering a real one", which is the actual
   // regression this task fixes, so it is worth keeping.
   //
-  // Background-color transitions over --dur-color (140ms), so a wait is
-  // needed after each hover -- reading getComputedStyle immediately would
-  // sometimes catch the mid-transition value rather than the settled one.
+  // Background-color transitions over --dur-color (140ms). Reading
+  // getComputedStyle right after a hover can catch that mid-transition value
+  // instead of the settled one. globals.css already collapses all
+  // transitions to 0.01ms under prefers-reduced-motion (an accessibility
+  // feature, not a test-only mechanism), so emulating it here makes the
+  // hover-driven background deterministic without a sleep.
+  await page.emulateMedia({ reducedMotion: "reduce" });
+
   await page.goto("/admin/audit?actor=nobody-by-this-name");
   const emptyRow = page.locator("tbody tr").filter({ has: page.locator(".log__empty") });
   const restBackground = await emptyRow.evaluate((el) => getComputedStyle(el).backgroundColor);
   await emptyRow.hover();
-  await page.waitForTimeout(200);
   const hoveredEmptyBackground = await emptyRow.evaluate(
     (el) => getComputedStyle(el).backgroundColor,
   );
@@ -674,7 +678,6 @@ test("the empty state does not pick up the row hover tint", async ({ page, conte
   await page.goto("/admin/audit");
   const dataRow = page.locator("tbody tr").first();
   await dataRow.hover();
-  await page.waitForTimeout(200);
   const hoveredDataBackground = await dataRow.evaluate((el) => getComputedStyle(el).backgroundColor);
 
   expect(hoveredEmptyBackground).toBe(restBackground);
