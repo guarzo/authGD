@@ -754,6 +754,10 @@ export async function revertPayment(
  * make an external call that persists nothing. There is no write to serialize
  * against, and taking a row lock for a window-opening request would put `FOR
  * UPDATE` contention on the payout path for no gain.
+ *
+ * Takes no `actor` and calls no operator guard: the operator check is the
+ * caller's job (`openInfoAction` calls `requireOperatorAccount` first), so any
+ * future second caller must add its own gate rather than rely on this one.
  */
 export async function getOpenInfoTarget(
   dbx: Dbx,

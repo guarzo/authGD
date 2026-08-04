@@ -195,6 +195,19 @@ Sync keeps working throughout: each job gates on the scopes it actually needs,
 so a character missing only the new scope still syncs. The warning clears
 per member as they log in again.
 
+**Rolling this out to an already-running deployment** (not the first-deploy
+case above): run
+
+```bash
+fly secrets set EVE_SSO_SCOPES="esi-characters.read_contacts.v1 esi-characters.write_contacts.v1 esi-ui.open_window.v1"
+fly deploy   # only if the secret change did not already trigger the rolling restart
+```
+
+`fly secrets set` restarts the machines itself, so the `fly deploy` line is a
+backstop, not a second required step. To confirm it took: `fly secrets list`
+shows an updated digest/timestamp for `EVE_SSO_SCOPES`, and the new scope
+appears on the EVE SSO consent screen the next time someone logs in.
+
 ## SYNC_MODE — the dry-run safety guard
 
 `SYNC_MODE` is **required and has no default**. Every other arrangement has a
