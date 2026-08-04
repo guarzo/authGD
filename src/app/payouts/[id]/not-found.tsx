@@ -24,15 +24,16 @@ import { SiteHeader } from "@/app/_components/ui";
  *
  * No `metadata` export here, and it is not an oversight: it was tried and
  * measured inert. A segment-scoped not-found does not get to set the title —
- * `page.tsx`'s own `metadata` is resolved and applied even though the page
- * threw, on hard and soft navigation alike, so the tab reads "Payout
- * operation" for an operation that isn't there. (The root boundary is
- * different and does export one: no page segment matched, so nothing competes
- * with it.) Correcting the title here would mean converting `page.tsx` to
- * `generateMetadata` and paying a second lookup for it, which is a change to
- * a working page rather than an addition — left as follow-up. It is cosmetic
- * next to the announcement, which `FocusHeading` carries regardless of the
- * title.
+ * `page.tsx`'s own metadata is resolved and applied even though the page
+ * threw, on hard and soft navigation alike. (The root boundary is different
+ * and does export one: no page segment matched, so nothing competes with it.)
+ *
+ * So the title is set from the other end. `page.tsx` exports
+ * `generateMetadata` instead of a static `metadata`, and it returns "No such
+ * operation" — this heading — for the same lookup that returns null. The
+ * second lookup that seemed to cost is free: both callers go through one
+ * `cache()`d loader, and Next resolves metadata and render in the same
+ * request.
  */
 
 export default function PayoutOperationNotFound() {

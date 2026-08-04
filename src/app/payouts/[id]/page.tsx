@@ -1,3 +1,4 @@
+import { cache } from "react";
 import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 import { getDb } from "@/db";
@@ -25,9 +26,61 @@ import { iskToCents } from "@/core/payout-split";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = {
-  title: "Payout operation",
-};
+/**
+ * The canonical 8-4-4-4-12 hex form, case-insensitively — the shape
+ * `defaultRandom()` writes and every link in the app carries.
+ *
+ * Without this check a malformed id reaches the `uuid` column as a parameter
+ * and postgres rejects the cast with 22P02, which surfaces as `error.tsx` —
+ * "Something broke", an apology for a server fault, when the member simply
+ * mistyped or followed a truncated link.
+ *
+ * Postgres's own parser is looser than this regex. Measured against a `::uuid`
+ * cast on the test database: it also accepts `{...}` braces, no hyphens at
+ * all, and hyphens after any group of four. Those forms are deliberately
+ * *not* accepted here. They cannot be produced by this app or by a link it
+ * renders, so accepting them would only widen the surface; and being narrower
+ * than the database fails toward the 404, which is the safe direction. Upper
+ * case is the one divergence worth allowing, because postgres normalizes it
+ * and the row would genuinely match.
+ */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * One detail lookup per request, shared by `generateMetadata` and the page
+ * body below. React's `cache()` is request-scoped, and Next runs metadata and
+ * render in the same request, so naming the operation in the tab title costs
+ * no extra query — the second call is a cache hit.
+ */
+const loadDetail = cache(async (id: string) => {
+  if (!UUID_RE.test(id)) return null;
+  return getPayoutOperationDetail(getDb(), id);
+});
+
+/** Same trick for the guard: several queries, resolved once per request. */
+const readAccess = cache(requirePayoutReader);
+
+/**
+ * Replaces a static `metadata` export, which could only ever say "Payout
+ * operation" — including for an operation that isn't there, because a
+ * segment-scoped `not-found.tsx` does not get to set the title and the page's
+ * own metadata is applied even when the page throws.
+ *
+ * The guard runs first here as it does in the page body: metadata resolves
+ * before render, so without it an id supplied by someone who cannot read
+ * payouts would still be looked up.
+ */
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}): Promise<Metadata> {
+  const access = await readAccess();
+  if (!access) return { title: "Payout operation" };
+  const { id } = await params;
+  const detail = await loadDetail(id);
+  return { title: detail ? detail.operation.name : "No such operation" };
+}
 
 const PRICING_LABELS: Record<PricingMode, string> = {
   sell_best: "Sell (best)",
@@ -82,12 +135,12 @@ export default async function PayoutOperationPage({
   params: Promise<{ id: string }>;
   searchParams: Promise<{ error?: string }>;
 }) {
-  const access = await requirePayoutReader();
+  const access = await readAccess();
   if (!access) redirect("/account");
   const { id } = await params;
   const { error } = await searchParams;
   const errorMessage = error ? ERRORS[error] : undefined;
-  const detail = await getPayoutOperationDetail(getDb(), id);
+  const detail = await loadDetail(id);
   if (!detail) notFound();
   const { operation, pools, participants, totalValue, corpAmount, locked } = detail;
 
