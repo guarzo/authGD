@@ -59,12 +59,12 @@ export default async function NewPayoutPage({
 
         {errorMessage && <Notice tone="bad">{errorMessage}</Notice>}
 
-        <form action={createOperationAction} className="stack">
-          <label className="stack">
+        <form action={createOperationAction} className="form-stack">
+          <label className="form-stack__field">
             Name
             <input className="field" name="name" defaultValue={submitted.name} required />
           </label>
-          <label className="stack">
+          <label className="form-stack__field">
             Date
             <input
               className="field"
@@ -74,7 +74,7 @@ export default async function NewPayoutPage({
               required
             />
           </label>
-          <label className="stack">
+          <label className="form-stack__field">
             Battle report URL (optional)
             <input
               className="field"
@@ -90,7 +90,7 @@ export default async function NewPayoutPage({
               an explicit label, unlike its siblings: the hint has to live outside
               the <label> or it gets concatenated into the input's accessible
               name — same arrangement /admin/audit uses for its filter hints. */}
-          <div className="stack">
+          <div className="form-stack__field">
             <label htmlFor="corp-share-pct">Corp share %</label>
             <input
               id="corp-share-pct"
@@ -109,7 +109,7 @@ export default async function NewPayoutPage({
               takes nothing.
             </span>
           </div>
-          <label className="stack">
+          <label className="form-stack__field">
             Notes (optional)
             <textarea
               className="field"

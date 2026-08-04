@@ -1368,6 +1368,33 @@ h3.rule-head__label {
   border-color: var(--gold-dim);
 }
 
+/* The payout flow's four editing forms used to reuse `.stack`, whose
+   `justify-items: start` exists so a status token doesn't blow out to the
+   full width of its table cell (see `.stack` below). Applied to a form that
+   rule stops every field from stretching, so each control falls back to its
+   own intrinsic width instead — a text input at ~20ch, `type="date"` wider,
+   `type="number"` narrower still, a textarea at its `cols` default regardless
+   of `rows` — and the column reads ragged rather than aligned. `.form-stack`
+   is the same vertical grid without that override, so fields take grid's
+   default stretch and share one edge; `max-width` keeps that edge from
+   running the full width of `.page--narrow` when nothing else caps it. */
+.form-stack {
+  display: grid;
+  gap: var(--s-4);
+  max-width: var(--measure);
+}
+
+/* One field: its label, its control, and — like `.filter-form__cell` — room
+   for a hint or a second element to sit below the control rather than
+   stretch to match it (the corp-share and appraise-location hints, both
+   outside their `<label>` so they don't get folded into its accessible
+   name). */
+.form-stack__field {
+  display: grid;
+  gap: var(--s-1);
+  align-content: start;
+}
+
 .filters {
   display: flex;
   flex-wrap: wrap;
