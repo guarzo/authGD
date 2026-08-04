@@ -548,8 +548,15 @@ test("an account with no main is still identified in the pinned column", async (
   await expect(page.locator(`${ROWS} em`)).toHaveCount(0);
   // Controls inside the row have to name it too — the note field announced as
   // "Note for account" on every main-less account.
-  await expect(page.getByLabel("Note for Sam Alt")).toHaveCount(1);
-  await expect(page.getByLabel(`Note for acct ${orphan.id.slice(0, 8)}`)).toHaveCount(1);
+  //
+  // `exact`, here and at every other `Note for` below: getByLabel matches on a
+  // substring, and the save button beside this field is named "save note for
+  // <identity>", which contains the field's whole name. Without it these count
+  // the pair and the assertion says nothing about the field.
+  await expect(page.getByLabel("Note for Sam Alt", { exact: true })).toHaveCount(1);
+  await expect(
+    page.getByLabel(`Note for acct ${orphan.id.slice(0, 8)}`, { exact: true }),
+  ).toHaveCount(1);
 
   // ...and the identity survives the scroll that made the pin necessary in the
   // first place: the tier controls are unreachable without it.
@@ -610,34 +617,34 @@ test("a blank character name never becomes a row's identity", async ({
 
   // Falls through to the non-blank character, not to "". The "·no main" marker
   // still applies: the row is named by a character that is not its main.
-  await expect(page.getByLabel("Note for Real Name")).toHaveCount(1);
+  await expect(page.getByLabel("Note for Real Name", { exact: true })).toHaveCount(1);
   await expect(summaries.filter({ hasText: "Real Name" })).toHaveAccessibleName(
     /^Real Name ·no main —/,
   );
 
   // Nothing non-blank to borrow, so the account id has to be used, not skipped.
   const id = `acct ${blank.id.slice(0, 8)}`;
-  await expect(page.getByLabel(`Note for ${id}`)).toHaveCount(1);
+  await expect(page.getByLabel(`Note for ${id}`, { exact: true })).toHaveCount(1);
   await expect(summaries.filter({ hasText: id })).toHaveAccessibleName(
     new RegExp(`^${id} —`),
   );
 
   // The same two outcomes for the whitespace shape: a padded main is not a
   // name, so the row borrows its alt and is marked as having no main...
-  await expect(page.getByLabel("Note for Spaced Alt")).toHaveCount(1);
+  await expect(page.getByLabel("Note for Spaced Alt", { exact: true })).toHaveCount(1);
   await expect(summaries.filter({ hasText: "Spaced Alt" })).toHaveAccessibleName(
     /^Spaced Alt ·no main —/,
   );
   // ...and with nothing to borrow it falls all the way to the account id rather
   // than pinning a cell that looks empty.
   const spacedId = `acct ${spaces.id.slice(0, 8)}`;
-  await expect(page.getByLabel(`Note for ${spacedId}`)).toHaveCount(1);
+  await expect(page.getByLabel(`Note for ${spacedId}`, { exact: true })).toHaveCount(1);
   await expect(summaries.filter({ hasText: spacedId })).toHaveAccessibleName(
     new RegExp(`^${spacedId} —`),
   );
 });
 
-test("the tier and cryo controls name the row they act on", async ({ page, context }) => {
+test("every per-account control names the row it acts on", async ({ page, context }) => {
   const admin = await seedWorld();
   await context.addCookies([await sessionCookieFor(db, admin.id)]);
   await page.goto("/admin/accounts");
@@ -674,6 +681,25 @@ test("the tier and cryo controls name the row they act on", async ({ page, conte
   await expect(
     drawerOf(azzyRow).getByRole("button", { name: "wake Azzy", exact: true }),
   ).toHaveText("wake");
+
+  // The rest of the page's per-account controls, swept: the drawer's were named
+  // first and the row's were not, which left three of them — grant, sync now,
+  // save note — bare on a table with one row per account. Nothing about those
+  // three makes them less anonymous out of their row than "freeze" was.
+  const named: [Locator, string, string][] = [
+    [zedRow, "grant admin to Zed", "grant"],
+    [zedRow, "sync now for Zed", "sync now"],
+    [zedDrawer, "save note for Zed", "save note"],
+    [rowFor(page, "Boss"), "revoke admin for Boss", "revoke"],
+  ];
+  for (const [scope, name, visible] of named) {
+    const btn = scope.getByRole("button", { name, exact: true });
+    await expect(btn).toHaveCount(1);
+    // The visible word has to survive inside the accessible name, or speech
+    // input loses the control it can actually see (WCAG 2.5.3).
+    await expect(btn).toHaveText(visible);
+    expect(name.startsWith(visible), `"${name}" leads with "${visible}"`).toBe(true);
+  }
 });
 
 /* --- Confirm-before-destroy ---------------------------------------------- */
