@@ -552,7 +552,7 @@ h3.rule-head__label {
   vertical-align: middle;
 }
 
-/* The drawer row is its own `<tr>` now (see row-disclosure.tsx), so opening it
+/* The drawer row is its own `<tr>` now (see disclosure.tsx, as="row"), so opening it
    no longer grows the row above it — the middle-alignment this table wants
    for its short, single-purpose cells is safe on every row, including this
    one, whose lone cell has nothing else to float away from. */
@@ -704,7 +704,7 @@ h3.rule-head__label {
    `td:first-child`, and pinning a full-width cell gives it an opaque ground
    and a stray hairline out at the table's right edge. The empty-state cell is
    one such colSpan; the accounts drawer's cell is the other, since the drawer
-   is its own `<tr>` now (see row-disclosure.tsx) rather than content nested in
+   is its own `<tr>` now (see disclosure.tsx, as="row") rather than content nested in
    the name cell. */
 .log--sticky-col tbody tr:not(.drawer-row) > td:first-child:not(.log__empty) {
   position: sticky;
@@ -956,9 +956,15 @@ h3.rule-head__label {
 }
 
 /* A tier the UI doesn't recognise. Neutral on purpose: better to read as
-   unknown data than to borrow a real tier's colour. */
+   unknown data than to borrow a real tier's colour. This is the one badge
+   that means "the data is wrong", so it has to hold AA everywhere the other
+   three do. --ink-faint measured 4.56:1 on the badge's own 14% tint at rest
+   and 3.94:1 on a hovered row (.log tbody tr:hover) — under AA on the one
+   badge an admin most needs to read. --ink-dim clears 5.67:1 measured the
+   same way — on the badge's own tint over a hovered row, not on the flat
+   ground — and stays visibly quieter than the three real tier hues. */
 .tier--unknown {
-  --tone: var(--ink-faint);
+  --tone: var(--ink-dim);
 }
 
 /* The account page's tier is the single most consequential fact on the screen,
@@ -970,6 +976,17 @@ h3.rule-head__label {
   font-size: var(--t-data);
   padding: 0.3em 0.65em;
   letter-spacing: 0.12em;
+}
+
+/* Replaces a literal 🔒 emoji, which rendered in the vendor's own colour
+   (ignoring --tone, the one thing this badge is built to carry a single hue
+   through) and at a non-mono advance width that broke the tabular rhythm of
+   the tier column. Drawn in currentColor at the mono advance instead. */
+.tier__lock::after {
+  content: "\25AA";
+  margin-left: 0.3em;
+  font-family: var(--font-mono), ui-monospace, monospace;
+  opacity: 0.8;
 }
 
 /* --- Buttons ------------------------------------------------------------ */
@@ -1004,11 +1021,63 @@ h3.rule-head__label {
 }
 
 .btn:disabled {
-  /* Measured: --ink-faint at 45% over --void was 2.15:1, below the 3:1 DESIGN.md
-     promises for disabled text. 65% measures 3.24:1 for the worst case, which is
-     a disabled .btn--quiet (transparent ground, --ink-faint text) over --void. */
-  opacity: 0.65;
+  /* Was opacity-dimming, and the comment here used to measure the worst case
+     as 3.24:1 — but that number was taken against --void. These are the
+     admin table's in-row controls, and .log tbody tr:hover (below) raises the
+     row to --hull-hi; the same 65% opacity measures 2.88:1 there, under the
+     3:1 DESIGN.md promises, right when an admin's pointer is on the row.
+     An opacity fade moves with whatever ground it sits on, so set the
+     disabled colour explicitly instead: --ink-faint on --hull-hi is 4.85:1,
+     clearing text AA rather than only the 3:1 floor, and it no longer
+     depends on which ground the control happens to be resting on.
+     Higher specificity than .btn--primary/.btn--danger (one class each), so
+     this also overrides their gold/red at rest — a disabled primary button
+     no longer reads as a live call-to-action. */
+  opacity: 1;
+  color: var(--ink-faint);
+  border-color: var(--rule);
+  background: transparent;
   cursor: not-allowed;
+}
+
+/* In-flight state. Submit's `aria-busy` was already correct ARIA, but nothing
+   in the stylesheet styled it, so a caller who forgot `pendingLabel` gave a
+   member no visible sign a click landed — on a table where "sync now" being
+   silent reads as a dead click and invites a second one. This fires from the
+   attribute alone, so it works on every <Submit> regardless of what the
+   caller passed. The pulsing dot reuses the .st/.tier value-marker language
+   (a dot in currentColor) rather than inventing a new device; it animates
+   opacity and scale only, never a layout property, and the reduced-motion
+   block above (:165) already zeroes both animation-duration and
+   animation-iteration-count globally, so it needs no separate override here. */
+.btn[aria-busy="true"] {
+  color: var(--ink-faint);
+  border-color: var(--rule-strong);
+}
+
+.btn[aria-busy="true"]::after {
+  content: "";
+  width: 0.5em;
+  height: 0.5em;
+  margin-left: 0.4em;
+  border-radius: 50%;
+  background: currentColor;
+  /* Matches .st::before: without it a long label in a narrow cell squashes
+     the dot into an ellipse, and the admin table is tested at 320px. */
+  flex-shrink: 0;
+  animation: btn-pulse 900ms var(--ease) infinite;
+}
+
+@keyframes btn-pulse {
+  0%,
+  100% {
+    opacity: 0.3;
+    transform: scale(0.85);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 .btn--primary {
@@ -1440,7 +1509,7 @@ h3.rule-head__label {
 
 /* The accounts row toggle: a plain `<button>` rather than `<summary>`, since
    the drawer it opens is a sibling `<tr>` now, not a child of a `<details>`
-   nested in this cell (see row-disclosure.tsx). It rebuilds the same look —
+   nested in this cell (see disclosure.tsx, as="row"). It rebuilds the same look —
    the +/- marker, the hover colour — a `<summary>` gets for free. */
 .row-toggle {
   display: flex;
@@ -1646,7 +1715,7 @@ h3.rule-head__label {
 /* The row drawer. Set tier / cryo / note come first since the admin opened
    the row to act, and the crew table sits below them at full width — this is
    why the drawer row spans every column instead of just the Name column (see
-   row-disclosure.tsx). */
+   disclosure.tsx, as="row"). */
 .drawer {
   display: grid;
   gap: var(--s-4);
@@ -1913,7 +1982,7 @@ h3.rule-head__label {
      279.5px of a 286px region — 98% — painting over every other column on
      every row.
 
-     The drawer is its own full-width `<tr>` now (see row-disclosure.tsx), so
+     The drawer is its own full-width `<tr>` now (see disclosure.tsx, as="row"), so
      it no longer touches column 1's width and the trade is off: the pin stays
      on with a drawer open, which is the better end of the trade anyway. The
      name an admin is about to change the tier of stays on screen through the

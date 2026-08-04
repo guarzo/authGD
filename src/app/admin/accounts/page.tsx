@@ -10,12 +10,12 @@ import {
   type AdminCharacterRow,
   type AdminListSort,
 } from "@/services/account-view";
-import { RuleHead, Scroller, Status, Tier } from "@/app/_components/ui";
+import { Notice, RuleHead, Scroller, Status, Tier } from "@/app/_components/ui";
 // Shared with the member's own character table rather than reimplemented here:
 // the near-miss label copy and the "not managed" wording are the same question
 // asked about the same character, and two copies drift.
 import { ContactState } from "@/app/account/contact-state";
-import { RowDisclosure } from "@/app/_components/row-disclosure";
+import { Disclosure } from "@/app/_components/disclosure";
 import { Submit } from "@/app/_components/submit";
 import { ConfirmArmScope, ConfirmSubmit } from "@/app/_components/confirm-submit";
 import { renderedAt } from "@/app/_components/utc-time";
@@ -122,15 +122,11 @@ export default async function AdminAccountsPage({
       </div>
 
       {params.error && ERRORS[params.error] && (
-        <p className="notice notice--bad" data-glyph="!" role="alert">
-          {ERRORS[params.error]}
-        </p>
+        <Notice tone="bad">{ERRORS[params.error]}</Notice>
       )}
 
       {params.queued === "account" && (
-        <p className="notice" data-glyph="·">
-          Sync queued. The worker picks it up within a few seconds.
-        </p>
+        <Notice>Sync queued. The worker picks it up within a few seconds.</Notice>
       )}
 
       <RuleHead as="h2">Filter</RuleHead>
@@ -339,13 +335,14 @@ function AccountRow({
   // with no identity at all, in the column whose whole job is saying whose tier
   // is about to change.
   const identity = mainName ?? firstName ?? idLabel;
-  // RowDisclosure puts its label on the summary as `aria-label`, which
+  // Disclosure (as="row") puts its label on the toggle as `aria-label`, which
   // overrides the visible text, so this mirrors that text verbatim — an
   // accessible name has to stay a superset of its visible label (WCAG 2.5.3).
   const pinLabel = firstName ? `${identity} ·no main` : identity;
 
   return (
-    <RowDisclosure
+    <Disclosure
+      as="row"
       label={pinLabel}
       colSpan={COLUMN_COUNT}
       summary={
@@ -614,6 +611,6 @@ function AccountRow({
           </table>
         </Scroller>
       </section>
-    </RowDisclosure>
+    </Disclosure>
   );
 }

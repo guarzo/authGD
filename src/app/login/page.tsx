@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { Notice } from "@/app/_components/ui";
 
 export const metadata: Metadata = {
   title: "Sign in",
@@ -32,11 +33,7 @@ export default async function LoginPage({
           <br />
           who can&rsquo;t fly good
         </p>
-        {message && (
-          <p className="notice notice--bad" data-glyph="!" role="alert">
-            {message}
-          </p>
-        )}
+        {message && <Notice tone="bad">{message}</Notice>}
         <a className="launch__action" href="/auth/eve/login">
           <img
             src="https://web.ccpgamescdn.com/eveonlineassets/developers/eve-sso-login-black-large.png"

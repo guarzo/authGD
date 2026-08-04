@@ -8,7 +8,8 @@ import { resetDb, seedMember, sessionCookieFor, testDb } from "./helpers";
  * The accounts table's own data rows.
  *
  * The drawer is a sibling `<tr>` of the row it belongs to now, not a
- * `<details>` nested in the name cell (see row-disclosure.tsx), and it holds a
+ * `<details>` nested in the name cell (see the `as="row"` shape in
+ * disclosure.tsx), and it holds a
  * full crew table. So a bare `tbody tr` filtered by an account name matches
  * three elements for one account — the collapsed row, its drawer row, and the
  * crew row for the same character — and any assertion needing exactly one is a
@@ -115,21 +116,23 @@ test("tier controls: manual set locks; return-to-auto unlocks", async ({
   const zedDrawer = drawerOf(zedRow);
   await toggleOf(zedRow).click();
   await zedDrawer.getByRole("button", { name: "Set Zed to blue" }).click();
-  await expect(zedRow.getByText("🔒")).toBeVisible();
+  // The lock mark is a CSS ::after (see ui.tsx/globals.css), not text, so it's
+  // asserted via the element it's drawn on rather than getByText.
+  await expect(zedRow.locator(".tier__lock")).toBeVisible();
   await expect(zedRow.locator(".tier")).toHaveText(/blue/);
   // The drawer holds the controls, so it has to survive the revalidation the
   // server action triggers or the next click has nothing to land on. The open
-  // state is React state in RowDisclosure and the closed drawer row is
+  // state is React state in Disclosure and the closed drawer row is
   // `hidden`, so visibility is what reports it — there is no `open` property
   // to read any more.
   await expect(zedDrawer).toBeVisible();
   await zedDrawer.getByRole("button", { name: "auto" }).click();
-  await expect(zedRow.getByText("🔒")).not.toBeVisible();
+  await expect(zedRow.locator(".tier__lock")).not.toBeVisible();
 });
 
 // The drawer holds every control for the row, so a server action that collapsed
 // it would make each edit cost a re-open. Its open state is React state in
-// RowDisclosure rather than the DOM's own `open` attribute, precisely so this
+// Disclosure rather than the DOM's own `open` attribute, precisely so this
 // survives the revalidatePath re-render by design instead of by luck.
 test("saving a note keeps the row drawer open and persists the note", async ({
   page,
@@ -539,7 +542,7 @@ test("an account with no main is still identified in the pinned column", async (
   // Visible text: the character name plus a marker, not a bare "no main" that
   // every such row would share.
   await expect(toggleOf(samRow)).toHaveText(/^Sam Alt ·no main \(\+1\)$/);
-  // Accessible name: RowDisclosure puts the label in aria-label, which
+  // Accessible name: Disclosure's row shape puts the label in aria-label, which
   // overrides the visible text for a screen reader, so the character name has
   // to survive there too rather than being spoken as a bare "no main".
   await expect(toggleOf(samRow)).toHaveAccessibleName(/^Sam Alt ·no main/);
@@ -663,7 +666,7 @@ test("the tier and cryo controls name the row they act on", async ({ page, conte
 
   // The lock-releasing control is in the same group and had the same gap.
   await zedDrawer.getByRole("button", { name: "Set Zed to blue", exact: true }).click();
-  await expect(zedRow.getByText("🔒")).toBeVisible();
+  await expect(zedRow.locator(".tier__lock")).toBeVisible();
   await expect(
     zedDrawer.getByRole("button", { name: "return Zed to auto tier", exact: true }),
   ).toHaveText("auto");
