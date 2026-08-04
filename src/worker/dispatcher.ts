@@ -81,6 +81,17 @@ export function planDispatch(
           singletonKey: "roles:all",
         },
       ];
+    default:
+      // An unrecognized kind (an older worker reading a row written by a newer
+      // web tier, or a hand-written row) must NOT throw: planDispatch runs
+      // inside dispatchOutbox's transaction, so a throw rolls the claim back
+      // for every row in the batch and the 2s retry loop then wedges all sync
+      // dispatch behind that one row. Drop it instead — it gets marked
+      // dispatched, and the log names what was lost.
+      console.error("outbox payload kind not recognized; dropping row", {
+        kind: (payload as { kind?: unknown }).kind,
+      });
+      return [];
   }
 }
 

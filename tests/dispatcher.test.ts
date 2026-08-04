@@ -1,7 +1,7 @@
 import { isNull } from "drizzle-orm";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { outbox } from "@/db/schema";
-import { enqueueSync } from "@/services/outbox";
+import { enqueueSync, type OutboxPayload } from "@/services/outbox";
 import { dispatchOutbox, planDispatch } from "@/worker/dispatcher";
 import { setupTestDb, truncateAll } from "./helpers/db";
 
@@ -60,6 +60,18 @@ describe("planDispatch", () => {
     ).toEqual(["contacts", "discord-roles", "membership", "wanderer"]);
   });
 
+  it("drops an unrecognized kind instead of throwing", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(
+        planDispatch({ kind: "from-the-future" } as unknown as OutboxPayload),
+      ).toEqual([]);
+      expect(spy).toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("maps membership-recheck to the recheck queue with its global singleton key", () => {
     const plan = planDispatch({ kind: "membership-recheck" });
     expect(plan).toEqual([
@@ -86,6 +98,28 @@ describe("dispatchOutbox", () => {
     expect(undispatched).toEqual([]);
     expect(await dispatchOutbox(ctx.db, send)).toBe(0);
     expect(sent).toHaveLength(5);
+  });
+
+  it("drops an unknown-kind row without wedging its siblings in the batch", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await ctx.db
+        .insert(outbox)
+        .values({ payload: { kind: "from-the-future" } as unknown as OutboxPayload });
+      await enqueueSync(ctx.db, { kind: "discord-user", discordUserId: "u9" });
+      const { sent, send } = collector();
+      // Both rows claimed; the bad one contributes no sends but is still
+      // marked dispatched, so it cannot be re-claimed forever.
+      expect(await dispatchOutbox(ctx.db, send)).toBe(2);
+      expect(sent.map((s) => s.queue)).toEqual(["discord-roles"]);
+      const undispatched = await ctx.db
+        .select()
+        .from(outbox)
+        .where(isNull(outbox.dispatchedAt));
+      expect(undispatched).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("rolls the claim back when a send fails, so rows retry next tick", async () => {
