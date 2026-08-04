@@ -8,6 +8,7 @@ import { getDb } from "@/db";
 import { appraiseLoot } from "@/services/appraisal";
 import { addAppraisedPool, addFlatPool, deletePool } from "@/services/payout-loot";
 import {
+  MAX_SHARES_HUNDREDTHS,
   createOperation,
   finalizeOperation,
   recordPayment,
@@ -276,6 +277,15 @@ export async function setParticipantSharesAction(
   // before the raw string reaches the numeric(6,2) column.
   if (iskToCents(shares) <= 0n) {
     operationFailed(operationId, "shares_positive");
+  }
+  // The numeric(6, 2) column's own range, mirrored here for the same reason the
+  // three checks above mirror the format and payout_participant_shares_ck: an
+  // unbounded "10000" reaches Postgres as a raw numeric overflow and lands the
+  // operator on error.tsx. assertSharesInRange in the service enforces this for
+  // every caller; this copy is the one that can give the operator a page with
+  // their roster still on it. Same constant, so the two cannot drift.
+  if (iskToCents(shares) > MAX_SHARES_HUNDREDTHS) {
+    operationFailed(operationId, "shares_range");
   }
   await getDb().transaction((dbtx) =>
     setParticipantShares(dbtx, actor, participantId, shares),

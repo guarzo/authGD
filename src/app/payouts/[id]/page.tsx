@@ -65,6 +65,7 @@ const ERRORS: Record<string, string> = {
     "Shares must be a plain number like 1 or 1.5. The roster value was left as it was.",
   shares_positive:
     "Shares must be greater than zero. To pay someone nothing, exclude them instead — that keeps them on the roster and out of the split.",
+  shares_range: "Shares cannot exceed 9999.99. The roster value was left as it was.",
   share_format:
     "Corp share must be a plain percentage like 10 or 12.5. The old value is unchanged.",
   share_range:

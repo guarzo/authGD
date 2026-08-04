@@ -961,3 +961,54 @@ describe("revertPayment", () => {
     expect(history.map((h) => h.kind)).toEqual(["paid", "reverted", "paid"]);
   });
 });
+
+describe("setParticipantShares bounds", () => {
+  it("rejects a share count above the column's range with a readable error", async () => {
+    const operator = await seedOperator();
+    const { id: operationId } = await ctx.db.transaction((tx) =>
+      createOperation(tx, operator.id, {
+        name: "Big shares",
+        occurredAt: new Date(),
+        corpSharePct: "0",
+      }),
+    );
+    await ctx.db.transaction((tx) =>
+      setRoster(tx, operator.id, operationId, [
+        {
+          displayName: "Greedy Pilot",
+          accountId: null,
+          recipientCharacterId: null,
+          sourceCharacters: ["Greedy Pilot"],
+          shares: "1",
+          excluded: false,
+        },
+      ]),
+    );
+    const [participant] = await ctx.db
+      .select()
+      .from(payoutParticipant)
+      .where(eq(payoutParticipant.operationId, operationId));
+
+    await expect(
+      ctx.db.transaction((tx) =>
+        setParticipantShares(tx, operator.id, participant.id, "10000"),
+      ),
+    ).rejects.toThrow(/9999\.99/);
+    await expect(
+      ctx.db.transaction((tx) =>
+        setParticipantShares(tx, operator.id, participant.id, "0"),
+      ),
+    ).rejects.toThrow(/positive/);
+
+    // 9999.99 is the largest the numeric(6,2) column holds, and must still be
+    // accepted — the guard is a bound, not an off-by-one narrowing.
+    await ctx.db.transaction((tx) =>
+      setParticipantShares(tx, operator.id, participant.id, "9999.99"),
+    );
+    const [after] = await ctx.db
+      .select()
+      .from(payoutParticipant)
+      .where(eq(payoutParticipant.id, participant.id));
+    expect(after.shares).toBe("9999.99");
+  });
+});

@@ -293,6 +293,31 @@ async function loadParticipantOperationId(
   return p.operationId;
 }
 
+/**
+ * `payout_participant.shares` is `numeric(6, 2)`, so 9999.99 is the largest
+ * value the column holds and anything above it dies as a raw Postgres numeric
+ * overflow. Mirrored here as a readable message, the same way `addFlatPool`
+ * mirrors `loot_pool_total_ck` and `createOperationAction` mirrors
+ * `payout_operation_corp_share_pct_ck`.
+ *
+ * Deliberately NOT a column widening: widening would mean a migration against
+ * production data purely to improve an error message, and nobody in a fleet
+ * draws ten thousand shares.
+ *
+ * Exported, unlike a plain module constant, because `setParticipantSharesAction`
+ * bounds against the same number to produce a redirect instead of a throw. One
+ * constant, two enforcement points, no drift.
+ */
+export const MAX_SHARES_HUNDREDTHS = 999999n; // 9999.99, in iskToCents' hundredths
+
+export function assertSharesInRange(shares: string): void {
+  const hundredths = iskToCents(shares); // also rejects "abc" / "1e5" outright
+  if (hundredths <= 0n) throw new Error("shares must be a positive number");
+  if (hundredths > MAX_SHARES_HUNDREDTHS) {
+    throw new Error("shares cannot exceed 9999.99");
+  }
+}
+
 export async function setParticipantShares(
   dbtx: DbTx,
   actor: string,
@@ -300,6 +325,7 @@ export async function setParticipantShares(
   shares: string,
 ): Promise<void> {
   await requirePayoutOperator(dbtx, actor);
+  assertSharesInRange(shares);
   const operationId = await loadParticipantOperationId(dbtx, participantId);
   await lockOperation(dbtx, operationId);
   await assertEditable(dbtx, operationId);
