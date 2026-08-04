@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { Notice } from "@/app/_components/ui";
 import { getConfig } from "@/config";
 
 // `await searchParams` below already forces dynamic rendering, so the
@@ -47,11 +48,7 @@ export default async function LoginPage({
             body content. The seal and motto are this page's head, so a member
             bounced back here reads the reason before the disclosure rather
             than hunting for it underneath. */}
-        {message && (
-          <p className="notice notice--bad" data-glyph="!" role="alert">
-            {message}
-          </p>
-        )}
+        {message && <Notice tone="bad">{message}</Notice>}
         <div className="launch__disclosure">
           <p className="launch__disclosure-note">
             Sign in with any EVE character. authGD sets your Discord role; while your main

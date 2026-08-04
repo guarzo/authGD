@@ -5,7 +5,14 @@ import { getConfig } from "@/config";
 import { getDb } from "@/db";
 import { getAccountView, type PushStatus } from "@/services/account-view";
 import { getSessionAccount } from "@/services/session";
-import { RuleHead, Scroller, SiteHeader, Status, Tier } from "@/app/_components/ui";
+import {
+  Notice,
+  RuleHead,
+  Scroller,
+  SiteHeader,
+  Status,
+  Tier,
+} from "@/app/_components/ui";
 import { RelativeTime } from "@/app/_components/relative-time";
 import { formatAgo } from "@/app/_components/format-ago";
 import { utcHhmm } from "@/app/_components/utc-time";
@@ -118,11 +125,7 @@ export default async function AccountPage({
           </p>
         </div>
 
-        {message && (
-          <p className="notice notice--bad" data-glyph="!" role="alert">
-            {message}
-          </p>
-        )}
+        {message && <Notice tone="bad">{message}</Notice>}
 
         {/* Only the characters the contacts job actually targets can be waiting
             on a first run. Testing every character instead meant a blue member,
@@ -132,10 +135,10 @@ export default async function AccountPage({
           view.characters.every(
             (c) => !c.contactsTarget || c.contactSyncResult === null,
           ) && (
-            <p className="notice" data-glyph="·">
+            <Notice>
               First sync has not run yet. Standings, map access and Discord roles update
               within a few minutes of linking a character.
-            </p>
+            </Notice>
           )}
 
         <RuleHead as="h2">Standing</RuleHead>
