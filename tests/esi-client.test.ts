@@ -312,3 +312,48 @@ describe("User-Agent (F6)", () => {
     expect(ua).toBe("authgd/0.1.0 (ops@example.com)");
   });
 });
+
+describe("openInformationWindow", () => {
+  it("POSTs the target id with the operator's bearer token", async () => {
+    let seen: { auth: string | null; target: string | null } | null = null;
+    server.use(
+      http.post(`${BASE}/ui/openwindow/information/`, ({ request }) => {
+        seen = {
+          auth: request.headers.get("authorization"),
+          target: new URL(request.url).searchParams.get("target_id"),
+        };
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+    const esi = createEsiClient();
+    await esi.openInformationWindow(90000001, "operator-at", 90000002);
+    expect(seen).toEqual({ auth: "Bearer operator-at", target: "90000002" });
+  });
+
+  it("throws a classified EsiError when the character is not logged in", async () => {
+    server.use(
+      http.post(`${BASE}/ui/openwindow/information/`, () =>
+        HttpResponse.json({ error: "Character not online" }, { status: 403 }),
+      ),
+    );
+    const esi = createEsiClient();
+    const err = await esi
+      .openInformationWindow(90000001, "at", 90000002)
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(EsiError);
+    expect((err as EsiError).status).toBe(403);
+  });
+
+  it("suppresses the call entirely in dry-run", async () => {
+    let calls = 0;
+    server.use(
+      http.post(`${BASE}/ui/openwindow/information/`, () => {
+        calls++;
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+    const esi = createEsiClient({ syncMode: "dry-run" });
+    await esi.openInformationWindow(90000001, "at", 90000002);
+    expect(calls).toBe(0);
+  });
+});
