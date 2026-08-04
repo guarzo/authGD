@@ -21,6 +21,7 @@ import {
 import { Disclosure } from "@/app/_components/disclosure";
 import { Submit } from "@/app/_components/submit";
 import { ConfirmArmScope, ConfirmSubmit } from "@/app/_components/confirm-submit";
+import { NoteForm } from "@/app/_components/note-form";
 import { renderedAt } from "@/app/_components/utc-time";
 import {
   demoteAdminAction,
@@ -557,22 +558,11 @@ function AccountRow({
 
         <section className="drawer__group">
           <span className="drawer__label">Note</span>
-          <form action={saveNoteAction.bind(null, r.accountId)} className="note-form">
-            <input
-              className="field"
-              name="note"
-              defaultValue={r.statusNote ?? ""}
-              placeholder="notes"
-              aria-label={`Note for ${identity}`}
-            />
-            <Submit
-              className="btn btn--micro"
-              pendingLabel="saving…"
-              aria-label={`save note for ${identity}`}
-            >
-              save note
-            </Submit>
-          </form>
+          <NoteForm
+            action={saveNoteAction.bind(null, r.accountId)}
+            identity={identity}
+            defaultValue={r.statusNote ?? ""}
+          />
         </section>
       </div>
 
