@@ -99,6 +99,43 @@ describe("createTriffClient", () => {
     expect(err).toBeInstanceOf(TriffError);
   });
 
+  it("throws TriffError instead of crashing on an Infinity price", async () => {
+    // JSON.parse("1e999") overflows to Infinity, which JSON.stringify (and so
+    // HttpResponse.json) can't produce -- a raw body is needed to reproduce
+    // what a malicious or buggy upstream could actually send. Without
+    // .finite() this parses successfully and later blows up as an uncaught
+    // RangeError at BigInt(Math.round(Infinity)) in appraisal.ts.
+    server.use(
+      http.get(
+        BASE,
+        () =>
+          new HttpResponse(
+            '{"types":[{"type_id":34,"sell":{"best":1e999,"p05":null},"buy":{}}]}',
+            { headers: { "content-type": "application/json" } },
+          ),
+      ),
+    );
+    const triff = createTriffClient();
+    const err = await triff.quote([34], { stationId: 60003760 }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(TriffError);
+  });
+
+  it("throws TriffError instead of corrupting totals on a negative price", async () => {
+    // Without .nonnegative() a negative price reaches iskToCents and would
+    // otherwise produce a negative totalValue, dying on the raw
+    // loot_item_price_ck constraint instead of this legible error.
+    server.use(
+      http.get(BASE, () =>
+        HttpResponse.json({
+          types: [{ type_id: 34, sell: { best: -1, p05: null }, buy: {} }],
+        }),
+      ),
+    );
+    const triff = createTriffClient();
+    const err = await triff.quote([34], { stationId: 60003760 }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(TriffError);
+  });
+
   it("throws TriffError when neither stationId nor regionId is given", async () => {
     const triff = createTriffClient();
     await expect(triff.quote([34], {})).rejects.toBeInstanceOf(TriffError);

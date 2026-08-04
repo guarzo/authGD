@@ -26,8 +26,14 @@ export type TriffQuote = {
 
 const sideSchema = z
   .object({
-    best: z.number().nullable().optional(),
-    p05: z.number().nullable().optional(),
+    // .finite().nonnegative() rejects Infinity (e.g. from JSON.parse("1e999")),
+    // prices >= 1e21 (whose .toFixed(2) flips to exponential notation and
+    // breaks iskToCents), and negative prices (which would violate
+    // loot_item_price_ck as a raw DB error) -- all three would otherwise slip
+    // past this schema and take a non-TriffError exit that the caller in
+    // actions.ts doesn't catch.
+    best: z.number().finite().nonnegative().nullable().optional(),
+    p05: z.number().finite().nonnegative().nullable().optional(),
   })
   .nullable()
   .optional();
