@@ -260,7 +260,15 @@ function AccountRow({
                   {c.affiliationInvalid && " · affiliation invalid"}
                   {c.contactSyncResult &&
                     ` · contacts: ${c.contactSyncResult}${
-                      c.contactSyncDetail ? ` ("${c.contactSyncDetail}")` : ""
+                      c.contactSyncDetail
+                        ? // The job joins near-miss candidates with ", " (src/jobs/contacts.ts).
+                          // Quoting each one separately keeps this from reading as one
+                          // (wrong) label name when there are two or more.
+                          ` (${c.contactSyncDetail
+                            .split(", ")
+                            .map((name) => `"${name}"`)
+                            .join(", ")})`
+                        : ""
                     }`}
                   {c.mapObservedAt &&
                     ` · on map (observed ${c.mapObservedAt.toISOString().slice(0, 16)}Z)`}

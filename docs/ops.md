@@ -369,14 +369,18 @@ Four properties worth knowing before changing it:
 - **ESI cannot create labels.** Create it in the client first. Until it exists
   the job records `missing_label` and skips every write — safe, but inert.
 - **The match is exact and case-sensitive** (`src/jobs/contacts.ts`), so
-  `authgd` ≠ `AuthGD`. A typo skips rather than deletes.
+  `authgd` ≠ `AuthGD`. A typo skips rather than deletes. A near-miss typo (case
+  or whitespace only) records `label_mismatch` and names both the offending
+  label(s) and the required name; an unrelated typo records `missing_label`
+  with no label to point at.
 - **A case-only change strands every existing member at once.** The label id is
   re-resolved from the name each run, so recapitalizing `STANDINGS_LABEL`
   instantly stops matching every label that was correct under the old value.
   This happened on 2026-08-03: eight of ten characters dropped to
-  `label_mismatch` in one run. Members must rename their label in game before
-  their sync resumes — announce the change before making it, and expect to
-  field reports from anyone who does not notice the difference on screen.
+  `missing_label` in one run (the same situation records `label_mismatch`
+  today). Members must rename their label in game before their sync resumes —
+  announce the change before making it, and expect to field reports from
+  anyone who does not notice the difference on screen.
 - **Nothing about the label is persisted** — the id is resolved from the name
   each run. Changing the value needs no migration, but contacts left under the
   old label become unmanaged: the app stops touching them rather than cleaning

@@ -33,6 +33,9 @@ export function matchContactLabel(
   const candidates = labels
     .filter((l) => fold(l.labelName) === wanted)
     .map((l) => l.labelName)
+    // Plain ordinal sort, intentionally: same rationale as `toLowerCase` above
+    // — a locale-aware sort would make the reported order depend on the
+    // worker's locale, which is not pinned.
     .sort();
 
   return candidates.length > 0 ? { kind: "near_miss", candidates } : { kind: "absent" };
