@@ -148,6 +148,11 @@ describe("getPayoutOperationDetail — exact money on the read side", () => {
     ]);
     const detail = await getPayoutOperationDetail(ctx.db, operationId);
     expect(detail!.totalValue).toBe("18014398509481984.02");
+    // listPayoutOperations sums the same pools in its own separate loop
+    // (src/services/payout-view.ts) — a Number() regression there wouldn't
+    // show up in getPayoutOperationDetail's assertion above.
+    const [summary] = await listPayoutOperations(ctx.db);
+    expect(summary.totalValue).toBe("18014398509481984.02");
   });
 
   it("derives corp share as total minus the sum of participant amounts, remainder included", async () => {
@@ -156,8 +161,9 @@ describe("getPayoutOperationDetail — exact money on the read side", () => {
     // vanish or get double-counted. Comparing in bigint cents, not floats,
     // is the whole point of this test: it must catch a Number()-based
     // corpAmount = total * pct / 100 that ignores the rounding remainder.
+    const CORP_SHARE_PCT = "10";
     const { operationId } = await seedOperation({
-      corpSharePct: "10",
+      corpSharePct: CORP_SHARE_PCT,
       totalValue: "100.01",
       names: ["A", "B", "C"],
     });
@@ -171,8 +177,21 @@ describe("getPayoutOperationDetail — exact money on the read side", () => {
     // Reconciles exactly against what recalculate actually wrote — the whole
     // point of deriving rather than storing a second copy of the number.
     expect(assignedCents + iskToCents(detail!.corpAmount)).toBe(totalCents);
-    // A naive total * 10% / 100 would give 10.00, not the derived remainder
+    // Literal anchors: every assertion above is relational only ("derived
+    // corp equals total minus the amounts just read back"), so a regression
+    // in recalculate itself would still reconcile and pass. 100.01 ISK split
+    // 3 equal ways after a 10% corp share is 30.00 ISK per participant and
+    // 10.01 ISK to the corp (the extra cent is the undistributed remainder).
+    expect(detail!.corpAmount).toBe("10.01");
+    expect(detail!.participants[0]!.amount).toBe("30.00");
+    // A naive total * pct / 100 would give 10.00, not the derived remainder
     // that also swallows the assignment rounding — pin the two disagree.
-    expect(iskToCents(detail!.corpAmount)).not.toBe((totalCents * 1000n) / 10000n);
+    // Basis points derived from the same constant the fixture uses above, so
+    // editing CORP_SHARE_PCT can't silently stop this from comparing against
+    // the naive formula.
+    const naiveBasisPoints = BigInt(Number(CORP_SHARE_PCT)) * 100n;
+    expect(iskToCents(detail!.corpAmount)).not.toBe(
+      (totalCents * naiveBasisPoints) / 10000n,
+    );
   });
 });
