@@ -29,6 +29,7 @@ import { DROPPED_REASONS, decodeDropped } from "../dropped";
 import { OPERATION_ERRORS, lookupErrorMessage } from "../errors";
 import { CopyAmountButton } from "./copy-amount-button";
 import { PaymentHistory } from "./payment-history";
+import { deriveRosterWarnings } from "./roster-warnings";
 import { PRICING_MODES, type PricingMode } from "@/core/pricing";
 import { iskToCents } from "@/core/payout-split";
 
@@ -149,25 +150,15 @@ export default async function PayoutOperationPage({
 
   // A name with no accountId is an unresolved roster entry (resolveRosterNames
   // never dedupes those against each other, on purpose — see its own comment).
-  // Unreachable today: PR 1's only roster input is setRosterAction, which goes
-  // through parseRosterPaste (itself case-insensitively deduped) once per
-  // paste, so no single roster can produce two rows with the same name. This
-  // stays wired up because PR 2 adds manual participant entry outside that
-  // paste path, and the day it lands, two rows sharing a display name are two
-  // full shares going out under one name — this is what keeps the FC from
-  // finding out only after finalizing.
-  const unresolvedByLowerName = new Map<string, string>(); // key -> first-seen spelling
-  const unresolvedNameCounts = new Map<string, number>();
-  for (const p of participants) {
-    if (p.accountId === null) {
-      const key = p.displayName.toLowerCase();
-      unresolvedByLowerName.set(key, unresolvedByLowerName.get(key) ?? p.displayName);
-      unresolvedNameCounts.set(key, (unresolvedNameCounts.get(key) ?? 0) + 1);
-    }
-  }
-  const duplicateUnresolvedNames = [...unresolvedNameCounts.entries()]
-    .filter(([, count]) => count > 1)
-    .map(([key]) => unresolvedByLowerName.get(key)!);
+  // `addParticipant` refuses a second unresolved row under a name already on
+  // the roster, but a roster written before that guard existed can still
+  // carry the pair, so the page keeps warning about it as a backstop. It also
+  // warns about a second clash the service deliberately does NOT refuse — a
+  // resolved row and an unresolved row sharing a name — because the resolved
+  // row carries its own accountId and is never ambiguous downstream. See
+  // `deriveRosterWarnings` for the full reasoning on both.
+  const { duplicateUnresolvedNames, crossStateClashes } =
+    deriveRosterWarnings(participants);
 
   // Only the *first* payment is worth an arm step. Recording one is what shuts
   // the door permanently — `locked` (hasPayments) makes the operation
@@ -641,6 +632,23 @@ export default async function PayoutOperationPage({
               pilot, remove one before finalizing.
               <br />
               <span className="dim">{duplicateUnresolvedNames.join(", ")}</span>
+            </span>
+          </p>
+        )}
+        {crossStateClashes.length > 0 && (
+          <p className="notice notice--warn" data-glyph="!" role="alert">
+            <span>
+              <strong>
+                {crossStateClashes.length} name{crossStateClashes.length === 1 ? "" : "s"}{" "}
+                on this roster {crossStateClashes.length === 1 ? "is" : "are"} both linked
+                and unlinked
+              </strong>{" "}
+              — one row is tied to an account, another under the same name is not, and
+              each is drawing a full share. They may be the same pilot whose link landed
+              after the roster was written, or two different people who share a name.
+              Check before finalizing.
+              <br />
+              <span className="dim">{crossStateClashes.join(", ")}</span>
             </span>
           </p>
         )}

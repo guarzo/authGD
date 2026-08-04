@@ -424,6 +424,64 @@ test("two participant rows sharing an unresolved name trigger the duplicate-name
 });
 
 /**
+ * The service allows a resolved row and an unresolved row to share a display
+ * name (see `addParticipant`'s guard, which only ever compares unresolved
+ * rows against each other) — the resolved row's own accountId makes it
+ * unambiguous downstream regardless of what an unresolved row is also
+ * called. This is the direction reachable through the real UI: a roster
+ * pasted before a pilot's ESI link existed leaves them unresolved, and adding
+ * that now-linked pilot by name must not be refused, just warned about.
+ *
+ * The other direction — a resolved row whose underlying character has since
+ * been renamed or removed, so it now happens to share a name with an
+ * unresolved row already on the roster — cannot be produced by driving the
+ * UI, because nothing in this app renames or deletes a character out from
+ * under a roster row. It is covered directly against `deriveRosterWarnings`
+ * in tests/payout-roster-warnings.test.ts instead.
+ */
+test("adding a linked pilot under a name already on the roster unresolved warns instead of refusing", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "FC Prime",
+    tier: "flygd",
+    status: "active",
+  });
+  await seedMember(db, { name: "Echo Pilot", tier: "green" });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+
+  const [op] = await db
+    .insert(payoutOperation)
+    .values({
+      name: "Late link",
+      occurredAt: new Date("2026-08-01"),
+      corpSharePct: "0",
+      createdBy: operator.id,
+    })
+    .returning();
+  // The night-of roster: "Echo Pilot" pasted before their ESI link existed.
+  await db.insert(payoutParticipant).values({
+    operationId: op.id,
+    displayName: "Echo Pilot",
+    accountId: null,
+    shares: "1",
+  });
+
+  await page.goto(`/payouts/${op.id}`);
+  await page.getByLabel("Character name").fill("Echo Pilot");
+  await page.getByRole("button", { name: "Add participant" }).click();
+
+  // Not refused: both rows are on the roster now.
+  await expect(page.getByRole("row").filter({ hasText: "Echo Pilot" })).toHaveCount(2);
+  await expect(page.locator("p.notice--bad")).toHaveCount(0);
+  await expect(
+    page.getByText("both linked and unlinked", { exact: false }),
+  ).toBeVisible();
+  await expect(page.getByText("Echo Pilot", { exact: true }).first()).toBeVisible();
+});
+
+/**
  * The corp cut is derived, not stored (see payout-view's getPayoutOperationDetail):
  * total loot minus every participant's amount. This asserts that identity holds
  * against the database directly after each mutation, not just that the page
