@@ -308,17 +308,22 @@ export async function unlinkCharacter(
   if (siblings.length <= 1) return { ok: false, error: "last_character" };
   await dbx.delete(contactSyncState).where(eq(contactSyncState.characterId, characterId));
   await dbx.delete(character).where(eq(character.id, characterId));
-  await logAudit(dbx, {
-    actor,
-    action: "character.unlinked",
-    target: String(characterId),
-  });
   const [acc] = await dbx
     .select()
     .from(account)
     .where(eq(account.id, existing.accountId))
     .for("update");
-  if (acc?.mainCharacterId === characterId) {
+  // Logged after the account read, not before: wasMain needs that row, and the
+  // character row carrying the name is already deleted above, so the name has
+  // to come from `existing` or it is gone for good.
+  const wasMain = acc?.mainCharacterId === characterId;
+  await logAudit(dbx, {
+    actor,
+    action: "character.unlinked",
+    target: String(characterId),
+    details: { name: existing.name, wasMain },
+  });
+  if (wasMain) {
     await applyNoMainRule(dbx, existing.accountId, "main unlinked");
   } else {
     await enqueueSync(dbx, { kind: "account", accountId: existing.accountId });

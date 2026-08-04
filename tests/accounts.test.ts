@@ -16,7 +16,7 @@ import {
 import { createSession, getSessionAccount } from "@/services/session";
 import { decryptToken } from "@/lib/crypto";
 import { setupTestDb, truncateAll } from "./helpers/db";
-import { seedAccount } from "./helpers/seed";
+import { seedAccount, seedCharacter } from "./helpers/seed";
 
 let ctx: Awaited<ReturnType<typeof setupTestDb>>;
 let cfg: Config;
@@ -205,6 +205,52 @@ describe("linkCharacter", () => {
     expect(chr.accountId).toBe(a.accountId);
     const audits = await ctx.db.select().from(auditLog);
     expect(audits.some((au) => au.action === "character.unlinked")).toBe(false);
+  });
+
+  it("records the unlinked character's name, which the row deletion destroys", async () => {
+    const acc = await seedAccount(ctx.db);
+    await seedCharacter(ctx.db, cfg, {
+      id: 90000001,
+      accountId: acc.id,
+      main: true,
+      name: "Zed Main",
+    });
+    await seedCharacter(ctx.db, cfg, {
+      id: 90000002,
+      accountId: acc.id,
+      name: "Zed Alt",
+    });
+    await unlink(acc.id, 90000002);
+    const audits = await ctx.db.select().from(auditLog);
+    const row = audits.find((a) => a.action === "character.unlinked");
+    expect(row?.details).toMatchObject({ name: "Zed Alt", wasMain: false });
+  });
+
+  it("flags an unlink of the main character, which is what triggers the derole", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    await seedCharacter(ctx.db, cfg, {
+      id: 90000001,
+      accountId: acc.id,
+      main: true,
+      name: "Zed Main",
+    });
+    await seedCharacter(ctx.db, cfg, {
+      id: 90000002,
+      accountId: acc.id,
+      name: "Zed Alt",
+    });
+    await unlink(acc.id, 90000001);
+    const audits = await ctx.db.select().from(auditLog);
+    const unlinked = audits.find((a) => a.action === "character.unlinked");
+    expect(unlinked?.details).toMatchObject({ name: "Zed Main", wasMain: true });
+    // The unlink row still precedes the derole row it explains.
+    const tier = audits.find((a) => a.action === "tier.changed");
+    expect(tier?.details).toMatchObject({
+      from: "flygd",
+      to: "green",
+      cause: "main unlinked",
+    });
+    expect(unlinked!.id).toBeLessThan(tier!.id);
   });
 });
 
