@@ -1385,6 +1385,42 @@ h3.rule-head__label {
   line-height: 1.7;
 }
 
+/* Left-aligned against the panel's centred composition: the prose reads as a
+   paragraph, not a slogan, and left-alignment keeps a multi-line block from
+   looking like ragged poetry. */
+.launch__disclosure {
+  margin-top: var(--s-5);
+  padding-top: var(--s-5);
+  border-top: 1px solid var(--rule);
+  text-align: left;
+}
+
+/* No font-size override: this is prose, and DESIGN.md sets prose at --t-body.
+   Matches .page__lede, which distinguishes secondary copy by colour alone. */
+.launch__disclosure-note {
+  color: var(--ink-dim);
+}
+
+.launch__scopes {
+  margin-top: var(--s-4);
+}
+
+.launch__scopes dt {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: var(--t-label);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.launch__scopes dd {
+  margin-top: var(--s-1);
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: var(--t-data);
+  color: var(--ink-faint);
+  word-break: break-word;
+}
+
 .launch__action {
   display: block;
   margin-top: var(--s-6);
