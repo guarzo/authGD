@@ -262,6 +262,65 @@ describe("runContactsJob", () => {
     const rows = await ctx.db.select().from(character).where(eq(character.id, 1));
     expect(rows[0].tokenStatus).toBe("needs_reauth");
   });
+
+  it("records label_mismatch with the found name and writes nothing", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
+    const { esi, calls } = fakeEsi({
+      labels: { 1: [{ labelId: LABEL_ID, labelName: "FLYGD" }] },
+    });
+    await runContactsJob({ db: ctx.db, cfg, esi, fetchImpl: okToken });
+
+    const row = await lastResult(1);
+    expect(row?.lastResult).toBe("label_mismatch");
+    expect(row?.lastDetail).toBe("FLYGD");
+    expect(row?.lastSyncedAt).toBeNull();
+    expect(calls.adds).toEqual([]);
+    expect(calls.edits).toEqual([]);
+    expect(calls.deletes).toEqual([]);
+  });
+
+  it("reports every fold-equal candidate rather than picking one", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
+    const { esi } = fakeEsi({
+      labels: {
+        1: [
+          { labelId: 1, labelName: "FLYGD" },
+          { labelId: 2, labelName: "flygd " },
+        ],
+      },
+    });
+    await runContactsJob({ db: ctx.db, cfg, esi, fetchImpl: okToken });
+    expect((await lastResult(1))?.lastDetail).toBe("FLYGD, flygd ");
+  });
+
+  it("still records missing_label when no label is even close", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
+    const { esi } = fakeEsi({ labels: { 1: [{ labelId: 9, labelName: "Blues" }] } });
+    await runContactsJob({ db: ctx.db, cfg, esi, fetchImpl: okToken });
+
+    const row = await lastResult(1);
+    expect(row?.lastResult).toBe("missing_label");
+    expect(row?.lastDetail).toBeNull();
+  });
+
+  it("clears a stale detail once the member fixes the label", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
+
+    const bad = fakeEsi({ labels: { 1: [{ labelId: LABEL_ID, labelName: "FLYGD" }] } });
+    await runContactsJob({ db: ctx.db, cfg, esi: bad.esi, fetchImpl: okToken });
+    expect((await lastResult(1))?.lastDetail).toBe("FLYGD");
+
+    const good = fakeEsi({ labels: { 1: [{ labelId: LABEL_ID, labelName: "flygd" }] } });
+    await runContactsJob({ db: ctx.db, cfg, esi: good.esi, fetchImpl: okToken });
+
+    const row = await lastResult(1);
+    expect(row?.lastResult).toBe("ok");
+    expect(row?.lastDetail).toBeNull();
+  });
 });
 
 describe("needs_reauth CAS (F5)", () => {

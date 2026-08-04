@@ -140,6 +140,14 @@ export const contactSyncState = pgTable("contact_sync_state", {
     .references(() => character.id),
   lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }),
   lastResult: text("last_result"),
+  /**
+   * Free-text context for `lastResult` — currently the label name(s) actually
+   * found on the character when `last_result = 'label_mismatch'`. Nullable and
+   * ALWAYS written (null when inapplicable): `recordResult` does a partial
+   * upsert, so a column left out of the set keeps its old value, and a member
+   * who fixed their label would keep a stale name in the UI forever.
+   */
+  lastDetail: text("last_detail"),
 });
 
 export const syncRun = pgTable(

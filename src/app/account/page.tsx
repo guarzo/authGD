@@ -9,6 +9,7 @@ import { RuleHead, Scroller, SiteHeader, Status, Tier } from "@/app/_components/
 import { RelativeTime } from "@/app/_components/relative-time";
 import { formatAgo } from "@/app/_components/format-ago";
 import { Submit } from "@/app/_components/submit";
+import { ContactState } from "./contact-state";
 import { setMainAction, unlinkAction } from "./actions";
 
 // Reads the session cookie and hits the DB on every request; getConfig() also
@@ -34,52 +35,10 @@ const ERRORS: Record<string, string> = {
 const CONTACTS_NOTE_ID = "contacts-note";
 
 /** A contacts state the note actually explains. "ok" needs no explanation, and
- *  "missing_label" already carries more specific instructions than the generic
- *  note would add — so neither surfaces it. */
+ *  "missing_label" and "label_mismatch" already carry more specific instructions
+ *  than the generic note would add — so neither surfaces it. */
 function contactsNoteApplies(result: string | null) {
-  return result !== "ok" && result !== "missing_label";
-}
-
-/**
- * The contact job records a small set of result codes. "ok" and "missing_label"
- * get bespoke treatment; anything else is a failure the member can act on by
- * re-authing, so it reads as bad rather than as noise.
- *
- * A character the job never targets has no code and never will: blue and green
- * members are the *content* of a FLYGD member's contact list, not a list that
- * gets written. Reading that structural absence as "not yet run" told most of
- * the corp their first sync was pending, permanently. Their standing is still
- * being pushed; the LAST PUSHED section is where that question is answered.
- */
-function ContactState({
-  result,
-  label,
-  target,
-}: {
-  result: string | null;
-  label: string;
-  target: boolean;
-}) {
-  if (!target) {
-    return (
-      <span className="dim" aria-label="not applicable">
-        —
-      </span>
-    );
-  }
-  if (result === null) return <Status tone="off">not yet run</Status>;
-  if (result === "ok") return <Status tone="ok">ok</Status>;
-  if (result === "missing_label") {
-    return (
-      <>
-        <Status tone="warn">label missing</Status>
-        <span className="dim">
-          Create a contact label named <code>{label}</code> in game, then re-sync.
-        </span>
-      </>
-    );
-  }
-  return <Status tone="bad">{result.replace(/_/g, " ")}</Status>;
+  return result !== "ok" && result !== "missing_label" && result !== "label_mismatch";
 }
 
 /** Wall-clock UTC, the timezone every EVE player already reads schedules in. */
@@ -261,6 +220,7 @@ export default async function AccountPage({
                     <div className="stack">
                       <ContactState
                         result={c.contactSyncResult}
+                        detail={c.contactSyncDetail}
                         label={cfg.standings.label}
                         target={c.contactsTarget}
                       />
