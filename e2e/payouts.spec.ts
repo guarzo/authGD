@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { and, eq } from "drizzle-orm";
 import { resetDb, seedMember, sessionCookieFor, testDb } from "./helpers";
 import {
@@ -8,6 +8,7 @@ import {
   payoutOperation,
   payoutParticipant,
 } from "../src/db/schema";
+import { centsToIsk, iskToCents } from "../src/core/payout-split";
 
 const { db, pool } = testDb();
 test.afterAll(() => pool.end());
@@ -65,6 +66,16 @@ test("create, add a flat pool, paste a roster, finalize, mark paid", async ({
   page,
   context,
 }) => {
+  // Regression guard: the operator's Finalize/Unlock controls used to sit in a
+  // <p> wrapping a <form>, which is invalid HTML and React logs it as a
+  // console error on every render regardless of hard vs. soft navigation.
+  // Attached before the first navigation so it catches the very first paint
+  // of the operation page (the create redirect).
+  const consoleErrors: string[] = [];
+  page.on("console", (msg) => {
+    if (msg.type() === "error") consoleErrors.push(msg.text());
+  });
+
   const operator = await seedMember(db, {
     name: "FC Prime",
     tier: "flygd",
@@ -151,6 +162,12 @@ test("create, add a flat pool, paste a roster, finalize, mark paid", async ({
     .where(and(eq(auditLog.action, "payout.paid"), eq(auditLog.target, opId)));
   expect(paid).toHaveLength(1);
   expect(paid[0].details).toMatchObject({ participantId: brainTartare.id });
+
+  // No DOM-nesting console error anywhere in this run — the operator controls
+  // (Finalize, then Unlock) rendered on every one of this test's page loads.
+  expect(consoleErrors.filter((e) => e.includes("cannot be a descendant"))).toEqual(
+    [],
+  );
 });
 
 test("pasting two alts of one account collapses them into one participant row", async ({
@@ -352,4 +369,87 @@ test("two participant rows sharing an unresolved name trigger the duplicate-name
   await page.goto(`/payouts/${op.id}`);
   await expect(page.getByText("1 unresolved name appears more than once")).toBeVisible();
   await expect(page.getByText("Ghost Pilot", { exact: true }).first()).toBeVisible();
+});
+
+/**
+ * The corp cut is derived, not stored (see payout-view's getPayoutOperationDetail):
+ * total loot minus every participant's amount. This asserts that identity holds
+ * against the database directly after each mutation, not just that the page
+ * renders *some* number — a bug that stored a stale corp amount, or that left an
+ * excluded/removed participant's share unaccounted for, would still render a
+ * plausible-looking figure without this check.
+ */
+async function assertReconciles(page: Page, operationId: string): Promise<void> {
+  const [pools, participants] = await Promise.all([
+    db.select().from(lootPool).where(eq(lootPool.operationId, operationId)),
+    db.select().from(payoutParticipant).where(eq(payoutParticipant.operationId, operationId)),
+  ]);
+  const totalCents = pools.reduce((sum, p) => sum + iskToCents(p.totalValue), 0n);
+  const assignedCents = participants.reduce((sum, p) => sum + iskToCents(p.amount), 0n);
+  const corpDd = page.locator("dd.mono", { hasText: "remainder" });
+  await expect(corpDd).toContainText(`${centsToIsk(totalCents - assignedCents)} ISK`);
+}
+
+test("setting shares, excluding, and removing a participant each recompute exact ISK amounts and reconcile against the total", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "FC Prime",
+    tier: "flygd",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+
+  await page.goto("/payouts/new");
+  await page.getByLabel("Name").fill("Split adjustments");
+  await page.getByLabel("Date").fill("2026-08-01");
+  await page.getByLabel("Corp share %").fill("0");
+  await page.getByRole("button", { name: "Create operation" }).click();
+  await expect(page.getByRole("heading", { name: "Split adjustments" })).toBeVisible();
+  const opId = page.url().split("/").pop()!;
+
+  await page.getByLabel("Total value (ISK)").fill("300");
+  await page.getByLabel("Note (required — why this number)").fill("even split test");
+  await page.getByRole("button", { name: "Add flat pool" }).click();
+
+  await page
+    .getByLabel("Paste (names separated by /)")
+    .fill("Alice Pilot / Bob Pilot / Carol Pilot");
+  await page.getByRole("button", { name: "Set roster" }).click();
+
+  const rowFor = (name: string) => page.getByRole("row").filter({ hasText: name });
+
+  // Baseline: 300 ISK, 0% corp share, three equal shares -> 100.00 each.
+  await expect(rowFor("Alice Pilot")).toContainText("100.00 ISK");
+  await expect(rowFor("Bob Pilot")).toContainText("100.00 ISK");
+  await expect(rowFor("Carol Pilot")).toContainText("100.00 ISK");
+  await assertReconciles(page, opId);
+
+  // setParticipantSharesAction: Carol takes 2 shares -> 4 total shares over
+  // the same 300 pool -> 75.00 / 75.00 / 150.00.
+  await page.getByLabel("Shares for Carol Pilot").fill("2");
+  await rowFor("Carol Pilot").getByRole("button", { name: "save" }).click();
+  await expect(rowFor("Alice Pilot")).toContainText("75.00 ISK");
+  await expect(rowFor("Bob Pilot")).toContainText("75.00 ISK");
+  await expect(rowFor("Carol Pilot")).toContainText("150.00 ISK");
+  await assertReconciles(page, opId);
+
+  // setParticipantExcludedAction: excluding Bob moves his share to the rest
+  // (Alice 1 share, Carol 2 shares, 3 total) -> 100.00 / 200.00. Bob's own
+  // amount goes to 0.00 — a stale 75.00 would still "look" excluded in the
+  // State column while quietly holding money back from the pool.
+  await rowFor("Bob Pilot").getByRole("button", { name: "exclude" }).click();
+  await expect(rowFor("Bob Pilot")).toContainText("excluded");
+  await expect(rowFor("Bob Pilot")).toContainText("0.00 ISK");
+  await expect(rowFor("Alice Pilot")).toContainText("100.00 ISK");
+  await expect(rowFor("Carol Pilot")).toContainText("200.00 ISK");
+  await assertReconciles(page, opId);
+
+  // removeParticipantAction: removing Carol leaves Alice as the only included
+  // participant, so she draws the whole pool.
+  await rowFor("Carol Pilot").getByRole("button", { name: "remove" }).click();
+  await expect(rowFor("Carol Pilot")).toHaveCount(0);
+  await expect(rowFor("Alice Pilot")).toContainText("300.00 ISK");
+  await assertReconciles(page, opId);
 });

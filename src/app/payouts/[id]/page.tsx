@@ -149,7 +149,7 @@ export default async function PayoutOperationPage({
         </dl>
 
         {access.isOperator && (
-          <p className="btn-row btn-row--tight">
+          <div className="btn-row btn-row--tight">
             {operation.status === "draft" && (
               <form action={finalizeAction.bind(null, operation.id)}>
                 <Submit className="btn btn--primary">Finalize</Submit>
@@ -160,7 +160,7 @@ export default async function PayoutOperationPage({
                 <Submit className="btn btn--quiet">Unlock</Submit>
               </form>
             )}
-          </p>
+          </div>
         )}
 
         <RuleHead as="h2" aside={<span className="dim mono">{totalValue} ISK</span>}>
