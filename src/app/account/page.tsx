@@ -8,8 +8,9 @@ import { getSessionAccount } from "@/services/session";
 import { RuleHead, Scroller, SiteHeader, Status, Tier } from "@/app/_components/ui";
 import { RelativeTime } from "@/app/_components/relative-time";
 import { formatAgo } from "@/app/_components/format-ago";
+import { utcHhmm } from "@/app/_components/utc-time";
 import { Submit } from "@/app/_components/submit";
-import { UnlinkButton } from "@/app/_components/unlink-button";
+import { ConfirmArmScope, ConfirmSubmit } from "@/app/_components/confirm-submit";
 import { ContactState } from "./contact-state";
 import { setMainAction, unlinkAction, wakeSelfAction } from "./actions";
 
@@ -26,6 +27,8 @@ const ERRORS: Record<string, string> = {
   already_linked: "That character is already linked to another account.",
   discord_already_linked: "That Discord account is already linked to another account.",
   discord_denied: "Discord authorization was cancelled.",
+  stale_character:
+    "That character isn't on this account anymore. The page below is current.",
 };
 
 /**
@@ -40,11 +43,6 @@ const CONTACTS_NOTE_ID = "contacts-note";
  *  than the generic note would add — so neither surfaces it. */
 function contactsNoteApplies(result: string | null) {
   return result !== "ok" && result !== "missing_label" && result !== "label_mismatch";
-}
-
-/** Wall-clock UTC, the timezone every EVE player already reads schedules in. */
-function utcHhmm(d: Date): string {
-  return `${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}`;
 }
 
 /**
@@ -87,7 +85,11 @@ export default async function AccountPage({
   const now = Date.now();
 
   const nav = [
-    { key: "account", href: "/account", label: "Account" },
+    // "Your account", not "Account", everywhere it appears: the admin nav
+    // already carries "Accounts" for the roster, and the two read as the same
+    // destination at a glance. The possessive is what distinguishes them, so
+    // it has to be the name on both navs rather than only the admin one.
+    { key: "account", href: "/account", label: "Your account" },
     ...(view.isAdmin ? [{ key: "admin", href: "/admin/accounts", label: "Admin" }] : []),
   ];
 
@@ -218,72 +220,84 @@ export default async function AccountPage({
               </tr>
             </thead>
             <tbody>
-              {view.characters.map((c) => (
-                <tr key={c.id}>
-                  <td>
-                    <img
-                      className="portrait"
-                      src={`https://images.evetech.net/characters/${c.id}/portrait?size=64`}
-                      alt=""
-                      width={32}
-                      height={32}
-                      loading="lazy"
-                    />
-                  </td>
-                  <td>
-                    <span className="char">
-                      {c.name}{" "}
-                      {c.isMain && <strong className="char__main">(main)</strong>}
-                    </span>
-                  </td>
-                  <td>
-                    {c.tokenStatus === "valid" && !c.needsReauthForScopes ? (
-                      <Status tone="ok">ok</Status>
-                    ) : (
-                      <a href="/auth/eve/link">
-                        <Status tone="warn">re-auth needed</Status>
-                      </a>
-                    )}
-                  </td>
-                  <td>
-                    <div className="stack">
-                      <ContactState
-                        result={c.contactSyncResult}
-                        detail={c.contactSyncDetail}
-                        label={cfg.standings.label}
-                        target={c.contactsTarget}
+              <ConfirmArmScope>
+                {view.characters.map((c) => (
+                  <tr key={c.id}>
+                    <td>
+                      <img
+                        className="portrait"
+                        src={`https://images.evetech.net/characters/${c.id}/portrait?size=64`}
+                        alt=""
+                        width={32}
+                        height={32}
+                        loading="lazy"
                       />
-                    </div>
-                  </td>
-                  <td>
-                    {c.onMapAcl ? (
-                      <Status tone="ok">on</Status>
-                    ) : (
-                      <Status tone="off">off</Status>
-                    )}
-                  </td>
-                  <td>
-                    <div className="btn-row btn-row--tight btn-row--end">
-                      {!c.isMain && (
-                        <form
-                          action={setMainAction.bind(null, c.id)}
-                          className="inline-form"
-                        >
-                          <Submit className="btn btn--quiet btn--micro">make main</Submit>
-                        </form>
+                    </td>
+                    <td>
+                      <span className="char">
+                        {c.name}{" "}
+                        {c.isMain && <strong className="char__main">(main)</strong>}
+                      </span>
+                    </td>
+                    <td>
+                      {c.tokenStatus === "valid" && !c.needsReauthForScopes ? (
+                        <Status tone="ok">ok</Status>
+                      ) : (
+                        <a href="/auth/eve/link">
+                          <Status tone="warn">re-auth needed</Status>
+                        </a>
                       )}
-                      {view.characters.length > 1 && (
-                        <form
-                          action={unlinkAction.bind(null, c.id)}
-                          className="inline-form"
-                        >
-                          <UnlinkButton />
-                        </form>
+                    </td>
+                    <td>
+                      <div className="stack">
+                        <ContactState
+                          result={c.contactSyncResult}
+                          detail={c.contactSyncDetail}
+                          label={cfg.standings.label}
+                          target={c.contactsTarget}
+                        />
+                      </div>
+                    </td>
+                    <td>
+                      {c.onMapAcl ? (
+                        <Status tone="ok">on</Status>
+                      ) : (
+                        <Status tone="off">off</Status>
                       )}
-                    </div>
-                  </td>
-                </tr>
-              ))}
+                    </td>
+                    <td>
+                      <div className="btn-row btn-row--tight btn-row--end">
+                        {!c.isMain && (
+                          <form
+                            action={setMainAction.bind(null, c.id)}
+                            className="inline-form"
+                          >
+                            <Submit
+                              className="btn btn--quiet btn--micro"
+                              pendingLabel="setting…"
+                            >
+                              make main
+                            </Submit>
+                          </form>
+                        )}
+                        {view.characters.length > 1 && (
+                          <form
+                            action={unlinkAction.bind(null, c.id)}
+                            className="inline-form"
+                          >
+                            <ConfirmSubmit
+                              className="btn btn--quiet btn--micro btn--danger-quiet"
+                              armedClassName="btn btn--micro btn--danger"
+                              label="unlink"
+                              confirmName={`confirm unlink ${c.name}`}
+                            />
+                          </form>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </ConfirmArmScope>
             </tbody>
           </table>
         </Scroller>

@@ -14,6 +14,17 @@ import {
 import { logAudit } from "@/services/audit";
 import { enqueueSync } from "@/services/outbox";
 
+// `not_authorized` is a real race, not a bug: the actor's own admin bit can be
+// cleared by another admin (demoteAdminAction) between this row rendering and
+// the click, since actions don't re-run the page's guard on soft navigation.
+// Redirect to the styled notice rather than throw, same as demoteAdminAction's
+// `last_admin` case below. `not_found` has no reachable path today — there is
+// no account-deletion feature — so it stays a throw: if it ever fires, that's
+// a bug worth landing on the error boundary, not copy worth writing for.
+function redirectNotAdmin(): never {
+  redirect("/admin/accounts?error=not_admin");
+}
+
 export async function setTierAction(
   accountId: string,
   tier: "flygd" | "blue" | "green",
@@ -22,6 +33,7 @@ export async function setTierAction(
   const result = await getDb().transaction((tx) =>
     setTierManual(tx, actor, accountId, tier),
   );
+  if (!result.ok && result.error === "not_authorized") redirectNotAdmin();
   if (!result.ok) throw new Error(result.error);
   revalidatePath("/admin/accounts");
 }
@@ -31,6 +43,7 @@ export async function returnToAutoAction(accountId: string): Promise<void> {
   const result = await getDb().transaction((tx) =>
     returnTierToAuto(tx, actor, accountId),
   );
+  if (!result.ok && result.error === "not_authorized") redirectNotAdmin();
   if (!result.ok) throw new Error(result.error);
   revalidatePath("/admin/accounts");
 }
@@ -43,6 +56,7 @@ export async function setStatusAction(
   const result = await getDb().transaction((tx) =>
     setAccountStatus(tx, actor, accountId, status),
   );
+  if (!result.ok && result.error === "not_authorized") redirectNotAdmin();
   if (!result.ok) throw new Error(result.error);
   revalidatePath("/admin/accounts");
 }
@@ -57,12 +71,14 @@ export async function saveNoteAction(
   // to "" would silently CLEAR the note (setStatusNote maps "" to null) and
   // write a status.note_changed audit entry for an edit nobody requested.
   // Reject the malformed request instead; "" itself stays valid — that is how
-  // the form asks for the note to be cleared.
+  // the form asks for the note to be cleared. This can only happen if the
+  // form itself is tampered with, so it stays a throw rather than a race.
   if (typeof raw !== "string") throw new Error("invalid_note");
 
   const result = await getDb().transaction((tx) =>
     setStatusNote(tx, actor, accountId, raw),
   );
+  if (!result.ok && result.error === "not_authorized") redirectNotAdmin();
   if (!result.ok) throw new Error(result.error);
   revalidatePath("/admin/accounts");
 }
@@ -86,6 +102,7 @@ export async function syncAccountAction(
 export async function promoteAdminAction(accountId: string): Promise<void> {
   const { accountId: actor } = await requireAdminAction();
   const result = await getDb().transaction((tx) => promoteAdmin(tx, actor, accountId));
+  if (!result.ok && result.error === "not_authorized") redirectNotAdmin();
   if (!result.ok) throw new Error(result.error);
   revalidatePath("/admin/accounts");
 }
@@ -97,6 +114,7 @@ export async function demoteAdminAction(accountId: string): Promise<void> {
     // Surface the service's protection instead of a 500 (carry-over).
     redirect("/admin/accounts?error=last_admin");
   }
+  if (!result.ok && result.error === "not_authorized") redirectNotAdmin();
   if (!result.ok) throw new Error(result.error);
   revalidatePath("/admin/accounts");
 }

@@ -4,7 +4,7 @@ import { getDb } from "@/db";
 import type { syncRunStatusEnum } from "@/db/schema";
 import { getAdminContext } from "@/lib/admin-guard";
 import { getSyncStatus } from "@/services/sync-status";
-import { cadenceFor } from "@/core/schedules";
+import { cadenceFor, JOB_CRON, nextOccurrence } from "@/core/schedules";
 import {
   countColumns,
   formatDuration,
@@ -26,6 +26,40 @@ export const metadata: Metadata = {
 
 function fmt(d: Date | null): string {
   return d ? d.toISOString().replace("T", " ").slice(0, 19) : "…";
+}
+
+function utcHhmm(d: Date): string {
+  return d.toISOString().slice(11, 16);
+}
+
+/**
+ * True when the cron's hour field is a fixed number rather than `*` or a
+ * step — the same test `formatCadence` uses to decide whether it can print a
+ * wall-clock time itself. When it's fixed, the cadence string already names
+ * the time (`daily 03:00 UTC`, `Sun 04:00 UTC`) and a next-run line under it
+ * would either repeat that number or, worse, read as "soon" for a job that
+ * only fires once a week. Read off the raw expression rather than the
+ * humanized cadence string, so a rewording of `formatCadence` can't silently
+ * break this.
+ */
+function cadenceNamesTime(cron: string): boolean {
+  const hour = cron.trim().split(/\s+/)[1];
+  return /^\d+$/.test(hour ?? "");
+}
+
+/**
+ * Mirrors `nextCheck` in account-view.ts: a missing or unsupported cadence
+ * degrades to "we don't know when" rather than throwing and taking the whole
+ * sync page down over a decoration.
+ */
+function nextRunFor(jobType: string, now: Date): Date | null {
+  const cron = JOB_CRON[jobType];
+  if (!cron || cadenceNamesTime(cron)) return null;
+  try {
+    return nextOccurrence(cron, now);
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -138,6 +172,7 @@ export default async function AdminSyncPage({
             const latestAt = latest ? (latest.finishedAt ?? latest.startedAt) : null;
             const latestIso = latestAt ? latestAt.toISOString() : null;
             const cadence = cadenceFor(g.jobType);
+            const nextRun = nextRunFor(g.jobType, new Date(now));
             const cols = countColumns(g.jobType, g.runs);
             const span = cols.length || 1;
             return (
@@ -159,6 +194,12 @@ export default async function AdminSyncPage({
                       {anyCadence && (
                         <span className="strip__cadence mono">
                           {cadence ?? "on demand"}
+                          {nextRun && (
+                            <>
+                              <br />
+                              next {utcHhmm(nextRun)}
+                            </>
+                          )}
                         </span>
                       )}
                     </>
@@ -175,19 +216,19 @@ export default async function AdminSyncPage({
                       <table className="log log--runs">
                         <thead>
                           <tr>
-                            <th>Started</th>
-                            <th>Took</th>
-                            <th>Status</th>
+                            <th scope="col">Started</th>
+                            <th scope="col">Took</th>
+                            <th scope="col">Status</th>
                             {cols.length > 0 ? (
                               cols.map((k) => (
-                                <th key={k} className="num">
+                                <th key={k} scope="col" className="num">
                                   {humanizeKey(k)}
                                 </th>
                               ))
                             ) : (
-                              <th>Counts</th>
+                              <th scope="col">Counts</th>
                             )}
-                            <th>Raw</th>
+                            <th scope="col">Raw</th>
                           </tr>
                         </thead>
                         <tbody>

@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
-import { sql } from "drizzle-orm";
-import { account, syncRun } from "../src/db/schema";
+import { eq, sql } from "drizzle-orm";
+import { account, character, syncRun } from "../src/db/schema";
 import { resetDb, seedMember, sessionCookieFor, testDb } from "./helpers";
 
 const { db, pool } = testDb();
@@ -138,6 +138,62 @@ test("unlink is quiet at rest and lands on one vertical with make main", async (
     .not.toBe(makeMainColor);
 });
 
+test("unlink arms on the first click, confirms on the second, and Escape disarms", async ({
+  page,
+  context,
+}) => {
+  const acc = await seedMember(db, {
+    name: "Pilot Prime",
+    tier: "green",
+    alts: ["Pilot Alt"],
+  });
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.goto("/account");
+
+  const altRow = page.locator("tr", { hasText: "Pilot Alt" });
+  const unlink = altRow.getByRole("button", { name: "unlink", exact: true });
+  const restBox = await unlink.boundingBox();
+
+  // A server action is a POST to the current route. Counting them is the only
+  // assertion that actually proves the first click never reached the server —
+  // "the row is still visible" would also pass in the window before an
+  // in-flight unlink came back and re-rendered without it.
+  let posts = 0;
+  page.on("request", (r) => {
+    if (r.method() === "POST") posts += 1;
+  });
+
+  await unlink.click();
+  const confirm = altRow.getByRole("button", { name: /^confirm unlink/ });
+  await expect(confirm).toBeVisible();
+  expect(posts).toBe(0);
+
+  // The label swap alone must not jitter the row.
+  const armedBox = await confirm.boundingBox();
+  expect(armedBox?.width).toBe(restBox?.width);
+
+  // Escape disarms without a reload.
+  await confirm.press("Escape");
+  await expect(altRow.getByRole("button", { name: "unlink", exact: true })).toBeVisible();
+  await expect(altRow.getByRole("button", { name: /^confirm unlink/ })).toHaveCount(0);
+  expect(posts).toBe(0);
+  // And the roster genuinely still holds both characters, read from the
+  // database rather than from the page that would be rendering it. Asserted
+  // here rather than while armed: a query is slow enough to race the arm's own
+  // revert timer, and the disarmed state is the stable one to read from.
+  expect(
+    await db.select().from(character).where(eq(character.accountId, acc.id)),
+  ).toHaveLength(2);
+
+  // Arm again and confirm: the second click is the one that actually unlinks.
+  await unlink.click();
+  await altRow.getByRole("button", { name: /^confirm unlink/ }).click();
+  await expect(page.getByText("Pilot Alt")).toHaveCount(0);
+  expect(
+    await db.select().from(character).where(eq(character.accountId, acc.id)),
+  ).toHaveLength(1);
+});
+
 test("last pushed reports per surface, with an unlinked Discord called out", async ({
   page,
   context,
@@ -227,4 +283,36 @@ test("last pushed is omitted entirely before any character is linked", async ({
   await page.goto("/account");
   await expect(page.getByRole("heading", { name: "Your account" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Last pushed" })).toHaveCount(0);
+});
+
+test("unlinking a character that already left the account lands on a styled notice, not the error boundary", async ({
+  page,
+  context,
+}) => {
+  const acc = await seedMember(db, {
+    name: "Pilot Prime",
+    tier: "green",
+    alts: ["Pilot Alt"],
+  });
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.goto("/account");
+
+  const altRow = page.locator("tr", { hasText: "Pilot Alt" });
+  const unlink = altRow.getByRole("button", { name: "unlink" });
+  await expect(unlink).toBeVisible();
+
+  // Simulate the race the action's pre-check exists for: the character leaves
+  // this account (a transfer reclaim, or a second click already unlinking it)
+  // between this render and the click below, without going through
+  // unlinkAction so the page's own pre-check is what has to catch it.
+  await db.delete(character).where(eq(character.name, "Pilot Alt"));
+
+  // First click arms rather than fires; this exercises the actual unlink
+  // submission, so it has to confirm.
+  await unlink.click();
+  await unlink.click();
+  await expect(page).toHaveURL(/error=stale_character/);
+  await expect(
+    page.getByRole("alert").filter({ hasText: "isn't on this account anymore" }),
+  ).toBeVisible();
 });

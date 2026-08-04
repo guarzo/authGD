@@ -4,12 +4,18 @@ export const metadata: Metadata = {
   title: "Sign in",
 };
 
+const ERRORS: Record<string, string> = {
+  oauth_denied: "EVE login was cancelled. Try again when ready.",
+  session_expired: "Your session ended. Sign in again to pick up where you left off.",
+};
+
 export default async function LoginPage({
   searchParams,
 }: {
   searchParams: Promise<{ error?: string }>;
 }) {
   const { error } = await searchParams;
+  const message = error ? ERRORS[error] : undefined;
   return (
     <main className="launch">
       <div className="launch__panel">
@@ -26,9 +32,9 @@ export default async function LoginPage({
           <br />
           who can&rsquo;t fly good
         </p>
-        {error === "oauth_denied" && (
+        {message && (
           <p className="notice notice--bad" data-glyph="!" role="alert">
-            EVE login was cancelled. Try again when ready.
+            {message}
           </p>
         )}
         <a className="launch__action" href="/auth/eve/login">
