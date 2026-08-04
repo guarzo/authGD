@@ -312,6 +312,27 @@ describe("getAdminAccountsList", () => {
     expect(byDate[0].tier).toBe("blue");
   });
 
+  it("filters the admin list down to pending accounts", async () => {
+    await seedAccount(ctx.db, { tier: "pending" });
+    await seedAccount(ctx.db, { tier: "green" });
+    await seedAccount(ctx.db, { tier: "flygd" });
+
+    const rows = await getAdminAccountsList(ctx.db, cfg, { tier: "pending" });
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].tier).toBe("pending");
+  });
+
+  it("sorts pending accounts ahead of every other tier when sorting by tier", async () => {
+    await seedAccount(ctx.db, { tier: "green" });
+    await seedAccount(ctx.db, { tier: "pending" });
+    await seedAccount(ctx.db, { tier: "flygd" });
+
+    const rows = await getAdminAccountsList(ctx.db, cfg, { sort: "tier" });
+
+    expect(rows.map((r) => r.tier)).toEqual(["pending", "flygd", "green"]);
+  });
+
   it("summarizes token health", async () => {
     const a = await seedAccount(ctx.db, { tier: "flygd" });
     await seedCharacter(ctx.db, cfg, { id: 10, accountId: a.id, main: true, name: "T1" });

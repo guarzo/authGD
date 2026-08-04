@@ -23,6 +23,7 @@ import { Submit } from "@/app/_components/submit";
 import { ConfirmArmScope, ConfirmSubmit } from "@/app/_components/confirm-submit";
 import { renderedAt } from "@/app/_components/utc-time";
 import {
+  approveAction,
   demoteAdminAction,
   promoteAdminAction,
   returnToAutoAction,
@@ -44,12 +45,19 @@ const SORTS: Array<{ key: AdminListSort; label: string }> = [
   { key: "status", label: "Cryo" },
   { key: "tierChangedAt", label: "Tier changed" },
 ];
+// What an admin may manually assign. Pending is deliberately absent: it is a
+// state accounts are born in, and setTierManual locks whatever it sets.
 const TIERS = ["flygd", "blue", "green"] as const;
+// What an admin may filter by — a superset, since pending accounts exist and
+// have to be findable. Drives the ?tier= whitelist and the filter chips only.
+const TIER_FILTERS = ["pending", ...TIERS] as const;
 
 const ERRORS: Record<string, string> = {
   last_admin: "Cannot demote the last admin.",
   not_admin:
     "Your admin access changed since this page loaded. Refresh to see the current state.",
+  not_pending:
+    "That account was already approved by someone else. Refresh to see its current tier.",
 };
 
 // The columns after the sortable ones, in render order. A list rather than a
@@ -90,8 +98,8 @@ export default async function AdminAccountsPage({
     SORTS.some((s) => s.key === params.sort) ? params.sort : "name"
   ) as AdminListSort;
   const dir = params.dir === "desc" ? "desc" : "asc";
-  const tier = TIERS.includes(params.tier as (typeof TIERS)[number])
-    ? (params.tier as (typeof TIERS)[number])
+  const tier = TIER_FILTERS.includes(params.tier as (typeof TIER_FILTERS)[number])
+    ? (params.tier as (typeof TIER_FILTERS)[number])
     : undefined;
   const status =
     params.status === "cryo" || params.status === "active" ? params.status : undefined;
@@ -103,6 +111,11 @@ export default async function AdminAccountsPage({
     sort,
     dir,
   });
+  // Independent of every active filter. `rows` is narrowed by tier AND status
+  // (above), so counting it would hide the queue from an admin who is looking
+  // at ?status=cryo — precisely when a standing reminder is most useful.
+  const pendingCount = (await getAdminAccountsList(getDb(), cfg, { tier: "pending" }))
+    .length;
 
   const qs = (over: Record<string, string | undefined>) => {
     const p = new URLSearchParams();
@@ -131,6 +144,14 @@ export default async function AdminAccountsPage({
         <Notice>Sync queued. The worker picks it up within a few seconds.</Notice>
       )}
 
+      {pendingCount > 0 && (
+        <Notice>
+          <a href="/admin/accounts?tier=pending">
+            {pendingCount} account{pendingCount === 1 ? "" : "s"} awaiting approval
+          </a>
+        </Notice>
+      )}
+
       <RuleHead as="h2">Filter</RuleHead>
       <div className="filters">
         <div className="filters__group" role="group" aria-label="Filter by tier">
@@ -142,7 +163,7 @@ export default async function AdminAccountsPage({
           >
             all
           </a>
-          {TIERS.map((t) => (
+          {TIER_FILTERS.map((t) => (
             <a
               key={t}
               className="btn"
@@ -475,34 +496,63 @@ function AccountRow({
         <section className="drawer__group">
           <span className="drawer__label">Set tier</span>
           <div className="btn-group">
-            {TIERS.map((t) => (
-              <form
-                key={t}
-                action={setTierAction.bind(null, r.accountId, t)}
-                className="inline-form"
-              >
-                {/* No `pendingLabel` here, unlike every other control in this
-                    drawer: the label is the tier itself, and swapping it for
-                    "setting…" would erase which of the three was pressed at
-                    exactly the moment the admin is checking. `disabled` plus
-                    `aria-busy` still report the in-flight state.
-
-                    Same principle as the note field for the accessible name: a
-                    speech-input or screen-reader user reaches this control with
-                    only the tier word to go on, and this is the control
-                    derole-don't-boot turns on. The visible text stays the bare
-                    tier word, so the accessible name keeps it verbatim (WCAG
-                    2.5.3) and adds the row in front of it. */}
-                <Submit
-                  className="btn btn--micro"
-                  disabled={r.tierLocked && r.tier === t}
-                  aria-pressed={r.tier === t}
-                  aria-label={`Set ${identity} to ${t}`}
+            {r.tier === "pending" ? (
+              <>
+                <form
+                  action={approveAction.bind(null, r.accountId, "green")}
+                  className="inline-form"
                 >
-                  {t}
-                </Submit>
-              </form>
-            ))}
+                  <Submit
+                    className="btn btn--micro"
+                    pendingLabel="approving…"
+                    aria-label={`approve ${identity} as green`}
+                  >
+                    Approve as Green
+                  </Submit>
+                </form>
+                <form
+                  action={approveAction.bind(null, r.accountId, "blue")}
+                  className="inline-form"
+                >
+                  <Submit
+                    className="btn btn--micro"
+                    pendingLabel="approving…"
+                    aria-label={`approve ${identity} as blue`}
+                  >
+                    Approve as Blue
+                  </Submit>
+                </form>
+              </>
+            ) : (
+              TIERS.map((t) => (
+                <form
+                  key={t}
+                  action={setTierAction.bind(null, r.accountId, t)}
+                  className="inline-form"
+                >
+                  {/* No `pendingLabel` here, unlike every other control in this
+                      drawer: the label is the tier itself, and swapping it for
+                      "setting…" would erase which of the three was pressed at
+                      exactly the moment the admin is checking. `disabled` plus
+                      `aria-busy` still report the in-flight state.
+
+                      Same principle as the note field for the accessible name: a
+                      speech-input or screen-reader user reaches this control with
+                      only the tier word to go on, and this is the control
+                      derole-don't-boot turns on. The visible text stays the bare
+                      tier word, so the accessible name keeps it verbatim (WCAG
+                      2.5.3) and adds the row in front of it. */}
+                  <Submit
+                    className="btn btn--micro"
+                    disabled={r.tierLocked && r.tier === t}
+                    aria-pressed={r.tier === t}
+                    aria-label={`Set ${identity} to ${t}`}
+                  >
+                    {t}
+                  </Submit>
+                </form>
+              ))
+            )}
             {r.tierLocked && (
               <form
                 action={returnToAutoAction.bind(null, r.accountId)}

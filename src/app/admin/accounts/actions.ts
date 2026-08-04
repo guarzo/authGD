@@ -6,6 +6,7 @@ import { getDb } from "@/db";
 import { requireAdminAction } from "@/lib/admin-guard";
 import { demoteAdmin, promoteAdmin } from "@/services/accounts";
 import {
+  approveAccount,
   returnTierToAuto,
   setAccountStatus,
   setStatusNote,
@@ -34,6 +35,25 @@ export async function setTierAction(
     setTierManual(tx, actor, accountId, tier),
   );
   if (!result.ok && result.error === "not_authorized") redirectNotAdmin();
+  if (!result.ok) throw new Error(result.error);
+  revalidatePath("/admin/accounts");
+}
+
+export async function approveAction(
+  accountId: string,
+  tier: "green" | "blue",
+): Promise<void> {
+  const { accountId: actor } = await requireAdminAction();
+  const result = await getDb().transaction((tx) =>
+    approveAccount(tx, actor, accountId, tier),
+  );
+  if (!result.ok && result.error === "not_authorized") redirectNotAdmin();
+  // not_pending is a race, not a bug: two admins working the queue, or one
+  // with a stale tab. Send them back to the queue with a notice rather than
+  // the error boundary — the account is approved, just not by them.
+  if (!result.ok && result.error === "not_pending") {
+    redirect("/admin/accounts?tier=pending&error=not_pending");
+  }
   if (!result.ok) throw new Error(result.error);
   revalidatePath("/admin/accounts");
 }
