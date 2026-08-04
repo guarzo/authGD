@@ -104,7 +104,7 @@ describe("appraiseLoot", () => {
     });
   });
 
-  it(// Rounding once at the line total rather than once per unit is the
+  // Rounding once at the line total rather than once per unit is the
   // point of this test: rounding the unit price to cents FIRST (naive:
   // 0.13 x 5,000,000 = 650,000.00) discriminates from rounding once at
   // the line total (correct: round(0.125 x 5,000,000) cents = 625,000.00)
@@ -115,7 +115,7 @@ describe("appraiseLoot", () => {
   // A second, differently-scaled line (small qty, ordinary 2dp price) is
   // included so this is also the only test with two nonzero-priced lines,
   // checking each line total AND the combined pool total.
-  "rounds once at the line total, not once per unit before multiplying by qty", async () => {
+  it("rounds once at the line total, not once per unit before multiplying by qty", async () => {
     const raw = "5000000x Widget\n3x Tritanium";
     const result = await appraiseLoot(
       raw,
