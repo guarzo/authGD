@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getConfig } from "@/config";
 import { getDb } from "@/db";
 import { exchangeEveCode, verifyEveAccessToken } from "@/lib/esi/sso";
+import { accountErrorUrl, loginErrorUrl } from "@/lib/error-redirects";
 import { getRequestAccount } from "@/lib/request-session";
 import { sessionCookieAttrs } from "@/lib/session-cookie";
 import {
@@ -18,19 +19,19 @@ export async function GET(req: NextRequest) {
   const to = (path: string) => NextResponse.redirect(new URL(path, cfg.appBaseUrl));
 
   // Provider denial (e.g. user clicked "cancel"): no code arrives, just error=
-  if (req.nextUrl.searchParams.get("error")) return to("/login?error=oauth_denied");
+  if (req.nextUrl.searchParams.get("error")) return to(loginErrorUrl("oauth_denied"));
 
   const code = req.nextUrl.searchParams.get("code");
   const state = req.nextUrl.searchParams.get("state");
   // Without state there is no transaction, so nothing tells us whether this was
   // a login or a character link. /login is the only destination we can be sure
   // is correct for either.
-  if (!code || !state) return to("/login?error=oauth_failed");
+  if (!code || !state) return to(loginErrorUrl("oauth_failed"));
 
   // Only EVE intents are consumable here; a link-discord transaction is
   // rejected WITHOUT being consumed. All binding checks run before any EVE call.
   const tx = await consumeOauthTransaction(db, state, ["login", "link-character"]);
-  if (!tx) return to("/login?error=oauth_expired");
+  if (!tx) return to(loginErrorUrl("oauth_expired"));
 
   const sess = await getRequestAccount(req);
   if (
@@ -41,7 +42,7 @@ export async function GET(req: NextRequest) {
     // replayed. Signed in but holding someone else's (or a stale) transaction
     // means retrying from the account page; no session at all means the session
     // is the thing that's missing.
-    return to(sess ? "/account?error=link_expired" : "/login?error=session_expired");
+    return to(sess ? accountErrorUrl("link_expired") : loginErrorUrl("session_expired"));
   }
 
   // Everything past here talks to EVE or the database, and route handlers are
@@ -62,7 +63,7 @@ export async function GET(req: NextRequest) {
       const result = await db.transaction((dbtx) =>
         linkCharacter(dbtx, cfg, sess!.accountId, ch),
       );
-      return to(result.ok ? "/account" : "/account?error=already_linked");
+      return to(result.ok ? "/account" : accountErrorUrl("already_linked"));
     }
 
     const { accountId } = await db.transaction((dbtx) => handleEveLogin(dbtx, cfg, ch));
@@ -82,8 +83,8 @@ export async function GET(req: NextRequest) {
     console.error("eve callback failed", err instanceof Error ? err.message : err);
     return to(
       tx.intent === "link-character"
-        ? "/account?error=link_failed"
-        : "/login?error=oauth_failed",
+        ? accountErrorUrl("link_failed")
+        : loginErrorUrl("oauth_failed"),
     );
   }
 }

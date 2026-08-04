@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { getConfig } from "@/config";
 import { getDb, type Db } from "@/db";
 import { account } from "@/db/schema";
+import { accountErrorUrl, loginErrorUrl } from "@/lib/error-redirects";
 import { getSessionAccount } from "@/services/session";
 
 export type AdminContext = { accountId: string };
@@ -78,9 +79,9 @@ function denyAdmin(reason: AdminDenial): never {
       // second hop: requireAdminPage re-guards `/admin/accounts` itself, so a
       // non-admin who lands there bounces onward to this same `/account`
       // redirect.
-      return redirect("/account?error=not_admin");
+      return redirect(accountErrorUrl("not_admin"));
     case "session-expired":
-      return redirect("/login?error=session_expired");
+      return redirect(loginErrorUrl("session_expired"));
     case "no-session":
       // Never signed in — most often someone who guessed /admin, or a crawler.
       // "Your session ended" would name an event that never happened, so this

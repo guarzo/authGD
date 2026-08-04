@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
 import { getConfig } from "@/config";
 import { getDb } from "@/db";
+import { ACCOUNT_ERRORS, loginErrorUrl, lookupErrorMessage } from "@/lib/error-redirects";
 import { getAccountView, type PushStatus } from "@/services/account-view";
 import { canReadPayouts } from "@/services/payouts";
 import { listAccountPayouts } from "@/services/payout-view";
@@ -42,27 +43,10 @@ export const metadata: Metadata = {
   title: "Your account",
 };
 
-// Every code here is emitted by a callback route redirect. The distinction the
-// copy has to carry is "retry works" (expired/failed) versus "retrying will do
-// the same thing" (already_linked). Sign-in links expire 10 minutes after you
-// start them (src/services/oauth-tx.ts).
-const ERRORS: Record<string, string> = {
-  already_linked:
-    "That character belongs to an account with its own history, so it can't be merged automatically. Ask an admin.",
-  discord_already_linked: "That Discord account is already linked to another account.",
-  discord_denied: "Discord authorization was cancelled.",
-  discord_expired:
-    "That Discord link expired before it finished. Nothing changed. Start it again below.",
-  discord_failed:
-    "Discord couldn't be reached, so the link didn't finish. Nothing changed. Try again.",
-  link_expired:
-    "That character link expired before it finished. Nothing changed. Start it again below.",
-  link_failed:
-    "EVE couldn't be reached, so the character didn't finish linking. Nothing changed. Try again.",
-  stale_character:
-    "That character isn't on this account anymore. The page below is current.",
-  not_admin: "Your admin access was removed. This is your account page.",
-};
+// Every code this page renders lives in src/lib/error-redirects.ts, beside the
+// builder its producers go through. Nearly all are emitted by a callback route
+// redirect; the distinction the copy has to carry is "retry works"
+// (expired/failed) versus "retrying will do the same thing" (already_linked).
 
 /**
  * The id the CONTACTS column header points `aria-describedby` at. The note is
@@ -116,10 +100,10 @@ export default async function AccountPage({
   // cookie at all is a first-time visitor, who must not be told a session they
   // never had has ended. `resolveAdmin` draws the same line for the admin
   // pages.
-  if (!sess) redirect(sid ? "/login?error=session_expired" : "/login");
+  if (!sess) redirect(sid ? loginErrorUrl("session_expired") : "/login");
   const view = await getAccountView(getDb(), cfg, sess.accountId);
   const { error } = await searchParams;
-  const message = error ? ERRORS[error] : undefined;
+  const message = lookupErrorMessage(ACCOUNT_ERRORS, error);
   const now = Date.now();
   // Same tier-only gate the payouts pages themselves re-check — this only
   // decides whether the link appears, never whether the route is reachable.

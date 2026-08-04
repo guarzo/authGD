@@ -52,9 +52,9 @@ export function encodeDropped(dropped: DroppedLootLine[]): string {
 
 /**
  * Null for anything this page cannot faithfully render — an absent param, a
- * hand-typed one, a truncated one. Same rule the `ERRORS` map follows for an
- * unrecognized `?error=` code: degrade to the plain page, never to an empty
- * or half-filled notice.
+ * hand-typed one, a truncated one. Same rule the `OPERATION_ERRORS` map follows
+ * for an unrecognized `?error=` code: degrade to the plain page, never to an
+ * empty or half-filled notice.
  */
 export function decodeDropped(raw: string | undefined): DroppedReport | null {
   if (!raw) return null;
