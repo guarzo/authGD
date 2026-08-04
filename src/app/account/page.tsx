@@ -22,9 +22,11 @@ import { setMainAction, unlinkAction, wakeSelfAction } from "./actions";
 const MANIFEST_COLUMN_COUNT = 6;
 
 /** The id a contacts cell's `aria-describedby` points at when — and only
- *  when — `ContactRemedy` has something to say about that character. Mirrors
- *  `CONTACTS_NOTE_ID` below: an id that always exists in the DOM but is only
- *  referenced when it resolves to real content. */
+ *  when — `ContactRemedy` has something to say about that character. Unlike
+ *  `CONTACTS_NOTE_ID` below, which is always in the DOM and merely toggles
+ *  between visible and visually-hidden, this element is not rendered at all
+ *  for a character with no remedy. The reference and the element are gated on
+ *  the same `hasContactRemedy` predicate, so the id can never dangle. */
 const contactRemedyId = (characterId: number) => `contact-remedy-${characterId}`;
 
 // Reads the session cookie and hits the DB on every request; getConfig() also
@@ -152,8 +154,10 @@ export default async function AccountPage({
                 </Status>
               </p>
             ) : health.verdict === "stalled" ? (
-              // Not "needs attention": nothing here is the member's to do. The
-              // per-character remedy below says why and who owns it.
+              // Not "needs attention": nothing here is the member's to fix
+              // themselves. For an unrecognized code the remedy does name an
+              // action — ask an admin — which is why the wording is about who
+              // owns the fix rather than claiming there is nothing to do.
               <p className="verdict">
                 <Status tone="warn">
                   {health.stalled} character{health.stalled === 1 ? "" : "s"} not syncing
