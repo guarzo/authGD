@@ -127,7 +127,7 @@ export default async function PayoutsPage({
                     {pastEnd ? (
                       <>
                         Nothing older than this point.{" "}
-                        <a href="/payouts">Back to the latest operations</a>
+                        <Link href="/payouts">Back to the latest operations</Link>
                       </>
                     ) : (
                       "No operations recorded yet."
