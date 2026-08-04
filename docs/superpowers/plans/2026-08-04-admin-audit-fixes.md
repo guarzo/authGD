@@ -38,13 +38,13 @@ Pure move, no behavior change. Doing this first means Task 2's diff shows only t
 
 - [ ] **Step 1: Write tests that pin the CURRENT behavior, including the bugs**
 
-Create `tests/audit-summarize.test.ts`. These assertions document what the code does today, bugs included, so Task 1 can prove it changed nothing. Task 2 will update the three marked assertions.
+Create `tests/audit-summarize.test.ts`. These pin behavior that is CORRECT today and must survive Task 2 unchanged, so the extraction can prove it changed nothing. Deliberately absent: the three behaviors Task 2 fixes (`status.changed` dropping `from`, the silent three-key cut, JSON role arrays). Pinning those would mean committing a test that asserts wrong output, so Task 2 writes them fresh against the corrected behavior instead. The tradeoff is accepted: this file is a partial, not a total, baseline.
 
 ```ts
 import { describe, expect, it } from "vitest";
 import { summarizeDetails } from "@/app/admin/audit/summarize";
 
-describe("summarizeDetails (pre-change baseline)", () => {
+describe("summarizeDetails", () => {
   it("renders a tier transition with its from value", () => {
     expect(summarizeDetails("tier.changed", { from: "flygd", to: "green" })).toBe(
       "flygd → green",
@@ -55,34 +55,16 @@ describe("summarizeDetails (pre-change baseline)", () => {
     expect(summarizeDetails("tier.changed", { to: "green" })).toBe("→ green");
   });
 
-  // BUG, fixed in Task 2: status.changed drops `from` even when present.
-  it("drops from on a status transition", () => {
+  it("renders a labelled scalar action", () => {
     expect(
-      summarizeDetails("status.changed", { from: "active", to: "cryo" }),
-    ).toBe("→ cryo");
+      summarizeDetails("admin.bootstrap_granted", { characterId: 90000001 }),
+    ).toBe("character 90000001");
   });
 
-  // BUG, fixed in Task 2: the default branch silently cuts after 3 keys.
-  it("silently truncates an undeclared action after three keys", () => {
+  it("renders a bare scalar action", () => {
     expect(
-      summarizeDetails("admin.promoted", {
-        by: "acct-1",
-        note: "shift lead",
-        scope: "full",
-        extra: "dropped",
-      }),
-    ).toBe("by=acct-1, note=shift lead, scope=full");
-  });
-
-  // BUG, fixed in Task 2: role ids render as JSON arrays.
-  it("dumps role id arrays as JSON", () => {
-    expect(
-      summarizeDetails("discord.role_changed", {
-        added: ["1"],
-        removed: ["2", "3"],
-        tier: "green",
-      }),
-    ).toBe('+["1"] -["2","3"] (green)');
+      summarizeDetails("token.invalidated", { reason: "refresh rejected" }),
+    ).toBe("refresh rejected");
   });
 
   it("renders an empty payload as an em dash", () => {
@@ -187,7 +169,7 @@ Leave the call site at what was line 464 alone — `summary={summarizeDetails(r.
 - [ ] **Step 5: Run tests and typecheck**
 
 Run: `npx vitest run tests/audit-summarize.test.ts`
-Expected: PASS, 7 tests.
+Expected: PASS, 6 tests.
 
 Run: `npm run typecheck`
 Expected: no output, exit 0. If it reports `fmt` unused or undefined in `page.tsx`, a fragment of the deleted block was left behind.
@@ -217,7 +199,7 @@ Pure move with no behavior change, plus tests pinning current output
 
 - [ ] **Step 1: Write the failing tests for the new behavior**
 
-In `tests/audit-summarize.test.ts`, replace the three assertions marked `BUG` with these, and append the new block. Keep every other test as-is: they are the regression guard proving this task changed only what it meant to.
+In `tests/audit-summarize.test.ts`, append this second `describe` block. Change nothing in the existing block: those six tests pin behavior that must survive this rewrite untouched, and they are the regression guard proving this task changed only what it meant to.
 
 ```ts
 const ROLE_NAMES = new Map([
@@ -226,7 +208,7 @@ const ROLE_NAMES = new Map([
   ["300", "green"],
 ]);
 
-describe("summarizeDetails", () => {
+describe("summarizeDetails, declared fields and role rendering", () => {
   it("renders a status transition with its from value", () => {
     expect(
       summarizeDetails("status.changed", { from: "active", to: "cryo" }),
@@ -287,8 +269,11 @@ describe("summarizeDetails", () => {
 
   it("resolves nothing when no role map is supplied", () => {
     expect(
-      summarizeDetails("discord.role_changed", { added: ["300"], removed: [] }),
-    ).toBe("+300…");
+      summarizeDetails("discord.role_changed", {
+        added: ["987654321098765432"],
+        removed: [],
+      }),
+    ).toBe("+987654…");
   });
 
   it("does not throw on a role payload that is not an array", () => {
