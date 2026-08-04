@@ -1,0 +1,1 @@
+ALTER TABLE "contact_sync_state" ADD COLUMN "last_detail" text;

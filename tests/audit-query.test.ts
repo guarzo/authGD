@@ -37,8 +37,8 @@ describe("queryAuditLog", () => {
     expect(
       (await queryAuditLog(ctx.db, { action: "tier." })).map((r) => r.action),
     ).toEqual(["tier.unlocked", "tier.changed"]);
-    expect(await queryAuditLog(ctx.db, { actor: "admin-1" })).toHaveLength(2);
-    expect(await queryAuditLog(ctx.db, { target: "42" })).toHaveLength(1);
+    expect(await queryAuditLog(ctx.db, { actorIds: ["admin-1"] })).toHaveLength(2);
+    expect(await queryAuditLog(ctx.db, { targetIds: ["42"] })).toHaveLength(1);
   });
 
   it("treats LIKE wildcards in the action filter as literals", async () => {

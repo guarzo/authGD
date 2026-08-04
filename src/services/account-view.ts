@@ -130,6 +130,9 @@ export interface AccountView {
      */
     contactsTarget: boolean;
     contactSyncResult: string | null;
+    /** Context for `contactSyncResult` — the label name(s) actually found when
+     *  the result is `label_mismatch`, else null. */
+    contactSyncDetail: string | null;
     onMapAcl: boolean;
   }>;
   pushes: Record<PushKind, PushStatus>;
@@ -184,6 +187,7 @@ export async function getAccountView(
         affiliationInvalid: c.affiliationInvalid,
       }),
       contactSyncResult: syncByChar.get(c.id)?.lastResult ?? null,
+      contactSyncDetail: syncByChar.get(c.id)?.lastDetail ?? null,
       onMapAcl: aclSet.has(c.id),
     })),
     pushes,
@@ -198,6 +202,7 @@ export interface AdminCharacterRow {
   needsReauthForScopes: boolean;
   affiliationInvalid: boolean;
   contactSyncResult: string | null;
+  contactSyncDetail: string | null;
   mapObservedAt: Date | null;
 }
 
@@ -270,6 +275,7 @@ export async function getAdminAccountsList(
       needsReauthForScopes: required.some((s) => !c.scopes.includes(s)),
       affiliationInvalid: c.affiliationInvalid,
       contactSyncResult: syncByChar.get(c.id)?.lastResult ?? null,
+      contactSyncDetail: syncByChar.get(c.id)?.lastDetail ?? null,
       mapObservedAt: obsByChar.get(c.id)?.observedAt ?? null,
     }));
     const dead = characters.filter(

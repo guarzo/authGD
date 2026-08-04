@@ -133,6 +133,14 @@ code {
   font-size: 0.9em;
 }
 
+/* A string quoted back to the member for character-by-character comparison.
+   `pre` is load-bearing: HTML collapses whitespace, so without it "AuthGD "
+   and "AuthGD" render identically and a trailing-space member sees two
+   strings that look the same — the exact bug this message exists to fix. */
+code.literal {
+  white-space: pre;
+}
+
 a {
   color: var(--ink);
   text-decoration-color: var(--rule-strong);
@@ -579,6 +587,19 @@ h3.rule-head__label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Audit log: a resolved name is its own filter control. `color: inherit`
+   keeps the base `a` rule from repainting the cells that are deliberately
+   dimmed mono -- `system` and the literal `all` read as machine values, and
+   that treatment is the point. Everything else about the link (underline,
+   offset, gold on hover) is inherited, so a name behaves exactly like every
+   other link on the page rather than inventing a second affordance.
+
+   Must stay ABOVE `.dim`: equal specificity, so `.dim` wins the resting
+   colour only by being later in the file. */
+.cell-link {
+  color: inherit;
 }
 
 /* Raw JSON payloads in the audit and sync tables. The collapsed line is capped
