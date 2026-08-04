@@ -13,12 +13,31 @@ PRODUCT.md sets the bar: an admin can answer "why is this person's role wrong?"
 from `/admin/audit` in under a minute. For the actions most likely to be the
 answer, the page cannot, because the row carries nothing to read.
 
-The app writes 27 distinct audit action names. Twelve attach a `details`
-payload; all twelve are already declared in the PARTS table in
-`src/app/admin/audit/summarize.ts`. The other fifteen call `logAudit` with no
-`details`, so `src/app/admin/audit/page.tsx:444` short-circuits to a dim
-placeholder and `summarizeDetails` is never called. Declaring those actions
-would change nothing on screen. **The work is in the writers.**
+The app writes 36 distinct audit action names. Nine of them are `payout.*`, and
+this spec reviews **the other 27**: the access-control set. That boundary is
+drawn deliberately and stated up front, because the counts below are otherwise
+easy to read as repository-wide.
+
+Of those 27, twelve attach a `details` payload; all twelve are already declared
+in the PARTS table in `src/app/admin/audit/summarize.ts`. PARTS holds thirteen
+entries, not twelve, and the extra one is the first defect below. The other
+fifteen actions call `logAudit` with no `details`, so
+`src/app/admin/audit/page.tsx:444` short-circuits to a dim placeholder and
+`summarizeDetails` is never called. Declaring those actions would change nothing
+on screen. **The work is in the writers.**
+
+**Why `payout.*` is excluded.** Those nine actions record ISK distribution for
+a fight operation: who was on the roster, what the loot appraised at, what was
+paid. None of them can answer "why did this member lose access", which is the
+one question this page exists to serve. Six carry a payload
+(`payout.roster_set`, `payout.participant_updated` twice,
+`payout.participant_removed`, `payout.paid`, `payout.pool_added` twice,
+`payout.pool_deleted`) and three do not (`payouts.ts:113` `payout.created`,
+`:371` `payout.finalized`, `:405` `payout.unlocked`). None of the nine is
+declared in PARTS, so all six payload-bearing ones render through the generic
+key=value fallback, and this branch leaves that unchanged: the fallback already
+appends `+N more`, so section 3 below is a no-op for them. Whether the payout
+surface wants declarations of its own is a real question and a separate one.
 
 Seven payload-free actions are access-relevant, each verified at this call site:
 
@@ -96,7 +115,7 @@ than answering a question.
 | `token.needs_reauth` | `{missingScopes}` | App-wide scope change, or one member's revocation. |
 | `tier.unlocked` | `{tier}` | What automation was handed back. |
 | `status.note_changed` | `{had, has}` | Added, replaced, or cleared. |
-| `wanderer.removed` | `{role}` | Whether access was live at removal. |
+| `wanderer.removed` | `{role}` | Which permission level was revoked. |
 | `admin.demoted` | none | Actor plus target is the whole event. |
 | `admin.promoted` | none | Same. |
 
@@ -115,6 +134,28 @@ row.
 `wasMain` is the fork into `applyNoMainRule` (`accounts.ts:321`), which is what
 clears the main and deroles the account. It is the field that connects an
 unlink to the `tier.changed` row that follows it.
+
+**The recorded name is legible, not searchable, and that is accepted.**
+`resolveFilterIdentity` (`src/services/audit.ts:296-303`) resolves a name
+filter by matching `lower(character.name)` against **live** character rows. The
+character is gone, so filtering by its name returns `{kind: "none"}` and the
+page renders "No account or character named X" even though rows about it exist.
+Recording the name in `details` does not change that: nothing indexes or
+searches payload contents.
+
+This is scoped out rather than solved. An access investigation starts from the
+member, not from the alt: the account still exists, and the actor filter
+resolves it normally, so the unlink row is reachable by the path an admin
+actually takes. The name field's job is to stop a found row from rendering as a
+dead id, not to be a search key.
+
+The residual cost, stated so it is not discovered later: an admin who knows
+only the deleted character's name, and not which account held it, cannot reach
+these rows by filtering. Closing that gap means matching names inside
+`audit_log.details`, which needs a jsonb index, a fourth `FilterResolution`
+kind for "a name that no longer exists", and a decision about what the Target
+cell renders when the id resolves to nothing but the payload carries a name.
+That is a spec of its own, not a paragraph in this one.
 
 **`token.needs_reauth` records what is missing, not what is required.**
 `cfg.eveSso.scopes.filter((s) => !identity.scopes.includes(s))` at
@@ -138,9 +179,21 @@ declaration this is meant to remove.
 **`wanderer.removed` records the role, not a cause.** A `cause` field would be
 a constant: the job knows only `diff.remove`, and the reason is always "not in
 the desired flygd set". The role held at removal, read from the `members` list
-already fetched at `wanderer.ts:43`, separates a live grant being revoked from
-an already-blocked entry being tidied up. Building the id-to-role `Map` is the
-only new computation in this spec, and it is over data the job holds.
+already fetched at `wanderer.ts:43`, records which permission level was
+revoked, and is what an admin needs to restore the entry if the removal turns
+out to have been wrong.
+
+Note what that role can and cannot be. `diffAcl` (`src/core/acl-diff.ts:23-27`)
+excludes both `admin` and `blocked` from `remove`: admin entries are never
+removed, and removing a blocked entry would be equivalent to un-banning. So a
+`wanderer.removed` payload can only ever carry `manager`, `member` or `viewer`,
+and the field's value is distinguishing an elevated grant from an ordinary one.
+An earlier draft of this spec justified the field as separating a live grant
+from "an already-blocked entry being tidied up", which describes a branch that
+cannot execute; the tests below assert the real invariant instead.
+
+Building the id-to-role `Map` is the only new computation in this spec, and it
+is over data the job holds.
 
 ### 2. `from` on the four writers that have it
 
@@ -207,6 +260,18 @@ Three new combinators alongside the existing four:
   string is long and the column is narrow. Serves `missingScopes`, and keeps a
   scope array out of the column as raw JSON, which is the mistake the Discord
   snowflakes were.
+
+  **`list` guards with `Array.isArray` and renders nothing when the value is
+  not an array or is empty.** The DB does not enforce payload shape, so a
+  legacy row, a hand-inserted row, or a future writer bug can put a bare string
+  or `null` there. This is parity with `roles()` (`summarize.ts:45`), which
+  already guards this way and already has a test for it; without the guard a
+  string value would `.map` into per-character garbage or throw into the
+  `(unreadable)` catch, turning one bad row into a dead cell. The key is still
+  treated as consumed, so a malformed value produces no misleading `+1 more`:
+  the payload is one disclosure click away, and the summary declines to
+  guess rather than inventing a reading of it.
+
 - `noteChange(hadKey, hasKey)` renders `note added`, `note replaced`, or
   `note cleared`.
 
@@ -262,8 +327,12 @@ table today all land somewhere honest:
 
 `tests/audit-summarize.test.ts` (exists, seventeen cases). Add:
 
-- one case per new combinator: `flag` truthy and falsy, `list` short and
-  collapsed, `noteChange` across added, replaced and cleared
+- one case per new combinator: `flag` truthy and falsy, `list` at one, two and
+  three-or-more values, `noteChange` across added, replaced and cleared
+- **`list` on a malformed value**: a bare string, `null`, and `[]` each render
+  nothing and never reach the `(unreadable)` catch, matching the existing
+  `roles()` malformed-payload test. This is the regression guard that stops one
+  legacy or hand-inserted row from producing a dead cell.
 - one case per new or changed declaration in the table above
 - `+N more` appears on a *declared* action carrying an undeclared key
 - a declared key rendering blank produces **no** marker (rule 1)
@@ -281,7 +350,7 @@ Every affected writer already has a suite. No new files.
 | `tests/accounts.test.ts` | `character.unlinked` writes `{name, wasMain}`, both branches of `wasMain`; `from` on the self-reactivation `status.changed` and the no-main-rule `tier.changed` |
 | `tests/admin-accounts.test.ts` | `tier.unlocked` writes `{tier}`; `status.note_changed` across added, replaced, cleared; `from` on the manual `tier.changed` and `status.changed` |
 | `tests/token-health-job.test.ts` | `token.needs_reauth` writes the scopes actually missing, not the whole required set |
-| `tests/wanderer-job.test.ts` | `wanderer.removed` writes the role held at removal; dry run still writes no row at all |
+| `tests/wanderer-job.test.ts` | `wanderer.removed` writes the role held at removal; a removal row never carries `admin` or `blocked`, because `diffAcl` cannot produce one (the invariant, asserted at the job level where the payload is written, not re-asserted against `tests/acl-diff.test.ts`); dry run still writes no row at all |
 | `tests/membership-job.test.ts` | untouched: it already writes `from` |
 
 ### E2E
@@ -320,8 +389,15 @@ so recover them with `git checkout`, never by deleting.
 ## Out of scope
 
 - No `audit_log` migration, no backfill.
-- The other fifteen payload-free actions stay payload-free. They were reviewed
-  against the product question and none of them answers it.
+- The other fifteen payload-free access-control actions stay payload-free. They
+  were reviewed against the product question and none of them answers it.
+- The nine `payout.*` actions, for the reason given in the Problem section:
+  they record ISK distribution, not access. Six of them render through the
+  generic fallback today and still will afterwards.
+- Searching by the name of a deleted character. Covered in full under
+  `character.unlinked` above: the name recorded in `details` makes a found row
+  legible and does not make it findable, and closing that needs a jsonb index
+  and a new `FilterResolution` kind.
 - Resolving a payload uuid to a human name. This is why `character.unlinked`
   records a name rather than an account id, and it is a follow-up, not a
   dependency.
