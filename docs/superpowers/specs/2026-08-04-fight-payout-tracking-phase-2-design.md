@@ -263,19 +263,22 @@ logs in.
 
 ### Rollout consequence, stated so it is not a deploy-day surprise
 
-Three places compare a character's granted scopes against `cfg.eveSso.scopes`.
-Adding a scope makes all three fire for every existing character:
+Four places compare a character's granted scopes against `cfg.eveSso.scopes`.
+Adding a scope makes all four fire for every existing character:
 
 - `src/jobs/token-health.ts:103` — `covered` goes false for every character,
   flipping each to `needs_reauth` and writing one `token.needs_reauth` audit row
-  (`:116-122`).
-- `src/services/account-view.ts:263,276` — every member's account page shows a
+  (`:115-121`).
+- `src/services/accounts.ts:106` — `tokenFields` reports the same for every
+  character it loads.
+- `src/services/account-view.ts:169,182` — every member's account page shows a
   re-authorize warning.
-- `src/app/admin/accounts/page.tsx:279` — every row in the admin table is
-  flagged.
+- `src/services/account-view.ts:250,275` — every row in the admin table is
+  flagged. The comparison lives here, not in the page:
+  `src/app/admin/accounts/page.tsx:285` only renders the field this computes.
 
-**Sync does not break.** `src/jobs/contacts.ts:18` gates per job, and
-`tests/contacts-job.test.ts:90,204` pin that a `needs_reauth` character with
+**Sync does not break.** `src/jobs/contacts.ts:13-29` gates per job, and
+`tests/contacts-job.test.ts:90-92,203-210` pin that a `needs_reauth` character with
 contact scopes granted still syncs. This is a fleet-wide false alarm that
 self-heals as members log back in, not an outage.
 
@@ -388,7 +391,7 @@ All nine from the handover are in scope.
 | 5 | `recordPayment` / `loadParticipantOperationId` throw bare `Error` | `PayoutNotFoundError`, joining `PayoutForbiddenError` / `PayoutLockedError` |
 | 6 | Identical unresolved names not deduped | Prevented in `addParticipant` (above) |
 | 7 | `perShareCents` returned and consumed nowhere | Drop it from `SplitResult` |
-| 8 | `loot_item_qty_ck` / `loot_item_price_ck` untested | Constraint tests |
+| 8 | `loot_item_qty_ck` / `loot_item_price_ck` only partly tested | Phase 1 already covers both **through `addAppraisedPool`** (`tests/payout-loot.test.ts:374-428`), so the original "untested" reading was stale. What is left: direct-insert coverage matching `payout-schema.test.ts`'s style, and the `totalValue < 0` half of `loot_item_price_ck`, which nothing currently reaches |
 | 9 | Parser edge cases | See below — three parts: one fixed, one bounded, one deliberately left |
 
 Defect 4 is defence in depth — the DB check constraints already catch it at
@@ -480,7 +483,9 @@ Grouped by what would otherwise regress.
 - `setItemPrice` and the pool writers reject a line or pool total outside
   `numeric(20,2)` with a readable error, not a Postgres one.
 - `computeSplit` input validation (defect 4).
-- `loot_item_qty_ck` / `loot_item_price_ck` reject as intended (defect 8).
+- `loot_item_qty_ck` / `loot_item_price_ck` reject as intended on **direct
+  insert**, and `loot_item_price_ck` rejects a negative `totalValue` — the two
+  gaps phase 1's through-`addAppraisedPool` tests leave open (defect 8).
 
 **Freeze and revert**
 
