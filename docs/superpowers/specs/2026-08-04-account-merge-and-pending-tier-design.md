@@ -18,7 +18,7 @@ concept (what a brand-new account is worth), so they ship together.
 button on `/account` is the intended way to attach an alt. The failure is a
 deliberate refusal, not a gap:
 
-```
+```text
 src/services/accounts.ts:244
     if (existing.ownerHash === ch.ownerHash) {
       return { ok: false, error: "already_linked" };
@@ -123,8 +123,13 @@ value in the transaction that adds it, and the Drizzle migrator runs
 migrations in a transaction, so `ALTER TYPE tier ADD VALUE 'pending'` followed
 by `ALTER COLUMN tier SET DEFAULT 'pending'` fails with `unsafe use of new
 value of enum type`. Instead `createAccountWithCharacter`
-(`src/services/accounts.ts:194`) writes `tier: "pending"` explicitly and the
+(`src/services/accounts.ts:194`) writes the tier explicitly and the
 migration only appends the value. Same behaviour, hazard removed.
+
+That explicit write is `tier: "green"` in deploy 1 and becomes `tier:
+"pending"` in deploy 2 — see the Rollout section. Deploy 1 teaches the system
+to *handle* a pending account without any path *creating* one, so nothing in
+this PR may write `"pending"` at account creation.
 
 Appending an enum value is irreversible — Postgres cannot remove one. This
 migration is one-way. It touches no existing rows.

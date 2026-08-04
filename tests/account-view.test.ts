@@ -328,10 +328,11 @@ describe("getAdminAccountsList", () => {
     await seedAccount(ctx.db, { tier: "green" });
     await seedAccount(ctx.db, { tier: "pending" });
     await seedAccount(ctx.db, { tier: "flygd" });
+    await seedAccount(ctx.db, { tier: "blue" });
 
     const rows = await getAdminAccountsList(ctx.db, cfg, { sort: "tier" });
 
-    expect(rows.map((r) => r.tier)).toEqual(["pending", "flygd", "green"]);
+    expect(rows.map((r) => r.tier)).toEqual(["pending", "flygd", "blue", "green"]);
   });
 
   it("summarizes token health", async () => {

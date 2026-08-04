@@ -317,6 +317,7 @@ git commit -m "fix(account): the no-main rule never promotes a pending account"
 **Interfaces:**
 - Consumes: `isAuthorized`, `lockTarget` (module-private, already in the file).
 - Produces:
+
   ```ts
   export type ApproveResult =
     | { ok: true }
@@ -329,6 +330,7 @@ git commit -m "fix(account): the no-main rule never promotes a pending account"
     tier: "green" | "blue",
   ): Promise<ApproveResult>;
   ```
+
   Audit action: `tier.approved`, details `{ to, locked }`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -1216,9 +1218,19 @@ git checkout -- tsconfig.json AGENTS.md
 
 - [ ] **Step 2: Confirm nothing creates pending yet**
 
-Run: `grep -rn 'tier: "pending"' src/`
+Run: `grep -n 'tier: "' src/services/accounts.ts`
 
-Expected: **no match**. If `createAccountWithCharacter` already writes pending, Task 11 leaked into deploy 1 — move it to its own commit before merging.
+Expected: **both matches say `"green"`** — the `applyNoMainRule` write and the
+`createAccountWithCharacter` write. If either says `"pending"`, Task 11 leaked
+into deploy 1 — move it to its own commit before merging.
+
+Do not use a bare `grep -rn 'tier: "pending"' src/` for this. Deploy 1
+deliberately adds *readers* of the pending tier, so that pattern also matches
+type annotations (`src/core/role-diff.ts`, `src/services/account-view.ts`) and
+the queue-count filter argument in `src/app/admin/accounts/page.tsx` — it
+matches several times on a *correct* deploy-1 tree, so "no match" is not a
+reachable result and the check would fail whether or not Task 11 leaked. The
+account write sites are the real invariant.
 
 - [ ] **Step 3: Confirm no existing account moves**
 
