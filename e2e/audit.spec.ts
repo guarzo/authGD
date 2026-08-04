@@ -650,7 +650,9 @@ test("the empty state does not pick up the row hover tint", async ({ page, conte
   const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
   await context.addCookies([await sessionCookieFor(db, admin.id)]);
 
-  await db.insert(auditLog).values([{ actor: admin.id, action: "sync.requested", target: "all" }]);
+  await db
+    .insert(auditLog)
+    .values([{ actor: admin.id, action: "sync.requested", target: "all" }]);
 
   // One matching row plus a filter that yields none, so both a real row and
   // the empty row are on screen and can be compared under the same hover
@@ -669,7 +671,9 @@ test("the empty state does not pick up the row hover tint", async ({ page, conte
 
   await page.goto("/admin/audit?actor=nobody-by-this-name");
   const emptyRow = page.locator("tbody tr").filter({ has: page.locator(".log__empty") });
-  const restBackground = await emptyRow.evaluate((el) => getComputedStyle(el).backgroundColor);
+  const restBackground = await emptyRow.evaluate(
+    (el) => getComputedStyle(el).backgroundColor,
+  );
   await emptyRow.hover();
   const hoveredEmptyBackground = await emptyRow.evaluate(
     (el) => getComputedStyle(el).backgroundColor,
@@ -678,7 +682,9 @@ test("the empty state does not pick up the row hover tint", async ({ page, conte
   await page.goto("/admin/audit");
   const dataRow = page.locator("tbody tr").first();
   await dataRow.hover();
-  const hoveredDataBackground = await dataRow.evaluate((el) => getComputedStyle(el).backgroundColor);
+  const hoveredDataBackground = await dataRow.evaluate(
+    (el) => getComputedStyle(el).backgroundColor,
+  );
 
   expect(hoveredEmptyBackground).toBe(restBackground);
   expect(hoveredEmptyBackground).not.toBe(hoveredDataBackground);

@@ -19,7 +19,10 @@ function shortId(id: string): string {
   return id.length > 6 ? `${id.slice(0, 6)}…` : id;
 }
 
-type Part = (d: Record<string, unknown>, roleNames: ReadonlyMap<string, string>) => string;
+type Part = (
+  d: Record<string, unknown>,
+  roleNames: ReadonlyMap<string, string>,
+) => string;
 
 /** `flygd → green`, or `→ green` when the payload has no prior value. One
  * renderer shared by every transition action, so the two can't drift apart

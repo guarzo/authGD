@@ -13,15 +13,15 @@ describe("summarizeDetails", () => {
   });
 
   it("renders a labelled scalar action", () => {
-    expect(
-      summarizeDetails("admin.bootstrap_granted", { characterId: 90000001 }),
-    ).toBe("character 90000001");
+    expect(summarizeDetails("admin.bootstrap_granted", { characterId: 90000001 })).toBe(
+      "character 90000001",
+    );
   });
 
   it("renders a bare scalar action", () => {
-    expect(
-      summarizeDetails("token.invalidated", { reason: "refresh rejected" }),
-    ).toBe("refresh rejected");
+    expect(summarizeDetails("token.invalidated", { reason: "refresh rejected" })).toBe(
+      "refresh rejected",
+    );
   });
 
   it("renders an empty payload as an em dash", () => {
@@ -42,9 +42,9 @@ const ROLE_NAMES = new Map([
 
 describe("summarizeDetails, declared fields and role rendering", () => {
   it("renders a status transition with its from value", () => {
-    expect(
-      summarizeDetails("status.changed", { from: "active", to: "cryo" }),
-    ).toBe("active → cryo");
+    expect(summarizeDetails("status.changed", { from: "active", to: "cryo" })).toBe(
+      "active → cryo",
+    );
   });
 
   it("renders a status transition without from", () => {
@@ -58,9 +58,9 @@ describe("summarizeDetails, declared fields and role rendering", () => {
   });
 
   it("marks a truncated fallback instead of cutting silently", () => {
-    expect(
-      summarizeDetails("unknown.action", { a: 1, b: 2, c: 3, d: 4, e: 5 }),
-    ).toBe("a=1, b=2, c=3, +2 more");
+    expect(summarizeDetails("unknown.action", { a: 1, b: 2, c: 3, d: 4, e: 5 })).toBe(
+      "a=1, b=2, c=3, +2 more",
+    );
   });
 
   it("does not mark a fallback that fits", () => {
@@ -110,7 +110,11 @@ describe("summarizeDetails, declared fields and role rendering", () => {
 
   it("does not throw on a role payload that is not an array", () => {
     expect(
-      summarizeDetails("discord.role_changed", { added: "300", removed: null }, ROLE_NAMES),
+      summarizeDetails(
+        "discord.role_changed",
+        { added: "300", removed: null },
+        ROLE_NAMES,
+      ),
     ).toBe("—");
   });
 });
