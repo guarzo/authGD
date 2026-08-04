@@ -9,8 +9,9 @@ import { RuleHead, Scroller, SiteHeader, Status, Tier } from "@/app/_components/
 import { RelativeTime } from "@/app/_components/relative-time";
 import { formatAgo } from "@/app/_components/format-ago";
 import { Submit } from "@/app/_components/submit";
+import { UnlinkButton } from "@/app/_components/unlink-button";
 import { ContactState } from "./contact-state";
-import { setMainAction, unlinkAction } from "./actions";
+import { setMainAction, unlinkAction, wakeSelfAction } from "./actions";
 
 // Reads the session cookie and hits the DB on every request; getConfig() also
 // requires env vars that aren't present at build time, so this route must
@@ -94,8 +95,8 @@ export default async function AccountPage({
   // two identical four-line paragraphs in a table column is noise, and the note
   // is about the column as a whole, not about one character.
   //
-  // Non-targets are excluded: their cell reads "—", not a state the note
-  // explains. Telling a blue member authGD manages a contact label on their
+  // Non-targets are excluded: their cell reads "— not managed", not a state the
+  // note explains. Telling a blue member authGD manages a contact label on their
   // characters describes something that never happens to them.
   const showContactsNote = view.characters.some(
     (c) => c.contactsTarget && contactsNoteApplies(c.contactSyncResult),
@@ -138,7 +139,30 @@ export default async function AccountPage({
           <dt>Tier</dt>
           <dd data-field="tier" className="facts__lead">
             <Tier tier={view.tier} size="lead" />
-            {view.status === "cryo" && <Status tone="warn">cryo</Status>}
+            {/* Cryo's copy and its "wake me" control fold into this same dd
+                rather than a row of their own: `.facts` is a grid, and a
+                `.visually-hidden` dt in that grid is taken out of flow by its
+                own `position: absolute`, which shifts every dt/dd after it
+                into the wrong track. `.facts__lead` already wraps, so the
+                sentence and button land on a second line within the value
+                column instead of inventing a row the grid can't place. */}
+            {view.status === "cryo" && (
+              <>
+                {/* Neutral, not --signal-warn: cryo is a pause the member
+                    asked for, not a fault. DESIGN.md's amber stays on the
+                    admin table, where cryo is a scanning target rather than a
+                    fact about the member's own state. */}
+                <Status>cryo</Status>
+                <span className="dim">
+                  Paused at your request. Tier is retained while you&rsquo;re away.
+                </span>
+                <form action={wakeSelfAction} className="inline-form">
+                  <Submit className="btn" pendingLabel="waking…">
+                    wake me
+                  </Submit>
+                </form>
+              </>
+            )}
           </dd>
 
           <dt>Discord</dt>
@@ -149,7 +173,12 @@ export default async function AccountPage({
               // with the tier badge for the eye.
               <Status>linked</Status>
             ) : (
-              <a href="/auth/discord/link">Link Discord</a>
+              // Raised to the default button grade: high-value but was the
+              // weakest affordance on the page. Not gold — DESIGN.md rations
+              // that to one primary action per view, "Add character" below.
+              <a className="btn" href="/auth/discord/link">
+                Link Discord
+              </a>
             )}
           </dd>
         </dl>
@@ -180,7 +209,7 @@ export default async function AccountPage({
                 <th scope="col">Name</th>
                 <th scope="col">Token</th>
                 <th scope="col" aria-describedby={CONTACTS_NOTE_ID}>
-                  Standings
+                  Contacts
                 </th>
                 <th scope="col">Map</th>
                 <th scope="col">
@@ -248,9 +277,7 @@ export default async function AccountPage({
                           action={unlinkAction.bind(null, c.id)}
                           className="inline-form"
                         >
-                          <Submit className="btn btn--quiet btn--micro btn--danger-quiet">
-                            unlink
-                          </Submit>
+                          <UnlinkButton />
                         </form>
                       )}
                     </div>
@@ -294,9 +321,13 @@ export default async function AccountPage({
           </>
         )}
 
-        {/* The closing beat. Decorative, so alt is empty; drawn at 560px from a
-            1120px asset cut for exactly this, never a scaled-down master. */}
-        <p className="closing">
+        {/* The closing beat. Decorative, so alt is empty; drawn from a
+            1120px asset cut for exactly this, never a scaled-down master.
+            A single-character account has little content above it, and the
+            full-size artwork dwarfed it; `.closing--compact` asks the same
+            asset for a smaller frame rather than cropping or downscaling it,
+            same technique the full size already uses, just a smaller target. */}
+        <p className={`closing${view.characters.length <= 1 ? " closing--compact" : ""}`}>
           <img
             src="/brand/lander-moon.webp"
             alt=""

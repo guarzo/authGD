@@ -28,11 +28,11 @@ export function ContactState({
   target: boolean;
 }) {
   if (!target) {
-    return (
-      <span className="dim" aria-label="not applicable">
-        —
-      </span>
-    );
+    // The em dash alone told sighted users nothing that the "not applicable"
+    // aria-label already told screen-reader users; say it in text so both
+    // groups get the same explanation instead of the accessible one doing
+    // all the work.
+    return <span className="dim">— not managed</span>;
   }
   if (result === null) return <Status tone="off">not yet run</Status>;
   if (result === "ok") return <Status tone="ok">ok</Status>;

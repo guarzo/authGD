@@ -65,7 +65,7 @@ test("the contacts note describes the column and only shows where it explains so
   // It hangs off the column header as an accessible description, not as a
   // standing footnote at the foot of the page, and not as a title attribute
   // that no keyboard user could ever summon.
-  await expect(page.getByRole("columnheader", { name: "Standings" })).toHaveAttribute(
+  await expect(page.getByRole("columnheader", { name: "Contacts" })).toHaveAttribute(
     "aria-describedby",
     "contacts-note",
   );
@@ -86,7 +86,7 @@ test("the contacts note describes the column and only shows where it explains so
   `);
   await page.reload();
   await expect(page.locator("#contacts-note")).toHaveClass(/visually-hidden/);
-  await expect(page.getByRole("columnheader", { name: "Standings" })).toHaveAttribute(
+  await expect(page.getByRole("columnheader", { name: "Contacts" })).toHaveAttribute(
     "aria-describedby",
     "contacts-note",
   );
