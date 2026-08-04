@@ -1,21 +1,25 @@
 import { describe, expect, it } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ContactState } from "@/app/account/contact-state";
+import { ContactRemedy } from "@/app/account/contact-state";
 
 // The job stores near-miss candidates as a JSON array (src/core/contact-label.ts),
 // and tests/contacts-job.test.ts only asserts that encoded value at the DB
 // layer. This is the only seam that covers what the member actually reads: a
 // two-candidate detail must render as two separately-quoted names, never as
 // one quoted blob that isn't the name of any label the member has.
-describe("ContactState (label_mismatch render)", () => {
+//
+// Renders ContactRemedy directly rather than ContactState: the status token
+// and the explanatory prose are separate exports of the same module (the
+// prose lives below the table on the account page, not inside the cell), and
+// this suite only covers what the member reads to fix the state.
+describe("ContactRemedy (label_mismatch render)", () => {
   const render = (detail: string | null) =>
     renderToStaticMarkup(
-      createElement(ContactState, {
+      createElement(ContactRemedy, {
         result: "label_mismatch",
         detail,
         label: "AuthGD",
-        target: true,
       }),
     );
   const encoded = (...candidates: string[]) => render(JSON.stringify(candidates));
@@ -87,18 +91,93 @@ describe("ContactState (label_mismatch render)", () => {
 // without the quoted `literal` treatment, a member is told to create a label
 // whose exact characters they cannot see — the incident this feature exists to
 // prevent, one branch over.
-describe("ContactState (missing_label render)", () => {
+describe("ContactRemedy (missing_label render)", () => {
   it("quotes the required label so its whitespace is visible", () => {
     const html = renderToStaticMarkup(
-      createElement(ContactState, {
+      createElement(ContactRemedy, {
         result: "missing_label",
         detail: null,
         label: "AuthGD ",
-        target: true,
       }),
     );
     expect(html).toContain("Create a contact label named");
     expect(html).toContain('class="literal"');
     expect(html).toContain("&quot;AuthGD &quot;");
+  });
+});
+
+// The six job-failure codes that used to fall through to a bare, alarm-red
+// code with zero guidance (contact-state.tsx previously did
+// `result.replace(/_/g, " ")`). Each now gets one of three treatments.
+describe("ContactRemedy (job-failure codes)", () => {
+  const render = (result: string, showReauth = true) =>
+    renderToStaticMarkup(
+      createElement(ContactRemedy, { result, detail: null, label: "AuthGD", showReauth }),
+    );
+
+  it.each(["token_invalid", "missing_scope", "needs_reauth"])(
+    "tells the member to re-authorize for %s",
+    (result) => {
+      const html = render(result);
+      expect(html).toContain("re-authorize");
+      expect(html).toContain('href="/auth/eve/link"');
+    },
+  );
+
+  // `/auth/eve/link` links a character to *the clicking user's* account, so the
+  // control is only ever correct for the character's own owner. The admin
+  // accounts table renders this same component for other members' characters
+  // and must never get a link that would attach one to the admin instead.
+  it.each(["token_invalid", "missing_scope", "needs_reauth"])(
+    "withholds the control but keeps the reason for %s when not self-service",
+    (result) => {
+      const html = render(result, false);
+      expect(html).not.toContain("href=");
+      expect(html).toContain("Re-linking the character clears it.");
+    },
+  );
+
+  it("defaults to withholding the re-authorize control", () => {
+    const html = renderToStaticMarkup(
+      createElement(ContactRemedy, {
+        result: "token_invalid",
+        detail: null,
+        label: "AuthGD",
+      }),
+    );
+    expect(html).not.toContain("href=");
+  });
+
+  it.each(["token_refresh_failed", "sync_failed"])(
+    "reads as transient and automatic for %s, with nothing to do",
+    (result) => {
+      const html = render(result);
+      expect(html).toContain("automatically");
+      expect(html).toContain("Nothing to do here");
+      expect(html).not.toContain("re-authorize");
+    },
+  );
+
+  it("attributes dry_run to an operator setting, not the member", () => {
+    const html = render("dry_run");
+    expect(html).toContain("operator setting");
+    expect(html).toContain("admin");
+    expect(html).not.toContain("re-authorize");
+  });
+
+  it("gives an unrecognised code a sentence instead of a bare code", () => {
+    const html = render("some_future_code");
+    expect(html).toContain("Unrecognized result");
+    expect(html).toContain("&quot;some_future_code&quot;");
+    expect(html).toContain("admin");
+  });
+
+  it("renders nothing for ok or a null result", () => {
+    expect(render("ok")).toBe("");
+    expect(
+      renderToStaticMarkup(
+        createElement(ContactRemedy, { result: null, detail: null, label: "AuthGD" }),
+      ),
+    ).toBe("");
   });
 });

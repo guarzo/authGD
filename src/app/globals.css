@@ -330,6 +330,15 @@ a:hover {
   margin-top: var(--s-2);
 }
 
+/* The account page's one-line verdict: whether there is anything below the
+   fold worth reading. It is always a `.st` Status token, same as everything
+   else this page calls state, so "the mono word is what the system computed"
+   holds here too. Layout only, no colour of its own — that comes from the
+   token's own tone (or lack of one for the quiet states). */
+.verdict {
+  margin-top: var(--s-3);
+}
+
 /* --- Section header ----------------------------------------------------- */
 /* The signature component: a typed label, then a hairline to the edge. */
 
@@ -1710,6 +1719,19 @@ h3.rule-head__label {
   margin-bottom: var(--s-4);
   font-size: 0.8125rem;
   color: var(--ink-faint);
+}
+
+/* A run of the same notes placed *after* the table instead of before it. The
+   caption position needs no top margin, so a .table-note following a table's
+   last row butts straight against the border; this restores the gap without
+   changing the caption case. The last note's own bottom margin is dropped so
+   the group spaces against what follows it, not doubly. */
+.table-notes {
+  margin-top: var(--s-4);
+}
+
+.table-notes .table-note:last-child {
+  margin-bottom: 0;
 }
 
 /* The hairline runs the full width of the content column, so it terminates on

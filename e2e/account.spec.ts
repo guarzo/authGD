@@ -194,7 +194,7 @@ test("unlink arms on the first click, confirms on the second, and Escape disarms
   ).toHaveLength(1);
 });
 
-test("last pushed reports per surface, with an unlinked Discord called out", async ({
+test("last pushed reports per surface, and drops Discord when it isn't linked", async ({
   page,
   context,
 }) => {
@@ -221,9 +221,10 @@ test("last pushed reports per surface, with an unlinked Discord called out", asy
   await expect(row("Standings")).toContainText(/next \d\d:05$/);
   await expect(row("Map")).toContainText("not yet run"); // scheduled, never run
   await expect(row("Map")).toContainText(/next \d\d:10$/);
-  // Nothing to push, so no cadence either: a different state from "not run".
-  await expect(row("Discord")).toContainText("not linked");
-  await expect(row("Discord")).not.toContainText("next");
+  // Nothing to push, so the row is dropped entirely rather than shown as an
+  // inert "not linked" token: STANDING above already states the same fact
+  // with the fix (Link Discord) attached, ~800px away.
+  await expect(pushed.locator("dt:text-is('Discord')")).toHaveCount(0);
 
   // The "next" column lines up across rows despite the states differing in
   // width, which is the whole point of reserving a column for them.
