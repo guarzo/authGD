@@ -545,7 +545,12 @@ test("an account with no main is still identified in the pinned column", async (
   // Accessible name: Disclosure's row shape puts the label in aria-label, which
   // overrides the visible text for a screen reader, so the character name has
   // to survive there too rather than being spoken as a bare "no main".
-  await expect(toggleOf(samRow)).toHaveAccessibleName(/^Sam Alt ·no main/);
+  // Anchored on the full visible string, not a prefix: a prefix regex passes
+  // whether or not the "(+1)" count survives into the name, which is exactly
+  // the WCAG 2.5.3 gap it is supposed to be guarding.
+  await expect(toggleOf(samRow)).toHaveAccessibleName(
+    /^Sam Alt ·no main \(\+1\) — crew and controls$/,
+  );
   await expect(rowFor(page, `acct ${orphan.id.slice(0, 8)}`)).toHaveCount(1);
   // The old fallback was a bare <em>no main</em>, identical on every such row.
   await expect(page.locator(`${ROWS} em`)).toHaveCount(0);
@@ -612,10 +617,12 @@ test("a blank character name never becomes a row's identity", async ({
   for (const l of labels) expect(l).not.toMatch(/^\s*—/);
 
   // Falls through to the non-blank character, not to "". The "·no main" marker
-  // still applies: the row is named by a character that is not its main.
+  // still applies: the row is named by a character that is not its main. The
+  // "(+1)" is the blank-named sibling being counted, and it has to be in the
+  // accessible name too — it is in the visible label (WCAG 2.5.3).
   await expect(page.getByLabel("Note for Real Name")).toHaveCount(1);
   await expect(summaries.filter({ hasText: "Real Name" })).toHaveAccessibleName(
-    /^Real Name ·no main —/,
+    /^Real Name ·no main \(\+1\) — crew and controls$/,
   );
 
   // Nothing non-blank to borrow, so the account id has to be used, not skipped.
@@ -629,7 +636,7 @@ test("a blank character name never becomes a row's identity", async ({
   // name, so the row borrows its alt and is marked as having no main...
   await expect(page.getByLabel("Note for Spaced Alt")).toHaveCount(1);
   await expect(summaries.filter({ hasText: "Spaced Alt" })).toHaveAccessibleName(
-    /^Spaced Alt ·no main —/,
+    /^Spaced Alt ·no main \(\+1\) — crew and controls$/,
   );
   // ...and with nothing to borrow it falls all the way to the account id rather
   // than pinning a cell that looks empty.

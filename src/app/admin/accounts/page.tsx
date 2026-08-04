@@ -338,7 +338,11 @@ function AccountRow({
   // Disclosure (as="row") puts its label on the toggle as `aria-label`, which
   // overrides the visible text, so this mirrors that text verbatim — an
   // accessible name has to stay a superset of its visible label (WCAG 2.5.3).
-  const pinLabel = firstName ? `${identity} ·no main` : identity;
+  // That includes the "(+N)" alt count in the summary below: without it a
+  // voice-control user reading "Sam Alt no main plus one" off the screen
+  // matches nothing, since the spoken name stops before the count.
+  const altCount = r.characters.length > 1 ? ` (+${r.characters.length - 1})` : "";
+  const pinLabel = `${firstName ? `${identity} ·no main` : identity}${altCount}`;
 
   return (
     <Disclosure
