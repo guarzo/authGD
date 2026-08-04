@@ -40,9 +40,15 @@ export function parseLootPaste(raw: string): ParsedLootLine[] {
         qty = parseQty(suffixMatch[2]);
       } else {
         const tabParts = line.split(/\t+/);
-        const lastTabPart = tabParts[tabParts.length - 1].trim();
-        if (tabParts.length >= 2 && /^[\d,]+$/.test(lastTabPart)) {
-          qty = parseQty(lastTabPart);
+        // The SECOND field, never the last. EVE's inventory window copies more
+        // than two tab-separated columns (Name / Qty / Est. Price, and wider
+        // variants), so reading the last numeric field takes a price as the
+        // quantity — "Tritanium\t100\t500,000" would parse as qty 500000 and
+        // overvalue the line 5000x, silently, with no unresolved-item warning
+        // to catch it. Column two is the quantity in every layout EVE emits.
+        const secondTabPart = tabParts[1]?.trim() ?? "";
+        if (tabParts.length >= 2 && /^[\d,]+$/.test(secondTabPart)) {
+          qty = parseQty(secondTabPart);
           name = tabParts[0];
         } else {
           const commaMatch = line.match(QTY_COMMA);

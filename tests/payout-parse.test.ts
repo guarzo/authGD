@@ -71,6 +71,19 @@ describe("parseLootPaste", () => {
       expected: [{ name: "Foo", qty: 12 }],
     },
     {
+      // EVE's inventory window copies a price column too. The quantity is
+      // column two; reading the last numeric column would take 500,000 as the
+      // quantity and overvalue this line 5000x.
+      label: "tab-separated with a trailing price column",
+      input: "Tritanium\t100\t500,000",
+      expected: [{ name: "Tritanium", qty: 100 }],
+    },
+    {
+      label: "tab-separated with several trailing columns",
+      input: "Nyx\t1\tSupercarrier\tShip\t1,300,000.00 m3\t22,000,000,000",
+      expected: [{ name: "Nyx", qty: 1 }],
+    },
+    {
       label: "comma-separated name and qty",
       input: "Foo, 12",
       expected: [{ name: "Foo", qty: 12 }],
