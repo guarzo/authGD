@@ -10,7 +10,7 @@ import { useEffect, useRef, type MouseEvent } from "react";
  * the element the member just pressed moves focus to `<body>`, and because
  * every one of these actions ends in a server-action `redirect()` — a client
  * navigation with no document load — there is nothing afterwards that puts it
- * back. `error.tsx:213-222` already refuses `disabled` for exactly this reason.
+ * back. `error.tsx:185-189` already refuses `disabled` for exactly this reason.
  * So the button keeps `aria-busy`, keeps focus, and stops a second submit here
  * instead.
  *
@@ -54,7 +54,16 @@ export function useSubmitGuard(pending: boolean) {
       return false;
     }
     const form = e.currentTarget.form;
-    if (form && !form.checkValidity()) return false;
+    // Latch only where a submit is actually about to happen. A click the
+    // browser blocks on constraint validation produces no submit and therefore
+    // no `pending` transition to release the latch again, which would leave the
+    // button permanently dead — and the same is true of a button with no form
+    // at all. `noValidate` is checked because it is what decides whether the
+    // browser blocks: on such a form `checkValidity()` still reports the fields
+    // invalid but the submit goes through anyway, and skipping the latch there
+    // would quietly turn the guard off.
+    if (!form) return false;
+    if (!form.noValidate && !form.checkValidity()) return false;
     inFlight.current = true;
     return true;
   };
