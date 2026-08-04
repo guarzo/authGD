@@ -40,3 +40,35 @@ export function matchContactLabel(
 
   return candidates.length > 0 ? { kind: "near_miss", candidates } : { kind: "absent" };
 }
+
+/**
+ * Near-miss candidates are persisted to `contact_sync_state.last_detail` as a
+ * JSON array, not as a delimited string. Every candidate is a fold-equal
+ * variant of STANDINGS_LABEL, so if that label contains the delimiter, EVERY
+ * candidate does — a `", "` join then round-trips into a list of substrings
+ * that name no label the member actually has, which is the exact defect this
+ * feature exists to fix.
+ */
+export function encodeLabelCandidates(candidates: string[]): string {
+  return JSON.stringify(candidates);
+}
+
+/**
+ * Tolerant by design, because it reads a column two formats have been written
+ * to: rows persisted before the JSON encoding above still hold a `", "` join,
+ * and the contacts job only rewrites a row when it next runs for that
+ * character. Anything that is not a JSON array of strings falls back to the
+ * legacy split, so an old row renders as it did before rather than as raw JSON.
+ */
+export function parseLabelCandidates(detail: string | null): string[] {
+  if (!detail) return [];
+  try {
+    const parsed: unknown = JSON.parse(detail);
+    if (Array.isArray(parsed) && parsed.every((c) => typeof c === "string")) {
+      return parsed;
+    }
+  } catch {
+    // Not JSON — legacy row; fall through to the delimiter split below.
+  }
+  return detail.split(", ");
+}

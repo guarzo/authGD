@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { matchContactLabel } from "@/core/contact-label";
+import {
+  encodeLabelCandidates,
+  matchContactLabel,
+  parseLabelCandidates,
+} from "@/core/contact-label";
 
 const label = (labelId: number, labelName: string) => ({ labelId, labelName });
 
@@ -63,5 +67,39 @@ describe("matchContactLabel", () => {
 
   it("is absent for an empty label list", () => {
     expect(matchContactLabel([], "AuthGD")).toEqual({ kind: "absent" });
+  });
+});
+
+describe("label candidate encoding", () => {
+  const roundTrip = (candidates: string[]) =>
+    parseLabelCandidates(encodeLabelCandidates(candidates));
+
+  it("round-trips names containing the legacy comma delimiter", () => {
+    expect(roundTrip(["Auth, GD", "auth, gd"])).toEqual(["Auth, GD", "auth, gd"]);
+  });
+
+  it("round-trips surrounding and repeated whitespace", () => {
+    expect(roundTrip([" AuthGD", "Auth  GD", "AuthGD "])).toEqual([
+      " AuthGD",
+      "Auth  GD",
+      "AuthGD ",
+    ]);
+  });
+
+  it("reads a pre-JSON row as the legacy delimiter split", () => {
+    expect(parseLabelCandidates("AUTHGD, authgd ")).toEqual(["AUTHGD", "authgd "]);
+  });
+
+  // JSON.parse accepts scalars and objects too, so "is it JSON" is not enough
+  // of a check: only an array of strings may be trusted as candidate names.
+  it("rejects JSON that is not an array of strings", () => {
+    expect(parseLabelCandidates("42")).toEqual(["42"]);
+    expect(parseLabelCandidates('{"a":1}')).toEqual(['{"a":1}']);
+    expect(parseLabelCandidates("[1,2]")).toEqual(["[1,2]"]);
+  });
+
+  it("reads null and empty as no candidates", () => {
+    expect(parseLabelCandidates(null)).toEqual([]);
+    expect(parseLabelCandidates("")).toEqual([]);
   });
 });

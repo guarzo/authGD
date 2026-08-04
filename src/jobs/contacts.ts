@@ -2,7 +2,7 @@ import { and, eq } from "drizzle-orm";
 import type { Config } from "@/config";
 import type { Db, Dbx } from "@/db";
 import { character, contactSyncState } from "@/db/schema";
-import { matchContactLabel } from "@/core/contact-label";
+import { encodeLabelCandidates, matchContactLabel } from "@/core/contact-label";
 import { diffContacts } from "@/core/contacts-diff";
 import { EsiError, type EsiClient } from "@/lib/esi/client";
 import { getFlygdCharacters, type FlygdCharacter } from "@/services/desired";
@@ -137,7 +137,7 @@ export async function runContactsJob(deps: {
             target.characterId,
             match.kind === "near_miss" ? "label_mismatch" : "missing_label",
             false,
-            match.kind === "near_miss" ? match.candidates.join(", ") : null,
+            match.kind === "near_miss" ? encodeLabelCandidates(match.candidates) : null,
           );
           continue;
         }
