@@ -22,7 +22,7 @@ import {
   deletePool,
   setItemPrice,
 } from "@/services/payout-loot";
-import { centsToIsk, iskToCents } from "@/core/payout-split";
+import { MAX_MONEY_CENTS, centsToIsk, iskToCents } from "@/core/payout-split";
 import { setupTestDb, truncateAll } from "./helpers/db";
 import { expectCheckViolation } from "./helpers/constraints";
 import { seedAccount } from "./helpers/seed";
@@ -539,6 +539,20 @@ describe("setItemPrice", () => {
       ctx.db.transaction((tx) => setItemPrice(tx, green.id, itemId, "9.00")),
     ).rejects.toThrow(PayoutForbiddenError);
   });
+
+  it("audits the reprice against the operation uuid, not the item or pool", async () => {
+    const { operatorId, operationId, poolId, itemId } = await seedPricedItem(2);
+    await ctx.db.transaction((tx) => setItemPrice(tx, operatorId, itemId, "9.00"));
+
+    const audits = await ctx.db
+      .select()
+      .from(auditLog)
+      .where(eq(auditLog.action, "payout.item_repriced"));
+    expect(audits).toHaveLength(1);
+    expect(audits[0].target).toBe(operationId); // the operation uuid, not the item or pool
+    expect(audits[0].target).not.toBe(itemId);
+    expect(audits[0].target).not.toBe(poolId);
+  });
 });
 
 describe("addAppraisedPool money bounds", () => {
@@ -575,5 +589,36 @@ describe("addAppraisedPool money bounds", () => {
         }),
       ),
     ).rejects.toThrow(/largest value this system can record/);
+  });
+
+  it("accepts a pool total of exactly MAX_MONEY_CENTS, the column's own ceiling", async () => {
+    const { operatorId, operationId } = await seedOperation();
+    // Pins `>` against a future `>=` typo in assertWithinMoneyRange: the
+    // rejection test above only proves one-past-the-bound fails, not that the
+    // bound itself still succeeds.
+    const boundaryValue = centsToIsk(MAX_MONEY_CENTS);
+    const { poolId } = await ctx.db.transaction((tx) =>
+      addAppraisedPool(tx, operatorId, operationId, {
+        rawPaste: "1x At the ceiling",
+        pricingMode: "sell_best",
+        stationId: 60003760,
+        appraisal: {
+          items: [
+            {
+              typeId: 34,
+              name: "At the ceiling",
+              qty: 1,
+              unitPrice: "0.00",
+              totalValue: boundaryValue,
+              priceSource: "triff",
+            },
+          ],
+          dropped: [],
+          totalValue: boundaryValue,
+        },
+      }),
+    );
+    const [pool] = await ctx.db.select().from(lootPool).where(eq(lootPool.id, poolId));
+    expect(pool.totalValue).toBe(boundaryValue);
   });
 });

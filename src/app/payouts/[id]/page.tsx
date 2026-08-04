@@ -67,6 +67,8 @@ const ERRORS: Record<string, string> = {
     "A flat pool needs a note saying where the number came from. It is the only record of why this total is what it is.",
   total_invalid:
     "Total must be a plain number like 12345.67 — no commas, and no shorthand like 1e5.",
+  price_invalid:
+    "Price must be a plain number like 12.34 — no commas, and at most two decimals. The item price was left as it was.",
   shares_required: "Shares cannot be blank. The roster value was left as it was.",
   shares_invalid:
     "Shares must be a plain number like 1 or 1.5. The roster value was left as it was.",
@@ -527,6 +529,11 @@ export default async function PayoutOperationPage({
                                 <input
                                   className="field"
                                   name="unitPrice"
+                                  type="number"
+                                  inputMode="decimal"
+                                  min="0"
+                                  step="0.01"
+                                  required
                                   defaultValue={item.unitPrice}
                                   aria-label={`Unit price for ${item.name}`}
                                 />

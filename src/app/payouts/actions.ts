@@ -279,7 +279,7 @@ export async function setItemPriceAction(
   // escape hatch for genuinely sub-cent heaps is the flat-total pool, which
   // takes a pool value directly and skips per-item pricing.
   if (!/^\d+(\.\d{1,2})?$/.test(unitPrice)) {
-    throw new Error("a price must be a plain number with at most 2 decimals, like 12.34");
+    operationFailed(operationId, "price_invalid");
   }
   await getDb().transaction((dbtx) => setItemPrice(dbtx, actor, itemId, unitPrice));
   revalidateOperation(operationId);

@@ -923,6 +923,71 @@ test("override an item price, finalize, pay, revert, and pay again", async ({
   expect(reverted).toHaveLength(1);
 });
 
+/*
+ * The unit-price control is the other money input on the page, alongside
+ * shares (see "bad shares land on the page, not the error boundary" above) —
+ * a malformed value must land back on the page with a specific message
+ * rather than on error.tsx, and the stored price must survive the rejection.
+ */
+test("bad unit price lands on the page, not the error boundary", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "FC Price",
+    tier: "flygd",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+
+  const [op] = await db
+    .insert(payoutOperation)
+    .values({
+      name: "Price guard",
+      occurredAt: new Date("2026-08-01"),
+      corpSharePct: "0",
+      createdBy: operator.id,
+    })
+    .returning();
+  const [poolRow] = await db
+    .insert(lootPool)
+    .values({
+      operationId: op.id,
+      valuationSource: "appraised",
+      pricingMode: "sell_best",
+      stationId: 60003760,
+      totalValue: "100.00",
+    })
+    .returning();
+  await db.insert(lootItem).values({
+    poolId: poolRow.id,
+    typeId: 34,
+    name: "Tritanium",
+    qty: 10,
+    unitPrice: "10.00",
+    totalValue: "100.00",
+    priceSource: "triff",
+  });
+
+  await page.goto(`/payouts/${op.id}`);
+  await page.locator("summary", { hasText: "Pool 1 items (1)" }).click();
+
+  // type=number, so the browser refuses to submit text or a comma-grouped
+  // value at all — bypassClientGuard drives it the way a scripted client
+  // (or EVE's own comma-grouped paste) would.
+  await bypassClientGuard(
+    page.getByLabel("Unit price for Tritanium", { exact: true }),
+    "1,234.00",
+  );
+  await page.getByRole("button", { name: "save unit price for Tritanium" }).click();
+  await expect(page.locator("p.notice--bad")).toContainText("plain number like 12.34");
+  await expect(page.getByText("Something broke")).toHaveCount(0);
+  // The stored value survived the rejection.
+  await expect(page.getByLabel("Unit price for Tritanium", { exact: true })).toHaveValue(
+    "10.00",
+  );
+});
+
 /**
  * The datalist is inert HTML, not a type-ahead: it ships with the page, the
  * browser filters it, and the form submits without JavaScript. This asserts
