@@ -423,8 +423,13 @@ export default async function AdminAuditPage({
             })}
             {rows.length === 0 && (
               <tr>
+                {/* The cell spans five fixed-width columns, so at 320px its box
+                    is far wider than the scroller and the text used to wrap
+                    out of view. The inner span pins to the scroller's visible
+                    left edge and wraps within it; the cell keeps its layout
+                    width. */}
                 <td className="log__empty" colSpan={5}>
-                  {emptyMessage}
+                  <span className="log__empty-text">{emptyMessage}</span>
                 </td>
               </tr>
             )}

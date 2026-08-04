@@ -565,7 +565,7 @@ h3.rule-head__label {
   background: none;
 }
 
-.log tbody tr:hover {
+.log tbody tr:not(:has(.log__empty)):hover {
   background: color-mix(in oklab, var(--hull-hi) 55%, transparent);
 }
 
@@ -573,6 +573,31 @@ h3.rule-head__label {
   padding: var(--s-6) var(--s-4);
   text-align: center;
   color: var(--ink-faint);
+}
+
+/* The empty cell spans every column, so under `table-layout: fixed` its box is
+   as wide as the whole table. `inline-block` would still center inside that
+   full width (the parent's `text-align: center` aligns the box itself, not
+   just its text), landing the message off to the right at narrow viewports.
+   `display: block` opts the span out of that centering -- a block box starts
+   at its container's left edge regardless of the parent's text-align -- and
+   sticky-pinning it to the scroll container's left edge keeps the message on
+   screen at every scroll position instead of scrolling away with the wide
+   cell.
+
+   `100vw` alone still overshoots: the span sits inside `.page`'s own gutter
+   (`--s-5` at its widest, `--s-4` once the narrow media query takes over) plus
+   the cell's own padding, so it is never actually flush with the viewport
+   edge. Subtracting twice `--s-5` -- the larger of the two gutter values --
+   is a conservative bound rather than an exact one, on purpose: undershooting
+   the box a little just narrows the message, where overshooting it is the
+   overflow this rule exists to prevent. */
+.log__empty-text {
+  position: sticky;
+  left: 0;
+  display: block;
+  max-width: calc(100vw - 2 * var(--s-5));
+  text-align: center;
 }
 
 /* Shrink-to-content in an auto-layout table. Applied to every column except the

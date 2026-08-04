@@ -623,3 +623,60 @@ test("a repeated filter param does not break the page", async ({ page, context }
   // filters render as a dim aside on the rule head (page.tsx:331), not chips.
   await expect(page.getByText("actor: beta")).toBeVisible();
 });
+
+test("the empty state is readable at 320px", async ({ page, context }) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+
+  await page.setViewportSize({ width: 320, height: 800 });
+  await page.goto("/admin/audit?actor=nobody-by-this-name");
+
+  const geometry = await page.evaluate(() => {
+    const cell = document.querySelector(".log__empty");
+    const scroller = document.querySelector(".scroller");
+    if (!cell || !scroller) return null;
+    const inner = cell.firstElementChild ?? cell;
+    return {
+      innerRight: Math.round(inner.getBoundingClientRect().right),
+      scrollerRight: Math.round(scroller.getBoundingClientRect().right),
+    };
+  });
+
+  expect(geometry).not.toBeNull();
+  expect(geometry!.innerRight).toBeLessThanOrEqual(geometry!.scrollerRight);
+});
+
+test("the empty state does not pick up the row hover tint", async ({ page, context }) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+
+  await db.insert(auditLog).values([{ actor: admin.id, action: "sync.requested", target: "all" }]);
+
+  // One matching row plus a filter that yields none, so both a real row and
+  // the empty row are on screen and can be compared under the same hover
+  // rule. Colour assertions are brittle -- a token rename would break this
+  // without changing behavior -- but it is the only way to automate "hovering
+  // this row must not look like hovering a real one", which is the actual
+  // regression this task fixes, so it is worth keeping.
+  //
+  // Background-color transitions over --dur-color (140ms), so a wait is
+  // needed after each hover -- reading getComputedStyle immediately would
+  // sometimes catch the mid-transition value rather than the settled one.
+  await page.goto("/admin/audit?actor=nobody-by-this-name");
+  const emptyRow = page.locator("tbody tr").filter({ has: page.locator(".log__empty") });
+  const restBackground = await emptyRow.evaluate((el) => getComputedStyle(el).backgroundColor);
+  await emptyRow.hover();
+  await page.waitForTimeout(200);
+  const hoveredEmptyBackground = await emptyRow.evaluate(
+    (el) => getComputedStyle(el).backgroundColor,
+  );
+
+  await page.goto("/admin/audit");
+  const dataRow = page.locator("tbody tr").first();
+  await dataRow.hover();
+  await page.waitForTimeout(200);
+  const hoveredDataBackground = await dataRow.evaluate((el) => getComputedStyle(el).backgroundColor);
+
+  expect(hoveredEmptyBackground).toBe(restBackground);
+  expect(hoveredEmptyBackground).not.toBe(hoveredDataBackground);
+});
