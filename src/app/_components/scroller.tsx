@@ -31,11 +31,23 @@ export function Scroller({
 }) {
   const [atStart, setAtStart] = useState(true);
   const [atEnd, setAtEnd] = useState(true);
+  // Whether there is any scroll range at all, on either axis. Separate from
+  // atStart/atEnd, which answer "which edge fade should show" and are both
+  // true for a region that simply fits — the same reading a `tall` region
+  // gives when it overflows vertically and not horizontally.
+  //
+  // Starts true, and the effect below takes the stop away rather than granting
+  // it. The server cannot measure, so the alternative starts every region at
+  // `tabIndex={-1}` and leaves the overflow unreachable by keyboard until
+  // hydration lands — a real loss of access traded for a cosmetic one. This
+  // way the worst case is a redundant stop for one frame.
+  const [scrollable, setScrollable] = useState(true);
 
   const measure = useCallback((el: HTMLDivElement) => {
-    const { scrollLeft, scrollWidth, clientWidth } = el;
+    const { scrollLeft, scrollWidth, clientWidth, scrollHeight, clientHeight } = el;
     setAtStart(scrollLeft <= 0);
     setAtEnd(scrollLeft + clientWidth >= scrollWidth - 1);
+    setScrollable(scrollWidth > clientWidth + 1 || scrollHeight > clientHeight + 1);
   }, []);
 
   const ref = useRef<HTMLDivElement | null>(null);
@@ -66,7 +78,15 @@ export function Scroller({
         className={tall ? "scroller scroller--tall" : "scroller"}
         role="region"
         aria-label={label}
-        tabIndex={0}
+        // A scroll container earns a tab stop only while it has something to
+        // scroll. The sync page opens one of these per expanded job row, and
+        // at desktop width the runs table usually fits its region — so an
+        // unconditional stop put several dead stops between an admin and the
+        // Re-run button they came for, each announcing "…runs, region". The
+        // observer below already corrects this the moment a collapsed row
+        // opens or the content widens. `role="region"` and the label stay
+        // either way: it is still worth having in the landmark list.
+        tabIndex={scrollable ? 0 : -1}
         onScroll={(e) => measure(e.currentTarget)}
       >
         {children}

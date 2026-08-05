@@ -371,10 +371,12 @@ test("the fan-out reports back, and Refresh clears the flag", async ({
   await expect(page.getByRole("status")).toHaveCount(1);
 
   await page
-    .getByRole("button", { name: "Sync membership, contacts, map, Discord" })
+    .getByRole("button", { name: "Sync membership, contacts, wanderer, discord-roles" })
     .click();
   const notice = page.getByRole("status");
-  await expect(notice).toContainText("Membership, contacts, map and Discord queued");
+  await expect(notice).toContainText(
+    "membership, contacts, wanderer and discord-roles queued for every account",
+  );
   await expect(page).toHaveURL(/queued=all/);
 
   // Refresh drops ?queued=, so a reload hours later does not re-show a stale

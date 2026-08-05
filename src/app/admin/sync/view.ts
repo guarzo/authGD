@@ -158,20 +158,63 @@ export function nextRunFor(jobType: string, now: Date): Date | null {
 }
 
 /**
+ * `HH:MM:SS UTC` for the enqueue instant carried in `?at=`, or null when the
+ * value is anything else. Same posture as `queuedNotice`'s own validation: the
+ * query string is untrusted input reaching copy, so a non-numeric or absurd
+ * value drops the clause rather than being echoed.
+ *
+ * The length check is on the ISO string, not on the digit count, because the
+ * two disagree in exactly the range a hand-edited `?at=` reaches first. `Date`
+ * happily represents year 33658, and `toISOString` prints it in the extended
+ * form `+033658-09-27T…`, six characters longer — so a fixed `slice(11, 19)`
+ * silently returns `27T01:46` instead of a clock. Neither the regex nor
+ * `Number.isNaN` sees anything wrong with that value; only the width does.
+ */
+export function queuedStamp(at: string | undefined): string | null {
+  if (at === undefined || !/^\d{1,15}$/.test(at)) return null;
+  const d = new Date(Number(at));
+  if (Number.isNaN(d.getTime())) return null;
+  const iso = d.toISOString();
+  if (iso.length !== 24) return null;
+  return `${iso.slice(11, 19)} UTC`;
+}
+
+/**
  * The one-line outcome of the press that got us here. Per-job re-runs redirect
  * with the job type itself, and that value is checked against the schedules
  * table before it is echoed: a hand-typed `?queued=` is untrusted input, and
  * this is copy, not a lookup that fails safe on its own.
+ *
+ * `at` is what makes a *second* press of the same button say something. The
+ * page mounts one permanent `role="status"` region and the redirect target for
+ * a given job is otherwise constant, so pressing `Re-run wanderer` twice
+ * produced a byte-identical string, React wrote nothing to the text node, and
+ * the live region — which announces on mutation — stayed silent about an
+ * enqueue that really happened. The instant differs per press, so the text
+ * does. It also retires the stale-notice hazard the Refresh anchor was
+ * carrying alone: a notice still on screen an hour later now says when.
+ *
+ * "reload this page", not "use Refresh": Refresh is the last control below
+ * seven job rows and however many open drawers, while this text renders at the
+ * top of the page, and nothing in the copy said which direction to go. The
+ * browser reload is what an admin reaches for anyway, and naming it costs the
+ * page nothing — the anchor's `?queued=`-dropping behaviour still matters, but
+ * only for the canonical URL, which a reload of *this* URL is not.
  */
-export function queuedNotice(queued: string | undefined): string {
+export function queuedNotice(queued: string | undefined, at?: string): string {
+  const stamp = queuedStamp(at);
+  const when = stamp === null ? "" : ` at ${stamp}`;
   if (queued === "all") {
-    return "Membership, contacts, map and Discord queued for every account. The worker picks them up within a few seconds; use Refresh to see the runs land.";
+    // The four job keys the fan-out actually enqueues, spelled the way the
+    // strip above spells them, so the nouns are findable in the column the
+    // admin is looking at rather than translated into a second vocabulary.
+    return `membership, contacts, wanderer and discord-roles queued for every account${when}. The worker picks them up within a few seconds; reload this page to see the runs land.`;
   }
   if (queued === "recheck") {
-    return "Affiliation recheck queued. The worker picks it up within a few seconds; use Refresh to see the run land.";
+    return `Affiliation recheck queued${when}. The worker picks it up within a few seconds; reload this page to see the run land.`;
   }
   if (isJobType(queued)) {
-    return `${queued} queued. The worker picks it up within a few seconds; use Refresh to see the run land.`;
+    return `${queued} queued${when}. The worker picks it up within a few seconds; reload this page to see the run land.`;
   }
   return "";
 }

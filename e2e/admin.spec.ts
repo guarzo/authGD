@@ -108,13 +108,15 @@ test("an admin de-roled after the page loaded gets the notice, not the error bou
   await context.addCookies([await sessionCookieFor(db, admin.id)]);
   await page.goto("/admin/sync");
   await expect(
-    page.getByRole("button", { name: "Sync membership, contacts, map, Discord" }),
+    page.getByRole("button", {
+      name: "Sync membership, contacts, wanderer, discord-roles",
+    }),
   ).toBeVisible();
 
   await db.update(account).set({ isAdmin: false }).where(eq(account.id, admin.id));
 
   await page
-    .getByRole("button", { name: "Sync membership, contacts, map, Discord" })
+    .getByRole("button", { name: "Sync membership, contacts, wanderer, discord-roles" })
     .click();
   await expect(page).toHaveURL(/\/account\?error=not_admin/);
   // Scoped rather than a bare `getByRole("alert")`: Next's

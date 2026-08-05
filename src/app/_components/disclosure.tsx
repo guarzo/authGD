@@ -1,6 +1,6 @@
 "use client";
 
-import { type ReactNode, useId, useState } from "react";
+import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 
 /**
  * A disclosure built on `<details>` rather than the ARIA button-and-region
@@ -60,6 +60,21 @@ type RowProps = DisclosureBaseProps & {
 export function Disclosure(props: DetailsProps | RowProps) {
   const [open, setOpen] = useState(props.defaultOpen ?? false);
   const id = useId();
+  const detailsRef = useRef<HTMLDetailsElement | null>(null);
+
+  // `<details>` toggles with no JavaScript at all, which is the reason it was
+  // chosen — but it means a toggle can happen *before* hydration, with no
+  // listener attached and no React event replay to catch it. The mirror below
+  // is rendered from state initialised at mount, so on a slow connection an
+  // admin can open a row and leave `aria-expanded="false"` on an open drawer
+  // permanently, until they toggle it again. Read the element's real `open`
+  // once on mount and adopt it. Unused in row mode, where the `<button>` is
+  // the sole source of truth and cannot drift; the hook still has to run
+  // unconditionally, so it sits above the branch.
+  useEffect(() => {
+    const el = detailsRef.current;
+    if (el) setOpen(el.open);
+  }, []);
 
   if (props.as === "row") {
     const { summary, cells, colSpan, className, label, children } = props;
@@ -97,6 +112,7 @@ export function Disclosure(props: DetailsProps | RowProps) {
   const { summary, className, ariaLabel, children } = props;
   return (
     <details
+      ref={detailsRef}
       className={className}
       open={open}
       onToggle={(e) => setOpen(e.currentTarget.open)}

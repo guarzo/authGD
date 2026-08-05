@@ -2134,6 +2134,15 @@ h3.rule-head__label {
   padding: var(--s-3) 0;
 }
 
+/* How deep the table above it goes. A caption line, not a label: it is a
+   sentence-case count of what is on screen, so it stays out of the label
+   register and reads at the same weight as the `.dim` cells it describes. */
+.strip__window {
+  margin: var(--s-2) 0 0;
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 0.75rem;
+}
+
 /* The per-row re-run lever. Sits under the history rather than over it, so it
    needs the gap the table's own bottom edge doesn't give it. */
 .strip__act {
