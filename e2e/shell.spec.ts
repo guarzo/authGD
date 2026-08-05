@@ -20,11 +20,11 @@ test("aria-current lands on the right tab on every shell route", async ({
   page,
   context,
 }) => {
-  // tier flygd so the payout routes render too — they carry their own nav,
+  // tier member so the payout routes render too — they carry their own nav,
   // built independently of the account and admin ones, and were the first
   // thing to reintroduce exactly the key-vs-href mismatch this test exists
   // for (they passed `current="payouts"` against an `href` of `/payouts`).
-  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
   await context.addCookies([await sessionCookieFor(db, admin.id)]);
 
   await page.goto("/account");
@@ -106,7 +106,7 @@ test("the header bar occupies the same rect on every shell route", async ({
   page,
   context,
 }) => {
-  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
   await context.addCookies([await sessionCookieFor(db, admin.id)]);
   await page.setViewportSize({ width: 1440, height: 900 });
 
@@ -188,7 +188,7 @@ test("the page column occupies the same rect on every shell route", async ({
   page,
   context,
 }) => {
-  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
   await context.addCookies([await sessionCookieFor(db, admin.id)]);
   await page.setViewportSize({ width: 1440, height: 900 });
 

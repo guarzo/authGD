@@ -334,4 +334,13 @@ describe("summarizeDetails, declared fields and role rendering", () => {
     expect(summarizeDetails("status.changed", { to: "cryo" })).toBe("→ cryo");
     expect(summarizeDetails("character.unlinked", {})).toBe("—");
   });
+
+  it("renders a pre-rename audit detail verbatim", () => {
+    // Spec D4: audit_log.details is history, not live state. Rows written before
+    // migration 0007 keep the old tier strings and are shown as stored — there is
+    // no alias map, and adding one would rewrite history to match today's config.
+    expect(
+      summarizeDetails("tier.changed", { from: "green", to: "flygd", cause: "admin" }),
+    ).toBe("green → flygd, admin");
+  });
 });
