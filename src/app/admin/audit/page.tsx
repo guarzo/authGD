@@ -326,19 +326,30 @@ export default async function AdminAuditPage({
     params.target && `target: ${params.target}`,
   ].filter(Boolean) as string[];
 
-  // One note per field whose name spans more than one account, so a widened
-  // result never looks like a narrow one. Text, not colour.
+  // One note per field whose name spans more than one account OR operation, so
+  // a widened result never looks like a narrow one. Text, not colour.
+  //
+  // The threshold is the UNION, not either count alone: 1 account + 1
+  // operation still warns, because that pair is exactly the conflation this
+  // notice exists for -- the rows below are a mix of two unrelated subjects,
+  // even though neither subject alone is ambiguous.
   const ambiguityNotes = (
     [
       ["actor", actorRes],
       ["target", targetRes],
     ] as const
   )
-    .map(([field, r]) =>
-      r && r.kind === "name" && r.accountCount > 1
-        ? `${field} "${r.name}" matches ${r.accountCount} accounts`
-        : null,
-    )
+    .map(([field, r]) => {
+      if (!r || r.kind !== "name") return null;
+      const { accountCount, operationCount } = r;
+      if (accountCount + operationCount <= 1) return null;
+      const parts = [
+        accountCount > 0 && `${accountCount} account${accountCount === 1 ? "" : "s"}`,
+        operationCount > 0 &&
+          `${operationCount} operation${operationCount === 1 ? "" : "s"}`,
+      ].filter(Boolean);
+      return `${field} "${r.name}" matches ${parts.join(" and ")}`;
+    })
     .filter(Boolean) as string[];
 
   // The cursor ran past the end of a non-empty log, distinct from the log
@@ -365,8 +376,20 @@ export default async function AdminAuditPage({
         }`;
 
   const emptyMessage: ReactNode = unmatched.length ? (
-    `No account or character named ${unmatched
-      .map(([field, r]) => `"${r.name}" (${field})`)
+    // Each clause carries its own kind, not just the field label, because the
+    // two columns can resolve to different kinds of thing. A target can be an
+    // account, a character OR a payout operation (TargetCell links an
+    // operation's name the same way it links a person's). An actor is never a
+    // payout operation -- every logAudit call site writes an account uuid or
+    // "system" to `actor`, so an operation uuid only ever reaches `target` --
+    // and offering "operation" as a reason the actor filter came up empty
+    // would send the admin looking in a place this column can never resolve
+    // to.
+    `No ${unmatched
+      .map(
+        ([field, r]) =>
+          `${field === "target" ? "account, character or operation" : "account or character"} named "${r.name}" (${field})`,
+      )
       .join(" or ")}.`
   ) : pastEnd ? (
     // The log is not empty, the cursor is simply past its end. Saying

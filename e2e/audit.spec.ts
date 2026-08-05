@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { auditLog, discordLink, syncRun } from "../src/db/schema";
+import { auditLog, discordLink, payoutOperation, syncRun } from "../src/db/schema";
 import { AUDIT_PAGE_SIZE } from "../src/services/audit";
 import { pinGeometry } from "./geometry";
 import { resetDb, seedMember, sessionCookieFor, testDb } from "./helpers";
@@ -369,6 +369,48 @@ test("raw ids and the literal 'all' target stay filterable", async ({
   await expect(page.locator(".log__empty")).toHaveText(
     'No account or character named "Nobody" (actor).',
   );
+});
+
+/**
+ * TargetCell links a payout operation's name the same way it links a
+ * person's (src/app/admin/audit/page.tsx, TargetCell) -- resolveFilterIdentity
+ * has to invert that link back to the operation's id, or every such click
+ * lands on the unmatched-filter empty state instead of the operation's rows.
+ */
+test("clicking a payout operation's name filters to that operation's rows", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
+  const [op] = await db
+    .insert(payoutOperation)
+    .values({ name: "Thursday roam", occurredAt: new Date("2026-07-31T00:00:00Z") })
+    .returning();
+
+  await db.insert(auditLog).values([
+    { actor: admin.id, action: "payout.created", target: op.id },
+    // An unrelated row, so the click-through has to actually narrow the
+    // result rather than the assertion below passing on the full log.
+    {
+      actor: admin.id,
+      action: "tier.changed",
+      target: admin.id,
+      details: { to: "member" },
+    },
+  ]);
+
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.goto("/admin/audit");
+  await expect(page.locator("tbody tr")).toHaveCount(2);
+
+  await page.getByRole("link", { name: "Thursday roam" }).first().click();
+  await expect(page).toHaveURL(/[?&]target=Thursday\+roam/);
+
+  await expect(page.locator(".log__empty")).toHaveCount(0);
+  const rows = page.locator("tbody tr");
+  await expect(rows).toHaveCount(1);
+  await expect(rows).toContainText("payout.created");
+  await expect(page.getByRole("heading", { name: "1 matching entries" })).toBeVisible();
 });
 
 test("an ambiguous name reports how many accounts it spans", async ({
