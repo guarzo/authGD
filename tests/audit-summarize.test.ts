@@ -3,13 +3,13 @@ import { summarizeDetails } from "@/app/admin/audit/summarize";
 
 describe("summarizeDetails", () => {
   it("renders a tier transition with its from value", () => {
-    expect(summarizeDetails("tier.changed", { from: "flygd", to: "green" })).toBe(
-      "flygd → green",
+    expect(summarizeDetails("tier.changed", { from: "member", to: "alumni" })).toBe(
+      "member → alumni",
     );
   });
 
   it("renders a tier transition without from", () => {
-    expect(summarizeDetails("tier.changed", { to: "green" })).toBe("→ green");
+    expect(summarizeDetails("tier.changed", { to: "alumni" })).toBe("→ alumni");
   });
 
   it("renders a labelled scalar action", () => {
@@ -200,32 +200,32 @@ describe("summarizeDetails, declared fields and role rendering", () => {
   it("surfaces the cause a tier change was written with", () => {
     expect(
       summarizeDetails("tier.changed", {
-        from: "flygd",
-        to: "green",
+        from: "member",
+        to: "alumni",
         cause: "main unlinked",
       }),
-    ).toBe("flygd → green, main unlinked");
+    ).toBe("member → alumni, main unlinked");
   });
 
   it("renders a truthy flag as its word and a falsy one as nothing", () => {
-    expect(summarizeDetails("tier.changed", { to: "blue", locked: true })).toBe(
-      "→ blue, locked",
+    expect(summarizeDetails("tier.changed", { to: "associate", locked: true })).toBe(
+      "→ associate, locked",
     );
-    expect(summarizeDetails("tier.changed", { to: "blue", locked: false })).toBe(
-      "→ blue",
+    expect(summarizeDetails("tier.changed", { to: "associate", locked: false })).toBe(
+      "→ associate",
     );
   });
 
   it("does not count a declared key that rendered blank as hidden", () => {
     // Rule 1: declared-and-deliberately-silent is not nobody-looked-at-it.
-    expect(summarizeDetails("tier.changed", { to: "blue", locked: false })).not.toContain(
-      "more",
-    );
+    expect(
+      summarizeDetails("tier.changed", { to: "associate", locked: false }),
+    ).not.toContain("more");
   });
 
   it("appends the remainder for an undeclared key on a declared action", () => {
-    expect(summarizeDetails("tier.changed", { to: "blue", surprise: 1 })).toBe(
-      "→ blue, +1 more",
+    expect(summarizeDetails("tier.changed", { to: "associate", surprise: 1 })).toBe(
+      "→ associate, +1 more",
     );
   });
 
@@ -241,12 +241,12 @@ describe("summarizeDetails, declared fields and role rendering", () => {
     // hand-curated declaration's.
     expect(
       summarizeDetails("tier.changed", {
-        from: "flygd",
-        to: "green",
+        from: "member",
+        to: "alumni",
         cause: "manual",
         locked: true,
       }),
-    ).toBe("flygd → green, manual, locked");
+    ).toBe("member → alumni, manual, locked");
   });
 
   it("renders one or two missing scopes in full and collapses three or more", () => {
@@ -327,7 +327,9 @@ describe("summarizeDetails, declared fields and role rendering", () => {
   });
 
   it("still degrades on rows written before this change", () => {
-    // The no-migration guarantee, expressed as tests.
+    // The no-migration guarantee, expressed as tests. This block deliberately
+    // holds pre-rename vocabulary ("green") so it keeps proving that a row
+    // written before the tier rename still renders — do not "fix" this one.
     expect(
       summarizeDetails("tier.changed", { to: "green", cause: "main unlinked" }),
     ).toBe("→ green, main unlinked");
