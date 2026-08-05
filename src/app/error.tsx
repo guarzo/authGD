@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { usePathname } from "next/navigation";
 import { FocusHeading } from "@/app/_components/focus-heading";
-import { Notice, SiteHeader, type NavItem } from "@/app/_components/ui";
+import { utcHhmm } from "@/app/_components/utc-time";
+import { Notice, RuleHead, SiteHeader, type NavItem } from "@/app/_components/ui";
 
 /**
  * Route-level error boundary (App Router: client component, `{error, reset}`).
@@ -115,6 +116,16 @@ export default function Error({
   const section = sectionFor(pathname);
   const [retrying, startRetry] = useTransition();
 
+  // Set after mount rather than during render. This boundary renders on the
+  // server for a server-side throw, and a clock read in the render body would
+  // be a hydration mismatch on every one of those. `null` until the effect
+  // runs, so the block below prints the two facts it already has and gains the
+  // third — which is the one an admin needs to bracket a search.
+  const [seenAt, setSeenAt] = useState<string | null>(null);
+  useEffect(() => {
+    setSeenAt(`${utcHhmm(new Date())} UTC`);
+  }, []);
+
   // The only trace a client-side failure leaves anywhere. A throw from one of
   // the app's client components never reaches a server log and — measured, not
   // assumed — carries no `digest` either, so without this line the incident is
@@ -163,7 +174,16 @@ export default function Error({
             and spends the freed clause on the one thing that changes the
             member's next move. */}
 
-        <Notice tone="bad">
+        {/* `live={false}`. This box holds guidance, not the fault — the fault is
+            the h1 and the lede above it — and `FocusHeading` already announces
+            the arrival by moving focus to that h1. A `role="alert"` rendering in
+            the same commit preempts it, so the member hears the instruction and
+            not the thing it is an instruction about. Opting out of the region
+            keeps the announcement order the page actually wants. The tone stays
+            `bad`: it is the visual grade the boundary needs, `p.notice--bad` is
+            what `e2e/error-boundary.spec.ts` locates by, and `live` is exactly
+            the knob 1A added so those two decisions could be made separately. */}
+        <Notice tone="bad" live={false}>
           {error.digest ? (
             <>
               Try again. If it keeps happening, tell an admin what you were doing and
@@ -182,8 +202,51 @@ export default function Error({
           )}
         </Notice>
 
+        {/* The escalation the sentence above asks for used to dead-end. The
+            member is told to quote a digest, and the admin they quote it to has
+            one tool — /admin/audit, which filters on actor, action, target and
+            before, and has no free-text search at all. A digest alone matches
+            none of those columns. What does narrow that log is the route and a
+            time, and neither was on screen: the route is in the URL bar the
+            member is about to navigate away from, and the mount time was
+            nowhere.
+
+            One block, selectable as a unit, so "copy this" is one gesture
+            rather than three. The digest repeats deliberately — the sentence
+            above has to keep carrying it, because an instruction that names a
+            reference and then puts it somewhere else is the failure this page
+            already fixed once. Here it is a field in a record; there it is the
+            thing the sentence points at.
+
+            `seenAt` is absent on the server render and arrives after mount, so
+            the row is conditional rather than showing an empty value.
+
+            `as="h2"` rather than the `span` default: it is the only section
+            heading on the page, under the h1, and a reader navigating by
+            heading is exactly the reader who would otherwise land on the button
+            row having never been offered the thing this block exists to hand
+            over. Every other `RuleHead` in the app passes `as` for the same
+            reason. */}
+        <RuleHead as="h2">What to send</RuleHead>
+        <pre className="escalation mono">
+          <code>
+            {`page    ${pathname}`}
+            {seenAt ? `\nseen    ${seenAt}` : ""}
+            {error.digest ? `\nref     ${error.digest}` : ""}
+          </code>
+        </pre>
+
         <div className="btn-row">
-          {/* `aria-busy` alone, no `disabled`: the styling for it already
+          {/* Plain grade, not `btn--primary`. The lede directly above warns that
+              a submitted action may have taken effect and to check before
+              sending it again — and pressing this is that second send. Gold is
+              the page's one emphasis ration, and spending it here made the
+              reading the lede warns about the most prominent thing on screen.
+              Nothing on this page earns gold instead: a boundary has no action
+              it can recommend, which is the honest state and is now what the
+              page looks like.
+
+              `aria-busy` alone, no `disabled`: the styling for it already
               exists at globals.css `.btn[aria-busy="true"]`, and disabling the
               button would move focus to `<body>` at the exact moment the
               member is waiting to hear something.
@@ -202,15 +265,10 @@ export default function Error({
               announcement that the press landed and got the same answer, which
               is the thing that was missing. The visual half is the busy state
               in flight; it is brief against a local failure and grows with the
-              round trip, which is the right way round.
-
-              `Try again` keeps the one gold ration. The audit argued for
-              demoting it, on the grounds that it is the control that can fail
-              — but it is also the only one that keeps the member where they
-              are, and the Notice names it in its own words. */}
+              round trip, which is the right way round. */}
           <button
             type="button"
-            className="btn btn--primary"
+            className="btn"
             aria-busy={retrying}
             onClick={() =>
               startRetry(() => {

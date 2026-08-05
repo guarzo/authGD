@@ -16,16 +16,26 @@ export const metadata: Metadata = {
  *  lives in `../errors` — with the type that stops the action emitting one the
  *  map has no entry for. */
 
+/** Collapses a possibly-repeated query param to one value, last wins — the same
+ *  helper `../page.tsx` and the audit page use, for the same reason: Next hands
+ *  `string | string[]`, and a repeated param reaching code that declared only
+ *  `string` took the audit page down with a 500. This page echoes six of them
+ *  straight back into `defaultValue`, so it is the widest instance of that
+ *  hazard in the app, not the narrowest. */
+function one(v: string | string[] | undefined): string | undefined {
+  return Array.isArray(v) ? v[v.length - 1] : v;
+}
+
 export default async function NewPayoutPage({
   searchParams,
 }: {
   searchParams: Promise<{
-    error?: string;
-    name?: string;
-    occurredAt?: string;
-    battleReportUrl?: string;
-    corpSharePct?: string;
-    notes?: string;
+    error?: string | string[];
+    name?: string | string[];
+    occurredAt?: string | string[];
+    battleReportUrl?: string | string[];
+    corpSharePct?: string | string[];
+    notes?: string | string[];
   }>;
 }) {
   const access = await requirePayoutReader();
@@ -36,8 +46,22 @@ export default async function NewPayoutPage({
   // worse than not being handed the form.
   if (!access.isOperator) redirect("/payouts");
 
-  const submitted = await searchParams;
-  const errorMessage = lookupErrorMessage(NEW_OPERATION_ERRORS, submitted.error);
+  const raw = await searchParams;
+  const submitted = {
+    name: one(raw.name),
+    occurredAt: one(raw.occurredAt),
+    battleReportUrl: one(raw.battleReportUrl),
+    corpSharePct: one(raw.corpSharePct),
+    notes: one(raw.notes),
+  };
+  const errorMessage = lookupErrorMessage(NEW_OPERATION_ERRORS, one(raw.error));
+
+  // The field this form exists to stamp is almost always today's, and the
+  // action parses `yyyy-mm-dd` as UTC midnight — which is EVE time — so the
+  // same slice both pages already render is the right default rather than a
+  // local-timezone guess. `??` keeps an echoed value winning over it, so a
+  // rejected submit still comes back showing what the operator typed.
+  const today = new Date().toISOString().slice(0, 10);
 
   const nav = [
     { href: "/account", label: "Your account" },
@@ -53,24 +77,37 @@ export default async function NewPayoutPage({
           <h1>New operation</h1>
           <p className="page__lede">
             One row per fight. Loot, roster, and the split are added on the operation once
-            it exists.
+            it exists. Creating one pays nobody &mdash; it opens a draft. It also
+            can&rsquo;t be deleted afterwards, so check the name and date.
           </p>
         </div>
 
-        {errorMessage && <Notice tone="bad">{errorMessage}</Notice>}
+        {/* Mounted unconditionally, not behind `&&`: the reserved slot registers
+            the live region before the text arrives, so AT announces a change to
+            it rather than a region born holding its own message. This is the one
+            form in the app whose entire validation model is a server round trip,
+            so it is the one that most needs the announcement to land. */}
+        <Notice tone="bad">{errorMessage}</Notice>
 
         <form action={createOperationAction} className="form-stack">
+          {/* Requiredness is spelled into the label rather than left to the
+              `required` attribute alone. The page's convention was "optional is
+              labelled, required is silent", which marks four of six fields and
+              leaves the reader to infer the rest from a browser bubble they
+              only see after pressing. `[id]/page.tsx`'s "Note (required — why
+              this number)" already set the other precedent; this follows it. */}
           <label className="form-stack__field">
-            Name
+            Name (required)
             <input className="field" name="name" defaultValue={submitted.name} required />
           </label>
           <label className="form-stack__field">
-            Date
+            Date (required)
             <input
               className="field"
               type="date"
               name="occurredAt"
-              defaultValue={submitted.occurredAt}
+              defaultValue={submitted.occurredAt ?? today}
+              max={today}
               required
             />
           </label>
@@ -84,18 +121,19 @@ export default async function NewPayoutPage({
             />
           </label>
           {/* No default. A pre-filled 0 is a number the operator never chose but
-              the roster lives with, and until now it could not be changed after
-              creation at all. Empty forces the decision; the action still
-              accepts blank as 0 for anyone who means it. This cell is a div with
-              an explicit label, unlike its siblings: the hint has to live outside
-              the <label> or it gets concatenated into the input's accessible
-              name — same arrangement /admin/audit uses for its filter hints. */}
+              the roster lives with. Empty forces the decision; the field is
+              `required`, so the form will not submit without one. This cell is a
+              div with an explicit label, unlike its siblings: the hint has to
+              live outside the <label> or it gets concatenated into the input's
+              accessible name — same arrangement /admin/audit uses for its
+              filter hints. */}
           <div className="form-stack__field">
-            <label htmlFor="corp-share-pct">Corp share %</label>
+            <label htmlFor="corp-share-pct">Corp share % (required)</label>
             <input
               id="corp-share-pct"
               className="field"
               type="number"
+              inputMode="decimal"
               name="corpSharePct"
               min="0"
               max="100"
@@ -109,16 +147,24 @@ export default async function NewPayoutPage({
               takes nothing.
             </span>
           </div>
+          {/* `maxLength` mirrors the 500-char ceiling `createFailed` enforces on
+              the way back. Without it the six error messages' "Everything else
+              is still filled in" was a claim the round trip could not keep:
+              anything longer was dropped from the redirect silently, and Notes
+              is the only field that can realistically get there. */}
           <label className="form-stack__field">
             Notes (optional)
             <textarea
               className="field"
               name="notes"
               rows={3}
+              maxLength={500}
               defaultValue={submitted.notes}
             />
           </label>
-          <Submit className="btn btn--primary">Create operation</Submit>
+          <Submit className="btn btn--primary" pendingLabel="Creating…">
+            Create operation
+          </Submit>
         </form>
       </main>
     </>

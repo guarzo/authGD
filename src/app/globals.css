@@ -1714,8 +1714,65 @@ h3.rule-head__label {
   color: var(--ink-faint);
 }
 
+/* The copy-this-to-an-admin record on `error.tsx`. A `<pre>` rather than a
+   definition list on purpose: the point is that one drag selects all of it and
+   pastes with its labels intact, and a table's cell boundaries paste as
+   whatever the receiving client feels like. `user-select: all` is deliberately
+   NOT set — it defeats selecting one line, and the digest alone is the most
+   likely single thing anyone copies.
+
+   Inset into `--hull` like a field, so it reads as a value the system produced
+   rather than as prose. It wraps rather than scrolling: this sits on the one
+   page that has already failed once, and a horizontal scrollbar is a second
+   thing to operate. */
+.escalation {
+  margin: 0 0 var(--s-5);
+  padding: var(--s-3) var(--s-4);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--void);
+  color: var(--ink-dim);
+  font-size: var(--t-data);
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-width: var(--measure);
+}
+
 .pager {
   margin-top: var(--s-5);
+}
+
+/* The in-flight mark on a soft navigation (`payouts/pending-link.tsx`). It is
+   drawn rather than typed so it costs no layout when absent and no reflow when
+   it arrives: the anchor reserves the space either way via the left margin,
+   and the glyph is a `::after` on a zero-width box.
+
+   Fully opaque at rest and animated only downward, so the global
+   `prefers-reduced-motion` collapse — which freezes it on the first frame —
+   leaves a visible mark rather than an invisible one. That is the whole reason
+   the keyframe runs 1 -> 0.35 -> 1 instead of starting dim. */
+.link-pending {
+  display: inline-block;
+  width: 0;
+  margin-left: var(--s-2);
+  font-family: var(--font-mono), ui-monospace, monospace;
+  color: var(--gold);
+}
+
+.link-pending::after {
+  content: "…";
+  animation: link-pending-pulse 900ms ease-in-out infinite;
+}
+
+@keyframes link-pending-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
 }
 
 /* --- Notices ------------------------------------------------------------ */
