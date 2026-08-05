@@ -137,7 +137,7 @@ function isStalled(c: CharacterHealthInput): boolean {
  * because "should have happened and didn't" is a stronger fact than "hasn't
  * happened yet". The underlying facts stay separately readable so a caller
  * that wants a quieter one — the first-sync notice — is not forced through
- * that priority. An account with no contacts targets at all (blue/green
+ * that priority. An account with no contacts targets at all (associate/alumni
  * members, or zero characters) can never be pending, matching the reasoning
  * in account-view.ts's `contactsTarget` doc.
  */
