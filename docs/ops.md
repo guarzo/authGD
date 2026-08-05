@@ -476,51 +476,57 @@ authGD worker: SYNC_MODE=dry-run — outbound writes are SUPPRESSED
 
 This is not obvious, and it stops people running the tests.
 
-`docker-compose.dev.yml` starts **one** Postgres hosting **two** databases:
+`docker-compose.dev.yml` starts **one** Postgres hosting your dev database plus
+a test database per worktree:
 
 | Database | Used by | Destructive operations |
 |---|---|---|
 | `authgd` | `npm run dev`, `npm run worker`, `npm run db:migrate` | none automatic |
-| `authgd_test` | `npm test` | `TRUNCATE` between every test |
+| `authgd_test_<worktree>_<hash>` | `npm test` in that worktree | `TRUNCATE` between every test |
+| `authgd_test` | `npm test` under CI only | `TRUNCATE` between every test |
 
-`authgd_test` is created by `scripts/init-test-db.sql` at container init. The
-test helpers connect to it explicitly (`tests/helpers/db.ts`), so the
-`TRUNCATE ... CASCADE` the suite runs between tests physically cannot reach
-`authgd`. Run the tests freely.
+`npm test` derives its database name from the worktree directory
+(`tests/helpers/test-db-url.ts`), creates it on first run, and migrates it. Two
+worktrees therefore never share a database, and the `TRUNCATE ... CASCADE` the
+suite runs between tests physically cannot reach `authgd`. Run the tests
+freely.
+
+Nothing reclaims these databases when a worktree is deleted, so:
+
+```bash
+npm run test:clean        # drop this worktree's test database
+```
+
+**Under CI the shared `authgd_test` is still used**, because the workflow
+stands up its own Postgres service and sets no override. An explicit
+`TEST_DATABASE_URL` also wins over the derived name, and opts that database out
+of both creation and `test:clean` — it is yours, not the harness's.
 
 `npm run test:e2e` does not appear above: it provisions a database of its own,
 in its own container, and never touches either of these. See
 [`npm run test:e2e` isolates itself](#npm-run-teste2e-isolates-itself) below.
 
-**Two `npm test` runs at once used to fight**, because they share
-`authgd_test` and the suite `TRUNCATE`s it between every test. A sibling run
-would see rows vanish mid-test — assertion failures like
-`expected [] to deeply equal [1, 2]` that moved around between runs,
-indistinguishable from a real regression. Playwright is pinned to
-`workers: 1` for the same reason within its own suite.
-
-That silent corruption is now a named error instead. `tests/helpers/global-setup.ts`
-takes a session-scoped `pg_try_advisory_lock` on `authgd_test` for the
-lifetime of the run (a fixed 64-bit key, chosen to be nowhere near
-pg-boss's own per-database advisory locks). A second `npm test` — in this
-checkout or another git worktree — fails immediately with a message naming
-the database and pointing at the fix below, instead of running and
-corrupting the first run's results. The lock is per-database, so it never
-fires for a run already pointed at its own private database via
-`TEST_DATABASE_URL` (see below) — there's nothing to contend with. If
+**Two `npm test` runs at once used to fight** when every checkout shared one
+database. Per-worktree databases remove that for the normal case, and
+`tests/helpers/global-setup.ts` still takes a session-scoped
+`pg_try_advisory_lock` for the cases that remain — CI, an explicit shared
+`TEST_DATABASE_URL`, or two runs in the same worktree. A fixed 64-bit lock key
+is chosen to be nowhere near pg-boss's own per-database advisory locks. A
+second `npm test` contending for the same database fails immediately with a
+message naming the database and suggesting a private `TEST_DATABASE_URL` of
+its own, instead of running and corrupting the first run's results. If
 Postgres isn't reachable at all, the lock check fails open rather than
 blocking the suite: plenty of test files never touch the database and must
 keep working with Postgres down.
 
-If you need to run the unit tests while another checkout is using
-`authgd_test`, point yours somewhere private — this is what the error
-message itself suggests:
-
-```bash
-docker exec <pg-container> psql -U authgd -d postgres \
-  -c "CREATE DATABASE authgd_test_mine OWNER authgd;"
-TEST_DATABASE_URL=postgres://authgd:authgd@localhost:5433/authgd_test_mine npm test
-```
+**A database migrated by a different checkout is refused.** Drizzle applies
+only migrations newer than the newest applied one, so a database migrated
+*ahead* of your checkout looks up-to-date to the migrator, and the suite fails
+against the wrong schema with errors that look like real regressions.
+`tests/helpers/global-setup.ts` compares applied migration hashes against
+`drizzle/` and fails the run with one message naming the database and the
+migration counts instead. The fix, for a database this worktree owns, is
+`npm run test:clean`.
 
 #### `npm run test:e2e` isolates itself
 
@@ -766,12 +772,12 @@ docker ps --filter publish=5433 --format '{{.Names}}\t{{.Image}}\t{{.Labels}}'
    behave differently under the same migrations.
 2. **Compose project** is a checkout of this repo, not an unrelated service that
    happens to use 5433 (`com.docker.compose.project` in the labels).
-3. **The `authgd_test` database exists** — it is created only by
-   `scripts/init-test-db.sql` at *first* container init, so a Postgres started
-   any other way will not have it and the test suites will fail:
+3. **The test database exists** — `npm test` creates its own per worktree, so
+   this is only a concern under CI or with an explicit `TEST_DATABASE_URL`.
+   List them with:
 
    ```bash
-   docker exec <container> psql -U authgd -lqt | cut -d'|' -f1 | grep -w authgd_test
+   docker exec <container> psql -U authgd -lqt | cut -d'|' -f1 | grep authgd_test
    ```
 
 If any of those don't hold, stop that container or change the host port rather
