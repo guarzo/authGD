@@ -26,9 +26,9 @@
   --gold-dim: oklch(0.72 0.14 84);
   --signal-ok: oklch(0.76 0.13 158);
   /* Hue 50, not the 70 this started at. At 70 the warn signal sat 18 degrees
-     from --gold / --tier-flygd with near-identical chroma and 0.03 of
+     from --gold / --tier-member with near-identical chroma and 0.03 of
      lightness between them — 0.057 apart in OKLab, which is not enough to
-     tell a gold FLYGD tier badge from an amber CRYO token two columns away in
+     tell a gold MEMBER tier badge from an amber CRYO token two columns away in
      the same mono uppercase with the same leading dot. Hue 50 nearly doubles
      that, to 0.104, while holding 0.146 from --signal-bad (hue 25).
 
@@ -49,9 +49,9 @@
 
   /* Tiers separate by lightness as well as hue, so they survive
      deuteranopia and protanopia. Always paired with the name in text. */
-  --tier-flygd: oklch(0.83 0.155 88);
-  --tier-blue: oklch(0.72 0.13 245);
-  --tier-green: oklch(0.76 0.13 158);
+  --tier-member: oklch(0.83 0.155 88);
+  --tier-associate: oklch(0.72 0.13 245);
+  --tier-alumni: oklch(0.76 0.13 158);
 
   /* Space: 4 8 12 16 24 32 48 64 96. Rhythm comes from varying the step. */
   --s-1: 0.25rem;
@@ -1120,7 +1120,7 @@ h3.rule-head__label {
      column width for every row. The audit log is fixed-layout with a
      `<colgroup>`, so 100% already IS a bound, and 34ch cut the peek short at
      roughly 245px inside a ~400px box. The peek is where the answer lives on
-     that page (`flygd -> green, alliance_left`), so the loss was the sentence,
+     that page (`member -> alumni, alliance_left`), so the loss was the sentence,
      not decoration. The 34ch cap is re-scoped to the table that needs it. */
   max-width: 100%;
   overflow: hidden;
@@ -1322,16 +1322,16 @@ h3.rule-head__label {
   flex-shrink: 0;
 }
 
-.tier--flygd {
-  --tone: var(--tier-flygd);
+.tier--member {
+  --tone: var(--tier-member);
 }
 
-.tier--blue {
-  --tone: var(--tier-blue);
+.tier--associate {
+  --tone: var(--tier-associate);
 }
 
-.tier--green {
-  --tone: var(--tier-green);
+.tier--alumni {
+  --tone: var(--tier-alumni);
 }
 
 /* A tier the UI doesn't recognise. Neutral on purpose: better to read as
