@@ -24,6 +24,18 @@ import { OPERATION_ERRORS, lookupErrorMessage } from "../errors";
  * composer at `new/new-operation-form.tsx` carries the same fix for the same
  * reason, proven by an e2e round trip.
  *
+ * That composer test is this component's coverage too, by proxy, and
+ * deliberately so. There is no way to reject THIS form without the network:
+ * `appraiseLoot` only fails via `TriffError`/`EsiError`, the clients are built
+ * inside `addAppraisedPoolAction` rather than injected, and `TRIFF_QUOTE_URL`
+ * is a constant — so a direct test would mean making an external client
+ * injectable purely for test reach. What can actually regress here is React's
+ * post-submit reset behaviour, and `e2e/payouts.spec.ts`'s "a rejected
+ * composer submit keeps the loot paste" asserts exactly that against the
+ * identical mechanism. If React changes, that test goes red and this file is
+ * wrong in the same way. Keep the two in step: a controlled value here is not
+ * a style choice, and reverting it to `defaultValue` will not fail any test.
+ *
  * This used to also collect a pricing mode (four options), a price-at kind
  * (station or region), and a station/region id (free numeric, defaulted to
  * Jita 4-4). This deployment has one pricing policy and always will — Jita
