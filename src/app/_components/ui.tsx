@@ -115,7 +115,7 @@ export function SiteHeader({
             // Derived from href, not useId: SiteHeader is a server component
             // and cannot use hooks, and href is already the nav's identity key.
             const badgeId = `nav-badge-${i.href}`;
-            const showBadge = i.badge !== undefined && i.badge.count > 0;
+            const badge = i.badge && i.badge.count > 0 ? i.badge : undefined;
             return (
               // The pair is ONE flex child. .shell__nav wraps, so a bare
               // sibling span can land on the next line away from the link it
@@ -134,14 +134,14 @@ export function SiteHeader({
                   // admin-nav.tsx exists to protect. A bare sibling would keep
                   // the name but associate nothing: screen-reader link
                   // navigation jumps link to link and would skip it entirely.
-                  aria-describedby={showBadge ? badgeId : undefined}
+                  aria-describedby={badge ? badgeId : undefined}
                 >
                   {i.label}
                 </a>
-                {showBadge && (
+                {badge && (
                   <span id={badgeId} className="shell__badge">
-                    {i.badge!.count}
-                    <span className="visually-hidden"> {i.badge!.description}</span>
+                    {badge.count}
+                    <span className="visually-hidden"> {badge.description}</span>
                   </span>
                 )}
               </span>
