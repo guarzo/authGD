@@ -1,7 +1,7 @@
-import { basename } from "node:path";
 import { execFileSync } from "node:child_process";
 import { Client } from "pg";
 import { TEST_URL } from "./db";
+import { deriveWorktreeDbName } from "./test-db-url";
 
 /**
  * Vitest `globalSetup`: take a session-scoped advisory lock on the test
@@ -31,25 +31,6 @@ import { TEST_URL } from "./db";
  * hash, so the two schemes can't be confused with one another either.
  */
 const LOCK_KEY = 0x4155544847444c4bn;
-
-const MAX_DB_NAME_LENGTH = 63;
-const PREFIX = "authgd_test_";
-
-/**
- * Turns a worktree directory name into the suffix of a legal, unquoted
- * Postgres identifier: lowercase, non `[a-z0-9_]` collapsed to a single `_`,
- * and the whole `authgd_test_<suffix>` name capped at Postgres's 63-byte
- * identifier limit. Matches the naming already in use for hand-made escape
- * databases (`authgd_test_admintbl`, `authgd_test_shellalign`, ...).
- */
-export function deriveWorktreeDbName(worktreeDir: string): string {
-  const suffix = basename(worktreeDir)
-    .toLowerCase()
-    .replace(/[^a-z0-9_]+/g, "_")
-    .replace(/^_+|_+$/g, "");
-  const budget = MAX_DB_NAME_LENGTH - PREFIX.length;
-  return PREFIX + (suffix || "worktree").slice(0, budget);
-}
 
 /**
  * Best-effort lookup of the container publishing `port`, for the error

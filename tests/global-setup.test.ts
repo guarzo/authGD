@@ -1,50 +1,58 @@
 import { describe, expect, it } from "vitest";
-import { buildContentionMessage, deriveWorktreeDbName } from "./helpers/global-setup";
+import { buildContentionMessage } from "./helpers/global-setup";
+import { deriveWorktreeDbName } from "./helpers/test-db-url";
 
 describe("deriveWorktreeDbName", () => {
+  const HASH = /_[0-9a-f]{6}$/;
+
   it("lowercases and keeps the authgd_test_ prefix", () => {
-    expect(deriveWorktreeDbName("/home/tng/workspace/authGD")).toBe("authgd_test_authgd");
+    expect(deriveWorktreeDbName("/home/tng/workspace/authGD")).toMatch(
+      /^authgd_test_authgd_[0-9a-f]{6}$/,
+    );
   });
 
   it("collapses illegal characters to underscores", () => {
-    expect(deriveWorktreeDbName("/worktrees/fix+account-page-mechanics")).toBe(
-      "authgd_test_fix_account_page_mechanics",
+    expect(deriveWorktreeDbName("/worktrees/fix+account-page-mechanics")).toMatch(
+      /^authgd_test_fix_account_page_mechanics_[0-9a-f]{6}$/,
     );
   });
 
   it("collapses runs of separators instead of leaving repeats", () => {
-    expect(deriveWorktreeDbName("/worktrees/a---b")).toBe("authgd_test_a_b");
+    expect(deriveWorktreeDbName("/worktrees/a---b")).toMatch(
+      /^authgd_test_a_b_[0-9a-f]{6}$/,
+    );
   });
 
   it("trims leading and trailing separators produced by sanitizing", () => {
-    expect(deriveWorktreeDbName("/worktrees/-leading-and-trailing-")).toBe(
-      "authgd_test_leading_and_trailing",
+    expect(deriveWorktreeDbName("/worktrees/-leading-and-trailing-")).toMatch(
+      /^authgd_test_leading_and_trailing_[0-9a-f]{6}$/,
     );
-  });
-
-  it("caps the result at 63 characters, Postgres's identifier limit", () => {
-    const long = "a".repeat(100);
-    const name = deriveWorktreeDbName(`/worktrees/${long}`);
-    expect(name.length).toBeLessThanOrEqual(63);
-    expect(name).toBe("authgd_test_" + long.slice(0, 63 - "authgd_test_".length));
-  });
-
-  it("accepts a trailing underscore left behind by truncation", () => {
-    // Trimming happens before the length cap, so a separator sitting exactly
-    // at the cut point survives into the final name. That is a legal unquoted
-    // Postgres identifier — asserted here so nobody 'fixes' it by trimming
-    // again afterwards and quietly changes the name every worktree derives.
-    const budget = 63 - "authgd_test_".length;
-    const name = deriveWorktreeDbName(
-      `/worktrees/${"a".repeat(budget - 1)}-${"b".repeat(10)}`,
-    );
-
-    expect(name).toBe(`authgd_test_${"a".repeat(budget - 1)}_`);
-    expect(name.length).toBe(63);
   });
 
   it("falls back to a placeholder if the basename sanitizes to nothing", () => {
-    expect(deriveWorktreeDbName("/worktrees/---")).toBe("authgd_test_worktree");
+    expect(deriveWorktreeDbName("/worktrees/---")).toMatch(
+      /^authgd_test_worktree_[0-9a-f]{6}$/,
+    );
+  });
+
+  // The reason the hash exists: two worktrees can share a basename.
+  it("gives two worktrees with the same basename different databases", () => {
+    const a = deriveWorktreeDbName("/home/tng/a/authGD");
+    const b = deriveWorktreeDbName("/home/tng/b/authGD");
+    expect(a).not.toBe(b);
+    expect(a.replace(HASH, "")).toBe(b.replace(HASH, ""));
+  });
+
+  it("is stable for the same directory", () => {
+    expect(deriveWorktreeDbName("/home/tng/a/authGD")).toBe(
+      deriveWorktreeDbName("/home/tng/a/authGD"),
+    );
+  });
+
+  it("caps the result at 63 characters with the hash still intact", () => {
+    const name = deriveWorktreeDbName(`/worktrees/${"a".repeat(100)}`);
+    expect(name.length).toBeLessThanOrEqual(63);
+    expect(name).toMatch(HASH);
   });
 });
 
