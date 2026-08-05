@@ -14,34 +14,61 @@ const { db, pool } = testDb();
 test.afterAll(() => pool.end());
 test.beforeEach(() => resetDb(db));
 
-test("login page renders the wired error param", async ({ page }) => {
-  await page.goto("/login?error=oauth_denied");
-  // Next.js dev also renders its own role="alert" route-announcer, so scope
-  // to the alert that actually carries our copy.
-  await expect(
-    page.getByRole("alert").filter({ hasText: "No access was granted" }),
-  ).toContainText("No access was granted");
-});
-
-// Every code the callbacks can redirect to /login with. A code with no entry in
-// the ERRORS map renders nothing at all, which is the one failure mode this
-// page cannot show the member, so each is checked by name.
-for (const [code, phrase] of [
-  ["oauth_expired", "expired before you finished"],
-  ["oauth_failed", "EVE couldn't be reached"],
-  ["session_expired", "Your session ended"],
+// Every code the callbacks can redirect to /login with, checked by name: a code
+// with no entry in the ERRORS map renders nothing at all, which is the one
+// failure mode this page cannot show the member.
+//
+// `tone` is asserted alongside the copy because the two are one decision. Only a
+// genuine fault renders `bad`; a member who clicked cancel on EVE's consent
+// screen and a session cookie reaching its TTL are neither of them broken
+// (PRODUCT.md principle 4). Notice derives its role from that tone — `bad` is
+// assertive, everything else polite — so the role is the observable proxy for
+// it, and pinning both here stops a future tone edit from silently flipping how
+// urgently AT interrupts on a non-fault.
+for (const [code, phrase, tone] of [
+  ["oauth_denied", "No access was granted", "info"],
+  ["oauth_expired", "expired before you finished", "bad"],
+  ["oauth_failed", "EVE couldn't be reached", "bad"],
+  ["session_expired", "Your session ended", "info"],
 ] as const) {
-  test(`login page explains ?error=${code}`, async ({ page }) => {
+  test(`login page explains ?error=${code} in the ${tone} tone`, async ({ page }) => {
     await page.goto(`/login?error=${code}`);
-    await expect(page.getByRole("alert").filter({ hasText: phrase })).toBeVisible();
+    // Next.js dev also renders its own role="alert" route-announcer, so scope
+    // to the node that actually carries our copy rather than to the role alone.
+    const notice = page.locator("p.notice").filter({ hasText: phrase });
+    await expect(notice).toBeVisible();
+    await expect(notice).toHaveAttribute("role", tone === "bad" ? "alert" : "status");
+    await expect(notice).toHaveClass(tone === "bad" ? /notice--bad/ : /^notice$/);
   });
 }
 
-// An unknown code must degrade to the plain page, never an empty alert box.
+// An unknown code must degrade to the plain page. The notice is now mounted
+// unconditionally so its live region is registered before any text arrives, so
+// what has to hold is that the empty slot is inert: no tone class, no glyph,
+// nothing drawn — and `role="status"`, not `alert`. Notice takes its role from
+// the tone and not from whether the slot has text, so an empty slot in the bad
+// tone would put an assertive region on the app's front door on every ordinary
+// visit. Checked here and on the no-code path below, because those are the two
+// ways to reach an empty slot.
 test("login page ignores an unrecognised error code", async ({ page }) => {
   await page.goto("/login?error=not_a_real_code");
   await expect(page.locator(".notice--bad")).toHaveCount(0);
+  await expect(page.locator("p.notice")).toHaveCount(0);
+  const slot = page.locator("p.notice-slot");
+  await expect(slot).toHaveCount(1);
+  await expect(slot).toHaveText("");
+  await expect(slot).not.toHaveAttribute("data-glyph", /./);
+  await expect(slot).toHaveAttribute("role", "status");
   await expect(page.getByRole("link", { name: /log in with eve online/i })).toBeVisible();
+});
+
+test("login page with no error code carries an inert, polite slot", async ({ page }) => {
+  await page.goto("/login");
+  await expect(page.locator("p.notice")).toHaveCount(0);
+  const slot = page.locator("p.notice-slot");
+  await expect(slot).toHaveCount(1);
+  await expect(slot).toHaveText("");
+  await expect(slot).toHaveAttribute("role", "status");
 });
 
 test("unauthenticated /account redirects to login", async ({ page }) => {
