@@ -232,8 +232,12 @@ the palette is visually identical. `.tier--unknown` and `.tier--pending` are
 untouched.
 
 **Tests**: `tests/helpers/seed.ts:10,20` and `e2e/helpers.ts:26,43` (union type
-and the `?? "green"` default → `?? "alumni"`); `tests/helpers/config.ts:24`'s
-`STANDINGS_LABEL: "flygd"` → `"authgd"`, matching the production default.
+and the `?? "green"` default → `?? "alumni"`). Separately and for a different
+reason, the standings-label fixtures at `playwright.config.ts:47`,
+`tests/config.test.ts:23` and `tests/helpers/config.ts:24` change from `"flygd"`
+to `"authgd"`, matching the production default — these are category-3
+occurrences, not tiers, and `tests/contacts-job.test.ts` carries ~15 more that
+must move with them so its case-sensitivity assertions stay coherent.
 
 Doc comments carrying the old vocabulary are updated alongside the code they
 describe — `desired.ts`'s "every character of every FlyGD account",
@@ -242,12 +246,31 @@ references, `account-view.ts:22`, `error.tsx:133`.
 
 ### Method
 
-`flygd` is safe to sweep mechanically: 352 unambiguous occurrences. `blue` and
-`green` are **not** — they collide with colour identifiers throughout
-`globals.css` and elsewhere (221 `green` hits, mostly not tiers). Those two are
-reviewed per-hit and filtered to tier context. `code-reviewer` runs on the diff
-before the PR, asked specifically to look for a missed literal and for an
-over-eager colour rename.
+No term is safe to sweep blindly. `flygd` has **three** distinct meanings and
+each takes a different replacement:
+
+| Meaning | Example | Becomes |
+| ------- | ------- | ------- |
+| Tier value / identifier | `tier === "flygd"`, `getFlygdCharacters` | `member` / `getMemberCharacters` |
+| Discord role env var | `DISCORD_ROLE_ID_FLYGD` | `DISCORD_ROLE_ID_MEMBER` |
+| **Standings contact-label fixture** | `STANDINGS_LABEL: "flygd"`, ESI `labelName: "FLYGD"` | `authgd` — **not** `member` |
+
+Category 3 is a real trap: `playwright.config.ts:47`, `tests/config.test.ts:23`
+and `tests/helpers/config.ts:24` all set `STANDINGS_LABEL: "flygd"`, and
+`tests/contacts-job.test.ts` uses `"flygd"`/`"FLYGD"`/`"flygd "` as ESI label
+names across ~15 assertions, several of which specifically exercise
+case-sensitivity and whitespace. `e2e/account.spec.ts:67` documents the
+collision in a comment. Rewriting these to `member` would keep the tests green
+while making them describe something that never happens in production, where the
+label defaults to `authgd` (`.env.example:64`).
+
+`blue` and `green` are likewise unsafe: they collide with colour identifiers
+throughout `globals.css` and elsewhere (221 `green` hits, mostly not tiers).
+
+Every occurrence is therefore classified before replacement, and the sweep runs
+per-module with a grep gate after each. `code-reviewer` runs on the diff before
+the PR, asked specifically to look for a missed literal, an over-eager colour
+rename, and any category-3 label fixture rewritten as a tier.
 
 ## Error handling
 
