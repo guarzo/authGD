@@ -125,12 +125,32 @@ only on that page. An admin on `/admin/audit` or `/admin/sync` gets no signal.
 
 ### Cost
 
-Lower than it appears. `AdminNav` is rendered by `src/app/admin/layout.tsx`,
-already an async server component awaiting `requireAdminPage()`. `SiteHeader`
-renders plain `<a href>` — full navigations, no soft transitions — so the layout
-re-runs on every admin page load and the badge cannot go stale. One indexed
-`COUNT` (`countAccountsByTier`, deliberately tier-only and cheap by its own doc
-at `account-view.ts:350-367`) in one place.
+`AdminNav` is rendered by `src/app/admin/layout.tsx`, already an async server
+component awaiting `requireAdminPage()`. `SiteHeader` renders plain `<a href>` —
+full navigations, no soft transitions — so the layout re-runs on every admin
+page load and the badge cannot go stale.
+
+The count is **not** indexed and, without care, would **not** be one query.
+`account` has no index array at all (`src/db/schema.ts:41-48`); the only indexes
+in the file are on `session.expiresAt`, the outbox partial index, `sync_run` and
+`audit_log`. So `countAccountsByTier` is a sequential scan. And `/admin/accounts`
+would run it twice — once in the layout, once at `page.tsx:120` for the retained
+banner.
+
+Both are accepted deliberately, with one fix:
+
+- **The seq scan stands. No index is added.** `tier` is a four-value enum on a
+  table holding one row per corp member; Postgres will scan a table that small
+  whether or not an index exists, so a `tier` index would buy nothing and would
+  add a persisted-schema change to a task that otherwise has none.
+- **The double execution is deduplicated** by wrapping the count in React
+  `cache()`, so the layout and the page share one call per request.
+  `src/app/payouts/[id]/page.tsx:1` already establishes this idiom in the
+  codebase, and a layout and its page render in the same request.
+
+Net cost on `/admin/accounts` is therefore one seq scan of a small table, the
+same as today; on `/admin/audit` and `/admin/sync` it is one where there was
+none.
 
 ### Shape
 
@@ -140,13 +160,44 @@ at `account-view.ts:350-367`) in one place.
 badge?: { count: number; description: string };
 ```
 
-`SiteHeader` renders it only when `count > 0`, as a **sibling `<span>` after
-the `<a>`, not inside it**. This is the one non-obvious decision in item 2.
-Putting the count inside the link makes its accessible name "Members 3 awaiting
-approval" on one load and "Members" on the next — the same destination named
-two ways, which is exactly what the `ITEMS` comment in `admin-nav.tsx:6-12`
-invokes WCAG 3.2.4 Consistent Identification to prevent. As a sibling, the
-link's name stays exactly "Members" and the count still lands in reading order.
+`SiteHeader` renders it only when `count > 0`, **outside the `<a>` but grouped
+with it and programmatically associated**:
+
+```tsx
+<span className="shell__navitem">
+  <a href={i.href} aria-current={…} aria-describedby={i.badge ? badgeId : undefined}>
+    {i.label}
+  </a>
+  {i.badge && i.badge.count > 0 && (
+    <span id={badgeId} className="shell__badge">
+      {i.badge.count}
+      <span className="visually-hidden"> {i.badge.description}</span>
+    </span>
+  )}
+</span>
+```
+
+This is the one non-obvious decision in item 2, and it is three constraints at
+once:
+
+- **Outside the `<a>`.** Inside, the link's accessible name becomes "Members 3
+  awaiting approval" on one load and "Members" on the next — the same
+  destination named two ways, exactly what the `ITEMS` comment in
+  `admin-nav.tsx:6-12` invokes WCAG 3.2.4 Consistent Identification to prevent.
+- **`aria-describedby`, not bare adjacency.** A sibling preserves the name but
+  is not *associated* with it: screen-reader link navigation jumps link to link
+  and would skip the badge entirely, so the count would exist only for someone
+  reading the nav linearly. The description makes it reachable from the link
+  itself while leaving the name alone.
+- **Wrapped in `.shell__navitem`.** `.shell__nav` is `display: flex` with
+  `flex-wrap: wrap` (`globals.css:370-376`), so a bare sibling `<span>` is a
+  flex child in its own right and can wrap onto the next line away from the
+  link it belongs to. The wrapper makes the pair one flex child.
+
+`badgeId` is derived from the item's `href` rather than `useId` — `SiteHeader`
+is a server component and cannot use hooks — which is stable across renders and
+unique by construction, since `href` is already the nav's identity key.
+
 `description` travels with the count rather than being hardcoded in
 `SiteHeader`, which is shared with the member nav.
 
@@ -189,9 +240,28 @@ Everything else stays on the fallback, deliberately:
 - **One to three self-describing keys**, under the cap and untruncated:
   `payout.corp_share_changed`, `payout.roster_set`, `payout.participant_added`,
   `payout.participant_updated`, `payout.participant_removed`, `payout.paid`,
-  `payout.pool_added`, `payout.pool_deleted`.
+  `payout.payment_reverted`, `payout.pool_added`, `payout.pool_deleted`.
 - `admin.promoted` stays absent, per the module doc: the old declaration named a
   scope and note no writer produces.
+
+### How this inventory was derived
+
+By hand it was wrong once — `payout.payment_reverted` was missing from the list
+above until review caught it, in a list whose only purpose is completeness. It
+is now derived mechanically, and the derivation is recorded here so a reviewer
+can re-run it rather than re-read it:
+
+```sh
+grep -rhno 'action: "[a-z_]*\.[a-z_]*"' src/ | sed 's/.*action: "//; s/"//' | sort -u > /tmp/all.txt
+grep -o '"[a-z_]*\.[a-z_]*":' src/app/admin/audit/summarize.ts | sed 's/"//g; s/://' | sort -u > /tmp/mapped.txt
+comm -23 /tmp/all.txt /tmp/mapped.txt
+```
+
+At 782bf9c that yields 42 distinct emitted actions, 17 already in `PARTS`, and
+25 unmapped. The 25 reconcile exactly against this design: **3** gain renderers,
+**12** carry no `details`, **9** carry one to three self-describing keys, and
+`admin.promoted` is the deliberate omission. Any future drift shows up as a
+count that no longer adds to 25.
 
 All three renderers are built from the existing `part` / `transition` / `flag` /
 `labelled` combinators and read only from `d`. `summarize.ts` stays a pure
@@ -203,12 +273,23 @@ only injected dependency.
 - `tests/discord-link.test.ts` — unlink deletes the row, writes
   `discord.unlinked` with `reason`, enqueues the `discord-user` deprovision and
   **not** `{kind:"account"}`, and returns `not_found` / `not_linked`.
+- `tests/discord-link.test.ts` — **concurrency**, following the `Promise.all` /
+  `Promise.allSettled` idiom the file already uses at `:73` and `:89`. The
+  account-row `FOR UPDATE` lock is the whole basis of the unlink design, and
+  sequential assertions do not exercise it. Cover a concurrent link and unlink
+  on one account: whichever order the lock grants, the final `discord_link`
+  state and the set of deprovision events must agree — no link left pointing at
+  a user that was deprovisioned, and no freed user left without one.
 - `tests/audit-summarize.test.ts` — the three renderers, plus a table-driven
   case asserting the twelve no-details actions render `—`. That records the
   cross-reference as behavior rather than as a claim in a PR description.
-- Nav badge — assert the Members link's accessible name is exactly `Members`
-  with a badge present, which is the invariant the sibling-span decision exists
-  to hold.
+- Nav badge — three assertions, not one. Asserting only that the link is still
+  named `Members` passes when no badge renders at all, which is the failure
+  mode most likely to ship. On a page that does **not** carry the banner
+  (`/admin/audit` or `/admin/sync`, so the badge is the only source of the
+  count): (a) with pending accounts, the badge shows the count and the link's
+  accessible *description* is the badge text; (b) the link's accessible *name*
+  is exactly `Members`; (c) with no pending accounts, no badge element renders.
 - `/account` and `/admin/accounts` both change, so `npm run test:e2e` runs.
 
 Full gate, output quoted: `npm test`, `npm run typecheck`, `npm run lint`,
