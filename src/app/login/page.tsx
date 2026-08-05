@@ -31,6 +31,7 @@ export default async function LoginPage({
   const cfg = getConfig();
   const scopes = cfg.eveSso.scopes;
   const label = cfg.standings.label;
+  const brand = cfg.brand;
   return (
     <main className="launch">
       <div className="launch__panel">
@@ -46,17 +47,26 @@ export default async function LoginPage({
             real cost, paid deliberately to keep the encode untouched.) */}
         <img
           className="launch__seal"
-          src="/brand/emblem.webp"
-          alt="Zoo Landers mission seal"
+          src={brand.sealUrl}
+          alt={`${brand.name} emblem`}
           width={180}
           height={180}
         />
-        <h1 className="launch__title">Zoo Landers</h1>
-        <p className="launch__motto">
-          Center for kids
-          <br />
-          who can&rsquo;t fly good
-        </p>
+        <h1 className="launch__title">{brand.name}</h1>
+        {/* Omitted entirely when unset rather than rendered empty: an empty
+            <p> still occupies the stack's row gap, which reads as a missing
+            image rather than as "this deployment has no motto". A newline in
+            the value is a line break — the only formatting the field takes. */}
+        {brand.motto && (
+          <p className="launch__motto">
+            {brand.motto.split("\n").map((line, i) => (
+              <span key={i}>
+                {i > 0 && <br />}
+                {line}
+              </span>
+            ))}
+          </p>
+        )}
         {/* Same slot account/page.tsx uses: after the page head, before the
             body content. The seal and motto are this page's head, so a member
             bounced back here reads the reason before the disclosure rather
@@ -117,7 +127,7 @@ export default async function LoginPage({
             fetchPriority="high"
           />
         </a>
-        <p className="launch__foot">Est. MMXXV · [FLYGD]</p>
+        {brand.footer && <p className="launch__foot">{brand.footer}</p>}
       </div>
     </main>
   );
