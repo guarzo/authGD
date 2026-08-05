@@ -108,7 +108,9 @@ export default async function PayoutsPage({
                 <th scope="col">Name</th>
                 <th scope="col">Date</th>
                 <th scope="col">Status</th>
-                <th scope="col">Total</th>
+                <th scope="col" className="num">
+                  Total
+                </th>
                 <th scope="col">Paid</th>
               </tr>
             </thead>
@@ -140,7 +142,7 @@ export default async function PayoutsPage({
                       span it is silently dropped and the cell reads as an
                       unexplained punctuation mark. `.visually-hidden` is the
                       pattern `<Tier>` already uses for exactly this. */}
-                  <td className="mono nowrap">
+                  <td className="mono nowrap num">
                     {op.status === "draft" && Number(op.totalValue) === 0 ? (
                       <span className="dim">
                         <span aria-hidden="true">&mdash;</span>

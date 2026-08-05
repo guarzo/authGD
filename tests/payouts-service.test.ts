@@ -11,14 +11,17 @@ import {
   payoutPayment,
 } from "@/db/schema";
 import { unlinkCharacter } from "@/services/accounts";
+import { queryAuditLog } from "@/services/audit";
 import { addAppraisedPool, deletePool, setItemPrice } from "@/services/payout-loot";
 import {
   PayoutForbiddenError,
+  PayoutHasPaidError,
   PayoutLockedError,
   PayoutNotFoundError,
   addParticipant,
   canReadPayouts,
   createOperation,
+  deleteOperation,
   finalizeOperation,
   getOpenInfoTarget,
   recalculate,
@@ -27,7 +30,11 @@ import {
   requirePayoutOperator,
   resolveRosterNames,
   revertPayment,
+  setBattleReportUrl,
   setCorpSharePct,
+  setNotes,
+  setOccurredAt,
+  setOperationName,
   setParticipantExcluded,
   setParticipantShares,
   setRoster,
@@ -119,6 +126,17 @@ async function seedFightWithOnePaidParticipant() {
     recordPayment(tx, seeded.operator.id, seeded.participantId),
   );
   return seeded;
+}
+
+/** A bare draft operation, no roster/pool/finalization -- what the four
+ *  detail editors below actually need, since assertEditable (the same gate
+ *  setCorpSharePct uses) refuses once an operation is finalized. */
+async function seedDraftOperation() {
+  const operator = await seedOperator();
+  const { id: operationId } = await ctx.db.transaction((tx) =>
+    createOperation(tx, operator.id, { name: "Thursday roam", occurredAt: new Date() }),
+  );
+  return { operator, operationId };
 }
 
 describe("requirePayoutOperator", () => {
@@ -583,11 +601,14 @@ describe("the service layer is the authorization boundary", () => {
    * re-checks inside its own transaction. If any of these stop throwing, the
    * guard was dropped from that function.
    *
-   * All fourteen mutating exports are exercised here: createOperation, setRoster,
+   * All eighteen mutating exports are exercised here: createOperation, setRoster,
    * finalizeOperation, unlockOperation, setParticipantShares,
    * setParticipantExcluded, removeParticipant, recordPayment, addAppraisedPool,
-   * deletePool, setCorpSharePct, revertPayment, addParticipant, setItemPrice.
-   * addFlatPool is covered separately in payout-loot.test.ts.
+   * deletePool, setCorpSharePct, revertPayment, addParticipant, setItemPrice,
+   * setOperationName, setOccurredAt, setBattleReportUrl, setNotes.
+   * addFlatPool is covered separately in payout-loot.test.ts. deleteOperation
+   * has its own forbidden-actor test in the `deleteOperation` describe block,
+   * since it gates on admin rather than merely on operator.
    */
   it("rejects every mutation when the actor is not an active member account", async () => {
     const operator = await seedOperator();
@@ -701,6 +722,20 @@ describe("the service layer is the authorization boundary", () => {
       ).rejects.toThrow(PayoutForbiddenError);
       await expect(
         ctx.db.transaction((tx) => setItemPrice(tx, actor, loopItem.id, "2.00")),
+      ).rejects.toThrow(PayoutForbiddenError);
+      await expect(
+        ctx.db.transaction((tx) => setOperationName(tx, actor, operationId, "Nope")),
+      ).rejects.toThrow(PayoutForbiddenError);
+      await expect(
+        ctx.db.transaction((tx) => setOccurredAt(tx, actor, operationId, new Date())),
+      ).rejects.toThrow(PayoutForbiddenError);
+      await expect(
+        ctx.db.transaction((tx) =>
+          setBattleReportUrl(tx, actor, operationId, "https://example.com/nope"),
+        ),
+      ).rejects.toThrow(PayoutForbiddenError);
+      await expect(
+        ctx.db.transaction((tx) => setNotes(tx, actor, operationId, "nope")),
       ).rejects.toThrow(PayoutForbiddenError);
     }
 
@@ -1361,5 +1396,299 @@ describe("getOpenInfoTarget", () => {
         "00000000-0000-0000-0000-000000000000",
       ),
     ).toBeNull();
+  });
+});
+
+describe("createOperation corp share default", () => {
+  it("defaults corpSharePct to 10 when the caller omits it", async () => {
+    const operator = await seedOperator();
+    const { id: operationId } = await ctx.db.transaction((tx) =>
+      createOperation(tx, operator.id, {
+        name: "No corp share given",
+        occurredAt: new Date(),
+      }),
+    );
+    const [op] = await ctx.db
+      .select()
+      .from(payoutOperation)
+      .where(eq(payoutOperation.id, operationId));
+    expect(op.corpSharePct).toBe("10.00");
+  });
+
+  it("still honours an explicit corpSharePct, including 0", async () => {
+    const operator = await seedOperator();
+    const { id: operationId } = await ctx.db.transaction((tx) =>
+      createOperation(tx, operator.id, {
+        name: "Explicit zero",
+        occurredAt: new Date(),
+        corpSharePct: "0",
+      }),
+    );
+    const [op] = await ctx.db
+      .select()
+      .from(payoutOperation)
+      .where(eq(payoutOperation.id, operationId));
+    expect(op.corpSharePct).toBe("0.00");
+  });
+});
+
+describe("deleteOperation", () => {
+  async function seedAdmin() {
+    return seedAccount(ctx.db, { tier: "member", status: "active", isAdmin: true });
+  }
+
+  it("deletes a draft with no payments", async () => {
+    const admin = await seedAdmin();
+    const { id: operationId } = await ctx.db.transaction((tx) =>
+      createOperation(tx, admin.id, {
+        name: "Never finalized",
+        occurredAt: new Date(),
+        corpSharePct: "0",
+      }),
+    );
+    await ctx.db.transaction((tx) => deleteOperation(tx, admin.id, operationId));
+    const rows = await ctx.db
+      .select()
+      .from(payoutOperation)
+      .where(eq(payoutOperation.id, operationId));
+    expect(rows).toHaveLength(0);
+  });
+
+  // The case the user actually hit in production, and the reason the
+  // predicate is `paid_amount IS NULL` rather than `hasPayments`:
+  // `hasPayments` counts payout_payment rows of ANY kind, including
+  // `reverted`, so it stays true forever once money moved even after every
+  // participant's paidAmount is back to null.
+  it("deletes a finalized operation whose payments were all reverted", async () => {
+    const { operator, operationId, participantId } =
+      await seedFightWithOnePaidParticipant();
+    await ctx.db.transaction((tx) => revertPayment(tx, operator.id, participantId));
+    const admin = await seedAdmin();
+    await ctx.db.transaction((tx) => deleteOperation(tx, admin.id, operationId));
+    const rows = await ctx.db
+      .select()
+      .from(payoutOperation)
+      .where(eq(payoutOperation.id, operationId));
+    expect(rows).toHaveLength(0);
+  });
+
+  it("throws PayoutHasPaidError when a participant is currently paid", async () => {
+    const { operationId } = await seedFightWithOnePaidParticipant();
+    const admin = await seedAdmin();
+    await expect(
+      ctx.db.transaction((tx) => deleteOperation(tx, admin.id, operationId)),
+    ).rejects.toThrow(PayoutHasPaidError);
+    const rows = await ctx.db
+      .select()
+      .from(payoutOperation)
+      .where(eq(payoutOperation.id, operationId));
+    expect(rows).toHaveLength(1); // untouched
+  });
+
+  it("throws PayoutForbiddenError for a non-admin operator", async () => {
+    const { operator, operationId } = await seedFightWithOneUnpaidParticipant();
+    await expect(
+      ctx.db.transaction((tx) => deleteOperation(tx, operator.id, operationId)),
+    ).rejects.toThrow(PayoutForbiddenError);
+    const rows = await ctx.db
+      .select()
+      .from(payoutOperation)
+      .where(eq(payoutOperation.id, operationId));
+    expect(rows).toHaveLength(1); // untouched
+  });
+
+  it("writes a payout.deleted audit row carrying name, occurredAt, roster size and value", async () => {
+    const { operationId } = await seedFightWithOneUnpaidParticipant();
+    const admin = await seedAdmin();
+    await ctx.db.transaction((tx) => deleteOperation(tx, admin.id, operationId));
+    const [row] = await ctx.db
+      .select()
+      .from(auditLog)
+      .where(eq(auditLog.action, "payout.deleted"));
+    expect(row.target).toBe(operationId);
+    expect(row.actor).toBe(admin.id);
+    expect(row.details).toMatchObject({
+      name: "Thursday roam",
+      participantCount: 1,
+      payableCount: 1,
+      totalValue: "1000.00",
+    });
+    expect(typeof (row.details as Record<string, unknown>).occurredAt).toBe("string");
+  });
+
+  // The audit row is the ONLY surviving evidence of what a delete destroyed,
+  // so `participantCount` must be the true roster size cascade-delete just
+  // removed -- not the paid-eligible figure the list page shows. An operation
+  // with an excluded participant is exactly where those two numbers diverge.
+  it("records the full roster size in participantCount even with an excluded participant, not just the payable count", async () => {
+    const admin = await seedAdmin();
+    const operator = await seedOperator();
+    const { id: operationId } = await ctx.db.transaction((tx) =>
+      createOperation(tx, operator.id, {
+        name: "Roam with a bench",
+        occurredAt: new Date(),
+        corpSharePct: "0",
+      }),
+    );
+    const roster: RosterEntry[] = [
+      {
+        displayName: "Line Member",
+        accountId: null,
+        recipientCharacterId: null,
+        sourceCharacters: ["Line Member"],
+        shares: "1",
+        excluded: false,
+      },
+      {
+        displayName: "Benched Pilot",
+        accountId: null,
+        recipientCharacterId: null,
+        sourceCharacters: ["Benched Pilot"],
+        shares: "1",
+        excluded: true,
+      },
+    ];
+    await ctx.db.transaction((tx) => setRoster(tx, operator.id, operationId, roster));
+    await ctx.db.transaction((tx) => deleteOperation(tx, admin.id, operationId));
+    const [row] = await ctx.db
+      .select()
+      .from(auditLog)
+      .where(eq(auditLog.action, "payout.deleted"));
+    expect(row.details).toMatchObject({ participantCount: 2, payableCount: 1 });
+  });
+
+  it("names a deleted operation's older audit rows via resolveAuditIdentities", async () => {
+    const { operationId } = await seedFightWithOneUnpaidParticipant();
+    const admin = await seedAdmin();
+    await ctx.db.transaction((tx) => deleteOperation(tx, admin.id, operationId));
+    const resolved = await queryAuditLog(ctx.db, { targetIds: [operationId] });
+    expect(resolved.length).toBeGreaterThan(1); // created, roster_set, finalized, deleted, ...
+    for (const row of resolved) {
+      expect(row.targetKind).toBe("payout");
+      expect(row.targetName).toBe("Thursday roam");
+    }
+  });
+
+  // deleteOperation opens its own `dbx.transaction(...)` even when `dbx` is
+  // already itself a transaction handle (Dbx = Db | DbTx). drizzle-orm maps a
+  // nested call like that to a SAVEPOINT on node-postgres rather than a no-op
+  // or an error, but that is runtime behaviour a passing `tsc --noEmit` does
+  // NOT verify -- the union type only says the method exists on both members.
+  // This proves it by committing a second, independent write in the SAME
+  // outer transaction and confirming both land together.
+  it("commits correctly when called with a Dbx that is already a transaction (nested SAVEPOINT)", async () => {
+    const { operationId } = await seedFightWithOneUnpaidParticipant();
+    const admin = await seedAdmin();
+    let siblingId = "";
+    await ctx.db.transaction(async (outerTx) => {
+      await deleteOperation(outerTx, admin.id, operationId);
+      const created = await createOperation(outerTx, admin.id, {
+        name: "Sibling written in the same outer transaction",
+        occurredAt: new Date(),
+      });
+      siblingId = created.id;
+    });
+    const deletedRows = await ctx.db
+      .select()
+      .from(payoutOperation)
+      .where(eq(payoutOperation.id, operationId));
+    expect(deletedRows).toHaveLength(0);
+    const [sibling] = await ctx.db
+      .select()
+      .from(payoutOperation)
+      .where(eq(payoutOperation.id, siblingId));
+    expect(sibling).toBeDefined();
+  });
+});
+
+describe("the four detail editors", () => {
+  it("setOperationName updates the name and audits the new value", async () => {
+    const { operator, operationId } = await seedDraftOperation();
+    await ctx.db.transaction((tx) =>
+      setOperationName(tx, operator.id, operationId, "Renamed roam"),
+    );
+    const [op] = await ctx.db
+      .select()
+      .from(payoutOperation)
+      .where(eq(payoutOperation.id, operationId));
+    expect(op.name).toBe("Renamed roam");
+    const [row] = await ctx.db
+      .select()
+      .from(auditLog)
+      .where(eq(auditLog.action, "payout.name_changed"));
+    expect(row.target).toBe(operationId);
+    expect(row.details).toEqual({ name: "Renamed roam" });
+  });
+
+  it("setOccurredAt updates the date and audits it as yyyy-mm-dd", async () => {
+    const { operator, operationId } = await seedDraftOperation();
+    const newDate = new Date("2026-02-14T00:00:00Z");
+    await ctx.db.transaction((tx) =>
+      setOccurredAt(tx, operator.id, operationId, newDate),
+    );
+    const [op] = await ctx.db
+      .select()
+      .from(payoutOperation)
+      .where(eq(payoutOperation.id, operationId));
+    expect(op.occurredAt.toISOString()).toBe(newDate.toISOString());
+    const [row] = await ctx.db
+      .select()
+      .from(auditLog)
+      .where(eq(auditLog.action, "payout.occurred_at_changed"));
+    expect(row.details).toEqual({ occurredAt: "2026-02-14" });
+  });
+
+  it("setBattleReportUrl updates the link and accepts null (clearing it)", async () => {
+    const { operator, operationId } = await seedDraftOperation();
+    await ctx.db.transaction((tx) =>
+      setBattleReportUrl(tx, operator.id, operationId, "https://zkillboard.com/kill/1/"),
+    );
+    let [op] = await ctx.db
+      .select()
+      .from(payoutOperation)
+      .where(eq(payoutOperation.id, operationId));
+    expect(op.battleReportUrl).toBe("https://zkillboard.com/kill/1/");
+
+    await ctx.db.transaction((tx) =>
+      setBattleReportUrl(tx, operator.id, operationId, null),
+    );
+    [op] = await ctx.db
+      .select()
+      .from(payoutOperation)
+      .where(eq(payoutOperation.id, operationId));
+    expect(op.battleReportUrl).toBeNull();
+  });
+
+  it("setNotes records had/has rather than the note text", async () => {
+    const { operator, operationId } = await seedDraftOperation();
+    await ctx.db.transaction((tx) =>
+      setNotes(tx, operator.id, operationId, "a secret note"),
+    );
+    await ctx.db.transaction((tx) => setNotes(tx, operator.id, operationId, null));
+    const rows = await ctx.db
+      .select()
+      .from(auditLog)
+      .where(eq(auditLog.action, "payout.notes_changed"))
+      .orderBy(asc(auditLog.id));
+    expect(rows[0].details).toEqual({ had: false, has: true });
+    expect(rows[1].details).toEqual({ had: true, has: false });
+  });
+
+  it("refuses all four once the operation is finalized (assertEditable)", async () => {
+    const { operator, operationId } = await seedFightWithOnePaidParticipant();
+    await expect(
+      ctx.db.transaction((tx) => setOperationName(tx, operator.id, operationId, "Nope")),
+    ).rejects.toThrow(PayoutLockedError);
+    await expect(
+      ctx.db.transaction((tx) => setOccurredAt(tx, operator.id, operationId, new Date())),
+    ).rejects.toThrow(PayoutLockedError);
+    await expect(
+      ctx.db.transaction((tx) =>
+        setBattleReportUrl(tx, operator.id, operationId, "https://example.com"),
+      ),
+    ).rejects.toThrow(PayoutLockedError);
+    await expect(
+      ctx.db.transaction((tx) => setNotes(tx, operator.id, operationId, "nope")),
+    ).rejects.toThrow(PayoutLockedError);
   });
 });

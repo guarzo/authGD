@@ -109,7 +109,6 @@ test("a cryo member can read but not mutate", async ({ page, context }) => {
   await page.goto("/payouts/new");
   await page.getByLabel("Name").fill("Thursday roam");
   await page.getByLabel("Date").fill("2026-08-01");
-  await page.getByLabel("Corp share %").fill("10");
   await page.getByRole("button", { name: "Create operation" }).click();
   await expect(page).toHaveURL(/\/payouts\/[0-9a-f-]+$/);
   const opUrl = page.url();
@@ -154,7 +153,6 @@ test("create, add a flat pool, paste a roster, finalize, mark paid", async ({
   await page.goto("/payouts/new");
   await page.getByLabel("Name").fill("Thursday roam");
   await page.getByLabel("Date").fill("2026-08-01");
-  await page.getByLabel("Corp share %").fill("10");
   await page.getByRole("button", { name: "Create operation" }).click();
   await expect(page.getByRole("heading", { name: "Thursday roam" })).toBeVisible();
   const opId = page.url().split("/").pop()!;
@@ -263,7 +261,6 @@ test("pasting two alts of one account collapses them into one participant row", 
   await page.goto("/payouts/new");
   await page.getByLabel("Name").fill("Roam with an alt");
   await page.getByLabel("Date").fill("2026-08-01");
-  await page.getByLabel("Corp share %").fill("0");
   await page.getByRole("button", { name: "Create operation" }).click();
 
   await page.getByLabel("Total value (ISK)").fill("200");
@@ -546,10 +543,15 @@ test("setting shares, excluding, and removing a participant each recompute exact
   await page.goto("/payouts/new");
   await page.getByLabel("Name").fill("Split adjustments");
   await page.getByLabel("Date").fill("2026-08-01");
-  await page.getByLabel("Corp share %").fill("0");
   await page.getByRole("button", { name: "Create operation" }).click();
   await expect(page.getByRole("heading", { name: "Split adjustments" })).toBeVisible();
   const opId = page.url().split("/").pop()!;
+
+  // The create form no longer collects corp share (it defaults to 10%) — set
+  // it to 0 here through the detail page's own editor so the even-split math
+  // below stays exact.
+  await page.getByLabel("Corp share %").fill("0");
+  await page.getByRole("button", { name: "save corp share" }).click();
 
   await page.getByLabel("Total value (ISK)").fill("300");
   await page.getByLabel("Note (required — why this number)").fill("even split test");
@@ -636,10 +638,6 @@ async function bypassClientGuard(input: Locator, value: string): Promise<void> {
 for (const [code, phrase] of [
   ["name_required", "needs a name"],
   ["date_invalid", "real calendar date"],
-  ["url_invalid", "not a URL"],
-  ["url_scheme", "http:// or https://"],
-  ["share_format", "plain percentage"],
-  ["share_range", "cannot exceed 100%"],
 ] as const) {
   test(`/payouts/new explains ?error=${code}`, async ({ page, context }) => {
     const operator = await seedMember(db, {
@@ -677,6 +675,7 @@ for (const [code, phrase] of [
   ["open_info_timeout", "took too long"],
   ["open_info_failed", "Could not open that window"],
   ["open_info_dry_run", "dry-run mode"],
+  ["delete_has_paid", "Revert every payment first"],
 ] as const) {
   test(`the operation page explains ?error=${code}`, async ({ page, context }) => {
     const operator = await seedMember(db, {
@@ -715,10 +714,10 @@ test("payout pages ignore an unrecognised error code", async ({ page, context })
 
 /*
  * The round trip the redirect exists for: a rejected create form comes back
- * with every other field still filled in. Retyping five fields because the
- * sixth was wrong is the actual cost of the old throw, and the only way to
- * catch a regression in it is to submit a bad value and read the good ones
- * back off the form.
+ * with the other field still filled in. Retyping the name because the date
+ * was bad (or vice versa) is the actual cost of the old throw, and the only
+ * way to catch a regression in it is to submit a bad value and read the good
+ * one back off the form.
  */
 test("a rejected create form comes back filled in", async ({ page, context }) => {
   const operator = await seedMember(db, {
@@ -729,27 +728,25 @@ test("a rejected create form comes back filled in", async ({ page, context }) =>
   await context.addCookies([await sessionCookieFor(db, operator.id)]);
   await page.goto("/payouts/new");
   await page.getByLabel("Name").fill("Hard-won roam");
-  await page.getByLabel("Date").fill("2026-08-01");
-  await page.getByLabel("Notes (optional)").fill("worth keeping");
-  // max="100" stops 150 in the browser, so reaching the server check at all
-  // means going around the client guard.
-  await bypassClientGuard(page.getByLabel("Corp share %"), "150");
+  // type="date" stops free text in the browser, so reaching the server check
+  // at all means going around the client guard.
+  await bypassClientGuard(page.getByLabel("Date"), "not-a-date");
   await page.getByRole("button", { name: "Create operation" }).click();
 
   await expect(page).toHaveURL(/\/payouts\/new\?/);
-  await expect(page.locator("p.notice--bad")).toContainText("cannot exceed 100%");
+  await expect(page.locator("p.notice--bad")).toContainText("real calendar date");
   await expect(page.getByText("Something broke")).toHaveCount(0);
+  // The rejected value never survives here: a genuinely invalid date cannot
+  // be displayed by a `type="date"` input regardless of what the query string
+  // carries, so the round trip this test actually pins is Name's.
   await expect(page.getByLabel("Name")).toHaveValue("Hard-won roam");
-  await expect(page.getByLabel("Date")).toHaveValue("2026-08-01");
-  await expect(page.getByLabel("Notes (optional)")).toHaveValue("worth keeping");
-  await expect(page.getByLabel("Corp share %")).toHaveValue("150");
 
-  // And the corrected submit goes through, so the echoed values are real form
+  // And the corrected submit goes through, so the echoed name is real form
   // state and not just decoration on an error page.
-  await page.getByLabel("Corp share %").fill("15");
+  await page.getByLabel("Date").fill("2026-08-01");
   await page.getByRole("button", { name: "Create operation" }).click();
   await expect(page).toHaveURL(/\/payouts\/[0-9a-f-]+$/);
-  await expect(page.getByText("15.00% + remainder")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Hard-won roam" })).toBeVisible();
 });
 
 /*
@@ -773,10 +770,15 @@ test("corp share can be corrected after creation, and the split follows", async 
   await page.goto("/payouts/new");
   await page.getByLabel("Name").fill("Corp share fix");
   await page.getByLabel("Date").fill("2026-08-01");
-  await page.getByLabel("Corp share %").fill("0");
   await page.getByRole("button", { name: "Create operation" }).click();
   await expect(page).toHaveURL(/\/payouts\/[0-9a-f-]+$/);
   const opId = page.url().split("/").pop()!;
+
+  // The create form defaults corp share to 10% — drop it to 0% through the
+  // detail page's own editor so the baseline below is the even split this
+  // test's math depends on, before the correction to 20% under test.
+  await page.getByLabel("Corp share %").fill("0");
+  await page.getByRole("button", { name: "save corp share" }).click();
 
   await page.getByLabel("Total value (ISK)").fill("1000");
   await page.getByLabel("Note (required — why this number)").fill("flat");
@@ -802,7 +804,10 @@ test("corp share can be corrected after creation, and the split follows", async 
     .where(
       and(eq(auditLog.action, "payout.corp_share_changed"), eq(auditLog.target, opId)),
     );
-  expect(changed).toHaveLength(1);
+  // Two rows: dropping the create form's 10% default to 0% above, then this
+  // correction to 20% — both are edits through the same action, audited alike.
+  expect(changed).toHaveLength(2);
+  expect(changed[1].details).toMatchObject({ corpSharePct: "20" });
 
   // Out-of-range comes back as a message on the page, not error.tsx, and the
   // stored value is untouched.
@@ -830,7 +835,6 @@ test("bad shares land on the page, not the error boundary", async ({ page, conte
   await page.goto("/payouts/new");
   await page.getByLabel("Name").fill("Shares guard");
   await page.getByLabel("Date").fill("2026-08-01");
-  await page.getByLabel("Corp share %").fill("0");
   await page.getByRole("button", { name: "Create operation" }).click();
   await expect(page).toHaveURL(/\/payouts\/[0-9a-f-]+$/);
 
@@ -1237,4 +1241,143 @@ test("open info appears only for an operator whose character granted the scope",
   await expect(row.getByRole("button", { name: "open info for Paid Pilot" })).toHaveCount(
     1,
   );
+});
+
+/*
+ * The destructive path, end to end and through the arming control. The service
+ * rules are covered exhaustively in tests/payouts-service.test.ts; what only a
+ * browser can show is that the admin-only section renders, that the two-press
+ * arm actually reaches the action, and that the delete leaves the page it just
+ * destroyed instead of revalidating a row that no longer exists.
+ */
+test("an admin deletes an operation, and the audit row outlives it", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedMember(db, {
+    name: "Admin Prime",
+    tier: "member",
+    status: "active",
+    isAdmin: true,
+  });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+
+  await page.goto("/payouts/new");
+  await page.getByLabel("Name").fill("Mistaken op");
+  await page.getByLabel("Date").fill("2026-08-01");
+  await page.getByRole("button", { name: "Create operation" }).click();
+  // The heading first: `page.url()` is read synchronously and would otherwise
+  // catch the pre-redirect `/payouts/new`, handing every later query the
+  // literal id "new".
+  await expect(page.getByRole("heading", { name: "Mistaken op" })).toBeVisible();
+  const opId = page.url().split("/").pop()!;
+
+  await page.getByLabel("Total value (ISK)").fill("1000000");
+  await page.getByLabel("Note (required — why this number)").fill("sold privately");
+  await page.getByRole("button", { name: "Add flat pool" }).click();
+  await page
+    .getByLabel("Paste (names separated by /)")
+    .fill("Brain Tartare / Gustav Oswaldo");
+  await page.getByRole("button", { name: "Set roster" }).click();
+  await expect(page.getByText("Gustav Oswaldo")).toBeVisible();
+
+  // The cost line states what is about to go, from the live counts — an admin
+  // reading "2 roster rows" is the only warning this flow gives.
+  await expect(page.getByText("Permanently deletes this operation")).toContainText(
+    "2 roster rows",
+  );
+
+  // Armed, like Finalize: the accessible name stays whole ("Delete operation")
+  // while the visible label is the single word under the heading that already
+  // said the rest.
+  await page.getByRole("button", { name: "Delete operation" }).click();
+  await page.getByRole("button", { name: /^confirm delete operation/ }).click();
+
+  // Leaves for the list rather than revalidating a page whose row is gone.
+  await expect(page).toHaveURL(/\/payouts$/);
+  await expect(page.getByRole("link", { name: "Mistaken op" })).toHaveCount(0);
+
+  const rows = await db
+    .select()
+    .from(payoutOperation)
+    .where(eq(payoutOperation.id, opId));
+  expect(rows).toHaveLength(0);
+  // Cascade took the roster with it; nothing is left pointing at a dead parent.
+  const orphans = await db
+    .select()
+    .from(payoutParticipant)
+    .where(eq(payoutParticipant.operationId, opId));
+  expect(orphans).toHaveLength(0);
+
+  // audit_log has no FK to the operation, which is the point: the row survives
+  // the delete, and it carries denormalised detail because the join that would
+  // have supplied it can no longer resolve.
+  const deleted = await db
+    .select()
+    .from(auditLog)
+    .where(and(eq(auditLog.action, "payout.deleted"), eq(auditLog.target, opId)));
+  expect(deleted).toHaveLength(1);
+  expect(deleted[0].details).toMatchObject({
+    name: "Mistaken op",
+    occurredAt: "2026-08-01",
+    participantCount: 2,
+    payableCount: 2,
+    totalValue: "1000000.00",
+  });
+});
+
+/*
+ * The gate, exercised the way an admin would hit it rather than by calling the
+ * service. `delete_has_paid` is the one rejection this flow has, and its notice
+ * is browser-only: the action redirects back to the operation with the code,
+ * and the operation has to still be there to read it on.
+ */
+test("deleting an operation with a paid participant is refused on the page", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedMember(db, {
+    name: "Admin Paid",
+    tier: "member",
+    status: "active",
+    isAdmin: true,
+  });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+
+  await page.goto("/payouts/new");
+  await page.getByLabel("Name").fill("Already paid op");
+  await page.getByLabel("Date").fill("2026-08-01");
+  await page.getByRole("button", { name: "Create operation" }).click();
+  await expect(page.getByRole("heading", { name: "Already paid op" })).toBeVisible();
+  const opId = page.url().split("/").pop()!;
+
+  await page.getByLabel("Total value (ISK)").fill("1000000");
+  await page.getByLabel("Note (required — why this number)").fill("sold privately");
+  await page.getByRole("button", { name: "Add flat pool" }).click();
+  await page.getByLabel("Paste (names separated by /)").fill("Brain Tartare");
+  await page.getByRole("button", { name: "Set roster" }).click();
+
+  await page.getByRole("button", { name: "Finalize" }).click();
+  await page.getByRole("button", { name: /^confirm finalize/ }).click();
+  await page.getByRole("button", { name: "mark paid" }).click();
+  await page.getByRole("button", { name: /^confirm mark paid/ }).click();
+  await expect(page.getByText("paid", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "Delete operation" }).click();
+  await page.getByRole("button", { name: /^confirm delete operation/ }).click();
+
+  await expect(page.locator("p.notice--bad")).toContainText("Revert every payment first");
+  // Refused, not partially applied: the operation and its roster are intact,
+  // and no audit row claims otherwise.
+  await expect(page).toHaveURL(new RegExp(`/payouts/${opId}`));
+  const rows = await db
+    .select()
+    .from(payoutOperation)
+    .where(eq(payoutOperation.id, opId));
+  expect(rows).toHaveLength(1);
+  const deleted = await db
+    .select()
+    .from(auditLog)
+    .where(and(eq(auditLog.action, "payout.deleted"), eq(auditLog.target, opId)));
+  expect(deleted).toHaveLength(0);
 });

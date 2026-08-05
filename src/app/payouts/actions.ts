@@ -15,8 +15,10 @@ import {
 import {
   MAX_SHARES_HUNDREDTHS,
   PayoutDuplicateParticipantError,
+  PayoutHasPaidError,
   addParticipant,
   createOperation,
+  deleteOperation,
   finalizeOperation,
   getOpenInfoTarget,
   recordPayment,
@@ -24,7 +26,11 @@ import {
   requirePayoutOperator,
   resolveRosterNames,
   revertPayment,
+  setBattleReportUrl,
   setCorpSharePct,
+  setNotes,
+  setOccurredAt,
+  setOperationName,
   setParticipantExcluded,
   setParticipantShares,
   setRoster,
@@ -91,24 +97,14 @@ function operationFailed(operationId: string, code: OperationErrorCode): never {
 /** The create form has nowhere to fall back to — a rejected operation does not
  *  exist yet, so /payouts/new is both the origin and the destination. Echo the
  *  submitted values back so the operator corrects one field instead of retyping
- *  five. Values over 500 chars are dropped rather than round-tripped: only
- *  `notes` can realistically reach that, and a redirect URL is the wrong place
- *  to discover a header-size limit.
+ *  the other.
  *
- *  Every message in `NEW_OPERATION_ERRORS` tells the operator the rest of the
- *  form survived, which this drop could silently falsify. The form closes that
- *  gap at the input instead of explaining it after the fact: the Notes textarea
- *  carries `maxLength={500}`, the same ceiling, so a value long enough to be
- *  dropped cannot be typed into the only field that could hold one. The two
- *  numbers have to move together — a `maxLength` raised above this cap
- *  reinstates the silent drop. */
-const CREATE_FIELDS = [
-  "name",
-  "occurredAt",
-  "battleReportUrl",
-  "corpSharePct",
-  "notes",
-] as const;
+ *  Just the two fields the slimmed-down form still asks for. Battle report,
+ *  corp share, and notes all moved to the detail page's own editors (see
+ *  `setBattleReportUrlAction`, `setCorpShareAction`, `setNotesAction` below) —
+ *  `createOperation` defaults corp share to 10% and leaves the other two null
+ *  when the create form does not send them. */
+const CREATE_FIELDS = ["name", "occurredAt"] as const;
 
 function createFailed(formData: FormData, code: NewOperationErrorCode): never {
   const params = new URLSearchParams({ error: code });
@@ -125,51 +121,32 @@ export async function createOperationAction(formData: FormData): Promise<void> {
   if (!name) createFailed(formData, "name_required");
   const occurredAt = new Date(field(formData, "occurredAt"));
   if (Number.isNaN(occurredAt.getTime())) createFailed(formData, "date_invalid");
-  const battleReportUrlRaw = field(formData, "battleReportUrl").trim() || null;
-  // Rendered as a plain `<a href>` on the detail page — reject anything but
-  // http(s) here so a `javascript:` or other scheme can never reach that link.
-  if (battleReportUrlRaw) {
-    let scheme: string;
-    try {
-      scheme = new URL(battleReportUrlRaw).protocol;
-    } catch {
-      createFailed(formData, "url_invalid");
-    }
-    if (scheme !== "http:" && scheme !== "https:") {
-      createFailed(formData, "url_scheme");
-    }
-  }
-  const battleReportUrl = battleReportUrlRaw;
-  const corpSharePct = field(formData, "corpSharePct").trim() || "0";
-  // The <input type="number" min max> on the form is client-side only —
-  // mirrors payout_operation_corp_share_pct_ck with a readable message before
-  // the raw string reaches the numeric(5,2) column, same precedent addFlatPool
-  // sets for its totalValue field.
-  if (!/^\d+(\.\d{1,2})?$/.test(corpSharePct)) {
-    createFailed(formData, "share_format");
-  }
-  if (Number(corpSharePct) > 100) {
-    createFailed(formData, "share_range");
-  }
-  const notes = field(formData, "notes").trim() || null;
 
+  // Battle report, corp share, and notes are no longer collected here — they
+  // moved to the detail page's own editors once the operation exists (see
+  // `setBattleReportUrlAction`, `setCorpShareAction`, `setNotesAction` below).
+  // `createOperation` defaults corp share to 10% and leaves the other two null.
   const { id } = await getDb().transaction((dbtx) =>
-    createOperation(dbtx, actor, {
-      name,
-      occurredAt,
-      battleReportUrl,
-      corpSharePct,
-      notes,
-    }),
+    createOperation(dbtx, actor, { name, occurredAt }),
   );
   revalidatePath("/payouts");
   redirect(`/payouts/${id}`);
 }
 
+/** The one rejection on this page that `useActionState` handles instead of a
+ *  `?error=` redirect — see `AppraiseForm`'s docblock for why. `null` is the
+ *  hook's initial state: `state === null` never renders a notice, whether
+ *  that means "hasn't submitted yet" or "still pending", and `ok: true` on a
+ *  success lets a client leaf tell that apart from either of those without
+ *  reading anything from the query string. */
+export type AppraiseActionState =
+  { ok: true } | { ok: false; code: "appraisal_failed" } | null;
+
 export async function addAppraisedPoolAction(
   operationId: string,
+  _prevState: AppraiseActionState,
   formData: FormData,
-): Promise<void> {
+): Promise<AppraiseActionState> {
   const actor = await requireOperatorAccount();
   const rawPaste = field(formData, "rawPaste");
   const pricingModeRaw = field(formData, "pricingMode");
@@ -237,21 +214,19 @@ export async function addAppraisedPoolAction(
     }
   } catch (err) {
     if (err instanceof TriffError || err instanceof EsiError) {
-      // Visible error on the appraisal form, pool left unvalued — never a
-      // silent partial total, per the design's Pricing/Failure handling. An
-      // ESI failure (name resolution inside appraiseLoot's resolveIds) is just
-      // as much a transient upstream failure as a triff failure and deserves
-      // the same friendly path, not an uncaught exit past this catch.
-      // Goes through `operationFailed` rather than a hand-written redirect so
-      // this code is checked against the page's map like every other one. Safe
-      // despite the "never inside a try" rule above: this is the CATCH block,
-      // and a throw from here propagates past its own try rather than into it.
-      operationFailed(operationId, "appraisal_failed");
+      // Returned, not redirected: a redirect can only carry a fixed code in
+      // the query string, and that is exactly the channel that cannot hold a
+      // paste running hundreds of lines back to the form. Returning it as
+      // `useActionState` state instead keeps `AppraiseForm` mounted — nothing
+      // navigates, so the paste the operator just typed is still sitting in
+      // the textarea when this renders, not merely echoed back from a URL.
+      return { ok: false, code: "appraisal_failed" };
     }
     throw err;
   }
   revalidateOperation(operationId);
   if (droppedParam) redirect(`/payouts/${operationId}?dropped=${droppedParam}`);
+  return { ok: true };
 }
 
 export async function addFlatPoolAction(
@@ -381,9 +356,76 @@ export async function setParticipantSharesAction(
   revalidateOperation(operationId);
 }
 
-/** The one operation-level field with an edit path. Same codes as the create
- *  form's share checks, so both surfaces reject identically; they land on
- *  different pages, which is why each page carries its own copy. */
+/** Four inline editors for fields the create form no longer collects up
+ *  front (name/date) plus the two that were always freeform (report link,
+ *  notes) — one action per field, mirroring `setOperationName` /
+ *  `setOccurredAt` / `setBattleReportUrl` / `setNotes`'s own one-function-
+ *  per-field split in the service layer. Each redirects on its own input
+ *  rejection through `operationFailed`, the same conversion every other input
+ *  rejection on this page already goes through, and every service call is
+ *  gated by `assertEditable` underneath — reachable only while `canEdit` is
+ *  true on the page, same as `setCorpShareAction` below. */
+export async function setNameAction(
+  operationId: string,
+  formData: FormData,
+): Promise<void> {
+  const actor = await requireOperatorAccount();
+  const name = field(formData, "name").trim();
+  if (!name) operationFailed(operationId, "name_required");
+  await getDb().transaction((dbtx) => setOperationName(dbtx, actor, operationId, name));
+  revalidateOperation(operationId);
+}
+
+export async function setOccurredAtAction(
+  operationId: string,
+  formData: FormData,
+): Promise<void> {
+  const actor = await requireOperatorAccount();
+  const occurredAt = new Date(field(formData, "occurredAt"));
+  if (Number.isNaN(occurredAt.getTime())) operationFailed(operationId, "date_invalid");
+  await getDb().transaction((dbtx) =>
+    setOccurredAt(dbtx, actor, operationId, occurredAt),
+  );
+  revalidateOperation(operationId);
+}
+
+export async function setBattleReportUrlAction(
+  operationId: string,
+  formData: FormData,
+): Promise<void> {
+  const actor = await requireOperatorAccount();
+  const raw = field(formData, "battleReportUrl").trim() || null;
+  // Same http(s)-only check `createOperationAction` runs, and for the same
+  // reason: this is rendered as a plain `<a href>` on this very page, so a
+  // `javascript:` or other scheme must never reach the database.
+  if (raw) {
+    let scheme: string;
+    try {
+      scheme = new URL(raw).protocol;
+    } catch {
+      operationFailed(operationId, "url_invalid");
+    }
+    if (scheme !== "http:" && scheme !== "https:") {
+      operationFailed(operationId, "url_scheme");
+    }
+  }
+  await getDb().transaction((dbtx) => setBattleReportUrl(dbtx, actor, operationId, raw));
+  revalidateOperation(operationId);
+}
+
+export async function setNotesAction(
+  operationId: string,
+  formData: FormData,
+): Promise<void> {
+  const actor = await requireOperatorAccount();
+  const notes = field(formData, "notes").trim() || null;
+  await getDb().transaction((dbtx) => setNotes(dbtx, actor, operationId, notes));
+  revalidateOperation(operationId);
+}
+
+/** The fifth operation-level field with an edit path. Same codes as the
+ *  create form's share checks, so both surfaces reject identically; they
+ *  land on different pages, which is why each page carries its own copy. */
 export async function setCorpShareAction(
   operationId: string,
   formData: FormData,
@@ -433,6 +475,39 @@ export async function unlockAction(operationId: string): Promise<void> {
   const actor = await requireOperatorAccount();
   await getDb().transaction((dbtx) => unlockOperation(dbtx, actor, operationId));
   revalidateOperation(operationId);
+}
+
+/**
+ * Admin-only, and gated regardless of status — a finalized operation whose
+ * every payment has been reverted is exactly as deletable as a draft nobody
+ * ever priced, because `deleteOperation` keys the refusal on a currently-paid
+ * participant, not on the lifecycle stage. `requireOperatorAccount` above
+ * proves member+active; `deleteOperation` re-checks `isAdmin` itself, the same
+ * "every mutation re-checks itself" rule `access.ts` states, so a forged
+ * request from a non-admin operator still lands on error.tsx rather than
+ * silently deleting.
+ *
+ * `PayoutHasPaidError` is the one rejection worth a redirect: it can only be
+ * reached by clicking a control the page renders regardless of paid state
+ * (the count of currently-paid participants is not known until the delete
+ * itself checks it, since a payment can be reverted after the page loads by
+ * another tab), so it needs its own explanation rather than error.tsx's
+ * "fault on our end". The redirect target is this operation's own page — the
+ * one place left to redirect to once the delete itself has failed — never
+ * `/payouts`, which is reserved for a delete that actually happened.
+ */
+export async function deleteOperationAction(operationId: string): Promise<void> {
+  const actor = await requireOperatorAccount();
+  try {
+    await getDb().transaction((dbtx) => deleteOperation(dbtx, actor, operationId));
+  } catch (err) {
+    if (err instanceof PayoutHasPaidError) {
+      operationFailed(operationId, "delete_has_paid");
+    }
+    throw err;
+  }
+  revalidatePath("/payouts");
+  redirect("/payouts");
 }
 
 export async function markPaidAction(

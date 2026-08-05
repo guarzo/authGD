@@ -8,11 +8,11 @@
  * rather than a redirect that renders an unchanged form and no explanation.
  *
  * TWO maps, not one, and codes are deliberately NOT globally unique.
- * `share_format` and `share_range` appear in both with different copy: the
+ * `name_required` and `date_invalid` appear in both with different copy: the
  * detail page's "The old value is unchanged." is true there (a stored value is
  * at stake) and false on the create form (the operation does not exist yet).
  * A single map would force one message that is wrong on one of the two pages,
- * or `share_format_new` / `share_format_detail` — uniqueness as bookkeeping,
+ * or `name_required_new` / `name_required_detail` — uniqueness as bookkeeping,
  * with no property gained. Each page's map is its namespace; the types are what
  * make that namespace enforceable.
  */
@@ -20,25 +20,15 @@
 /** Every code `createOperationAction` can reject with, rendered by
  *  `/payouts/new`.
  *
- *  All of these land back there with the submitted values echoed in the query
- *  string and reapplied, so each message can honestly say the work survived:
- *  the operator fixes one field rather than retyping five. The claim is
- *  uniform across all six on purpose — it was on two of them, which read as
- *  though the other four lost something. It is also now true rather than
- *  merely intended: `createFailed` drops any value over 500 chars from the
- *  redirect, and Notes — the only field that can realistically reach that —
- *  carries a matching `maxLength` on the form. */
+ *  Just two fields now: the create form was slimmed to name + date, so battle
+ *  report / corp share / notes rejections cannot happen here anymore — those
+ *  fields moved to editors on the detail page and their codes live in
+ *  `OPERATION_ERRORS` below. Both land back here with the submitted value
+ *  echoed in the query string and reapplied, so each message can honestly say
+ *  the other field survived. */
 export const NEW_OPERATION_ERRORS = {
-  name_required: "An operation needs a name. Everything else is still filled in.",
-  date_invalid: "Date must be a real calendar date. Everything else is still filled in.",
-  url_invalid:
-    "That battle report is not a URL. Paste the full link, or leave it blank and add it later — everything else is still filled in.",
-  url_scheme:
-    "Battle report links must start with http:// or https://. Everything else is still filled in.",
-  share_format:
-    "Corp share must be a plain percentage like 10 or 12.5. Everything else is still filled in.",
-  share_range:
-    "Corp share cannot exceed 100% — that would leave the roster nothing to split. Everything else is still filled in.",
+  name_required: "An operation needs a name. The date is still filled in.",
+  date_invalid: "Date must be a real calendar date. The name is still filled in.",
 } as const;
 
 /** Every code an action on `/payouts/[id]` can redirect with.
@@ -49,7 +39,16 @@ export const NEW_OPERATION_ERRORS = {
  *  `region_invalid` are unreachable by filling the form in. That is deliberate
  *  — a redirect cannot carry the loot paste back, so those failures are
  *  prevented at the input rather than explained after the fact. None of these
- *  messages claims the paste survived, because on those paths it did not. */
+ *  messages claims the paste survived, because on those paths it did not.
+ *
+ *  `appraisal_failed` is the one everyday rejection from that same form, and
+ *  it is the one exception to "a redirect cannot carry the loot paste back":
+ *  `addAppraisedPoolAction` no longer redirects on this code at all.
+ *  `AppraiseForm` (`[id]/appraise-form.tsx`) calls it through `useActionState`
+ *  instead, so a triff/ESI failure returns state rather than navigating, and
+ *  the paste the operator typed is still sitting in the textarea. The code
+ *  stays in this map only so the page can still render it for a direct
+ *  `?error=appraisal_failed` visit — the same entry both paths share. */
 export const OPERATION_ERRORS = {
   appraisal_failed:
     "Could not price that paste right now (triff.tools did not answer). Nothing was saved — adjust and try again, or use a flat pool.",
@@ -75,6 +74,12 @@ export const OPERATION_ERRORS = {
     "Corp share must be a plain percentage like 10 or 12.5. The old value is unchanged.",
   share_range:
     "Corp share cannot exceed 100% — that would leave the roster nothing to split. The old value is unchanged.",
+  name_required: "An operation needs a name. The old name is unchanged.",
+  date_invalid: "Date must be a real calendar date. The old date is unchanged.",
+  url_invalid:
+    "That battle report is not a URL. Paste the full link, or leave it blank. The old value is unchanged.",
+  url_scheme:
+    "Battle report links must start with http:// or https://. The old value is unchanged.",
   participant_name_required:
     "Type a character name to add someone to the roster. Nothing was added.",
   participant_duplicate:
@@ -103,6 +108,8 @@ export const OPERATION_ERRORS = {
     "That line cannot be opened: it is excluded, has no linked character, or the operation is no longer finalized. Reload the page to see where it stands.",
   open_info_dry_run:
     "This deployment is in dry-run mode, so nothing is sent to EVE. The amounts and the payment controls are real; only the in-game window is suppressed.",
+  delete_has_paid:
+    "This operation has a currently-paid participant and cannot be deleted. Revert every payment first, then try again.",
 } as const;
 
 export type NewOperationErrorCode = keyof typeof NEW_OPERATION_ERRORS;

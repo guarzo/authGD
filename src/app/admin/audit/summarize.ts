@@ -201,6 +201,27 @@ const PARTS: Record<string, readonly Part[]> = {
   // declared parts, joined by the ", " every other multi-part line uses, which
   // renders "Tritanium, → 5.50" — the arrow needs to live inside one part.
   "payout.item_repriced": [transition("name", "unitPrice"), silent("itemId", "poolId")],
+  // `name` isn't declared via scalar(): the target uuid no longer resolves to
+  // a name (the operation is gone), so this line IS the only place left that
+  // says which operation this was, which is why it leads rather than trails.
+  "payout.deleted": [
+    labelled("deleted", "name"),
+    labelled("occurred", "occurredAt"),
+    labelled("roster", "participantCount"),
+    labelled("value", "totalValue"),
+    // Declared but not shown on the line: the true destroyed-roster count
+    // above is the headline figure, and this one (excluded participants
+    // dropped) is only useful in the full-payload disclosure, not worth a
+    // second number crowding the summary.
+    silent("payableCount"),
+  ],
+  "payout.name_changed": [labelled("renamed", "name")],
+  "payout.occurred_at_changed": [labelled("date", "occurredAt")],
+  "payout.battle_report_changed": [labelled("report", "battleReportUrl")],
+  // Same shape as status.note_changed on purpose: the text itself isn't
+  // logged, only whether it appeared, changed, or was cleared -- see
+  // noteChange's doc.
+  "payout.notes_changed": [noteChange("had", "has")],
   "status.changed": [transition("from", "to"), flag("self", "self-service")],
   "admin.bootstrap_granted": [labelled("character", "characterId")],
   "account.created": [labelled("main", "mainCharacterId")],
