@@ -2481,23 +2481,12 @@ h3.rule-head__label {
   flex-wrap: wrap;
 }
 
-/* A settled status token and the control that changes it, on one line.
-
-   The gap is --s-3 rather than the --s-1 it started at, and the reason is that
-   the two children are harder to tell apart than a status/control pair usually
-   is: `.st` and `.btn--micro` are both the mono uppercase label register at the
-   same 11px and the same tracking. The button does carry a fill, a border and
-   600 weight the status token does not, but the type is identical, and at 4px
-   that shared register is what wins: they read as one object with two halves,
-   and the object on the right unlinks a Discord account. 12px also
-   matches the --s-3 the parent `.facts__lead` already uses between its own
-   items, so the control is no longer three times closer to the label it is not
-   part of than to the row it belongs to. */
-.inline-pair {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--s-3);
-}
+/* `.inline-pair` lived here: a settled status token and the control that
+   changes it, on one line. Both call sites were the Discord row, and both now
+   render the control alone — the verb answers "is it linked?" without a token
+   beside it to be confused with. The rule's whole history was trying to hold
+   two things apart that read as one object (--s-1 to --s-3), which was the
+   clue that there should only have been one. */
 
 .stack {
   display: grid;

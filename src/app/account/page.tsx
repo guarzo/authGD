@@ -298,29 +298,38 @@ export default async function AccountPage({
               // one (confirm-submit.tsx:115), and a scope of one is right here —
               // arming this must not disarm a character row three sections down.
               <ConfirmArmScope>
-                <span className="inline-pair">
-                  <Status>linked</Status>
-                  <form action={unlinkDiscordAction} className="inline-form">
-                    {/* A grade heavier at rest than the character-row unlinks
-                        below (`.btn--quiet .btn--danger-quiet`), and
-                        deliberately so: those drop one character from an
-                        account that keeps every other one, while this one
-                        enqueues a deprovision that strips every managed role
-                        in the guild. There is one of these and up to a dozen
-                        of those, so the quiet grade that keeps a dense table
-                        from reading as a wall of buttons buys nothing here.
-                        Both still upgrade to full `.btn--danger` only once
-                        armed. */}
-                    <ConfirmSubmit
-                      className="btn btn--micro"
-                      armedClassName="btn btn--micro btn--danger"
-                      label="unlink"
-                      restName="unlink Discord"
-                      confirmName="confirm unlink Discord"
-                      describedBy="discord-unlink-cost"
-                    />
-                  </form>
-                </span>
+                {/* No `linked` token beside the button. The unlinked branch
+                    below has never rendered one either — it is a bare "Link
+                    Discord" — so the row already trusts a verb to answer "is
+                    Discord linked?" in one state. Rendering a status token in
+                    the other state made the two halves read as one object,
+                    which is the clutter #108 tried to solve with spacing. The
+                    verb carries the state: `unlink` present means linked.
+
+                    The same call the sync-schedule section already made: it
+                    drops its Discord row rather than render an inert "not
+                    linked" token, on the grounds that a nearby element states
+                    the fact with the action attached. */}
+                <form action={unlinkDiscordAction} className="inline-form">
+                  {/* A grade heavier at rest than the character-row unlinks
+                      below (`.btn--quiet .btn--danger-quiet`), and
+                      deliberately so: those drop one character from an
+                      account that keeps every other one, while this one
+                      enqueues a deprovision that strips every managed role
+                      in the guild. There is one of these and up to a dozen
+                      of those, so the quiet grade that keeps a dense table
+                      from reading as a wall of buttons buys nothing here.
+                      Both still upgrade to full `.btn--danger` only once
+                      armed. */}
+                  <ConfirmSubmit
+                    className="btn btn--micro"
+                    armedClassName="btn btn--micro btn--danger"
+                    label="unlink"
+                    restName="unlink Discord"
+                    confirmName="confirm unlink Discord"
+                    describedBy="discord-unlink-cost"
+                  />
+                </form>
                 {/* The unlink is not just a disconnected account: the deprovision
                     it enqueues strips every managed role
                     (jobs/discord-roles.ts:79), so a member who reads only the
