@@ -3,12 +3,12 @@ node_modules
 .git
 .claude
 docs
-# e2e/ is deliberately NOT listed here. tsconfig.json type-checks `**/*.ts`,
-# and playwright.config.ts + scripts/e2e-clean.ts import from e2e/ — ignoring
-# it makes `next build` fail inside the image with TS2307 while CI, which
-# builds the full checkout, stays green. It reaches the build stage only; the
-# runner stage copies neither it nor tests/.
-tests
+# e2e/ and tests/ are deliberately NOT listed here. tsconfig.json type-checks
+# `**/*.ts`, and scripts/ imports from both — playwright.config.ts and
+# scripts/e2e-clean.ts from e2e/, scripts/drop-test-db.ts from
+# tests/helpers/test-db-url.ts. Ignoring either makes `next build` fail inside
+# the image with TS2307 while CI, which builds the full checkout, stays green.
+# They reach the build stage only; the runner stage copies neither.
 tmp
 docker-compose.dev.yml
 *.md
