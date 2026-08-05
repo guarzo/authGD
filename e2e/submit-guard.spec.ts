@@ -37,7 +37,6 @@ test("double-clicking Create operation makes one operation, not two", async ({
   await page.goto("/payouts/new");
   await page.getByLabel("Name").fill("Doubletap roam");
   await page.getByLabel("Date").fill("2026-08-01");
-  await page.getByLabel("Corp share %").fill("10");
   await page.getByRole("button", { name: "Create operation" }).dblclick();
 
   await expect(page).toHaveURL(/\/payouts\/[0-9a-f-]+$/);
@@ -66,7 +65,6 @@ test("the pressed button keeps focus while its form is in flight", async ({
   await page.goto("/payouts/new");
   await page.getByLabel("Name").fill("Focus roam");
   await page.getByLabel("Date").fill("2026-08-01");
-  await page.getByLabel("Corp share %").fill("0");
 
   // Recorded rather than sampled. Reading `document.activeElement` once after
   // the press races the client navigation: land after it and focus is already

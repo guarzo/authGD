@@ -9,17 +9,21 @@ import { Submit } from "@/app/_components/submit";
 import { ConfirmArmScope, ConfirmSubmit } from "@/app/_components/confirm-submit";
 import { requirePayoutReader } from "../access";
 import {
-  addAppraisedPoolAction,
   addFlatPoolAction,
   addParticipantAction,
+  deleteOperationAction,
   deletePoolAction,
   finalizeAction,
   markPaidAction,
   openInfoAction,
   removeParticipantAction,
   revertPaymentAction,
+  setBattleReportUrlAction,
   setCorpShareAction,
   setItemPriceAction,
+  setNameAction,
+  setNotesAction,
+  setOccurredAtAction,
   setParticipantExcludedAction,
   setParticipantSharesAction,
   setRosterAction,
@@ -27,10 +31,12 @@ import {
 } from "../actions";
 import { DROPPED_REASONS, decodeDropped } from "../dropped";
 import { OPERATION_ERRORS, lookupErrorMessage } from "../errors";
+import { AppraiseForm } from "./appraise-form";
+import { ClearStaleQuery } from "./clear-stale-query";
 import { CopyAmountButton } from "./copy-amount-button";
 import { PaymentHistory } from "./payment-history";
 import { deriveRosterWarnings } from "./roster-warnings";
-import { PRICING_MODES, type PricingMode } from "@/core/pricing";
+import type { PricingMode } from "@/core/pricing";
 import { iskToCents } from "@/core/payout-split";
 import { fmtIsk } from "@/app/_components/format-isk";
 
@@ -108,6 +114,15 @@ const PRICING_LABELS: Record<PricingMode, string> = {
  *  constant rather than a `useId` (this is a server component). */
 const CHARACTER_LIST_ID = "known-character-names";
 
+/** Below this many rows, `.scroller--tall`'s cap (globals.css, tuned against
+ *  /admin/accounts' ~50-row table) does more harm than good: it clips a row
+ *  mid-height inside a page that still has hundreds of pixels of vertical
+ *  slack below it, for a sticky header that had nothing to scroll over in the
+ *  first place. A typical roster is a dozen names; 20 is comfortably above
+ *  that and still short of where an un-capped table would start crowding the
+ *  Finalize control off screen. */
+const ROSTER_TALL_THRESHOLD = 20;
+
 function fmtDate(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
@@ -128,6 +143,10 @@ export default async function PayoutOperationPage({
   const detail = await loadDetail(id);
   if (!detail) notFound();
   const { operation, pools, participants, totalValue, corpAmount, locked } = detail;
+  // Same reasoning as the create form's own `max`: an operation cannot be
+  // dated into the future, and the date input enforces that client-side the
+  // same way `/payouts/new` does.
+  const today = new Date().toISOString().slice(0, 10);
 
   const nav = [
     { href: "/account", label: "Your account" },
@@ -202,6 +221,10 @@ export default async function PayoutOperationPage({
           </p>
         </div>
 
+        {/* Clears `?error=`/`?dropped=` from the address bar once shown, so a
+            later successful edit elsewhere on this page cannot re-render this
+            same, by-then-stale notice — see the component's own docblock. */}
+        <ClearStaleQuery />
         {errorMessage && <Notice tone="bad">{errorMessage}</Notice>}
 
         {/* "items", not "lines": parseLootPaste sums by item name before it
@@ -243,6 +266,99 @@ export default async function PayoutOperationPage({
             ) : (
               <Status tone="off">draft</Status>
             )}
+          </dd>
+          <dt>Name</dt>
+          <dd>
+            {/* Unlike Corp share below, this fact and its editor would say the
+                SAME string twice: corp share's line is derived (an ISK amount
+                and a percentage the input does not contain), while the name is
+                simply the input's own value. So the read-only line renders only
+                for a reader who cannot edit — for an operator the field IS the
+                current value, and `<h1>` above already states it. The create
+                form collects name + date only, so this is the whole correction
+                path if either was mistyped. */}
+            <div className="stack">
+              {!canEdit && <span>{operation.name}</span>}
+              {canEdit && (
+                <form
+                  action={setNameAction.bind(null, operation.id)}
+                  className="inline-form"
+                >
+                  <input
+                    className="field field--grow"
+                    name="name"
+                    required
+                    defaultValue={operation.name}
+                    aria-label="Operation name"
+                  />
+                  <Submit className="btn btn--micro" aria-label="save operation name">
+                    save
+                  </Submit>
+                </form>
+              )}
+            </div>
+          </dd>
+          <dt>Date</dt>
+          <dd className="mono">
+            <div className="stack">
+              {!canEdit && <span>{fmtDate(operation.occurredAt)}</span>}
+              {canEdit && (
+                <form
+                  action={setOccurredAtAction.bind(null, operation.id)}
+                  className="inline-form"
+                >
+                  <input
+                    className="field"
+                    type="date"
+                    name="occurredAt"
+                    max={today}
+                    required
+                    defaultValue={fmtDate(operation.occurredAt)}
+                    aria-label="Operation date"
+                  />
+                  <Submit className="btn btn--micro" aria-label="save operation date">
+                    save
+                  </Submit>
+                </form>
+              )}
+            </div>
+          </dd>
+          <dt>Battle report</dt>
+          <dd>
+            <div className="stack">
+              {/* The clickable link is worth keeping for a reader, but for an
+                  operator it is the third copy of the same URL on this page:
+                  the lede above carries the same link, and the field below
+                  carries the same text. Only the reader's copy survives. */}
+              {!canEdit && (
+                <span>
+                  {operation.battleReportUrl ? (
+                    <a href={operation.battleReportUrl} target="_blank" rel="noreferrer">
+                      {operation.battleReportUrl}
+                    </a>
+                  ) : (
+                    <span className="dim">Not set</span>
+                  )}
+                </span>
+              )}
+              {canEdit && (
+                <form
+                  action={setBattleReportUrlAction.bind(null, operation.id)}
+                  className="inline-form"
+                >
+                  <input
+                    className="field field--grow"
+                    type="url"
+                    name="battleReportUrl"
+                    defaultValue={operation.battleReportUrl ?? ""}
+                    aria-label="Battle report URL"
+                  />
+                  <Submit className="btn btn--micro" aria-label="save battle report URL">
+                    save
+                  </Submit>
+                </form>
+              )}
+            </div>
           </dd>
           <dt>Corp share</dt>
           <dd className="mono">
@@ -297,10 +413,42 @@ export default async function PayoutOperationPage({
           </dd>
           <dt>Total loot</dt>
           <dd className="mono">{fmtIsk(totalValue)} ISK</dd>
-          {operation.notes && (
+          {/* Unlike the facts above, this row itself is conditional rather
+              than always-rendered-with-a-placeholder: an operator who cannot
+              edit and whose operation has no notes gets no empty "Notes"
+              label pointing at nothing. Once editable, the row always
+              renders — the textarea IS the affordance for adding a first
+              note, so hiding it until one exists would hide the only way to
+              write one. */}
+          {(operation.notes || canEdit) && (
             <>
               <dt>Notes</dt>
-              <dd>{operation.notes}</dd>
+              <dd>
+                <div className="stack">
+                  {!canEdit && operation.notes && <span>{operation.notes}</span>}
+                  {canEdit && (
+                    <form
+                      action={setNotesAction.bind(null, operation.id)}
+                      className="inline-form"
+                    >
+                      <textarea
+                        className="field field--grow"
+                        name="notes"
+                        rows={3}
+                        maxLength={500}
+                        defaultValue={operation.notes ?? ""}
+                        aria-label="Operation notes"
+                      />
+                      <Submit
+                        className="btn btn--micro"
+                        aria-label="save operation notes"
+                      >
+                        save
+                      </Submit>
+                    </form>
+                  )}
+                </div>
+              </dd>
             </>
           )}
         </dl>
@@ -335,7 +483,9 @@ export default async function PayoutOperationPage({
               <tr>
                 <th scope="col">#</th>
                 <th scope="col">Source</th>
-                <th scope="col">Value</th>
+                <th scope="col" className="num">
+                  Value
+                </th>
                 <th scope="col">Notes</th>
                 <th scope="col">
                   <span className="visually-hidden">Actions</span>
@@ -361,7 +511,7 @@ export default async function PayoutOperationPage({
                         <Status tone="warn">flat (manual)</Status>
                       )}
                     </td>
-                    <td className="mono nowrap">{fmtIsk(pool.totalValue)} ISK</td>
+                    <td className="mono nowrap num">{fmtIsk(pool.totalValue)} ISK</td>
                     <td>{pool.notes}</td>
                     <td>
                       {canEdit && (
@@ -522,8 +672,12 @@ export default async function PayoutOperationPage({
                       <tr>
                         <th scope="col">Item</th>
                         <th scope="col">Qty</th>
-                        <th scope="col">Unit price</th>
-                        <th scope="col">Line total</th>
+                        <th scope="col" className="num">
+                          Unit price
+                        </th>
+                        <th scope="col" className="num">
+                          Line total
+                        </th>
                         <th scope="col">Price source</th>
                         <th scope="col">
                           <span className="visually-hidden">Actions</span>
@@ -535,8 +689,10 @@ export default async function PayoutOperationPage({
                         <tr key={item.id}>
                           <td>{item.name}</td>
                           <td className="mono nowrap">{item.qty}</td>
-                          <td className="mono nowrap">{fmtIsk(item.unitPrice)}</td>
-                          <td className="mono nowrap">{fmtIsk(item.totalValue)} ISK</td>
+                          <td className="mono nowrap num">{fmtIsk(item.unitPrice)}</td>
+                          <td className="mono nowrap num">
+                            {fmtIsk(item.totalValue)} ISK
+                          </td>
                           <td>
                             {item.priceSource === "unresolved" ? (
                               <Status tone="warn">unresolved</Status>
@@ -559,7 +715,7 @@ export default async function PayoutOperationPage({
                                     speech-input or screen-reader operator
                                     which verb, never which of 200 items. */}
                                 <input
-                                  className="field"
+                                  className="field field--money"
                                   name="unitPrice"
                                   type="number"
                                   inputMode="decimal"
@@ -598,6 +754,13 @@ export default async function PayoutOperationPage({
             defaultOpen={pools.length === 0}
           >
             <div className="form-stack">
+              {/* Appraise first, flat pool second: pasting a killmail/loot log
+                  for triff to price is the common path, and a flat manual
+                  number is the fallback for when triff cannot reach it — the
+                  order on the page should read the same way an operator
+                  actually reaches for these. */}
+              <AppraiseForm operationId={operation.id} />
+
               <form
                 action={addFlatPoolAction.bind(null, operation.id)}
                 className="form-stack"
@@ -623,60 +786,6 @@ export default async function PayoutOperationPage({
                   <textarea className="field" name="rawPaste" rows={3} />
                 </label>
                 <Submit className="btn">Add flat pool</Submit>
-              </form>
-
-              <form
-                action={addAppraisedPoolAction.bind(null, operation.id)}
-                className="form-stack"
-              >
-                <RuleHead as="h3">Appraise a loot paste</RuleHead>
-                <label className="form-stack__field">
-                  Loot paste
-                  <textarea className="field" name="rawPaste" rows={10} required />
-                </label>
-                <label className="form-stack__field">
-                  Pricing
-                  <select className="field" name="pricingMode" defaultValue="sell_best">
-                    {PRICING_MODES.map((mode) => (
-                      <option key={mode} value={mode}>
-                        {PRICING_LABELS[mode]}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                {/* Kind + id, rather than a station box and a region box the
-                    operator must leave one of blank. triff accepts exactly one,
-                    and this is the only form on the page whose failure would cost
-                    the operator a long paste, so the rule is expressed as a shape
-                    that cannot be filled in wrongly rather than as prose above two
-                    inputs that can. */}
-                <label className="form-stack__field">
-                  Price at
-                  <select className="field" name="locationKind" defaultValue="station">
-                    <option value="station">Station</option>
-                    <option value="region">Region</option>
-                  </select>
-                </label>
-                <div className="form-stack__field">
-                  <label htmlFor="appraise-location-id">Station or region ID</label>
-                  <input
-                    id="appraise-location-id"
-                    className="field"
-                    name="locationId"
-                    inputMode="numeric"
-                    pattern="[0-9]+"
-                    defaultValue="60003760"
-                    required
-                    aria-describedby="appraise-location-hint"
-                  />
-                  <span className="dim" id="appraise-location-hint">
-                    Digits only. Jita 4-4 is station 60003760; The Forge is region
-                    10000002.
-                  </span>
-                </div>
-                <Submit className="btn" pendingLabel="Pricing…">
-                  Appraise
-                </Submit>
               </form>
             </div>
           </Disclosure>
@@ -789,17 +898,23 @@ export default async function PayoutOperationPage({
         )}
 
         {/* `tall` + the dense/sticky-head/sticky-col kit, same as the two admin
-            tables (admin/accounts, admin/audit): at ~2000px for 50 rows the
-            header is gone after about a dozen, and this is the page's core
-            paying loop — the one table on this page worth scanning while
-            scrolled. */}
-        <Scroller label="Roster" tall>
+            tables (admin/accounts, admin/audit) — but only past
+            ROSTER_TALL_THRESHOLD. Unconditional `tall` was tuned for those
+            tables' ~50 rows; a dozen-name roster inside the same fixed cap
+            clipped a row mid-height on a page with plenty of room left below
+            it. Below the threshold the table renders at its natural height,
+            same as the loot pools table above it. */}
+        <Scroller label="Roster" tall={participants.length > ROSTER_TALL_THRESHOLD}>
           <table className="log log--dense log--sticky-head log--sticky-col">
             <thead>
               <tr>
                 <th scope="col">Name</th>
-                <th scope="col">Shares</th>
-                <th scope="col">Amount</th>
+                <th scope="col" className="num">
+                  Shares
+                </th>
+                <th scope="col" className="num">
+                  Amount
+                </th>
                 <th scope="col">State</th>
                 <th scope="col">
                   <span className="visually-hidden">Actions</span>
@@ -819,7 +934,7 @@ export default async function PayoutOperationPage({
                         <span className="dim"> ({p.sourceCharacters.join(", ")})</span>
                       )}
                     </td>
-                    <td>
+                    <td className="num">
                       {canEdit ? (
                         <form
                           action={setParticipantSharesAction.bind(
@@ -830,7 +945,7 @@ export default async function PayoutOperationPage({
                           className="inline-form"
                         >
                           <input
-                            className="field"
+                            className="field field--micro"
                             name="shares"
                             type="number"
                             inputMode="decimal"
@@ -851,7 +966,7 @@ export default async function PayoutOperationPage({
                         <span className="mono">{p.shares}</span>
                       )}
                     </td>
-                    <td className="mono nowrap">
+                    <td className="mono nowrap num">
                       <div className="stack">
                         <span>{fmtIsk(p.amount)} ISK</span>
                         {/* Copy sits under the amount it copies, not two
@@ -1049,6 +1164,56 @@ export default async function PayoutOperationPage({
               </p>
             )}
           </ConfirmArmScope>
+        )}
+
+        {/* Admin-only, and deliberately last on the page: everything above is
+            the case FOR keeping this operation (the roster, the loot, the
+            payment history), so the one control that erases all of it reads
+            last, not first. Status plays no part in whether this shows up
+            (draft, finalized, locked all render it) because the underlying
+            rule doesn't care either: a finalized operation with a fully
+            reverted roster is exactly as deletable as a draft nobody ever
+            priced. `deleteOperation` is the one gate that matters, and it is
+            re-checked there, not assumed from `access.isAdmin` here. */}
+        {access.isAdmin && (
+          <>
+            <RuleHead as="h2">Delete operation</RuleHead>
+            <ConfirmArmScope>
+              <form
+                action={deleteOperationAction.bind(null, operation.id)}
+                data-navigates
+              >
+                <ConfirmSubmit
+                  className="btn btn--quiet btn--danger-quiet"
+                  armedClassName="btn btn--danger"
+                  label="Delete"
+                  // The heading directly above already says "Delete operation",
+                  // so spelling it again on the button two lines down is a
+                  // stutter, not a clarification. `restName` is how the Discord
+                  // unlink solves the same split: the visible word shortens, the
+                  // spoken name stays whole, and WCAG 2.5.3 holds because the
+                  // name still contains the label.
+                  restName="Delete operation"
+                  confirmName="confirm delete operation"
+                  describedBy="delete-operation-cost"
+                />
+              </form>
+              {/* Carried by aria-describedby rather than folded into the
+                  button's own name, same call account/page.tsx's Discord
+                  unlink makes: a name is spoken ahead of every press and has
+                  to stay short, and this sits after the control in reading
+                  order. States the real counts about to be destroyed, not a
+                  generic warning — an admin deciding whether to press this
+                  needs to know whether it is one empty draft or a twelve-name
+                  roster with loot recorded against it. */}
+              <p id="delete-operation-cost" className="dim">
+                Permanently deletes this operation: {participants.length} roster row
+                {participants.length === 1 ? "" : "s"} and {fmtIsk(totalValue)} ISK of
+                recorded loot. Blocked only if a participant is currently marked paid;
+                revert every payment first if so.
+              </p>
+            </ConfirmArmScope>
+          </>
         )}
       </main>
     </>

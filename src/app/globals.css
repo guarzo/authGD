@@ -1686,6 +1686,75 @@ h3.rule-head__label {
   border-color: var(--gold);
 }
 
+/* `.field` carries no width of its own — every multi-field form relies on
+   that, either `.stack`'s intrinsic sizing or `.form-stack`'s grid stretch —
+   so an in-row number field falls back to the UA default instead: measured in
+   Chromium, that's 199px for a 4-character value. These two cut it down for
+   the `type="number"` cells inside an `.inline-form`: Shares on the roster and
+   unit price on a pool item.
+
+   `ch` because it scales with the mono face the fields already set, but the
+   character count has to be paid for on top of the chrome rather than inside
+   it. `.field` is `border-box`, so a bare `8ch` is the width of the BOX: 12px
+   of padding each side, a 1px border and the spinner Chromium reserves leave
+   about 4.8 characters of it for text, and `9999.99` is clipped in the field
+   that exists to show `9999.99`. The `2.5rem` is that chrome, measured, so the
+   `ch` term means what it reads as.
+
+   Two sizes rather than one because the columns are not the same magnitude.
+   Shares is bounded at `9999.99`; ISK is not, and the seeded pool already
+   holds `1400000000.00`. A mistyped zero in a unit price is the expensive
+   error on this page, so that field shows all 13 digits back. It still cannot
+   widen its column: the read-only rendering it replaces carries thousands
+   separators, and `1,400,000,000.00` measures 166px against this field's
+   149px. */
+.field--micro {
+  width: calc(7ch + 2.5rem);
+  flex: 0 0 auto;
+}
+
+.field--money {
+  width: calc(13ch + 2.5rem);
+  flex: 0 0 auto;
+}
+
+/* The opposite problem to `--micro`, in the facts list rather than a table row.
+   Name, battle report and notes each used to render twice: a read-only span
+   holding the full value, and an editor below repeating it verbatim. The span
+   is gone (only Corp share kept one, because its line is derived rather than an
+   echo), so the field IS the value now. At the UA default a text input stops
+   around 20ch, which was survivable beside a span showing the whole string and
+   is not once it replaces it — an operator checking a battle report URL saw
+   `https://br.evetools.c`.
+
+   Capped rather than unbounded: these sit in a `<dd>` that can run the full
+   page column, and a 90ch input is harder to scan than a truncated one. But
+   the cap is the `max-width` and the fill is the `width`, not the other way
+   round. A definite `width: 52ch` is the same thing only while the row is
+   wider than 52ch; below that it keeps its full width and carries the page
+   off screen at 390px, and its own `max-width: 100%` cannot pull it back,
+   because that percentage resolves against a containing block the field
+   itself just sized (`.stack` is shrink-to-fit — see below). Making the width
+   the percentage inverts that dependency: the row sizes the field, so the cap
+   only ever has to bite from above. */
+.field--grow {
+  width: 100%;
+  max-width: 52ch;
+  min-width: 0;
+}
+
+/* `.stack` sets `justify-items: start` so a status token doesn't blow out to
+   the full width of its table cell. That makes its children shrink-to-fit, and
+   a shrink-to-fit parent gives `.field--grow`'s `width: 100%` nothing to fill:
+   the field lands on its own content width (255px, clipping the name) instead
+   of the row's. Stretching just the forms that hold a grown field hands the
+   percentage a real width, leaving Corp share's narrow percentage input in the
+   same list and every other `.stack` in the app alone. `:has` matches the
+   `.scroller--tall:has(.log--dense)` precedent above. */
+.stack > .inline-form:has(.field--grow) {
+  justify-self: stretch;
+}
+
 /* The payout flow's five forms used to reuse `.stack`, whose
    `justify-items: start` exists so a status token doesn't blow out to the
    full width of its table cell (see `.stack` below). Applied to a form that
@@ -2347,6 +2416,22 @@ h3.rule-head__label {
 .log th.num,
 .log td.num {
   text-align: right;
+}
+
+/* `text-align` moves inline content, but the payout tables put their money
+   cells in a block-level `.stack` (the amount plus its copy button) or
+   `.inline-form` (the shares input plus its save button) — both lay out
+   their own children (grid `justify-items: start`, flex's default
+   `justify-content: flex-start`) regardless of the containing cell's
+   `text-align`. Left unhandled, a `.num` header floats at the column's right
+   edge while every value under it stays pinned to the left. Scoped to a
+   direct child of a `.num` cell so no other `.stack`/`.inline-form` in the
+   app (which rely on their left-anchored default) is affected. */
+.log td.num > .stack {
+  justify-items: end;
+}
+.log td.num > .inline-form {
+  justify-content: flex-end;
 }
 
 /* Below this width the four tracks cannot hold their labels, and a grid that

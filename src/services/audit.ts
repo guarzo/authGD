@@ -116,6 +116,9 @@ function targetKindFromAction(
  *      as a target, all in parallel
  *   2. accounts reached only via a discord link (to get *their*
  *      mainCharacterId) — skipped entirely if no discord targets resolved
+ *   2b. names of deleted payout operations, recovered from the `payout.deleted`
+ *      audit row's own details — skipped entirely if step 1 resolved every
+ *      payout target already
  *   3. every character name needed (target characters + all main characters
  *      collected above), in one shot
  * Anything that doesn't resolve is left as `null`/`"unresolved"`; the raw
@@ -184,6 +187,31 @@ export async function resolveAuditIdentities(
     links.map((l) => [l.discordUserId, l.accountId]),
   );
   const nameByPayoutId = new Map(payoutOperations.map((o) => [o.id, o.name]));
+
+  // The live join above misses every deleted operation, and a delete is a
+  // hard delete (schema.ts: every payout child table cascades, so there is no
+  // tombstone row to join against). Without this, EVERY historical row for
+  // that operation -- payout.created, payout.paid, payout.reverted, not just
+  // payout.deleted itself -- would resolve to null and lose its clickable
+  // filter link. The name survives because `deleteOperation` denormalises it
+  // onto its own audit row before the operation disappears; this is that
+  // fallback read. One extra query, skipped entirely when nothing missed.
+  const missedPayoutIds = [...targetPayoutIds].filter((id) => !nameByPayoutId.has(id));
+  if (missedPayoutIds.length > 0) {
+    const deletions = await dbx
+      .select({ target: auditLog.target, details: auditLog.details })
+      .from(auditLog)
+      .where(
+        and(
+          eq(auditLog.action, "payout.deleted"),
+          inArray(auditLog.target, missedPayoutIds),
+        ),
+      );
+    for (const row of deletions) {
+      const name = row.details?.name;
+      if (typeof name === "string") nameByPayoutId.set(row.target, name);
+    }
+  }
 
   const characterIds = new Set<number>(targetCharacterIds);
   for (const a of accountById.values()) {

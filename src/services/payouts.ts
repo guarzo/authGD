@@ -22,6 +22,9 @@ export class PayoutNotFoundError extends Error {}
  *  fault: the operator typed this name and can retype it, so it earns a message
  *  on the page rather than error.tsx's "a fault on this end". */
 export class PayoutDuplicateParticipantError extends Error {}
+/** Thrown by `deleteOperation` when any participant currently carries a
+ *  `paidAmount` — see that function's doc for why this is not `hasPayments`. */
+export class PayoutHasPaidError extends Error {}
 
 /**
  * `getSessionAccount` (src/services/session.ts) resolves a session to an
@@ -103,7 +106,7 @@ export async function createOperation(
     name: string;
     occurredAt: Date;
     battleReportUrl?: string | null;
-    corpSharePct: string;
+    corpSharePct?: string;
     notes?: string | null;
   },
 ): Promise<{ id: string }> {
@@ -114,7 +117,13 @@ export async function createOperation(
       name: input.name,
       occurredAt: input.occurredAt,
       battleReportUrl: input.battleReportUrl ?? null,
-      corpSharePct: input.corpSharePct,
+      // The create form only asks for name + date now, so most callers omit
+      // this. The column itself still defaults to "0" (schema.ts) -- that
+      // default states no policy, deliberately, since a bare DB insert (a
+      // migration backfill, a script) should not silently commit anyone to a
+      // number. 10% is the product default and belongs at the layer that
+      // knows it is one, not baked into the schema.
+      corpSharePct: input.corpSharePct ?? "10",
       notes: input.notes ?? null,
       createdBy: actor,
     })
@@ -159,6 +168,108 @@ export async function setCorpSharePct(
     details: { corpSharePct },
   });
   await recalculate(dbtx, operationId);
+}
+
+/**
+ * Four separate editors for the fields the create form no longer collects up
+ * front (name/date) plus the two that were always freeform (report link,
+ * notes) — one function per field, matching `setParticipantShares` /
+ * `setParticipantExcluded`'s split rather than one combined setter, so each
+ * inline editor on the detail page saves independently and the audit log
+ * keeps one action per actual fact changed instead of a single
+ * "something about this operation changed" bucket.
+ *
+ * Same gate as `setCorpSharePct` -- `assertEditable`, holding the row lock --
+ * but none of these feed `computeSplit`, so none of them recalculate.
+ */
+export async function setOperationName(
+  dbtx: DbTx,
+  actor: string,
+  operationId: string,
+  name: string,
+): Promise<void> {
+  await requirePayoutOperator(dbtx, actor);
+  await lockOperation(dbtx, operationId);
+  await assertEditable(dbtx, operationId);
+  await dbtx
+    .update(payoutOperation)
+    .set({ name })
+    .where(eq(payoutOperation.id, operationId));
+  await logAudit(dbtx, {
+    actor,
+    action: "payout.name_changed",
+    target: operationId,
+    details: { name },
+  });
+}
+
+export async function setOccurredAt(
+  dbtx: DbTx,
+  actor: string,
+  operationId: string,
+  occurredAt: Date,
+): Promise<void> {
+  await requirePayoutOperator(dbtx, actor);
+  await lockOperation(dbtx, operationId);
+  await assertEditable(dbtx, operationId);
+  await dbtx
+    .update(payoutOperation)
+    .set({ occurredAt })
+    .where(eq(payoutOperation.id, operationId));
+  await logAudit(dbtx, {
+    actor,
+    action: "payout.occurred_at_changed",
+    target: operationId,
+    // yyyy-mm-dd, the same convention every occurredAt render already uses
+    // (src/app/payouts/[id]/page.tsx, account-payouts.tsx) -- a full
+    // timestamp would just be truncated back to this on the page anyway.
+    details: { occurredAt: occurredAt.toISOString().slice(0, 10) },
+  });
+}
+
+export async function setBattleReportUrl(
+  dbtx: DbTx,
+  actor: string,
+  operationId: string,
+  battleReportUrl: string | null,
+): Promise<void> {
+  await requirePayoutOperator(dbtx, actor);
+  await lockOperation(dbtx, operationId);
+  await assertEditable(dbtx, operationId);
+  await dbtx
+    .update(payoutOperation)
+    .set({ battleReportUrl })
+    .where(eq(payoutOperation.id, operationId));
+  await logAudit(dbtx, {
+    actor,
+    action: "payout.battle_report_changed",
+    target: operationId,
+    details: { battleReportUrl },
+  });
+}
+
+export async function setNotes(
+  dbtx: DbTx,
+  actor: string,
+  operationId: string,
+  notes: string | null,
+): Promise<void> {
+  await requirePayoutOperator(dbtx, actor);
+  const op = await lockOperation(dbtx, operationId);
+  await assertEditable(dbtx, operationId);
+  await dbtx
+    .update(payoutOperation)
+    .set({ notes })
+    .where(eq(payoutOperation.id, operationId));
+  await logAudit(dbtx, {
+    actor,
+    action: "payout.notes_changed",
+    target: operationId,
+    // had/has, not the text itself -- the same choice status.note_changed
+    // already made (summarize.ts's noteChange): the note lives on the
+    // operation where it is current, not frozen into the log at write time.
+    details: { had: Boolean(op.notes), has: Boolean(notes) },
+  });
 }
 
 export type RosterEntry = {
@@ -727,6 +838,87 @@ export async function revertPayment(
     action: "payout.payment_reverted",
     target: op.id,
     details: { participantId, amount },
+  });
+}
+
+/**
+ * Deletes an operation and everything that hangs off it — every child table
+ * (loot_pool, loot_item, payout_participant, payout_payment) cascades on
+ * `operation_id` / `pool_id` / `participant_id` (schema.ts:244, :275, :297,
+ * :324), so a single row delete is the whole tree; no migration needed.
+ *
+ * Deletable when NO participant currently carries a `paidAmount` — deliberately
+ * not `hasPayments` (above), which counts `payout_payment` rows of any `kind`
+ * including `reverted`. A finalized operation whose entire roster was paid and
+ * then reverted has `hasPayments() === true` forever (reverting does not lift
+ * the payment freeze — see `revertPayment`'s doc), which would make it
+ * permanently undeletable even though nobody is currently owed a cent. Status
+ * is irrelevant to this predicate for the same reason: a finalized operation
+ * with a fully-reverted roster IS deletable.
+ *
+ * Authorization is re-checked here, not left to the caller: `requirePayoutOperator`
+ * (the standard mutation gate) AND `account.isAdmin`, since destroying an
+ * operation outright is a step beyond anything an ordinary operator mutation
+ * does. `src/app/payouts/access.ts` states the rule this follows -- every
+ * mutation re-checks itself.
+ */
+export async function deleteOperation(
+  dbx: Dbx,
+  actor: string,
+  operationId: string,
+): Promise<void> {
+  await dbx.transaction(async (dbtx) => {
+    await requirePayoutOperator(dbtx, actor);
+    const [acc] = await dbtx.select().from(account).where(eq(account.id, actor));
+    if (!acc?.isAdmin) {
+      throw new PayoutForbiddenError("only an admin may delete a payout operation");
+    }
+
+    const op = await lockOperation(dbtx, operationId);
+
+    const participants = await dbtx
+      .select({
+        paidAmount: payoutParticipant.paidAmount,
+        excluded: payoutParticipant.excluded,
+      })
+      .from(payoutParticipant)
+      .where(eq(payoutParticipant.operationId, operationId));
+    if (participants.some((p) => p.paidAmount !== null)) {
+      throw new PayoutHasPaidError(
+        "operation has a currently-paid participant and cannot be deleted",
+      );
+    }
+
+    // Read what the audit row needs to say BEFORE the delete removes the rows
+    // it would otherwise join against. `participantCount` is the true roster
+    // size that cascade-delete is about to destroy -- this audit row is the
+    // only surviving evidence of that, so it states what was actually
+    // destroyed, not who would have been paid. `payableCount` (excluding
+    // rows nobody was ever going to pay) is kept alongside it because it
+    // is still useful context, the same figure payout-view.ts's list page
+    // shows, just never the headline.
+    const pools = await dbtx
+      .select({ totalValue: lootPool.totalValue })
+      .from(lootPool)
+      .where(eq(lootPool.operationId, operationId));
+    const totalCents = pools.reduce((sum, p) => sum + iskToCents(p.totalValue), 0n);
+    const participantCount = participants.length;
+    const payableCount = participants.filter((p) => !p.excluded).length;
+
+    await dbtx.delete(payoutOperation).where(eq(payoutOperation.id, operationId));
+
+    await logAudit(dbtx, {
+      actor,
+      action: "payout.deleted",
+      target: operationId,
+      details: {
+        name: op.name,
+        occurredAt: op.occurredAt.toISOString().slice(0, 10),
+        participantCount,
+        payableCount,
+        totalValue: centsToIsk(totalCents),
+      },
+    });
   });
 }
 

@@ -307,4 +307,33 @@ describe("resolveAuditIdentities: payout target kind", () => {
     expect(row.targetName).toBe("Roster test");
     expect(row.targetName).not.toBe("Should Not Appear");
   });
+
+  it("still names a deleted operation's older rows, via the payout.deleted fallback", async () => {
+    // The operation row itself is never inserted here -- a hard delete leaves
+    // nothing to join against, which is exactly the case this test is for.
+    const opId = "11111111-1111-1111-1111-111111111111";
+    await logAudit(ctx.db, { actor: "system", action: "payout.created", target: opId });
+    await logAudit(ctx.db, {
+      actor: "system",
+      action: "payout.paid",
+      target: opId,
+      details: { participantId: "irrelevant-here" },
+    });
+    await logAudit(ctx.db, {
+      actor: "system",
+      action: "payout.deleted",
+      target: opId,
+      details: {
+        name: "Deleted Roam",
+        occurredAt: "2026-01-01",
+        participantCount: 1,
+        totalValue: "10.00",
+      },
+    });
+    const rows = await queryAuditLog(ctx.db);
+    for (const row of rows) {
+      expect(row.targetKind).toBe("payout");
+      expect(row.targetName).toBe("Deleted Roam");
+    }
+  });
 });

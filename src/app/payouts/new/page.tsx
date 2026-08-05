@@ -19,9 +19,7 @@ export const metadata: Metadata = {
 /** Collapses a possibly-repeated query param to one value, last wins — the same
  *  helper `../page.tsx` and the audit page use, for the same reason: Next hands
  *  `string | string[]`, and a repeated param reaching code that declared only
- *  `string` took the audit page down with a 500. This page echoes six of them
- *  straight back into `defaultValue`, so it is the widest instance of that
- *  hazard in the app, not the narrowest. */
+ *  `string` took the audit page down with a 500. */
 function one(v: string | string[] | undefined): string | undefined {
   return Array.isArray(v) ? v[v.length - 1] : v;
 }
@@ -33,9 +31,6 @@ export default async function NewPayoutPage({
     error?: string | string[];
     name?: string | string[];
     occurredAt?: string | string[];
-    battleReportUrl?: string | string[];
-    corpSharePct?: string | string[];
-    notes?: string | string[];
   }>;
 }) {
   const access = await requirePayoutReader();
@@ -50,9 +45,6 @@ export default async function NewPayoutPage({
   const submitted = {
     name: one(raw.name),
     occurredAt: one(raw.occurredAt),
-    battleReportUrl: one(raw.battleReportUrl),
-    corpSharePct: one(raw.corpSharePct),
-    notes: one(raw.notes),
   };
   const errorMessage = lookupErrorMessage(NEW_OPERATION_ERRORS, one(raw.error));
 
@@ -76,9 +68,10 @@ export default async function NewPayoutPage({
         <div className="page__head">
           <h1>New operation</h1>
           <p className="page__lede">
-            One row per fight. Loot, roster, and the split are added on the operation once
-            it exists. Creating one pays nobody &mdash; it opens a draft. It also
-            can&rsquo;t be deleted afterwards, so check the name and date.
+            One row per fight. Give it a name and a date; battle report, corp share, and
+            notes can all be added on the operation once it exists. Creating one pays
+            nobody: it opens a draft, and an admin can delete it later if it turns out to
+            be a mistake.
           </p>
         </div>
 
@@ -91,11 +84,8 @@ export default async function NewPayoutPage({
 
         <form action={createOperationAction} className="form-stack">
           {/* Requiredness is spelled into the label rather than left to the
-              `required` attribute alone. The page's convention was "optional is
-              labelled, required is silent", which marks four of six fields and
-              leaves the reader to infer the rest from a browser bubble they
-              only see after pressing. `[id]/page.tsx`'s "Note (required — why
-              this number)" already set the other precedent; this follows it. */}
+              `required` attribute alone. Both fields here are required, so
+              there is no "optional" case left to distinguish them from. */}
           <label className="form-stack__field">
             Name (required)
             <input className="field" name="name" defaultValue={submitted.name} required />
@@ -109,57 +99,6 @@ export default async function NewPayoutPage({
               defaultValue={submitted.occurredAt ?? today}
               max={today}
               required
-            />
-          </label>
-          <label className="form-stack__field">
-            Battle report URL (optional)
-            <input
-              className="field"
-              type="url"
-              name="battleReportUrl"
-              defaultValue={submitted.battleReportUrl}
-            />
-          </label>
-          {/* No default. A pre-filled 0 is a number the operator never chose but
-              the roster lives with. Empty forces the decision; the field is
-              `required`, so the form will not submit without one. This cell is a
-              div with an explicit label, unlike its siblings: the hint has to
-              live outside the <label> or it gets concatenated into the input's
-              accessible name — same arrangement /admin/audit uses for its
-              filter hints. */}
-          <div className="form-stack__field">
-            <label htmlFor="corp-share-pct">Corp share % (required)</label>
-            <input
-              id="corp-share-pct"
-              className="field"
-              type="number"
-              inputMode="decimal"
-              name="corpSharePct"
-              min="0"
-              max="100"
-              step="0.01"
-              defaultValue={submitted.corpSharePct}
-              required
-              aria-describedby="corp-share-hint"
-            />
-            <span className="dim" id="corp-share-hint">
-              Taken off the top before the roster splits the rest. Enter 0 if the corp
-              takes nothing.
-            </span>
-          </div>
-          {/* `maxLength` mirrors the 500-char ceiling `createFailed` enforces on
-              the way back. Without it the six error messages' "Everything else
-              is still filled in" was a claim the round trip could not keep:
-              anything longer was dropped from the redirect silently, and Notes
-              is the only field that can realistically get there. */}
-          <label className="form-stack__field">
-            Notes (optional)
-            <textarea
-              className="field"
-              name="notes"
-              rows={3}
-              maxLength={500}
-              defaultValue={submitted.notes}
             />
           </label>
           <Submit className="btn btn--primary" pendingLabel="Creating…">
