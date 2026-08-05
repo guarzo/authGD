@@ -5,7 +5,6 @@ import { requireAdminPage } from "@/lib/admin-guard";
 import { ADMIN_ACCOUNTS_ERRORS, lookupErrorMessage } from "@/lib/error-redirects";
 import { isContactsTarget } from "@/services/desired";
 import {
-  countAccountsByTier,
   getAdminAccountsList,
   type AdminAccountRow,
   type AdminCharacterRow,
@@ -25,6 +24,7 @@ import { Submit } from "@/app/_components/submit";
 import { ConfirmArmScope, ConfirmSubmit } from "@/app/_components/confirm-submit";
 import { NoteForm } from "@/app/_components/note-form";
 import { renderedAt } from "@/app/_components/utc-time";
+import { countPendingCached } from "../pending-count";
 import {
   approveAction,
   demoteAdminAction,
@@ -34,6 +34,7 @@ import {
   setStatusAction,
   setTierAction,
   syncAccountAction,
+  unlinkDiscordAction,
 } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -117,7 +118,7 @@ export default async function AdminAccountsPage({
   // single `count(*)` rather than another getAdminAccountsList call: that
   // call assembles a full row (five unbounded scans plus per-character work)
   // for every account just to get thrown away for a length.
-  const pendingCount = await countAccountsByTier(getDb(), "pending");
+  const pendingCount = await countPendingCached();
   const errorMessage = lookupErrorMessage(ADMIN_ACCOUNTS_ERRORS, params.error);
 
   const listParams = (over: Record<string, string | undefined> = {}) => {
@@ -492,7 +493,22 @@ function AccountRow({
 
           <td>
             {r.discordLinked ? (
-              <Status tone="ok">linked</Status>
+              // Already inside the tbody-wide ConfirmArmScope (:281), like every
+              // other confirm in this row. Names its row for the same reason the
+              // Actions cell does: "unlink" read out of context says whose Discord
+              // is about to be disconnected to nobody.
+              <span className="inline-pair">
+                <Status tone="ok">linked</Status>
+                <form action={unlinkDiscordAction.bind(null, r.accountId, listSearch)}>
+                  <ConfirmSubmit
+                    className="btn btn--micro"
+                    armedClassName="btn btn--micro btn--danger"
+                    label="unlink"
+                    restName={`unlink Discord for ${identity}`}
+                    confirmName={`confirm unlink Discord for ${identity}`}
+                  />
+                </form>
+              </span>
             ) : (
               <Status tone="off">none</Status>
             )}

@@ -18,7 +18,12 @@ import { Submit } from "@/app/_components/submit";
 import { ConfirmArmScope, ConfirmSubmit } from "@/app/_components/confirm-submit";
 import { ContactRemedy, ContactState, hasContactRemedy } from "./contact-state";
 import { StandingTier } from "./standing";
-import { setMainAction, unlinkAction, wakeSelfAction } from "./actions";
+import {
+  setMainAction,
+  unlinkAction,
+  unlinkDiscordAction,
+  wakeSelfAction,
+} from "./actions";
 import { AccountPayouts } from "./account-payouts";
 
 /** Columns in the crew manifest table: portrait, name, token, contacts, map,
@@ -278,10 +283,23 @@ export default async function AccountPage({
           <dt>Discord</dt>
           <dd>
             {view.discordLinked ? (
-              // Secondary to the tier, and per DESIGN.md a settled state is not
-              // actionable: a neutral token says "linked" without competing
-              // with the tier badge for the eye.
-              <Status>linked</Status>
+              // Its own arm scope, not the manifest's: ConfirmSubmit throws outside
+              // one (confirm-submit.tsx:115), and a scope of one is right here —
+              // arming this must not disarm a character row three sections down.
+              <ConfirmArmScope>
+                <span className="inline-pair">
+                  <Status>linked</Status>
+                  <form action={unlinkDiscordAction} className="inline-form">
+                    <ConfirmSubmit
+                      className="btn btn--micro"
+                      armedClassName="btn btn--micro btn--danger"
+                      label="unlink"
+                      restName="unlink Discord"
+                      confirmName="confirm unlink Discord"
+                    />
+                  </form>
+                </span>
+              </ConfirmArmScope>
             ) : (
               // Raised to the default button grade: high-value but was the
               // weakest affordance on the page. Not gold — DESIGN.md rations

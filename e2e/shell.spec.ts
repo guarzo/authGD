@@ -241,6 +241,38 @@ test("the page column occupies the same rect on every shell route", async ({
   expect(rects).toEqual(Object.fromEntries(routes.map((p) => [p, expected])));
 });
 
+test("the pending count reaches the admin nav, without renaming the tab", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  await seedMember(db, { name: "Waiting One", tier: "pending" });
+  await seedMember(db, { name: "Waiting Two", tier: "pending" });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+
+  // /admin/audit, not /admin/accounts: there the badge is the only source of
+  // the count, so a passing assertion cannot be the banner in disguise.
+  await page.goto("/admin/audit");
+  const members = page.getByRole("link", { name: "Members", exact: true });
+  // The name is EXACTLY "Members" — the WCAG 3.2.4 invariant the
+  // outside-the-link placement exists to hold.
+  await expect(members).toBeVisible();
+  await expect(page.locator(".shell__badge")).toHaveText("2 awaiting approval");
+  // ...and it is associated with the link, not merely next to it.
+  const describedBy = await members.getAttribute("aria-describedby");
+  expect(describedBy).toBe("nav-badge-/admin/accounts");
+
+  await resetDb(db);
+  const solo = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  await context.clearCookies();
+  await context.addCookies([await sessionCookieFor(db, solo.id)]);
+  await page.goto("/admin/audit");
+  await expect(page.locator(".shell__badge")).toHaveCount(0);
+  await expect(
+    page.getByRole("link", { name: "Members", exact: true }),
+  ).not.toHaveAttribute("aria-describedby");
+});
+
 test("sign-out ends the session and a subsequent protected request bounces to login", async ({
   page,
   context,

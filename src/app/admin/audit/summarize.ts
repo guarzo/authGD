@@ -14,7 +14,8 @@ function fmt(v: unknown): string {
 }
 
 /** A Discord role id we can't name: first six characters, then an ellipsis.
- * The full value rides along in the `title` the details cell already sets. */
+ * The full value stays one click away, in the disclosure the details cell
+ * already renders. */
 function shortId(id: string): string {
   return id.length > 6 ? `${id.slice(0, 6)}…` : id;
 }
@@ -87,6 +88,25 @@ function flag(key: string, word: string): Part {
   return part([key], (d) => (d[key] ? word : ""));
 }
 
+/** A uuid the audit page cannot resolve to a name, shortened the way an
+ * unnameable role id is. `account.merged` is the case: the source account row
+ * is deleted by the merge that writes the row, so there is nothing left to
+ * resolve against and the full value only crowds the column. It stays one click
+ * away, in the disclosure the details cell already renders. */
+function shortRef(word: string, key: string): Part {
+  return part([key], (d) =>
+    typeof d[key] === "string" ? `${word} ${shortId(d[key])}` : "",
+  );
+}
+
+/** Keys the line deliberately does not show. Declaring them is the whole
+ * point: `summarizeDetails` counts undeclared keys as `+N more`, so a payload
+ * id that identifies a sub-object rather than describing the change would
+ * otherwise be reported to an admin as something withheld. */
+function silent(...keys: string[]): Part {
+  return part(keys, () => "");
+}
+
 /** `missing esi-a.v1, esi-b.v1` up to two values, `missing 4 scopes` beyond
  * that: a full EVE scope string is long and this column is narrow.
  *
@@ -130,6 +150,20 @@ function noteChange(hadKey: string, hasKey: string): Part {
  */
 const PARTS: Record<string, readonly Part[]> = {
   "tier.changed": [transition("from", "to"), scalar("cause"), flag("locked", "locked")],
+  // Same shape as tier.changed on purpose: an approval IS a tier transition,
+  // and the payload has no `from` because a pending account has no prior tier
+  // an admin would recognise. `transition` already renders `→ green` for that.
+  "tier.approved": [transition("from", "to"), flag("locked", "locked")],
+  "account.merged": [
+    shortRef("absorbed", "sourceAccountId"),
+    labelled("character", "characterId"),
+  ],
+  // The only action in the repo whose payload exceeds FALLBACK_KEYS, and the
+  // key the fallback dropped was the price — the reason the row exists.
+  // transition() reused rather than scalar()+labelled(): those are two
+  // declared parts, joined by the ", " every other multi-part line uses, which
+  // renders "Tritanium, → 5.50" — the arrow needs to live inside one part.
+  "payout.item_repriced": [transition("name", "unitPrice"), silent("itemId", "poolId")],
   "status.changed": [transition("from", "to"), flag("self", "self-service")],
   "admin.bootstrap_granted": [labelled("character", "characterId")],
   "account.created": [labelled("main", "mainCharacterId")],

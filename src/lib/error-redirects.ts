@@ -110,8 +110,8 @@ export function loginErrorTone(code: string | undefined): "bad" | "info" {
  *
  *  THE `merge_*` SET IS ONE REFUSAL WITH SEVEN REASONS, not seven failures.
  *  Each maps 1:1 to a `MergeBlocker` from src/services/accounts.ts, and the
- *  split exists because the remedies differ: the first four name a field an
- *  admin clears from /admin/accounts in seconds, and the last three have no
+ *  split exists because the remedies differ: the first five name a field an
+ *  admin clears from /admin/accounts in seconds, and the last two have no
  *  cheap fix and must not pretend otherwise. The generic `already_linked` this
  *  set replaced said only "ask an admin" — which sent members looking for an
  *  admin merge tool that does not exist, when clearing a stale status note
@@ -133,10 +133,10 @@ export const ACCOUNT_ERRORS = {
     "That character sits on an account that isn't active. An admin can reactivate it, then link it again.",
   merge_note:
     "That character sits on an account carrying an admin note. An admin can clear the note, then link it again.",
+  merge_discord:
+    "That character sits on an account with its own Discord link. An admin can remove it, then link it again.",
   merge_characters:
     "That character sits on an account with other characters of its own, so it can't be merged automatically. Ask an admin.",
-  merge_discord:
-    "That character sits on an account with its own Discord link, so it can't be merged automatically. Ask an admin.",
   merge_payouts:
     "That character sits on an account with payout history, so it can't be merged automatically. Ask an admin.",
   discord_already_linked: "That Discord account is already linked to another account.",

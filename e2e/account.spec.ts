@@ -357,10 +357,30 @@ test("the first-run notice promises Discord roles once Discord is linked", async
   });
   await context.addCookies([await sessionCookieFor(db, acc.id)]);
   await page.goto("/account");
-  await expect(page.getByRole("status")).toContainText(
+  // Scoped to the Notice itself: a linked account now also renders the
+  // Discord unlink control's own always-mounted status live region
+  // (confirm-submit.tsx), so a bare getByRole("status") matches both.
+  await expect(page.locator("p.notice")).toContainText(
     "Standings, map access and Discord roles",
   );
   await expect(page.getByRole("link", { name: "Link Discord" })).toHaveCount(0);
+});
+
+test("a member can unlink their own Discord", async ({ page, context }) => {
+  const member = await seedMember(db, { name: "Pilot", tier: "green" });
+  await db.insert(discordLink).values({
+    accountId: member.id,
+    discordUserId: "duid-e2e",
+  });
+  await context.addCookies([await sessionCookieFor(db, member.id)]);
+
+  await page.goto("/account");
+  // Two clicks by design: ConfirmSubmit arms first, submits second.
+  await page.getByRole("button", { name: "unlink Discord", exact: true }).click();
+  await page.getByRole("button", { name: "confirm unlink Discord", exact: true }).click();
+
+  await expect(page.getByRole("link", { name: "Link Discord" })).toBeVisible();
+  expect(await db.select().from(discordLink)).toHaveLength(0);
 });
 
 test("a pending member is told their access is awaiting approval", async ({

@@ -1,6 +1,6 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { eq } from "drizzle-orm";
-import { account } from "../src/db/schema";
+import { account, discordLink } from "../src/db/schema";
 import { clearOfPin, coveredByPin, pinGeometry } from "./geometry";
 import { BASE_URL } from "./env";
 import { resetDb, seedMember, sessionCookieFor, testDb } from "./helpers";
@@ -356,6 +356,29 @@ test("the skip link moves focus to the main landmark", async ({ page, context })
   await expect(page.locator("a.skip")).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(page.locator("main#main")).toBeFocused();
+});
+
+test("an admin can unlink a member's Discord", async ({ page, context }) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  const member = await seedMember(db, { name: "Pilot", tier: "green" });
+  await db.insert(discordLink).values({
+    accountId: member.id,
+    discordUserId: "duid-e2e",
+  });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+
+  await page.goto("/admin/accounts");
+  await page
+    .getByRole("button", { name: "unlink Discord for Pilot", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "confirm unlink Discord for Pilot", exact: true })
+    .click();
+
+  await expect(
+    page.getByRole("button", { name: "unlink Discord for Pilot", exact: true }),
+  ).toHaveCount(0);
+  expect(await db.select().from(discordLink)).toHaveLength(0);
 });
 
 /* --- The approval queue --------------------------------------------------- */

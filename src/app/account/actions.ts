@@ -9,6 +9,7 @@ import { getDb } from "@/db";
 import { character } from "@/db/schema";
 import { accountErrorUrl, loginErrorUrl } from "@/lib/error-redirects";
 import { setMainCharacter, unlinkCharacter, wakeSelf } from "@/services/accounts";
+import { unlinkDiscord } from "@/services/discord-link";
 import { getSessionAccount } from "@/services/session";
 
 async function requireAccount(): Promise<string> {
@@ -70,5 +71,18 @@ export async function wakeSelfAction(): Promise<void> {
   const accountId = await requireAccount();
   const result = await getDb().transaction((dbtx) => wakeSelf(dbtx, accountId));
   if (!result.ok) throw new Error(result.error);
+  revalidatePath("/account");
+}
+
+/** Member self-serve: disconnect Discord. Only ever the caller's own account,
+ *  so `actor` and the target are the same id.
+ *
+ *  Both failures are a silent no-op. The control renders only when the account
+ *  IS linked, so `not_linked` means a second submit or another tab got there
+ *  first, and `not_found` cannot be reached by a member holding a live session
+ *  for that very account. Same reasoning as `unlinkAction`'s rejections. */
+export async function unlinkDiscordAction(): Promise<void> {
+  const accountId = await requireAccount();
+  await getDb().transaction((dbtx) => unlinkDiscord(dbtx, accountId, accountId, "self"));
   revalidatePath("/account");
 }

@@ -373,6 +373,22 @@ a:hover {
   flex-wrap: wrap;
 }
 
+/* The pair a nav item and its badge form, so .shell__nav's flex-wrap moves
+   them together rather than stranding the count on the next line. */
+.shell__navitem {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(var(--s-1) / 2);
+}
+
+/* A count, not an alert: the admin register label beside it is already quiet,
+   and a filled pill here would outweigh the nav it sits in. */
+.shell__badge {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: var(--track-control);
+  color: var(--ink-faint);
+}
+
 .shell__nav a {
   position: relative;
   letter-spacing: var(--track-label);
@@ -2463,6 +2479,13 @@ h3.rule-head__label {
   align-items: center;
   gap: var(--s-2);
   flex-wrap: wrap;
+}
+
+/* A settled status token and the control that changes it, on one line. */
+.inline-pair {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-1);
 }
 
 .stack {
