@@ -56,6 +56,18 @@ test("aria-current lands on the right tab on every shell route", async ({
     // Scoped to the nav rather than the document: /admin/accounts' filter chips
     // carry their own, correct, `aria-current="true"` for the selected filter.
     await expect(page.locator(".shell__nav [aria-current]")).toHaveCount(1);
+    // And that the tab is actually painted as active. The attribute and the
+    // stylesheet are two independent things: `globals.css` matched
+    // `[aria-current="page"]` alone until the "true" token existed, which left
+    // the section routes correct to a screen reader and unmarked to everyone
+    // else. Asserting the hairline rather than the colour — `--ink` is also
+    // the hover colour, so text colour alone does not distinguish an active
+    // tab from a hovered one, and the critique's own note says the 1px rule is
+    // doing necessary work rather than decorating.
+    const rule = await page
+      .getByRole("link", { name: label })
+      .evaluate((el) => getComputedStyle(el, "::after").height);
+    expect(rule).toBe("1px");
   }
 });
 

@@ -313,15 +313,23 @@ a:hover {
    Note that --ink is also the :hover colour, so a hovered inactive tab now
    matches the active tab's text exactly; the two are told apart by hover's
    --hull-hi fill versus the active hairline, not by colour. That is why this
-   selector no longer needs to outrank .shell__nav a:hover — they agree. */
-.shell__nav a[aria-current="page"] {
+   selector no longer needs to outrank .shell__nav a:hover — they agree.
+
+   Matched on the bare attribute rather than ="page". A tab whose route is an
+   ancestor of the current one — /payouts while on /payouts/new, /payouts/[id]
+   or the payout 404 — correctly emits "true" rather than "page", because it is
+   not the current page (ui.tsx:111). Both tokens mean "this is the active tab"
+   for painting purposes. The only other aria-current in the app is on the
+   /admin/accounts filter chips, which are .btn under .filters and outside this
+   selector's .shell__nav scope. */
+.shell__nav a[aria-current] {
   color: var(--ink);
 }
 
 /* Inset to the item's padding so the rule underlines the label rather than the
    hit area. Sits on the pseudo-element, not on a border, so it cannot shift
    the item's box or interfere with the global focus ring. */
-.shell__nav a[aria-current="page"]::after {
+.shell__nav a[aria-current]::after {
   content: "";
   position: absolute;
   left: var(--s-3);
