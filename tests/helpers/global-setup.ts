@@ -11,9 +11,14 @@ import { deriveWorktreeDbName } from "./test-db-url";
  * database"). Without this, the symptom is assertion failures that move
  * around between runs — indistinguishable from a real regression.
  *
- * Deliberately NOT per-worktree database isolation (that was considered and
- * rejected) — this only turns silent corruption into a named error that
- * points at the existing `TEST_DATABASE_URL` escape hatch.
+ * `npm test` now defaults to a database derived from the worktree path
+ * (`tests/helpers/test-db-url.ts`), so this contention case is mostly
+ * confined to CI's shared `authgd_test` and to anyone using the explicit
+ * `TEST_DATABASE_URL` escape hatch to point multiple checkouts at the same
+ * database on purpose. See
+ * docs/superpowers/specs/2026-08-05-per-worktree-unit-test-db-design.md for
+ * why per-worktree isolation was reversed from an earlier "deliberately not"
+ * stance.
  */
 
 /**

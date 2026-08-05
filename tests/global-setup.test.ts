@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { buildContentionMessage } from "./helpers/global-setup";
-import { deriveWorktreeDbName } from "./helpers/test-db-url";
+import {
+  deriveWorktreeDbName,
+  ownsTestDatabase,
+  resolveTestUrl,
+} from "./helpers/test-db-url";
 
 describe("deriveWorktreeDbName", () => {
   const HASH = /_[0-9a-f]{6}$/;
@@ -86,5 +90,50 @@ describe("buildContentionMessage", () => {
     });
 
     expect(message).toContain("docker exec <postgres-container> psql");
+  });
+});
+
+describe("resolveTestUrl", () => {
+  it("prefers an explicit TEST_DATABASE_URL over everything", () => {
+    expect(
+      resolveTestUrl(
+        { TEST_DATABASE_URL: "postgres://u:p@example:5432/mine", CI: "true" },
+        "/worktrees/x",
+      ),
+    ).toBe("postgres://u:p@example:5432/mine");
+  });
+
+  // CI stands up a shared Postgres service and sets no override. Changing this
+  // would point CI at a database nothing creates.
+  it("uses the historical shared database under CI", () => {
+    expect(resolveTestUrl({ CI: "true" }, "/worktrees/x")).toBe(
+      "postgres://authgd:authgd@localhost:5433/authgd_test",
+    );
+  });
+
+  it("otherwise derives a database for this worktree", () => {
+    expect(resolveTestUrl({}, "/worktrees/my-branch")).toMatch(
+      /^postgres:\/\/authgd:authgd@localhost:5433\/authgd_test_my_branch_[0-9a-f]{6}$/,
+    );
+  });
+
+  it("ignores an empty TEST_DATABASE_URL rather than connecting nowhere", () => {
+    expect(resolveTestUrl({ TEST_DATABASE_URL: "" }, "/worktrees/x")).toMatch(
+      /authgd_test_x_[0-9a-f]{6}$/,
+    );
+  });
+});
+
+describe("ownsTestDatabase", () => {
+  it("owns the database it derived itself", () => {
+    expect(ownsTestDatabase({})).toBe(true);
+  });
+
+  it("does not own a database named by TEST_DATABASE_URL", () => {
+    expect(ownsTestDatabase({ TEST_DATABASE_URL: "postgres://u:p@h:1/d" })).toBe(false);
+  });
+
+  it("does not own CI's shared database", () => {
+    expect(ownsTestDatabase({ CI: "true" })).toBe(false);
   });
 });
