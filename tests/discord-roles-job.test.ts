@@ -17,9 +17,9 @@ beforeEach(() => truncateAll(ctx.db));
 
 const MANAGE_ROLES = String(1 << 28);
 const validGuildRoles = [
-  { id: "10", name: "FlyGD", position: 5, permissions: "0" },
-  { id: "11", name: "Blue", position: 4, permissions: "0" },
-  { id: "12", name: "Green", position: 3, permissions: "0" },
+  { id: "10", name: "Member", position: 5, permissions: "0" },
+  { id: "11", name: "Associate", position: 4, permissions: "0" },
+  { id: "12", name: "Alumni", position: 3, permissions: "0" },
   { id: "bot-role", name: "Bot", position: 9, permissions: MANAGE_ROLES },
 ];
 
@@ -61,7 +61,7 @@ describe("runDiscordRolesJob", () => {
   });
 
   it("config validation failure is permanent: failed run, webhook, NO retry", async () => {
-    const badRoles = validGuildRoles.filter((r) => r.id !== "11"); // blue missing
+    const badRoles = validGuildRoles.filter((r) => r.id !== "11"); // associate missing
     const d = fakeDiscord({}, badRoles);
     const webhook = vi.fn(async () => new Response(null, { status: 204 }));
     const result = await runDiscordRolesJob({

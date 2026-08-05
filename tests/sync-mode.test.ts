@@ -320,9 +320,9 @@ describe("job reporting honesty in dry-run", () => {
     await seedCharacter(ctx.db, dryCfg, { id: 90000001, accountId: acc.id, main: true });
     const client: DiscordClient = {
       getGuildRoles: async () => [
-        { id: "10", name: "FlyGD", position: 5, permissions: "0" },
-        { id: "11", name: "Blue", position: 4, permissions: "0" },
-        { id: "12", name: "Green", position: 3, permissions: "0" },
+        { id: "10", name: "Member", position: 5, permissions: "0" },
+        { id: "11", name: "Associate", position: 4, permissions: "0" },
+        { id: "12", name: "Alumni", position: 3, permissions: "0" },
         { id: "bot-role", name: "Bot", position: 9, permissions: "268435456" },
       ],
       getBotUserId: async () => "bot-user",
@@ -347,9 +347,9 @@ describe("job reporting honesty in dry-run", () => {
   it("discord-roles deprovision path writes NO audit rows in dry-run and reports wouldRemove", async () => {
     const client: DiscordClient = {
       getGuildRoles: async () => [
-        { id: "10", name: "FlyGD", position: 5, permissions: "0" },
-        { id: "11", name: "Blue", position: 4, permissions: "0" },
-        { id: "12", name: "Green", position: 3, permissions: "0" },
+        { id: "10", name: "Member", position: 5, permissions: "0" },
+        { id: "11", name: "Associate", position: 4, permissions: "0" },
+        { id: "12", name: "Alumni", position: 3, permissions: "0" },
         { id: "bot-role", name: "Bot", position: 9, permissions: "268435456" },
       ],
       getBotUserId: async () => "bot-user",

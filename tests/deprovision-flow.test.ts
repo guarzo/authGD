@@ -91,7 +91,7 @@ it("main leaves alliance → alumni → contacts removed, ACL removed, role chan
     },
   };
 
-  // Discord: both users currently carry the FlyGD role.
+  // Discord: both users currently carry the Member role.
   const MANAGE_ROLES = String(1 << 28);
   const roleOps = {
     added: [] as Array<[string, string]>,
@@ -104,9 +104,9 @@ it("main leaves alliance → alumni → contacts removed, ACL removed, role chan
   };
   const discord: DiscordClient = {
     getGuildRoles: async () => [
-      { id: "10", name: "FlyGD", position: 5, permissions: "0" },
-      { id: "11", name: "Blue", position: 4, permissions: "0" },
-      { id: "12", name: "Green", position: 3, permissions: "0" },
+      { id: "10", name: "Member", position: 5, permissions: "0" },
+      { id: "11", name: "Associate", position: 4, permissions: "0" },
+      { id: "12", name: "Alumni", position: 3, permissions: "0" },
       { id: "bot-role", name: "Bot", position: 9, permissions: MANAGE_ROLES },
     ],
     getBotUserId: async () => "bot-user",
