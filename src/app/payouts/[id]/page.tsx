@@ -32,6 +32,7 @@ import { PaymentHistory } from "./payment-history";
 import { deriveRosterWarnings } from "./roster-warnings";
 import { PRICING_MODES, type PricingMode } from "@/core/pricing";
 import { iskToCents } from "@/core/payout-split";
+import { fmtIsk } from "@/app/_components/format-isk";
 
 export const dynamic = "force-dynamic";
 
@@ -160,6 +161,12 @@ export default async function PayoutOperationPage({
   const { duplicateUnresolvedNames, crossStateClashes } =
     deriveRosterWarnings(participants);
 
+  // Same semantics as the list page's paidCount (payout-view.ts): an excluded
+  // row is owed nothing and drops out of the denominator too, so an
+  // all-excluded roster reads 0/0 rather than 0/N.
+  const owedParticipants = participants.filter((p) => p.paymentState !== "excluded");
+  const paidParticipants = owedParticipants.filter((p) => p.paymentState === "paid");
+
   // Only the *first* payment is worth an arm step. Recording one is what shuts
   // the door permanently — `locked` (hasPayments) makes the operation
   // un-editable and un-unlockable from then on (Recalculation safety,
@@ -180,7 +187,10 @@ export default async function PayoutOperationPage({
         <div className="page__head">
           <h1>{operation.name}</h1>
           <p className="page__lede">
-            {fmtDate(operation.occurredAt)}
+            {/* Computed state, not prose: "prose is proportional, state is
+                mono" applies to a plain ISO date as much as to a badge or an
+                amount. The link and the separator around it stay proportional. */}
+            <span className="mono">{fmtDate(operation.occurredAt)}</span>
             {operation.battleReportUrl && (
               <>
                 {" · "}
@@ -236,46 +246,57 @@ export default async function PayoutOperationPage({
           </dd>
           <dt>Corp share</dt>
           <dd className="mono">
-            {corpAmount} ISK{" "}
-            <span className="dim">({operation.corpSharePct}% + remainder)</span>
-            {/* The percentage used to be write-once: an operator who accepted
-                the create form's default committed the whole roster to 0% with
-                no way back short of deleting the operation. It sits inside the
-                fact it corrects rather than in a separate edit panel, so the
-                current value and the way to change it are the same glance. */}
-            {canEdit && (
-              <form
-                action={setCorpShareAction.bind(null, operation.id)}
-                className="inline-form"
-              >
-                <label className="dim" htmlFor="corp-share">
-                  Corp share %
-                </label>
-                <input
-                  id="corp-share"
-                  className="field"
-                  name="corpSharePct"
-                  type="number"
-                  inputMode="decimal"
-                  min="0"
-                  max="100"
-                  step="0.01"
-                  required
-                  defaultValue={operation.corpSharePct}
-                />
-                {/* Every "save" on this page needs its object spelled out: the
-                    word alone appears once here and once per participant row,
-                    and a screen-reader or speech-input operator reaching one out
-                    of visual context cannot tell them apart. Starts with the
-                    visible label, so it stays a WCAG 2.5.3 match. */}
-                <Submit className="btn btn--micro" aria-label="save corp share">
-                  save
-                </Submit>
-              </form>
-            )}
+            {/* `.stack` puts the amount line and the editor form on separate
+                rows — sharing one line ran the field and button straight into
+                "12,345 ISK (10% + remainder)" the moment the field grew wide
+                enough to matter. */}
+            <div className="stack">
+              <span>
+                {fmtIsk(corpAmount)} ISK{" "}
+                <span className="dim">({operation.corpSharePct}% + remainder)</span>
+              </span>
+              {/* The percentage used to be write-once: an operator who accepted
+                  the create form's default committed the whole roster to 0%
+                  with no way back at all — there is no route to delete a payout
+                  operation, only a loot pool within one, so nothing could undo
+                  the mistake. It sits inside the fact it corrects rather than
+                  in a separate edit panel, so the current value and the way to
+                  change it are the same glance. */}
+              {canEdit && (
+                <form
+                  action={setCorpShareAction.bind(null, operation.id)}
+                  className="inline-form"
+                >
+                  {/* No visible <label>: it only restated the <dt> "Corp
+                      share" a few characters to its left. Same shape as the
+                      unit price and shares inputs below — aria-label carries
+                      the name, the <dt> carries the visible one. */}
+                  <input
+                    className="field"
+                    name="corpSharePct"
+                    type="number"
+                    inputMode="decimal"
+                    min="0"
+                    max="100"
+                    step="0.01"
+                    required
+                    defaultValue={operation.corpSharePct}
+                    aria-label="Corp share %"
+                  />
+                  {/* Every "save" on this page needs its object spelled out: the
+                      word alone appears once here and once per participant row,
+                      and a screen-reader or speech-input operator reaching one out
+                      of visual context cannot tell them apart. Starts with the
+                      visible label, so it stays a WCAG 2.5.3 match. */}
+                  <Submit className="btn btn--micro" aria-label="save corp share">
+                    save
+                  </Submit>
+                </form>
+              )}
+            </div>
           </dd>
           <dt>Total loot</dt>
-          <dd className="mono">{totalValue} ISK</dd>
+          <dd className="mono">{fmtIsk(totalValue)} ISK</dd>
           {operation.notes && (
             <>
               <dt>Notes</dt>
@@ -296,33 +317,16 @@ export default async function PayoutOperationPage({
           </Notice>
         )}
 
-        {access.isOperator && (
-          <ConfirmArmScope>
-            <div className="btn-row btn-row--tight">
-              {operation.status === "draft" && (
-                <form action={finalizeAction.bind(null, operation.id)}>
-                  {/* Finalizing freezes every number on the page. Unlock exists,
-                      but only until the first payment — so this is the last
-                      cheap moment to notice a wrong share. */}
-                  <ConfirmSubmit
-                    className="btn btn--primary"
-                    label="Finalize"
-                    confirmName="confirm finalize"
-                  />
-                </form>
-              )}
-              {operation.status === "finalized" && !locked && canUnlock && (
-                <form action={unlockAction.bind(null, operation.id)}>
-                  {/* Unlock stays one click: it reopens editing, and is undone
-                      by finalizing again. */}
-                  <Submit className="btn btn--quiet">Unlock</Submit>
-                </form>
-              )}
-            </div>
-          </ConfirmArmScope>
-        )}
+        {/* The Finalize/Unlock control row used to sit here, ahead of the
+            pools and roster it acts on. It now sits below the participants
+            table instead — see the comment there — so the button that
+            freezes every number on the page follows the numbers themselves
+            rather than heading them by ~600 rendered lines. */}
 
-        <RuleHead as="h2" aside={<span className="dim mono">{totalValue} ISK</span>}>
+        <RuleHead
+          as="h2"
+          aside={<span className="dim mono">{fmtIsk(totalValue)} ISK</span>}
+        >
           Loot pools
         </RuleHead>
         <Scroller label="Loot pools">
@@ -357,19 +361,26 @@ export default async function PayoutOperationPage({
                         <Status tone="warn">flat (manual)</Status>
                       )}
                     </td>
-                    <td className="mono nowrap">{pool.totalValue} ISK</td>
+                    <td className="mono nowrap">{fmtIsk(pool.totalValue)} ISK</td>
                     <td>{pool.notes}</td>
                     <td>
                       {canEdit && (
                         <form action={deletePoolAction.bind(null, operation.id, pool.id)}>
                           {/* Deleting a pool drops its whole appraisal — the
                             paste, every priced line, the lot — and the only
-                            way back is to re-paste and re-price. */}
+                            way back is to re-paste and re-price. Irreversible,
+                            so it gets revert's grade on confirm (full
+                            `.btn--danger`, not the quiet grade `remove` keeps),
+                            and a real per-row subject name — the previous
+                            literal "delete pool" on every row named nothing,
+                            which is why it still has to start with the visible
+                            label to keep the WCAG 2.5.3 match. */}
                           <ConfirmSubmit
                             className="btn btn--quiet btn--micro btn--danger-quiet"
+                            armedClassName="btn btn--micro btn--danger"
                             label="delete"
-                            restName="delete pool"
-                            confirmName="confirm delete pool"
+                            restName={`delete pool ${index + 1}`}
+                            confirmName={`confirm delete pool ${index + 1}`}
                           />
                         </form>
                       )}
@@ -379,7 +390,7 @@ export default async function PayoutOperationPage({
                 {pools.length === 0 && (
                   <tr>
                     <td className="log__empty" colSpan={5}>
-                      No loot recorded yet.
+                      <span className="log__empty-text">No loot recorded yet.</span>
                     </td>
                   </tr>
                 )}
@@ -416,7 +427,7 @@ export default async function PayoutOperationPage({
           return (
             <div key={pool.id}>
               {unresolved.length > 0 && (
-                <p className="notice notice--warn" data-glyph="!">
+                <Notice tone="warn">
                   <span>
                     <strong>
                       Pool {index + 1}: {unresolved.length} item
@@ -429,10 +440,10 @@ export default async function PayoutOperationPage({
                       {unresolved.map((i) => `${i.name} ×${i.qty}`).join(", ")}
                     </span>
                   </span>
-                </p>
+                </Notice>
               )}
               {subCentPriced.length > 0 && (
-                <p className="notice notice--warn" data-glyph="!">
+                <Notice tone="warn">
                   <span>
                     <strong>
                       Pool {index + 1}: {subCentPriced.length} item
@@ -443,15 +454,54 @@ export default async function PayoutOperationPage({
                     <br />
                     <span className="dim">
                       {subCentPriced
-                        .map((i) => `${i.name} ×${i.qty} (${i.totalValue} ISK)`)
+                        .map((i) => `${i.name} ×${i.qty} (${fmtIsk(i.totalValue)} ISK)`)
                         .join(", ")}
                     </span>
                   </span>
-                </p>
+                </Notice>
               )}
             </div>
           );
         })}
+
+        {/* Unresolved items only — deliberately NOT the sub-cent ones. The two
+            warnings above separate "genuinely unpriced, so the total is short"
+            from "rounds to 0.00 for display but the line total is real and
+            already counted". Only the first is something an operator would
+            reopen an operation to fix; offering the route back for the second
+            would tell them to correct a number that is already right.
+
+            The predicate is re-derived here rather than lifted out of the map
+            above: that map emits one warning block per pool, this is a single
+            page-level flag, and folding both into one loop would tangle two
+            shapes of output. */}
+        {pools.some((pool) => pool.items.some((i) => i.priceSource === "unresolved")) &&
+          !canEdit &&
+          operation.status === "finalized" &&
+          !locked && (
+            // The warnings above are visible to everyone, but only an operator
+            // in draft can act on them — reprice closes the moment the
+            // operation is finalized. Without this, the only route back
+            // (Unlock) is the quietest control on the page and says nothing
+            // about what it's for. `locked` is excluded: the frozen notice
+            // above already covers that case, and Unlock no longer exists once
+            // a payment is recorded.
+            <Notice tone="info">
+              {canUnlock ? (
+                <>
+                  Some loot is still unpriced, so the total is short — but repricing is
+                  closed while the operation is finalized. Unlock, below the roster,
+                  reopens it until it is finalized again.
+                </>
+              ) : (
+                <>
+                  Some loot is still unpriced, so the total is short — but repricing is
+                  closed while the operation is finalized. Only this operation&apos;s
+                  creator or an admin can unlock it.
+                </>
+              )}
+            </Notice>
+          )}
 
         {/* The two warnings above keep their place ahead of this table. They are
             the fast path for "what needs attention" and are readable without
@@ -485,8 +535,8 @@ export default async function PayoutOperationPage({
                         <tr key={item.id}>
                           <td>{item.name}</td>
                           <td className="mono nowrap">{item.qty}</td>
-                          <td className="mono nowrap">{item.unitPrice}</td>
-                          <td className="mono nowrap">{item.totalValue} ISK</td>
+                          <td className="mono nowrap">{fmtIsk(item.unitPrice)}</td>
+                          <td className="mono nowrap">{fmtIsk(item.totalValue)} ISK</td>
                           <td>
                             {item.priceSource === "unresolved" ? (
                               <Status tone="warn">unresolved</Status>
@@ -632,9 +682,26 @@ export default async function PayoutOperationPage({
           </Disclosure>
         )}
 
-        <RuleHead as="h2">Roster</RuleHead>
+        {/* "Roster" names the list; "participant" names a single row in it —
+            the Scroller label and column headers below follow that rule, so
+            it doesn't drift back to "Participants" naming the list too. */}
+        <RuleHead
+          as="h2"
+          aside={
+            // Only once there is a roster worth counting — an operator adding
+            // the first participant has nothing to report yet, and "0/0" reads
+            // as a stalled payout rather than an empty one.
+            owedParticipants.length > 0 && (
+              <span className="dim mono">
+                {paidParticipants.length}/{owedParticipants.length}
+              </span>
+            )
+          }
+        >
+          Roster
+        </RuleHead>
         {duplicateUnresolvedNames.length > 0 && (
-          <p className="notice notice--warn" data-glyph="!" role="alert">
+          <Notice tone="warn">
             <span>
               <strong>
                 {duplicateUnresolvedNames.length} unresolved name
@@ -646,10 +713,10 @@ export default async function PayoutOperationPage({
               <br />
               <span className="dim">{duplicateUnresolvedNames.join(", ")}</span>
             </span>
-          </p>
+          </Notice>
         )}
         {crossStateClashes.length > 0 && (
-          <p className="notice notice--warn" data-glyph="!" role="alert">
+          <Notice tone="warn">
             <span>
               <strong>
                 {crossStateClashes.length} name{crossStateClashes.length === 1 ? "" : "s"}{" "}
@@ -663,7 +730,7 @@ export default async function PayoutOperationPage({
               <br />
               <span className="dim">{crossStateClashes.join(", ")}</span>
             </span>
-          </p>
+          </Notice>
         )}
         {canEdit && (
           // Same rule as the loot disclosure above: collapsed only once there
@@ -721,8 +788,13 @@ export default async function PayoutOperationPage({
           </Disclosure>
         )}
 
-        <Scroller label="Participants">
-          <table className="log">
+        {/* `tall` + the dense/sticky-head/sticky-col kit, same as the two admin
+            tables (admin/accounts, admin/audit): at ~2000px for 50 rows the
+            header is gone after about a dozen, and this is the page's core
+            paying loop — the one table on this page worth scanning while
+            scrolled. */}
+        <Scroller label="Roster" tall>
+          <table className="log log--dense log--sticky-head log--sticky-col">
             <thead>
               <tr>
                 <th scope="col">Name</th>
@@ -779,15 +851,44 @@ export default async function PayoutOperationPage({
                         <span className="mono">{p.shares}</span>
                       )}
                     </td>
-                    <td className="mono nowrap">{p.amount} ISK</td>
+                    <td className="mono nowrap">
+                      <div className="stack">
+                        <span>{fmtIsk(p.amount)} ISK</span>
+                        {/* Copy sits under the amount it copies, not two
+                            columns away in Actions — the raw, unformatted
+                            p.amount goes to the clipboard, never through
+                            fmtIsk, since it's pasted elsewhere verbatim.
+
+                            Wrapped in its own box because `.stack` is a grid
+                            and CopyAmountButton renders two siblings: left
+                            loose, the button and its result line would take
+                            separate grid rows, and the result line reserves
+                            5rem of width even while empty — an empty row under
+                            every unpaid participant. They belong on one line
+                            here exactly as they did in the button row. */}
+                        {operation.status === "finalized" &&
+                          p.paymentState !== "excluded" && (
+                            <div>
+                              <CopyAmountButton
+                                amount={p.amount}
+                                participantName={p.displayName}
+                              />
+                            </div>
+                          )}
+                      </div>
+                    </td>
                     <td>
                       <div className="stack">
                         {p.paymentState === "excluded" && (
                           <Status tone="off">excluded</Status>
                         )}
-                        {p.paymentState === "unpaid" && (
-                          <Status tone="warn">unpaid</Status>
-                        )}
+                        {/* Neutral, not warn: a freshly finalized operation
+                            opens as every row reading "unpaid", and colour
+                            that decreases as the payout gets done is
+                            backwards. Same call DESIGN.md makes for cryo on
+                            the member's own account page — colour only where
+                            someone scans for it, neutral where it's expected. */}
+                        {p.paymentState === "unpaid" && <Status>unpaid</Status>}
                         {p.paymentState === "paid" && <Status tone="ok">paid</Status>}
                         {/* Stored since phase 1 and never shown until now — and
                             the actor with it, so the list says who, not just
@@ -804,10 +905,6 @@ export default async function PayoutOperationPage({
                         {operation.status === "finalized" &&
                           p.paymentState !== "excluded" && (
                             <>
-                              <CopyAmountButton
-                                amount={p.amount}
-                                participantName={p.displayName}
-                              />
                               {access.canOpenInfo && p.recipientCharacterId !== null && (
                                 <form
                                   action={openInfoAction.bind(null, operation.id, p.id)}
@@ -901,7 +998,7 @@ export default async function PayoutOperationPage({
                 {participants.length === 0 && (
                   <tr>
                     <td className="log__empty" colSpan={5}>
-                      No roster set yet.
+                      <span className="log__empty-text">No roster set yet.</span>
                     </td>
                   </tr>
                 )}
@@ -909,6 +1006,50 @@ export default async function PayoutOperationPage({
             </ConfirmArmScope>
           </table>
         </Scroller>
+
+        {/* Finalize/Unlock, moved down from ahead of the pools and roster: it
+            used to sit ~600 rendered lines above the shares it freezes, so an
+            operator scrolled past every number on the page before reaching
+            the button that locks them. It now follows the data it operates
+            on instead, which is also `.btn-row--controls`'s own reason to
+            exist (globals.css; see admin/sync's re-run row for the same
+            shape). */}
+        {access.isOperator && (
+          <ConfirmArmScope>
+            <div className="btn-row btn-row--tight btn-row--controls">
+              {operation.status === "draft" && (
+                <form action={finalizeAction.bind(null, operation.id)}>
+                  {/* Finalizing freezes every number on the page. Unlock exists,
+                      but only until the first payment — so this is the last
+                      cheap moment to notice a wrong share. */}
+                  <ConfirmSubmit
+                    className="btn btn--primary"
+                    label="Finalize"
+                    confirmName="confirm finalize"
+                  />
+                </form>
+              )}
+              {operation.status === "finalized" && !locked && canUnlock && (
+                <form action={unlockAction.bind(null, operation.id)}>
+                  {/* Unlock stays one click: it reopens editing, and is undone
+                      by finalizing again. */}
+                  <Submit className="btn btn--quiet">Unlock</Submit>
+                </form>
+              )}
+            </div>
+            {/* Unlock used to carry no copy at all, so the one control that
+                reopens a finalized operation's numbers said nothing about
+                what it did. Sits under the row rather than inside its
+                `btn-row--tight` nowrap, which a sentence this long would
+                overflow. */}
+            {operation.status === "finalized" && !locked && canUnlock && (
+              <p className="dim">
+                Unlock reopens the pools, roster and shares to editing, until finalized
+                again or until the first payment is recorded.
+              </p>
+            )}
+          </ConfirmArmScope>
+        )}
       </main>
     </>
   );

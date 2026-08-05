@@ -151,10 +151,12 @@ test("create, add a flat pool, paste a roster, finalize, mark paid", async ({
   await page.getByLabel("Total value (ISK)").fill("1000000");
   await page.getByLabel("Note (required — why this number)").fill("sold privately");
   await page.getByRole("button", { name: "Add flat pool" }).click();
-  // Scoped to the pool row: with one pool, "1000000.00 ISK" also appears in
+  // Scoped to the pool row: with one pool, "1,000,000.00 ISK" also appears in
   // the operation's "Total loot" summary, so a bare getByText is ambiguous.
+  // fmtIsk groups this display value with commas — the raw form no longer
+  // appears on the page.
   const flatPoolRow = page.getByRole("row").filter({ hasText: "flat (manual)" });
-  await expect(flatPoolRow).toContainText("1000000.00 ISK");
+  await expect(flatPoolRow).toContainText("1,000,000.00 ISK");
 
   await page
     .getByLabel("Paste (names separated by /)")
@@ -165,10 +167,10 @@ test("create, add a flat pool, paste a roster, finalize, mark paid", async ({
 
   // 1,000,000 total, 10% corp share -> 900,000 pool, split evenly two ways
   // (both unresolved names get shares "1" and no account) -> 450,000.00 each.
-  await expect(page.getByText("450000.00 ISK")).toHaveCount(2);
+  await expect(page.getByText("450,000.00 ISK")).toHaveCount(2);
   // The corp's actual cut is shown, not just the percentage — 10% of 1,000,000
   // plus whatever the per-share floor left behind (nothing, here).
-  await expect(page.getByText("100000.00 ISK")).toBeVisible();
+  await expect(page.getByText("100,000.00 ISK")).toBeVisible();
 
   // Finalize is armed, not one-click: it commits every number on the page, and
   // only its creator or an admin can undo it.
