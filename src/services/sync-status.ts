@@ -20,10 +20,13 @@ export type SyncStatusGroup = {
   runs: Array<typeof syncRun.$inferSelect>;
   queued: boolean;
   /** Oldest undispatched-row `createdAt` targeting this jobType, or null when
-   * nothing is queued for it. Per job type, not global: an "all" payload sits
-   * in the outbox once but ages the same instant for every job type it fans
-   * out to, so this is the min across every payload that maps here, not a
-   * single page-wide timestamp. */
+   * nothing is queued for it — or, in a case the database cannot actually
+   * produce, when the row is queued but its age did not survive the read.
+   * `queued` is the authority on whether work is waiting; this only dates it.
+   * Per job type, not global: an "all" payload sits in the outbox once but
+   * ages the same instant for every job type it fans out to, so this is the
+   * min across every payload that maps here, not a single page-wide
+   * timestamp. */
   queuedSince: Date | null;
 };
 
@@ -50,9 +53,15 @@ export async function getSyncStatus(
   // "Queued" means work targets that job type, not "you queued it" — a
   // member-triggered account/discord-user row counts the same as an admin's.
   const summary = await undispatchedSummary(dbx);
+  const queuedTypes = new Set<string>();
   const queuedSinceByType = new Map<string, Date>();
   for (const { payload, oldest } of summary) {
     for (const { jobType } of jobsFor(payload)) {
+      // Presence and age are tracked apart on purpose: a row whose `oldest`
+      // came back null still proves work is queued for this job type, and
+      // `queued` must not depend on whether the age survived.
+      queuedTypes.add(jobType);
+      if (oldest === null) continue;
       const current = queuedSinceByType.get(jobType);
       if (!current || oldest < current) queuedSinceByType.set(jobType, oldest);
     }
@@ -70,7 +79,7 @@ export async function getSyncStatus(
             .orderBy(desc(syncRun.id))
             .limit(runsPerJob)
         : [],
-      queued: queuedSinceByType.has(jobType),
+      queued: queuedTypes.has(jobType),
       queuedSince: queuedSinceByType.get(jobType) ?? null,
     })),
   );

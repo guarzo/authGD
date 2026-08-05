@@ -306,8 +306,14 @@ export const QUEUED_AGE_STUCK_MS = 15 * 60 * 1000;
  * `queuedMarkerText` below only so the visible (aria-hidden) dot and the
  * accessible sentence can each read the one instant they need without
  * duplicating the threshold between them.
+ *
+ * A null `queuedSince` is a row known to have work queued whose age did not
+ * survive the read (see `undispatchedSummary`). It never escalates: escalation
+ * is a claim about how long something has waited, and an unknown age cannot
+ * support one.
  */
-export function queuedMarkerStuck(queuedSince: Date, now: Date): boolean {
+export function queuedMarkerStuck(queuedSince: Date | null, now: Date): boolean {
+  if (queuedSince === null) return false;
   return now.getTime() - queuedSince.getTime() >= QUEUED_AGE_STUCK_MS;
 }
 
@@ -319,8 +325,13 @@ export function queuedMarkerStuck(queuedSince: Date, now: Date): boolean {
  * finding: "queued 5m ago" says the dispatcher is behind, and past
  * `QUEUED_AGE_STUCK_MS` it says so about a process that is not coming back on
  * its own.
+ *
+ * A null `queuedSince` falls back to the bare ", queued": the row still has
+ * work waiting and must still say so — losing the age is not a reason to lose
+ * the marker — but there is no dated claim to make about it.
  */
-export function queuedMarkerText(queuedSince: Date, now: Date): string {
+export function queuedMarkerText(queuedSince: Date | null, now: Date): string {
+  if (queuedSince === null) return ", queued";
   const ageMs = now.getTime() - queuedSince.getTime();
   if (ageMs < QUEUED_AGE_NOTABLE_MS) return ", queued";
   return `, queued ${elapsedShort(ageMs)} ago`;

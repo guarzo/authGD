@@ -275,7 +275,7 @@ export default async function AdminSyncPage({
                               <Status tone={HEALTH_TONE[health]}>
                                 {healthLabel(health)}
                               </Status>
-                              {g.queued && g.queuedSince && (
+                              {g.queued && (
                                 // A ring, not a second `.st` word: the health
                                 // track is a fixed 7.5rem, and "cadence unknown"
                                 // — the longest label — already spends most of
@@ -310,6 +310,14 @@ export default async function AdminSyncPage({
                                 // escalation is allowed to change the ring's own
                                 // shape, since the fixed-width track has no room
                                 // for a second visible word.
+                                //
+                                // Gated on `queued` alone, never on
+                                // `queuedSince`: the age is a detail the two
+                                // helpers below each degrade on their own, and
+                                // hiding the whole marker over a missing one
+                                // would make a job with work waiting read as
+                                // idle — the one thing this ring exists to
+                                // prevent.
                                 <>
                                   <span
                                     className={

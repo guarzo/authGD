@@ -313,6 +313,13 @@ describe("queuedMarkerText", () => {
     // itself has only one shape for every age past the notable threshold.
     expect(queuedMarkerText(at(-20 * MIN), NOON)).toBe(", queued 20m ago");
   });
+
+  it("still says queued when the age is unknown", () => {
+    // A null age means the row is queued but `undispatchedSummary` could not
+    // date it. The marker must survive that: dropping it would make a job with
+    // work waiting read as idle, which is worse than losing the "5m ago".
+    expect(queuedMarkerText(null, NOON)).toBe(", queued");
+  });
 });
 
 describe("queuedMarkerStuck", () => {
@@ -328,5 +335,11 @@ describe("queuedMarkerStuck", () => {
     // retries forever rather than surfacing it anywhere else.
     expect(queuedMarkerStuck(at(-15 * MIN), NOON)).toBe(true);
     expect(queuedMarkerStuck(at(-60 * MIN), NOON)).toBe(true);
+  });
+
+  it("never escalates on an unknown age", () => {
+    // Escalation is a claim about how long something has waited; a null age
+    // cannot support one, however long the row has actually been there.
+    expect(queuedMarkerStuck(null, NOON)).toBe(false);
   });
 });
