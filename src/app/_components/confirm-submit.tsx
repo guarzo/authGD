@@ -52,11 +52,12 @@ export function ConfirmArmScope({ children }: { children: ReactNode }) {
  * that is when it appears.
  *
  * It is hidden with `.visually-hidden`, never unmounted, for two reasons. The
- * element is the target of the button's `aria-describedby`, and a description
- * that only exists after the first press would not be spoken ahead of it — the
- * exact failure `ConfirmSubmit`'s own `describedBy` doc argues against.
- * `.visually-hidden` is `position: absolute`, so at rest it is also out of flow
- * and adds no gap to the flex row it sits in.
+ * element is the target of the button's `aria-describedby`, and the whole value
+ * of that association is reaching a member who tabs straight to the control:
+ * the sentence sits AFTER the button in reading order, so a description that
+ * only came into existence on the first press would not be there to be spoken
+ * ahead of it. `.visually-hidden` is `position: absolute`, so at rest it is also
+ * out of flow and adds no gap to the flex row it sits in.
  *
  * Scope-level, not control-level: this reads "something in this scope is
  * armed", not "that particular button is armed". Correct only in a scope

@@ -341,7 +341,7 @@ export default async function AccountPage({
                     and a worker runs it (jobs/discord-roles.ts), so a member who
                     unlinks and still sees the role a minute later has been told
                     the truth rather than contradicted. The verb survived the
-                    trim from 18 words to 10 because it is the one fact in the
+                    trim from 17 words to 11 because it is the one fact in the
                     sentence a member can catch this page being wrong about. */}
                 <ConfirmCost id="discord-unlink-cost" className="dim">
                   Queues removal of the Discord roles authGD manages. Relink any time.

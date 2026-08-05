@@ -212,7 +212,7 @@ export function ContactRemedy({
 
             (This clause used to read "on its own — nothing else to do here" in
             the label branches; it was cut to six words because it was the same
-            15-word tail repeated once per affected character. The distinction
+            14-word tail repeated once per affected character. The distinction
             this comment draws survives the cut: the label branches point at
             the next sync, this one points at the retry.) */}
         authGD retries automatically. No action needed.
