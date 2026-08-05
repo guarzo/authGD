@@ -29,6 +29,21 @@ export async function takeUndispatched(
   return rows.map((r) => ({ id: r.id, payload: r.payload }));
 }
 
+/**
+ * The payloads of every undispatched row, for a read-only status view. Unlike
+ * `takeUndispatched` this takes no lock and is not paired with
+ * `markDispatched` — the admin sync page only needs to know whether work is
+ * queued, never to claim it, and a `FOR UPDATE` read here would contend with
+ * the dispatcher's own claim on the same rows.
+ */
+export async function undispatchedPayloads(dbx: Dbx): Promise<OutboxPayload[]> {
+  const rows = await dbx
+    .select({ payload: outbox.payload })
+    .from(outbox)
+    .where(isNull(outbox.dispatchedAt));
+  return rows.map((r) => r.payload);
+}
+
 export async function markDispatched(dbx: Dbx, ids: number[]): Promise<void> {
   if (ids.length === 0) return;
   await dbx

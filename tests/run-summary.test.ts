@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  type CollapsibleRun,
   type RunLike,
+  collapseRuns,
   countColumns,
   formatDuration,
   humanizeKey,
@@ -89,5 +91,134 @@ describe("formatDuration", () => {
     expect(formatDuration(t(0), t(59_600))).toBe("1m 0s");
     expect(formatDuration(t(0), t(359_600))).toBe("6m 0s");
     expect(formatDuration(t(0), t(3_599_600))).toBe("1h 0m");
+  });
+});
+
+describe("collapseRuns", () => {
+  const t = (ms: number) => new Date(1_700_000_000_000 + ms);
+
+  function run(
+    id: number,
+    opts: {
+      status?: "ok" | "partial" | "failed" | null;
+      counts?: Record<string, number> | null;
+      startedAt?: Date | null;
+      finishedAt?: Date | null;
+    } = {},
+  ): CollapsibleRun {
+    const {
+      status = "ok",
+      counts = { checked: 19 },
+      startedAt = t(id * 1000),
+      finishedAt = t(id * 1000 + 500),
+    } = opts;
+    return { id, status, counts, startedAt, finishedAt };
+  }
+
+  it("returns a single run as its own entry, not a one-element group", () => {
+    const groups = collapseRuns([run(1)]);
+    expect(groups).toEqual([{ kind: "run", run: run(1) }]);
+  });
+
+  it("collapses a run of all-identical runs into one group", () => {
+    const runs = [run(3), run(2), run(1)]; // newest-first, as getSyncStatus hands back
+    const groups = collapseRuns(runs);
+    expect(groups).toEqual([
+      {
+        kind: "group",
+        runs,
+        count: 3,
+        status: "ok",
+        counts: { checked: 19 },
+        from: run(1).startedAt,
+        to: run(3).finishedAt,
+      },
+    ]);
+  });
+
+  it("breaks the group on a status or counts change and does not merge across the gap", () => {
+    const runs = [
+      run(4, { counts: { checked: 20 } }),
+      run(3),
+      run(2),
+      run(1, { status: "failed", counts: null }),
+    ];
+    const groups = collapseRuns(runs);
+    expect(groups).toEqual([
+      { kind: "run", run: runs[0] },
+      {
+        kind: "group",
+        runs: [runs[1], runs[2]],
+        count: 2,
+        status: "ok",
+        counts: { checked: 19 },
+        from: runs[2].startedAt,
+        to: runs[1].finishedAt,
+      },
+      { kind: "run", run: runs[3] },
+    ]);
+  });
+
+  it("alternates back and forth without ever merging non-adjacent matching runs", () => {
+    // ok, failed, ok, failed — every neighbour differs, so nothing collapses
+    // even though the odd-indexed and even-indexed runs match each other.
+    const runs = [
+      run(4, { status: "failed" }),
+      run(3),
+      run(2, { status: "failed" }),
+      run(1),
+    ];
+    const groups = collapseRuns(runs);
+    expect(groups).toEqual(runs.map((r) => ({ kind: "run", run: r })));
+  });
+
+  it("never collapses a still-running run into a finished one, in either position", () => {
+    const inFlight = run(3, { finishedAt: null, status: null });
+    const groups = collapseRuns([inFlight, run(2), run(1)]);
+    expect(groups).toEqual([
+      { kind: "run", run: inFlight },
+      {
+        kind: "group",
+        runs: [run(2), run(1)],
+        count: 2,
+        status: "ok",
+        counts: { checked: 19 },
+        from: run(1).startedAt,
+        to: run(2).finishedAt,
+      },
+    ]);
+  });
+
+  it("never collapses two still-running runs together, even with identical fields", () => {
+    const a = run(2, { finishedAt: null, status: null });
+    const b = run(1, { finishedAt: null, status: null });
+    expect(collapseRuns([a, b])).toEqual([
+      { kind: "run", run: a },
+      { kind: "run", run: b },
+    ]);
+  });
+
+  it("treats no recorded counts as different from all-zero counts", () => {
+    const groups = collapseRuns([run(2, { counts: null }), run(1, { counts: null })]);
+    expect(groups).toEqual([
+      {
+        kind: "group",
+        runs: [run(2, { counts: null }), run(1, { counts: null })],
+        count: 2,
+        status: "ok",
+        counts: null,
+        from: run(1).startedAt,
+        to: run(2).finishedAt,
+      },
+    ]);
+    // null counts and {} are not the same fact.
+    expect(collapseRuns([run(2, { counts: null }), run(1, { counts: {} })])).toEqual([
+      { kind: "run", run: run(2, { counts: null }) },
+      { kind: "run", run: run(1, { counts: {} }) },
+    ]);
+  });
+
+  it("returns an empty array for no runs", () => {
+    expect(collapseRuns([] as CollapsibleRun[])).toEqual([]);
   });
 });
