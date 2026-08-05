@@ -38,9 +38,10 @@ export function Scroller({
   //
   // Starts true, and the effect below takes the stop away rather than granting
   // it. The server cannot measure, so the alternative starts every region at
-  // `tabIndex={-1}` and leaves the overflow unreachable by keyboard until
-  // hydration lands — a real loss of access traded for a cosmetic one. This
-  // way the worst case is a redundant stop for one frame.
+  // `tabIndex={-1}` and leaves the overflow unreachable by keyboard for the
+  // whole of the pre-hydration window — a real loss of access traded for a
+  // cosmetic one. This way the only cost is a stop that turns out to be
+  // redundant, and only until the first measurement.
   const [scrollable, setScrollable] = useState(true);
 
   const measure = useCallback((el: HTMLDivElement) => {
@@ -82,10 +83,13 @@ export function Scroller({
         // scroll. The sync page opens one of these per expanded job row, and
         // at desktop width the runs table usually fits its region — so an
         // unconditional stop put several dead stops between an admin and the
-        // Re-run button they came for, each announcing "…runs, region". The
-        // observer below already corrects this the moment a collapsed row
-        // opens or the content widens. `role="region"` and the label stay
-        // either way: it is still worth having in the landmark list.
+        // Re-run button they came for, each announcing "…runs, region". A
+        // Scroller inside a collapsed `<details>` measures 0×0 and loses the
+        // stop, so getting it back rests on the ResizeObserver above firing
+        // when the drawer opens; `e2e/sync.spec.ts` pins that, because a
+        // missed observation now costs keyboard access to the table rather
+        // than just the edge fades. `role="region"` and the label stay either
+        // way: it is still worth having in the landmark list.
         tabIndex={scrollable ? 0 : -1}
         onScroll={(e) => measure(e.currentTarget)}
       >

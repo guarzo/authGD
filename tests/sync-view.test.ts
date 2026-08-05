@@ -128,7 +128,7 @@ describe("nextRunFor", () => {
 
 describe("queuedStamp", () => {
   it("prints the enqueue instant in the page's own UTC register", () => {
-    expect(queuedStamp("1785240432000")).toBe("12:07:12 UTC");
+    expect(queuedStamp("1785240432000")).toBe("12:07:12.000 UTC");
   });
 
   it("refuses anything that is not a plain millisecond count", () => {
@@ -141,15 +141,16 @@ describe("queuedStamp", () => {
   /**
    * The values that pass the digit check and the NaN check and still have no
    * clock in them. `new Date(999999999999999).toISOString()` is
-   * `+033658-09-27T01:46:39.999Z` — six characters wider than the usual form,
-   * so the fixed slice lands on `27T01:46` and renders it as a time of day.
+   * `+033658-09-27T01:46:39.999Z` — three characters wider than the usual
+   * form, because the year field goes from four digits to seven, so the fixed
+   * slice lands on `27T01:46:39` and renders it as a time of day.
    */
   it("refuses an instant so far out that ISO switches to extended years", () => {
     for (const bad of ["999999999999999", "253402300800000"]) {
       expect(queuedStamp(bad), bad).toBeNull();
     }
     // The boundary itself still works: the last millisecond of year 9999.
-    expect(queuedStamp("253402300799999")).toBe("23:59:59 UTC");
+    expect(queuedStamp("253402300799999")).toBe("23:59:59.999 UTC");
   });
 });
 
@@ -187,8 +188,21 @@ describe("queuedNotice", () => {
     const first = queuedNotice("wanderer", "1785240432000");
     const second = queuedNotice("wanderer", "1785240471000");
     expect(first).not.toBe(second);
-    expect(first).toContain("12:07:12 UTC");
-    expect(second).toContain("12:07:51 UTC");
+    expect(first).toContain("12:07:12.000 UTC");
+    expect(second).toContain("12:07:51.000 UTC");
+  });
+
+  /**
+   * And two presses inside one second, which is the interval that actually
+   * occurs. `Submit` is deliberately not disabled while its form is in flight,
+   * so the second press lands the moment the first round-trip returns — under
+   * a second on localhost. A stamp cut at whole seconds would leave exactly
+   * this case silent, which is the case the stamp exists for.
+   */
+  it("differs between two presses inside the same second", () => {
+    expect(queuedNotice("wanderer", "1785240432120")).not.toBe(
+      queuedNotice("wanderer", "1785240432880"),
+    );
   });
 
   it("drops the instant rather than echoing a hand-typed one", () => {

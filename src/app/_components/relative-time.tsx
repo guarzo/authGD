@@ -34,7 +34,21 @@ let ticker: ReturnType<typeof setInterval> | null = null;
 function subscribe(tick: () => void): () => void {
   subscribers.add(tick);
   ticker ??= setInterval(() => {
-    for (const fn of subscribers) fn();
+    // Per-subscriber try/catch, because sharing the loop also shares the
+    // failures: a throw aborts the iteration, and `Set` iterates in insertion
+    // order, so one bad subscriber would freeze every timestamp registered
+    // after it — on every subsequent tick, not once. The per-instance timers
+    // this replaced isolated that by construction; the shared one has to say
+    // so. Nothing reachable throws today (`formatAgo` returns a string for a
+    // malformed instant rather than raising), which is exactly why the guard
+    // has to be here rather than assumed.
+    for (const fn of subscribers) {
+      try {
+        fn();
+      } catch {
+        // A stalled clock beside a working one; not worth taking the rest down.
+      }
+    }
   }, 30_000);
   return () => {
     subscribers.delete(tick);

@@ -39,16 +39,23 @@ function fmt(d: Date | null): string {
 }
 
 /**
- * An absence glyph and the words it stands for. The three absences in the runs
- * table read differently by eye — `—` for a finished run that recorded
- * nothing, `…` for one still in flight, `no change` for a recorded all-zero —
- * but at the default punctuation verbosity of NVDA, JAWS and VoiceOver an em
- * dash and an ellipsis are both dropped, so both cells announced as empty and
- * were indistinguishable from each other and from a missing cell.
+ * An absence glyph and the words it stands for. The runs table distinguishes
+ * several kinds of absence by eye — `—` for a finished run that recorded
+ * nothing, `…` for one still in flight, `—` again for a counter this run did
+ * not report — but at the default punctuation verbosity of NVDA, JAWS and
+ * VoiceOver an em dash and an ellipsis are both dropped, so every one of those
+ * cells announced as empty: indistinguishable from each other and from a
+ * missing cell. Each call site supplies the words its own glyph means, which
+ * is why this takes the string rather than deriving it.
+ *
+ * `fmt()` above still returns a bare `…` for a null start instant. It is left
+ * alone deliberately: it returns a string into several call sites, only one of
+ * which is a table cell, and no run in the schema reaches it with a null
+ * `startedAt`.
  *
  * The hidden span is `position: absolute` and takes its containing block from
  * `.scroller`'s `position: relative`, so it costs no layout and cannot stretch
- * the table it sits in.
+ * the table it sits in — or inflate the `scrollWidth` the Scroller measures.
  */
 function Absent({ glyph, children }: { glyph: string; children: string }) {
   return (
@@ -296,7 +303,17 @@ export default async function AdminSyncPage({
                                   ) : isNoChange(r.counts) ? (
                                     "no change"
                                   ) : (
-                                    <Absent glyph="—">not recorded</Absent>
+                                    // Not "not recorded": counts *were*
+                                    // recorded, the Raw column beside this
+                                    // renders them, and they are simply not
+                                    // all zero and not countable either — a
+                                    // payload like `{ removed: 0, lastError:
+                                    // null }` clears isNoChange and yields no
+                                    // columns. The glyph was ambiguous about
+                                    // that; hidden words would state it as a
+                                    // fact, so they have to state the right
+                                    // one.
+                                    <Absent glyph="—">nothing counted</Absent>
                                   )}
                                 </td>
                               ) : isNoChange(r.counts) ? (
@@ -311,7 +328,14 @@ export default async function AdminSyncPage({
                                       key={k}
                                       className={v ? "mono num" : "mono num dim"}
                                     >
-                                      {v ?? "—"}
+                                      {/* The column exists because some other
+                                          run in the window moved this counter;
+                                          this run did not report it. Same
+                                          absence as the cells above, in the
+                                          same table, so it gets the same
+                                          treatment rather than announcing as
+                                          an empty cell. */}
+                                      {v ?? <Absent glyph="—">not reported</Absent>}
                                     </td>
                                   );
                                 })

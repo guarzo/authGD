@@ -158,17 +158,26 @@ export function nextRunFor(jobType: string, now: Date): Date | null {
 }
 
 /**
- * `HH:MM:SS UTC` for the enqueue instant carried in `?at=`, or null when the
- * value is anything else. Same posture as `queuedNotice`'s own validation: the
- * query string is untrusted input reaching copy, so a non-numeric or absurd
- * value drops the clause rather than being echoed.
+ * `HH:MM:SS.mmm UTC` for the enqueue instant carried in `?at=`, or null when
+ * the value is anything else. Same posture as `queuedNotice`'s own validation:
+ * the query string is untrusted input reaching copy, so a non-numeric or
+ * absurd value drops the clause rather than being echoed.
+ *
+ * Milliseconds, not whole seconds, and they are the entire point rather than a
+ * flourish. This stamp exists to make a repeat press announce, and `Submit` is
+ * deliberately not disabled while its form is in flight — so the second press
+ * lands the instant the first round-trip completes, which on localhost is
+ * inside the same wall-clock second. At second precision those two presses
+ * produce a byte-identical string again and the live region goes quiet, which
+ * is the bug this was added to close.
  *
  * The length check is on the ISO string, not on the digit count, because the
  * two disagree in exactly the range a hand-edited `?at=` reaches first. `Date`
  * happily represents year 33658, and `toISOString` prints it in the extended
- * form `+033658-09-27T…`, six characters longer — so a fixed `slice(11, 19)`
- * silently returns `27T01:46` instead of a clock. Neither the regex nor
- * `Number.isNaN` sees anything wrong with that value; only the width does.
+ * form `+033658-09-27T…` — three characters wider, because the year field goes
+ * from four digits to seven — so a fixed slice silently returns `27T01:46:39`
+ * instead of a clock. Neither the regex nor `Number.isNaN` sees anything wrong
+ * with that value; only the width does.
  */
 export function queuedStamp(at: string | undefined): string | null {
   if (at === undefined || !/^\d{1,15}$/.test(at)) return null;
@@ -176,7 +185,7 @@ export function queuedStamp(at: string | undefined): string | null {
   if (Number.isNaN(d.getTime())) return null;
   const iso = d.toISOString();
   if (iso.length !== 24) return null;
-  return `${iso.slice(11, 19)} UTC`;
+  return `${iso.slice(11, 23)} UTC`;
 }
 
 /**

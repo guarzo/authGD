@@ -60,14 +60,14 @@ describe("resolveFilterIdentity", () => {
   });
 
   // Regression guard: sync.requested / sync.recheck_requested write the literal
-  // target "all" (src/app/admin/sync/actions.ts:14,56). Sending it down the
+  // target "all" (src/app/admin/sync/actions.ts:14,60). Sending it down the
   // name path would match no character and silently return zero rows.
   it("treats the reserved literal 'all' as raw", async () => {
     const r = await resolveFilterIdentity(ctx.db, "target", "all");
     expect(r).toEqual({ kind: "raw", ids: ["all"] });
   });
 
-  // A single-job re-run writes the JOB TYPE as the target (actions.ts:46), so
+  // A single-job re-run writes the JOB TYPE as the target (actions.ts:50), so
   // every schedules-table key is a literal too. Derived from JOB_CRON on both
   // sides on purpose: the point is that adding a scheduled job cannot leave a
   // target that renders in the log but cannot be filtered by.
