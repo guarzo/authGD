@@ -793,3 +793,81 @@ rejects `--env-file-if-exists` outright and every deploy fails. The floor now
 sits at 24 to track Active LTS, well clear of that, but the Dockerfile copies
 `.npmrc` before `npm ci` in both stages so `engine-strict` turns any regression
 below the floor into a **build** failure instead of a release-time one.
+
+## Tier rename migration (0007)
+
+The tier enum values were renamed in place: `flygd → member`, `blue →
+associate`, `green → alumni`. `RENAME VALUE` rewrites no rows, but the old image
+cannot run against the new enum — its queries use values Postgres no longer
+accepts. **This deploy requires a maintenance window.**
+
+### Deploy
+
+`docs/ops.md` § "Sizing and redundancy" runs **`web=2`, `worker=1`** — `web=2`
+is a deliberate choice that closes the deploy gap, not a default. Record the
+live counts before scaling down and restore those, rather than trusting the
+numbers written here:
+
+```bash
+fly scale show   # record the current web and worker counts
+```
+
+1. `fly scale count web=0 worker=0`
+2. Set the new role secrets, copying each value verbatim from the old one.
+   Leave the old three set:
+   ```bash
+   fly secrets set DISCORD_ROLE_ID_MEMBER=<value of DISCORD_ROLE_ID_FLYGD> \
+                   DISCORD_ROLE_ID_ASSOCIATE=<value of DISCORD_ROLE_ID_BLUE> \
+                   DISCORD_ROLE_ID_ALUMNI=<value of DISCORD_ROLE_ID_GREEN>
+   ```
+3. `fly deploy` — the release command runs the migration
+4. `fly scale count web=2 worker=1` (or the counts recorded above), then verify
+   `/api/health` and load `/admin/accounts`
+5. Only after step 4 is confirmed healthy:
+   ```bash
+   fly secrets unset DISCORD_ROLE_ID_FLYGD DISCORD_ROLE_ID_BLUE DISCORD_ROLE_ID_GREEN
+   ```
+
+Step 5 is last and separate so a rollback still has a bootable old image.
+
+### Rollback
+
+Keeping the old secrets is **necessary but not sufficient** — the enum must be
+reverted before the old image starts, or it fails on every tier read regardless
+of configuration.
+
+1. `fly scale count web=0 worker=0`
+2. Revert the enum:
+   ```sql
+   ALTER TYPE "public"."tier" RENAME VALUE 'member' TO 'flygd';
+   ALTER TYPE "public"."tier" RENAME VALUE 'associate' TO 'blue';
+   ALTER TYPE "public"."tier" RENAME VALUE 'alumni' TO 'green';
+   ALTER TABLE "account" ALTER COLUMN "tier" SET DEFAULT 'green';
+   ```
+3. Remove the migration's row so the next forward deploy re-applies it.
+   **`__drizzle_migrations.hash` is a SHA-256 of the file contents, not the
+   filename — matching on `'%0007%'` finds nothing and silently leaves the row
+   in place.** The row is identified by `created_at`, which is the `when` value
+   drizzle-kit recorded in `drizzle/meta/_journal.json` for the `0007_*` entry.
+   Read that number out of the journal in the deployed image, then, in the same
+   transaction as step 2:
+
+   ```sql
+   -- <when> is the "when" field of the 0007 entry in drizzle/meta/_journal.json
+   SELECT id, hash, created_at FROM drizzle.__drizzle_migrations
+    WHERE created_at = <when>;
+   -- confirm exactly one row, and that its hash matches:
+   --   sha256sum drizzle/0007_<name>.sql
+   DELETE FROM drizzle.__drizzle_migrations WHERE created_at = <when>;
+   ```
+
+   Run steps 2 and 3 inside one `BEGIN`/`COMMIT`. If the `SELECT` returns zero
+   or more than one row, `ROLLBACK` and stop — reverting the enum without
+   clearing the record leaves the next deploy unable to move forward, and
+   clearing the wrong record is worse.
+4. Re-set `DISCORD_ROLE_ID_FLYGD/_BLUE/_GREEN` if step 5 of the deploy already ran
+5. `fly deploy --image <previous image ref>`
+6. `fly scale count web=2 worker=1` (or the counts recorded before the deploy)
+
+A Fly version bump does not guarantee a new image — check `ImageRef` before
+concluding the rollback took effect.
