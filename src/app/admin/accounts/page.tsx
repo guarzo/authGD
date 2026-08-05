@@ -316,39 +316,48 @@ export default async function AdminAccountsPage({
 }
 
 /**
- * Whether the account's main is the character that went dark. Hoisted out of
- * `tokenTone` because it is not only a colour input: it is the one token fact
- * that has to be readable as text. Two accounts with the same 4/5 summary and
- * the same one dead alt-or-main rendered byte-identical text and differed only
- * in the tone of the badge, which is colour carrying meaning on its own
- * (WCAG 1.4.1).
- */
-function isMainDead(r: AdminAccountRow): boolean {
-  const main = r.characters.find((c) => c.isMain);
-  return (
-    main !== undefined &&
-    (main.tokenStatus === "invalid" || main.tokenStatus === "missing")
-  );
-}
-
-/**
- * Token colour is proportional, not absolute. A long-dead token on a
- * forgotten alt is a routine standing state, not an alarm; the one case that
- * actually means the account is cut off is the main going dark, so that is
- * the only thing that forces red on its own. Short of that, red is reserved
- * for zero healthy tokens (every character is dead or needs re-auth), and
- * amber covers everything short of that. "nothing reads as punishment"
- * (PRODUCT.md) otherwise fails on any account with one stale alt.
+ * The token cell's two outputs, derived together.
  *
- * `mainDead` is passed in rather than recomputed here so the badge's tone and
- * the `main dead` marker beside it can never disagree about the same fact.
+ * `mainDead` — whether the character that went dark is the account's main — is
+ * not only a colour input: it is the one token fact that has to be readable as
+ * text. Two accounts with the same 4/5 summary and the same single dead
+ * character rendered byte-identical text and differed only in the tone of the
+ * badge, which is colour carrying meaning on its own (WCAG 1.4.1).
+ *
+ * Returned as a pair rather than computed by two functions the caller has to
+ * keep in step. The tone and the `main dead` marker are two renderings of one
+ * fact, so the only way they can disagree is if something lets them be derived
+ * separately — and a `tokenTone(r, mainDead)` taking the boolean as an argument
+ * is exactly that something. Here there is no second input to get wrong.
+ *
+ * Tone itself is proportional, not absolute. A long-dead token on a forgotten
+ * alt is a routine standing state, not an alarm; the one case that actually
+ * means the account is cut off is the main going dark, so that is the only
+ * thing that forces red on its own. Short of that, red is reserved for zero
+ * healthy tokens (every character is dead or needs re-auth), and amber covers
+ * everything short of that. "nothing reads as punishment" (PRODUCT.md)
+ * otherwise fails on any account with one stale alt.
  */
-function tokenTone(r: AdminAccountRow, mainDead: boolean): "ok" | "warn" | "bad" | "off" {
+function tokenState(r: AdminAccountRow): {
+  tone: "ok" | "warn" | "bad" | "off";
+  mainDead: boolean;
+} {
+  const main = r.characters.find((c) => c.isMain);
+  const mainDead =
+    main !== undefined &&
+    (main.tokenStatus === "invalid" || main.tokenStatus === "missing");
+
   const tokens = r.tokenSummary;
-  if (tokens.total === 0) return "off";
-  if (tokens.healthy === 0 || mainDead) return "bad";
-  if (tokens.dead > 0 || tokens.needsReauth > 0) return "warn";
-  return "ok";
+  const tone =
+    tokens.total === 0
+      ? "off"
+      : tokens.healthy === 0 || mainDead
+        ? "bad"
+        : tokens.dead > 0 || tokens.needsReauth > 0
+          ? "warn"
+          : "ok";
+
+  return { tone, mainDead };
 }
 
 /** The token cell's per-character badge, admin's finer-grained view of the
@@ -374,7 +383,7 @@ function AccountRow({
   listSearch: string;
 }) {
   const tokens = r.tokenSummary;
-  const mainDead = isMainDead(r);
+  const { tone: tokenBadgeTone, mainDead } = tokenState(r);
 
   // Shown once above the crew table rather than once per character on the map:
   // the ACL observation is a single job run, so every character on it shares
@@ -462,7 +471,7 @@ function AccountRow({
 
           <td>
             <div className="stack">
-              <Status tone={tokenTone(r, mainDead)}>
+              <Status tone={tokenBadgeTone}>
                 {tokens.healthy}/{tokens.total} ok
               </Status>
               {/* First, and undimmed. This is the severe case — the account is
