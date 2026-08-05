@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { buildContentionMessage, hasCode } from "./helpers/global-setup";
+import {
+  buildContentionMessage,
+  buildSchemaDriftMessage,
+  findForeignMigrations,
+  hasCode,
+} from "./helpers/global-setup";
 import {
   deriveWorktreeDbName,
   ownsTestDatabase,
@@ -161,5 +166,75 @@ describe("ownsTestDatabase", () => {
 
   it("does not own CI's shared database", () => {
     expect(ownsTestDatabase({ CI: "true" })).toBe(false);
+  });
+});
+
+describe("findForeignMigrations", () => {
+  // The reported bug: another checkout migrated this database further than the
+  // journal here goes, and drizzle's migrator cannot see it.
+  it("finds a hash the checkout's journal does not contain", () => {
+    expect(findForeignMigrations(["a", "b", "c"], ["a", "b"])).toEqual(["c"]);
+  });
+
+  // The normal case. migrate() applies the rest; this must stay silent.
+  it("stays quiet when the database is merely behind", () => {
+    expect(findForeignMigrations(["a"], ["a", "b", "c"])).toEqual([]);
+  });
+
+  it("stays quiet when the database matches exactly", () => {
+    expect(findForeignMigrations(["a", "b"], ["a", "b"])).toEqual([]);
+  });
+
+  it("stays quiet on a brand-new database with no history", () => {
+    expect(findForeignMigrations([], ["a", "b"])).toEqual([]);
+  });
+
+  // Two branches that each added one migration have equal counts, so counting
+  // rows would miss this entirely. Hashes catch it.
+  it("catches divergence that equal counts would hide", () => {
+    expect(findForeignMigrations(["a", "theirs"], ["a", "ours"])).toEqual(["theirs"]);
+  });
+
+  it("reports every foreign hash, not just the first", () => {
+    expect(findForeignMigrations(["a", "x", "y"], ["a"])).toEqual(["x", "y"]);
+  });
+});
+
+describe("buildSchemaDriftMessage", () => {
+  it("points a worktree at test:clean, which recreates its own database", () => {
+    const message = buildSchemaDriftMessage({
+      database: "authgd_test_mine_a1b2c3",
+      host: "localhost",
+      port: "5433",
+      appliedCount: 8,
+      expectedCount: 7,
+      foreignCount: 1,
+      owned: true,
+      containerName: "authgd-dev-postgres-1",
+    });
+
+    expect(message).toContain("authgd_test_mine_a1b2c3 (localhost:5433)");
+    expect(message).toContain("8 applied");
+    expect(message).toContain("7 in drizzle/");
+    expect(message).toContain("npm run test:clean");
+    expect(message).toContain("docs/ops.md");
+  });
+
+  // A database we do not own must never be handed a drop command as step one.
+  it("tells an unowned database to unset the override first", () => {
+    const message = buildSchemaDriftMessage({
+      database: "authgd_test",
+      host: "localhost",
+      port: "5433",
+      appliedCount: 8,
+      expectedCount: 7,
+      foreignCount: 1,
+      owned: false,
+      containerName: "authgd-dev-postgres-1",
+    });
+
+    expect(message).toContain("Unset TEST_DATABASE_URL");
+    expect(message).not.toContain("npm run test:clean");
+    expect(message).toContain("DROP DATABASE authgd_test");
   });
 });

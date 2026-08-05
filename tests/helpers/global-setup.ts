@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { readMigrationFiles } from "drizzle-orm/migrator";
 import { Client } from "pg";
 import { TEST_URL } from "./db";
 import { deriveWorktreeDbName, OWNS_TEST_DB } from "./test-db-url";
@@ -187,6 +188,116 @@ Wait for it to finish, or give this worktree its own database:
 See docs/ops.md — "npm test cannot touch your dev database".`;
 }
 
+/**
+ * Migration hashes applied in the database that this checkout's journal does
+ * not contain.
+ *
+ * `readMigrationFiles` produces exactly the `sha256(fileContents)` that the
+ * migrator writes into `drizzle.__drizzle_migrations.hash`, so set membership
+ * is an exact comparison rather than a heuristic.
+ *
+ * Deliberately one-directional. Expected-but-unapplied migrations are the
+ * normal case — `setupTestDb()` calls `migrate()` and they get applied. Only
+ * the reverse is unrecoverable: the migrator applies journal entries newer than
+ * the newest applied one, so a database migrated *ahead* looks identical to one
+ * that is current, and nothing repairs it.
+ */
+export function findForeignMigrations(applied: string[], expected: string[]): string[] {
+  const known = new Set(expected);
+  return applied.filter((hash) => !known.has(hash));
+}
+
+export function buildSchemaDriftMessage(opts: {
+  database: string;
+  host: string;
+  port: string;
+  appliedCount: number;
+  expectedCount: number;
+  foreignCount: number;
+  owned: boolean;
+  containerName: string;
+}): string {
+  const {
+    database,
+    host,
+    port,
+    appliedCount,
+    expectedCount,
+    foreignCount,
+    owned,
+    containerName,
+  } = opts;
+
+  // A database this worktree owns is cheap to throw away, so that is the whole
+  // fix. One it does not own may be CI's or a colleague's; dropping it is the
+  // fallback, never the headline.
+  const fix = owned
+    ? `Recreate this worktree's database:
+
+  npm run test:clean && npm test`
+    : `Unset TEST_DATABASE_URL to use this worktree's own database, or recreate this one:
+
+  docker exec ${containerName} psql -U authgd -d postgres \\
+    -c "DROP DATABASE ${database};" -c "CREATE DATABASE ${database} OWNER authgd;"`;
+
+  return `${database} (${host}:${port}) has ${foreignCount} migration(s) this checkout does not have (${appliedCount} applied, ${expectedCount} in drizzle/).
+
+Another checkout migrated it further than this one goes. Drizzle only applies
+migrations newer than the newest applied one, so it cannot repair this — the
+suite would run against the wrong schema and fail in ways that look like real
+regressions.
+
+${fix}
+
+See docs/ops.md — "npm test cannot touch your dev database".`;
+}
+
+/**
+ * Throws when the database has migrations this checkout does not.
+ *
+ * Every way of *not knowing* falls open — an unreadable journal or a database
+ * with no migration history yet are both ordinary (a brand-new database has no
+ * `drizzle` schema until `setupTestDb()` migrates it). Only a confirmed foreign
+ * hash is worth failing a run over.
+ */
+async function assertNoSchemaDrift(client: Client, url: URL): Promise<void> {
+  let expected: string[];
+  try {
+    expected = readMigrationFiles({ migrationsFolder: "drizzle" }).map((m) => m.hash);
+  } catch (err) {
+    debugLog("could not read the migration journal:", err);
+    return;
+  }
+
+  let applied: string[];
+  try {
+    const { rows } = await client.query<{ hash: string }>(
+      "SELECT hash FROM drizzle.__drizzle_migrations ORDER BY created_at",
+    );
+    applied = rows.map((row) => row.hash);
+  } catch (err) {
+    debugLog("no migration history to compare against:", err);
+    return;
+  }
+
+  const foreign = findForeignMigrations(applied, expected);
+  if (foreign.length === 0) return;
+
+  const port = url.port || "5432";
+  throw new Error(
+    buildSchemaDriftMessage({
+      database: decodeURIComponent(url.pathname.replace(/^\//, "")),
+      host: url.hostname,
+      port,
+      appliedCount: applied.length,
+      expectedCount: expected.length,
+      foreignCount: foreign.length,
+      owned: OWNS_TEST_DB,
+      containerName: findContainerName(port),
+    }),
+  );
+}
+
 /** Vitest global setup / teardown. Runs once in the runner process. */
 export default async function globalSetup(): Promise<() => Promise<void>> {
   const url = new URL(TEST_URL);
@@ -222,6 +333,16 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
         worktreeDbName: deriveWorktreeDbName(process.cwd()),
       }),
     );
+  }
+
+  // Runs holding the lock, so a second run reports contention (the more urgent
+  // problem) rather than racing this check. Release before throwing: the
+  // teardown below never runs when globalSetup throws.
+  try {
+    await assertNoSchemaDrift(client, url);
+  } catch (err) {
+    await client.end();
+    throw err;
   }
 
   // Session-scoped advisory locks are held for the life of this connection
