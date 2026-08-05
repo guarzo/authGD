@@ -22,7 +22,7 @@ const TEST_DB_ORIGIN = "postgres://authgd:authgd@localhost:5433";
  * and deliberately sets no override, so this value must stay exactly what it
  * has always been.
  */
-export const SHARED_TEST_URL = `${TEST_DB_ORIGIN}/authgd_test`;
+const SHARED_TEST_URL = `${TEST_DB_ORIGIN}/authgd_test`;
 
 /**
  * Turns a worktree directory into a legal, unquoted Postgres identifier:
