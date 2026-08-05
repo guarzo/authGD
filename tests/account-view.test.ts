@@ -63,7 +63,7 @@ describe("getAccountView", () => {
     const acc = await ctx.db.transaction(async (tx) => {
       const [row] = await tx
         .insert(account)
-        .values({ tier: "flygd", mainCharacterId: 1001 })
+        .values({ tier: "member", mainCharacterId: 1001 })
         .returning();
       await tx.insert(character).values([
         {
@@ -97,7 +97,7 @@ describe("getAccountView", () => {
     });
 
     const view = await getAccountView(ctx.db, cfg, acc.id);
-    expect(view.tier).toBe("flygd");
+    expect(view.tier).toBe("member");
     expect(view.discordLinked).toBe(true);
 
     const main = view.characters.find((c) => c.id === 1001)!;
@@ -118,12 +118,12 @@ describe("getAccountView", () => {
     expect(view.discordLinked).toBe(false);
   });
 
-  it("marks non-flygd characters as outside the contacts desired set", async () => {
-    // A blue member is the content of a FLYGD member's contact list, never a
+  it("marks non-member characters as outside the contacts desired set", async () => {
+    // An associate member is the content of a member's contact list, never a
     // target of the job, so contact_sync_state will never have a row for them.
     // The view has to say that structurally, or the page reads the permanent
     // null as "your first sync is still pending".
-    const acc = await seedAccount(ctx.db, { tier: "blue" });
+    const acc = await seedAccount(ctx.db, { tier: "associate" });
     await seedCharacter(ctx.db, cfg, { id: 2001, accountId: acc.id });
 
     const view = await getAccountView(ctx.db, cfg, acc.id);
@@ -131,10 +131,10 @@ describe("getAccountView", () => {
     expect(view.characters[0].contactSyncResult).toBeNull();
   });
 
-  it("excludes a flygd character CCP reports as gone", async () => {
-    // affiliation_invalid drops the character from getFlygdCharacters, so it
+  it("excludes a member character CCP reports as gone", async () => {
+    // affiliation_invalid drops the character from getMemberCharacters, so it
     // stops accruing results for the same structural reason.
-    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    const acc = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, cfg, { id: 2002, accountId: acc.id });
     await seedCharacter(ctx.db, cfg, {
       id: 2003,
@@ -149,7 +149,7 @@ describe("getAccountView", () => {
   });
 
   it("surfaces the label detail on the member view", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    const acc = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
     await ctx.db.insert(contactSyncState).values({
       characterId: 1,
@@ -164,7 +164,7 @@ describe("getAccountView", () => {
   });
 
   it("leaves the detail null when there is nothing to report", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    const acc = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, cfg, { id: 2, accountId: acc.id, main: true });
     await ctx.db
       .insert(contactSyncState)
@@ -223,8 +223,8 @@ describe("getPushStatus", () => {
 
 describe("getAdminAccountsList", () => {
   async function seedTrio() {
-    // A: flygd, main "Alpha" + alt, on map, discord linked
-    const a = await seedAccount(ctx.db, { tier: "flygd", discordUserId: "111" });
+    // A: member, main "Alpha" + alt, on map, discord linked
+    const a = await seedAccount(ctx.db, { tier: "member", discordUserId: "111" });
     await seedCharacter(ctx.db, cfg, {
       id: 1,
       accountId: a.id,
@@ -237,8 +237,8 @@ describe("getAdminAccountsList", () => {
       role: "viewer",
       observedAt: new Date("2026-08-01T00:00:00Z"),
     });
-    // B: green + cryo, main "Beta"
-    const b = await seedAccount(ctx.db, { tier: "green" });
+    // B: alumni + cryo, main "Beta"
+    const b = await seedAccount(ctx.db, { tier: "alumni" });
     await seedCharacter(ctx.db, cfg, {
       id: 3,
       accountId: b.id,
@@ -249,8 +249,8 @@ describe("getAdminAccountsList", () => {
       .update(account)
       .set({ status: "cryo", statusChangedAt: new Date(), statusNote: "afk" })
       .where(eq(account.id, b.id));
-    // C: locked blue, set by A, main "Gamma"
-    const c = await seedAccount(ctx.db, { tier: "blue", tierLocked: true });
+    // C: locked associate, set by A, main "Gamma"
+    const c = await seedAccount(ctx.db, { tier: "associate", tierLocked: true });
     await seedCharacter(ctx.db, cfg, {
       id: 4,
       accountId: c.id,
@@ -282,7 +282,7 @@ describe("getAdminAccountsList", () => {
 
   it("defaults to name sort with no-main accounts last — in BOTH directions", async () => {
     await seedTrio();
-    const noMain = await seedAccount(ctx.db, { tier: "green" }); // zero characters
+    const noMain = await seedAccount(ctx.db, { tier: "alumni" }); // zero characters
     const rows = await getAdminAccountsList(ctx.db, cfg);
     expect(rows.map((r) => r.mainName)).toEqual(["Alpha", "Beta", "Gamma", null]);
     expect(rows[3].accountId).toBe(noMain.id);
@@ -295,8 +295,8 @@ describe("getAdminAccountsList", () => {
 
   it("filters by tier and by cryo status", async () => {
     const { a, b } = await seedTrio();
-    const flygd = await getAdminAccountsList(ctx.db, cfg, { tier: "flygd" });
-    expect(flygd.map((r) => r.accountId)).toEqual([a.id]);
+    const member = await getAdminAccountsList(ctx.db, cfg, { tier: "member" });
+    expect(member.map((r) => r.accountId)).toEqual([a.id]);
     const cryo = await getAdminAccountsList(ctx.db, cfg, { status: "cryo" });
     expect(cryo.map((r) => r.accountId)).toEqual([b.id]);
   });
@@ -304,19 +304,19 @@ describe("getAdminAccountsList", () => {
   it("sorts by tier rank and by tier-change date desc", async () => {
     await seedTrio();
     const byTier = await getAdminAccountsList(ctx.db, cfg, { sort: "tier" });
-    expect(byTier.map((r) => r.tier)).toEqual(["flygd", "blue", "green"]);
+    expect(byTier.map((r) => r.tier)).toEqual(["member", "associate", "alumni"]);
     const byDate = await getAdminAccountsList(ctx.db, cfg, {
       sort: "tierChangedAt",
       dir: "desc",
     });
     // C is the only account with tierChangedAt; nulls sort last regardless of dir
-    expect(byDate[0].tier).toBe("blue");
+    expect(byDate[0].tier).toBe("associate");
   });
 
   it("filters the admin list down to pending accounts", async () => {
     await seedAccount(ctx.db, { tier: "pending" });
-    await seedAccount(ctx.db, { tier: "green" });
-    await seedAccount(ctx.db, { tier: "flygd" });
+    await seedAccount(ctx.db, { tier: "alumni" });
+    await seedAccount(ctx.db, { tier: "member" });
 
     const rows = await getAdminAccountsList(ctx.db, cfg, { tier: "pending" });
 
@@ -325,18 +325,18 @@ describe("getAdminAccountsList", () => {
   });
 
   it("sorts pending accounts ahead of every other tier when sorting by tier", async () => {
-    await seedAccount(ctx.db, { tier: "green" });
+    await seedAccount(ctx.db, { tier: "alumni" });
     await seedAccount(ctx.db, { tier: "pending" });
-    await seedAccount(ctx.db, { tier: "flygd" });
-    await seedAccount(ctx.db, { tier: "blue" });
+    await seedAccount(ctx.db, { tier: "member" });
+    await seedAccount(ctx.db, { tier: "associate" });
 
     const rows = await getAdminAccountsList(ctx.db, cfg, { sort: "tier" });
 
-    expect(rows.map((r) => r.tier)).toEqual(["pending", "flygd", "blue", "green"]);
+    expect(rows.map((r) => r.tier)).toEqual(["pending", "member", "associate", "alumni"]);
   });
 
   it("summarizes token health", async () => {
-    const a = await seedAccount(ctx.db, { tier: "flygd" });
+    const a = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, cfg, { id: 10, accountId: a.id, main: true, name: "T1" });
     await seedCharacter(ctx.db, cfg, { id: 11, accountId: a.id, name: "T2" });
     await ctx.db
@@ -368,16 +368,16 @@ describe("countAccountsByTier", () => {
   it("counts only the requested tier, ignoring other rows", async () => {
     await seedAccount(ctx.db, { tier: "pending" });
     await seedAccount(ctx.db, { tier: "pending" });
-    await seedAccount(ctx.db, { tier: "green" });
-    await seedAccount(ctx.db, { tier: "flygd" });
+    await seedAccount(ctx.db, { tier: "alumni" });
+    await seedAccount(ctx.db, { tier: "member" });
 
     expect(await countAccountsByTier(ctx.db, "pending")).toBe(2);
-    expect(await countAccountsByTier(ctx.db, "green")).toBe(1);
+    expect(await countAccountsByTier(ctx.db, "alumni")).toBe(1);
   });
 
   it("returns 0 rather than a falsy non-number when a tier has no rows", async () => {
-    await seedAccount(ctx.db, { tier: "green" });
+    await seedAccount(ctx.db, { tier: "alumni" });
 
-    expect(await countAccountsByTier(ctx.db, "blue")).toBe(0);
+    expect(await countAccountsByTier(ctx.db, "associate")).toBe(0);
   });
 });

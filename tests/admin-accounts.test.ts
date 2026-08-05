@@ -32,27 +32,31 @@ const lastAudit = async () =>
 describe("setTierManual", () => {
   it("sets tier, locks, stamps changed-by, audits, and enqueues sync in one tx", async () => {
     const admin = await seedAdmin();
-    const target = await seedAccount(ctx.db, { tier: "flygd" });
+    const target = await seedAccount(ctx.db, { tier: "member" });
     const r = await ctx.db.transaction((tx) =>
-      setTierManual(tx, admin.id, target.id, "blue"),
+      setTierManual(tx, admin.id, target.id, "associate"),
     );
     expect(r).toEqual({ ok: true });
     const after = await getAcc(target.id);
-    expect(after.tier).toBe("blue");
+    expect(after.tier).toBe("associate");
     expect(after.tierLocked).toBe(true);
     expect(after.tierChangedBy).toBe(admin.id);
     expect(after.tierChangedAt).not.toBeNull();
     const audit = await lastAudit();
     expect(audit.action).toBe("tier.changed");
     expect(audit.actor).toBe(admin.id);
-    expect(audit.details).toMatchObject({ to: "blue", locked: true, cause: "manual" });
+    expect(audit.details).toMatchObject({
+      to: "associate",
+      locked: true,
+      cause: "manual",
+    });
     expect(await outboxRows()).toHaveLength(1);
   });
 
-  it("locking at the SAME tier is still a change (green → locked green)", async () => {
+  it("locking at the SAME tier is still a change (alumni → locked alumni)", async () => {
     const admin = await seedAdmin();
-    const target = await seedAccount(ctx.db, { tier: "green" });
-    await ctx.db.transaction((tx) => setTierManual(tx, admin.id, target.id, "green"));
+    const target = await seedAccount(ctx.db, { tier: "alumni" });
+    await ctx.db.transaction((tx) => setTierManual(tx, admin.id, target.id, "alumni"));
     const after = await getAcc(target.id);
     expect(after.tierLocked).toBe(true);
     expect(await outboxRows()).toHaveLength(1);
@@ -60,8 +64,8 @@ describe("setTierManual", () => {
 
   it("is a no-op when already locked at that tier", async () => {
     const admin = await seedAdmin();
-    const target = await seedAccount(ctx.db, { tier: "blue", tierLocked: true });
-    await ctx.db.transaction((tx) => setTierManual(tx, admin.id, target.id, "blue"));
+    const target = await seedAccount(ctx.db, { tier: "associate", tierLocked: true });
+    await ctx.db.transaction((tx) => setTierManual(tx, admin.id, target.id, "associate"));
     expect(await outboxRows()).toHaveLength(0);
     expect(await lastAudit()).toBeUndefined();
   });
@@ -70,19 +74,19 @@ describe("setTierManual", () => {
     const nobody = await seedAccount(ctx.db);
     const target = await seedAccount(ctx.db);
     const r = await ctx.db.transaction((tx) =>
-      setTierManual(tx, nobody.id, target.id, "blue"),
+      setTierManual(tx, nobody.id, target.id, "associate"),
     );
     expect(r).toEqual({ ok: false, error: "not_authorized" });
   });
 
   it("records the tier it moved from, so the transition reads both ways", async () => {
     const admin = await seedAdmin();
-    const target = await seedAccount(ctx.db, { tier: "flygd" });
-    await ctx.db.transaction((tx) => setTierManual(tx, admin.id, target.id, "blue"));
+    const target = await seedAccount(ctx.db, { tier: "member" });
+    await ctx.db.transaction((tx) => setTierManual(tx, admin.id, target.id, "associate"));
     const audit = await lastAudit();
     expect(audit.details).toMatchObject({
-      from: "flygd",
-      to: "blue",
+      from: "member",
+      to: "associate",
       locked: true,
       cause: "manual",
     });
@@ -102,12 +106,12 @@ describe("setAccountStatus not_found", () => {
 describe("returnTierToAuto", () => {
   it("clears the lock only — tier and changed-at untouched — audits, enqueues", async () => {
     const admin = await seedAdmin();
-    const target = await seedAccount(ctx.db, { tier: "blue", tierLocked: true });
+    const target = await seedAccount(ctx.db, { tier: "associate", tierLocked: true });
     const before = await getAcc(target.id);
     await ctx.db.transaction((tx) => returnTierToAuto(tx, admin.id, target.id));
     const after = await getAcc(target.id);
     expect(after.tierLocked).toBe(false);
-    expect(after.tier).toBe("blue"); // membership job converges it later
+    expect(after.tier).toBe("associate"); // membership job converges it later
     expect(after.tierChangedAt).toEqual(before.tierChangedAt);
     expect((await lastAudit()).action).toBe("tier.unlocked");
     expect(await outboxRows()).toHaveLength(1);
@@ -124,12 +128,12 @@ describe("returnTierToAuto", () => {
     const admin = await seedAdmin();
     // Seeded and locked tiers differ, so the assertion picks between two live
     // values rather than passing against a hardcoded literal.
-    const target = await seedAccount(ctx.db, { tier: "flygd" });
-    await ctx.db.transaction((tx) => setTierManual(tx, admin.id, target.id, "blue"));
+    const target = await seedAccount(ctx.db, { tier: "member" });
+    await ctx.db.transaction((tx) => setTierManual(tx, admin.id, target.id, "associate"));
     await ctx.db.transaction((tx) => returnTierToAuto(tx, admin.id, target.id));
     const audit = await lastAudit();
     expect(audit.action).toBe("tier.unlocked");
-    expect(audit.details).toMatchObject({ tier: "blue" });
+    expect(audit.details).toMatchObject({ tier: "associate" });
   });
 });
 
@@ -198,43 +202,45 @@ describe("setAccountStatus / setStatusNote", () => {
 });
 
 describe("approveAccount", () => {
-  it("approves to green WITHOUT locking, so the member can still auto-promote", async () => {
+  it("approves to alumni WITHOUT locking, so the member can still auto-promote", async () => {
     const admin = await seedAccount(ctx.db, { isAdmin: true });
     const target = await seedAccount(ctx.db, { tier: "pending" });
 
     const res = await ctx.db.transaction((tx) =>
-      approveAccount(tx, admin.id, target.id, "green"),
+      approveAccount(tx, admin.id, target.id, "alumni"),
     );
 
     expect(res).toEqual({ ok: true });
     const [after] = await ctx.db.select().from(account).where(eq(account.id, target.id));
-    expect(after.tier).toBe("green");
+    expect(after.tier).toBe("alumni");
     expect(after.tierLocked).toBe(false);
     expect(after.tierChangedBy).toBe(admin.id);
   });
 
-  it("approves to blue WITH a lock, since an unlocked blue converges to green", async () => {
+  it("approves to associate WITH a lock, since an unlocked associate converges to alumni", async () => {
     const admin = await seedAccount(ctx.db, { isAdmin: true });
     const target = await seedAccount(ctx.db, { tier: "pending" });
 
-    await ctx.db.transaction((tx) => approveAccount(tx, admin.id, target.id, "blue"));
+    await ctx.db.transaction((tx) =>
+      approveAccount(tx, admin.id, target.id, "associate"),
+    );
 
     const [after] = await ctx.db.select().from(account).where(eq(account.id, target.id));
-    expect(after.tier).toBe("blue");
+    expect(after.tier).toBe("associate");
     expect(after.tierLocked).toBe(true);
   });
 
   it("refuses an account that is not pending", async () => {
     const admin = await seedAccount(ctx.db, { isAdmin: true });
-    const target = await seedAccount(ctx.db, { tier: "flygd" });
+    const target = await seedAccount(ctx.db, { tier: "member" });
 
     const res = await ctx.db.transaction((tx) =>
-      approveAccount(tx, admin.id, target.id, "green"),
+      approveAccount(tx, admin.id, target.id, "alumni"),
     );
 
     expect(res).toEqual({ ok: false, error: "not_pending" });
     const [after] = await ctx.db.select().from(account).where(eq(account.id, target.id));
-    expect(after.tier).toBe("flygd");
+    expect(after.tier).toBe("member");
   });
 
   it("refuses a non-admin actor", async () => {
@@ -242,7 +248,7 @@ describe("approveAccount", () => {
     const target = await seedAccount(ctx.db, { tier: "pending" });
 
     const res = await ctx.db.transaction((tx) =>
-      approveAccount(tx, nobody.id, target.id, "green"),
+      approveAccount(tx, nobody.id, target.id, "alumni"),
     );
 
     expect(res).toEqual({ ok: false, error: "not_authorized" });
@@ -252,7 +258,7 @@ describe("approveAccount", () => {
     const admin = await seedAccount(ctx.db, { isAdmin: true });
 
     const res = await ctx.db.transaction((tx) =>
-      approveAccount(tx, admin.id, "00000000-0000-0000-0000-000000000000", "green"),
+      approveAccount(tx, admin.id, "00000000-0000-0000-0000-000000000000", "alumni"),
     );
 
     expect(res).toEqual({ ok: false, error: "not_found" });
@@ -262,7 +268,7 @@ describe("approveAccount", () => {
     const admin = await seedAccount(ctx.db, { isAdmin: true });
     const target = await seedAccount(ctx.db, { tier: "pending" });
 
-    await ctx.db.transaction((tx) => approveAccount(tx, admin.id, target.id, "green"));
+    await ctx.db.transaction((tx) => approveAccount(tx, admin.id, target.id, "alumni"));
 
     const rows = await ctx.db
       .select()
@@ -271,7 +277,7 @@ describe("approveAccount", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].actor).toBe(admin.id);
     expect(rows[0].target).toBe(target.id);
-    expect(rows[0].details).toEqual({ to: "green", locked: false });
+    expect(rows[0].details).toEqual({ to: "alumni", locked: false });
     expect(await ctx.db.select().from(outbox)).toHaveLength(1);
   });
 });

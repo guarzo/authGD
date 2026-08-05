@@ -24,7 +24,7 @@ async function lockTarget(dbx: DbTx, accountId: string) {
 }
 
 /**
- * Spec tier state machine: ANY manual set (flygd, blue, or green) locks the
+ * Spec tier state machine: ANY manual set (member, associate, or alumni) locks the
  * account — the membership job never touches locked accounts. Change + audit
  * + outbox commit in one transaction (the caller supplies the DbTx).
  */
@@ -32,7 +32,7 @@ export async function setTierManual(
   dbx: DbTx,
   actor: string,
   accountId: string,
-  tier: "flygd" | "blue" | "green",
+  tier: "member" | "associate" | "alumni",
 ): Promise<AdminMutationResult> {
   if (!(await isAuthorized(dbx, actor))) return { ok: false, error: "not_authorized" };
   const acc = await lockTarget(dbx, accountId);
@@ -104,25 +104,25 @@ export type ApproveResult =
   { ok: true } | { ok: false; error: "not_authorized" | "not_found" | "not_pending" };
 
 /**
- * Approve a pending account onto green or blue. Separate from setTierManual
+ * Approve a pending account onto alumni or associate. Separate from setTierManual
  * because the lock differs and the guard differs.
  *
- * Green is left UNLOCKED so the account rejoins the automatic state machine:
+ * Alumni is left UNLOCKED so the account rejoins the automatic state machine:
  * if the member later joins the alliance, the membership job promotes them to
- * flygd with no admin involved. An unlocked green is stable, because
- * decideTier already wants green for a confirmed non-alliance main.
+ * member with no admin involved. An unlocked alumni is stable, because
+ * decideTier already wants alumni for a confirmed non-alliance main.
  *
- * Blue MUST lock. An unlocked blue is converged straight back to green on the
- * next membership run, which is why blue is inherently a locked tier.
+ * Associate MUST lock. An unlocked associate is converged straight back to alumni on the
+ * next membership run, which is why associate is inherently a locked tier.
  *
- * flygd is not an approval target — it is the system's to grant, or an admin's
+ * member is not an approval target — it is the system's to grant, or an admin's
  * via setTierManual.
  */
 export async function approveAccount(
   dbx: DbTx,
   actor: string,
   accountId: string,
-  tier: "green" | "blue",
+  tier: "alumni" | "associate",
 ): Promise<ApproveResult> {
   if (!(await isAuthorized(dbx, actor))) return { ok: false, error: "not_authorized" };
   const acc = await lockTarget(dbx, accountId);
@@ -130,7 +130,7 @@ export async function approveAccount(
   // Re-checked under the lock: two admins approving the same account race here,
   // and the second must not re-stamp a tier the first already granted.
   if (acc.tier !== "pending") return { ok: false, error: "not_pending" };
-  const locked = tier === "blue";
+  const locked = tier === "associate";
   await dbx
     .update(account)
     .set({ tier, tierLocked: locked, tierChangedAt: new Date(), tierChangedBy: actor })

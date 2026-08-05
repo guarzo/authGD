@@ -41,7 +41,7 @@ afterAll(() => ctx.cleanup());
 beforeEach(() => truncateAll(ctx.db));
 
 async function seedOperator() {
-  return seedAccount(ctx.db, { tier: "flygd", status: "active" });
+  return seedAccount(ctx.db, { tier: "member", status: "active" });
 }
 
 function roster(names: string[]): RosterEntry[] {
@@ -387,7 +387,7 @@ describe("payout list cursor encoding", () => {
 
 describe("listCharacterNames", () => {
   async function seedCharacters(count: number) {
-    const acc = await seedAccount(ctx.db, { tier: "flygd", status: "active" });
+    const acc = await seedAccount(ctx.db, { tier: "member", status: "active" });
     await ctx.db.insert(character).values(
       Array.from({ length: count }, (_, i) => ({
         id: 5_000_000 + i,
@@ -424,7 +424,7 @@ describe("listCharacterNames", () => {
 
 describe("listAccountPayouts", () => {
   async function seedForAccount(opts: { excluded?: boolean } = {}) {
-    const member = await seedAccount(ctx.db, { tier: "flygd", status: "active" });
+    const member = await seedAccount(ctx.db, { tier: "member", status: "active" });
     const { operationId, operator } = await seedOperation({
       totalValue: "100.00",
       names: ["Placeholder"],
@@ -472,12 +472,12 @@ describe("listAccountPayouts", () => {
   it("never returns another member's rows", async () => {
     const { operationId, operator } = await seedForAccount();
     await ctx.db.transaction((tx) => finalizeOperation(tx, operator.id, operationId));
-    const stranger = await seedAccount(ctx.db, { tier: "flygd", status: "active" });
+    const stranger = await seedAccount(ctx.db, { tier: "member", status: "active" });
     expect(await listAccountPayouts(ctx.db, stranger.id)).toEqual([]);
   });
 
   it("orders newest first", async () => {
-    const member = await seedAccount(ctx.db, { tier: "flygd", status: "active" });
+    const member = await seedAccount(ctx.db, { tier: "member", status: "active" });
     for (const day of ["2026-08-01", "2026-08-03", "2026-08-02"]) {
       const { operationId, operator } = await seedOperation({
         totalValue: "100.00",

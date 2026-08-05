@@ -151,16 +151,16 @@ async function applyNoMainRule(dbx: DbTx, accountId: string, cause: string) {
     .where(eq(account.id, accountId))
     .for("update");
   if (!acc) return;
-  // Demote only from an earned tier. Green is already the floor, and pending
-  // is BELOW it — demoting a pending account to green would turn losing your
+  // Demote only from an earned tier. Alumni is already the floor, and pending
+  // is BELOW it — demoting a pending account to alumni would turn losing your
   // main into an automatic approval.
-  const demote = !acc.tierLocked && acc.tier !== "green" && acc.tier !== "pending";
+  const demote = !acc.tierLocked && acc.tier !== "alumni" && acc.tier !== "pending";
   await dbx
     .update(account)
     .set({
       mainCharacterId: null,
       ...(demote
-        ? { tier: "green" as const, tierChangedAt: new Date(), tierChangedBy: "system" }
+        ? { tier: "alumni" as const, tierChangedAt: new Date(), tierChangedBy: "system" }
         : {}),
     })
     .where(eq(account.id, accountId));
@@ -169,7 +169,7 @@ async function applyNoMainRule(dbx: DbTx, accountId: string, cause: string) {
       actor: "system",
       action: "tier.changed",
       target: accountId,
-      details: { from: acc.tier, to: "green", cause },
+      details: { from: acc.tier, to: "alumni", cause },
     });
   }
   await enqueueSync(dbx, { kind: "account", accountId });
@@ -204,7 +204,7 @@ async function createAccountWithCharacter(
 ): Promise<string> {
   const [acc] = await dbx
     .insert(account)
-    // Explicit, not the column default: the default stays green because a
+    // Explicit, not the column default: the default stays alumni because a
     // migration cannot use a newly added enum value in the transaction that
     // adds it. Deploy 1 taught every reader about pending; this line is
     // deploy 2, and must never ship in the same release as deploy 1.
@@ -279,8 +279,8 @@ export type MergeBlocker =
  * "Payout history" means all three tables, not just the two that name the
  * account as a subject. payout_payment.actor is a set-null FK (schema.ts:320),
  * so deleting an account that recorded a payment silently detaches financial
- * attribution. Note this is reachable WITHOUT the account being flygd now:
- * recordPayment requires active flygd (payouts.ts:445), but a derole to green
+ * attribution. Note this is reachable WITHOUT the account being member now:
+ * recordPayment requires active member (payouts.ts:445), but a derole to alumni
  * is automatic and unlocked, and nothing below inspects tier. A one-character
  * ex-operator with no Discord link would otherwise pass every other check.
  *
@@ -561,7 +561,7 @@ export async function maybeGrantBootstrapAdmin(
  * unlinkCharacter there is NO last-character guard — that guard exists only
  * for ordinary unlink flows, while a sold character always leaves its old
  * account, which may legitimately end with zero characters (spec: it stays
- * Green until an admin deletes it). Locks, deletes the link, applies the
+ * Alumni until an admin deletes it). Locks, deletes the link, applies the
  * no-main rule (demotion unless tier_locked + outbox enqueue), and revokes
  * the account's sessions.
  */
