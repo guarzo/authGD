@@ -219,8 +219,15 @@ export default function Error({
             thing the sentence points at.
 
             `seenAt` is absent on the server render and arrives after mount, so
-            the row is conditional rather than showing an empty value. */}
-        <RuleHead>What to send</RuleHead>
+            the row is conditional rather than showing an empty value.
+
+            `as="h2"` rather than the `span` default: it is the only section
+            heading on the page, under the h1, and a reader navigating by
+            heading is exactly the reader who would otherwise land on the button
+            row having never been offered the thing this block exists to hand
+            over. Every other `RuleHead` in the app passes `as` for the same
+            reason. */}
+        <RuleHead as="h2">What to send</RuleHead>
         <pre className="escalation mono">
           <code>
             {`page    ${pathname}`}
