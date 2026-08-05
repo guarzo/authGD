@@ -420,10 +420,14 @@ async function seedDenseLog() {
   return admin;
 }
 
-for (const width of [320, 390, 768]) {
-  // 40rem is the breakpoint the narrow rules hang off. 768px sits above it and
-  // is in this loop as the control: it must keep the full stamp.
-  const narrow = width < 640;
+for (const width of [320, 390]) {
+  // Every width in this loop is one where the table cannot fit its column and
+  // the pinned first column is therefore load-bearing. 768px used to be in here
+  // as the control that kept the full stamp; it is now in the loop below
+  // instead, because at 768px this table forces no horizontal scroll at all and
+  // there is nothing left for a pin to do. 66rem, not 40rem, is the breakpoint
+  // the elapsed-time rendering hangs off.
+  const narrow = width <= 1056;
 
   test(`audit at ${width}px: the timestamp column and the header stay put`, async ({
     page,
@@ -482,7 +486,84 @@ for (const width of [320, 390, 768]) {
     // width floor on the table it was handed 0px inside any region narrower
     // than the four sized columns, i.e. at every width in this loop, with its
     // payload disclosure unclickable at all of them. Measured 120px at 320 and
-    // 390, 228px at 768.
+    // 390.
+    const detailsWidth = await page
+      .locator("tbody tr:first-child td:nth-child(5)")
+      .evaluate((el) => el.getBoundingClientRect().width);
+    expect(detailsWidth, "the Details column has room to open into").toBeGreaterThan(100);
+  });
+}
+
+/**
+ * The band this table used to fail hardest in. There were two width stops in
+ * the stylesheet — 46rem and 40rem — so every viewport from 641px up got the
+ * desktop setting and its 62rem floor: 0px of forced horizontal scroll at
+ * 639px, 399px at 641px, 272px at 768px, 17px at 1025px, none from 1050px up.
+ * A tablet was the worst place to read the audit log and it got better as the
+ * screen grew, which is the reverse of what a reader would predict.
+ *
+ * A 66rem stop carrying a middle column setting closes it. These widths are
+ * the ones that were broken and the one that never was, asserted the same way,
+ * so a future change that reintroduces a floor above the viewport fails here
+ * rather than in a screenshot nobody takes at 768px.
+ *
+ * Deliberately not folded into the loop above: that loop's assertions are all
+ * about a pinned column inside a region that scrolls, and the entire point of
+ * these widths is that nothing scrolls.
+ */
+for (const width of [768, 1025, 1056, 1057, 1280]) {
+  // The same 66rem boundary the stylesheet uses. 768 is inside the middle band
+  // and takes the elapsed rendering; 1280 is above it and keeps the stamp the
+  // At column exists for. 1056 and 1057 straddle the stop itself: `max-width:
+  // 66rem` is inclusive, so 1056 must still be narrow and 1057 must not. Both
+  // sides are asserted because the two ways to get this wrong — writing the
+  // wrong rem figure, or writing `min-width` — each leave one side right, and
+  // a single sample anywhere in the band passes through either mistake.
+  //
+  // 1025 is here because it is where this test earned its keep. The stop was
+  // first written at 64rem, which reads like the obvious round number and
+  // closes 641–1024 — leaving 1025–1049 forcing up to 17px of scroll, the
+  // exact defect the block exists to remove, in a 25px window that neither 768
+  // nor 1280 goes anywhere near. Keep this width even though 1056 now covers
+  // the boundary: it is the regression case, not the boundary case.
+  const narrow = width <= 1056;
+
+  test(`audit at ${width}px: the table fits its column and the header still sticks`, async ({
+    page,
+    context,
+  }) => {
+    const admin = await seedDenseLog();
+    await context.addCookies([await sessionCookieFor(db, admin.id)]);
+    await page.setViewportSize({ width, height: 720 });
+    await page.goto("/admin/audit");
+    await page.waitForSelector(".scroller tbody tr");
+
+    const cell = page.locator("tbody tr:first-child td:first-child");
+    const exact = cell.locator("span.only-wide");
+    const relative = cell.locator("span.only-narrow time");
+    // Both renderings are in the markup at every width; only one is shown.
+    await expect(exact).toHaveText(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+    await expect(relative).toHaveText(/^\d+[smhd] ago$/);
+    await expect(narrow ? relative : exact).toBeVisible();
+    await expect(narrow ? exact : relative).toBeHidden();
+
+    const maxScrollLeft = await page
+      .locator(".scroller")
+      .evaluate((el) => el.scrollWidth - el.clientWidth);
+    expect(maxScrollLeft, "no forced horizontal scroll at this width").toBe(0);
+
+    // The vertical pin is unaffected by any of this and must stay: the region
+    // is still height-capped, so the header still has to ride the scroll.
+    const head = await pinGeometry(page, ".scroller", "thead th:first-child", "down");
+    expect(head.maxScrollTop).toBeGreaterThan(0);
+    expect(head.scrolledTop).toBe(head.maxScrollTop);
+    expect(head.overlapY).toBeCloseTo(head.cellHeight, 0);
+    expect(head.text).toContain("At");
+
+    // The colgroup's one unsized column. A fixed-layout table is at least the
+    // sum of its columns, so lowering the floor for this band without lowering
+    // the four sized columns with it starves Details — measured 72px on the
+    // first attempt at 768px, against 158px once all five moved together.
     const detailsWidth = await page
       .locator("tbody tr:first-child td:nth-child(5)")
       .evaluate((el) => el.getBoundingClientRect().width);

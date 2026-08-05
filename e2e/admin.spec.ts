@@ -700,6 +700,99 @@ test("pinned cells keep the scroll region's tab stop and the row's focus order",
 });
 
 /**
+ * WCAG 2.2 2.4.11, Focus Not Obscured. The accounts table pins its header row
+ * inside a height-capped scroll region, so the sticky layer paints over the top
+ * of the scrollport an element is scrolled into. Without a `scroll-margin` on
+ * the *target*, a scroll that aligns the target to the nearest edge parks it
+ * exactly flush with the scrollport edge — which is underneath the header — and
+ * the focus ring is rendered where nothing can see it.
+ *
+ * Asserting rects rather than the CSS property: `scroll-margin-top: 2.5rem` in
+ * the stylesheet proves the declaration exists, not that the engine applies it.
+ * That gap is the whole risk here, and it turned out to be wider than expected
+ * — see the note on the scroll trigger inside.
+ */
+test("a control scrolled to the top of the pinned region stays clear of the header", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedDenseWorld();
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto("/admin/accounts");
+
+  // Everything below happens inside one `evaluate`, and the rects are read
+  // with getBoundingClientRect rather than with Playwright's boundingBox().
+  // boundingBox() scrolls the element into view itself, centring it in the
+  // region — so a draft that scrolled through the locator API and then measured
+  // through it was reading Playwright's scroll, not the browser's, and passed
+  // with the CSS property deleted.
+  //
+  // The trigger is `scrollIntoView({block: "nearest"})` and not `focus()`,
+  // which is what this rule is really about, because Chromium's programmatic
+  // focus scroll *centres* an off-screen element: measured, focusing this
+  // toggle from above the fold lands it at y=675 in a region whose header ends
+  // at 436, with or without the scroll-margin. Nearest-edge alignment is the
+  // one scroll-margin governs, it is what the engines that don't centre use for
+  // sequential focus navigation, and it is the only alignment under which this
+  // control can be obscured at all. Measured both ways: 442 with the property
+  // (6px clear), 402 without it (34px under the header, and this test red).
+  const ROW = 12;
+  const geom = await page.evaluate((row) => {
+    const sc = document.querySelector(".scroller") as HTMLElement;
+    const rows = sc.querySelectorAll(".log--dense > tbody > tr:not(.drawer-row)");
+    const tr = rows[row] as HTMLElement | undefined;
+    const toggle = tr?.querySelector("td:first-child .row-toggle") as HTMLElement | null;
+    const th = sc.querySelector<HTMLElement>(".log--dense > thead th");
+    if (!tr || !toggle || !th) return null;
+
+    // One short scroll past the row, so revealing it scrolls *up* by less than
+    // a screenful. From the very bottom the browser would instead run the
+    // region back to 0, landing the row naturally below the header — clear of
+    // it for a reason that has nothing to do with scroll-margin.
+    sc.scrollTop = tr.offsetTop + tr.offsetHeight + 40;
+    const scrolled = sc.scrollTop > 0 && sc.scrollTop >= tr.offsetTop;
+    const before = toggle.getBoundingClientRect().top;
+    const headTop = th.getBoundingClientRect().top;
+
+    toggle.scrollIntoView({ block: "nearest" });
+    // After the scroll, not before: focusing an off-screen element centres it
+    // in Chromium, which would make the alignment above a no-op. On an element
+    // already in view, focus() scrolls nothing.
+    toggle.focus();
+
+    const head = th.getBoundingClientRect();
+    return {
+      scrolled,
+      startedAbove: before < headTop,
+      focused: document.activeElement === toggle,
+      controlTop: toggle.getBoundingClientRect().top,
+      headBottom: head.bottom,
+    };
+  }, ROW);
+
+  expect(
+    geom,
+    "the dense table, its header and row 12's toggle all resolved",
+  ).not.toBeNull();
+  // Three guards. Without them the assertion passes when the region never
+  // scrolled, when the target was on screen all along so nothing moved, or when
+  // the control was never focusable in the first place — the first two are how
+  // the earlier drafts of this test went green against CSS without the fix.
+  expect(
+    geom!.scrolled,
+    "the region scrolled far enough to put the target above it",
+  ).toBe(true);
+  expect(geom!.startedAbove, "the target starts above the sticky header").toBe(true);
+  expect(geom!.focused, "the row toggle actually took focus").toBe(true);
+
+  expect(
+    geom!.controlTop,
+    "the focused control's top edge is below the sticky header's bottom edge",
+  ).toBeGreaterThanOrEqual(geom!.headBottom);
+});
+
+/**
  * This used to be "an open row drawer unpins the first column at 320px", and
  * the rule it guarded is gone. The drawer used to live inside the name cell,
  * and its crew group is `flex: 1 1 100%`, so opening one row widened column 1

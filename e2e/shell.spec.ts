@@ -172,6 +172,75 @@ test("the header bar occupies the same rect on every shell route", async ({
   expect(rects).toEqual(Object.fromEntries(routes.map((p) => [p, expected])));
 });
 
+/**
+ * The same defect one level down, and the one a user actually reported: the bar
+ * was fixed but `.page--narrow` still capped the *column* at 60rem, so /account
+ * and /payouts/new put their H1 and every section rule 144px right of where the
+ * other five routes put theirs, and the header's seal lined up with neither.
+ *
+ * Measuring `main.page` rather than asserting the absence of `.page--narrow`:
+ * the narrow cap can come back as a class, a `:has()` rule, or a per-page
+ * override, and only the geometry is the property the reader sees. Both the
+ * slack and the width are pinned for the reason the bar test gives — a column
+ * that stayed 1248px but stopped being centred is the same bug.
+ */
+test("the page column occupies the same rect on every shell route", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.setViewportSize({ width: 1440, height: 900 });
+
+  const [op] = await db
+    .insert(payoutOperation)
+    .values({
+      name: "Column rect",
+      occurredAt: new Date("2026-08-01"),
+      corpSharePct: "0",
+      createdBy: admin.id,
+    })
+    .returning();
+
+  // /account and /payouts/new are two of the five routes that carry
+  // `page--narrow`; dropping either from this list guts the test.
+  const routes = [
+    "/account",
+    "/admin/accounts",
+    "/admin/audit",
+    "/admin/sync",
+    "/payouts",
+    "/payouts/new",
+    `/payouts/${op.id}`,
+  ];
+
+  const rects: Record<string, { slack: number; width: number }> = {};
+  for (const path of routes) {
+    await test.step(path, async () => {
+      await page.goto(path);
+      // Same three guards as the header test above, for the same three reasons:
+      // an access redirect, the error boundary's own `main`, and a null box.
+      expect(new URL(page.url()).pathname).toBe(path);
+      await expect(page.getByRole("heading", { name: "Something broke" })).toHaveCount(0);
+      const column = page.locator("main.page");
+      await expect(column).toBeVisible();
+
+      const box = (await column.boundingBox())!;
+      const vw = await page.evaluate(() => document.documentElement.clientWidth);
+      rects[path] = {
+        slack: Math.round(box.x - (vw - box.width) / 2),
+        width: Math.round(box.width),
+      };
+    });
+  }
+
+  // The same 1248px the header bar takes — that identity is the fix. Spelled
+  // out rather than compared to rects["/admin/audit"], so a regression moving
+  // every route to the narrow measure together still fails here.
+  const expected = { slack: 0, width: 1248 };
+  expect(rects).toEqual(Object.fromEntries(routes.map((p) => [p, expected])));
+});
+
 test("sign-out ends the session and a subsequent protected request bounces to login", async ({
   page,
   context,
