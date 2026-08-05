@@ -1314,6 +1314,80 @@ test("accounts at 320px: an open drawer wraps to the scroll region, not to the t
   }
 });
 
+/**
+ * The region's height cap (`.scroller--tall:has(.log--dense)`) subtracts the
+ * chrome above it so the whole thing lands inside the viewport and the page
+ * itself never scrolls. That is right for the collapsed table and wrong for an
+ * open drawer: the drawer is taller than a row by design, so the cap clipped it
+ * mid-crew-table behind a second, inner scrollbar while the page below the
+ * region sat empty.
+ *
+ * The load-bearing assertion is that the drawer *fits* the region, not that the
+ * region stops scrolling — on a table this long it still scrolls, and should.
+ * The last assertion is what stops the fix from being "delete the cap": the
+ * sticky header needs a scroll range to travel over, so a released cap has to
+ * still be a cap.
+ *
+ * Heights are compared against each other rather than against the 436px and
+ * 720px they measure today, because both are viewport arithmetic over a chrome
+ * measurement the rule's own comment expects to be revisited.
+ */
+test("an open drawer is not clipped by the region's height cap", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedDenseWorld();
+  // Enough crew that the drawer is taller than the chrome-subtracted cap: at
+  // 900px tall that cap measures 436px, and eight characters do not fit it.
+  await seedMember(db, {
+    name: "Zed Wide",
+    alts: [
+      "Alt One",
+      "Alt Two",
+      "Alt Three",
+      "Alt Four",
+      "Alt Five",
+      "Alt Six",
+      "Alt Seven",
+    ],
+  });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto("/admin/accounts");
+
+  const region = () =>
+    page.evaluate(() => {
+      const sc = document.querySelector(".scroller") as HTMLElement;
+      const drawer = sc.querySelector(".drawer-row:not([hidden])");
+      return {
+        visible: sc.clientHeight,
+        content: sc.scrollHeight,
+        drawer: drawer ? drawer.getBoundingClientRect().height : 0,
+      };
+    });
+
+  const closed = await region();
+  const row = rowFor(page, "Zed Wide");
+  await toggleOf(row).click();
+  await expect(drawerOf(row)).toBeVisible();
+  const open = await region();
+
+  expect(open.drawer, "the drawer is tall enough to have been clipped").toBeGreaterThan(
+    closed.visible,
+  );
+  expect(
+    open.visible,
+    "opening a drawer gives the chrome subtraction back",
+  ).toBeGreaterThan(closed.visible);
+  expect(open.drawer, "an open drawer fits the region it opened in").toBeLessThanOrEqual(
+    open.visible,
+  );
+  expect(
+    open.content,
+    "the region is still capped, so sticky keeps its range",
+  ).toBeGreaterThan(open.visible);
+});
+
 test("the start fade never paints over the pinned column", async ({ page, context }) => {
   const admin = await seedDenseWorld();
   await context.addCookies([await sessionCookieFor(db, admin.id)]);

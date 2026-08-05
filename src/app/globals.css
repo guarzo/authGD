@@ -583,6 +583,19 @@ h3.rule-head__label {
      staying pinned to the viewport edge. */
   position: relative;
   overflow-x: auto;
+  /* The bars are part of the frame, not the OS. Left unstyled they render in
+     the platform's light-mode default — a pale grey trough with a mid-grey
+     thumb — which on this palette is the brightest thing in the region, right
+     next to the table it is supposed to be subordinate to.
+     `--rule-strong` is the same colour as the border below, so the thumb reads
+     as the frame's edge moving rather than as a new object; the trough goes
+     transparent so an idle axis leaves only a gutter. `thin` because the
+     default width is sized for a mouse-grab and these bars are mostly read,
+     not dragged — the region scrolls from the keyboard and the wheel too.
+     Ignored by WebKit, which keeps its own overlay bars; those already fade
+     out and don't carry the light trough, so there is nothing to correct. */
+  scrollbar-width: thin;
+  scrollbar-color: var(--rule-strong) transparent;
   /* --rule-strong, not --rule. This border is the only thing telling a reader
      where the scrollable region begins and ends, which makes it a control
      boundary under WCAG 1.4.11 rather than decoration — and --rule measures
@@ -962,6 +975,37 @@ h3.rule-head__label {
 .scroller--tall:has(.log--dense) {
   max-height: min(80vh, max(18rem, 100vh - 29rem));
   max-height: min(80svh, max(18rem, 100svh - 29rem));
+}
+
+/* Opening a row drawer gives the chrome subtraction back. The `- 29rem` term
+   above buys one thing: the region ends inside the viewport, so the page
+   itself never scrolls and the only scrollbar on screen is the region's. That
+   is worth having for the collapsed table, where the region holds nothing but
+   rows and the reader's job is to scan them.
+
+   An open drawer inverts it. The drawer is taller than a row by design — set
+   tier, cryo, note, history, and a nested crew table, one line per character —
+   and at 900px tall the capped region measures 436px against content that
+   wants 709px on a two-row table with eight characters on one of the accounts.
+   The reader who opened it is trying to read *down* it, and the cap answers by
+   clipping it mid-crew-table behind a second, inner scrollbar, while the page
+   below the region sits empty. Something has to scroll once a drawer is open;
+   the page's own scrollbar is the better one, because there is only ever one
+   of it.
+
+   Back to the shared `.scroller--tall` bound rather than `none`: the sticky
+   header still needs a scroll range to travel over, and a fifty-row table with
+   one drawer open would otherwise run the header off the top of the screen.
+   A drawer taller than 80svh still scrolls in the region — that is the case
+   where a nested scroll is the honest answer.
+
+   `:not([hidden])` because the drawer row is always in the DOM: Disclosure
+   (as="row") toggles `hidden` rather than unmounting, so the note field keeps
+   an unsaved draft across a close. A bare `:has(.drawer-row)` would match
+   every table with a collapsed drawer in it, which is all of them. */
+.scroller--tall:has(.log--dense):has(tr.drawer-row:not([hidden])) {
+  max-height: 80vh;
+  max-height: 80svh;
 }
 
 .log--sticky-head thead th {
