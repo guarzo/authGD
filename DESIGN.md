@@ -48,7 +48,7 @@ Gold is identity and emphasis. The three signals are semantic and never decorati
 | `--gold` | `oklch(0.83 0.155 88)` | Brand mark, active nav, primary action, FlyGD tier. |
 | `--gold-dim` | `oklch(0.72 0.14 84)` | Gold borders, hover on gold surfaces. |
 | `--signal-ok` | `oklch(0.76 0.13 158)` | Healthy token, present on map, linked. |
-| `--signal-warn` | `oklch(0.80 0.15 70)` | Needs re-auth, scope shortfall, cryo (admin table only — an admin scans for it; the member's own account page reads cryo in `--ink-dim` instead, since it's a pause the member asked for, not a fault). |
+| `--signal-warn` | `oklch(0.80 0.15 50)` | Needs re-auth, scope shortfall, cryo (admin table only — an admin scans for it; the member's own account page reads cryo in `--ink-dim` instead, since it's a pause the member asked for, not a fault). Hue 50 rather than the 70 this started at: at 70 the warn signal sat 18° from `--gold`/`--tier-flygd` at near-identical chroma and lightness — 0.057 apart in OKLab, not enough to tell a gold FlyGD badge from an amber CRYO token two columns away in the same mono uppercase. 50 doubles that separation while staying 0.146 from `--signal-bad`, so warn is no longer nearer to identity than to failure. |
 | `--signal-bad` | `oklch(0.68 0.19 25)` | Dead token, failed sync, destructive action. |
 
 ### Tier colours
@@ -96,11 +96,41 @@ Ratio 1.25 minimum between adjacent steps, with a hard jump at display sizes.
 | `--t-h2` | `1.375rem` | 700 | `-0.01em` |
 | `--t-body` | `0.9375rem` | 400 | `0` |
 | `--t-data` | `0.875rem` | 400 | `0` (mono) |
-| `--t-label` | `0.6875rem` | 600 | `0.12em`, uppercase (mono) |
+| `--t-label` | `0.6875rem` | 600 | see below, uppercase (mono) |
 
 - Body prose caps at **68ch**.
 - All numeric and tabular data uses `font-variant-numeric: tabular-nums`, so columns
   align and a changing value doesn't reflow its neighbours.
+
+### The label register
+
+Small mono uppercase is the most reused type in the system, and it is **one** style,
+declared once in `globals.css` under `--- Label register ---` and applied by adding a
+selector to that list. Weight is `600` for every one of them; a label that inherits
+`400` because its rule simply never said is a bug, not a variant. The register and the
+component are separate concerns: a component in the list keeps its own colour, spacing
+and tracking, and nothing else about its type.
+
+Tracking is the one property that legitimately varies, so it is tokenised by the job
+the label is doing rather than left as a number at the call site:
+
+| Token | Value | Use |
+|---|---|---|
+| `--track-value` | `0.08em` | In-row values and micro controls. |
+| `--track-control` | `0.1em` | Button and badge labels. |
+| `--track-label` | `0.12em` | Form and table labels. The register's default. |
+| `--track-furniture` | `0.14em` | Section labels, the wordmark, mission furniture. |
+
+`.btn`, `.tier` and `.st` carry the register's family, size and case but are
+deliberately **not** in the shared list: they are components with their own states, and
+their type belongs next to their behaviour. They take a tracking token and nothing
+else. (`.st` is currently the one exception to the weight rule — it declares no
+`font-weight` and so renders at 400. That is a defect, not a variant.)
+
+The register is for **labels** — a fixed word naming a field. Small mono text that is
+itself a value, or a value with a prose word attached ("next 14:32"), is not a label
+and does not join: uppercasing it changes copy, and the 600 would set it apart from the
+sentence-case metadata it sits beside.
 
 ## Layout
 
@@ -108,6 +138,11 @@ Ratio 1.25 minimum between adjacent steps, with a hard jump at display sizes.
   comes from varying the step, not from repeating one padding value.
 - **App shell.** A ruled header bar carrying the seal, the corp name, and nav. Content
   below in a single measured column; admin tables are allowed to run wider.
+- **One column origin.** The page box is `--measure-page` on *every* route, so the H1's
+  left edge, every section rule's origin, and the header's seal land on one vertical
+  everywhere. Surfaces that want a narrower reading width cap their **contents**
+  (`.page--narrow > :where(*)`), never the column — capping the column moved the whole
+  page 144px sideways on a nav click.
 - **No cards.** Structure is expressed with hairline rules and section headers. The
   one exception is the login panel, which is a genuine object on an empty field.
 - **Section header** is the signature component: a mono uppercase label, then a
@@ -163,9 +198,14 @@ licence.
 - The skip link is invisible until focused, then takes the `--gold` ground and
   `--void` text of a primary action. It is a focus surface rather than a fifth
   standing use of gold: nothing sees it unless it is the focused control.
-- Disabled controls drop to 65% opacity and keep their text legible at 3:1.
-- Hit targets: `36px` for standalone controls (`.btn`), `28px` for the in-row
-  controls of the admin tables (`.btn--micro`). Both clear the `24px` WCAG 2.5.8
-  (AA) minimum. The tables carry a control set on every row and cannot reach the
-  `44px` AAA target without growing past a screenful, so density wins there and
-  nowhere else.
+- Disabled controls keep `opacity: 1` and take an explicit `--ink-faint`, rather than
+  fading. An opacity fade moves with whatever ground it lands on: at 65% the disabled
+  text measured 3.24:1 on `--void` but 2.88:1 on a hovered admin table row, under the
+  3:1 floor exactly when the pointer is on the row. The explicit colour is 4.85:1 on
+  `--hull-hi` and does not move. **Do not "simplify" this back to an opacity.**
+- Hit targets: `36px` for standalone controls (`.btn`), `28px` for the in-row controls
+  of the admin tables (`.btn--micro`, `.btn--quiet`, `.row-toggle`). Both clear the
+  `24px` WCAG 2.5.8 (AA) minimum. The tables carry a control set on every row and
+  cannot reach the `44px` AAA target without growing past a screenful, so density wins
+  there and nowhere else. There are **two** sizes and no others: `quiet` is a colour
+  grade, like `primary` and `default`, and does not carry a size of its own.

@@ -25,7 +25,17 @@
   --gold: oklch(0.83 0.155 88);
   --gold-dim: oklch(0.72 0.14 84);
   --signal-ok: oklch(0.76 0.13 158);
-  --signal-warn: oklch(0.8 0.15 70);
+  /* Hue 50, not the 70 this started at. At 70 the warn signal sat 18 degrees
+     from --gold / --tier-flygd with near-identical chroma and 0.03 of
+     lightness between them — 0.057 apart in OKLab, which is not enough to
+     tell a gold FLYGD tier badge from an amber CRYO token two columns away in
+     the same mono uppercase with the same leading dot. Hue 50 doubles that to
+     0.104 while staying 0.146 from --signal-bad (hue 25), so warn is no
+     longer nearer to identity than it is to failure. Contrast is unchanged in
+     kind: 9.43 / 8.54 / 7.44 / 8.41 against --void / --hull / --hull-hi / a
+     hovered row, all far above the 4.5:1 it needs as text and the 3:1 it
+     needs as the .notice--warn border. */
+  --signal-warn: oklch(0.8 0.15 50);
   --signal-bad: oklch(0.68 0.19 25);
 
   /* Tiers separate by lightness as well as hue, so they survive
@@ -45,12 +55,25 @@
   --s-8: 4rem;
   --s-9: 6rem;
 
+  /* Reserved. Deliberately unreferenced: the one surface with room for a
+     display step is the login hero, which currently sets its own 1.5rem. Kept
+     declared so the scale has a step above --t-h1 to reach for rather than
+     inventing one at the call site. Do not delete as dead. */
   --t-display: clamp(2.5rem, 6vw, 4rem);
   --t-h1: clamp(1.75rem, 3vw, 2.25rem);
   --t-h2: 1.375rem;
   --t-body: 0.9375rem;
   --t-data: 0.875rem;
   --t-label: 0.6875rem;
+
+  /* Tracking for the label register. The system had four values in use and the
+     rule for picking between them written down nowhere, so a new label got
+     whichever number its neighbour happened to carry. Named by the job the
+     label is doing, not by the number. */
+  --track-value: 0.08em; /* in-row values and micro controls */
+  --track-control: 0.1em; /* button and badge labels */
+  --track-label: 0.12em; /* form and table labels */
+  --track-furniture: 0.14em; /* section labels, wordmark, mission furniture */
 
   --radius: 2px;
   --measure: 68ch;
@@ -97,6 +120,16 @@ img,
 svg {
   display: block;
   max-width: 100%;
+  /* Paired with the cap, never alone. A content `width`/`height` attribute maps
+     into CSS as a presentational hint, so both axes are already definite and the
+     UA's `aspect-ratio: auto <w>/<h>` has nothing to apply to: `max-width` then
+     shrinks the width while the attribute holds the height, and the image is
+     squashed rather than scaled. Measured worst case was the login SSO button at
+     200% zoom on a 375px viewport — a 55% horizontal crush. `.closing img`
+     already pairs the two by hand; this makes it the default, and the elements
+     that genuinely want a fixed box (.portrait, .shell__mark img, .launch__seal)
+     set both axes from a class and outrank this. */
+  height: auto;
 }
 
 input,
@@ -174,6 +207,61 @@ a:hover {
   }
 }
 
+/* --- Label register ------------------------------------------------------ */
+/* DESIGN.md specifies one label style — 0.6875rem / 600 / uppercase, mono —
+   and the file had redeclared it at thirteen sites in two different weights.
+   Nine of them inherited 400 because they simply never said; the other four
+   said 600. The two met on /admin/sync, where `.log th` (600) and
+   `.strip__head` (400) render labels at the same size, the same tracking and
+   the same colour about 40px apart, which reads as two kinds of label rather
+   than one applied twice.
+
+   So the four properties every label shares are declared here, once, and each
+   component below keeps only what is actually its own: its colour, its
+   spacing, and its tracking token. Weight is deliberately not left to
+   inheritance — several of these sit inside `<h2>`/`<th>`/`<dt>` elements
+   whose UA weight differs, so "say nothing" produced three different answers.
+
+   `.btn`, `.tier` and `.st` are NOT in this list on purpose. They carry the
+   register's family, size and case, but they are components with their own
+   states, and folding their type in here would put it two hundred lines from
+   their behaviour. They take the tracking tokens and nothing else — which is
+   why `.st` still runs at the inherited 400 while `.btn` and `.tier` declare
+   600. That is a real inconsistency and it is out of this pass's scope; see
+   the PR.
+
+   `.shell__nav a` is here beyond the sites the audit enumerated: it is a mono
+   --t-label uppercase label sitting in the same bar as `.shell__register`, so
+   leaving it at the inherited 400 while its neighbour moved to 600 would have
+   rebuilt, inside one component, the exact split this block exists to close.
+
+   `.push__next` was enumerated by the audit and is deliberately NOT here. It
+   is the only one of the fourteen with no `text-transform` of its own, because
+   it is not a label: it renders "next 14:32", a prose word and a value, beside
+   a `.ago` that reads "3m ago" in sentence case at weight 400. Folding
+   it in would uppercase and embolden one half of a two-item metadata row and
+   leave the other half alone — a visible copy change, in a component nobody
+   reported, to satisfy a rule about labels it isn't an instance of. It keeps
+   its own three properties below and takes the tracking token. */
+.rule-head__label,
+.log th,
+.strip__name,
+.strip__head,
+.drawer__label,
+.facts dt,
+.filters__label,
+.filter-form__label,
+.launch__scopes dt,
+.shell__register,
+.shell__nav a,
+.worker,
+.btn-row__stamp {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: var(--t-label);
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
 /* --- Shell -------------------------------------------------------------- */
 
 /* The bar is full-bleed: the ground and the bottom hairline run edge to edge,
@@ -245,10 +333,13 @@ a:hover {
   letter-spacing: 0.02em;
 }
 
+/* Not folded into the label register: at 0.5625rem this is below --t-label,
+   deliberately, so the subtitle sits under the wordmark rather than beside it
+   in the hierarchy. It takes the furniture tracking and nothing else. */
 .shell__wordmark span {
   font-family: var(--font-mono), ui-monospace, monospace;
   font-size: 0.5625rem;
-  letter-spacing: 0.14em;
+  letter-spacing: var(--track-furniture);
   text-transform: uppercase;
   color: var(--ink-faint);
 }
@@ -258,10 +349,7 @@ a:hover {
    --ink-faint keep it at the same visual weight as the wordmark's subtitle
    line rather than a loud, filled pill competing with the nav for attention. */
 .shell__register {
-  font-family: var(--font-mono), ui-monospace, monospace;
-  font-size: var(--t-label);
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
+  letter-spacing: var(--track-furniture);
   color: var(--ink-faint);
 }
 
@@ -275,10 +363,7 @@ a:hover {
 
 .shell__nav a {
   position: relative;
-  font-family: var(--font-mono), ui-monospace, monospace;
-  font-size: var(--t-label);
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  letter-spacing: var(--track-label);
   text-decoration: none;
   color: var(--ink-dim);
   padding: var(--s-2) var(--s-3);
@@ -337,11 +422,23 @@ a:hover {
   padding: var(--s-7) var(--s-5) var(--s-9);
 }
 
-/* Wide enough for the six-column crew manifest to sit inside the measure
-   without scrolling on a laptop. Prose is capped separately, so this only
-   affects the table and the rules. */
-.page--narrow {
-  max-width: var(--measure-page-narrow);
+/* Narrow surfaces cap their *contents*, not their column. The page box stays
+   on --measure-page for every route, so the H1's left edge and every rule's
+   origin land on one vertical everywhere — and on the same vertical as the
+   header's seal, which the fixed-measure bar (ui.tsx) could not reach before.
+   :where() keeps this at zero specificity for the child, so components that
+   set their own tighter cap (.notice, .table-note, .footnote > span, all on
+   --measure) still win on source order.
+
+   Replaces a `max-width: var(--measure-page-narrow)` on the page box itself,
+   whose comment claimed it was sized for the six-column crew manifest. It was
+   not: that table is `.log`, `width: 100%`, no `min-width`, and fits at either
+   measure. What the old rule actually did was move every narrow route's column
+   144px left of every wide route's, so a nav click shifted the whole page
+   sideways. Content width is unchanged here (60rem - 2 * --s-5 = 57rem);
+   only its horizontal origin moves, which is the entire point. */
+.page--narrow > :where(*) {
+  max-width: calc(var(--measure-page-narrow) - 2 * var(--s-5));
 }
 
 .page__head {
@@ -374,11 +471,7 @@ a:hover {
 }
 
 .rule-head__label {
-  font-family: var(--font-mono), ui-monospace, monospace;
-  font-size: var(--t-label);
-  font-weight: 600;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
+  letter-spacing: var(--track-furniture);
   color: var(--ink-faint);
   /* Allowed to shrink and break: at 320px or high zoom a long job name plus a
      status aside would otherwise force the whole page to scroll sideways. */
@@ -433,10 +526,7 @@ h3.rule-head__label {
 }
 
 .facts dt {
-  font-family: var(--font-mono), ui-monospace, monospace;
-  font-size: var(--t-label);
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  letter-spacing: var(--track-label);
   color: var(--ink-faint);
 }
 
@@ -457,7 +547,12 @@ h3.rule-head__label {
      staying pinned to the viewport edge. */
   position: relative;
   overflow-x: auto;
-  border: 1px solid var(--rule);
+  /* --rule-strong, not --rule. This border is the only thing telling a reader
+     where the scrollable region begins and ends, which makes it a control
+     boundary under WCAG 1.4.11 rather than decoration — and --rule measures
+     1.76:1 on --void, 1.59:1 on --hull and 1.39:1 on --hull-hi. --rule-strong
+     clears 3:1 on every ground the frame can sit on (4.11 / 3.72 / 3.24). */
+  border: 1px solid var(--rule-strong);
   border-radius: var(--radius);
 }
 
@@ -566,11 +661,7 @@ h3.rule-head__label {
   vertical-align: bottom;
   background: var(--hull);
   padding: var(--s-3) var(--s-4);
-  font-family: var(--font-mono), ui-monospace, monospace;
-  font-size: var(--t-label);
-  font-weight: 600;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  letter-spacing: var(--track-label);
   color: var(--ink-faint);
   white-space: nowrap;
   border-bottom: 1px solid var(--rule-strong);
@@ -789,6 +880,51 @@ h3.rule-head__label {
   z-index: 2;
 }
 
+/* WCAG 2.2 2.4.11, Focus Not Obscured. Scrolling a row control to the nearest
+   scrollport edge parks it flush with that edge — and the sticky header is *in*
+   the scrollport, painted over the top 34px of it, so a control revealed at the
+   top lands underneath it. The focus ring is drawn and invisible.
+
+   scroll-into-view honours the scroll-margin of the *target*, not the padding
+   of the scrollport, so this has to sit on the focusable elements rather than
+   on .scroller — `scroll-padding-top` there would fix the same case for
+   programmatic scrolls and do nothing for sequential focus navigation in
+   Chromium. 2.5rem (40px) is a deliberate over-estimate of the header's
+   measured 34px: an over-scroll leaves the control a few pixels lower than
+   necessary, an under-scroll leaves it obscured, and only one of those is a
+   failure. Measured in the e2e spec: 442px with this rule, 402px without it,
+   against a header ending at 436px.
+
+   Worth knowing before anyone deletes this as unnecessary: Chromium's
+   *programmatic* focus scroll centres an off-screen element, so `.focus()`
+   alone never reproduces the obscured case and never exercises this rule. It
+   is nearest-edge alignment that does — which is what the engines that don't
+   centre use for sequential focus navigation, and what e2e triggers directly.
+   Untested on WebKit, which is the engine least consistent about applying
+   scroll-margin during sequential focus navigation. See the note in the PR. */
+.log--sticky-head :is(a, button, summary, input, .row-toggle) {
+  scroll-margin-top: 2.5rem;
+}
+
+/* The same failure on the horizontal axis: the pinned first column paints over
+   the left edge of the scrollport, so a header link in column 2 tabbed to from
+   column 1 scrolls flush against — and under — it.
+
+   Scoped per table rather than set once on .log--sticky-col. Both tables share
+   that class and pin a first column of a different width (audit's is a fixed
+   12.25rem; the accounts table's is auto-sized around a name), so a single
+   global figure is necessarily wrong for one of them, and wrong in the
+   direction that re-obscures the target. Over-estimating is the safe error on
+   this axis too, which is why the accounts table takes a round 10rem it cannot
+   compute. */
+.log--audit.log--sticky-col thead th:not(:first-child) :is(a, button) {
+  scroll-margin-left: 12.25rem;
+}
+
+.log--dense.log--sticky-col thead th:not(:first-child) :is(a, button) {
+  scroll-margin-left: 10rem;
+}
+
 /* Two exclusions, one reason: a cell that spans the whole table still matches
    `td:first-child`, and pinning a full-width cell gives it an opaque ground
    and a stray hairline out at the table's right edge. The empty-state cell is
@@ -806,10 +942,13 @@ h3.rule-head__label {
 }
 
 /* The pinned edge has to read as an edge once content is sliding under it, and
-   a hairline is what this system draws edges with. */
+   a hairline is what this system draws edges with. --rule-strong rather than
+   --rule for the same reason as .scroller: this line is the boundary of the
+   frozen region, so it carries meaning, and --rule's 1.39:1 against the hovered
+   row it most often sits on is not a line most people can see at 1px. */
 .log--sticky-col th:first-child,
 .log--sticky-col tr:not(.drawer-row) > td:first-child:not(.log__empty) {
-  border-right: 1px solid var(--rule);
+  border-right: 1px solid var(--rule-strong);
 }
 
 /* The corner cell overlaps both the pinned header row and the pinned column,
@@ -930,13 +1069,24 @@ h3.rule-head__label {
   font-family: var(--font-mono), ui-monospace, monospace;
   font-size: var(--t-label);
   font-weight: 600;
-  letter-spacing: 0.08em;
+  letter-spacing: var(--track-value);
   color: var(--ink-dim);
 }
 
 .dim {
   color: var(--ink-faint);
   font-size: 0.8125rem;
+}
+
+/* Colour only. `.dim` also drops a step of size, which is right for a
+   standalone metadata line and wrong for a span inside a data cell that has to
+   keep the mono column's advance width.
+
+   Unreferenced on purpose: the markup that needs it is .tsx, which this pass
+   does not own. The audit found several data cells reaching for `.dim` and
+   getting a size change with it; this is the class they should take instead. */
+.dim-ink {
+  color: var(--ink-faint);
 }
 
 /* Error summaries in the sync table. This lands on a <td>, so it must not set
@@ -966,7 +1116,7 @@ h3.rule-head__label {
   gap: 0.4em;
   font-family: var(--font-mono), ui-monospace, monospace;
   font-size: var(--t-label);
-  letter-spacing: 0.08em;
+  letter-spacing: var(--track-value);
   text-transform: uppercase;
   color: var(--ink-dim);
   white-space: nowrap;
@@ -1042,7 +1192,7 @@ h3.rule-head__label {
   font-family: var(--font-mono), ui-monospace, monospace;
   font-size: var(--t-label);
   font-weight: 600;
-  letter-spacing: 0.1em;
+  letter-spacing: var(--track-control);
   text-transform: uppercase;
 }
 
@@ -1129,7 +1279,7 @@ h3.rule-head__label {
   font-family: var(--font-mono), ui-monospace, monospace;
   font-size: var(--t-label);
   font-weight: 600;
-  letter-spacing: 0.1em;
+  letter-spacing: var(--track-control);
   text-transform: uppercase;
   text-decoration: none;
   cursor: pointer;
@@ -1216,12 +1366,20 @@ h3.rule-head__label {
   color: var(--void);
 }
 
-/* Text-only until hovered. For the many inline row actions. */
+/* Text-only until hovered. For the many inline row actions.
+
+   min-height matches .btn--micro rather than sitting between the grades.
+   DESIGN.md documents two hit-target sizes — 36px standalone, 28px in-row —
+   and describes `quiet` as a *colour* grade alongside primary and default, not
+   a size. Its 1.875rem was a third size nobody had committed to: 30px, two
+   pixels off one grade and six off the other, which made "how tall is a
+   button here" unanswerable from the spec. Joined to the in-row grade, since
+   that is where nearly all of these live. */
 .btn--quiet {
   background: transparent;
   border-color: transparent;
   color: var(--ink-faint);
-  min-height: 1.875rem;
+  min-height: 1.75rem;
   padding: var(--s-1) var(--s-2);
 }
 
@@ -1275,12 +1433,31 @@ h3.rule-head__label {
    border is what reads as "selected" against the transparent, borderless
    .btn--quiet default. The border is --ink-dim rather than --rule-strong
    because --rule-strong is exactly what .btn--quiet:hover uses: sharing it
-   would make a hovered unselected chip identical to a selected one at rest. */
-.btn[aria-pressed="true"],
-.btn[aria-current="true"] {
+   would make a hovered unselected chip identical to a selected one at rest.
+
+   `:not(:disabled)` because this pair is (0,2,0), the same as .btn:disabled
+   146 lines above it, so on a disabled-but-pressed control it won on source
+   order and repainted the ground, the border and the text of a button that
+   cannot be operated. That is exactly the tier button of a locked account:
+   the lock glyph said "pinned" while every other cue said "live". */
+.btn[aria-pressed="true"]:not(:disabled),
+.btn[aria-current="true"]:not(:disabled) {
   background: var(--hull-hi);
   border-color: var(--ink-dim);
   color: var(--ink);
+}
+
+/* A second, non-colour carrier for the selected state. Unselected and selected
+   filter chips differed by their border alone, and those two borders are
+   2.33:1 apart — under the 3:1 that WCAG 1.4.11 asks of the boundary between
+   two states of a control, and colour-only besides (1.4.1). A leading marker
+   in currentColor is the same device .tier__lock::after already uses, so it
+   costs no new vocabulary. Deliberately not gold: this fires on every selected
+   chip on the page and would blow the ration DESIGN.md sets. */
+.btn[aria-pressed="true"]:not(:disabled)::before,
+.btn[aria-current="true"]:not(:disabled)::before {
+  content: "\25AA"; /* black small square */
+  margin-right: 0.4em;
 }
 
 /* Selected chips take the ordinary .btn hover, but need the higher specificity
@@ -1321,11 +1498,11 @@ h3.rule-head__label {
 }
 
 /* When the page itself was last asked. Belongs beside Refresh, not in the
-   strip: it is a fact about this render, not about any job. */
+   strip: it is a fact about this render, not about any job. Joining the label
+   register also puts it in mono, which it was not before — it is a timestamp,
+   and "prose is proportional, state is monospaced" makes that not optional. */
 .btn-row__stamp {
-  font-size: var(--t-label);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  letter-spacing: var(--track-value);
   color: var(--ink-faint);
 }
 
@@ -1342,7 +1519,7 @@ h3.rule-head__label {
   min-height: 1.75rem;
   padding: 0.2rem var(--s-2);
   font-size: 0.6875rem;
-  letter-spacing: 0.08em;
+  letter-spacing: var(--track-value);
 }
 
 /* --- Fields ------------------------------------------------------------- */
@@ -1368,6 +1545,39 @@ h3.rule-head__label {
   border-color: var(--gold-dim);
 }
 
+/* DESIGN.md has specified "gold border on focus plus the global focus ring"
+   since the field was written; there was no :focus rule at all, so hover was
+   the only state that ever moved the border and a keyboard user got the ring
+   without the border change a mouse user got for free. :focus-visible rather
+   than :focus so a click on a text input does not paint both affordances. */
+.field:focus-visible {
+  border-color: var(--gold);
+}
+
+/* .stack is `justify-items: start`, which is right for the tier badges and
+   status tokens it holds inside table cells and wrong for a form control: an
+   input's default `size` is 20 characters, so every field in a stacked form
+   rendered about 20ch wide regardless of what it held — a date, a percentage
+   and a wallet division all the same width, none of them the right one.
+   Stretch them back to the row and let --measure do the capping.
+
+   `:where(.field)` for the same reason C3 uses it on .page--narrow: written
+   plainly the selector is (0,2,0) and outranks .field--short below, so every
+   short field inside a stacked form — which is all of them — would silently
+   take the full measure back. At (0,1,0) the variant wins on source order. */
+.stack > :where(.field) {
+  justify-self: stretch;
+  width: 100%;
+  max-width: var(--measure);
+}
+
+/* For the inputs whose content has a known short maximum — a date, a
+   percentage. A full --measure box in front of "12" reads as an invitation to
+   type a sentence. */
+.field--short {
+  max-width: 12rem;
+}
+
 .filters {
   display: flex;
   flex-wrap: wrap;
@@ -1384,10 +1594,7 @@ h3.rule-head__label {
 }
 
 .filters__label {
-  font-family: var(--font-mono), ui-monospace, monospace;
-  font-size: var(--t-label);
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  letter-spacing: var(--track-label);
   color: var(--ink-faint);
   margin-right: var(--s-1);
 }
@@ -1434,10 +1641,7 @@ h3.rule-head__label {
 }
 
 .filter-form__label {
-  font-family: var(--font-mono), ui-monospace, monospace;
-  font-size: var(--t-label);
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  letter-spacing: var(--track-label);
   color: var(--ink-faint);
 }
 
@@ -1519,10 +1723,7 @@ h3.rule-head__label {
 
 .worker {
   margin: 0 0 var(--s-5);
-  font-family: var(--font-mono), ui-monospace, monospace;
-  font-size: var(--t-label);
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  letter-spacing: var(--track-label);
   color: var(--ink-dim);
 }
 
@@ -1618,7 +1819,7 @@ h3.rule-head__label {
   margin-top: var(--s-2);
   font-family: var(--font-mono), ui-monospace, monospace;
   font-size: var(--t-label);
-  letter-spacing: 0.14em;
+  letter-spacing: var(--track-furniture);
   text-transform: uppercase;
   color: var(--ink-faint);
   line-height: 1.7;
@@ -1645,10 +1846,7 @@ h3.rule-head__label {
 }
 
 .launch__scopes dt {
-  font-family: var(--font-mono), ui-monospace, monospace;
-  font-size: var(--t-label);
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  letter-spacing: var(--track-label);
   color: var(--ink-faint);
 }
 
@@ -1734,9 +1932,19 @@ h3.rule-head__label {
    the +/- marker, the hover colour — a `<summary>` gets for free. */
 .row-toggle {
   display: flex;
+  /* flex-start, not center: it keeps the +/- marker on line one of a name that
+     wraps, rather than floating it against the middle of a two-line block. */
   align-items: flex-start;
   gap: var(--s-2);
   width: 100%;
+  /* 28px, the same floor `.json > summary` takes for the identical shape. This
+     rule sets `padding: 0`, so the control was exactly its --t-data line box —
+     14px at the inherited 1.55, about 21.7px, under the 24px WCAG 2.5.8 (AA)
+     minimum, and it is the control that opens every row of the accounts table.
+     Expressed as min-height rather than as padding so a one-line name gets the
+     full target while a wrapped one keeps its own height and the marker stays
+     on line one. */
+  min-height: 1.75rem;
   padding: 0;
   background: none;
   border: none;
@@ -1773,7 +1981,10 @@ h3.rule-head__label {
   list-style: none;
   margin: var(--s-6) 0 0;
   padding: 0;
-  border: 1px solid var(--rule);
+  /* The strip's outer edge, like .scroller's, bounds a region of interactive
+     rows rather than decorating one — so --rule-strong, which clears 3:1 on
+     --void, --hull and --hull-hi, instead of --rule's 1.39-1.76:1. */
+  border: 1px solid var(--rule-strong);
   border-radius: var(--radius);
 }
 
@@ -1813,16 +2024,15 @@ h3.rule-head__label {
 
 .strip__head {
   background: var(--hull);
-  font-family: var(--font-mono), ui-monospace, monospace;
-  font-size: var(--t-label);
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  letter-spacing: var(--track-label);
   color: var(--ink-faint);
 }
 
+/* Each job is a separate expandable control, so the line dividing one from the
+   next separates two targets rather than ruling a paragraph: --rule-strong. */
 .strip__job + .strip__job,
 .strip__head + .strip__job {
-  border-top: 1px solid var(--rule);
+  border-top: 1px solid var(--rule-strong);
 }
 
 .strip__disc > summary {
@@ -1858,11 +2068,7 @@ h3.rule-head__label {
    else about browser h2 sizing should survive. */
 .strip__name {
   margin: 0;
-  font-family: var(--font-mono), ui-monospace, monospace;
-  font-size: var(--t-label);
-  font-weight: 600;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
+  letter-spacing: var(--track-furniture);
   color: var(--ink);
   line-height: 1.4;
   min-width: 0;
@@ -2018,11 +2224,7 @@ h3.rule-head__label {
 }
 
 .drawer__label {
-  font-family: var(--font-mono), ui-monospace, monospace;
-  font-size: var(--t-label);
-  font-weight: 600;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  letter-spacing: var(--track-label);
   color: var(--ink-faint);
 }
 
@@ -2116,7 +2318,7 @@ h3.rule-head__label {
 .push__next {
   font-family: var(--font-mono), ui-monospace, monospace;
   font-size: var(--t-label);
-  letter-spacing: 0.08em;
+  letter-spacing: var(--track-value);
   color: var(--ink-faint);
 }
 
@@ -2174,6 +2376,89 @@ h3.rule-head__label {
    widths, so nothing has to be measured or scripted to choose between them. */
 .only-narrow {
   display: none;
+}
+
+/* --- Middle ------------------------------------------------------------- */
+
+/* The band this file did not serve. There were exactly two width breakpoints
+   in 2300 lines — 46rem and 40rem, and the 46rem one touches only the sync
+   strip — so every viewport from 641px to 1039px got /admin/audit's full
+   desktop table, and its 62rem floor made that a cliff rather than a slope:
+   at 639px the table is in its narrow setting and forces
+   0px of horizontal scroll; at 641px it snaps to the desktop setting and
+   forces 399px. Two pixels of viewport, 399 pixels of scroll, and it improves
+   from there rather than getting worse — 272px at 768px, 16px at 1024px, 0
+   from 1040px up. A tablet is the worst place to read the audit log, which is
+   the reverse of what a reader would predict from the width.
+
+   One stop, carrying a middle setting for the audit table only, because that
+   table is the only thing in the file with a floor wide enough to produce the
+   cliff. The floor comes to 43rem — 688px — which is under a 768px viewport's
+   content box, so the tablet case that forced 272px of scroll now forces none,
+   and 641px forces 95px instead of 399px (same 48px of page padding the four
+   figures above are computed against).
+
+   All five columns move, not just the first. The first attempt lowered column
+   1 alone and left the desktop widths on 2-4; the four sized columns then
+   summed to 696px of a 768px floor and handed Details — the colgroup's one
+   unsized column, and the only one with something to open — 72px. A
+   fixed-layout table is at least the sum of its columns, so the floor and the
+   sized columns are one decision, and e2e's Details floor is what caught it.
+   Each middle width sits between the desktop and narrow settings, on the same
+   principle the narrow block states: every one of these is an `.ellipsis-cell`
+   carrying its full value in `title`, so shrinking truncates rather than
+   paints over. At the 43rem floor the four sized columns leave Details 128px;
+   at 768px the table is wider than its floor, so Details measures 158px and
+   forced scroll is 0. The e2e spec pins Details above 100px.
+
+   Column 1 comes down to 8rem because the only-wide/only-narrow swap is
+   extended to this range, so it holds the elapsed-time rendering ("365d ago",
+   8ch) rather than a 19ch ISO stamp. Both renderings are already in the markup
+   at every width, so this is a visibility change, not a content change, and
+   nothing has to be measured or scripted.
+
+   The swap is scoped to `.log--audit` rather than set on the bare utilities:
+   the same two classes also drive the runs table's Started column on
+   /admin/sync, whose own floor and column widths are tuned separately and are
+   not what produces the cliff. Flipping them globally here would render "3h
+   ago" into a column still sized for a 19ch stamp on a page that had no
+   problem. */
+@media (max-width: 64rem) {
+  .log--audit {
+    min-width: 43rem;
+  }
+
+  .log--audit col:nth-child(1) {
+    width: 8rem;
+  }
+
+  .log--audit col:nth-child(2) {
+    width: 7.5rem;
+  }
+
+  .log--audit col:nth-child(3) {
+    width: 12rem;
+  }
+
+  .log--audit col:nth-child(4) {
+    width: 7.5rem;
+  }
+
+  /* Track the pin: the scroll-margin above is the desktop 12.25rem, and a
+     figure left behind by a column that shrank is exactly the rot this
+     breakpoint would otherwise start. Over-estimating still clamps harmlessly
+     at scrollLeft 0, but the number should say what the column is. */
+  .log--audit.log--sticky-col thead th:not(:first-child) :is(a, button) {
+    scroll-margin-left: 8rem;
+  }
+
+  .log--audit .only-wide {
+    display: none;
+  }
+
+  .log--audit .only-narrow {
+    display: inline;
+  }
 }
 
 /* --- Narrow ------------------------------------------------------------- */
@@ -2326,6 +2611,11 @@ h3.rule-head__label {
 
   .log--audit col:nth-child(4) {
     width: 6rem;
+  }
+
+  /* Same reason as the 64rem stop: the pin is 5rem here. */
+  .log--audit.log--sticky-col thead th:not(:first-child) :is(a, button) {
+    scroll-margin-left: 5rem;
   }
 
   /* 4px of side padding, as on the runs table: at this width padding is the
