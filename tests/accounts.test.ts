@@ -478,6 +478,25 @@ describe("linkCharacter refusing a real account", () => {
     refuses("characters", async (id) => {
       await seedCharacter(ctx.db, cfg, { id: 90000403, accountId: id });
     }));
+
+  // The cases above each trip one guard, so none of them can see the order the
+  // guards run in — and that order is load-bearing copy, not an implementation
+  // detail. An account tripping both a clearable field and an unclearable one
+  // must report the clearable one: "clear the note and retry" is a fix the
+  // member can get, "it has payout history, ask an admin" is a dead end. Move
+  // the payout checks above the note check and every other test still passes.
+  it("reports the clearable blocker when an account trips two", () =>
+    refuses("note", async (id) => {
+      await ctx.db
+        .update(account)
+        .set({ statusNote: "left the corp, keeping the tier" })
+        .where(eq(account.id, id));
+      const [op] = await ctx.db
+        .insert(payoutOperation)
+        .values({ name: "Op", occurredAt: new Date(), createdBy: id })
+        .returning();
+      expect(op.createdBy).toBe(id);
+    }));
 });
 
 describe("transaction rollback", () => {
