@@ -1,5 +1,6 @@
 import { AdminNav } from "@/app/_components/admin-nav";
 import { requireAdminPage } from "@/lib/admin-guard";
+import { countPendingCached } from "./pending-count";
 
 /**
  * Guarded here as well as in each page, not instead of it. A layout is the
@@ -11,9 +12,10 @@ import { requireAdminPage } from "@/lib/admin-guard";
  */
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
   await requireAdminPage();
+  const pendingCount = await countPendingCached();
   return (
     <>
-      <AdminNav />
+      <AdminNav pendingCount={pendingCount} />
       {children}
     </>
   );

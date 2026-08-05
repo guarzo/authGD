@@ -21,7 +21,14 @@ import type { tierEnum } from "@/db/schema";
  * shows no active tab. `e2e/shell.spec.ts` covers that residual gap by
  * asserting exactly one `aria-current` on every shell route.
  */
-export type NavItem = { href: string; label: string };
+export type NavItem = {
+  href: string;
+  label: string;
+  /** A count rendered beside the item. `description` is the visually-hidden
+   *  text naming what the number counts; it lives on the item rather than in
+   *  SiteHeader because this component is shared with the member nav. */
+  badge?: { count: number; description: string };
+};
 
 /**
  * The ruled header bar. `current` is passed in rather than read from a hook so
@@ -104,15 +111,42 @@ export function SiteHeader({
         </a>
         {admin && <span className="shell__register">Admin</span>}
         <nav className="shell__nav" aria-label={admin ? "Admin" : "Main"}>
-          {items.map((i) => (
-            <a
-              key={i.href}
-              href={i.href}
-              aria-current={i.href === current ? (section ? "true" : "page") : undefined}
-            >
-              {i.label}
-            </a>
-          ))}
+          {items.map((i) => {
+            // Derived from href, not useId: SiteHeader is a server component
+            // and cannot use hooks, and href is already the nav's identity key.
+            const badgeId = `nav-badge-${i.href}`;
+            const showBadge = i.badge !== undefined && i.badge.count > 0;
+            return (
+              // The pair is ONE flex child. .shell__nav wraps, so a bare
+              // sibling span can land on the next line away from the link it
+              // belongs to.
+              <span key={i.href} className="shell__navitem">
+                <a
+                  href={i.href}
+                  aria-current={
+                    i.href === current ? (section ? "true" : "page") : undefined
+                  }
+                  // Described-by rather than inside the link: inside, the
+                  // accessible NAME becomes "Members 3 awaiting approval" on
+                  // one load and "Members" on the next — the same destination
+                  // named two ways, which is what WCAG 3.2.4 Consistent
+                  // Identification forbids and what the ITEMS comment in
+                  // admin-nav.tsx exists to protect. A bare sibling would keep
+                  // the name but associate nothing: screen-reader link
+                  // navigation jumps link to link and would skip it entirely.
+                  aria-describedby={showBadge ? badgeId : undefined}
+                >
+                  {i.label}
+                </a>
+                {showBadge && (
+                  <span id={badgeId} className="shell__badge">
+                    {i.badge!.count}
+                    <span className="visually-hidden"> {i.badge!.description}</span>
+                  </span>
+                )}
+              </span>
+            );
+          })}
           {/* The one control in the bar that isn't a destination, so it's a
               form/POST rather than a link — see auth/signout/route.ts for why
               a GET here would be CSRF-triggerable. Quiet grade, reused rather

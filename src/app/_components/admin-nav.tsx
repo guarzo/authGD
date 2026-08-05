@@ -22,7 +22,14 @@ const ITEMS = [
  * ConfirmSubmit, Submit...). This one needs the pathname to mark the active
  * admin tab with aria-current, which only a client component can read.
  */
-export function AdminNav() {
+export function AdminNav({ pendingCount }: { pendingCount: number }) {
   const pathname = usePathname();
-  return <SiteHeader items={ITEMS} current={pathname} admin />;
+  // ITEMS stays static: the badge is derived per render, so the array is
+  // still a module constant and the label text still cannot drift.
+  const items = ITEMS.map((i) =>
+    i.href === "/admin/accounts" && pendingCount > 0
+      ? { ...i, badge: { count: pendingCount, description: "awaiting approval" } }
+      : i,
+  );
+  return <SiteHeader items={items} current={pathname} admin />;
 }
