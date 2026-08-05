@@ -235,6 +235,21 @@ export default async function PayoutOperationPage({
     (p) => p.shares !== "1" || p.paymentState === "excluded",
   ).length;
 
+  // --- What the Operation section holds ------------------------------------
+  // The facts grid and the lifecycle control are independently conditional but
+  // share one heading, so each is named rather than re-derived inline: the
+  // heading has to render when *either* has something to show, and inlining
+  // both tests into the JSX made that condition unreadable.
+  const hasFacts = pools.length > 0 || participants.length > 0;
+  // Only a flat pool is required to carry a note; an appraised one almost
+  // never has any. Rendering the column unconditionally spends a full column
+  // and its heading on nothing across the whole table in the common case.
+  const anyPoolNotes = pools.some((p) => p.notes);
+  const canFinalize = access.isOperator && operation.status === "draft";
+  const canRelease =
+    access.isOperator && operation.status === "finalized" && !locked && canUnlock;
+  const showLifecycle = canFinalize || canRelease || (access.isOperator && locked);
+
   return (
     <>
       <SiteHeader items={nav} current="/payouts" section {...brandProps()} />
@@ -324,15 +339,25 @@ export default async function PayoutOperationPage({
           </Notice>
         )}
 
-        {/* The fuller facts grid does not lead the page anymore — the summary
-            line above already answers "where does this stand" the instant the
-            page loads. This block earns its place only once there is
-            something to look up in it: an operation with no loot and no
-            roster has nothing here worth a whole grid over the one-line
-            summary already shown. */}
-        {(pools.length > 0 || participants.length > 0) && (
-          <>
-            <RuleHead as="h2">Operation</RuleHead>
+        {/* One page-wide arm scope: at most one destructive/confirm control
+            (a pool delete, a roster remove, a roster replace, mark-paid,
+            finalize, unlock, revert, delete) can be armed at a time, regardless
+            of which section it lives in — arming one used to leave whatever was
+            armed in a different table's own scope silently primed. It opens
+            here rather than at Loot because Finalize and Unlock now sit in the
+            Operation section, and a confirm control outside the scope would
+            throw for want of the context. */}
+        <ConfirmArmScope>
+          {/* --- Operation ----------------------------------------------- */}
+          {(hasFacts || showLifecycle) && <RuleHead as="h2">Operation</RuleHead>}
+
+          {/* The fuller facts grid does not lead the page anymore — the summary
+              line above already answers "where does this stand" the instant the
+              page loads. This block earns its place only once there is
+              something to look up in it: an operation with no loot and no
+              roster has nothing here worth a whole grid over the one-line
+              summary already shown. */}
+          {hasFacts && (
             <dl className="facts">
               <dt>Status</dt>
               <dd>
@@ -376,15 +401,68 @@ export default async function PayoutOperationPage({
               <dt>Total loot</dt>
               <dd className="mono">{fmtIsk(totalValue)} ISK</dd>
             </dl>
-          </>
-        )}
+          )}
 
-        {/* One page-wide arm scope: at most one destructive/confirm control
-            (a pool delete, a roster remove, a roster replace, mark-paid,
-            revert, finalize, delete) can be armed at a time, regardless of
-            which section it lives in — arming one used to leave whatever was
-            armed in a different table's own scope silently primed. */}
-        <ConfirmArmScope>
+          {/* Finalize and Unlock, beside the status they change rather than at
+              the foot of the page under Notes and above Delete. Structurally a
+              sibling of the <dl>, never a child of it: a <form> dropped between
+              a <dt>/<dd> pair is invalid HTML the parser silently reshuffles —
+              the same class of bug as the <p><form> nesting fixed in da8c7d0,
+              which `expectNoFormInParagraph` in e2e/payouts.spec.ts guards. */}
+          {showLifecycle && (
+            <div className="lifecycle">
+              {locked && (
+                <p className="dim">
+                  A payment has been recorded, so the loot pools, the roster, shares and
+                  the corp share are fixed permanently. Reverting a payment does not
+                  reopen editing — it corrects who has been paid, and nothing else. If the
+                  wrong person was marked paid, revert them and pay the right one; both
+                  work while frozen.
+                </p>
+              )}
+              <div className="btn-row btn-row--tight">
+                {canFinalize && (
+                  <form action={finalizeAction.bind(null, operation.id)}>
+                    <ConfirmSubmit
+                      className={primaryStage === "finalize" ? "btn btn--primary" : "btn"}
+                      label="Finalize"
+                      confirmName="confirm finalize"
+                      describedBy="finalize-cost"
+                    />
+                    <ConfirmCost id="finalize-cost" className="dim">
+                      Closes the pools, roster and shares to editing. Reversible with
+                      Unlock until the first payment is recorded, and permanent after
+                      that.
+                    </ConfirmCost>
+                  </form>
+                )}
+                {/* Plain grade, and armed like its neighbours. Quiet made it
+                  indistinguishable from the label register it sat beside — the
+                  comment on `primaryStage` above already says Unlock is meant
+                  to be plain, and the markup had drifted from it. It reopens
+                  finalized financial state, which is the same weight as the
+                  Finalize it undoes, so it arms rather than firing on one
+                  press. The standing explanation that used to sit permanently
+                  below it is now the cost sentence, which is what this
+                  component exists to hold. */}
+                {canRelease && (
+                  <form action={unlockAction.bind(null, operation.id)}>
+                    <ConfirmSubmit
+                      className="btn"
+                      label="Unlock"
+                      confirmName="confirm unlock"
+                      describedBy="unlock-cost"
+                    />
+                    <ConfirmCost id="unlock-cost" className="dim">
+                      Reopens the pools, roster and shares to editing, until finalized
+                      again or until the first payment is recorded.
+                    </ConfirmCost>
+                  </form>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* --- Loot ---------------------------------------------------- */}
           <RuleHead
             as="h2"
@@ -412,7 +490,7 @@ export default async function PayoutOperationPage({
                       <th scope="col" className="num">
                         Value
                       </th>
-                      <th scope="col">Notes</th>
+                      {anyPoolNotes && <th scope="col">Notes</th>}
                       <th scope="col">
                         <span className="visually-hidden">Actions</span>
                       </th>
@@ -434,7 +512,7 @@ export default async function PayoutOperationPage({
                           )}
                         </td>
                         <td className="mono nowrap num">{fmtIsk(pool.totalValue)} ISK</td>
-                        <td>{pool.notes}</td>
+                        {anyPoolNotes && <td>{pool.notes}</td>}
                         <td>
                           {canEdit && (
                             <form
@@ -489,8 +567,8 @@ export default async function PayoutOperationPage({
                     {canUnlock ? (
                       <>
                         Some loot is still unpriced, so the total is short — but repricing
-                        is closed while the operation is finalized. Unlock, below the
-                        roster, reopens it until it is finalized again.
+                        is closed while the operation is finalized. Unlock, in the
+                        Operation block above, reopens it until it is finalized again.
                       </>
                     ) : (
                       <>
@@ -512,7 +590,7 @@ export default async function PayoutOperationPage({
               {pools.map(
                 (pool, index) =>
                   pool.items.length > 0 && (
-                    <div key={pool.id} className="stack">
+                    <div key={pool.id} className="pool-items">
                       {pools.length > 1 && <p className="dim mono">Pool {index + 1}</p>}
                       <Scroller label={`Pool ${index + 1} items`}>
                         <table className="log">
@@ -631,10 +709,21 @@ export default async function PayoutOperationPage({
             <Disclosure
               as="details"
               className="disc"
-              summary="Add one participant (the only way to add someone without discarding existing share edits)"
+              summary="Add one participant"
               ariaLabel="Add one participant — the only way to add someone without discarding existing share edits"
               defaultOpen={participants.length === 0}
             >
+              {/* The rationale moved off the summary and into the body. As a
+                  summary it was a 79-character sentence sitting in a column of
+                  two- and three-word controls, which made the disclosure read
+                  as a paragraph with a "+" in front of it rather than as
+                  something to open. It is still worth saying — it is the whole
+                  reason this control exists beside the paste — so it is said
+                  once the operator has opened the thing it describes. */}
+              <p className="dim">
+                The only way to add someone without discarding existing share edits.
+                Pasting a roster replaces the whole thing.
+              </p>
               <form
                 action={addParticipantAction.bind(null, operation.id)}
                 className="form-stack"
@@ -723,20 +812,17 @@ export default async function PayoutOperationPage({
                             <span className="mono">{p.shares}</span>
                           )}
                         </td>
-                        <td className="mono nowrap num">
-                          <div className="stack">
-                            <span>{fmtIsk(p.amount)} ISK</span>
-                            {operation.status === "finalized" &&
-                              p.paymentState !== "excluded" && (
-                                <div>
-                                  <CopyAmountButton
-                                    amount={p.amount}
-                                    participantName={p.displayName}
-                                  />
-                                </div>
-                              )}
-                          </div>
-                        </td>
+                        {/* The figure alone. `copy amount` used to stack under
+                            it inside this cell, which put a left-aligned
+                            control (`.stack` sets `justify-items: start`) in a
+                            right-aligned numeric column and cost the column the
+                            one thing a column of money is for — a single
+                            vertical to read down. The button is an action, so
+                            it lives in the action cell with the other actions;
+                            `.copy-result`'s width reservation was already
+                            written for "a right-aligned row of buttons", which
+                            is where it now actually is. */}
+                        <td className="mono nowrap num">{fmtIsk(p.amount)} ISK</td>
                         <td>
                           <div className="stack">
                             {p.paymentState === "excluded" && (
@@ -755,6 +841,10 @@ export default async function PayoutOperationPage({
                             {operation.status === "finalized" &&
                               p.paymentState !== "excluded" && (
                                 <>
+                                  <CopyAmountButton
+                                    amount={p.amount}
+                                    participantName={p.displayName}
+                                  />
                                   {access.canOpenInfo &&
                                     p.recipientCharacterId !== null && (
                                       <form
@@ -911,8 +1001,19 @@ export default async function PayoutOperationPage({
                       Paste (names separated by /)
                       <textarea className="field" name="paste" rows={8} required />
                     </label>
+                    {/* Plain grade, not quiet. This is the terminal submit of
+                        a form the operator has just typed a paste into, and
+                        neither of its two structural siblings is quiet: "Add
+                        participant" is a plain `.btn`, and "Set roster" is
+                        plain or `--primary` depending on the stage. `.btn--quiet`
+                        is transparent and borderless, so in that slot it reads
+                        as a caption under the textarea rather than the control
+                        that sends it. `--danger-quiet` keeps the destructive
+                        restraint (colour only) without spending the border the
+                        affordance needs, which is the pairing "Delete
+                        operation" already uses. */}
                     <ConfirmSubmit
-                      className="btn btn--quiet"
+                      className="btn btn--danger-quiet"
                       armedClassName="btn btn--danger"
                       label="Replace roster"
                       confirmName="confirm replace roster"
@@ -933,7 +1034,11 @@ export default async function PayoutOperationPage({
 
           {/* --- Details --------------------------------------------------- */}
           <RuleHead as="h2">Details</RuleHead>
-          <dl className="facts">
+          {/* --wide because "Battle report" is the one label in the app that
+              does not fit `.facts`' 6rem column: it wraps to two lines and
+              leaves its own value hanging off the second, while the row it sits
+              in has most of the page still empty to the right. */}
+          <dl className="facts facts--wide">
             <dt>Battle report</dt>
             <dd>
               {canEdit ? (
@@ -985,43 +1090,6 @@ export default async function PayoutOperationPage({
               )}
             </dd>
           </dl>
-
-          {/* --- Finalize ---------------------------------------------- */}
-          {access.isOperator && (
-            <>
-              {locked && (
-                <p className="dim">
-                  A payment has been recorded, so the loot pools, the roster, shares and
-                  the corp share are fixed permanently. Reverting a payment does not
-                  reopen editing — it corrects who has been paid, and nothing else. If the
-                  wrong person was marked paid, revert them and pay the right one; both
-                  work while frozen.
-                </p>
-              )}
-              <div className="btn-row btn-row--tight btn-row--controls">
-                {operation.status === "draft" && (
-                  <form action={finalizeAction.bind(null, operation.id)}>
-                    <ConfirmSubmit
-                      className={primaryStage === "finalize" ? "btn btn--primary" : "btn"}
-                      label="Finalize"
-                      confirmName="confirm finalize"
-                    />
-                  </form>
-                )}
-                {operation.status === "finalized" && !locked && canUnlock && (
-                  <form action={unlockAction.bind(null, operation.id)}>
-                    <Submit className="btn btn--quiet">Unlock</Submit>
-                  </form>
-                )}
-              </div>
-              {operation.status === "finalized" && !locked && canUnlock && (
-                <p className="dim">
-                  Unlock reopens the pools, roster and shares to editing, until finalized
-                  again or until the first payment is recorded.
-                </p>
-              )}
-            </>
-          )}
 
           {/* --- Delete operation --------------------------------------- */}
           {access.isAdmin && (
