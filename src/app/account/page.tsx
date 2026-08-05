@@ -586,7 +586,7 @@ export default async function AccountPage({
             asset for a smaller frame rather than cropping or downscaling it,
             same technique the full size already uses, just a smaller target. */}
         <p className={`closing${view.characters.length <= 1 ? " closing--compact" : ""}`}>
-          <Image src="/brand/lander-moon.webp" alt="" width={1120} height={711} />
+          <Image src="/brand/hero-account.webp" alt="" width={1120} height={711} />
         </p>
       </main>
     </>

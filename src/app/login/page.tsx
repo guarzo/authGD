@@ -40,13 +40,13 @@ export default async function LoginPage({
             at all. This is the image that principle is about. Nothing else it
             offers applies: the mark is a fixed 180px at a known intrinsic size,
             so there is no layout shift to prevent and no art direction to do.
-            seal.webp is 512x512 — a ~3x cut for the 180px it is drawn at, which
+            emblem.webp is 512x512 — a ~3x cut for the 180px it is drawn at, which
             is the retina source, not principle 5's "large file scaled down".
             (The one thing next/image WOULD buy is a 1x srcset entry; that is a
             real cost, paid deliberately to keep the encode untouched.) */}
         <img
           className="launch__seal"
-          src="/brand/seal.webp"
+          src="/brand/emblem.webp"
           alt="Zoo Landers mission seal"
           width={180}
           height={180}

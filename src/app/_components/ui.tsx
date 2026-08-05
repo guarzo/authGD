@@ -103,7 +103,7 @@ export function SiteHeader({
       </a>
       <div className="shell__bar">
         <a className="shell__mark" href={admin ? "/admin/accounts" : "/account"}>
-          <img src="/brand/seal-sm.webp" alt="" width={34} height={34} />
+          <img src="/brand/mark.webp" alt="" width={34} height={34} />
           <span className="shell__wordmark">
             <b>Zoo Landers</b>
             <span>Flight Ops</span>
