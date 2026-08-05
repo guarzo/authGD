@@ -603,6 +603,13 @@ h3.rule-head__label {
   align-items: baseline;
 }
 
+/* Still a fixed column, for the reason above — just a wider one, for the grids
+   whose longest label does not clear 6rem. Not `max-content`: that would make
+   every value's left edge depend on the longest label currently rendered. */
+.facts--wide {
+  grid-template-columns: 8rem 1fr;
+}
+
 /* The row carrying the page's headline fact. Lays its badge and any qualifier
    (cryo) on one line rather than relying on a text space between them. */
 .facts__lead {
@@ -619,6 +626,25 @@ h3.rule-head__label {
 
 .facts dd {
   margin: 0;
+}
+
+/* The lifecycle control that closes or reopens the thing the facts grid above
+   describes. It sits inside the Operation section rather than at the foot of
+   the page, so it needs a gap that reads as "still this section, new kind of
+   thing" — --s-5 against the grid's own --s-5 row gap would read as one more
+   row, so it takes the next step up. The paragraph is capped at --measure for
+   the same reason every other block of prose here is: it is read, not scanned,
+   and a full-page-width line at this size loses the return sweep. */
+.lifecycle {
+  margin-top: var(--s-6);
+  display: grid;
+  gap: var(--s-4);
+  justify-items: start;
+}
+
+.lifecycle > p {
+  margin: 0;
+  max-width: var(--measure);
 }
 
 /* --- Tables ------------------------------------------------------------- */
@@ -1936,6 +1962,35 @@ h3.rule-head__label {
   max-width: var(--measure);
 }
 
+/* Fields share one edge; the submit does not. A `.btn` is sized from its label
+   by DESIGN.md's button spec, so inheriting the field stretch above turned
+   "Create operation" into a full-measure gold bar — the largest and loudest
+   object on /payouts/new, and a shape no other button in the app has. The
+   stretch was written for `<input>`/`<textarea>`/`<select>`, whose intrinsic
+   widths disagree with each other; a button's does not have that problem. */
+.form-stack > .btn {
+  justify-self: start;
+}
+
+/* A section header opening a form separates it from nothing. `.rule-head`'s
+   48px top margin is written for headers that follow a previous section's
+   content, and it stacks on top of whatever the form already sits inside: on
+   /payouts/new that is `.form-panel`'s own 48px of top padding, so the panel
+   opened with 96px of empty ground above the word OPERATION.
+
+   Two branches because the two forms that open with a header disagree about
+   what comes first in the DOM. `appraise-form.tsx` puts its `RuleHead` first
+   outright, so `:first-child` catches it. `new-operation-form.tsx` puts the
+   reserved `Notice` ahead of the header — that slot is out of flow, so the
+   header is still the first thing anyone sees, but `:first-child` cannot know
+   that and would miss it. Only the always-mounted reserved slot needs the
+   second branch; a `Notice` rendered behind `&&` (as appraise-form's is)
+   isn't in the DOM to be skipped over in the first place. */
+.form-stack > .rule-head:first-child,
+.form-stack > .notice-slot + .rule-head {
+  margin-top: 0;
+}
+
 /* One field: its label, its control, and optionally a hint below (the
    corp-share and appraise-location hints, both outside their `<label>` so they
    don't get folded into its accessible name). Tighter gap than the form's, so
@@ -2166,6 +2221,17 @@ h3.rule-head__label {
    must therefore draw nothing at all when empty. */
 .notice-slot {
   margin: 0;
+  /* An empty live region is a reservation, not content: it exists only so AT
+     has a region to announce *into* when the message arrives. Left in flow it
+     is zero-height but still a grid item, so `.form-stack`'s row gap applies on
+     both sides of nothing — on /payouts/new that put roughly 64px of dead space
+     between the panel's top padding and the first heading, with no element
+     anyone could see to explain it. Out of flow it stops counting for track
+     sizing while staying in the accessibility tree, which is the same trade
+     `.visually-hidden` already makes for `ConfirmCost`. It re-enters flow the
+     instant it has text, because a `Notice` with children renders `.notice`
+     rather than this class at all. */
+  position: absolute;
 }
 
 /* --- Worker liveness ---------------------------------------------------- */
@@ -2949,6 +3015,24 @@ h3.rule-head__label {
    beside it to be confused with. The rule's whole history was trying to hold
    two things apart that read as one object (--s-1 to --s-3), which was the
    clue that there should only have been one. */
+
+/* A pool's item manifest under its own "Pool N" label. `.stack` was the
+   obvious wrapper and the wrong one: its `justify-items: start` exists to stop
+   a status token blowing out to the full width of a table cell, and applied
+   here it stopped the `.scroller` stretching too — so the item table sized to
+   the intrinsic width of its own content and stopped a few hundred pixels short
+   of the pool table directly above it. A stair-step with nothing structural
+   behind it, and the widest single thing wrong with the finalized page. Same
+   gap, grid's default stretch. */
+.pool-items {
+  display: grid;
+  gap: var(--s-2);
+}
+
+/* Consecutive pools are separate manifests, not more rows of one table. */
+.pool-items + .pool-items {
+  margin-top: var(--s-5);
+}
 
 .stack {
   display: grid;
