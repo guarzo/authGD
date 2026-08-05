@@ -20,7 +20,33 @@ const roleSchema = z.object({
   position: z.number().int(),
   permissions: z.string(),
 });
-const memberSchema = z.object({ roles: z.array(z.string()) });
+/**
+ * `roles` is strict: it is what the job exists to diff, and a body that cannot
+ * produce it is a body we must fail on.
+ *
+ * The name fields are the opposite, and deliberately so. `parseBody` classifies
+ * a schema failure as PERMANENT — no retry, the member counts as failed — so a
+ * strict field here would turn any future shape change in Discord's member
+ * payload into every member's role sync failing, to protect a caption. Each one
+ * is nullish (absent, null, or a string are all fine) and then `.catch()`es to
+ * null, so a value of the wrong type degrades to "no handle shown" instead of
+ * taking the roles with it. Do not tighten these without moving the names out
+ * of this call.
+ */
+const memberSchema = z.object({
+  roles: z.array(z.string()),
+  /** Guild nickname. Absent for a member who never set one. */
+  nick: z.string().nullish().catch(null),
+  user: z
+    .object({
+      /** The stable @handle. */
+      username: z.string().nullish().catch(null),
+      /** Account-wide display name; the fallback when there is no `nick`. */
+      global_name: z.string().nullish().catch(null),
+    })
+    .nullish()
+    .catch(null),
+});
 const userSchema = z.object({ id: z.string() });
 
 /** Malformed bodies are deterministic — fail closed as permanent, never
@@ -91,7 +117,7 @@ export function createDiscordClient(cfg: Config, fetchImpl: typeof fetch = fetch
     /** null ONLY for Discord code 10007 (Unknown Member — user not in guild).
      * Any other 404 (10004 Unknown Guild = bad config, malformed body) is a
      * permanent error: the role job must fail loudly, not skip everyone. */
-    async getGuildMember(userId: string): Promise<{ roles: string[] } | null> {
+    async getGuildMember(userId: string): Promise<z.infer<typeof memberSchema> | null> {
       const path = `/guilds/${guild}/members/${userId}`;
       const res = await rawRequest(path);
       if (res.status === 404) {

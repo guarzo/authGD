@@ -2769,6 +2769,30 @@ h3.rule-head__label {
   flex-wrap: wrap;
 }
 
+/* The account page's Discord identity: display name then dimmed @handle, one
+   unit. Its own flex row rather than two more children of `.facts__lead`,
+   because the two names are one thing and the button beside them is another —
+   `--s-2` holds the pair together against the `--s-3` that separates it from
+   the control, which is the spacing argument #108 spent two passes on. */
+.discord-id {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+}
+
+/* Same idea in the admin table's Discord cell, minus the display name. Wraps
+   so a long handle in a column with no width of its own drops the button to a
+   second line for that one row rather than widening the table for every row —
+   the accounts table is already horizontally scrolled at 320px and its column
+   widths are a measured budget (see `.log--dense` above). */
+.discord-cell {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+}
+
 /* `.inline-pair` lived here: a settled status token and the control that
    changes it, on one line. Both call sites were the Discord row, and both now
    render the control alone — the verb answers "is it linked?" without a token

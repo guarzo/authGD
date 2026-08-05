@@ -369,6 +369,49 @@ test("the first-run notice promises Discord roles once Discord is linked", async
   await expect(page.getByRole("link", { name: "Link Discord" })).toHaveCount(0);
 });
 
+/**
+ * The Discord row says which account is linked, not just that one is. The
+ * display name leads because it is what the member is called by the people they
+ * play with; the @handle follows because it is what settles it when two people
+ * go by the same nickname.
+ *
+ * Each half is independent — a member with no guild nickname and no global name
+ * has only a handle, and a link made before the first roles sync has only a
+ * handle too — so this walks all three shapes rather than the happy one. The
+ * both-null case renders what shipped before either column existed: the unlink
+ * control alone, which is why no backfill has to run before this is correct.
+ */
+test("the Discord row names the linked account, in whatever detail it has", async ({
+  page,
+  context,
+}) => {
+  const member = await seedMember(db, { name: "Pilot", tier: "member" });
+  await db.insert(discordLink).values({
+    accountId: member.id,
+    discordUserId: "duid-names",
+    username: "guarzo",
+    displayName: "Wardec Wally",
+  });
+  await context.addCookies([await sessionCookieFor(db, member.id)]);
+
+  const identity = page.locator(".discord-id");
+  await page.goto("/account");
+  await expect(identity).toHaveText("Wardec Wally@guarzo");
+
+  // Handle but no display name: a link that has not been through a roles sync.
+  await db.update(discordLink).set({ displayName: null });
+  await page.reload();
+  await expect(identity).toHaveText("@guarzo");
+
+  // Neither. The row falls back to the control on its own.
+  await db.update(discordLink).set({ username: null });
+  await page.reload();
+  await expect(identity).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "unlink Discord", exact: true }),
+  ).toBeVisible();
+});
+
 test("a member can unlink their own Discord", async ({ page, context }) => {
   const member = await seedMember(db, { name: "Pilot", tier: "alumni" });
   await db.insert(discordLink).values({

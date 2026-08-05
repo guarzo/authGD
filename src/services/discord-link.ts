@@ -31,6 +31,14 @@ export async function linkDiscord(
   dbx: DbTx,
   accountId: string,
   discordUserId: string,
+  /**
+   * The @handle, from the same `/users/@me` response the caller already has.
+   * Optional because it is decoration: the link is the snowflake, and every
+   * reader tolerates a null name. `/users/@me` is not guild-scoped, so it
+   * carries no `nick` — `displayName` stays null here and the roles job fills
+   * it on the next cycle.
+   */
+  username?: string,
 ): Promise<{ ok: true } | { ok: false; error: "already_linked" }> {
   // Lock the account row first: concurrent replacements for one account
   // serialize here, so every intermediate discord user gets its deprovision
@@ -56,10 +64,22 @@ export async function linkDiscord(
   try {
     await dbx
       .insert(discordLink)
-      .values({ accountId, discordUserId })
+      .values({ accountId, discordUserId, username: username ?? null })
       .onConflictDoUpdate({
         target: discordLink.accountId,
-        set: { discordUserId, linkedAt: new Date() },
+        // `displayName` is cleared rather than carried over. On a REPLACEMENT
+        // it belonged to the Discord user being replaced, so keeping it would
+        // label the new link with the old person's guild nickname — and this
+        // path cannot tell the two cases apart without an extra read. Clearing
+        // costs nothing: `/users/@me` has no `nick` to write here anyway, and
+        // the `{kind:"account"}` enqueue below runs discord-roles for this
+        // account, which refills it from the guild member payload.
+        set: {
+          discordUserId,
+          username: username ?? null,
+          displayName: null,
+          linkedAt: new Date(),
+        },
       });
   } catch (err) {
     // concurrent claim of the same discord user: abort the whole transaction

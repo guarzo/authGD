@@ -152,6 +152,24 @@ export async function runDiscordRolesJob(
           managed: cfg.discord.roleIds,
           memberRoleIds: member.roles,
         });
+
+        // Unguarded in dry-run, unlike every role write below. The same
+        // distinction `wanderer.ts` draws when it records an ACL observation
+        // during a suppressed run: this is what Discord told us, not something
+        // we did to Discord. Suppressing it would make dry-run runs leave the
+        // names permanently stale on an instance that never runs live.
+        //
+        // Written every cycle rather than once, which is also the backfill:
+        // links created before these columns existed fill in on the account's
+        // next roles run with no migration step and no extra API call, since
+        // `getGuildMember` was already being called here for the role diff.
+        const username = member.user?.username ?? null;
+        const displayName = member.nick ?? member.user?.global_name ?? null;
+        await db
+          .update(discordLink)
+          .set({ username, displayName })
+          .where(eq(discordLink.discordUserId, row.discordUserId));
+
         for (const roleId of diff.add) {
           await discord.addMemberRole(row.discordUserId, roleId);
         }

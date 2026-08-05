@@ -118,6 +118,32 @@ describe("getAccountView", () => {
     expect(view.discordLinked).toBe(false);
   });
 
+  // Both names are optional at every layer: a link made before the columns
+  // existed, or one whose owner has left the guild, carries neither. The view
+  // reports null rather than inventing a placeholder, and both pages render the
+  // unlink control alone in that case.
+  it("carries the discord names through, and reports null when the link has none", async () => {
+    const [bare] = await ctx.db.insert(account).values({}).returning();
+    await ctx.db
+      .insert(discordLink)
+      .values({ accountId: bare.id, discordUserId: "d-bare" });
+    const bareView = await getAccountView(ctx.db, cfg, bare.id);
+    expect(bareView.discordLinked).toBe(true);
+    expect(bareView.discordUsername).toBeNull();
+    expect(bareView.discordDisplayName).toBeNull();
+
+    const [named] = await ctx.db.insert(account).values({}).returning();
+    await ctx.db.insert(discordLink).values({
+      accountId: named.id,
+      discordUserId: "d-named",
+      username: "guarzo",
+      displayName: "Wardec Wally",
+    });
+    const namedView = await getAccountView(ctx.db, cfg, named.id);
+    expect(namedView.discordUsername).toBe("guarzo");
+    expect(namedView.discordDisplayName).toBe("Wardec Wally");
+  });
+
   it("marks non-member characters as outside the contacts desired set", async () => {
     // An associate member is the content of a member's contact list, never a
     // target of the job, so contact_sync_state will never have a row for them.
@@ -270,6 +296,15 @@ describe("getAdminAccountsList", () => {
     const rowA = rows.find((r) => r.accountId === a.id)!;
     expect(rowA.mainName).toBe("Alpha");
     expect(rowA.discordLinked).toBe(true);
+    // The list shape carries the handle only — the display name is the account
+    // page's business, since this table already names the member in column one.
+    expect(rowA).not.toHaveProperty("discordDisplayName");
+    expect(rowA.discordUsername).toBeNull();
+    await ctx.db.update(discordLink).set({ username: "guarzo", displayName: "Wally" });
+    const refreshed = (await getAdminAccountsList(ctx.db, cfg)).find(
+      (r) => r.accountId === a.id,
+    )!;
+    expect(refreshed.discordUsername).toBe("guarzo");
     expect(rowA.mapCount).toBe(1);
     expect(rowA.characters.find((ch) => ch.id === 1)?.mapObservedAt).toEqual(
       new Date("2026-08-01T00:00:00Z"),
