@@ -42,7 +42,7 @@ describe("ContactRemedy (label_mismatch render)", () => {
     expect(html).toContain("differs from");
     expect(html).toContain("only in capitalization");
     expect(html).not.toContain("only in spacing");
-    expect(html).toContain("nothing else to do here");
+    expect(html).toContain("The next sync picks it up.");
   });
 
   it("states the difference in words for a spacing-only near miss", () => {
@@ -106,7 +106,7 @@ describe("ContactRemedy (label_mismatch render)", () => {
     const html = render(null);
     expect(html).toContain("A label differing only in capitalization or spacing exists");
     expect(html).not.toContain("Labels named");
-    expect(html).toContain("nothing else to do here");
+    expect(html).toContain("The next sync picks it up.");
   });
 });
 
@@ -128,7 +128,7 @@ describe("ContactRemedy (missing_label render)", () => {
     expect(html).toContain("Create a contact label named");
     expect(html).toContain('class="literal"');
     expect(html).toContain("&quot;AuthGD &quot;");
-    expect(html).toContain("nothing else to do here");
+    expect(html).toContain("The next sync picks it up.");
   });
 });
 

@@ -50,8 +50,13 @@ export function ContactState({
   }
   if (result === null) return <Status tone="off">not yet run</Status>;
   if (result === "ok") return <Status tone="ok">ok</Status>;
-  if (result === "missing_label") return <Status tone="warn">label missing</Status>;
-  if (result === "label_mismatch") return <Status tone="warn">label mismatch</Status>;
+  // Plain English, not the job's own vocabulary. `missing_label` and
+  // `label_mismatch` are src/jobs/contacts.ts result codes; rendering them
+  // verbatim put two compound nouns in a scanned column and left the token
+  // unable to stand without the remedy prose below the table. The codes are
+  // unchanged — only what a member reads is.
+  if (result === "missing_label") return <Status tone="warn">label needed</Status>;
+  if (result === "label_mismatch") return <Status tone="warn">label wrong</Status>;
   // Member-fixable by re-linking the character: a dead token, a missing scope,
   // or ESI revoking the token mid-sync all land the same place a re-auth does.
   if (result === "token_invalid") return <Status tone="bad">token invalid</Status>;
@@ -96,7 +101,7 @@ export function ContactRemedy({
     return (
       <span className="dim">
         Create a contact label named <code className="literal">{`"${label}"`}</code> in
-        game. The next sync picks it up on its own — nothing else to do here.
+        game. The next sync picks it up.
       </span>
     );
   }
@@ -127,15 +132,14 @@ export function ContactRemedy({
               : difference === "spacing"
                 ? "only in spacing"
                 : "in both capitalization and spacing"}
-            . Rename it in game to match exactly. The next sync picks it up on its own —
-            nothing else to do here.
+            . Rename it in game to match exactly. The next sync picks it up.
           </>
         ) : candidates.length === 1 ? (
           <>
             Your label is named <code className="literal">{`"${candidates[0]}"`}</code>.
             It must be exactly <code className="literal">{`"${label}"`}</code> —
             capitalization and spaces both count. Rename it in game. The next sync picks
-            it up on its own — nothing else to do here.
+            it up.
           </>
         ) : candidates.length > 1 ? (
           <>
@@ -152,14 +156,13 @@ export function ContactRemedy({
             ))}{" "}
             {candidates.length === 2 ? "both" : "all"} differ only in capitalization or
             spacing. It must be exactly <code className="literal">{`"${label}"`}</code> —
-            rename one in game. The next sync picks it up on its own — nothing else to do
-            here.
+            rename one in game. The next sync picks it up.
           </>
         ) : (
           <>
             A label differing only in capitalization or spacing exists. It must be exactly{" "}
             <code className="literal">{`"${label}"`}</code> — rename it in game. The next
-            sync picks it up on its own — nothing else to do here.
+            sync picks it up.
           </>
         )}
       </span>
@@ -200,11 +203,18 @@ export function ContactRemedy({
         {result === "token_refresh_failed"
           ? "Refreshing this character's token failed."
           : "The last sync for this character failed."}{" "}
-        {/* Not "nothing else to do here": the label remedies above spend that
-            phrase after an explicit "rename it in game", where "else"
-            presupposes that in-game imperative. This code asks nothing of
-            anyone at all, so borrowing the phrase here would give it a second,
-            weaker reading and teach members to skim past the one that matters. */}
+        {/* Not "the next sync picks it up": the label remedies above end on
+            that phrase, and they earn it by having just issued an in-game
+            imperative — the sync picks up work the member did. This code asks
+            nothing of anyone at all, so borrowing the phrase here would imply
+            a pending fix that does not exist, and would teach members to skim
+            past the sentence that does ask for something.
+
+            (This clause used to read "on its own — nothing else to do here" in
+            the label branches; it was cut to six words because it was the same
+            14-word tail repeated once per affected character. The distinction
+            this comment draws survives the cut: the label branches point at
+            the next sync, this one points at the retry.) */}
         authGD retries automatically. No action needed.
       </span>
     );
