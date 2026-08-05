@@ -737,8 +737,11 @@ test("a control scrolled to the top of the pinned region stays clear of the head
   // at 436, with or without the scroll-margin. Nearest-edge alignment is the
   // one scroll-margin governs, it is what the engines that don't centre use for
   // sequential focus navigation, and it is the only alignment under which this
-  // control can be obscured at all. Measured both ways: 442 with the property
-  // (6px clear), 402 without it (34px under the header, and this test red).
+  // control can be obscured at all. Measured against a header ending at 436px:
+  // 402 with the rule deleted, and clear of it with the rule in place. The
+  // assertion is rect-vs-rect rather than a pixel figure, so the shared
+  // scroll-margin can be widened for the taller audit header (it has been,
+  // to 3rem) without this test having to be re-tuned.
   const ROW = 12;
   const geom = await page.evaluate((row) => {
     const sc = document.querySelector(".scroller") as HTMLElement;
