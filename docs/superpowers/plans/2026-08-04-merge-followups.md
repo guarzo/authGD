@@ -6,7 +6,7 @@
 
 **Architecture:** Three independent changes off one spec. Item 3 is a pure function with no I/O and lands first. Item 1 adds one service export consumed by two server actions. Item 2 threads a count from the admin layout through a shared server component. Nothing touches the schema, so there is no migration.
 
-**Tech Stack:** Next.js 15 App Router (server components, server actions), Drizzle ORM on Postgres, pg-boss worker via an outbox table, Vitest, Playwright.
+**Tech Stack:** Next.js 16.3 App Router (server components, server actions), React 19, Drizzle ORM on Postgres, pg-boss worker via an outbox table, Vitest, Playwright.
 
 Spec: `docs/superpowers/specs/2026-08-04-merge-followups-design.md`.
 
@@ -62,14 +62,18 @@ it("renders a merge with a shortened source account and its character", () => {
 });
 
 it("renders a reprice with the name and price the fallback used to truncate", () => {
+  // unitPrice is what payout-loot.ts:218 actually writes: centsToIsk(), which
+  // is always a 2dp STRING. Kept verbatim rather than normalised to 5.5 — the
+  // trailing zeros are the money shape, and stripping them would render a
+  // 1000.00 ISK reprice as "1000".
   expect(
     summarizeDetails("payout.item_repriced", {
       itemId: "i-1",
       poolId: "p-1",
       name: "Tritanium",
-      unitPrice: 5.5,
+      unitPrice: "5.50",
     }),
-  ).toBe("Tritanium → 5.5");
+  ).toBe("Tritanium → 5.50");
 });
 
 // The sub-object ids are declared-and-silent, not unread: a `+2 more` here
@@ -80,7 +84,7 @@ it("does not report the reprice sub-object ids as hidden keys", () => {
       itemId: "i-1",
       poolId: "p-1",
       name: "Tritanium",
-      unitPrice: 5.5,
+      unitPrice: "5.50",
     }),
   ).not.toContain("more");
 });
@@ -268,15 +272,22 @@ describe("unlinkDiscord", () => {
   });
 
   // The account-row FOR UPDATE lock is the basis of the whole design, and the
-  // sequential cases above never exercise it. Whichever order the lock grants,
-  // the surviving link and the deprovision events must agree: no link left
-  // pointing at a user that was deprovisioned, and no freed user without one.
+  // sequential cases above never exercise it. Both operations lock the SAME
+  // account row, so unlike the cross-account link race above they serialize
+  // rather than conflict: neither is allowed to throw, and neither is allowed
+  // to return an error. Promise.all, not allSettled — a rejection here is a
+  // failure of the design, not an outcome to tolerate.
   it("concurrent link and unlink leave a consistent link and deprovision set", async () => {
     const [a] = await ctx.db.insert(account).values({}).returning();
     await ld(a.id, "duid-1");
     await ctx.db.delete(outbox);
 
-    await Promise.allSettled([ld(a.id, "duid-2"), ud(a.id, a.id)]);
+    const [linked, unlinked] = await Promise.all([ld(a.id, "duid-2"), ud(a.id, a.id)]);
+    // Whichever order the lock granted, both operations had work to do:
+    // unlink-then-link finds duid-1 to free and then links duid-2;
+    // link-then-unlink replaces duid-1 with duid-2 and then frees duid-2.
+    expect(linked).toEqual({ ok: true });
+    expect(unlinked).toEqual({ ok: true });
 
     const links = await ctx.db.select().from(discordLink);
     const deprovisioned = (await ctx.db.select().from(outbox))

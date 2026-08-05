@@ -228,7 +228,7 @@ cross-referenced. Three earn a renderer:
 | --- | --- | --- |
 | `tier.approved` (`admin-accounts.ts:140`) | `{to, locked}` | Fallback reads `to=green, locked=false`. `transition("from","to")` already renders `→ green` when `from` is absent, and `flag("locked","locked")` exists — no new machinery, and it stops drifting from `tier.changed`. |
 | `account.merged` (`accounts.ts:365`) | `{sourceAccountId, characterId}` | Fallback dumps a raw uuid and a bare number with no labels. |
-| `payout.item_repriced` (`payout-loot.ts:213`) | `{itemId, poolId, name, unitPrice}` | Four keys against the cap of 3 — the **only** action in the repo the fallback truncates, and what it drops is `unitPrice`, the reason the row exists. |
+| `payout.item_repriced` (`payout-loot.ts:213`) | `{itemId, poolId, name, unitPrice}` — `unitPrice` is `centsToIsk()`, a 2dp string | Four keys against the cap of 3 — the **only** action in the repo the fallback truncates, and what it drops is `unitPrice`, the reason the row exists. |
 
 Everything else stays on the fallback, deliberately:
 
@@ -273,13 +273,16 @@ only injected dependency.
 - `tests/discord-link.test.ts` — unlink deletes the row, writes
   `discord.unlinked` with `reason`, enqueues the `discord-user` deprovision and
   **not** `{kind:"account"}`, and returns `not_found` / `not_linked`.
-- `tests/discord-link.test.ts` — **concurrency**, following the `Promise.all` /
-  `Promise.allSettled` idiom the file already uses at `:73` and `:89`. The
-  account-row `FOR UPDATE` lock is the whole basis of the unlink design, and
-  sequential assertions do not exercise it. Cover a concurrent link and unlink
-  on one account: whichever order the lock grants, the final `discord_link`
-  state and the set of deprovision events must agree — no link left pointing at
-  a user that was deprovisioned, and no freed user left without one.
+- `tests/discord-link.test.ts` — **concurrency**, following the `Promise.all`
+  idiom the file already uses at `:73`. The account-row `FOR UPDATE` lock is
+  the whole basis of the unlink design, and sequential assertions do not
+  exercise it. Cover a concurrent link and unlink on one account. Both lock the
+  same row, so unlike the cross-account race at `:89` they serialize rather
+  than conflict: **both must return `{ok:true}`** — `Promise.all`, not
+  `allSettled`, so a rejection fails the test instead of being tolerated. Then
+  the final `discord_link` state and the set of deprovision events must agree:
+  no link left pointing at a user that was deprovisioned, and no freed user
+  left without one.
 - `tests/audit-summarize.test.ts` — the three renderers, plus a table-driven
   case asserting the twelve no-details actions render `—`. That records the
   cross-reference as behavior rather than as a claim in a PR description.
