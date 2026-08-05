@@ -59,6 +59,9 @@ type RowProps = DisclosureBaseProps & {
 
 export function Disclosure(props: DetailsProps | RowProps) {
   const [open, setOpen] = useState(props.defaultOpen ?? false);
+  // Row mode only (see below). Starts equal to `open` so a `defaultOpen` row
+  // renders its children on the server exactly as it did before.
+  const [everOpen, setEverOpen] = useState(props.defaultOpen ?? false);
   const id = useId();
   const detailsRef = useRef<HTMLDetailsElement | null>(null);
 
@@ -88,7 +91,10 @@ export function Disclosure(props: DetailsProps | RowProps) {
               aria-expanded={open}
               aria-controls={id}
               aria-label={`${label} — crew and controls`}
-              onClick={() => setOpen((o) => !o)}
+              onClick={() => {
+                setOpen((o) => !o);
+                setEverOpen(true);
+              }}
             >
               {summary}
             </button>
@@ -97,11 +103,33 @@ export function Disclosure(props: DetailsProps | RowProps) {
         </tr>
         {/* `hidden` rather than an unmount: the note field is an uncontrolled
             input, so unmounting it on close and remounting it on reopen would
-            drop an unsaved draft back to `defaultValue`. */}
+            drop an unsaved draft back to `defaultValue`.
+
+            The children are gated on `everOpen` rather than `open` for the
+            same reason, from the other side. Every row of the admin accounts
+            table carries a crew table, a nested Scroller (two ResizeObservers),
+            a NoteForm, a ConfirmSubmit and about six forms; shipping N of each
+            in the server HTML and hydrating them all is the cost of a drawer
+            nobody opened. `everOpen` latches on the first toggle and never
+            clears, so from that point on this is exactly the old behaviour and
+            the draft-preservation argument above still holds — a row that has
+            been opened once keeps its subtree for the rest of the page's life,
+            open or closed.
+
+            Deliberately NOT applied to the `as="details"` branch below, whose
+            children stay eager: find-in-page has to reach text inside a
+            collapsed <details>, and that shape is the one that still works with
+            no JavaScript at all.
+
+            The row and the div are still rendered unconditionally. The
+            `aria-controls` above targets that div by id, and
+            `.scroller:has(.drawer)` (globals.css) is what gives the drawer its
+            inline-size container — both would break on a subtree that isn't
+            there. */}
         <tr className="drawer-row" hidden={!open}>
           <td colSpan={colSpan}>
             <div className="drawer" id={id}>
-              {children}
+              {everOpen && children}
             </div>
           </td>
         </tr>

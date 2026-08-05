@@ -185,22 +185,47 @@ export function accountErrorUrl(code: AccountErrorCode): string {
 }
 
 /**
- * `/admin/accounts?[tier=…&]error=<code>`.
+ * `/admin/accounts?[<the list's own params>&]error=<code>`.
  *
- * The only one of the three that carries a second param: `not_pending` and a
- * `not_found` raised from the approval queue both send the admin back to the
- * pending FILTER they were working, not the unfiltered list. Built with
- * `URLSearchParams` rather than concatenated — same reason `createFailed` does
- * (src/app/payouts/actions.ts) — so the extra param is preserved by
- * construction instead of by remembering to include it. `tier` is emitted
- * before `error`, matching the URLs these call sites wrote by hand.
+ * The only one of the three that carries anything besides the code, and the
+ * reason is that this page is a filtered, sorted list an admin is scanning
+ * rather than a single fixed screen. `listSearch` is that list's own query
+ * string — `tier`, `status`, `sort`, `dir` — handed over by
+ * admin/accounts/page.tsx, which bound it into every control it rendered. Every
+ * code here is a race between two legitimate admins, so the admin is going to
+ * carry on working immediately after reading the notice, and returning them to
+ * the unfiltered default list sorted by name is throwing away the view they
+ * built.
+ *
+ * This supersedes the earlier forced `tier=pending`, which sent `not_pending`
+ * and a queue-raised `not_found` to the pending filter on the theory that only
+ * the approval queue produced them. That theory was right about the approval
+ * queue and silently wrong about everyone else: `not_found` reaches every
+ * mutation on the page (the merge feature can delete any row mid-scan), so an
+ * admin filtered to `?status=cryo` lost their filter, and an admin already on
+ * `?tier=pending` had it "restored" without their sort. Nothing has to be
+ * guessed now — the page knows which view it rendered and says so.
+ *
+ * `error` and `queued` are dropped off the inherited string before the new
+ * `error` is set: both are one-shot notices belonging to the request that
+ * produced them, and re-emitting `queued=account` would show "Sync queued"
+ * again beside a failure notice. `URLSearchParams` rather than concatenation —
+ * same reason `createFailed` does (src/app/payouts/actions.ts) — so the
+ * inherited params are preserved by construction. They keep the page's own
+ * emission order and `error` lands last.
+ *
+ * Required, with no default. An omitted `listSearch` would compile to exactly
+ * the unfiltered redirect this parameter exists to prevent, and it would fail
+ * silently — a lost filter looks like a page that merely loaded. There is
+ * nothing a default could mean here that is not the bug.
  */
 export function adminAccountsErrorUrl(
   code: AdminAccountsErrorCode,
-  params: { tier?: "pending" } = {},
+  listSearch: string,
 ): string {
-  const search = new URLSearchParams();
-  if (params.tier) search.set("tier", params.tier);
+  const search = new URLSearchParams(listSearch);
+  search.delete("error");
+  search.delete("queued");
   search.set("error", code);
   return `/admin/accounts?${search.toString()}`;
 }

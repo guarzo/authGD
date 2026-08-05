@@ -24,6 +24,21 @@ const drawerOf = (row: Locator) => row.locator("xpath=following-sibling::tr[1]")
 /** The name toggle: a `<button>` now, not a `<summary>`. */
 const toggleOf = (row: Locator) => row.locator(".row-toggle");
 
+/**
+ * Open every data row's drawer.
+ *
+ * A drawer's children are mounted on its first open and kept from then on
+ * (`everOpen` in disclosure.tsx) rather than shipped closed on every row, so a
+ * control inside one does not exist in the DOM until its row has been expanded
+ * at least once. Tests that assert on a per-row control's accessible name —
+ * rather than on the opening itself — go through this.
+ */
+async function openEveryDrawer(page: Page) {
+  const toggles = page.locator(`${ROWS} > td:first-child .row-toggle`);
+  const n = await toggles.count();
+  for (let i = 0; i < n; i++) await toggles.nth(i).click();
+}
+
 const { db, pool } = testDb();
 test.afterAll(() => pool.end());
 test.beforeEach(() => resetDb(db));
@@ -184,6 +199,71 @@ test("the row expander is labelled and reports its state", async ({ page, contex
   await expect(toggle).toHaveAttribute("aria-expanded", "true");
 });
 
+/**
+ * "Why is this person's role wrong?" is the question PRODUCT.md gives the audit
+ * log a minute to answer, and the nav item was the only way in — so the answer
+ * started by retyping a name from memory into a filter.
+ *
+ * Filtered by NAME rather than by account id on purpose: `resolveFilterIdentity`
+ * (services/audit.ts) expands a name into the account, its characters AND its
+ * discord id, which are the three identifier forms one person's target rows are
+ * spread across. A uuid is `kind: "raw"` and matches only the account's own
+ * rows.
+ */
+test("each row links into the audit log filtered to that account", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedWorld();
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.goto("/admin/accounts");
+
+  const zedRow = rowFor(page, "Zed");
+  await toggleOf(zedRow).click();
+  const link = drawerOf(zedRow).getByRole("link", { name: "audit log for Zed" });
+  // Visible text leads the accessible name, so speech input reaches it by what
+  // is written on it (WCAG 2.5.3).
+  await expect(link).toHaveText("audit log");
+  await expect(link).toHaveAttribute("href", "/admin/audit?target=Zed");
+
+  await link.click();
+  await expect(page).toHaveURL(/\/admin\/audit\?target=Zed/);
+  // The destination understood the filter rather than merely receiving it.
+  await expect(page.locator("input[name='target']")).toHaveValue("Zed");
+});
+
+/**
+ * Four of the ten headers sort and six do not, and at rest they were
+ * pixel-identical — the hover colour was the only thing that ever said so, and
+ * a keyboard or touch user never sees it before committing to a click. The
+ * glyph is aria-hidden because `aria-sort` on the `<th>` already carries the
+ * state, so it must not reach any accessible name.
+ */
+test("sortable headers say so at rest, without changing their accessible names", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedWorld();
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.goto("/admin/accounts");
+
+  const sortable = page.locator(".log--dense thead th:has(a)");
+  await expect(sortable).toHaveCount(4);
+  // Name is the active sort, so it shows a direction arrow; the other three
+  // show the inactive hint.
+  await expect(page.locator(".log--dense thead .log__sortable")).toHaveCount(3);
+  await expect(
+    page.locator(".log--dense thead th:not(:has(a)) .log__sortable"),
+  ).toHaveCount(0);
+
+  await expect(
+    page.getByRole("columnheader", { name: "Name", exact: true }),
+  ).toHaveAttribute("aria-sort", "ascending");
+  // The glyph is inside the link, so an accessible name that had picked it up
+  // would read "Tier ↕" here.
+  await expect(page.getByRole("link", { name: "Tier", exact: true })).toBeVisible();
+});
+
 test("tier controls: manual set locks; return-to-auto unlocks", async ({
   page,
   context,
@@ -335,9 +415,12 @@ test("an admin reaches the queue from the count link and approves", async ({
   await toggleOf(row).click();
   // Named for the row like every other per-account control: the visible label
   // is "Approve as Green" on every queued account, and this is the press that
-  // grants someone access.
+  // grants someone access. The row goes after the visible label rather than
+  // inside it, so the label survives as one contiguous run of the accessible
+  // name and speech input can still reach the button by what is written on it
+  // (WCAG 2.5.3) — the same convention the Actions cell uses.
   await drawer
-    .getByRole("button", { name: "approve Waiting Pilot as green", exact: true })
+    .getByRole("button", { name: "Approve as Green for Waiting Pilot", exact: true })
     .click();
 
   // The queue is empty, so the standing reminder is gone...
@@ -388,13 +471,13 @@ test("pending is never offered as a manual tier an admin can assign", async ({
   await toggleOf(waiting).click();
   await expect(
     waitingDrawer.getByRole("button", {
-      name: "approve Waiting Pilot as green",
+      name: "Approve as Green for Waiting Pilot",
       exact: true,
     }),
   ).toHaveText("Approve as Green");
   await expect(
     waitingDrawer.getByRole("button", {
-      name: "approve Waiting Pilot as blue",
+      name: "Approve as Blue for Waiting Pilot",
       exact: true,
     }),
   ).toHaveText("Approve as Blue");
@@ -445,7 +528,7 @@ test("approving an account someone else already approved lands on a notice, not 
   const row = rowFor(page, "Waiting Pilot");
   await toggleOf(row).click();
   const approve = drawerOf(row).getByRole("button", {
-    name: "approve Waiting Pilot as green",
+    name: "Approve as Green for Waiting Pilot",
     exact: true,
   });
   await expect(approve).toBeVisible();
@@ -458,7 +541,14 @@ test("approving an account someone else already approved lands on a notice, not 
   await approve.click();
   // Back to the queue, not to the unfiltered list: the admin was working the
   // queue and has more of it to work.
-  await expect(page).toHaveURL(/tier=pending&error=not_pending/);
+  //
+  // Asserted as two independent params rather than as the adjacent pair they
+  // used to be. The error URL now carries the whole view the admin was looking
+  // at — sort and dir as well as the filter — so `sort=name&dir=asc` sits
+  // between these two, and a regex pinning them side by side would be pinning
+  // param order, which nothing depends on.
+  await expect(page).toHaveURL(/[?&]tier=pending(&|$)/);
+  await expect(page).toHaveURL(/[?&]error=not_pending(&|$)/);
   // Scoped rather than a bare getByRole("alert"): Next's dev-only
   // `__next-route-announcer__` carries the same role.
   await expect(page.locator("p.notice--bad")).toContainText(
@@ -468,6 +558,61 @@ test("approving an account someone else already approved lands on a notice, not 
   // The other admin's grant stands — the losing click must not re-stamp it.
   const [after] = await db.select().from(account).where(eq(account.id, waiting.id));
   expect(after.tier).toBe("blue");
+});
+
+/**
+ * The general form of the claim above, on a view that has nothing to do with
+ * the approval queue.
+ *
+ * The old error URLs carried at most a hard-coded `tier=pending`, on the theory
+ * that only queue work produced these races. Every other admin — filtered to
+ * cryo, sorted by tier changed — was dropped on the unfiltered list sorted by
+ * name and had to rebuild the view before they could carry on. `last_admin` is
+ * used here because it needs no second actor to provoke: one admin, demoting
+ * themselves. The path it takes through `adminAccountsErrorUrl` is the one
+ * every other mutation error takes.
+ */
+test("an error returns the admin to the filter and sort they were working", async ({
+  page,
+  context,
+}) => {
+  // The only admin, and frozen, so ?status=cryo is a view that actually holds
+  // them: an empty list would make the assertions below vacuous.
+  const admin = await seedMember(db, {
+    name: "Boss",
+    tier: "flygd",
+    status: "cryo",
+    isAdmin: true,
+  });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.goto("/admin/accounts?status=cryo&sort=tierChangedAt&dir=desc");
+
+  const bossRow = rowFor(page, "Boss");
+  await expect(bossRow).toHaveCount(1);
+  const revoke = bossRow.getByRole("button", { name: "revoke admin for Boss" });
+  await revoke.click();
+  await bossRow.getByRole("button", { name: /^confirm revoke admin/ }).click();
+
+  // Every param of the view survives, not just the one the old code guessed at.
+  await expect(page).toHaveURL(/[?&]status=cryo(&|$)/);
+  await expect(page).toHaveURL(/[?&]sort=tierChangedAt(&|$)/);
+  await expect(page).toHaveURL(/[?&]dir=desc(&|$)/);
+  await expect(page).toHaveURL(/[?&]error=last_admin(&|$)/);
+  // No stale `tier=pending` invented on the way through, which is what the
+  // removed forced filter would have added here.
+  await expect(page).not.toHaveURL(/[?&]tier=/);
+
+  await expect(page.locator("p.notice--bad")).toContainText("last admin");
+  // And the list under the notice is the filtered one, rendered from those
+  // params rather than merely named by them.
+  await expect(page.locator(ROWS)).toHaveCount(1);
+  // The active chip's accessible name picks up the "▪" its aria-current
+  // styling draws in front of it, and a bare "cryo" also matches the Cryo
+  // column's sort link, so name the chip as it actually reads.
+  await expect(page.getByRole("link", { name: "▪ cryo", exact: true })).toHaveAttribute(
+    "aria-current",
+    "true",
+  );
 });
 
 /**
@@ -489,7 +634,7 @@ test("a de-roled admin's approve click gets the notice, not the error boundary",
   const row = rowFor(page, "Waiting Pilot");
   await toggleOf(row).click();
   const approve = drawerOf(row).getByRole("button", {
-    name: "approve Waiting Pilot as green",
+    name: "Approve as Green for Waiting Pilot",
     exact: true,
   });
   await expect(approve).toBeVisible();
@@ -1046,6 +1191,22 @@ test("accounts at 320px: an open drawer wraps to the scroll region, not to the t
   await toggleOf(zedRow).click();
   await expect(drawerOf(zedRow)).toBeVisible();
 
+  // The region is height-capped against the chrome above it now
+  // (`.scroller--tall:has(.log--dense)`), so on a 720px viewport the third
+  // row's drawer opens below the region's own vertical fold. Everything this
+  // test asserts is horizontal — `inRegion` is only here to stop `covered: 0`
+  // being vacuously true of an off-screen control — so scroll the region down
+  // to the drawer once and leave scrollLeft alone, which `coveredByPin` and
+  // `geometry` set for themselves.
+  await page.evaluate(() => {
+    const sc = document.querySelector(".scroller") as HTMLElement;
+    const drawer = sc.querySelector(".drawer-row:not([hidden])") as HTMLElement;
+    drawer.scrollIntoView({ block: "center" });
+    // scrollIntoView on a sticky-headed region can leave the row under the
+    // header; nudge back by its height so the top of the drawer is clear.
+    const head = sc.querySelector("thead") as HTMLElement;
+    sc.scrollTop = Math.max(0, sc.scrollTop - head.getBoundingClientRect().height);
+  });
   // The drawer no longer contributes to the table's width: it sizes off the
   // scrollport via a container query rather than off the cell it lives in, so
   // opening one adds no horizontal scroll at all.
@@ -1212,6 +1373,38 @@ test("the empty-state row does not inherit the pinned column", async ({
   });
   expect(style.position).toBe("static");
   expect(style.borderRight).toBe("0px");
+
+  // ...and the message it holds is actually on screen, which is the assertion
+  // this test used to be missing. The cell is ~750px wide inside a ~286px
+  // scrollport and `text-align: center` centred the text at x≈375 — entirely
+  // outside the region, with the start fade deliberately suppressed on
+  // sticky-column tables so nothing even cued scrolling to it. `toHaveText`
+  // passed the whole time: the text existed, it was just nowhere a reader
+  // could get to it. Presence is what let this ship, so measure the box.
+  const boxes = await page.evaluate(() => {
+    const region = document.querySelector(".scroller") as HTMLElement;
+    const text = document.querySelector(".log__empty-text") as HTMLElement;
+    const r = region.getBoundingClientRect();
+    const t = text.getBoundingClientRect();
+    return {
+      overlap: Math.max(0, Math.min(r.right, t.right) - Math.max(r.left, t.left)),
+      textWidth: t.width,
+      textLeft: t.left,
+      regionLeft: r.left,
+      regionRight: r.right,
+      maxScrollLeft: region.scrollWidth - region.clientWidth,
+    };
+  });
+  // The region really does scroll, so "on screen" is a fact about this message
+  // and not about a table that happened to fit.
+  expect(boxes.maxScrollLeft, "the table is wider than its region").toBeGreaterThan(0);
+  expect(
+    boxes.overlap,
+    "the empty-state message is wholly inside the scroll region at rest",
+  ).toBeCloseTo(boxes.textWidth, 0);
+  expect(boxes.textLeft, "...and not pushed off to the right of it").toBeLessThan(
+    boxes.regionRight,
+  );
 });
 
 /* --- Row identity -------------------------------------------------------- */
@@ -1259,6 +1452,7 @@ test("an account with no main is still identified in the pinned column", async (
   // substring, and the save button beside this field is named "save note for
   // <identity>", which contains the field's whole name. Without it these count
   // the pair and the assertion says nothing about the field.
+  await openEveryDrawer(page);
   await expect(page.getByLabel("Note for Sam Alt", { exact: true })).toHaveCount(1);
   await expect(
     page.getByLabel(`Note for acct ${orphan.id.slice(0, 8)}`, { exact: true }),
@@ -1325,6 +1519,7 @@ test("a blank character name never becomes a row's identity", async ({
   // still applies: the row is named by a character that is not its main. The
   // "(+1)" is the blank-named sibling being counted, and it has to be in the
   // accessible name too — it is in the visible label (WCAG 2.5.3).
+  await openEveryDrawer(page);
   await expect(page.getByLabel("Note for Real Name", { exact: true })).toHaveCount(1);
   await expect(summaries.filter({ hasText: "Real Name" })).toHaveAccessibleName(
     /^Real Name ·no main \(\+1\) — crew and controls$/,
