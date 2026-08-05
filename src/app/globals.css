@@ -64,10 +64,8 @@
   --s-8: 4rem;
   --s-9: 6rem;
 
-  /* Reserved. Deliberately unreferenced: the one surface with room for a
-     display step is the login hero, which currently sets its own 1.5rem. Kept
-     declared so the scale has a step above --t-h1 to reach for rather than
-     inventing one at the call site. Do not delete as dead. */
+  /* Spent by .launch__title, the login hero — the one surface with room for a
+     display step, and the reason this was declared. */
   --t-display: clamp(2.5rem, 6vw, 4rem);
   --t-h1: clamp(1.75rem, 3vw, 2.25rem);
   --t-h2: 1.375rem;
@@ -1854,9 +1852,16 @@ h3.rule-head__label {
   }
 }
 
+/* The display step, finally spent. At 1.5rem this was 1.09x --t-h2 — inside the
+   system's own declared 1.25 minimum ratio, and smaller than every product h1,
+   so the product's name was set smaller than "Accounts" on an admin table.
+   --t-display was declared for this surface and referenced nowhere; the tracking
+   comes with it, from DESIGN.md's scale table. Positive 0.02em was the old
+   1.5rem's compensation and is wrong at 4rem, where a grotesque at 700 needs the
+   negative to stop reading as spaced-out. */
 .launch__title {
-  font-size: 1.5rem;
-  letter-spacing: 0.02em;
+  font-size: var(--t-display);
+  letter-spacing: -0.03em;
 }
 
 .launch__motto {
@@ -1894,6 +1899,13 @@ h3.rule-head__label {
   color: var(--ink-faint);
 }
 
+/* One dd per scope, so the list has real boundaries. Joined with a space and
+   wrapped with `overflow-wrap: anywhere`, four identifiers in a ~30ch box gave
+   the reader no way to tell a scope boundary from a line break — at the consent
+   moment, which is the one moment the list exists for. `anywhere` stays: a
+   single esi-*.v1 identifier can still outrun the box on its own, and now that
+   each one owns a line, a mid-identifier break can no longer be mistaken for
+   the start of the next scope. */
 .launch__scopes dd {
   margin-top: var(--s-1);
   font-family: var(--font-mono), ui-monospace, monospace;
@@ -1902,13 +1914,28 @@ h3.rule-head__label {
   overflow-wrap: anywhere;
 }
 
+/* inline-block, not block. As a block this was a ~414px strip around a 270px
+   button: the focus ring outlined the strip rather than the control, the empty
+   space either side of the button was clickable, and `a:hover` — which the
+   global anchor rule expresses as a colour change — is unobservable on a block
+   whose only child is an image. The product's single entry action therefore had
+   no hover state of any kind. Shrink-wrapping the box fixes the ring and the hit
+   area; the rule below supplies the state. Centred by the panel's text-align,
+   which is why .launch__action img no longer needs its own auto margins. */
 .launch__action {
-  display: block;
+  display: inline-block;
   margin-top: var(--s-6);
+  /* Held transparent rather than added on hover, so the box does not resize
+     under the pointer and shift the button 1px. */
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  transition: border-color var(--dur-color) var(--ease);
 }
 
-.launch__action img {
-  margin: 0 auto;
+/* The quiet grade's language — a rule appearing on hover — because that is what
+   DESIGN.md already gives a control whose resting state carries no border. */
+.launch__action:hover {
+  border-color: var(--gold);
 }
 
 .launch__foot {

@@ -48,13 +48,59 @@
  *  and either callback when the session is gone mid-link. Sign-in links expire
  *  10 minutes after you start them (src/services/oauth-tx.ts). */
 export const LOGIN_ERRORS = {
-  oauth_denied: "Nothing changed. No access was granted. Sign in whenever you're ready.",
+  oauth_denied: "Sign-in was cancelled. No access was granted.",
   oauth_expired:
     "That sign-in link expired before you finished. They last 10 minutes. Start again below.",
   oauth_failed:
     "EVE couldn't be reached, so sign-in didn't finish. Nothing changed. Try again.",
-  session_expired: "Your session ended. Sign in again to pick up where you left off.",
+  session_expired: "Your session ended. Sign in again below.",
 } as const;
+
+/**
+ * Which `/login` codes are not faults, and so must not render in the alarm
+ * tone. PRODUCT.md principle 4: "Reserve alarm colour for things the user can
+ * and should fix." A member who clicked cancel on EVE's consent screen chose
+ * that, and a session cookie reaching its TTL is the cookie doing its job —
+ * neither is broken, and painting both `bad` told four different stories in one
+ * colour. The two that remain `bad` are genuine faults: a link that ran out
+ * before the member finished, and EVE being unreachable.
+ *
+ * CARRIED ALONGSIDE THE MAP, NOT INSIDE IT. Moving the values to
+ * `{tone, text}` would either diverge `LOGIN_ERRORS` from its two siblings
+ * below, or force the same reshape through `/account` and `/admin/accounts` —
+ * and through the payout pages as well, because `lookupErrorMessage` is
+ * re-exported by `src/app/payouts/errors.ts` and read against `OPERATION_ERRORS`
+ * and `NEW_OPERATION_ERRORS` too. That is five maps across four surfaces to
+ * restyle one notice. A sparse sidecar keyed by the same union costs nothing to
+ * the four maps that do not want it, and stays typed: a code renamed in
+ * `LOGIN_ERRORS` fails to compile here.
+ *
+ * Sparse on purpose — a `LOGIN_ERRORS` code that is absent here renders `bad`,
+ * so the default is still the loud one and a new code has to opt out
+ * deliberately rather than be quietly demoted by forgetting to list it. (A
+ * string that is not a `LOGIN_ERRORS` key at all is a separate case, and
+ * `loginErrorTone` below handles it separately.)
+ */
+export const LOGIN_ERROR_TONES: Partial<Record<LoginErrorCode, "info">> = {
+  oauth_denied: "info",
+  session_expired: "info",
+};
+
+/** The tone `/login` should render `code` in.
+ *
+ *  `bad` is reserved for a code that actually resolves to a message: no code at
+ *  all, and a code nobody recognises, both render an EMPTY slot, and `Notice`
+ *  derives `role` from the tone whether or not the slot has text in it. Sending
+ *  those through the `bad` branch would put `role="alert"` — the assertive one —
+ *  on every ordinary visit to the sign-in page, for a region that stays empty.
+ *  Inert in practice, since this page only ever fills that slot by a full
+ *  navigation, but an empty assertive region is not a thing to leave lying
+ *  around on the app's front door. The sparse default still holds where it was
+ *  meant to: a real code with no sidecar entry is `bad`. */
+export function loginErrorTone(code: string | undefined): "bad" | "info" {
+  if (code === undefined || !Object.hasOwn(LOGIN_ERRORS, code)) return "info";
+  return Object.hasOwn(LOGIN_ERROR_TONES, code) ? "info" : "bad";
+}
 
 /** Codes reaching `/account`. All but `not_admin` and `stale_character` are
  *  emitted by a callback route redirect. The distinction the copy has to carry
