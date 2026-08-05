@@ -292,7 +292,7 @@ test("approving an account updates the nav badge, and the new count carries to t
   page,
   context,
 }) => {
-  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
   await seedMember(db, { name: "Waiting One", tier: "pending" });
   await seedMember(db, { name: "Waiting Two", tier: "pending" });
   await context.addCookies([await sessionCookieFor(db, admin.id)]);
@@ -306,7 +306,7 @@ test("approving an account updates the nav badge, and the new count carries to t
   await row.locator(".row-toggle").click();
   await row
     .locator("xpath=following-sibling::tr[1]")
-    .getByRole("button", { name: "Approve as Green for Waiting One", exact: true })
+    .getByRole("button", { name: "Approve as Alumni for Waiting One", exact: true })
     .click();
 
   // The layout re-ran for the action that changed it.
