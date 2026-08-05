@@ -2275,8 +2275,17 @@ h3.rule-head__label {
 
 /* --- Utility ------------------------------------------------------------ */
 
+/* A `.field` plus a micro `Submit`, meant to sit inline with the prose around
+   it — but `display: inline` ignored both controls' own box model, so a 36px
+   field and a 28px button ran straight into whatever text sat beside them
+   with no line of their own to share. Flex gives the pair a row that centres
+   the field against the button and wraps as a unit at narrow widths, rather
+   than splitting the field and button onto separate lines mid-pair. */
 .inline-form {
-  display: inline;
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  flex-wrap: wrap;
 }
 
 .stack {

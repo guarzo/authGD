@@ -39,7 +39,9 @@ describe("PaymentHistory", () => {
       }),
     ]);
     expect(html).toContain("2026-08-01 12:34:56 UTC");
-    expect(html).toContain("450000.00 ISK");
+    // fmtIsk groups this display value with commas — the raw "450000.00"
+    // form no longer appears in the rendered markup.
+    expect(html).toContain("450,000.00 ISK");
     expect(html).toContain("reverted");
     expect(html).toContain("FC Prime");
     expect(html).toContain("Second FC");

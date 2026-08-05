@@ -126,8 +126,9 @@ export async function createOperation(
 /**
  * The corp share was previously set once at creation and never again: an
  * operator who left the field at its default committed every participant to a
- * 0% corp share, with no way back short of deleting the operation and rebuilding
- * it. This is the correction path.
+ * 0% corp share, with no way back at all — there is no route to delete a
+ * payout operation, only a loot pool within one, so nothing could undo the
+ * mistake. This is the correction path.
  *
  * Same gate as every other edit — `assertEditable`, holding the row lock — and
  * it recalculates, because the percentage is an input to `computeSplit` and

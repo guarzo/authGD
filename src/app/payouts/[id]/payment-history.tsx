@@ -1,4 +1,5 @@
 import { Disclosure } from "@/app/_components/disclosure";
+import { fmtIsk } from "@/app/_components/format-isk";
 import type { PayoutPaymentView } from "@/services/payout-view";
 
 /** Payment events are audit-grade, so they get a full instant rather than a
@@ -41,7 +42,7 @@ export function PaymentHistory({
         {payments.map((ev) => (
           <li key={ev.id}>
             <span className="mono nowrap">{fmtAt(ev.at)}</span> {ev.kind}{" "}
-            <span className="mono nowrap">{ev.amount} ISK</span> by{" "}
+            <span className="mono nowrap">{fmtIsk(ev.amount)} ISK</span> by{" "}
             {ev.actorName ?? "unknown"}
           </li>
         ))}
