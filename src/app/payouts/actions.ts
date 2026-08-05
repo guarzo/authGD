@@ -93,7 +93,15 @@ function operationFailed(operationId: string, code: OperationErrorCode): never {
  *  submitted values back so the operator corrects one field instead of retyping
  *  five. Values over 500 chars are dropped rather than round-tripped: only
  *  `notes` can realistically reach that, and a redirect URL is the wrong place
- *  to discover a header-size limit. */
+ *  to discover a header-size limit.
+ *
+ *  Every message in `NEW_OPERATION_ERRORS` tells the operator the rest of the
+ *  form survived, which this drop could silently falsify. The form closes that
+ *  gap at the input instead of explaining it after the fact: the Notes textarea
+ *  carries `maxLength={500}`, the same ceiling, so a value long enough to be
+ *  dropped cannot be typed into the only field that could hold one. The two
+ *  numbers have to move together — a `maxLength` raised above this cap
+ *  reinstates the silent drop. */
 const CREATE_FIELDS = [
   "name",
   "occurredAt",
