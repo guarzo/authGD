@@ -20,7 +20,7 @@ const { readMigrationFiles } = await import("drizzle-orm/migrator");
  */
 describe("assertNoSchemaDrift", () => {
   const FOREIGN_HASH = "bogus-foreign-hash-test";
-  let client: Client;
+  let client: Client | undefined;
 
   // Every case here reads or writes `drizzle.__drizzle_migrations`, which only
   // exists once something has migrated. In a full run an alphabetically earlier
@@ -32,10 +32,14 @@ describe("assertNoSchemaDrift", () => {
   });
 
   afterEach(async () => {
+    // A leaked sentinel row has a created_at far in the future, which makes
+    // migrate() a permanent no-op for this database — say so rather than
+    // swallow it, even though the next run's own drift check would catch it.
     await client
       ?.query("DELETE FROM drizzle.__drizzle_migrations WHERE hash = $1", [FOREIGN_HASH])
-      .catch(() => {});
+      .catch((err) => console.warn("could not remove the drift sentinel row:", err));
     await client?.end().catch(() => {});
+    client = undefined;
     vi.mocked(readMigrationFiles).mockRestore();
   });
 

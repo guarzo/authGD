@@ -351,7 +351,11 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   try {
     await assertNoSchemaDrift(client, url);
   } catch (err) {
-    await client.end();
+    // Guarded: a rejecting end() here would replace the drift diagnosis — the
+    // one message this check exists to deliver — with a connection error.
+    await client
+      .end()
+      .catch((endErr) => debugLog("could not close after drift:", endErr));
     throw err;
   }
 
