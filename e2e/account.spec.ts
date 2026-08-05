@@ -365,7 +365,7 @@ test("the first-run notice promises Discord roles once Discord is linked", async
 });
 
 test("a member can unlink their own Discord", async ({ page, context }) => {
-  const member = await seedMember(db, { name: "Pilot", tier: "green" });
+  const member = await seedMember(db, { name: "Pilot", tier: "alumni" });
   await db.insert(discordLink).values({
     accountId: member.id,
     discordUserId: "duid-e2e",

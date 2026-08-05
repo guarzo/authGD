@@ -359,8 +359,8 @@ test("the skip link moves focus to the main landmark", async ({ page, context })
 });
 
 test("an admin can unlink a member's Discord", async ({ page, context }) => {
-  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
-  const member = await seedMember(db, { name: "Pilot", tier: "green" });
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
+  const member = await seedMember(db, { name: "Pilot", tier: "alumni" });
   await db.insert(discordLink).values({
     accountId: member.id,
     discordUserId: "duid-e2e",

@@ -245,7 +245,7 @@ test("the pending count reaches the admin nav, without renaming the tab", async 
   page,
   context,
 }) => {
-  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
   await seedMember(db, { name: "Waiting One", tier: "pending" });
   await seedMember(db, { name: "Waiting Two", tier: "pending" });
   await context.addCookies([await sessionCookieFor(db, admin.id)]);
@@ -263,7 +263,7 @@ test("the pending count reaches the admin nav, without renaming the tab", async 
   expect(describedBy).toBe("nav-badge-/admin/accounts");
 
   await resetDb(db);
-  const solo = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  const solo = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
   await context.clearCookies();
   await context.addCookies([await sessionCookieFor(db, solo.id)]);
   await page.goto("/admin/audit");
