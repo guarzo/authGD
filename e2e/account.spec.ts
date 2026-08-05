@@ -91,9 +91,7 @@ test("account page shows characters, main marker, and tier", async ({
   await expect(page.getByText("Pilot Prime")).toBeVisible();
   await expect(page.getByText("(main)")).toBeVisible();
   await expect(page.getByText("Pilot Alt")).toBeVisible();
-  // "flygd" also happens to be STANDINGS_LABEL in the e2e env, which the page
-  // renders again in the contacts note now attached to the STANDINGS column —
-  // so scope to the tier field rather than matching the bare word.
+  // STANDINGS_LABEL is "authgd" in the e2e env, which the page echoes.
   await expect(page.locator("[data-field='tier']")).toContainText("flygd");
 });
 
@@ -106,7 +104,7 @@ test("the contacts note describes the column via a table caption, and shows visi
     tier: "flygd",
     alts: ["Unsynced Alt"],
   });
-  // FLYGD, because only a FLYGD account's characters are contacts targets at
+  // MEMBER, because only a member account's characters are contacts targets at
   // all — the note explains a column that says nothing to anyone else. Only the
   // main has ever synced, so the alt's never-run state is one the note explains
   // and the note earns its space above the manifest.
@@ -122,7 +120,7 @@ test("the contacts note describes the column via a table caption, and shows visi
   // any cell in the CONTACTS column, unlike a `<th>`'s aria-describedby, which
   // only ever reached the header.
   const caption = page.locator("table.log caption");
-  await expect(caption).toHaveText(/authGD owns the flygd contact label/);
+  await expect(caption).toHaveText(/authGD owns the authgd contact label/);
   await expect(caption).toHaveClass(/visually-hidden/);
   await expect(page.locator("[title]")).toHaveCount(0);
   await expect(page.locator(".footnote")).toHaveCount(0);
@@ -150,7 +148,7 @@ test("the contacts note describes the column via a table caption, and shows visi
     0,
   );
   await expect(page.locator("table.log caption")).toHaveText(
-    /authGD owns the flygd contact label/,
+    /authGD owns the authgd contact label/,
   );
 });
 

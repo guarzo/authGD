@@ -154,13 +154,13 @@ describe("getAccountView", () => {
     await ctx.db.insert(contactSyncState).values({
       characterId: 1,
       lastResult: "label_mismatch",
-      lastDetail: "FLYGD",
+      lastDetail: "AUTHGD",
     });
 
     const view = await getAccountView(ctx.db, cfg, acc.id);
     const ch = view.characters.find((c) => c.id === 1);
     expect(ch?.contactSyncResult).toBe("label_mismatch");
-    expect(ch?.contactSyncDetail).toBe("FLYGD");
+    expect(ch?.contactSyncDetail).toBe("AUTHGD");
   });
 
   it("leaves the detail null when there is nothing to report", async () => {

@@ -20,7 +20,7 @@ const validEnv = {
   WANDERER_BASE_URL: "https://wanderer.example",
   WANDERER_API_KEY: "k",
   WANDERER_ACL_ID: "acl-1",
-  STANDINGS_LABEL: "flygd",
+  STANDINGS_LABEL: "authgd",
   STANDINGS_VALUE: "5",
   ESI_CONTACT: "ops@example.com",
   SYNC_MODE: "live",

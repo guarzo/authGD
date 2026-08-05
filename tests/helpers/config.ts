@@ -21,7 +21,7 @@ export function testConfig(overrides: Partial<NodeJS.ProcessEnv> = {}): Config {
     WANDERER_BASE_URL: "https://wanderer.example",
     WANDERER_API_KEY: "wkey",
     WANDERER_ACL_ID: "acl-1",
-    STANDINGS_LABEL: "flygd",
+    STANDINGS_LABEL: "authgd",
     STANDINGS_VALUE: "5",
     ESI_CONTACT: "ops@example.com",
     // "live", deliberately (spec D10): 13 test files build config through this

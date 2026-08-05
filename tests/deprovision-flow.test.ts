@@ -44,7 +44,7 @@ it("main leaves alliance → alumni → contacts removed, ACL removed, role chan
         corporationId: 1,
         allianceId: id === 20 ? 99000001 : null,
       })),
-    getContactLabels: async () => [{ labelId: LABEL_ID, labelName: "flygd" }],
+    getContactLabels: async () => [{ labelId: LABEL_ID, labelName: "authgd" }],
     // stayer's char 20 currently has 10 and 11 under our label
     getAllContacts: async (characterId) =>
       characterId === 20

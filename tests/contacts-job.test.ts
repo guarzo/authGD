@@ -8,7 +8,7 @@ import { setupTestDb, truncateAll } from "./helpers/db";
 import { testConfig } from "./helpers/config";
 import { seedAccount, seedCharacter } from "./helpers/seed";
 
-const cfg = testConfig(); // label "flygd", standing 5
+const cfg = testConfig(); // label "authgd", standing 5
 const LABEL_ID = 77;
 
 let ctx: Awaited<ReturnType<typeof setupTestDb>>;
@@ -38,7 +38,7 @@ function fakeEsi(perChar: {
   const calls: Calls = { adds: [], edits: [], deletes: [] };
   const esi: ContactsEsi = {
     getContactLabels: async (characterId) =>
-      perChar.labels?.[characterId] ?? [{ labelId: LABEL_ID, labelName: "flygd" }],
+      perChar.labels?.[characterId] ?? [{ labelId: LABEL_ID, labelName: "authgd" }],
     getAllContacts: async (characterId) => {
       const c = perChar.contacts?.[characterId] ?? [];
       if (c === "fail") throw new EsiError("page read failed", 500, "transient");
@@ -253,7 +253,7 @@ describe("runContactsJob", () => {
         if (characterId === 1) {
           throw new EsiError("token has no scope", 403, "needs_reauth");
         }
-        return [{ labelId: LABEL_ID, labelName: "flygd" }];
+        return [{ labelId: LABEL_ID, labelName: "authgd" }];
       },
     };
     const result = await runContactsJob({ db: ctx.db, cfg, esi, fetchImpl: okToken });
@@ -267,13 +267,13 @@ describe("runContactsJob", () => {
     const acc = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
     const { esi, calls } = fakeEsi({
-      labels: { 1: [{ labelId: LABEL_ID, labelName: "FLYGD" }] },
+      labels: { 1: [{ labelId: LABEL_ID, labelName: "AUTHGD" }] },
     });
     await runContactsJob({ db: ctx.db, cfg, esi, fetchImpl: okToken });
 
     const row = await lastResult(1);
     expect(row?.lastResult).toBe("label_mismatch");
-    expect(row?.lastDetail).toBe(JSON.stringify(["FLYGD"]));
+    expect(row?.lastDetail).toBe(JSON.stringify(["AUTHGD"]));
     expect(row?.lastSyncedAt).toBeNull();
     expect(calls.adds).toEqual([]);
     expect(calls.edits).toEqual([]);
@@ -286,13 +286,13 @@ describe("runContactsJob", () => {
     const { esi } = fakeEsi({
       labels: {
         1: [
-          { labelId: 1, labelName: "FLYGD" },
-          { labelId: 2, labelName: "flygd " },
+          { labelId: 1, labelName: "AUTHGD" },
+          { labelId: 2, labelName: "authgd " },
         ],
       },
     });
     await runContactsJob({ db: ctx.db, cfg, esi, fetchImpl: okToken });
-    expect((await lastResult(1))?.lastDetail).toBe(JSON.stringify(["FLYGD", "flygd "]));
+    expect((await lastResult(1))?.lastDetail).toBe(JSON.stringify(["AUTHGD", "authgd "]));
   });
 
   it("still records missing_label when no label is even close", async () => {
@@ -310,11 +310,11 @@ describe("runContactsJob", () => {
     const acc = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
 
-    const bad = fakeEsi({ labels: { 1: [{ labelId: LABEL_ID, labelName: "FLYGD" }] } });
+    const bad = fakeEsi({ labels: { 1: [{ labelId: LABEL_ID, labelName: "AUTHGD" }] } });
     await runContactsJob({ db: ctx.db, cfg, esi: bad.esi, fetchImpl: okToken });
-    expect((await lastResult(1))?.lastDetail).toBe(JSON.stringify(["FLYGD"]));
+    expect((await lastResult(1))?.lastDetail).toBe(JSON.stringify(["AUTHGD"]));
 
-    const good = fakeEsi({ labels: { 1: [{ labelId: LABEL_ID, labelName: "flygd" }] } });
+    const good = fakeEsi({ labels: { 1: [{ labelId: LABEL_ID, labelName: "authgd" }] } });
     await runContactsJob({ db: ctx.db, cfg, esi: good.esi, fetchImpl: okToken });
 
     const row = await lastResult(1);
@@ -328,7 +328,7 @@ describe("needs_reauth CAS (F5)", () => {
     const acc = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
     const esi: ContactsEsi = {
-      ...fakeEsi({ labels: { 1: [{ labelId: 7, labelName: "flygd" }] } }).esi,
+      ...fakeEsi({ labels: { 1: [{ labelId: 7, labelName: "authgd" }] } }).esi,
       getAllContacts: async () => {
         throw new EsiError("missing scope", 403, "needs_reauth");
       },
@@ -342,7 +342,7 @@ describe("needs_reauth CAS (F5)", () => {
     const acc = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
     const esi: ContactsEsi = {
-      ...fakeEsi({ labels: { 1: [{ labelId: 7, labelName: "flygd" }] } }).esi,
+      ...fakeEsi({ labels: { 1: [{ labelId: 7, labelName: "authgd" }] } }).esi,
       getAllContacts: async () => {
         // concurrent re-auth: someone else stored a fresh blob mid-flight
         await ctx.db
