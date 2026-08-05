@@ -310,7 +310,7 @@ export default async function AdminAuditPage({
 
   // tier -> role id in config; this table needs role id -> tier. Through
   // tierLabel(), because the value is rendered to an admin as a role's name:
-  // a deployment that calls its members "FlyGD" wants `+FlyGD`, not `+member`.
+  // a deployment that calls its members "Pilot" wants `+Pilot`, not `+member`.
   const roleNames = new Map(
     Object.entries(getConfig().discord.roleIds).map(([tier, id]) => [
       id,

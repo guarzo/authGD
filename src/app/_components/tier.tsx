@@ -40,7 +40,7 @@ export function Tier({
   return (
     <span className={size === "lead" ? `${tone} tier--lead` : tone}>
       {/* The label is display only — `tone` above and the CSS both key off the
-          raw enum value, so a deployment naming its members "FlyGD" still gets
+          raw enum value, so a deployment naming its members "Pilot" still gets
           .tier--member. */}
       {tierLabel(tier)}
       {locked && (

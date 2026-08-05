@@ -1274,7 +1274,7 @@ test("a tier demotion row shows why it happened without opening the payload", as
       action: "tier.changed",
       target: member.id,
       // Deliberately NOT renamed: this row stands in for audit history written
-      // before migration 0007. Per spec D4 it must still render its stored values.
+      // before migration 0007, and must still render its stored values.
       details: { from: "flygd", to: "green", cause: "main left alliance" },
     },
   ]);

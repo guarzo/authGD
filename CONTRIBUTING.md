@@ -73,7 +73,9 @@ Never edit a migration that has already been applied to a running deployment —
 `fly.toml` runs migrations as a release command on every deploy, so an edited one
 either fails or silently diverges. Destructive or data-rewriting migrations
 (renaming an enum value, dropping a column) need a deploy runbook in
-`docs/ops.md` alongside them; see the tier rename (0007) for the shape.
+`docs/ops.md` alongside them: the scale-down and scale-up steps, the exact SQL
+to revert, and how to clear the migration's row from
+`drizzle.__drizzle_migrations` so the next forward deploy re-applies it.
 
 **Secrets stay out of the repo and out of logs.** ESI refresh tokens are
 encrypted at rest with `TOKEN_ENCRYPTION_KEY`; don't log decrypted tokens, and

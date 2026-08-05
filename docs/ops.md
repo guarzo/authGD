@@ -356,7 +356,7 @@ exercises the DNS record and the certificate users actually depend on, so a
 probe of the `.fly.dev` name would stay green through an expired cert:
 
 ```bash
-gh variable set APP_BASE_URL --body https://authgd.zoolanders.space
+gh variable set APP_BASE_URL --body https://auth.example.com
 ```
 
 This is the same value as the app's own `APP_BASE_URL` secret, but the two are
@@ -800,121 +800,12 @@ sits at 24 to track Active LTS, well clear of that, but the Dockerfile copies
 `.npmrc` before `npm ci` in both stages so `engine-strict` turns any regression
 below the floor into a **build** failure instead of a release-time one.
 
-## Tier rename migration (0007)
-
-The tier enum values were renamed in place: `flygd → member`, `blue →
-associate`, `green → alumni`. `RENAME VALUE` rewrites no rows, but the old image
-cannot run against the new enum — its queries use values Postgres no longer
-accepts. **This deploy requires a maintenance window.**
-
-### Deploy
-
-`docs/ops.md` § "Sizing and redundancy" runs **`web=2`, `worker=1`** — `web=2`
-is a deliberate choice that closes the deploy gap, not a default. Record the
-live counts before scaling down and restore those, rather than trusting the
-numbers written here:
-
-```bash
-fly scale show   # record the current web and worker counts
-```
-
-1. `fly scale count web=0 worker=0`
-2. Set the new role secrets, copying each value verbatim from the old one.
-   Read the three old values first and substitute them for the placeholders —
-   the `<…>` below are not shell syntax and will be set literally if pasted
-   as-is. Fly secrets are **write-only**: `fly secrets list` shows digests, not
-   values, so the only way to read them back is off a running machine, before
-   step 1 scales the machines to zero:
-   ```bash
-   fly ssh console -C "printenv DISCORD_ROLE_ID_FLYGD"
-   fly ssh console -C "printenv DISCORD_ROLE_ID_BLUE"
-   fly ssh console -C "printenv DISCORD_ROLE_ID_GREEN"
-   ```
-   That prints each value to your terminal, where it lands in scrollback and
-   shell history — treat the session accordingly. Leave the old three set:
-   ```bash
-   fly secrets set DISCORD_ROLE_ID_MEMBER='<paste value of DISCORD_ROLE_ID_FLYGD>' \
-                   DISCORD_ROLE_ID_ASSOCIATE='<paste value of DISCORD_ROLE_ID_BLUE>' \
-                   DISCORD_ROLE_ID_ALUMNI='<paste value of DISCORD_ROLE_ID_GREEN>'
-   ```
-3. Merge the pull request. **Merging is the deploy** — this repo deploys from
-   `main` through Fly's GitHub integration, so there is no `fly deploy` to run
-   by hand, and merging before step 1 would start a rolling replacement with
-   the old image still serving against the new enum. Watch `fly releases` until
-   the release command reports the migration applied.
-
-   **Do not arm auto-merge on a migration PR.** Merging is the deploy, and
-   auto-merge fires whenever the last required check goes green — which may be
-   long after you clicked it. On this migration it fired roughly 90 minutes
-   later and took the deploy with it, machines still up, with nobody watching.
-   Merge by hand, at the moment you are ready for the window.
-4. `fly scale count web=2 worker=1` (or the counts recorded above), then verify
-   `/api/health` and load `/admin/accounts`
-5. Confirm the renamed role secrets actually resolve. `/api/health` and
-   `/admin/accounts` prove the enum rename took; they say nothing about Discord,
-   and a mistyped or omitted `DISCORD_ROLE_ID_*` fails silently as "no role
-   managed" rather than as an outage. On `/admin/sync`, run the
-   "Sync membership, contacts, wanderer, discord-roles" action and wait for the
-   `discord-roles` runs to land green — a bad role ID surfaces there as a
-   Discord role configuration error (and on the ops webhook).
-6. Only after steps 4 and 5 are confirmed healthy:
-   ```bash
-   fly secrets unset DISCORD_ROLE_ID_FLYGD DISCORD_ROLE_ID_BLUE DISCORD_ROLE_ID_GREEN
-   ```
-
-Step 6 is last and separate so a rollback still has a bootable old image.
-
-### Rollback
-
-Keeping the old secrets is **necessary but not sufficient** — the enum must be
-reverted before the old image starts, or it fails on every tier read regardless
-of configuration.
-
-1. `fly scale count web=0 worker=0`
-2. Revert the enum:
-   ```sql
-   ALTER TYPE "public"."tier" RENAME VALUE 'member' TO 'flygd';
-   ALTER TYPE "public"."tier" RENAME VALUE 'associate' TO 'blue';
-   ALTER TYPE "public"."tier" RENAME VALUE 'alumni' TO 'green';
-   ALTER TABLE "account" ALTER COLUMN "tier" SET DEFAULT 'green';
-   ```
-3. Remove the migration's row so the next forward deploy re-applies it.
-   **`__drizzle_migrations.hash` is a SHA-256 of the file contents, not the
-   filename — matching on `'%0007%'` finds nothing and silently leaves the row
-   in place.** The row is identified by `created_at`, which is the `when` value
-   drizzle-kit recorded in `drizzle/meta/_journal.json` for the `0007_*` entry.
-   Read that number out of the journal in the deployed image, then, in the same
-   transaction as step 2:
-
-   ```sql
-   -- <when> is the "when" field of the 0007 entry in drizzle/meta/_journal.json
-   -- <hash> is the output of: sha256sum drizzle/0007_<name>.sql
-   SELECT id, hash, created_at FROM drizzle.__drizzle_migrations
-    WHERE created_at = <when>;
-   -- confirm exactly one row, and that its hash equals <hash>, then:
-   DELETE FROM drizzle.__drizzle_migrations
-    WHERE created_at = <when> AND hash = '<hash>';
-   ```
-
-   Run steps 2 and 3 inside one `BEGIN`/`COMMIT`, and check the `DELETE` reported
-   `DELETE 1` before committing. If the `SELECT` or the `DELETE` touches zero or
-   more than one row, `ROLLBACK` and stop — reverting the enum without clearing
-   the record leaves the next deploy unable to move forward, and clearing the
-   wrong record is worse. Keying the `DELETE` on the hash as well as `created_at`
-   means a mistyped `<when>` deletes nothing rather than something else.
-4. Re-set `DISCORD_ROLE_ID_FLYGD/_BLUE/_GREEN` if step 6 of the deploy already ran
-5. `fly deploy --image <previous image ref>`
-6. `fly scale count web=2 worker=1` (or the counts recorded before the deploy)
-
-A Fly version bump does not guarantee a new image — check `ImageRef` before
-concluding the rollback took effect.
-
 ## Branding deploy — set the secrets before you merge
 
-The tier rename above changed what the database stores. This one changes only
-what the page says: `TIER_LABEL_*` and `BRAND_*` are read at request time and
-have defaults, so **there is no migration and no maintenance window** — a plain
-rolling deploy, nothing to scale down.
+Changing the vocabulary changes only what the page says, never what the database
+stores: `TIER_LABEL_*` and `BRAND_*` are read at request time and have defaults,
+so **there is no migration and no maintenance window** — a plain rolling deploy,
+nothing to scale down.
 
 The one thing that is order-dependent is the vocabulary. Unset, the labels fall
 back to the enum values (`Member`, `Associate`, `Alumni`), so an image that
@@ -923,27 +814,26 @@ until the next release. Set them first and the new image comes up already
 speaking the corp's language:
 
 ```bash
-fly secrets set BRAND_NAME='Zoo Landers' \
-                BRAND_TAGLINE='Flight Ops' \
-                BRAND_MOTTO=$'Center for kids\nwho can\'t fly good' \
-                BRAND_FOOTER='Est. MMXXV · [FLYGD]' \
-                TIER_LABEL_MEMBER='FlyGD' \
-                TIER_LABEL_ASSOCIATE='Blue' \
-                TIER_LABEL_ALUMNI='Green'
+fly secrets set BRAND_NAME='<Your Corp>' \
+                BRAND_TAGLINE='<subtitle under the name>' \
+                BRAND_MOTTO=$'<first line>\n<second line>' \
+                BRAND_FOOTER='Est. MMXXV · [<TICKER>]' \
+                TIER_LABEL_MEMBER='<full member>' \
+                TIER_LABEL_ASSOCIATE='<associate>' \
+                TIER_LABEL_ALUMNI='<alumni>'
 ```
 
 `BRAND_MOTTO` is the only value with structure: it renders as two lines, and
 the line break has to survive the shell, which is what `$'…'` is for — plain
-single quotes would set a literal backslash-n. Everything else is an ordinary
-string.
+single quotes would set a literal backslash-n. An apostrophe inside `$'…'`
+needs escaping as `\'`. Everything else is an ordinary string.
 
 Setting secrets triggers a release on its own, so the sequence is: set the
 secrets (the old image ignores the new names and keeps serving), wait for that
 release to finish, then merge the PR. Watch `fly releases` for the second one.
 
-`TIER_LABEL_PENDING`, `BRAND_MARK_URL`, and `BRAND_SEAL_URL` are left unset —
-their defaults are correct for this deployment. See `.env.example` for the full
-list.
+`TIER_LABEL_PENDING`, `BRAND_MARK_URL`, and `BRAND_SEAL_URL` can be left unset
+if their defaults suit you. See `.env.example` for the full list.
 
 ### Rollback
 

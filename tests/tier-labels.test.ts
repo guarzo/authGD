@@ -2,17 +2,17 @@ import { describe, expect, it } from "vitest";
 import { resolveTierLabel } from "@/core/tier-labels";
 
 const LABELS = {
-  member: "FlyGD",
-  associate: "Blue",
-  alumni: "Green",
+  member: "Pilot",
+  associate: "Cadet",
+  alumni: "Veteran",
   pending: "Pending",
 };
 
 describe("resolveTierLabel", () => {
   it("returns the configured label for a known tier", () => {
-    expect(resolveTierLabel("member", LABELS)).toBe("FlyGD");
-    expect(resolveTierLabel("associate", LABELS)).toBe("Blue");
-    expect(resolveTierLabel("alumni", LABELS)).toBe("Green");
+    expect(resolveTierLabel("member", LABELS)).toBe("Pilot");
+    expect(resolveTierLabel("associate", LABELS)).toBe("Cadet");
+    expect(resolveTierLabel("alumni", LABELS)).toBe("Veteran");
     expect(resolveTierLabel("pending", LABELS)).toBe("Pending");
   });
 
