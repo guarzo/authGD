@@ -51,6 +51,12 @@ Postgres 16, pg-boss, Vitest, Playwright.
   at plan time and every task's own commits shift the ones after it. Locate work
   by grepping for the literal in the named file; if a cited line does not contain
   what the plan says it does, trust the grep and say so in your report.
+- **The per-task file lists are a floor, not a ceiling.** They were built from a
+  grep taken at plan time. If a task's own verification grep surfaces a tier
+  literal in a file the task plainly owns but the list omits, that occurrence is
+  in scope — rename it and note it in the report. `src/core/account-health.ts:140`
+  ("blue/green members", a doc comment) was found this way during Task 3 and is
+  covered by Task 3.
 
 ---
 
