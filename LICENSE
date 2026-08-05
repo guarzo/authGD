@@ -26,9 +26,11 @@ SOFTWARE.
 
 The MIT license above applies to the source code in this repository. It does
 NOT cover the artwork distributed alongside it — including the files in
-`docs/assets/` and `public/` — which was created by **Faoble** and is used here
-with permission. All rights to those images remain with the artist. Please do
-not reuse or redistribute them.
+`docs/assets/` and `public/` — which was created by **Faoble**.
+
+Faoble permits that artwork to be used and redistributed, including as part of
+a fork or self-hosted deployment of this project, provided **Faoble is
+credited**. All other rights remain with the artist; no other use is granted.
 
 ## EVE Online
 

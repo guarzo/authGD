@@ -1,5 +1,12 @@
 # Design
 
+> **Running a fork?** This is the design record of the *reference deployment* —
+> its theme, palette, and artwork. The colour and accessibility work (contrast
+> ratios, colour-blind separation, focus rings, reduced motion) is worth keeping
+> whatever you rename things to; the theme itself is one corp's taste. See the
+> README's "Making it yours" for what is configurable and what needs a file
+> replaced.
+
 ## Visual Theme
 
 **Flight operations at night.** A 1960s mission-documentation system — ruled forms,
@@ -45,22 +52,29 @@ Gold is identity and emphasis. The three signals are semantic and never decorati
 
 | Token | Value | Use |
 |---|---|---|
-| `--gold` | `oklch(0.83 0.155 88)` | Brand mark, active nav, primary action, FlyGD tier. |
+| `--gold` | `oklch(0.83 0.155 88)` | Brand mark, active nav, primary action, Member tier. |
 | `--gold-dim` | `oklch(0.72 0.14 84)` | Gold borders, hover on gold surfaces. |
 | `--signal-ok` | `oklch(0.76 0.13 158)` | Healthy token, present on map, linked. |
-| `--signal-warn` | `oklch(0.80 0.15 50)` | Needs re-auth, scope shortfall, cryo (admin table only — an admin scans for it; the member's own account page reads cryo in `--ink-dim` instead, since it's a pause the member asked for, not a fault). Hue 50 rather than the 70 this started at: at 70 the warn signal sat 18° from `--gold`/`--tier-flygd` at near-identical chroma and lightness — 0.057 apart in OKLab, not enough to tell a gold FlyGD badge from an amber CRYO token two columns away in the same mono uppercase. 50 nearly doubles that to 0.104 while holding 0.146 from `--signal-bad`. Warn remains nearer to gold than to bad, deliberately: equalising the two means rotating to about hue 37, buying separation from identity by spending it on failure, and mistaking a warning for an error is the worse confusion. The bar is legibility against gold, not equidistance. |
+| `--signal-warn` | `oklch(0.80 0.15 50)` | Needs re-auth, scope shortfall, cryo (admin table only — an admin scans for it; the member's own account page reads cryo in `--ink-dim` instead, since it's a pause the member asked for, not a fault). Hue 50 rather than the 70 this started at: at 70 the warn signal sat 18° from `--gold`/`--tier-member` at near-identical chroma and lightness — 0.057 apart in OKLab, not enough to tell a gold Member badge from an amber CRYO token two columns away in the same mono uppercase. 50 nearly doubles that to 0.104 while holding 0.146 from `--signal-bad`. Warn remains nearer to gold than to bad, deliberately: equalising the two means rotating to about hue 37, buying separation from identity by spending it on failure, and mistaking a warning for an error is the worse confusion. The bar is legibility against gold, not equidistance. |
 | `--signal-bad` | `oklch(0.68 0.19 25)` | Dead token, failed sync, destructive action. |
 
 ### Tier colours
 
 Distinguishable by lightness as well as hue, so they survive deuteranopia and
-protanopia. Always paired with the tier's name in text.
+protanopia. Always paired with the tier's name in text — the configured label, not
+the enum value, so the pairing holds however a deployment renames its tiers.
 
 | Tier | Token | Value |
 |---|---|---|
-| FlyGD | `--tier-flygd` | `oklch(0.83 0.155 88)` (gold) |
-| Blue | `--tier-blue` | `oklch(0.72 0.13 245)` |
-| Green | `--tier-green` | `oklch(0.76 0.13 158)` |
+| Member | `--tier-member` | `oklch(0.83 0.155 88)` (gold) |
+| Associate | `--tier-associate` | `oklch(0.72 0.13 245)` |
+| Alumni | `--tier-alumni` | `oklch(0.76 0.13 158)` |
+
+Pending has no hue of its own. It renders achromatic in `--ink-dim`: the three
+colours above are tuned as a set, and "not yet approved" reads better as an
+absence of colour than as a fourth one. The same treatment covers a tier value
+the UI does not recognise, which should read as unknown data rather than borrow
+a real tier's colour.
 
 ### Rules
 
@@ -184,15 +198,19 @@ you what it holds.
 
 ## Assets
 
-Artwork by **Faoble**, used with permission and not covered by the repository's MIT
-licence.
+Artwork by **Faoble**, not covered by the repository's MIT licence: usable and
+redistributable in a fork as long as Faoble is credited (see `LICENSE`). A fork
+that wants its own identity replaces all four — the two `BRAND_*_URL` ones by
+configuration, the other two by overwriting the file.
 
-- `public/brand/seal.webp` — the Zoo Landers / Flygd seal (navy, gold, cream). The
-  identity mark, used large on login.
-- `public/brand/seal-sm.webp` — the same seal at header size, so the mark in the
-  site header is not a 400px image scaled down to 34px.
-- `public/brand/lander.webp` — line-art rendering of the lander. Used once, very low
-  opacity, as the login field's ground.
+- `public/brand/emblem.webp` — the corporation seal (navy, gold, cream). The identity
+  mark, used large on login. Configurable: `BRAND_SEAL_URL`.
+- `public/brand/mark.webp` — the same seal at header size, so the mark in the site
+  header is not a 400px image scaled down to 34px. Configurable: `BRAND_MARK_URL`.
+- `public/brand/hero.webp` — line art held at very low opacity as the login field's
+  ground. Referenced by path from `globals.css`; not configurable.
+- `public/brand/hero-account.webp` — the account page illustration, cut for the size
+  it is drawn at. Referenced by path from the account page; not configurable.
 
 ## Focus and states
 

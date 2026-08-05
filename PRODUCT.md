@@ -1,5 +1,13 @@
 # Product
 
+> **Running a fork?** This document describes the *reference deployment* — one
+> specific corporation, its users, and the voice the UI was built to speak in.
+> It is a design record, not a specification you have to satisfy. Nothing here
+> is compiled into the app: names, tier labels, and login copy are all
+> environment variables (see the README's "Making it yours"). If you are doing
+> active development on a fork, rewrite this document for your own corp rather
+> than inheriting someone else's personality.
+
 ## Register
 
 product
@@ -75,7 +83,7 @@ what is true. Never exclaims. Never apologizes twice.
 3. **Scanning is the primary act.** Admin surfaces are read far more than they are
    operated. Optimize for the eye moving down a column and catching the one wrong
    value, not for the beauty of a single row.
-4. **Nothing reads as punishment.** Green tier, cryo status, and a dead token are
+4. **Nothing reads as punishment.** The Alumni tier, cryo status, and a dead token are
    ordinary states, not failures. Reserve alarm colour for things the user can and
    should fix.
 5. **Earn the artwork.** Faoble's illustrations are shown properly or not at all:
@@ -90,8 +98,8 @@ what is true. Never exclaims. Never apologizes twice.
   and UI boundaries meet 3:1.
 - **Never colour alone.** Tier, token health, Discord link, and map presence all
   carry a text or glyph label in addition to any colour. The palette is checked
-  against deuteranopia and protanopia, where the gold/blue/green tier set stays
-  distinguishable by lightness as well as hue.
+  against deuteranopia and protanopia, where the three tier hues (gold, blue, green)
+  stay distinguishable by lightness as well as hue.
 - **`prefers-reduced-motion`** is honoured globally; all transitions collapse.
 - **Keyboard first.** Every control is reachable and has a visible focus ring with
   3:1 contrast against both its own background and the adjacent surface. Focus is
