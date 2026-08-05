@@ -1,12 +1,16 @@
-export type ManagedRoleIds = { flygd: string; blue: string; green: string };
+export type ManagedRoleIds = { member: string; associate: string; alumni: string };
 
 /** Ensure exactly the tier's role among the three managed roles; all other roles untouched. */
 export function diffRoles(input: {
-  tier: "pending" | "flygd" | "blue" | "green";
+  tier: "pending" | "member" | "associate" | "alumni";
   managed: ManagedRoleIds;
   memberRoleIds: string[];
 }): { add: string[]; remove: string[] } {
-  const managedAll = [input.managed.flygd, input.managed.blue, input.managed.green];
+  const managedAll = [
+    input.managed.member,
+    input.managed.associate,
+    input.managed.alumni,
+  ];
   const have = new Set(input.memberRoleIds);
   // Pending is the state of an account nobody has approved, so the guild owes
   // it nothing: strip whatever it carries and add none. Returning early also
@@ -27,7 +31,7 @@ export function stripManagedRoles(
   managed: ManagedRoleIds,
   memberRoleIds: string[],
 ): string[] {
-  const managedAll = new Set([managed.flygd, managed.blue, managed.green]);
+  const managedAll = new Set([managed.member, managed.associate, managed.alumni]);
   return memberRoleIds.filter((r) => managedAll.has(r));
 }
 
@@ -55,7 +59,7 @@ export function validateRoleConfig(input: {
    * provided, its guild role is folded into the bot's permission union. */
   everyoneRoleId?: string;
 }): { ok: true } | { ok: false; error: string } {
-  const ids = [input.managed.flygd, input.managed.blue, input.managed.green];
+  const ids = [input.managed.member, input.managed.associate, input.managed.alumni];
   if (new Set(ids).size !== 3) {
     return { ok: false, error: "managed role ids are not distinct" };
   }

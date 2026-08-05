@@ -1,16 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { diffRoles, stripManagedRoles, validateRoleConfig } from "@/core/role-diff";
 
-const managed = { flygd: "10", blue: "11", green: "12" };
+const managed = { member: "10", associate: "11", alumni: "12" };
 
 describe("diffRoles", () => {
   it("adds the tier role and removes the other managed roles only", () => {
     expect(
-      diffRoles({ tier: "flygd", managed, memberRoleIds: ["11", "12", "999"] }),
+      diffRoles({ tier: "member", managed, memberRoleIds: ["11", "12", "999"] }),
     ).toEqual({ add: ["10"], remove: ["11", "12"] });
   });
   it("is a no-op when exactly the tier role is present", () => {
-    expect(diffRoles({ tier: "green", managed, memberRoleIds: ["12", "999"] })).toEqual({
+    expect(diffRoles({ tier: "alumni", managed, memberRoleIds: ["12", "999"] })).toEqual({
       add: [],
       remove: [],
     });
@@ -51,7 +51,7 @@ describe("validateRoleConfig", () => {
   });
   it("rejects duplicate managed role ids", () => {
     const r = validateRoleConfig({
-      managed: { flygd: "10", blue: "10", green: "12" },
+      managed: { member: "10", associate: "10", alumni: "12" },
       guildRoles,
       botRoleIds: ["bot-role"],
     });
@@ -59,7 +59,7 @@ describe("validateRoleConfig", () => {
   });
   it("rejects managed roles missing from the guild", () => {
     const r = validateRoleConfig({
-      managed: { ...managed, blue: "404" },
+      managed: { ...managed, associate: "404" },
       guildRoles,
       botRoleIds: ["bot-role"],
     });
