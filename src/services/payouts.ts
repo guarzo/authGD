@@ -10,6 +10,9 @@ import {
 } from "@/db/schema";
 import { centsToIsk, computeSplit, iskToCents } from "@/core/payout-split";
 import { logAudit } from "@/services/audit";
+import { addAppraisedPool } from "@/services/payout-loot";
+import type { AppraisalResult } from "@/services/appraisal";
+import type { PricingMode } from "@/core/pricing";
 
 export class PayoutForbiddenError extends Error {}
 export class PayoutLockedError extends Error {}
@@ -133,6 +136,68 @@ export async function createOperation(
     .returning();
   await logAudit(dbtx, { actor, action: "payout.created", target: op.id });
   return { id: op.id };
+}
+
+/**
+ * The composer's entry point: create the operation, then thread its own
+ * pastes through the SAME two functions the detail page's editors would call
+ * one at a time — `addAppraisedPool` (src/services/payout-loot.ts) and
+ * `setRoster` above — inside the ONE transaction the caller opened.
+ *
+ * Two things this deliberately does NOT do:
+ *
+ *   1. Appraise the loot itself. `appraisal` here is already-priced data — the
+ *      network call to triff/ESI is a caller concern (`createOperationAction`)
+ *      and must happen BEFORE this transaction opens, exactly like
+ *      `addAppraisedPoolAction` already does for the detail-page path: an
+ *      external call inside an open transaction holds the row lock (once
+ *      taken below) for however long that call takes, and a slow or hung
+ *      upstream would then block every other reader/writer of this operation
+ *      for no reason.
+ *   2. Collapse the audit trail. `payout.created`, `payout.pool_added` and
+ *      `payout.roster_set` each fire from the function that owns that fact,
+ *      the same three rows a three-click create-then-fill-in-later flow would
+ *      have produced. One paste, one submit, but the log still reads as three
+ *      distinct state changes, because it is three distinct state changes.
+ *
+ * The trailing `recalculate` is not redundant bookkeeping removed by
+ * inlining: `addAppraisedPool` and `setRoster` each already recalculate after
+ * their own write, so with both present the split is computed twice — set (0
+ * participants against the fresh pool) then correct once wrestled. Kept
+ * anyway, unconditionally, so the split is always correct regardless of which
+ * of the two optional inputs is present, without this function having to
+ * reason about which combination the caller passed.
+ */
+export async function createOperationWithContents(
+  dbtx: DbTx,
+  actor: string,
+  input: {
+    name: string;
+    occurredAt: Date;
+    corpSharePct?: string;
+    appraisal?: {
+      rawPaste: string;
+      pricingMode: PricingMode;
+      stationId: number | null;
+      regionId: number | null;
+      appraisal: AppraisalResult;
+    };
+    rosterEntries?: RosterEntry[];
+  },
+): Promise<{ id: string }> {
+  const { id } = await createOperation(dbtx, actor, {
+    name: input.name,
+    occurredAt: input.occurredAt,
+    corpSharePct: input.corpSharePct,
+  });
+  if (input.appraisal) {
+    await addAppraisedPool(dbtx, actor, id, input.appraisal);
+  }
+  if (input.rosterEntries) {
+    await setRoster(dbtx, actor, id, input.rosterEntries);
+  }
+  await recalculate(dbtx, id);
+  return { id };
 }
 
 /**

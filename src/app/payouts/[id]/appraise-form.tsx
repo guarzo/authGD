@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useEffect, useState } from "react";
 import { Notice, RuleHead } from "@/app/_components/ui";
 import { Submit } from "@/app/_components/submit";
 import { addAppraisedPoolAction, type AppraiseActionState } from "../actions";
@@ -14,8 +14,15 @@ import { OPERATION_ERRORS, lookupErrorMessage } from "../errors";
  * lines (see `errors.ts`'s docblock and `addAppraisedPoolAction`'s own).
  *
  * `useActionState` returns state instead of navigating on that failure, so
- * this component never unmounts — the loot paste the operator typed is still
- * exactly what it was, because nothing ever replaced the DOM it is sitting in.
+ * this component never unmounts. Staying mounted is necessary but NOT
+ * sufficient: React 19 resets an uncontrolled field after a `<form action>`
+ * submit settles, so an uncontrolled textarea here lost the paste on rejection
+ * even though the DOM around it never moved. This claim used to be written as
+ * if not-unmounting were the whole story; it wasn't. The value is controlled
+ * below, which is what actually makes the paste survive a rejection — the
+ * state is re-applied on the very render that shows the failure notice. The
+ * composer at `new/new-operation-form.tsx` carries the same fix for the same
+ * reason, proven by an e2e round trip.
  *
  * This used to also collect a pricing mode (four options), a price-at kind
  * (station or region), and a station/region id (free numeric, defaulted to
@@ -27,11 +34,33 @@ import { OPERATION_ERRORS, lookupErrorMessage } from "../errors";
  * `region_invalid` error codes stay in `errors.ts` as backstops even though
  * nothing in this form can produce them anymore — see that file's docblock.
  */
-export function AppraiseForm({ operationId }: { operationId: string }) {
+export function AppraiseForm({
+  operationId,
+  primary = true,
+}: {
+  operationId: string;
+  /** Defaults to true — the common case is an empty operation, where this
+   *  paste is the only thing worth doing. Once loot already exists, the
+   *  ledger's single gold control moves on ("Set roster", then "Finalize" —
+   *  see `[id]/page.tsx`'s one-primary-per-state comment), and this form
+   *  renders again from "Add another paste" at the plain grade instead, so
+   *  the page never shows two gold buttons at once. */
+  primary?: boolean;
+}) {
   const [state, formAction] = useActionState<AppraiseActionState, FormData>(
     addAppraisedPoolAction.bind(null, operationId),
     null,
   );
+  const [paste, setPaste] = useState("");
+
+  // Controlled means React's post-submit reset no longer empties the field, so
+  // the success case has to do it explicitly: the paste has been priced and
+  // banked into a pool by this point, and leaving it sitting in the box reads
+  // as "that didn't take". Keyed off `state` rather than `state.ok` because a
+  // fresh object arrives per submit, so a second successful paste clears too.
+  useEffect(() => {
+    if (state?.ok) setPaste("");
+  }, [state]);
 
   return (
     <form action={formAction} className="form-stack" data-navigates>
@@ -44,9 +73,16 @@ export function AppraiseForm({ operationId }: { operationId: string }) {
       )}
       <label className="form-stack__field">
         Loot paste
-        <textarea className="field" name="rawPaste" rows={10} required />
+        <textarea
+          className="field"
+          name="rawPaste"
+          rows={10}
+          required
+          value={paste}
+          onChange={(e) => setPaste(e.target.value)}
+        />
       </label>
-      <Submit className="btn btn--primary" pendingLabel="Pricing…">
+      <Submit className={primary ? "btn btn--primary" : "btn"} pendingLabel="Pricing…">
         Appraise
       </Submit>
     </form>

@@ -21,6 +21,7 @@ import {
   addParticipant,
   canReadPayouts,
   createOperation,
+  createOperationWithContents,
   deleteOperation,
   finalizeOperation,
   getOpenInfoTarget,
@@ -1697,5 +1698,192 @@ describe("the four detail editors", () => {
     await expect(
       ctx.db.transaction((tx) => setNotes(tx, operator.id, operationId, "nope")),
     ).rejects.toThrow(PayoutLockedError);
+  });
+});
+
+describe("createOperationWithContents", () => {
+  const oneShareRoster: RosterEntry[] = [
+    {
+      displayName: "Line Member",
+      accountId: null,
+      recipientCharacterId: null,
+      sourceCharacters: ["Line Member"],
+      shares: "1",
+      excluded: false,
+    },
+  ];
+  const tenIskAppraisal = {
+    rawPaste: "2x Tritanium",
+    pricingMode: "sell_best" as const,
+    stationId: 60003760,
+    regionId: null,
+    appraisal: {
+      items: [
+        {
+          typeId: 34,
+          name: "Tritanium",
+          qty: 2,
+          unitPrice: "5.00",
+          totalValue: "10.00",
+          priceSource: "triff" as const,
+        },
+      ],
+      totalValue: "10.00",
+      dropped: [],
+    },
+  };
+
+  it("creates just the operation when neither loot nor a roster is given", async () => {
+    const operator = await seedOperator();
+    const { id: operationId } = await ctx.db.transaction((tx) =>
+      createOperationWithContents(tx, operator.id, {
+        name: "Name and date only",
+        occurredAt: new Date(),
+        corpSharePct: "10",
+      }),
+    );
+    const [op] = await ctx.db
+      .select()
+      .from(payoutOperation)
+      .where(eq(payoutOperation.id, operationId));
+    expect(op.name).toBe("Name and date only");
+    const pools = await ctx.db
+      .select()
+      .from(lootPool)
+      .where(eq(lootPool.operationId, operationId));
+    expect(pools).toHaveLength(0);
+    const participants = await ctx.db
+      .select()
+      .from(payoutParticipant)
+      .where(eq(payoutParticipant.operationId, operationId));
+    expect(participants).toHaveLength(0);
+    const created = await ctx.db
+      .select()
+      .from(auditLog)
+      .where(eq(auditLog.action, "payout.created"));
+    expect(created).toHaveLength(1);
+  });
+
+  it("adds the priced pool and audits payout.pool_added when appraisal is given", async () => {
+    const operator = await seedOperator();
+    const { id: operationId } = await ctx.db.transaction((tx) =>
+      createOperationWithContents(tx, operator.id, {
+        name: "With loot",
+        occurredAt: new Date(),
+        corpSharePct: "0",
+        appraisal: tenIskAppraisal,
+      }),
+    );
+    const [pool] = await ctx.db
+      .select()
+      .from(lootPool)
+      .where(eq(lootPool.operationId, operationId));
+    expect(pool.totalValue).toBe("10.00");
+    const poolAdded = await ctx.db
+      .select()
+      .from(auditLog)
+      .where(eq(auditLog.action, "payout.pool_added"));
+    expect(poolAdded).toHaveLength(1);
+  });
+
+  it("sets the roster and audits payout.roster_set when rosterEntries is given", async () => {
+    const operator = await seedOperator();
+    const { id: operationId } = await ctx.db.transaction((tx) =>
+      createOperationWithContents(tx, operator.id, {
+        name: "With roster",
+        occurredAt: new Date(),
+        corpSharePct: "0",
+        rosterEntries: oneShareRoster,
+      }),
+    );
+    const participants = await ctx.db
+      .select()
+      .from(payoutParticipant)
+      .where(eq(payoutParticipant.operationId, operationId));
+    expect(participants).toHaveLength(1);
+    const rosterSet = await ctx.db
+      .select()
+      .from(auditLog)
+      .where(eq(auditLog.action, "payout.roster_set"));
+    expect(rosterSet).toHaveLength(1);
+  });
+
+  it("adds both the pool and the roster and splits the pool across the roster when both are given", async () => {
+    const operator = await seedOperator();
+    const { id: operationId } = await ctx.db.transaction((tx) =>
+      createOperationWithContents(tx, operator.id, {
+        name: "With both",
+        occurredAt: new Date(),
+        corpSharePct: "0",
+        appraisal: tenIskAppraisal,
+        rosterEntries: oneShareRoster,
+      }),
+    );
+    const [participant] = await ctx.db
+      .select()
+      .from(payoutParticipant)
+      .where(eq(payoutParticipant.operationId, operationId));
+    expect(participant.amount).toBe("10.00");
+    const actions = (
+      await ctx.db
+        .select({ action: auditLog.action })
+        .from(auditLog)
+        .where(eq(auditLog.target, operationId))
+    ).map((r) => r.action);
+    expect(actions).toEqual(
+      expect.arrayContaining([
+        "payout.created",
+        "payout.pool_added",
+        "payout.roster_set",
+      ]),
+    );
+  });
+
+  it("rolls back the whole operation, not just the pool, if adding the appraised pool fails", async () => {
+    const operator = await seedOperator();
+    await expect(
+      ctx.db.transaction((tx) =>
+        createOperationWithContents(tx, operator.id, {
+          name: "Should not survive",
+          occurredAt: new Date(),
+          corpSharePct: "0",
+          appraisal: {
+            rawPaste: "1x Absurd",
+            pricingMode: "sell_best",
+            stationId: 60003760,
+            regionId: null,
+            appraisal: {
+              items: [
+                {
+                  typeId: 34,
+                  name: "Absurd",
+                  qty: 1,
+                  unitPrice: "0.00",
+                  // Past MAX_MONEY_CENTS (core/payout-split.ts) --
+                  // addAppraisedPool's own assertWithinMoneyRange throws
+                  // before any row lands, and that throw must unwind the
+                  // whole transaction this test wraps around, taking the
+                  // freshly-created operation with it. This is the same
+                  // guarantee `createOperationAction` leans on to run
+                  // appraisal BEFORE opening a transaction at all -- here it
+                  // is exercised from underneath, at the point where a
+                  // failure mid-transaction would otherwise leave an
+                  // orphaned shell.
+                  totalValue: "999999999999999999999.00",
+                  priceSource: "triff",
+                },
+              ],
+              totalValue: "999999999999999999999.00",
+              dropped: [],
+            },
+          },
+        }),
+      ),
+    ).rejects.toThrow();
+    const ops = await ctx.db
+      .select()
+      .from(payoutOperation)
+      .where(eq(payoutOperation.name, "Should not survive"));
+    expect(ops).toHaveLength(0);
   });
 });

@@ -20,15 +20,21 @@
 /** Every code `createOperationAction` can reject with, rendered by
  *  `/payouts/new`.
  *
- *  Just two fields now: the create form was slimmed to name + date, so battle
- *  report / corp share / notes rejections cannot happen here anymore — those
- *  fields moved to editors on the detail page and their codes live in
- *  `OPERATION_ERRORS` below. Both land back here with the submitted value
- *  echoed in the query string and reapplied, so each message can honestly say
- *  the other field survived. */
+ *  The composer collects name, date, an optional loot paste and an optional
+ *  roster paste in one screen. Every rejection here is returned as
+ *  `useActionState` state rather than a `?error=` redirect — a redirect can
+ *  only carry a fixed code in the query string, and a loot paste running
+ *  hundreds of lines cannot survive that round trip. See
+ *  `createOperationAction`'s own comment for why every one of these RETURNS
+ *  rather than redirects, and why `appraisal_failed` here means the
+ *  operation was never created at all (contrast `OPERATION_ERRORS`'s own
+ *  `appraisal_failed`, reached only once an operation already exists). */
 export const NEW_OPERATION_ERRORS = {
-  name_required: "An operation needs a name. The date is still filled in.",
-  date_invalid: "Date must be a real calendar date. The name is still filled in.",
+  name_required: "An operation needs a name. Everything else you typed is still here.",
+  date_invalid:
+    "Date must be a real calendar date. Everything else you typed is still here.",
+  appraisal_failed:
+    "Could not price that loot paste right now (triff.tools did not answer). Nothing was created — adjust the paste and try again, or leave it blank and price loot later.",
 } as const;
 
 /** Every code an action on `/payouts/[id]` can redirect with.
