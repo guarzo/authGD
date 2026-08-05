@@ -138,10 +138,15 @@ export function accountErrorUrl(code: AccountErrorCode): string {
  * same reason `createFailed` does (src/app/payouts/actions.ts) — so the
  * inherited params are preserved by construction. They keep the page's own
  * emission order and `error` lands last.
+ *
+ * Required, with no default. An omitted `listSearch` would compile to exactly
+ * the unfiltered redirect this parameter exists to prevent, and it would fail
+ * silently — a lost filter looks like a page that merely loaded. There is
+ * nothing a default could mean here that is not the bug.
  */
 export function adminAccountsErrorUrl(
   code: AdminAccountsErrorCode,
-  listSearch = "",
+  listSearch: string,
 ): string {
   const search = new URLSearchParams(listSearch);
   search.delete("error");
