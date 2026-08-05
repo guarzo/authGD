@@ -775,10 +775,11 @@ need more than a literal swap:
   (`["100","flygd"], ["200","blue"], ["300","green"]`) is a Discord role-name
   lookup keyed by id; rename the *names* to `member`/`associate`/`alumni` and
   update the `"+green −flygd"` expectations to `"+alumni −member"`. Line 248's
-  `new Map([["1", "green"]])` and its assertion move together. **Keep one case
-  on the old vocabulary** — Task 10 Step 3 specifies which and why; if you are
-  running Task 6 first, leave lines 6-12's `flygd → green` case alone and Task
-  10 will formalise it.
+  `new Map([["1", "green"]])` and its assertion move together. **Rename the
+  whole file — leave zero old tier literals.** The legacy-history coverage this
+  sweep needs is a purpose-built test that Task 10 Step 3 *adds*; keeping an
+  incidental fixture back here would only duplicate it, and would leave the file
+  unable to distinguish a deliberate fixture from a literal nobody got to.
 - `tests/account-payouts.test.ts` — line 40's comment, and the two test names
   and two assertions on lines 88-96 that quote `"FlyGD-only"`. Those become
   `"Member-only"`, matching the copy change in Step 3.
@@ -1163,10 +1164,11 @@ Expected: PASS.
 - [ ] **Step 5: Verify the label no longer collides with a tier name**
 
 Run: `grep -rn "flygd" -i tests/ playwright.config.ts`
-Expected: **only** the deliberately-retained legacy audit case in
-`tests/audit-summarize.test.ts` (Task 6 Step 1 left it alone; Task 10 Step 3
-formalises it with a comment). Every remaining hit is either a tier Tasks 3-6
-missed or a label this task missed — resolve it rather than committing.
+Expected: **no hits at all.** `tests/audit-summarize.test.ts` was renamed in
+full by Task 6 — the legacy-history coverage is a purpose-built test that Task
+10 Step 3 *adds*, and it does not exist yet at this point in the sequence. Any
+hit here is either a tier Tasks 3-6 missed or a label this task missed —
+resolve it rather than committing.
 
 - [ ] **Step 6: Commit**
 
