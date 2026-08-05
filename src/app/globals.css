@@ -2465,6 +2465,13 @@ h3.rule-head__label {
   flex-wrap: wrap;
 }
 
+/* A settled status token and the control that changes it, on one line. */
+.inline-pair {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-1);
+}
+
 .stack {
   display: grid;
   gap: var(--s-2);
