@@ -495,7 +495,7 @@ function AccountRow({
 
           <td>
             {r.discordLinked ? (
-              // Already inside the tbody-wide ConfirmArmScope (:281), like every
+              // Already inside the tbody-wide ConfirmArmScope (:282), like every
               // other confirm in this row. Names its row for the same reason the
               // Actions cell does: "unlink" read out of context says whose Discord
               // is about to be disconnected to nobody.
@@ -508,8 +508,43 @@ function AccountRow({
                     label="unlink"
                     restName={`unlink Discord for ${identity}`}
                     confirmName={`confirm unlink Discord for ${identity}`}
+                    describedBy={`discord-unlink-cost-${r.accountId}`}
                   />
                 </form>
+                {/* Hidden always, rather than revealed on arm like the account
+                    page's `ConfirmCost`. That component reads scope-level arm
+                    state, and this scope is the whole tbody — three confirms per
+                    row (unlink, revoke/promote, freeze/wake) times every row.
+                    Arming any one of them would reveal every row's cost. Its own
+                    doc says as much. Switch to it once it takes a per-control
+                    id; giving this one cell its own ConfirmArmScope to get there
+                    would instead break the single-armed-control-per-table
+                    invariant the shared scope exists to hold.
+
+                    Revealing on arm is also wrong for a table row on its own
+                    terms: the hint would reflow the row, and ConfirmSubmit
+                    disarms on pointerleave for mouse users
+                    (confirm-submit.tsx:162-170), so the button sliding out from
+                    under a stationary pointer would disarm the control the
+                    admin just armed. Absolute positioning is no escape —
+                    `.scroller` is a scroll container, so the hint would extend
+                    the scrollable area rather than float clear of it.
+                    `.visually-hidden` is itself `position: absolute`, so this
+                    span costs no row height, which matters when scanning is the
+                    primary act (PRODUCT.md principle 3) and this renders once
+                    per account.
+
+                    "queues removal", not "removes": unlinkDiscord ends in
+                    enqueueSync (services/discord-link.ts:135-138) and the roles
+                    come off in the worker. The account page keeps the same verb
+                    for the same reason. */}
+                <span
+                  className="visually-hidden"
+                  id={`discord-unlink-cost-${r.accountId}`}
+                >
+                  Unlinking queues removal of the Discord roles authGD manages for this
+                  member.
+                </span>
               </span>
             ) : (
               <Status tone="off">none</Status>
