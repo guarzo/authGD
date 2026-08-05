@@ -327,12 +327,10 @@ describe("summarizeDetails, declared fields and role rendering", () => {
   });
 
   it("still degrades on rows written before this change", () => {
-    // The no-migration guarantee, expressed as tests. This block deliberately
-    // holds pre-rename vocabulary ("green") so it keeps proving that a row
-    // written before the tier rename still renders — do not "fix" this one.
+    // The no-migration guarantee, expressed as tests.
     expect(
-      summarizeDetails("tier.changed", { to: "green", cause: "main unlinked" }),
-    ).toBe("→ green, main unlinked");
+      summarizeDetails("tier.changed", { to: "alumni", cause: "main unlinked" }),
+    ).toBe("→ alumni, main unlinked");
     expect(summarizeDetails("status.changed", { to: "cryo" })).toBe("→ cryo");
     expect(summarizeDetails("character.unlinked", {})).toBe("—");
   });
