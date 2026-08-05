@@ -909,11 +909,16 @@ h3.rule-head__label {
    of the scrollport, so this has to sit on the focusable elements rather than
    on .scroller — `scroll-padding-top` there would fix the same case for
    programmatic scrolls and do nothing for sequential focus navigation in
-   Chromium. 2.5rem (40px) is a deliberate over-estimate of the header's
-   measured 34px: an over-scroll leaves the control a few pixels lower than
-   necessary, an under-scroll leaves it obscured, and only one of those is a
-   failure. Measured in the e2e spec: 442px with this rule, 402px without it,
-   against a header ending at 436px.
+   Chromium.
+
+   3rem (48px), deliberately over the tallest header this rule covers: the
+   accounts table's measures 34px and the audit table's 42px, and the earlier
+   2.5rem was set against the first of those alone. It cleared the accounts
+   header by 6px and left an audit row control 2px UNDER its own — an
+   under-scroll is the failure, an over-scroll only leaves the control a few
+   pixels lower than it had to be. A shared figure has to clear the taller one.
+   Measured in the e2e specs: /admin/accounts 442px against a header ending at
+   436px; /admin/audit 466px against 468px before this went to 3rem.
 
    Worth knowing before anyone deletes this as unnecessary: Chromium's
    *programmatic* focus scroll centres an off-screen element, so `.focus()`
@@ -923,7 +928,7 @@ h3.rule-head__label {
    Untested on WebKit, which is the engine least consistent about applying
    scroll-margin during sequential focus navigation. See the note in the PR. */
 .log--sticky-head :is(a, button, summary, input, .row-toggle) {
-  scroll-margin-top: 2.5rem;
+  scroll-margin-top: 3rem;
 }
 
 /* The same failure on the horizontal axis: the pinned first column paints over
@@ -1039,10 +1044,15 @@ h3.rule-head__label {
    what would otherwise be inherited from it, whatever the specificity. */
 .json__peek {
   display: block;
-  /* min() rather than a flat 34ch: in a fixed-layout table like the audit log
-     the column is narrower than 34ch, and a cap wider than the cell spills the
-     JSON over the next column instead of truncating it. */
-  max-width: min(34ch, 100%);
+  /* The cell, and nothing narrower. The old cap was `min(34ch, 100%)`, which
+     was written for the sync log's auto-layout table -- there the cell has no
+     width of its own and 34ch is what stops one long payload from setting the
+     column width for every row. The audit log is fixed-layout with a
+     `<colgroup>`, so 100% already IS a bound, and 34ch cut the peek short at
+     roughly 245px inside a ~400px box. The peek is where the answer lives on
+     that page (`flygd -> green, alliance_left`), so the loss was the sentence,
+     not decoration. The 34ch cap is re-scoped to the table that needs it. */
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1050,16 +1060,29 @@ h3.rule-head__label {
   font-weight: 400;
 }
 
+/* Auto-layout table: without a cap the widest payload in any row dictates the
+   column width for all of them. */
+.log--runs .json__peek {
+  max-width: min(34ch, 100%);
+}
+
 .json__full {
   margin: var(--s-2) 0 0;
   padding: var(--s-2) var(--s-3);
   max-width: 40ch;
-  overflow-x: auto;
   background: var(--void);
   border: 1px solid var(--rule);
   border-radius: var(--radius);
   color: var(--ink-dim);
-  white-space: pre;
+  /* Wraps rather than scrolling sideways. `white-space: pre` + `overflow-x:
+     auto` made this a scroll container with no way into it from a keyboard
+     (WCAG 2.1.1) -- content that only a pointer could reach. A tab stop per
+     block is the wrong fix here: a full audit page has AUDIT_PAGE_SIZE of
+     them, and the Scroller around the table already costs one. Wrapping
+     removes the scroll container instead of making it reachable.
+     `overflow-wrap: anywhere` because JSON has no spaces to break at. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .portrait {
@@ -1741,6 +1764,13 @@ h3.rule-head__label {
 
 .pager {
   margin-top: var(--s-5);
+}
+
+/* The copy above the table sits tighter to it than the copy below does: the
+   bottom pager closes the page, the top one introduces the table. */
+.pager--top {
+  margin-top: var(--s-3);
+  margin-bottom: var(--s-3);
 }
 
 /* The in-flight mark on a soft navigation (`payouts/pending-link.tsx`). It is

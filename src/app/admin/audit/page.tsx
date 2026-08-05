@@ -5,10 +5,9 @@ import { getConfig } from "@/config";
 import { requireAdminPage } from "@/lib/admin-guard";
 import { AUDIT_PAGE_SIZE, queryAuditLog, resolveFilterIdentity } from "@/services/audit";
 import type { FilterResolution, ResolvedAuditRow } from "@/services/audit";
-import { RuleHead, Json, Scroller } from "@/app/_components/ui";
+import { RuleHead, Json, Notice, Scroller } from "@/app/_components/ui";
 import { Submit } from "@/app/_components/submit";
 import { formatAgo } from "@/app/_components/format-ago";
-import { RelativeTime } from "@/app/_components/relative-time";
 import { renderedAt } from "@/app/_components/utc-time";
 import { summarizeDetails } from "@/app/admin/audit/summarize";
 
@@ -38,7 +37,7 @@ function one(v: string | string[] | undefined): string | undefined {
  */
 function filterHref(
   params: Record<string, string | undefined>,
-  field: "actor" | "target",
+  field: "actor" | "target" | "action",
   value: string,
 ): string {
   const q = new URLSearchParams();
@@ -47,6 +46,21 @@ function filterHref(
   }
   q.set(field, value);
   return `/admin/audit?${q.toString()}`;
+}
+
+/**
+ * The raw id behind a resolved name, for anyone not using a pointer. The cells
+ * put it in `title`, which is hover-only: VoiceOver and TalkBack do not
+ * announce it, touch cannot reach it, and it is genuinely different
+ * information from the name beside it rather than a restatement of it. So it
+ * is also stated in text a screen reader reads out, clipped to nothing.
+ *
+ * Only where the visible text and the raw value actually differ. `system`, the
+ * reserved literals and an unresolved id all render the raw value already, and
+ * repeating it there would announce every one of them twice.
+ */
+function RawId({ id }: { id: string }) {
+  return <span className="visually-hidden">{` (id ${id})`}</span>;
 }
 
 /**
@@ -87,6 +101,7 @@ function ActorCell({
         title={r.actor}
       >
         {r.actorName}
+        <RawId id={r.actor} />
       </a>
     );
   }
@@ -125,6 +140,7 @@ function TargetCell({
         title={r.target}
       >
         {r.targetName}
+        <RawId id={r.target} />
       </a>
     );
   }
@@ -143,6 +159,56 @@ function TargetCell({
     <span className="mono ellipsis-cell" title={r.target}>
       {r.target}
     </span>
+  );
+}
+
+/**
+ * Both ends of the keyset pager.
+ *
+ * Renders whenever there is a full page OR a cursor is set. The old condition
+ * was `rows.length === AUDIT_PAGE_SIZE` alone, which made the last page a dead
+ * end: at exactly AUDIT_PAGE_SIZE rows there is a page 2, page 2 has fewer
+ * rows, so page 2 rendered no pager at all -- no way back, and no indication
+ * you were not looking at the newest entries.
+ *
+ * `← Latest` reuses `filterHrefBase`, so it keeps the active filter and drops
+ * only the cursor.
+ *
+ * Both labels carry a visually-hidden qualifier. "Older" alone is not a link
+ * purpose once the arrow is `aria-hidden` (WCAG 2.4.4), and a screen reader
+ * listing links off this page would otherwise get two bare directions.
+ */
+function Pager({
+  rows,
+  params,
+  older,
+  filterHrefBase,
+  top = false,
+}: {
+  rows: ResolvedAuditRow[];
+  params: Record<string, string | undefined>;
+  older: URLSearchParams;
+  filterHrefBase: string;
+  top?: boolean;
+}) {
+  const hasOlder = rows.length === AUDIT_PAGE_SIZE;
+  const hasLatest = Boolean(params.before);
+  if (!hasOlder && !hasLatest) return null;
+  return (
+    <div className={`btn-row pager${top ? " pager--top" : ""}`}>
+      {hasLatest && (
+        <a className="btn" href={filterHrefBase}>
+          <span aria-hidden="true">←</span> Latest
+          <span className="visually-hidden"> entries</span>
+        </a>
+      )}
+      {hasOlder && (
+        <a className="btn" href={`/admin/audit?${older.toString()}`}>
+          Older<span className="visually-hidden"> entries</span>{" "}
+          <span aria-hidden="true">→</span>
+        </a>
+      )}
+    </div>
   );
 }
 
@@ -268,6 +334,12 @@ export default async function AdminAuditPage({
     Number.isFinite(beforeId) &&
     rows.length === 0;
 
+  // "older" whenever a cursor is set. Without it the heading read
+  // `100+ entries` byte-identical on page 1 and page 7, so the one piece of
+  // text describing the result set never admitted you had paged away from the
+  // newest rows. It says which KIND of page this is; the `← Latest` control
+  // beside it is the way back.
+  const pageQualifier = params.before ? "older " : "";
   const countLabel =
     rows.length === 0
       ? pastEnd
@@ -275,7 +347,7 @@ export default async function AdminAuditPage({
         : filtered
           ? "No matching entries"
           : "No entries"
-      : `${rows.length}${rows.length === AUDIT_PAGE_SIZE ? "+" : ""} ${
+      : `${rows.length}${rows.length === AUDIT_PAGE_SIZE ? "+" : ""} ${pageQualifier}${
           filtered ? "matching entries" : "entries"
         }`;
 
@@ -293,7 +365,24 @@ export default async function AdminAuditPage({
       <a href={filterHrefBase}>Back to the latest entries</a>
     </>
   ) : filtered ? (
-    "Nothing matches this filter."
+    // The actor/target asymmetry bites hardest here: a member almost never
+    // appears as an actor, so "no results" for an actor filter usually means
+    // the filter was pointed at the wrong column, not that the log is silent
+    // about that person. The nudge only appears when it can actually help --
+    // when actor is set and target is not.
+    <>
+      Nothing matches this filter.
+      {params.actor && !params.target && (
+        <>
+          {" "}
+          Members are usually the target of an entry, not the actor.{" "}
+          <a href={filterHref({ action: params.action }, "target", params.actor)}>
+            Search {params.actor} as a target
+          </a>
+          .
+        </>
+      )}
+    </>
   ) : (
     "Nothing has happened yet."
   );
@@ -315,13 +404,32 @@ export default async function AdminAuditPage({
         Filter
       </RuleHead>
       <form method="get" className="filter-form">
-        <label className="filter-form__cell">
-          <span className="filter-form__label">Actor</span>
-          <input className="field" name="actor" defaultValue={params.actor ?? ""} />
-        </label>
-        {/* This cell is a div with an explicit label, unlike its two siblings:
-            the hint has to live outside the <label> or it gets concatenated
-            into the input's accessible name ("Action prefix e.g. tier."). */}
+        {/* All three cells are a div with an explicit label rather than a
+          wrapping <label>: the hint has to live outside the <label> or it gets
+          concatenated into the input's accessible name ("Action prefix e.g.
+          tier."), so it is wired up with aria-describedby instead.
+
+          Actor and Target are not symmetrical and nothing on the page said so.
+          A member is written to `actor` by exactly one service (Discord
+          linking); every tier change, status change and token event puts them
+          in `target`, with the admin or `system` as the actor. Guessing wrong
+          gets you "Nothing matches this filter." -- true, and completely
+          misleading about whether the log has anything on that person. */}
+        <div className="filter-form__cell">
+          <label className="filter-form__label" htmlFor="filter-actor">
+            Actor
+          </label>
+          <input
+            id="filter-actor"
+            className="field"
+            name="actor"
+            defaultValue={params.actor ?? ""}
+            aria-describedby="filter-actor-hint"
+          />
+          <span className="filter-form__hint" id="filter-actor-hint">
+            who did it
+          </span>
+        </div>
         <div className="filter-form__cell">
           <label className="filter-form__label" htmlFor="filter-action">
             Action prefix
@@ -337,10 +445,21 @@ export default async function AdminAuditPage({
             e.g. tier.
           </span>
         </div>
-        <label className="filter-form__cell">
-          <span className="filter-form__label">Target</span>
-          <input className="field" name="target" defaultValue={params.target ?? ""} />
-        </label>
+        <div className="filter-form__cell">
+          <label className="filter-form__label" htmlFor="filter-target">
+            Target
+          </label>
+          <input
+            id="filter-target"
+            className="field"
+            name="target"
+            defaultValue={params.target ?? ""}
+            aria-describedby="filter-target-hint"
+          />
+          <span className="filter-form__hint" id="filter-target-hint">
+            who it happened to
+          </span>
+        </div>
         <div className="filter-form__cell filter-form__cell--actions">
           <div className="filter-form__actions">
             {/* Filter is routine and reversible, not the page's primary act —
@@ -355,17 +474,28 @@ export default async function AdminAuditPage({
         </div>
       </form>
 
-      <RuleHead
-        as="h2"
-        aside={
-          // The render stamp joins the ambiguity notes on the same rule rather
-          // than taking a line of its own: both answer "how much should I trust
-          // what I'm reading", and the aside is already the slot for that.
-          <span className="dim">{[...ambiguityNotes, renderedAt()].join(" · ")}</span>
-        }
-      >
+      <RuleHead as="h2" aside={<span className="dim">{renderedAt()}</span>}>
         {countLabel}
       </RuleHead>
+      {/* Hoisted out of the rule's aside, where it sat dimmed and joined to the
+          render stamp by a middot and was typographically indistinguishable
+          from it. "actor Zed matches 2 accounts" is not a freshness note: it
+          says the rows below are a UNION of two people's histories, which is
+          the one thing that can make this page answer the question wrongly
+          while looking right. */}
+      {ambiguityNotes.length > 0 && (
+        <Notice tone="warn">{ambiguityNotes.join(" · ")}</Notice>
+      )}
+      {/* Also above the table. The bottom pager is roughly 300 tab stops past
+          the top of a full page, so on a keyboard the only way to reach the
+          next page was to traverse every link in every row. */}
+      <Pager
+        rows={rows}
+        params={params}
+        older={older}
+        filterHrefBase={filterHrefBase}
+        top
+      />
       <Scroller label="Audit entries" tall>
         <table className="log log--audit log--sticky-head log--sticky-col">
           <caption className="visually-hidden">Audit log entries</caption>
@@ -410,11 +540,22 @@ export default async function AdminAuditPage({
                       instant may not leave the accessibility tree for that, so
                       it is restated in text a screen reader reads out; `title`
                       would not do, since VoiceOver and TalkBack do not announce
-                      it and touch cannot reach it. */}
+                      it and touch cannot reach it.
+
+                      The elapsed text is rendered once on the server rather
+                      than by a client component that re-ticks: a full page is
+                      AUDIT_PAGE_SIZE rows, so the live version cost 100
+                      setIntervals and 100 client-component boundaries in the
+                      RSC payload at every viewport. The page is
+                      `force-dynamic` and the rule above it already stamps
+                      "as of HH:MM UTC", so the reading is dated in the same
+                      way the rest of the page is. */}
                   <td className="mono nowrap">
                     <span className="only-wide">{stamp(r.at)}</span>
                     <span className="only-narrow">
-                      <RelativeTime iso={iso} initial={formatAgo(iso, now)} />
+                      <time className="ago dim mono" dateTime={iso}>
+                        {formatAgo(iso, now)}
+                      </time>
                       <span className="visually-hidden">{`at ${stamp(r.at)} UTC`}</span>
                     </span>
                   </td>
@@ -425,8 +566,21 @@ export default async function AdminAuditPage({
                     {/* Sized to fit the current action vocabulary, but bounded
                         anyway: a longer action name added later truncates with
                         the full value in `title`, the way actor and target
-                        already do, rather than painting over the next column. */}
-                    <span className="ellipsis-cell" title={r.action}>
+                        already do, rather than painting over the next column.
+
+                        Links to itself as a filter, like actor and target. It
+                        is one of the three filterable fields and was the only
+                        one you could not click, on a page that already splits
+                        it at the dot and dims the prefix -- so it looked
+                        interactive and was not. The exact action, not the
+                        prefix: `action` is a prefix match, so filtering by the
+                        whole string is the narrowest reading of "show me this
+                        one", and the admin can shorten it in the form. */}
+                    <a
+                      className="ellipsis-cell cell-link"
+                      href={filterHref(params, "action", r.action)}
+                      title={r.action}
+                    >
                       {dot === -1 ? (
                         r.action
                       ) : (
@@ -435,7 +589,7 @@ export default async function AdminAuditPage({
                           {r.action.slice(dot + 1)}
                         </>
                       )}
-                    </span>
+                    </a>
                   </td>
                   <td>
                     <TargetCell r={r} params={params} />
@@ -469,13 +623,7 @@ export default async function AdminAuditPage({
         </table>
       </Scroller>
 
-      {rows.length === AUDIT_PAGE_SIZE && (
-        <div className="btn-row pager">
-          <a className="btn" href={`/admin/audit?${older.toString()}`}>
-            Older <span aria-hidden="true">→</span>
-          </a>
-        </div>
-      )}
+      <Pager rows={rows} params={params} older={older} filterHrefBase={filterHrefBase} />
     </main>
   );
 }
