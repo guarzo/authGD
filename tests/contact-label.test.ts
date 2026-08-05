@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  describeLabelDifference,
   encodeLabelCandidates,
   matchContactLabel,
   parseLabelCandidates,
@@ -101,5 +102,29 @@ describe("label candidate encoding", () => {
   it("reads null and empty as no candidates", () => {
     expect(parseLabelCandidates(null)).toEqual([]);
     expect(parseLabelCandidates("")).toEqual([]);
+  });
+});
+
+describe("describeLabelDifference", () => {
+  it("reports a pure case difference", () => {
+    expect(describeLabelDifference("AUTHGD", "AuthGD")).toBe("case");
+  });
+
+  it("reports a pure spacing difference", () => {
+    expect(describeLabelDifference("AuthGD ", "AuthGD")).toBe("spacing");
+    expect(describeLabelDifference(" AuthGD", "AuthGD")).toBe("spacing");
+    expect(describeLabelDifference("Auth  GD", "Auth GD")).toBe("spacing");
+  });
+
+  it("reports a combined case and spacing difference", () => {
+    expect(describeLabelDifference(" authgd ", "AuthGD")).toBe("case-and-spacing");
+  });
+
+  it("falls back to other when the strings differ on more than case and spacing", () => {
+    expect(describeLabelDifference("Blues", "AuthGD")).toBe("other");
+  });
+
+  it("falls back to other for a candidate that is already exactly equal", () => {
+    expect(describeLabelDifference("AuthGD", "AuthGD")).toBe("other");
   });
 });

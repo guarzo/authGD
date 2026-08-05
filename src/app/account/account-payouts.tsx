@@ -1,4 +1,5 @@
 import { RuleHead, Scroller, Status } from "@/app/_components/ui";
+import { fmtIsk } from "@/app/_components/format-isk";
 import type { AccountPayoutRow } from "@/services/payout-view";
 
 function fmtDate(d: Date): string {
@@ -27,6 +28,11 @@ function fmtDate(d: Date): string {
  * One row per operation: alts collapse into one participant, and an unresolved
  * name carries no accountId at all, so nothing here can duplicate an
  * operationId key.
+ *
+ * `linkToOperations === false` also drives one short dim line above the
+ * table: without it, the operation names below simply stop being links with
+ * no stated reason, which is the same "a member finds things quietly gone"
+ * problem the bare tier badge had before standing.tsx's green/blue sentences.
  */
 export function AccountPayouts({
   rows,
@@ -38,7 +44,21 @@ export function AccountPayouts({
   return (
     <>
       <RuleHead as="h2">Your payouts</RuleHead>
-      <Scroller label="Your payouts">
+      {/* Same "derole, don't boot" fact as the Standing row: a member below
+          flygd loses the operation page behind these names (canReadPayouts),
+          not the payment history itself. Left silent, the names below just go
+          quietly inert — the same "things vanish with no explanation" problem
+          the tier badge alone had. */}
+      {!linkToOperations && (
+        <p className="table-note">
+          Operation pages are FlyGD-only. Your own payout history here stays regardless of
+          tier.
+        </p>
+      )}
+      {/* Distinct from the RuleHead above it: both otherwise announce "Your
+          payouts" and a screen-reader user hears the same words twice in a
+          row. */}
+      <Scroller label="Payout history">
         <table className="log">
           <thead>
             <tr>
@@ -59,8 +79,12 @@ export function AccountPayouts({
                   )}
                 </td>
                 <td className="mono nowrap">{fmtDate(r.occurredAt)}</td>
-                {/* The exact numeric(20,2) string the column holds. */}
-                <td className="mono nowrap">{r.amount} ISK</td>
+                {/* The exact numeric(20,2) string the column holds, grouped for
+                    readability — see format-isk.ts. Not `.num`-aligned: that
+                    half of its recommendation is out of scope here, and other
+                    payout tables it might also apply to belong to other
+                    sessions. */}
+                <td className="mono nowrap">{fmtIsk(r.amount)} ISK</td>
                 <td>
                   {r.paid ? (
                     <Status tone="ok">paid</Status>

@@ -49,8 +49,9 @@ describe("AccountPayouts", () => {
 
   it("shows the exact stored amount and each paid state", () => {
     const html = render(false);
-    expect(html).toContain("450000.00 ISK");
-    expect(html).toContain("1200.50 ISK");
+    // 450000.00 groups to 450,000.00 via fmtIsk — see the dedicated test below.
+    expect(html).toContain("450,000.00 ISK");
+    expect(html).toContain("1,200.50 ISK");
     // Anchored on the element boundary: "unpaid" contains "paid", so a bare
     // toContain("paid") passes on a render where every row is unpaid and this
     // test would never notice the paid badge going missing.
@@ -58,7 +59,40 @@ describe("AccountPayouts", () => {
     expect(html).toContain(">unpaid<");
   });
 
+  // fmtIsk groups the integer part in threes (src/app/_components/format-isk.ts);
+  // this is the seam that proves the row actually renders through it rather
+  // than the raw numeric(20,2) string.
+  it("groups the amount via fmtIsk", () => {
+    const grouped: AccountPayoutRow[] = [
+      {
+        operationId: "33333333-3333-4333-8333-333333333333",
+        operationName: "Big op",
+        occurredAt: new Date("2026-08-01T00:00:00Z"),
+        amount: "4821430000.00",
+        paid: true,
+      },
+    ];
+    const html = renderToStaticMarkup(
+      createElement(AccountPayouts, { rows: grouped, linkToOperations: true }),
+    );
+    expect(html).toContain("4,821,430,000.00 ISK");
+    expect(html).not.toContain("4821430000.00 ISK");
+  });
+
   it("renders the operation date, not a relative time", () => {
     expect(render(false)).toContain("2026-08-01");
+  });
+
+  // The other half of "demoted, not booted": without this line the operation
+  // names below silently stop being links, with nothing said about why.
+  it("explains that operation pages are FlyGD-only when the viewer can't reach them", () => {
+    const html = render(false);
+    expect(html).toContain("FlyGD-only");
+    expect(html).toContain("stays regardless of tier");
+  });
+
+  it("omits the FlyGD-only line for a viewer who can reach operations", () => {
+    const html = render(true);
+    expect(html).not.toContain("FlyGD-only");
   });
 });

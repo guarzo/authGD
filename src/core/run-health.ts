@@ -128,6 +128,28 @@ function isLate(due: Due, now: Date): boolean {
   return due.kind === "at" && now.getTime() - due.at.getTime() > OVERDUE_GRACE_MS;
 }
 
+/**
+ * Whether a scheduled thing anchored at `since` should have happened again by
+ * `now`, using this module's own lateness rule rather than a second one
+ * invented at the call site. Built for callers — `account-health.ts` is the
+ * first — that want a plain yes/no rather than `rowHealth`'s full vocabulary.
+ *
+ * `null` `cron` (nothing schedules it) and `null` `since` (no anchor to be
+ * late against — first-run territory, not a stopped job) both read as "not
+ * overdue", matching the "never" reading in `rowHealth`'s own never-run
+ * branch above. An unreadable or far-off cadence (`dueAfter`'s `unreadable`
+ * and `far` cases) also reads false: this predicate collapses "we don't know"
+ * and "not due yet" into a single false, which is exactly why `rowHealth`
+ * itself does NOT use this — it still has to tell "unknown" from "fresh"
+ * apart for its own five-state vocabulary.
+ */
+export function isOverdue(cron: string | null, since: Date | null, now: Date): boolean {
+  if (cron === null || since === null) return false;
+  const due = dueAfter(cron, since);
+  if (due.kind !== "at") return false;
+  return isLate(due, now);
+}
+
 export function rowHealth(input: {
   status: SyncRunStatus | null; // null = run in flight
   startedAt: Date | null;

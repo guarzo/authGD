@@ -1,5 +1,5 @@
 import { Status } from "@/app/_components/ui";
-import { parseLabelCandidates } from "@/core/contact-label";
+import { describeLabelDifference, parseLabelCandidates } from "@/core/contact-label";
 
 /**
  * Split in two so the account page can put the status token in the CONTACTS
@@ -96,7 +96,7 @@ export function ContactRemedy({
     return (
       <span className="dim">
         Create a contact label named <code className="literal">{`"${label}"`}</code> in
-        game. The next sync picks it up on its own — nothing to do here.
+        game. The next sync picks it up on its own — nothing else to do here.
       </span>
     );
   }
@@ -106,14 +106,36 @@ export function ContactRemedy({
     // — rather than the serialized value as a single name — keeps the copy from
     // naming a label the member does not have.
     const candidates = parseLabelCandidates(detail);
+    // Speech output normalizes whitespace and does not announce case, so a
+    // single-candidate sentence that only differed by quoting two
+    // near-identical strings was heard as the same sentence twice. Naming the
+    // actual axis of difference in words (case / spacing / both) makes the
+    // sentence stand on its own before either literal is read.
+    // "other" is unreachable in practice (matchContactLabel only reports a
+    // fold-equal near miss) but keeps today's unqualified wording rather than
+    // asserting a difference this function can't name.
+    const difference =
+      candidates.length === 1 ? describeLabelDifference(candidates[0], label) : null;
     return (
       <span className="dim">
-        {candidates.length === 1 ? (
+        {candidates.length === 1 && difference !== "other" ? (
+          <>
+            Your label is named <code className="literal">{`"${candidates[0]}"`}</code>,
+            which differs from <code className="literal">{`"${label}"`}</code>{" "}
+            {difference === "case"
+              ? "only in capitalization"
+              : difference === "spacing"
+                ? "only in spacing"
+                : "in both capitalization and spacing"}
+            . Rename it in game to match exactly. The next sync picks it up on its own —
+            nothing else to do here.
+          </>
+        ) : candidates.length === 1 ? (
           <>
             Your label is named <code className="literal">{`"${candidates[0]}"`}</code>.
             It must be exactly <code className="literal">{`"${label}"`}</code> —
             capitalization and spaces both count. Rename it in game. The next sync picks
-            it up on its own — nothing to do here.
+            it up on its own — nothing else to do here.
           </>
         ) : candidates.length > 1 ? (
           <>
@@ -130,13 +152,14 @@ export function ContactRemedy({
             ))}{" "}
             {candidates.length === 2 ? "both" : "all"} differ only in capitalization or
             spacing. It must be exactly <code className="literal">{`"${label}"`}</code> —
-            rename one in game. The next sync picks it up on its own — nothing to do here.
+            rename one in game. The next sync picks it up on its own — nothing else to do
+            here.
           </>
         ) : (
           <>
             A label differing only in capitalization or spacing exists. It must be exactly{" "}
             <code className="literal">{`"${label}"`}</code> — rename it in game. The next
-            sync picks it up on its own — nothing to do here.
+            sync picks it up on its own — nothing else to do here.
           </>
         )}
       </span>
@@ -177,12 +200,11 @@ export function ContactRemedy({
         {result === "token_refresh_failed"
           ? "Refreshing this character's token failed."
           : "The last sync for this character failed."}{" "}
-        {/* Not "nothing to do here": #53 and #60 already spent that phrase on
-            the label remedies, where it means "nothing more to do *in authGD*"
-            and sits after an explicit "rename it in game". Reusing it for a
-            code that genuinely asks nothing of anyone gives one phrase two
-            readings, and the weaker one teaches members to skim past the
-            imperative that precedes it. */}
+        {/* Not "nothing else to do here": the label remedies above spend that
+            phrase after an explicit "rename it in game", where "else"
+            presupposes that in-game imperative. This code asks nothing of
+            anyone at all, so borrowing the phrase here would give it a second,
+            weaker reading and teach members to skim past the one that matters. */}
         authGD retries automatically. No action needed.
       </span>
     );

@@ -66,32 +66,39 @@ describe("every contacts result code has UI copy", () => {
   it.each(CONTACT_SYNC_RESULTS.filter((r) => r !== "ok"))(
     "the verdict classifies %s as either needing attention or stalled",
     (result) => {
-      const h = computeAccountHealth([
-        {
-          tokenStatus: "valid",
-          needsReauthForScopes: false,
-          contactsTarget: true,
-          contactSyncResult: result,
-        },
-      ]);
+      const h = computeAccountHealth(
+        [
+          {
+            tokenStatus: "valid",
+            needsReauthForScopes: false,
+            contactsTarget: true,
+            contactSyncResult: result,
+          },
+        ],
+        { linked: false, lastPushedAt: null, now: new Date("2026-01-05T15:19:00.000Z") },
+      );
       expect(h.attention + h.stalled).toBe(1);
       expect(h.verdict).not.toBe("nominal");
     },
   );
 
   it("classifies ok as nominal", () => {
-    const h = computeAccountHealth([
-      {
-        tokenStatus: "valid",
-        needsReauthForScopes: false,
-        contactsTarget: true,
-        contactSyncResult: "ok",
-      },
-    ]);
+    const h = computeAccountHealth(
+      [
+        {
+          tokenStatus: "valid",
+          needsReauthForScopes: false,
+          contactsTarget: true,
+          contactSyncResult: "ok",
+        },
+      ],
+      { linked: false, lastPushedAt: null, now: new Date("2026-01-05T15:19:00.000Z") },
+    );
     expect(h).toEqual({
       attention: 0,
       stalled: 0,
       firstSyncPending: false,
+      discordStale: false,
       verdict: "nominal",
     });
   });

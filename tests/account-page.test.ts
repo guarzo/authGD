@@ -34,6 +34,28 @@ describe("ContactRemedy (label_mismatch render)", () => {
     expect(html).not.toContain("Labels named");
   });
 
+  // Speech output normalizes whitespace and doesn't announce case, so the
+  // quoted literals alone read as identical strings. The sentence must name
+  // the axis of difference in words so it stands on its own.
+  it("states the difference in words for a case-only near miss", () => {
+    const html = encoded("AUTHGD");
+    expect(html).toContain("differs from");
+    expect(html).toContain("only in capitalization");
+    expect(html).not.toContain("only in spacing");
+    expect(html).toContain("nothing else to do here");
+  });
+
+  it("states the difference in words for a spacing-only near miss", () => {
+    const html = encoded("AuthGD ");
+    expect(html).toContain("only in spacing");
+    expect(html).not.toContain("only in capitalization");
+  });
+
+  it("states the difference in words for a combined case-and-spacing near miss", () => {
+    const html = encoded(" authgd ");
+    expect(html).toContain("in both capitalization and spacing");
+  });
+
   it("quotes each of two candidates separately, not as one joined name", () => {
     const html = encoded("AUTHGD", "authgd ");
     // Each candidate appears in its own quote marks...
@@ -84,6 +106,7 @@ describe("ContactRemedy (label_mismatch render)", () => {
     const html = render(null);
     expect(html).toContain("A label differing only in capitalization or spacing exists");
     expect(html).not.toContain("Labels named");
+    expect(html).toContain("nothing else to do here");
   });
 });
 
@@ -105,6 +128,7 @@ describe("ContactRemedy (missing_label render)", () => {
     expect(html).toContain("Create a contact label named");
     expect(html).toContain('class="literal"');
     expect(html).toContain("&quot;AuthGD &quot;");
+    expect(html).toContain("nothing else to do here");
   });
 });
 

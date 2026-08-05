@@ -7,6 +7,8 @@
  */
 
 import type { ContactSyncResult } from "@/core/contact-result";
+import { cronFor } from "@/core/schedules";
+import { isOverdue } from "@/core/run-health";
 
 /** The subset of `AccountView`'s character shape this derivation reads. A
  *  structural `Pick`-style interface rather than importing `AccountView`
@@ -51,8 +53,28 @@ export interface AccountHealth {
    * the first run is minutes away must not vanish because of the former.
    */
   firstSyncPending: boolean;
+  /** The discord-roles job has not run inside its own schedule, on an account
+   *  that has a Discord link for it to push to. */
+  discordStale: boolean;
   /** Which single fact the one-line verdict leads with. */
-  verdict: "degraded" | "stalled" | "first-sync-pending" | "nominal";
+  verdict: "degraded" | "stalled" | "discord-stale" | "first-sync-pending" | "nominal";
+}
+
+/**
+ * Account-level Discord-push facts, kept apart from `CharacterHealthInput`
+ * because "the last push happened" is a fact about the account's Discord
+ * link, not about any one character. A second, required parameter rather than
+ * an optional one: this module's own `MEMBER_FIXABLE` comment below tells the
+ * story of what an easy-to-forget input does when it is allowed to default
+ * away silently — a verdict that quietly under-counts forever. Required makes
+ * a call site that forgets Discord entirely a compile error instead.
+ */
+export interface DiscordPushInput {
+  /** Whether a Discord link exists. Nothing is pushed without one. */
+  linked: boolean;
+  /** Completion of the newest discord-roles run, or null if none has landed. */
+  lastPushedAt: Date | null;
+  now: Date;
 }
 
 /**
@@ -109,30 +131,48 @@ function isStalled(c: CharacterHealthInput): boolean {
 
 /**
  * `verdict` is a headline and only one fact can lead. The order is by what it
- * asks of the member: something to fix outranks something to merely know about,
- * which outranks a first run still in flight. The underlying facts stay
- * separately readable so a caller that wants a quieter one — the first-sync
- * notice — is not forced through that priority. An account with no contacts
- * targets at all (blue/green members, or zero characters) can never be pending,
- * matching the reasoning in account-view.ts's `contactsTarget` doc.
+ * asks of the member: something to fix outranks something to merely know
+ * about, which outranks an account-wide push that stopped, which outranks a
+ * first run still in flight. `discord-stale` sits above `first-sync-pending`
+ * because "should have happened and didn't" is a stronger fact than "hasn't
+ * happened yet". The underlying facts stay separately readable so a caller
+ * that wants a quieter one — the first-sync notice — is not forced through
+ * that priority. An account with no contacts targets at all (blue/green
+ * members, or zero characters) can never be pending, matching the reasoning
+ * in account-view.ts's `contactsTarget` doc.
  */
-export function computeAccountHealth(characters: CharacterHealthInput[]): AccountHealth {
+export function computeAccountHealth(
+  characters: CharacterHealthInput[],
+  discord: DiscordPushInput,
+): AccountHealth {
   const attention = characters.filter(needsAttention).length;
   const stalled = characters.filter(isStalled).length;
   const targets = characters.filter((c) => c.contactsTarget);
   const firstSyncPending =
     targets.length > 0 && targets.every((c) => c.contactSyncResult === null);
+  // Account-level, not per-character, so it deliberately does not fold into
+  // `stalled` — see that field's doc for why counting it there would make
+  // "N characters not syncing" a lie. `lastPushedAt === null` reads as "not
+  // stale" via `isOverdue`'s own null-`since` guard: a link with no completed
+  // push yet has no anchor to be late against, which is first-run territory,
+  // not a stopped job.
+  const discordStale =
+    discord.linked &&
+    isOverdue(cronFor("discord-roles"), discord.lastPushedAt, discord.now);
   return {
     attention,
     stalled,
     firstSyncPending,
+    discordStale,
     verdict:
       attention > 0
         ? "degraded"
         : stalled > 0
           ? "stalled"
-          : firstSyncPending
-            ? "first-sync-pending"
-            : "nominal",
+          : discordStale
+            ? "discord-stale"
+            : firstSyncPending
+              ? "first-sync-pending"
+              : "nominal",
   };
 }

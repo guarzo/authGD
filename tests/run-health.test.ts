@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { JOB_CRON } from "@/core/schedules";
 import {
+  isOverdue,
   OVERDUE_GRACE_MS,
   rowHealth,
   STUCK_FLOOR_MS,
@@ -202,5 +203,39 @@ describe("rowHealth", () => {
     expect(OVERDUE_GRACE_MS).toBe(5 * 60 * 1000);
     expect(STUCK_MULTIPLIER).toBe(3);
     expect(STUCK_FLOOR_MS).toBe(15 * 60 * 1000);
+  });
+});
+
+describe("isOverdue", () => {
+  // discord-roles fires hourly at :15; last completion 14:15 is next due
+  // 15:15, overdue past the 5-minute grace at 15:21.
+  const SINCE = new Date("2026-01-05T14:15:00.000Z");
+  const cron = JOB_CRON["discord-roles"];
+
+  it("is never overdue with no cron — nothing schedules it", () => {
+    expect(isOverdue(null, SINCE, at(SINCE, 365 * DAY))).toBe(false);
+  });
+
+  it("is never overdue with no anchor — nothing to be late against", () => {
+    expect(isOverdue(cron, null, at(SINCE, 365 * DAY))).toBe(false);
+  });
+
+  it("is not overdue on time", () => {
+    expect(isOverdue(cron, SINCE, at(SINCE, HOUR))).toBe(false); // exactly 15:15
+  });
+
+  it("respects the grace window", () => {
+    const due = at(SINCE, HOUR); // 15:15
+    expect(isOverdue(cron, SINCE, at(due, OVERDUE_GRACE_MS))).toBe(false); // 15:20, not yet
+    expect(isOverdue(cron, SINCE, at(due, OVERDUE_GRACE_MS + 1))).toBe(true); // 15:21
+  });
+
+  it("is overdue past the grace window", () => {
+    expect(isOverdue(cron, SINCE, at(SINCE, 2 * HOUR))).toBe(true);
+  });
+
+  it("is not overdue when the cron cannot be read — unreadable collapses to false", () => {
+    expect(isOverdue("not a cron", SINCE, at(SINCE, 365 * DAY))).toBe(false);
+    expect(isOverdue("0 0 30 2 *", SINCE, at(SINCE, 365 * DAY))).toBe(false); // Feb 30
   });
 });

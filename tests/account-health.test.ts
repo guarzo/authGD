@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { computeAccountHealth, type CharacterHealthInput } from "@/core/account-health";
+import {
+  computeAccountHealth,
+  type CharacterHealthInput,
+  type DiscordPushInput,
+} from "@/core/account-health";
 
 const char = (over: Partial<CharacterHealthInput> = {}): CharacterHealthInput => ({
   tokenStatus: "valid",
@@ -9,27 +13,47 @@ const char = (over: Partial<CharacterHealthInput> = {}): CharacterHealthInput =>
   ...over,
 });
 
+/**
+ * `discord-roles` fires hourly at :15 (`JOB_CRON["discord-roles"]`), so a push
+ * "at 14:15" is due again at 15:15 and overdue past the 5-minute grace at
+ * 15:21. `NOW` sits well inside the grace of the default `LAST_PUSHED` so the
+ * unqualified default reads not-stale.
+ */
+const LAST_PUSHED = new Date("2026-01-05T14:15:00.000Z");
+const NOW = new Date("2026-01-05T15:19:00.000Z");
+const OVERDUE_NOW = new Date("2026-01-05T15:21:00.000Z");
+
+const discord = (over: Partial<DiscordPushInput> = {}): DiscordPushInput => ({
+  linked: false,
+  lastPushedAt: LAST_PUSHED,
+  now: NOW,
+  ...over,
+});
+
 const health = (
   attention: number,
   stalled: number,
   firstSyncPending: boolean,
-  verdict: "degraded" | "stalled" | "first-sync-pending" | "nominal",
-) => ({ attention, stalled, firstSyncPending, verdict });
+  verdict: "degraded" | "stalled" | "discord-stale" | "first-sync-pending" | "nominal",
+  discordStale = false,
+) => ({ attention, stalled, firstSyncPending, discordStale, verdict });
 
 describe("computeAccountHealth", () => {
   it("is nominal with no characters at all", () => {
-    expect(computeAccountHealth([])).toEqual(health(0, 0, false, "nominal"));
+    expect(computeAccountHealth([], discord())).toEqual(health(0, 0, false, "nominal"));
   });
 
   it("is nominal when every character is healthy", () => {
     const chars = [char(), char({ contactsTarget: true, contactSyncResult: "ok" })];
-    expect(computeAccountHealth(chars)).toEqual(health(0, 0, false, "nominal"));
+    expect(computeAccountHealth(chars, discord())).toEqual(
+      health(0, 0, false, "nominal"),
+    );
   });
 
   it("is nominal for a non-target character regardless of its (absent) sync result", () => {
     // Blue/green members are never contacts targets, so a null result here is
     // structural, not a pending first sync — see account-view.ts.
-    expect(computeAccountHealth([char({ contactsTarget: false })])).toEqual(
+    expect(computeAccountHealth([char({ contactsTarget: false })], discord())).toEqual(
       health(0, 0, false, "nominal"),
     );
   });
@@ -39,7 +63,9 @@ describe("computeAccountHealth", () => {
       char({ contactsTarget: true, contactSyncResult: null }),
       char({ contactsTarget: true, contactSyncResult: null }),
     ];
-    expect(computeAccountHealth(chars)).toEqual(health(0, 0, true, "first-sync-pending"));
+    expect(computeAccountHealth(chars, discord())).toEqual(
+      health(0, 0, true, "first-sync-pending"),
+    );
   });
 
   it("is not first-sync-pending once any target character has a result", () => {
@@ -47,19 +73,21 @@ describe("computeAccountHealth", () => {
       char({ contactsTarget: true, contactSyncResult: "ok" }),
       char({ contactsTarget: true, contactSyncResult: null }),
     ];
-    expect(computeAccountHealth(chars)).toEqual(health(0, 0, false, "nominal"));
+    expect(computeAccountHealth(chars, discord())).toEqual(
+      health(0, 0, false, "nominal"),
+    );
   });
 
   it("counts a bad token as needing attention", () => {
-    expect(computeAccountHealth([char({ tokenStatus: "invalid" })])).toEqual(
+    expect(computeAccountHealth([char({ tokenStatus: "invalid" })], discord())).toEqual(
       health(1, 0, false, "degraded"),
     );
   });
 
   it("counts a scope shortfall as needing attention even with a valid token", () => {
-    expect(computeAccountHealth([char({ needsReauthForScopes: true })])).toEqual(
-      health(1, 0, false, "degraded"),
-    );
+    expect(
+      computeAccountHealth([char({ needsReauthForScopes: true })], discord()),
+    ).toEqual(health(1, 0, false, "degraded"));
   });
 
   it.each([
@@ -70,7 +98,9 @@ describe("computeAccountHealth", () => {
     "needs_reauth",
   ])("counts %s as needing attention — the member can clear it themselves", (result) => {
     const chars = [char({ contactsTarget: true, contactSyncResult: result })];
-    expect(computeAccountHealth(chars)).toEqual(health(1, 0, false, "degraded"));
+    expect(computeAccountHealth(chars, discord())).toEqual(
+      health(1, 0, false, "degraded"),
+    );
   });
 
   // ContactRemedy tells the member "nothing to do here" for these. A headline
@@ -80,7 +110,9 @@ describe("computeAccountHealth", () => {
     "counts %s as stalled, not as needing attention",
     (result) => {
       const chars = [char({ contactsTarget: true, contactSyncResult: result })];
-      expect(computeAccountHealth(chars)).toEqual(health(0, 1, false, "stalled"));
+      expect(computeAccountHealth(chars, discord())).toEqual(
+        health(0, 1, false, "stalled"),
+      );
     },
   );
 
@@ -92,7 +124,9 @@ describe("computeAccountHealth", () => {
         contactSyncResult: "sync_failed",
       }),
     ];
-    expect(computeAccountHealth(chars)).toEqual(health(1, 0, false, "degraded"));
+    expect(computeAccountHealth(chars, discord())).toEqual(
+      health(1, 0, false, "degraded"),
+    );
   });
 
   it("leads with attention when both kinds are present", () => {
@@ -100,7 +134,9 @@ describe("computeAccountHealth", () => {
       char({ contactsTarget: true, contactSyncResult: "missing_label" }),
       char({ contactsTarget: true, contactSyncResult: "dry_run" }),
     ];
-    expect(computeAccountHealth(chars)).toEqual(health(1, 1, false, "degraded"));
+    expect(computeAccountHealth(chars, discord())).toEqual(
+      health(1, 1, false, "degraded"),
+    );
   });
 
   it("does not count a target character mid-first-sync as degraded on its own", () => {
@@ -110,7 +146,9 @@ describe("computeAccountHealth", () => {
     ];
     // The token problem is real and counted; the pending contacts state is
     // not treated as a separate failure.
-    expect(computeAccountHealth(chars)).toEqual(health(1, 0, true, "degraded"));
+    expect(computeAccountHealth(chars, discord())).toEqual(
+      health(1, 0, true, "degraded"),
+    );
   });
 
   it("sums multiple characters needing attention", () => {
@@ -119,7 +157,9 @@ describe("computeAccountHealth", () => {
       char({ needsReauthForScopes: true }),
       char({ contactsTarget: true, contactSyncResult: "ok" }),
     ];
-    expect(computeAccountHealth(chars)).toEqual(health(2, 0, false, "degraded"));
+    expect(computeAccountHealth(chars, discord())).toEqual(
+      health(2, 0, false, "degraded"),
+    );
   });
 
   // The regression this shape exists to prevent. A character linked seconds ago
@@ -135,6 +175,43 @@ describe("computeAccountHealth", () => {
         contactSyncResult: null,
       }),
     ];
-    expect(computeAccountHealth(chars)).toEqual(health(1, 0, true, "degraded"));
+    expect(computeAccountHealth(chars, discord())).toEqual(
+      health(1, 0, true, "degraded"),
+    );
+  });
+
+  describe("discord push staleness", () => {
+    it("is discord-stale when linked and the last push is overdue", () => {
+      const d = discord({ linked: true, now: OVERDUE_NOW });
+      expect(computeAccountHealth([], d)).toEqual(
+        health(0, 0, false, "discord-stale", true),
+      );
+    });
+
+    it("is not discord-stale when linked but never pushed — no anchor to be late against", () => {
+      const d = discord({ linked: true, lastPushedAt: null, now: OVERDUE_NOW });
+      expect(computeAccountHealth([], d)).toEqual(health(0, 0, false, "nominal"));
+    });
+
+    it("is not discord-stale when not linked, however overdue the last push would read", () => {
+      const d = discord({ linked: false, now: OVERDUE_NOW });
+      expect(computeAccountHealth([], d)).toEqual(health(0, 0, false, "nominal"));
+    });
+
+    it("stays degraded when a character needs attention alongside a stale discord push", () => {
+      const chars = [char({ tokenStatus: "invalid" })];
+      const d = discord({ linked: true, now: OVERDUE_NOW });
+      expect(computeAccountHealth(chars, d)).toEqual(
+        health(1, 0, false, "degraded", true),
+      );
+    });
+
+    it("stays stalled when a character is stalled alongside a stale discord push", () => {
+      const chars = [char({ contactsTarget: true, contactSyncResult: "sync_failed" })];
+      const d = discord({ linked: true, now: OVERDUE_NOW });
+      expect(computeAccountHealth(chars, d)).toEqual(
+        health(0, 1, false, "stalled", true),
+      );
+    });
   });
 });

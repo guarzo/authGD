@@ -70,7 +70,7 @@ test("account page shows characters, main marker, and tier", async ({
   await expect(page.locator("[data-field='tier']")).toContainText("flygd");
 });
 
-test("the contacts note describes the column and only shows where it explains something", async ({
+test("the contacts note describes the column via a table caption, and shows visible prose only where it explains something", async ({
   page,
   context,
 }) => {
@@ -90,33 +90,40 @@ test("the contacts note describes the column and only shows where it explains so
   await context.addCookies([await sessionCookieFor(db, acc.id)]);
   await page.goto("/account");
 
-  // It hangs off the column header as an accessible description, not as a
-  // standing footnote at the foot of the page, and not as a title attribute
-  // that no keyboard user could ever summon.
-  await expect(page.getByRole("columnheader", { name: "Contacts" })).toHaveAttribute(
-    "aria-describedby",
-    "contacts-note",
-  );
-  const note = page.locator("#contacts-note");
-  await expect(note).toHaveText(/authGD owns the flygd contact label/);
+  // The note lives in a <caption>, announced for the table as a whole — a
+  // keyboard/screen-reader user reaches it whether they land on the header or
+  // any cell in the CONTACTS column, unlike a `<th>`'s aria-describedby, which
+  // only ever reached the header.
+  const caption = page.locator("table.log caption");
+  await expect(caption).toHaveText(/authGD owns the flygd contact label/);
+  await expect(caption).toHaveClass(/visually-hidden/);
   await expect(page.locator("[title]")).toHaveCount(0);
   await expect(page.locator(".footnote")).toHaveCount(0);
+  await expect(page.getByRole("columnheader", { name: "Contacts" })).not.toHaveAttribute(
+    "aria-describedby",
+  );
 
-  // Visible, once, above the table — not repeated inside the cells.
-  await expect(note).toHaveClass(/table-note/);
-  await expect(page.locator(".log").getByText(/managed automatically/)).toHaveCount(0);
+  // Visible, once, above the table — not repeated in the rows. Scoped to
+  // `tbody`, not `.log`: the caption is now inside the table and says these
+  // very words on purpose, so a table-wide check would match it.
+  const visibleNote = page.locator("p.table-note", { hasText: "authGD owns the" });
+  await expect(visibleNote).toBeVisible();
+  await expect(page.locator(".log tbody").getByText(/managed automatically/)).toHaveCount(
+    0,
+  );
 
-  // With every row healthy it stops being visible copy but stays in the
-  // accessible tree, so the header description never goes away.
+  // With every row healthy the visible copy goes away, but the caption — a
+  // standing property of the column, not news — never does.
   await db.execute(sql`
     insert into contact_sync_state (character_id, last_result, last_synced_at)
     select id, 'ok', now() from "character" where name = 'Unsynced Alt'
   `);
   await page.reload();
-  await expect(page.locator("#contacts-note")).toHaveClass(/visually-hidden/);
-  await expect(page.getByRole("columnheader", { name: "Contacts" })).toHaveAttribute(
-    "aria-describedby",
-    "contacts-note",
+  await expect(page.locator("p.table-note", { hasText: "authGD owns the" })).toHaveCount(
+    0,
+  );
+  await expect(page.locator("table.log caption")).toHaveText(
+    /authGD owns the flygd contact label/,
   );
 });
 
@@ -222,7 +229,7 @@ test("unlink arms on the first click, confirms on the second, and Escape disarms
   ).toHaveLength(1);
 });
 
-test("last pushed reports per surface, and drops Discord when it isn't linked", async ({
+test("sync schedule reports per surface, and drops Discord when it isn't linked", async ({
   page,
   context,
 }) => {
@@ -238,7 +245,7 @@ test("last pushed reports per surface, and drops Discord when it isn't linked", 
   await page.goto("/account");
 
   const pushed = page.locator("dl.facts").last();
-  await expect(page.getByRole("heading", { name: "Last pushed" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Sync schedule" })).toBeVisible();
 
   // Scoped per row: a container-wide toContainText would pass even if the three
   // states landed on the wrong surfaces.
@@ -278,16 +285,19 @@ test("a blue member is not told their first sync is pending", async ({
   await expect(page.getByRole("heading", { name: "Your account" })).toBeVisible();
   await expect(page.getByText("First sync has not run yet")).toHaveCount(0);
   // Scoped to the manifest: "not yet run" is still the truthful state for a
-  // JOB that has never fired, which is what the LAST PUSHED rows report here.
+  // JOB that has never fired, which is what the SYNC SCHEDULE rows report here.
   // The claim being fixed is the per-character one.
   await expect(page.getByRole("table").getByText("not yet run")).toHaveCount(0);
   // The account-level answer still shows: the standing is being pushed, and
   // this is where the member can see when.
-  await expect(page.getByRole("heading", { name: "Last pushed" })).toBeVisible();
-  // The contact-label note stays in the accessible tree as the column's
-  // description, but it is not visible copy: authGD writes no contact label on
-  // a blue member's characters, so there is nothing for it to explain.
-  await expect(page.locator("#contacts-note")).toHaveClass(/visually-hidden/);
+  await expect(page.getByRole("heading", { name: "Sync schedule" })).toBeVisible();
+  // The contact-label note stays in the accessible tree as the whole table's
+  // caption, but it is not visible copy: authGD writes no contact label on a
+  // blue member's characters, so there is nothing for it to explain.
+  await expect(page.locator("table.log caption")).toHaveClass(/visually-hidden/);
+  await expect(page.locator("p.table-note", { hasText: "authGD owns the" })).toHaveCount(
+    0,
+  );
 });
 
 test("a flygd member still sees the first-run notice", async ({ page, context }) => {
@@ -302,8 +312,11 @@ test("a flygd member still sees the first-run notice", async ({ page, context })
   // one step they still owe is already taken care of.
   await expect(page.getByRole("status")).toContainText("Discord roles start once you");
   await expect(page.getByRole("link", { name: "Link Discord" })).toBeVisible();
-  // The label note applies to this account, so it becomes visible copy.
-  await expect(page.locator("#contacts-note")).toHaveClass(/table-note/);
+  // The label note applies to this account, so it becomes visible copy above
+  // the table, in addition to the caption that is always in the accessible tree.
+  await expect(
+    page.locator("p.table-note", { hasText: "authGD owns the" }),
+  ).toBeVisible();
 });
 
 test("the first-run notice promises Discord roles once Discord is linked", async ({
@@ -345,7 +358,7 @@ test("a pending member is told their access is awaiting approval", async ({
   await expect(page.locator(".notice--bad, .notice--warn")).toHaveCount(0);
 });
 
-test("last pushed is omitted entirely before any character is linked", async ({
+test("sync schedule is omitted entirely before any character is linked", async ({
   page,
   context,
 }) => {
@@ -355,7 +368,7 @@ test("last pushed is omitted entirely before any character is linked", async ({
   await context.addCookies([await sessionCookieFor(db, acc.id)]);
   await page.goto("/account");
   await expect(page.getByRole("heading", { name: "Your account" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Last pushed" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Sync schedule" })).toHaveCount(0);
 });
 
 test("unlinking a character that already left the account lands on a styled notice, not the error boundary", async ({
@@ -429,7 +442,10 @@ test("a member who is no longer flygd sees their payout row with no link to the 
   await page.goto("/account");
 
   const row = page.getByRole("row").filter({ hasText: "Thursday roam" });
-  await expect(row).toContainText("450000.00 ISK");
+  // Grouped by fmtIsk, as everywhere else this page prints an amount. The
+  // operation pages under /payouts still print the raw numeric(20,2) string —
+  // adopting fmtIsk there belongs to whoever owns those tables.
+  await expect(row).toContainText("450,000.00 ISK");
   await expect(row).toContainText("unpaid");
   // The name is there; the link is not.
   await expect(row.getByRole("link")).toHaveCount(0);

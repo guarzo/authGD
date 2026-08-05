@@ -11,6 +11,15 @@ import type { Tier as TierValue } from "@/core/tier";
  * callout would break the two-column tracks, and DESIGN.md reserves warning
  * colour for the admin table. Nothing here reads as a fault (PRODUCT.md); the
  * member has done nothing wrong and is waiting on someone else.
+ *
+ * Green and blue get the same badge-plus-sentence treatment for the same
+ * reason: both are the account's state AFTER standings and map access stop
+ * being pushed (desired.ts targets `tier === "flygd"` only), and PRODUCT.md's
+ * core promise — "derole, don't boot" — means that fact must not land as a
+ * bare uppercase badge with no reassurance attached. Green is the system's own
+ * call (tier.ts) and converges back to flygd on its own; blue is admin-set and
+ * does not self-correct. The two sentences say which is true, never the word
+ * "demoted" and never that anything was "removed".
  */
 export function StandingTier({ tier }: { tier: TierValue }) {
   if (tier === "pending") {
@@ -20,6 +29,29 @@ export function StandingTier({ tier }: { tier: TierValue }) {
         <span className="dim">
           Your access is awaiting approval from an admin. Nothing is wrong — someone on
           the team will review your account.
+        </span>
+      </>
+    );
+  }
+  if (tier === "green") {
+    return (
+      <>
+        <Tier tier={tier} size="lead" />
+        <span className="dim">
+          Your main isn&rsquo;t in the alliance right now, so standings and map access
+          aren&rsquo;t pushed — your account, characters, and Discord link stay as they
+          are, and this reverts on its own once that changes.
+        </span>
+      </>
+    );
+  }
+  if (tier === "blue") {
+    return (
+      <>
+        <Tier tier={tier} size="lead" />
+        <span className="dim">
+          An admin set this — standings and map access aren&rsquo;t pushed at this tier,
+          but your account, characters, and Discord link stay as they are.
         </span>
       </>
     );
