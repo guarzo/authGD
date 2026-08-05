@@ -153,16 +153,22 @@ rename the file.
 
 - [ ] **Step 5: Apply to the test database and run the test**
 
-`npm run db:migrate` reads **`DATABASE_URL`**, not `TEST_DATABASE_URL`. Set it
-explicitly for this command every time, or it will migrate whatever your `.env`
-points at — most likely your dev database:
+`setupTestDb()` (`tests/helpers/db.ts:16`) calls `migrate()` itself against
+`TEST_DATABASE_URL`, defaulting to
+`postgres://authgd:authgd@localhost:5433/authgd_test`. So the test run migrates
+the test database for you — do **not** invoke `npm run db:migrate` here. That
+script reads `DATABASE_URL`, which is unset in this shell, and would either
+throw `DATABASE_URL not set` or migrate your dev database:
 
 ```bash
-DATABASE_URL="$TEST_DATABASE_URL" npm run db:migrate
 npm test -- tests/db-schema.test.ts
 ```
 
 Expected: PASS.
+
+Note that `authgd_test` at :5433 is shared with the main checkout, so this
+migration is visible outside this worktree. That is expected and reversible via
+the rollback SQL.
 
 - [ ] **Step 6: Prove the migration and its rollback on a disposable database**
 
