@@ -290,7 +290,7 @@ describe("job reporting honesty in dry-run", () => {
   });
 
   it("wanderer writes NO audit rows in dry-run and reports would* counters", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    const acc = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, dryCfg, {
       id: 90000001,
       accountId: acc.id,
@@ -316,7 +316,7 @@ describe("job reporting honesty in dry-run", () => {
   });
 
   it("discord-roles writes NO audit rows in dry-run and reports wouldChangeRoles", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "flygd", discordUserId: "u1" });
+    const acc = await seedAccount(ctx.db, { tier: "member", discordUserId: "u1" });
     await seedCharacter(ctx.db, dryCfg, { id: 90000001, accountId: acc.id, main: true });
     const client: DiscordClient = {
       getGuildRoles: async () => [

@@ -49,7 +49,7 @@ function fakeDiscord(
 
 describe("runDiscordRolesJob", () => {
   it("ensures exactly the tier's managed role, leaving other roles alone", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "flygd", discordUserId: "u1" });
+    const acc = await seedAccount(ctx.db, { tier: "member", discordUserId: "u1" });
     await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
     const d = fakeDiscord({ u1: ["11", "999"] });
     const result = await runDiscordRolesJob({ db: ctx.db, cfg, discord: d.client });
@@ -117,7 +117,7 @@ describe("runDiscordRolesJob", () => {
   });
 
   it("logs and skips users not in the guild", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "green", discordUserId: "gone" });
+    const acc = await seedAccount(ctx.db, { tier: "alumni", discordUserId: "gone" });
     await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
     const d = fakeDiscord({ gone: null });
     const result = await runDiscordRolesJob({ db: ctx.db, cfg, discord: d.client });
@@ -164,7 +164,7 @@ describe("runDiscordRolesJob", () => {
     const client: DiscordClient = {
       ...d.client,
       removeMemberRole: async (userId, roleId) => {
-        const acc = await seedAccount(ctx.db, { tier: "flygd", discordUserId: "u9" });
+        const acc = await seedAccount(ctx.db, { tier: "member", discordUserId: "u9" });
         await seedCharacter(ctx.db, cfg, { id: 99, accountId: acc.id, main: true });
         await d.client.removeMemberRole(userId, roleId);
       },
@@ -183,7 +183,7 @@ describe("runDiscordRolesJob", () => {
   });
 
   it("skips the strip when the user re-linked meanwhile", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "flygd", discordUserId: "u9" });
+    const acc = await seedAccount(ctx.db, { tier: "member", discordUserId: "u9" });
     await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
     const d = fakeDiscord({ u9: ["10"] });
     const result = await runDiscordRolesJob(
@@ -195,9 +195,9 @@ describe("runDiscordRolesJob", () => {
   });
 
   it("scopes to one account when accountId is passed", async () => {
-    const a1 = await seedAccount(ctx.db, { tier: "flygd", discordUserId: "u1" });
+    const a1 = await seedAccount(ctx.db, { tier: "member", discordUserId: "u1" });
     await seedCharacter(ctx.db, cfg, { id: 1, accountId: a1.id, main: true });
-    const a2 = await seedAccount(ctx.db, { tier: "green", discordUserId: "u2" });
+    const a2 = await seedAccount(ctx.db, { tier: "alumni", discordUserId: "u2" });
     await seedCharacter(ctx.db, cfg, { id: 2, accountId: a2.id, main: true });
     const d = fakeDiscord({ u1: [], u2: [] });
     await runDiscordRolesJob(

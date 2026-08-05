@@ -78,7 +78,7 @@ async function getChar(id: number) {
 
 describe("runTokenHealthJob", () => {
   it("keeps healthy tokens valid and rotates them", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    const acc = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, cfg, {
       id: 1,
       accountId: acc.id,
@@ -103,7 +103,7 @@ describe("runTokenHealthJob", () => {
   });
 
   it("marks scope shortfalls needs_reauth (in-place re-auth, never unlink)", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    const acc = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, cfg, {
       id: 1,
       accountId: acc.id,
@@ -130,7 +130,7 @@ describe("runTokenHealthJob", () => {
   });
 
   it("records which scopes are missing, not the whole required set", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    const acc = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, cfg, {
       id: 1,
       accountId: acc.id,
@@ -157,7 +157,7 @@ describe("runTokenHealthJob", () => {
   });
 
   it("marks token invalid ONLY on permanent OAuth errors", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    const acc = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, cfg, {
       id: 1,
       accountId: acc.id,
@@ -176,7 +176,7 @@ describe("runTokenHealthJob", () => {
   });
 
   it("transient refresh failures change nothing and retry", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    const acc = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, cfg, {
       id: 1,
       accountId: acc.id,
@@ -195,7 +195,7 @@ describe("runTokenHealthJob", () => {
   });
 
   it("owner_hash mismatch reclaims the character and revokes the account's sessions", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    const acc = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, cfg, {
       id: 1,
       accountId: acc.id,
@@ -227,7 +227,7 @@ describe("runTokenHealthJob", () => {
     // no-main rule applied: main cleared, demoted, deprovision enqueued
     const [after] = await ctx.db.select().from(account);
     expect(after.mainCharacterId).toBeNull();
-    expect(after.tier).toBe("green");
+    expect(after.tier).toBe("alumni");
     const outboxRows = await ctx.db.select().from(outbox);
     expect(outboxRows.map((r) => r.payload)).toContainEqual({
       kind: "account",
@@ -239,7 +239,7 @@ describe("runTokenHealthJob", () => {
   });
 
   it("reclaims even the LAST character — the account may legitimately end empty", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    const acc = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, cfg, {
       id: 1,
       accountId: acc.id,
@@ -263,12 +263,12 @@ describe("runTokenHealthJob", () => {
     expect(await getChar(1)).toBeUndefined(); // gone — no last-character guard here
     const [after] = await ctx.db.select().from(account);
     expect(after.mainCharacterId).toBeNull();
-    expect(after.tier).toBe("green"); // deprovisioned, not left flygd
+    expect(after.tier).toBe("alumni"); // deprovisioned, not left member
     expect(await ctx.db.select().from(session)).toEqual([]);
   });
 
   it("fails closed when the token's subject is a DIFFERENT character", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    const acc = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, cfg, {
       id: 1,
       accountId: acc.id,
@@ -298,7 +298,7 @@ describe("runTokenHealthJob", () => {
   });
 
   it("a verify failure on one character never blocks the rest of the run", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    const acc = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, cfg, {
       id: 1,
       accountId: acc.id,
@@ -336,7 +336,7 @@ describe("runTokenHealthJob", () => {
   });
 
   it("a transient verify failure (JWKS/network trouble) changes nothing and retries", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    const acc = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, cfg, {
       id: 1,
       accountId: acc.id,
@@ -370,7 +370,7 @@ describe("runTokenHealthJob", () => {
   });
 
   it("reclaimTransferredCharacter refuses a stale decision (row changed hands)", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    const acc = await seedAccount(ctx.db, { tier: "member" });
     // the row's CURRENT owner hash is already the new owner's
     await seedCharacter(ctx.db, cfg, {
       id: 1,

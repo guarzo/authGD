@@ -6,7 +6,7 @@ import { encodeLabelCandidates, matchContactLabel } from "@/core/contact-label";
 import type { ContactSyncResult } from "@/core/contact-result";
 import { diffContacts } from "@/core/contacts-diff";
 import { EsiError, type EsiClient } from "@/lib/esi/client";
-import { getFlygdCharacters, type FlygdCharacter } from "@/services/desired";
+import { getMemberCharacters, type MemberCharacter } from "@/services/desired";
 import { runJob, type JobResult } from "@/services/sync-run";
 import { getFreshAccessToken } from "@/services/tokens";
 
@@ -21,7 +21,7 @@ export const CONTACT_SCOPES = [
  * as long as BOTH contact scopes are granted and the token isn't dead.
  */
 export function canPushContacts(
-  ch: Pick<FlygdCharacter, "tokenStatus" | "scopes" | "refreshTokenEnc">,
+  ch: Pick<MemberCharacter, "tokenStatus" | "scopes" | "refreshTokenEnc">,
 ): boolean {
   if (!ch.refreshTokenEnc) return false;
   if (ch.tokenStatus === "invalid" || ch.tokenStatus === "missing") return false;
@@ -72,8 +72,8 @@ export async function runContactsJob(deps: {
 }): Promise<JobResult> {
   const { db, cfg, esi } = deps;
   return runJob(db, "contacts", async () => {
-    const flygd = await getFlygdCharacters(db);
-    const desiredAll = flygd.map((c) => c.characterId);
+    const members = await getMemberCharacters(db);
+    const desiredAll = members.map((c) => c.characterId);
     const counts = {
       targets: 0,
       added: 0,
@@ -85,7 +85,7 @@ export async function runContactsJob(deps: {
     let transientFailures = 0;
     const errors: string[] = [];
 
-    for (const target of flygd) {
+    for (const target of members) {
       if (!canPushContacts(target)) {
         counts.skipped++;
         // Persist WHY, so the member/admin pages can show remediation.

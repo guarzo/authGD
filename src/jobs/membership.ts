@@ -22,7 +22,7 @@ export async function applyTierTransition(
   input: {
     accountId: string;
     mainCharacterId: number;
-    next: "flygd" | "green";
+    next: "member" | "alumni";
     checkedAt: Date;
   },
 ): Promise<boolean> {
@@ -62,7 +62,7 @@ export async function applyTierTransition(
       details: {
         from: locked.tier,
         to: input.next,
-        cause: input.next === "flygd" ? "main joined alliance" : "main left alliance",
+        cause: input.next === "member" ? "main joined alliance" : "main left alliance",
       },
     });
     await enqueueSync(tx, { kind: "account", accountId: input.accountId });
@@ -202,7 +202,7 @@ export async function runMembershipJob(
         checkedAt,
       });
       if (!applied) continue;
-      if (next === "flygd") promoted++;
+      if (next === "member") promoted++;
       else demoted++;
     }
 
