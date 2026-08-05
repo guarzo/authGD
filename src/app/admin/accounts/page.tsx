@@ -34,6 +34,7 @@ import {
   setStatusAction,
   setTierAction,
   syncAccountAction,
+  unlinkDiscordAction,
 } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -492,7 +493,22 @@ function AccountRow({
 
           <td>
             {r.discordLinked ? (
-              <Status tone="ok">linked</Status>
+              // Already inside the tbody-wide ConfirmArmScope (:281), like every
+              // other confirm in this row. Names its row for the same reason the
+              // Actions cell does: "unlink" read out of context says whose Discord
+              // is about to be disconnected to nobody.
+              <span className="inline-pair">
+                <Status tone="ok">linked</Status>
+                <form action={unlinkDiscordAction.bind(null, r.accountId, listSearch)}>
+                  <ConfirmSubmit
+                    className="btn btn--micro"
+                    armedClassName="btn btn--micro btn--danger"
+                    label="unlink"
+                    restName={`unlink Discord for ${identity}`}
+                    confirmName={`confirm unlink Discord for ${identity}`}
+                  />
+                </form>
+              </span>
             ) : (
               <Status tone="off">none</Status>
             )}

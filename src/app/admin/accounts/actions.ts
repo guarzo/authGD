@@ -14,6 +14,7 @@ import {
   setTierManual,
 } from "@/services/admin-accounts";
 import { logAudit } from "@/services/audit";
+import { unlinkDiscord } from "@/services/discord-link";
 import { enqueueSync } from "@/services/outbox";
 
 // `not_authorized` is a real race, not a bug: the actor's own admin bit can be
@@ -214,5 +215,34 @@ export async function demoteAdminAction(
   }
   if (!result.ok && result.error === "not_authorized") redirectNotAdmin(listSearch);
   if (!result.ok) throw new Error(result.error);
+  revalidatePath("/admin/accounts");
+}
+
+/** Admin control: disconnect a member's Discord.
+ *
+ *  This is what `ACCOUNT_ERRORS.merge_discord` now names. A member blocked
+ *  from linking a character because the SOURCE account holds a Discord link
+ *  cannot clear it themselves — they are signed in as the target — so without
+ *  this the only remedy was signing out and back in as the accidental account.
+ *
+ *  `not_found` is the merge race every control here shares. `not_linked` is a
+ *  stale tab: the cell renders the control only when the row says linked, and
+ *  a second admin clearing it first is not an error worth a notice.
+ *
+ *  Takes `listSearch` like every other mutation on this page, unlike the
+ *  brief's sketch: `redirectOnMutationError` here is the same one every other
+ *  action calls, and it has required the admin's current filter/sort since
+ *  #89 — passing only the error code would not compile. */
+export async function unlinkDiscordAction(
+  accountId: string,
+  listSearch: string,
+): Promise<void> {
+  const { accountId: actor } = await requireAdminAction();
+  const result = await getDb().transaction((tx) =>
+    unlinkDiscord(tx, actor, accountId, "admin"),
+  );
+  if (!result.ok && result.error === "not_found") {
+    redirectOnMutationError("not_found", listSearch);
+  }
   revalidatePath("/admin/accounts");
 }
