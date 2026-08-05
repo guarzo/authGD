@@ -38,6 +38,77 @@ describe("summarizeDetails", () => {
     cyclic.self = cyclic;
     expect(() => summarizeDetails("unknown.action", cyclic)).not.toThrow();
   });
+
+  it("renders an approval as a transition into the granted tier", () => {
+    expect(summarizeDetails("tier.approved", { to: "green", locked: false })).toBe(
+      "→ green",
+    );
+  });
+
+  it("renders an approval that locked the tier", () => {
+    expect(summarizeDetails("tier.approved", { to: "blue", locked: true })).toBe(
+      "→ blue, locked",
+    );
+  });
+
+  it("renders a merge with a shortened source account and its character", () => {
+    expect(
+      summarizeDetails("account.merged", {
+        sourceAccountId: "7f3a2b1c-0000-4000-8000-000000000001",
+        characterId: 90000001,
+      }),
+    ).toBe("absorbed 7f3a2b…, character 90000001");
+  });
+
+  it("renders a reprice with the name and price the fallback used to truncate", () => {
+    // unitPrice is what payout-loot.ts:218 actually writes: centsToIsk(), which
+    // is always a 2dp STRING. Kept verbatim rather than normalised to 5.5 — the
+    // trailing zeros are the money shape, and stripping them would render a
+    // 1000.00 ISK reprice as "1000".
+    expect(
+      summarizeDetails("payout.item_repriced", {
+        itemId: "i-1",
+        poolId: "p-1",
+        name: "Tritanium",
+        unitPrice: "5.50",
+      }),
+    ).toBe("Tritanium → 5.50");
+  });
+
+  // The sub-object ids are declared-and-silent, not unread: a `+2 more` here
+  // would tell an admin something was hidden from them when nothing was.
+  it("does not report the reprice sub-object ids as hidden keys", () => {
+    expect(
+      summarizeDetails("payout.item_repriced", {
+        itemId: "i-1",
+        poolId: "p-1",
+        name: "Tritanium",
+        unitPrice: "5.50",
+      }),
+    ).not.toContain("more");
+  });
+
+  // Every action emitted with no `details` at all. Derived mechanically from
+  // `grep -rho 'action: "…"' src/`; see the spec's "How this inventory was
+  // derived". A renderer for any of these would be machinery for an empty
+  // payload, and the em dash is already correct.
+  it.each([
+    "character.linked",
+    "character.reauthed",
+    "discord.linked",
+    "admin.demoted",
+    "admin.promoted",
+    "character.affiliation_invalid",
+    "wanderer.added",
+    "wanderer.unblocked",
+    "sync.requested",
+    "sync.recheck_requested",
+    "payout.created",
+    "payout.finalized",
+    "payout.unlocked",
+  ])("renders %s with no details as an em dash", (action) => {
+    expect(summarizeDetails(action, {})).toBe("—");
+  });
 });
 
 const ROLE_NAMES = new Map([
