@@ -7,7 +7,7 @@ import { encryptToken } from "@/lib/crypto";
 export async function seedAccount(
   db: Db,
   opts: {
-    tier?: "pending" | "flygd" | "blue" | "green";
+    tier?: "pending" | "member" | "associate" | "alumni";
     tierLocked?: boolean;
     status?: "active" | "cryo";
     isAdmin?: boolean;
@@ -17,7 +17,7 @@ export async function seedAccount(
   const [acc] = await db
     .insert(account)
     .values({
-      tier: opts.tier ?? "green",
+      tier: opts.tier ?? "alumni",
       tierLocked: opts.tierLocked ?? false,
       status: opts.status ?? "active",
       isAdmin: opts.isAdmin ?? false,

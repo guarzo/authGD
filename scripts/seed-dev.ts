@@ -27,7 +27,7 @@ import { TRUNCATE_ALL_SQL } from "@/db/tables";
 import { encryptToken } from "@/lib/crypto";
 import { createSession, revokeAccountSessions } from "@/services/session";
 
-type Tier = "flygd" | "blue" | "green";
+type Tier = "member" | "associate" | "alumni";
 
 type SeedSpec = {
   label: string;
@@ -50,7 +50,7 @@ const SEED: SeedSpec[] = [
     label: "admin",
     name: "Admin Prime",
     mainId: 91_000_001,
-    tier: "flygd",
+    tier: "member",
     isAdmin: true,
     alts: [
       { id: 91_000_101, name: "Admin Prime Alt" },
@@ -58,27 +58,27 @@ const SEED: SeedSpec[] = [
     ],
   },
   {
-    label: "flygd",
-    name: "Flygd Pilot",
+    label: "member",
+    name: "Member Pilot",
     mainId: 91_000_002,
-    tier: "flygd",
-    alts: [{ id: 91_000_103, name: "Flygd Pilot Alt" }],
+    tier: "member",
+    alts: [{ id: 91_000_103, name: "Member Pilot Alt" }],
   },
-  { label: "blue", name: "Blue Pilot", mainId: 91_000_003, tier: "blue" },
-  { label: "green", name: "Green Pilot", mainId: 91_000_004, tier: "green" },
+  { label: "associate", name: "Associate Pilot", mainId: 91_000_003, tier: "associate" },
+  { label: "alumni", name: "Alumni Pilot", mainId: 91_000_004, tier: "alumni" },
   // Two states the admin pages need something to render.
   {
     label: "cryo",
     name: "Cryo Pilot",
     mainId: 91_000_005,
-    tier: "green",
+    tier: "alumni",
     status: "cryo",
   },
   {
     label: "locked",
     name: "Locked Pilot",
     mainId: 91_000_006,
-    tier: "blue",
+    tier: "associate",
     tierLocked: true,
   },
 ];
@@ -157,8 +157,8 @@ async function upsertAccount(db: Db, cfg: Config, spec: SeedSpec): Promise<strin
         refreshTokenEnc: encryptToken(`dev-refresh-${ch.id}`, cfg.tokenEncryptionKey),
         scopes: [...cfg.eveSso.scopes],
         tokenStatus: "valid" as const,
-        // flygd tier is derived from alliance membership by the sync jobs.
-        allianceId: spec.tier === "flygd" ? cfg.allianceId : null,
+        // member tier is derived from alliance membership by the sync jobs.
+        allianceId: spec.tier === "member" ? cfg.allianceId : null,
       };
       await tx
         .insert(character)
