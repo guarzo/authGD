@@ -241,8 +241,22 @@ export async function unlinkDiscordAction(
   const result = await getDb().transaction((tx) =>
     unlinkDiscord(tx, actor, accountId, "admin"),
   );
-  if (!result.ok && result.error === "not_found") {
-    redirectOnMutationError("not_found", listSearch);
+  if (!result.ok) {
+    // Every sibling passes result.error straight to redirectOnMutationError,
+    // whose union does not carry "not_linked", so this one has to narrow. The
+    // `never` default is what makes it exhaustive: a third variant on
+    // unlinkDiscord becomes a compile error rather than a silent no-op.
+    switch (result.error) {
+      case "not_found":
+        return redirectOnMutationError("not_found", listSearch);
+      // The row is already in the state the admin asked for. Nothing to say.
+      case "not_linked":
+        break;
+      default: {
+        const unhandled: never = result.error;
+        throw new Error(`unhandled unlinkDiscord error: ${String(unhandled)}`);
+      }
+    }
   }
   revalidatePath("/admin/accounts");
 }

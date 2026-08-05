@@ -14,7 +14,8 @@ function fmt(v: unknown): string {
 }
 
 /** A Discord role id we can't name: first six characters, then an ellipsis.
- * The full value rides along in the `title` the details cell already sets. */
+ * The full value stays one click away, in the disclosure the details cell
+ * already renders. */
 function shortId(id: string): string {
   return id.length > 6 ? `${id.slice(0, 6)}…` : id;
 }
@@ -90,8 +91,8 @@ function flag(key: string, word: string): Part {
 /** A uuid the audit page cannot resolve to a name, shortened the way an
  * unnameable role id is. `account.merged` is the case: the source account row
  * is deleted by the merge that writes the row, so there is nothing left to
- * resolve against and the full value only crowds the column. It rides along in
- * the `title` the details cell already sets. */
+ * resolve against and the full value only crowds the column. It stays one click
+ * away, in the disclosure the details cell already renders. */
 function shortRef(word: string, key: string): Part {
   return part([key], (d) =>
     typeof d[key] === "string" ? `${word} ${shortId(d[key])}` : "",
