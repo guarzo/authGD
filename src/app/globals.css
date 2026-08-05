@@ -234,40 +234,49 @@ a:hover {
    `.btn`, `.tier` and `.st` are NOT in this list on purpose. They carry the
    register's family, size and case, but they are components with their own
    states, and folding their type in here would put it two hundred lines from
-   their behaviour. They take the tracking tokens and nothing else — which is
-   why `.st` still runs at the inherited 400 while `.btn` and `.tier` declare
-   600. That is a real inconsistency and it is out of this pass's scope; see
-   the PR.
+   their behaviour. They take the tracking tokens and nothing else. `.st` used
+   to leave weight to inherit, rendering at 400 while `.btn` and `.tier`
+   declared 600 — a real inconsistency, not a variant, now fixed by giving
+   `.st` its own explicit 600 alongside the other two.
 
    `.shell__nav a` is here beyond the sites the audit enumerated: it is a mono
    --t-label uppercase label sitting in the same bar as `.shell__register`, so
    leaving it at the inherited 400 while its neighbour moved to 600 would have
    rebuilt, inside one component, the exact split this block exists to close.
 
-   `.push__next` and `.btn-row__stamp` were enumerated by the audit and are
-   deliberately NOT here. Neither is a label: they render "next 14:32" and
-   "checked 20:25:25 UTC", a prose word and a value. Both reach for
-   `--track-value`, the tracking token for values, which is the tell that
-   sorted them — a component asking for value tracking is telling you what it
-   holds. Both keep their own properties below and inherit the 400 they have
-   always rendered at; the register would have moved them to 600. Folding
-   `.push__next` in would also have uppercased one half of a two-item metadata
-   row — it sits beside a `.ago` reading "3m ago" in sentence case — and left
-   the other half alone. `.btn-row__stamp` is already uppercase and keeps that;
-   case is not what makes something a register label, or `.btn` and `.tier`
-   would be in this list too. */
+   `.strip__group` is here for the same reason, added after the audit rather
+   than by it: it names a fixed group ("Sweep", "On-demand", "Housekeeping"),
+   which is exactly what this register is for, and a fourth undeclared-weight
+   label is not a defect worth re-earning the moment one gets added.
+
+   `.push__next`, `.btn-row__stamp` and `.worker` were enumerated by the audit
+   and are deliberately NOT here. None of them is a label: they render "next
+   14:32", "checked 20:25:25 UTC" and "worker · last run 18m ago" — a prose
+   word and a value, in every case. All three reach for `--track-value`, the
+   tracking token for values, which is the tell that sorted them — a component
+   asking for value tracking is telling you what it holds. All three keep
+   their own properties below and inherit the 400 they have always rendered
+   at; the register would have moved them to 600. Folding `.push__next` in
+   would also have uppercased one half of a two-item metadata row — it sits
+   beside a `.ago` reading "3m ago" in sentence case — and left the other half
+   alone. `.btn-row__stamp` is already uppercase and keeps that; case is not
+   what makes something a register label, or `.btn` and `.tier` would be in
+   this list too. `.worker` was in the register only because its copy happens
+   to render in lowercase words that the register's own `text-transform:
+   uppercase` was silently forcing to caps — moving it out lets "worker · last
+   run 18m ago" read in the sentence case it is actually written in. */
 .rule-head__label,
 .log th,
 .strip__name,
 .strip__head,
+.strip__group,
 .drawer__label,
 .facts dt,
 .filters__label,
 .filter-form__label,
 .launch__scopes dt,
 .shell__register,
-.shell__nav a,
-.worker {
+.shell__nav a {
   font-family: var(--font-mono), ui-monospace, monospace;
   font-size: var(--t-label);
   font-weight: 600;
@@ -379,6 +388,18 @@ a:hover {
   display: inline-flex;
   align-items: center;
   gap: calc(var(--s-1) / 2);
+}
+
+/* Sign out renders at the same size, case and colour as the four nav
+   destinations beside it — it's `.btn--quiet`, the nav's own quiet grade, not
+   a louder one — so a hairline is the only thing that says "this ends the
+   session" rather than "this is a fifth page". Margin, not `.shell__nav`'s own
+   `gap`, so the rule sits closer to the button it separates than to the link
+   before it: a centered gap would read as belonging to neither. */
+.shell__signout {
+  margin-left: var(--s-3);
+  padding-left: var(--s-3);
+  border-left: 1px solid var(--rule);
 }
 
 /* A count, not an alert: the admin register label beside it is already quiet,
@@ -849,12 +870,27 @@ h3.rule-head__label {
    cell crushes an error string into a one-word column — under that the Scroller
    takes over. Column widths otherwise come from content.
 
-   These three blocks sit here, above the narrow media query, rather than at the
+   These two blocks sit here, above the narrow media query, rather than at the
    end of the file where they used to: the query releases both floors at 40rem,
    and same-specificity rules declared after it would win regardless. */
 .log--runs {
   width: 100%;
   min-width: 44rem;
+  /* `width: 100%` alone hands every byte of the container's leftover space to
+     auto-layout's content-sized columns, and Status — the widest of them, the
+     one holding the folded-in error string — absorbs the largest share of
+     that surplus. Measured on
+     a 6-counter job at the page's own 1164px content width: Status stretched
+     to 336px for "ok" or a one-line error, nearly three columns' worth of
+     blank cell between the badge and the first counter it's supposed to sit
+     beside. `max-content` caps the table at what its own cells actually ask
+     for — different for every job, since each now shows only the counters it
+     moves (see the comment on the table below) — so a fixed rem value would
+     be wrong for most of them. Surplus width becomes trailing space after the
+     table instead of stretching into it; the `min-width` floor above still
+     wins on a narrow container, where `max-content` would only starve it
+     further. */
+  max-width: max-content;
 }
 
 /* Third column is Status by construction (Started, Took, Status, …). It is the
@@ -1273,6 +1309,7 @@ h3.rule-head__label {
   gap: 0.4em;
   font-family: var(--font-mono), ui-monospace, monospace;
   font-size: var(--t-label);
+  font-weight: 600;
   letter-spacing: var(--track-value);
   text-transform: uppercase;
   color: var(--ink-dim);
@@ -1329,8 +1366,10 @@ h3.rule-head__label {
    measure before rewording it. */
 .st--lead {
   font-size: var(--t-body);
-  /* The badge it has to outrank is 600 inside a border and a tint. Matching
-     its weight, one size step above it, gets there without a fill of its own. */
+  /* Redundant with `.st`'s own 600 now, but stated here anyway: the badge this
+     has to outrank is 600 inside a border and a tint, and this rule is what
+     gets there, one size step above it, without a fill of its own — that
+     argument should survive `.st`'s base weight changing again. */
   font-weight: 600;
   letter-spacing: 0;
   text-transform: none;
@@ -1655,10 +1694,13 @@ h3.rule-head__label {
   margin-top: var(--s-6);
 }
 
-/* When the page itself was last asked. Belongs beside Refresh, not in the
-   strip: it is a fact about this render, not about any job. Joining the label
-   register also puts it in mono, which it was not before — it is a timestamp,
-   and "prose is proportional, state is monospaced" makes that not optional. */
+/* When the page itself was last rendered. Moved from beside Refresh into the
+   strip's own `RuleHead` aside: it is a fact about the render, not about any
+   job or any control, and it used to sit below seven rows and however many
+   open drawers — the worst place on the page to ask "how current is this
+   table". Joining the label register also puts it in mono, which it was not
+   before — it is a timestamp, and "prose is proportional, state is
+   monospaced" makes that not optional. */
 /* Uppercase, but not a register label: it is already uppercase on main and
    dropping that would be an unasked-for copy change. Weight is left to
    inherit, which is the 400 it has always rendered at — the register would
@@ -2029,14 +2071,19 @@ h3.rule-head__label {
 }
 
 /* --- Worker liveness ---------------------------------------------------- */
-/* One line about the process, above seven lines about jobs. In the label
-   register rather than prose: it is a reading off an instrument, and it sits
-   directly under a lede that is prose, so the register change is what marks
-   the switch from explanation to state. */
+/* One line about the process, above seven lines about jobs. Mono, like the
+   register, so it still reads as an instrument reading rather than the lede's
+   prose above it — but it is not itself a register label: its content is a
+   prose word plus a computed value ("worker · last run 18m ago"), the same
+   shape as `.push__next` and `.btn-row__stamp`, so it takes `--track-value`
+   and its own sentence case rather than joining the register and being forced
+   to caps. */
 
 .worker {
   margin: 0 0 var(--s-5);
-  letter-spacing: var(--track-label);
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: var(--t-label);
+  letter-spacing: var(--track-value);
   color: var(--ink-dim);
 }
 
@@ -2320,14 +2367,22 @@ h3.rule-head__label {
    scanning one narrow strip, not five tables. */
 
 .strip {
-  list-style: none;
   margin: var(--s-6) 0 0;
-  padding: 0;
   /* The strip's outer edge, like .scroller's, bounds a region of interactive
      rows rather than decorating one — so --rule-strong, which clears 3:1 on
      --void, --hull and --hull-hi, instead of --rule's 1.39-1.76:1. */
   border: 1px solid var(--rule-strong);
   border-radius: var(--radius);
+}
+
+/* One `role="list"` per group, not one for the whole strip: see the comment in
+   page.tsx on why the flat "list, 7 items" gave way to "list, 4 items" / "list,
+   1 item" / "list, 2 items", each named by its own group heading. Needs its own
+   reset now that `.strip` itself is no longer the `<ul>`. */
+.strip__sub {
+  list-style: none;
+  margin: 0;
+  padding: 0;
 }
 
 .strip__head,
@@ -2339,8 +2394,17 @@ h3.rule-head__label {
      cadence in one row shift that row's health token out of line with the
      rest — which is the single column this whole strip exists to let you
      scan. The cadence track is unconditional: the status service seeds a row
-     for every scheduled job, so there is always something to put in it. */
-  grid-template-columns: 1ch minmax(7rem, 1fr) 7.5rem 6.5rem 9rem;
+     for every scheduled job, so there is always something to put in it.
+
+     The name track's upper bound is 28rem, not `1fr`: an unbounded `1fr` here
+     stretched to whatever width the viewport had, so on a wide monitor the
+     three value columns sat ~840px from the name they describe with nothing
+     — no zebra, no leader, no rule — filling the gap between them. The
+     trailing spacer track (also `1fr`) is what actually absorbs the leftover
+     width now: it holds no grid item, so it is simply unused space, and the
+     name-plus-values group it displaces reads as one left-aligned block
+     instead of stretching across the row. */
+  grid-template-columns: 1ch minmax(7rem, 28rem) 7.5rem 6.5rem 9rem 1fr;
   align-items: center;
   gap: var(--s-4);
   padding: var(--s-3) var(--s-4);
@@ -2353,8 +2417,42 @@ h3.rule-head__label {
    cells do — by name. Positional selectors made inserting a column a silent
    one-track shift of every alignment rule below the insertion point. */
 .strip__head > .strip__h-health,
-.strip__disc > summary > .st {
+.strip__disc > summary > .strip__health {
   justify-self: start;
+}
+
+/* One grid item for the whole health track, holding the health token and —
+   while `getSyncStatus` reports `queued` — a marker beside it. `.st` alone
+   used to be the direct child this track's `justify-self` and the header's
+   alignment comment (above) were both written against; wrapping it preserves
+   both without either needing to know the other exists. `.strip__health`
+   declares no gap of its own; `.strip__queued`'s own `margin-left` is what
+   spaces the two. */
+.strip__health {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+
+/* A ring, not a second `.st` word: the health track is a fixed 7.5rem, and
+   "cadence unknown" — the longest health label — already spends most of that
+   width on its own, so a second word here overflows the track next to it on
+   exactly the rows most likely to carry it (an on-demand job someone just
+   fanned out to). `aria-hidden`; the accessible word sits in the sibling
+   `visually-hidden` span in the markup, same shape as `Absent` in
+   `admin/sync/page.tsx` — not that component itself, since its own doc
+   reserves it for a run that recorded nothing, not a job with something
+   coming. Outlined rather than filled, so it reads as a different kind of
+   mark from the health token's own filled dot beside it, not a second,
+   competing status. */
+.strip__queued {
+  display: inline-block;
+  width: 0.5em;
+  height: 0.5em;
+  margin-left: var(--s-2);
+  border: 1.5px solid var(--ink-faint);
+  border-radius: 50%;
+  flex-shrink: 0;
 }
 
 .strip__head > .strip__h-last,
@@ -2371,10 +2469,68 @@ h3.rule-head__label {
 }
 
 /* Each job is a separate expandable control, so the line dividing one from the
-   next separates two targets rather than ruling a paragraph: --rule-strong. */
-.strip__job + .strip__job,
-.strip__head + .strip__job {
+   next separates two targets rather than ruling a paragraph: --rule-strong.
+   The first job in each group needs none of its own: the group heading's own
+   hairline (below) is the divider there, and stacking both would be two
+   lines doing one job — see `.strip__sub`'s own top padding, which is what
+   stands in for the border-top a first-of-group job would otherwise get. */
+.strip__job + .strip__job {
   border-top: 1px solid var(--rule-strong);
+}
+
+/* --- Fan-out grouping ---------------------------------------------------- */
+/* Which of the page's own controls can reach a row (see `JOB_GROUP` in
+   `@/core/schedules`), made visible: before this, the primary button's scope
+   was answerable only by reading its own label, 50 characters of uppercase
+   mono at the most expensive spot in the interface. This is the section-header
+   vocabulary DESIGN.md already commits to — a mono uppercase label, then a
+   hairline to the edge — scaled to the strip's own row density rather than a
+   page-level section's own generous spacing, and it labels the same seven
+   rows rather than filtering any of them out.
+
+   Visible, not aria-hidden: `.strip__head`'s columns are decorative because
+   every row's own accessible name already restates job/health/age/cadence,
+   but this label is the one thing a screen reader user would otherwise lose
+   entirely — see the comment on `.strip` in page.tsx. It is the accessible
+   name of the `role="list"` it precedes, via `aria-labelledby`, so it needs
+   to render as ordinary text, not be hidden from the tree it names. */
+.strip__group {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: 0 var(--s-4);
+  color: var(--ink-faint);
+  letter-spacing: var(--track-furniture);
+}
+
+.strip__group::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--rule);
+}
+
+/* The first group sits right under the aria-hidden column-label row; every
+   later one follows the previous group's own `role="list"` and earns that
+   list's last row's divider instead of stacking a second line under the
+   hairline it already carries. */
+.strip__head + .strip__group {
+  padding-top: var(--s-3);
+}
+
+.strip__sub + .strip__group {
+  border-top: 1px solid var(--rule-strong);
+  padding-top: var(--s-3);
+}
+
+/* Stands in for the border-top a first-of-group job would otherwise get from
+   `.strip__job + .strip__job` above: the group heading's own hairline is
+   that job's divider, so the small gap here is only breathing room, not a
+   second line. Lives on the list wrapper rather than on the first `<li>`
+   itself, since every job in a group is now this list's own direct child and
+   the wrapper is what actually sits next to the heading in the DOM. */
+.strip__group + .strip__sub {
+  padding-top: var(--s-1);
 }
 
 .strip__disc > summary {
@@ -2406,8 +2562,11 @@ h3.rule-head__label {
   outline-offset: -2px;
 }
 
-/* The job name is a real h2 so the page keeps its heading outline; nothing
-   else about browser h2 sizing should survive. */
+/* The job name is a real h3 — a child of the strip's own h2 RuleHead, not an
+   eighth sibling next to it — so the page keeps a heading outline where the
+   section header is the parent of the seven job names rather than one more
+   item at the same level. Nothing else about browser h3 sizing should
+   survive. */
 .strip__name {
   margin: 0;
   letter-spacing: var(--track-furniture);
@@ -2878,6 +3037,20 @@ h3.rule-head__label {
     padding-top: var(--s-2);
   }
 
+  /* Same reasoning as .filters__sep below: .shell__nav already wraps at this
+     width, and a vertical rule that lands alone at the start of a wrapped
+     line reads as a stray tick rather than a separator. Same treatment —
+     turn it into whatever break already forced the wrap. */
+  .shell__signout {
+    flex-basis: 100%;
+    margin-left: 0;
+    margin-top: var(--s-2);
+    padding-left: 0;
+    padding-top: var(--s-2);
+    border-left: none;
+    border-top: 1px solid var(--rule);
+  }
+
   .facts {
     grid-template-columns: 1fr;
     gap: var(--s-1) 0;
@@ -3021,6 +3194,18 @@ h3.rule-head__label {
   .log--audit td {
     padding: var(--s-2) var(--s-1);
   }
+}
+
+/* A collapsed run of `count` consecutive runs sharing one outcome
+   (`collapseRuns`, run-summary.ts) reads as one line, not `count` of them — the
+   whole reason it collapses. Italic marks that this row stands for several
+   without relying on the "N runs" text alone to say so, the same "value plus a
+   quiet visual cue" split the rest of this table uses for dim/absent cells. Sits
+   below the narrow media query, unlike the two floors and the padding above:
+   nothing there overrides `font-style`, so it has no cascade-order argument for
+   sitting above it. */
+.log--group td {
+  font-style: italic;
 }
 
 /* The crew table inside the accounts drawer: four short columns with the

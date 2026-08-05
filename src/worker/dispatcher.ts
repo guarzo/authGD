@@ -1,4 +1,5 @@
 import type { Db } from "@/db";
+import { jobsFor, type PlannedJob } from "@/core/dispatch-plan";
 import { markDispatched, takeUndispatched, type OutboxPayload } from "@/services/outbox";
 import { globalSingletonKey, QUEUES } from "@/worker/queues";
 
@@ -23,12 +24,63 @@ export const RERUNNABLE: ReadonlySet<string> = new Set(
 );
 
 /**
- * Maps one outbox payload to its pg-boss sends. Membership and Discord roles
- * are account-scopable; the desired contact/ACL sets are GLOBAL (every member
- * pushes every other member), so account changes fan out to global
- * reconciliations, coalesced by fixed singleton keys from `globalSingletonKey`
- * — the same function `scheduleJobs` keys its cron ticks with. Every payload
- * carries jobType so the dead-letter handler can name the failed job.
+ * Account-scoped sends whose singleton-key prefix differs from their queue
+ * name. Only discord-roles differs (it keys "roles:...", not
+ * "discord-roles:..."), matching the same historical exception
+ * `globalSingletonKey` carries for the "all"/scheduled case in
+ * `@/worker/queues`.
+ */
+const ACCOUNT_SINGLETON_PREFIX: Record<string, string> = {
+  [QUEUES.discordRoles]: "roles",
+};
+
+/**
+ * Turns one `PlannedJob` (the pure fact "this payload targets this job type,
+ * with this scoping", from `@/core/dispatch-plan`) into a pg-boss send.
+ * Singleton keys are coalesced by `globalSingletonKey` for global sends —
+ * the same function `scheduleJobs` keys its cron ticks with — or by the
+ * account/discord-user scoping the job carries. Every send's data carries
+ * jobType so the dead-letter handler can name the failed job.
+ */
+function sendFor(job: PlannedJob): {
+  queue: string;
+  data: Record<string, unknown>;
+  singletonKey: string;
+} {
+  const queue = job.jobType;
+  switch (job.scope) {
+    case "account": {
+      const prefix = ACCOUNT_SINGLETON_PREFIX[queue] ?? queue;
+      return {
+        queue,
+        data: { jobType: queue, accountId: job.accountId },
+        singletonKey: `${prefix}:${job.accountId}`,
+      };
+    }
+    case "discord-user":
+      return {
+        queue,
+        data: { jobType: queue, discordUserId: job.discordUserId },
+        singletonKey: `roles:user:${job.discordUserId}`,
+      };
+    case "global":
+      return {
+        queue,
+        data: { jobType: queue },
+        singletonKey: globalSingletonKey(queue),
+      };
+    default: {
+      const exhaustive: never = job;
+      throw new Error(`unhandled PlannedJob scope: ${JSON.stringify(exhaustive)}`);
+    }
+  }
+}
+
+/**
+ * Maps one outbox payload to its pg-boss sends, via `jobsFor` in
+ * `@/core/dispatch-plan` — the ONE place that decides which job types a
+ * payload targets, shared with `getSyncStatus` so the admin page's queued
+ * marker cannot drift from what this actually dispatches.
  *
  * `rowId` is only for the drop log. Without it a dropped row and a delivered
  * one look identical afterwards (`markDispatched` stamps both), so the admin
@@ -54,91 +106,19 @@ export function planDispatch(
     return [];
   }
 
-  switch (payload.kind) {
-    case "account":
-      return [
-        {
-          queue: QUEUES.membership,
-          data: { jobType: QUEUES.membership, accountId: payload.accountId },
-          singletonKey: `membership:${payload.accountId}`,
-        },
-        {
-          queue: QUEUES.contacts,
-          data: { jobType: QUEUES.contacts },
-          singletonKey: globalSingletonKey(QUEUES.contacts),
-        },
-        {
-          queue: QUEUES.wanderer,
-          data: { jobType: QUEUES.wanderer },
-          singletonKey: globalSingletonKey(QUEUES.wanderer),
-        },
-        {
-          queue: QUEUES.discordRoles,
-          data: { jobType: QUEUES.discordRoles, accountId: payload.accountId },
-          singletonKey: `roles:${payload.accountId}`,
-        },
-      ];
-    case "discord-user":
-      return [
-        {
-          queue: QUEUES.discordRoles,
-          data: { jobType: QUEUES.discordRoles, discordUserId: payload.discordUserId },
-          singletonKey: `roles:user:${payload.discordUserId}`,
-        },
-      ];
-    case "membership-recheck":
-      return [
-        {
-          queue: QUEUES.membershipRecheck,
-          data: { jobType: QUEUES.membershipRecheck },
-          singletonKey: globalSingletonKey(QUEUES.membershipRecheck),
-        },
-      ];
-    case "all":
-      return [
-        {
-          queue: QUEUES.membership,
-          data: { jobType: QUEUES.membership },
-          singletonKey: globalSingletonKey(QUEUES.membership),
-        },
-        {
-          queue: QUEUES.contacts,
-          data: { jobType: QUEUES.contacts },
-          singletonKey: globalSingletonKey(QUEUES.contacts),
-        },
-        {
-          queue: QUEUES.wanderer,
-          data: { jobType: QUEUES.wanderer },
-          singletonKey: globalSingletonKey(QUEUES.wanderer),
-        },
-        {
-          queue: QUEUES.discordRoles,
-          data: { jobType: QUEUES.discordRoles },
-          singletonKey: globalSingletonKey(QUEUES.discordRoles),
-        },
-      ];
-    case "job": {
-      // Re-run one named job. An unrecognized jobType breaks out to the drop
-      // arm below rather than being sent, so a bad row can never enqueue to a
-      // queue pg-boss has not been told about.
-      if (!RERUNNABLE.has(payload.jobType)) break;
-      return [
-        {
-          queue: payload.jobType,
-          data: { jobType: payload.jobType },
-          singletonKey: globalSingletonKey(payload.jobType),
-        },
-      ];
-    }
+  const jobs = jobsFor(payload);
+  if (jobs.length === 0) {
+    // An unrecognized kind (an older worker reading a row written by a newer
+    // web tier, or a hand-written row) or a "job" re-run naming an unrunnable
+    // jobType must NOT throw: planDispatch runs inside dispatchOutbox's
+    // transaction, so a throw rolls the claim back for every row in the batch
+    // and the 2s retry loop then wedges all sync dispatch behind that one
+    // row. Drop it instead — it gets marked dispatched, and the log names
+    // both the row and what was lost.
+    console.error("outbox payload not dispatchable; dropping row", { rowId, payload });
+    return [];
   }
-  // An unrecognized kind (an older worker reading a row written by a newer web
-  // tier, or a hand-written row) must NOT throw: planDispatch runs inside
-  // dispatchOutbox's transaction, so a throw rolls the claim back for every row
-  // in the batch and the 2s retry loop then wedges all sync dispatch behind
-  // that one row. Drop it instead — it gets marked dispatched, and the log
-  // names both the row and what was lost.
-  console.error("outbox payload not dispatchable; dropping row", { rowId, payload });
-  return [];
+  return jobs.map(sendFor);
 }
 
 /**

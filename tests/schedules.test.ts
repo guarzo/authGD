@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   JOB_CRON,
+  JOB_GROUP,
   SCAN_WINDOW_MS,
   cadenceFor,
   cronFor,
   formatCadence,
+  groupFor,
   isJobType,
   nextFire,
   nextOccurrence,
@@ -230,5 +232,34 @@ describe("isJobType / cronFor", () => {
     expect(isJobType(undefined)).toBe(false);
     expect(isJobType(null)).toBe(false);
     expect(isJobType(7)).toBe(false);
+  });
+});
+
+describe("JOB_GROUP / groupFor", () => {
+  it("assigns every scheduled job type to exactly one strip", () => {
+    expect(Object.keys(JOB_GROUP).sort()).toEqual(Object.keys(JOB_CRON).sort());
+  });
+
+  it("groups the primary fan-out as sweep", () => {
+    for (const job of ["membership", "contacts", "wanderer", "discord-roles"]) {
+      expect(JOB_GROUP[job as keyof typeof JOB_GROUP], job).toBe("sweep");
+      expect(groupFor(job)).toBe("sweep");
+    }
+  });
+
+  it("groups membership-recheck as on-demand", () => {
+    expect(JOB_GROUP["membership-recheck"]).toBe("on-demand");
+    expect(groupFor("membership-recheck")).toBe("on-demand");
+  });
+
+  it("groups token-health and purge as housekeeping", () => {
+    for (const job of ["token-health", "purge"]) {
+      expect(JOB_GROUP[job as keyof typeof JOB_GROUP], job).toBe("housekeeping");
+      expect(groupFor(job)).toBe("housekeeping");
+    }
+  });
+
+  it("returns null for a job type nothing schedules", () => {
+    expect(groupFor("zz-custom")).toBeNull();
   });
 });

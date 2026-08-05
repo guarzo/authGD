@@ -1,9 +1,11 @@
 import { inArray, isNull } from "drizzle-orm";
 import type { Dbx } from "@/db";
+import type { OutboxPayload } from "@/core/dispatch-plan";
 import { outbox } from "@/db/schema";
 
-/** Derived from the schema's payload column so the two can never drift. */
-export type OutboxPayload = typeof outbox.$inferSelect.payload;
+/** The one declaration lives in `@/core/dispatch-plan`; re-exported here so
+ * this module's own consumers don't need to know it moved. */
+export type { OutboxPayload };
 
 export async function enqueueSync(dbx: Dbx, payload: OutboxPayload): Promise<void> {
   await dbx.insert(outbox).values({ payload });
@@ -27,6 +29,21 @@ export async function takeUndispatched(
     .limit(limit)
     .for("update", { skipLocked: true });
   return rows.map((r) => ({ id: r.id, payload: r.payload }));
+}
+
+/**
+ * The payloads of every undispatched row, for a read-only status view. Unlike
+ * `takeUndispatched` this takes no lock and is not paired with
+ * `markDispatched` — the admin sync page only needs to know whether work is
+ * queued, never to claim it, and a `FOR UPDATE` read here would contend with
+ * the dispatcher's own claim on the same rows.
+ */
+export async function undispatchedPayloads(dbx: Dbx): Promise<OutboxPayload[]> {
+  const rows = await dbx
+    .select({ payload: outbox.payload })
+    .from(outbox)
+    .where(isNull(outbox.dispatchedAt));
+  return rows.map((r) => r.payload);
 }
 
 export async function markDispatched(dbx: Dbx, ids: number[]): Promise<void> {

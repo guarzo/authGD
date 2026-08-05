@@ -1,3 +1,5 @@
+import type { SyncRunStatus } from "@/db/schema";
+
 /**
  * Pure shaping for the admin sync history tables. The rule these helpers exist
  * to enforce: a column earns its width by carrying information. A counter that
@@ -115,4 +117,154 @@ export function formatDuration(
   if (m < 60) return `${m}m ${total % 60}s`;
   const h = Math.floor(m / 60);
   return `${h}h ${m % 60}m`;
+}
+
+/* --- Run collapsing ------------------------------------------------------- */
+
+/**
+ * A run row the drawer can collapse. `status` and `id` join `RunLike`'s fields
+ * because both matter to collapsing: identical counts on a `failed` and an
+ * `ok` run are still two different facts, and `id` gives the page a stable
+ * React key per group without re-deriving one from a range of timestamps.
+ * `errorSummary` is optional because the column is: `RunLike` predates it and
+ * some job rows (`purge.ts`) never set it at all.
+ */
+export type CollapsibleRun = RunLike & {
+  id: number;
+  status: SyncRunStatus | null;
+  errorSummary?: string | null;
+};
+
+/**
+ * One row of the (possibly collapsed) runs drawer: either a single run
+ * rendered as-is, or a run of consecutive runs that recorded the same
+ * outcome, collapsed to save the ~187px five identical `19 / 19 / OK` rows
+ * would otherwise spend saying nothing changed. (`.log td` is `--s-3` (12px)
+ * padding top and bottom plus a 1px `border-top`, around a `--t-data`
+ * (0.875rem = 14px) line box at the body's 1.55 line-height — 14 * 1.55 ≈
+ * 21.7px — for ~46.7px per row; four collapsed rows save ~187px.)
+ */
+export type CollapsedRun<T extends CollapsibleRun = CollapsibleRun> =
+  | { kind: "run"; run: T }
+  | {
+      kind: "group";
+      /** The runs the group stands in for, in the order they were given. */
+      runs: T[];
+      count: number;
+      status: SyncRunStatus | null;
+      counts: Record<string, number> | null;
+      errorSummary: string | null;
+      /** Earliest `startedAt` in the group, or null if none is recorded. */
+      from: Date | null;
+      /** Latest `finishedAt` in the group. Never null: every run inside a
+       * group has finished — see `sameOutcome` below. */
+      to: Date | null;
+    };
+
+/**
+ * `Record<string, number>` equality by value, not reference: two runs from
+ * separate rows never share a `counts` object, so `===` would never collapse
+ * anything. `null` only equals `null` — a run with no recorded counts is a
+ * different fact from one that recorded all zeros.
+ */
+function sameCounts(
+  a: Record<string, number> | null,
+  b: Record<string, number> | null,
+): boolean {
+  if (a === null || b === null) return a === b;
+  const aKeys = Object.keys(a).sort();
+  const bKeys = Object.keys(b).sort();
+  if (aKeys.length !== bKeys.length) return false;
+  return aKeys.every((k, i) => k === bKeys[i] && a[k] === b[k]);
+}
+
+/**
+ * `undefined` (the field was never selected) and `null` (selected, and the
+ * job recorded no error text) both mean "nothing to show" here, unlike
+ * `counts` above where absent and empty are different facts — there is no
+ * "recorded an empty error string on purpose" case to distinguish it from.
+ */
+function normalizeErrorSummary(v: string | null | undefined): string | null {
+  return v ?? null;
+}
+
+/**
+ * Whether two runs recorded the same outcome and may collapse together. A run
+ * still in flight (`finishedAt === null`) never matches anything, itself
+ * included: it has no final counts to compare, and a still-running run must
+ * never be folded into a finished one's row — the one case this module exists
+ * to get right, since a stuck run reads very differently from a healthy one.
+ *
+ * `errorSummary` matters even when status and counts agree: `contacts.ts`,
+ * `wanderer.ts` and `discord-roles.ts` all build it from per-target error
+ * text (`errors.slice(0, 5).join("; ")`) that `counts` never reflects — two
+ * `partial` runs can both show `failed: 1` while a different character failed
+ * for a different reason each time. Collapsing those would silently hide the
+ * second run's diagnostics behind the first's, in exactly the view an admin
+ * opened to read them. Refusing to merge is the safe direction.
+ */
+function sameOutcome(a: CollapsibleRun, b: CollapsibleRun): boolean {
+  return (
+    a.finishedAt !== null &&
+    b.finishedAt !== null &&
+    a.status === b.status &&
+    sameCounts(a.counts, b.counts) &&
+    normalizeErrorSummary(a.errorSummary) === normalizeErrorSummary(b.errorSummary)
+  );
+}
+
+function earliest(dates: Array<Date | null>): Date | null {
+  const known = dates.filter((d): d is Date => d !== null);
+  if (known.length === 0) return null;
+  return known.reduce((min, d) => (d < min ? d : min));
+}
+
+function latest(dates: Array<Date | null>): Date | null {
+  const known = dates.filter((d): d is Date => d !== null);
+  if (known.length === 0) return null;
+  return known.reduce((max, d) => (d > max ? d : max));
+}
+
+function toGroup<T extends CollapsibleRun>(runs: T[]): CollapsedRun<T> {
+  return {
+    kind: "group",
+    runs,
+    count: runs.length,
+    status: runs[0].status,
+    counts: runs[0].counts,
+    errorSummary: normalizeErrorSummary(runs[0].errorSummary),
+    from: earliest(runs.map((r) => r.startedAt)),
+    to: latest(runs.map((r) => r.finishedAt)),
+  };
+}
+
+/**
+ * Collapses CONSECUTIVE runs sharing an identical outcome (same status, same
+ * counts, same error text, both finished) into one group entry. Order is not
+ * assumed beyond "consecutive" — `getSyncStatus` hands these back
+ * newest-first, but nothing here reads that direction into the result,
+ * `from`/`to` are computed as the min/max over whatever the group contains.
+ *
+ * A run differing in status, counts, or error text breaks the run and starts
+ * a new one. A single run that matches nothing around it comes back as
+ * `{ kind: "run" }`, not a one-element group, so the page never has to
+ * special-case a group of one.
+ */
+export function collapseRuns<T extends CollapsibleRun>(runs: T[]): CollapsedRun<T>[] {
+  const out: CollapsedRun<T>[] = [];
+
+  for (const run of runs) {
+    const last = out[out.length - 1];
+    if (last?.kind === "group" && sameOutcome(last.runs[last.runs.length - 1], run)) {
+      out[out.length - 1] = toGroup([...last.runs, run]);
+      continue;
+    }
+    if (last?.kind === "run" && sameOutcome(last.run, run)) {
+      out[out.length - 1] = toGroup([last.run, run]);
+      continue;
+    }
+    out.push({ kind: "run", run });
+  }
+
+  return out;
 }
