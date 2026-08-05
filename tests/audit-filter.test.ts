@@ -128,7 +128,13 @@ describe("resolveFilterIdentity", () => {
       main: true,
     });
     const r = await resolveFilterIdentity(ctx.db, "actor", "Zed");
-    expect(r).toEqual({ kind: "name", name: "Zed", ids: [acc.id], accountCount: 1 });
+    expect(r).toEqual({
+      kind: "name",
+      name: "Zed",
+      ids: [acc.id],
+      accountCount: 1,
+      operationCount: 0,
+    });
   });
 
   it("matches case-insensitively", async () => {
@@ -192,6 +198,7 @@ describe("resolveFilterIdentity", () => {
       name: "Alt Zed",
       ids: ["90002"],
       accountCount: 1,
+      operationCount: 0,
     });
   });
 
@@ -255,15 +262,19 @@ describe("resolveFilterIdentity", () => {
     expect(new Set((r as { ids: string[] }).ids)).toEqual(new Set(["90003", "90004"]));
   });
 
-  it("returns kind none for a name that matches nothing, in one query", async () => {
+  it("returns kind none for a name that matches nothing, in one round of 3 queries", async () => {
     const { result, calls } = await countQueries(() =>
       resolveFilterIdentity(ctx.db, "target", "Nobody"),
     );
     expect(result).toEqual({ kind: "none", name: "Nobody" });
-    expect(calls).toBe(1); // short-circuits after the character lookup
+    // Character lookup + live payout lookup + deleted-payout lookup, all run
+    // concurrently before deciding "none" -- see resolveFilterIdentity's
+    // target branch for why the payout queries can't be skipped just because
+    // the character query alone came up empty.
+    expect(calls).toBe(3);
   });
 
-  it("stays within the query budget: <=3 for a target name, <=2 for an actor name", async () => {
+  it("stays within the query budget: <=5 for a target name, <=2 for an actor name", async () => {
     const acc = await seedAccount(ctx.db, { discordUserId: "555555555555555555" });
     await seedCharacter(ctx.db, cfg, {
       id: 90001,
@@ -271,8 +282,10 @@ describe("resolveFilterIdentity", () => {
       name: "Zed",
       main: true,
     });
+    // 5 = character + live-payout + deleted-payout (parallel round) + mains +
+    // discord links.
     const t = await countQueries(() => resolveFilterIdentity(ctx.db, "target", "Zed"));
-    expect(t.calls).toBeLessThanOrEqual(3);
+    expect(t.calls).toBeLessThanOrEqual(5);
     const a = await countQueries(() => resolveFilterIdentity(ctx.db, "actor", "Zed"));
     expect(a.calls).toBeLessThanOrEqual(2);
   });

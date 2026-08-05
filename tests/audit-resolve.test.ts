@@ -1,6 +1,11 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { auditLog, discordLink, payoutOperation } from "@/db/schema";
-import { logAudit, queryAuditLog, resolveAuditIdentities } from "@/services/audit";
+import {
+  logAudit,
+  queryAuditLog,
+  resolveAuditIdentities,
+  resolveFilterIdentity,
+} from "@/services/audit";
 import { setupTestDb, truncateAll } from "./helpers/db";
 import { testConfig } from "./helpers/config";
 import { seedAccount, seedCharacter } from "./helpers/seed";
@@ -335,5 +340,133 @@ describe("resolveAuditIdentities: payout target kind", () => {
       expect(row.targetKind).toBe("payout");
       expect(row.targetName).toBe("Deleted Roam");
     }
+  });
+});
+
+describe("resolveFilterIdentity: payout operation names", () => {
+  it("resolves a target filter by a live operation's name to that operation's uuid", async () => {
+    const [op] = await ctx.db
+      .insert(payoutOperation)
+      .values({ name: "Thursday roam", occurredAt: new Date(), corpSharePct: "10.00" })
+      .returning();
+    await logAudit(ctx.db, { actor: "system", action: "payout.paid", target: op.id });
+    await logAudit(ctx.db, {
+      actor: "system",
+      action: "payout.paid",
+      target: "00000000-0000-0000-0000-000000000000",
+    });
+
+    const resolution = await resolveFilterIdentity(ctx.db, "target", "Thursday roam");
+    expect(resolution.kind).toBe("name");
+    if (resolution.kind !== "name") throw new Error("unreachable");
+    expect(resolution.ids).toEqual([op.id]);
+    expect(resolution.operationCount).toBe(1);
+    expect(resolution.accountCount).toBe(0);
+
+    const rows = await queryAuditLog(ctx.db, { targetIds: resolution.ids });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].target).toBe(op.id);
+  });
+
+  it("matches an operation name case-insensitively", async () => {
+    const [op] = await ctx.db
+      .insert(payoutOperation)
+      .values({ name: "Thursday Roam", occurredAt: new Date(), corpSharePct: "0" })
+      .returning();
+
+    const resolution = await resolveFilterIdentity(ctx.db, "target", "thursday roam");
+    expect(resolution.kind).toBe("name");
+    if (resolution.kind !== "name") throw new Error("unreachable");
+    expect(resolution.ids).toEqual([op.id]);
+    expect(resolution.operationCount).toBe(1);
+  });
+
+  it("resolves a target filter by a deleted operation's name via the payout.deleted fallback", async () => {
+    // No payout_operation row at all -- a hard delete leaves nothing to join
+    // against, only the denormalised name on the payout.deleted audit row.
+    const opId = "11111111-1111-1111-1111-111111111111";
+    await logAudit(ctx.db, { actor: "system", action: "payout.created", target: opId });
+    await logAudit(ctx.db, {
+      actor: "system",
+      action: "payout.paid",
+      target: opId,
+      details: { participantId: "irrelevant-here" },
+    });
+    await logAudit(ctx.db, {
+      actor: "system",
+      action: "payout.deleted",
+      target: opId,
+      details: { name: "Deleted Roam", occurredAt: "2026-01-01", participantCount: 1 },
+    });
+
+    const resolution = await resolveFilterIdentity(ctx.db, "target", "Deleted Roam");
+    expect(resolution.kind).toBe("name");
+    if (resolution.kind !== "name") throw new Error("unreachable");
+    expect(resolution.ids).toEqual([opId]);
+    expect(resolution.operationCount).toBe(1);
+
+    const rows = await queryAuditLog(ctx.db, { targetIds: resolution.ids });
+    expect(rows.map((r) => r.action).sort()).toEqual([
+      "payout.created",
+      "payout.deleted",
+      "payout.paid",
+    ]);
+  });
+
+  it("unions an account match and an operation match sharing a name", async () => {
+    const acc = await seedAccount(ctx.db);
+    await seedCharacter(ctx.db, cfg, {
+      id: 90201,
+      accountId: acc.id,
+      name: "Shared Name",
+      main: true,
+    });
+    const [op] = await ctx.db
+      .insert(payoutOperation)
+      .values({ name: "Shared Name", occurredAt: new Date(), corpSharePct: "0" })
+      .returning();
+
+    const resolution = await resolveFilterIdentity(ctx.db, "target", "Shared Name");
+    expect(resolution.kind).toBe("name");
+    if (resolution.kind !== "name") throw new Error("unreachable");
+    expect(resolution.accountCount).toBe(1);
+    expect(resolution.operationCount).toBe(1);
+    expect(new Set(resolution.ids)).toEqual(new Set([acc.id, "90201", op.id]));
+  });
+
+  it("gives operationCount 2 when two operations share a name", async () => {
+    const [op1] = await ctx.db
+      .insert(payoutOperation)
+      .values({ name: "Twin Roam", occurredAt: new Date(), corpSharePct: "0" })
+      .returning();
+    const [op2] = await ctx.db
+      .insert(payoutOperation)
+      .values({ name: "Twin Roam", occurredAt: new Date(), corpSharePct: "0" })
+      .returning();
+
+    const resolution = await resolveFilterIdentity(ctx.db, "target", "Twin Roam");
+    expect(resolution.kind).toBe("name");
+    if (resolution.kind !== "name") throw new Error("unreachable");
+    expect(resolution.operationCount).toBe(2);
+    expect(new Set(resolution.ids)).toEqual(new Set([op1.id, op2.id]));
+  });
+
+  it("never resolves an operation name in the actor column", async () => {
+    await ctx.db
+      .insert(payoutOperation)
+      .values({ name: "Actorless Roam", occurredAt: new Date(), corpSharePct: "0" })
+      .returning();
+
+    const resolution = await resolveFilterIdentity(ctx.db, "actor", "Actorless Roam");
+    expect(resolution).toEqual({ kind: "none", name: "Actorless Roam" });
+  });
+
+  it("still returns raw for a pasted uuid with zero queries, guarding the short-circuit", async () => {
+    const someUuid = "22222222-2222-2222-2222-222222222222";
+    const { result: resolution, calls } = await countQueries(() =>
+      resolveFilterIdentity(ctx.db, "target", someUuid),
+    );
+    expect(resolution).toEqual({ kind: "raw", ids: [someUuid] });
+    expect(calls).toBe(0);
   });
 });

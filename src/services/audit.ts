@@ -287,24 +287,32 @@ export async function resolveAuditIdentities(
 
 export type FilterResolution =
   | { kind: "raw"; ids: string[] }
-  | { kind: "name"; name: string; ids: string[]; accountCount: number }
+  | {
+      kind: "name";
+      name: string;
+      ids: string[];
+      accountCount: number;
+      operationCount: number;
+    }
   | { kind: "none"; name: string };
 
 /**
  * Inverts `resolveAuditIdentities` for the filter box: turns what an admin
- * sees ("Zed") back into the raw ids the audit log actually stores.
+ * sees ("Zed", "Thursday roam") back into the raw ids the audit log actually
+ * stores.
  *
  * A raw id costs nothing -- UUIDs, bare digit strings and the reserved
  * literals short-circuit with zero queries, which is what keeps pasting an id
- * working. Everything else is a name, resolved along the same three display
- * paths `resolveAuditIdentities` renders:
+ * working. Everything else is a name, resolved along the display paths
+ * `resolveAuditIdentities` renders:
  *
  *   actor  -> accounts whose main character carries the name (actor is only
  *             ever an account uuid or "system", so nothing else can match)
  *   target -> those accounts, PLUS every character carrying the name, PLUS the
- *             discord ids linked to those accounts, because one person's
- *             target rows are spread across all three identifier forms and a
- *             filter that pinned one would silently hide the others
+ *             discord ids linked to those accounts, PLUS every payout
+ *             operation carrying the name (live or deleted) -- one name can
+ *             legitimately mean a person AND an unrelated operation, and a
+ *             filter that pinned one would silently hide the other
  *
  * Deliberately NOT called from inside queryAuditLog: that function receives
  * raw ids only, so a caller passing a non-uuid raw actor (as
@@ -321,23 +329,25 @@ export async function resolveFilterIdentity(
     return { kind: "raw", ids: [value] };
   }
 
-  // 1. every character carrying the name (case-insensitive), with its owner
-  const chars = await dbx
-    .select({ id: character.id, accountId: character.accountId })
-    .from(character)
-    .where(sql`lower(${character.name}) = lower(${value})`);
-  if (chars.length === 0) return { kind: "none", name: value };
-
-  const characterIds = chars.map((c) => c.id);
-
-  // 2. the accounts that *display* the name, i.e. whose main is one of those
-  const mains = await dbx
-    .select({ id: account.id })
-    .from(account)
-    .where(inArray(account.mainCharacterId, characterIds));
-  const displayAccountIds = mains.map((a) => a.id);
-
   if (field === "actor") {
+    // An operation name can never appear in the actor column: every logAudit
+    // call site in src/ passes an account uuid or the literal "system" as
+    // `actor`, and schema.ts documents the column as exactly that. An
+    // operation uuid only ever reaches `target`. So there is no payout lookup
+    // to run here -- an actor filter costs exactly what it always did.
+    const chars = await dbx
+      .select({ id: character.id, accountId: character.accountId })
+      .from(character)
+      .where(sql`lower(${character.name}) = lower(${value})`);
+    if (chars.length === 0) return { kind: "none", name: value };
+
+    const characterIds = chars.map((c) => c.id);
+    const mains = await dbx
+      .select({ id: account.id })
+      .from(account)
+      .where(inArray(account.mainCharacterId, characterIds));
+    const displayAccountIds = mains.map((a) => a.id);
+
     // An alt's name can never appear in the actor column, so its owning
     // account neither contributes rows nor counts toward ambiguity.
     if (displayAccountIds.length === 0) return { kind: "none", name: value };
@@ -346,11 +356,67 @@ export async function resolveFilterIdentity(
       name: value,
       ids: displayAccountIds,
       accountCount: displayAccountIds.length,
+      operationCount: 0,
     };
   }
 
-  // 3. discord ids of the displaying accounts (this one IS index-backed --
-  //    discord_link.account_id is that table's primary key)
+  // target: characters and payout operations are independent lookups, so run
+  // all three in one round rather than paying for the character query (and
+  // deciding "none" from it alone) before an operation match is even checked
+  // -- that ordering is exactly the bug this replaces.
+  const [chars, liveOps, deletedOps] = await Promise.all([
+    // every character carrying the name (case-insensitive), with its owner
+    dbx
+      .select({ id: character.id, accountId: character.accountId })
+      .from(character)
+      .where(sql`lower(${character.name}) = lower(${value})`),
+    // live operations carrying the name
+    dbx
+      .select({ id: payoutOperation.id })
+      .from(payoutOperation)
+      .where(sql`lower(${payoutOperation.name}) = lower(${value})`),
+    // deleted operations, recovered from their own payout.deleted audit row --
+    // a delete is a hard delete (every payout child table cascades, schema.ts),
+    // so there is no tombstone to join against; `deleteOperation`
+    // (src/services/payouts.ts) reads the name off the operation and writes it
+    // into that audit row's details, both inside the transaction that drops
+    // the row. Unlike the equivalent fallback in resolveAuditIdentities, this
+    // is NOT gated on the live query missing anything: a deleted operation can
+    // share a name with a live one and is still a distinct operation the
+    // filter must include, not a redundant lookup to skip.
+    dbx
+      .select({ target: auditLog.target })
+      .from(auditLog)
+      .where(
+        and(
+          eq(auditLog.action, "payout.deleted"),
+          sql`lower((${auditLog.details})->>'name') = lower(${value})`,
+        ),
+      ),
+  ]);
+
+  const operationIds = new Set<string>([
+    ...liveOps.map((o) => o.id),
+    ...deletedOps.map((o) => o.target),
+  ]);
+
+  if (chars.length === 0 && operationIds.size === 0) {
+    return { kind: "none", name: value };
+  }
+
+  const characterIds = chars.map((c) => c.id);
+
+  // the accounts that *display* the name, i.e. whose main is one of those
+  const mains = characterIds.length
+    ? await dbx
+        .select({ id: account.id })
+        .from(account)
+        .where(inArray(account.mainCharacterId, characterIds))
+    : [];
+  const displayAccountIds = mains.map((a) => a.id);
+
+  // discord ids of the displaying accounts (this one IS index-backed --
+  // discord_link.account_id is that table's primary key)
   const links = displayAccountIds.length
     ? await dbx
         .select({ discordUserId: discordLink.discordUserId })
@@ -362,8 +428,8 @@ export async function resolveFilterIdentity(
     ...displayAccountIds,
     ...characterIds.map(String),
     ...links.map((l) => l.discordUserId),
+    ...operationIds,
   ];
-  if (ids.length === 0) return { kind: "none", name: value };
 
   // Matched character ids are in the union, so their owning accounts are
   // surfaced too and must count -- otherwise two same-named alts on two
@@ -371,7 +437,13 @@ export async function resolveFilterIdentity(
   const accountCount = new Set([...displayAccountIds, ...chars.map((c) => c.accountId)])
     .size;
 
-  return { kind: "name", name: value, ids, accountCount };
+  return {
+    kind: "name",
+    name: value,
+    ids,
+    accountCount,
+    operationCount: operationIds.size,
+  };
 }
 
 export async function queryAuditLog(
