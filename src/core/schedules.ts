@@ -37,6 +37,37 @@ export function cronFor(jobType: string): string | null {
   return isJobType(jobType) ? JOB_CRON[jobType] : null;
 }
 
+/**
+ * Which strip of the admin sync page a job belongs to. This follows what the
+ * page's OWN controls can reach, not the job's queue mechanics:
+ *
+ * - `sweep` — the four jobs the primary "sync everything" fan-out enqueues
+ *   (membership, contacts, wanderer, discord-roles).
+ * - `on-demand` — reachable from a dedicated control other than the fan-out
+ *   (membership-recheck, via "Recheck invalid affiliations").
+ * - `housekeeping` — not reachable from any page control (token-health, purge).
+ *
+ * `Record<JobType, JobGroup>` rather than a partial map: adding a `JOB_CRON`
+ * key without deciding its group is a compile error here, the same argument
+ * `JobType` itself makes for `cronFor`.
+ */
+export type JobGroup = "sweep" | "on-demand" | "housekeeping";
+
+export const JOB_GROUP: Record<JobType, JobGroup> = {
+  membership: "sweep",
+  contacts: "sweep",
+  wanderer: "sweep",
+  "discord-roles": "sweep",
+  "membership-recheck": "on-demand",
+  "token-health": "housekeeping",
+  purge: "housekeeping",
+};
+
+/** The strip a job type belongs to, or null when nothing schedules it. */
+export function groupFor(jobType: string): JobGroup | null {
+  return isJobType(jobType) ? JOB_GROUP[jobType] : null;
+}
+
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 function pad(n: string): string {
