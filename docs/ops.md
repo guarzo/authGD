@@ -20,8 +20,8 @@ fly secrets set \
   EVE_SSO_CLIENT_ID=... EVE_SSO_CLIENT_SECRET=... \
   EVE_SSO_SCOPES="esi-characters.read_contacts.v1 esi-characters.write_contacts.v1 esi-ui.open_window.v1" \
   DISCORD_CLIENT_ID=... DISCORD_CLIENT_SECRET=... DISCORD_BOT_TOKEN=... \
-  DISCORD_GUILD_ID=... DISCORD_ROLE_ID_FLYGD=... DISCORD_ROLE_ID_BLUE=... \
-  DISCORD_ROLE_ID_GREEN=... DISCORD_OPS_WEBHOOK_URL=... \
+  DISCORD_GUILD_ID=... DISCORD_ROLE_ID_MEMBER=... DISCORD_ROLE_ID_ASSOCIATE=... \
+  DISCORD_ROLE_ID_ALUMNI=... DISCORD_OPS_WEBHOOK_URL=... \
   WANDERER_BASE_URL=... WANDERER_API_KEY=... WANDERER_ACL_ID=... \
   STANDINGS_LABEL=authgd STANDINGS_VALUE=5 \
   ESI_CONTACT="you@example.com" \
@@ -166,14 +166,14 @@ character already on the ACL.
 | `SESSION_COOKIE_NAME` | no (default `authgd_session`) | session cookie name |
 | `TOKEN_ENCRYPTION_KEY` | yes | base64, exactly 32 bytes; encrypts EVE refresh tokens at rest |
 | `APP_BASE_URL` | yes | public URL; OAuth redirect URIs derive from it |
-| `ALLIANCE_ID` | yes | membership anchor: main in this alliance ⇒ FlyGD |
+| `ALLIANCE_ID` | yes | membership anchor: main in this alliance ⇒ member |
 | `BOOTSTRAP_ADMIN_CHARACTER_IDS` | no | comma-separated; see recovery caveat below |
 | `EVE_SSO_CLIENT_ID` / `EVE_SSO_CLIENT_SECRET` | yes | EVE application credentials |
 | `EVE_SSO_SCOPES` | yes | space-separated full scope set requested at every login. Adding a scope flips every existing character to `needs_reauth` until its holder logs in again — a capability warning, not an outage: `src/jobs/contacts.ts` gates per job on the scopes it actually needs |
 | `DISCORD_CLIENT_ID` / `DISCORD_CLIENT_SECRET` | yes | Discord OAuth (identify only) |
 | `DISCORD_BOT_TOKEN` | yes | bot with Manage Roles above the three managed roles |
 | `DISCORD_GUILD_ID` | yes | the guild whose roles are managed |
-| `DISCORD_ROLE_ID_FLYGD` / `_BLUE` / `_GREEN` | yes | the three managed role ids (distinct) |
+| `DISCORD_ROLE_ID_MEMBER` / `_ASSOCIATE` / `_ALUMNI` | yes | the three managed role ids (distinct) |
 | `DISCORD_OPS_WEBHOOK_URL` | no | ops alerts (final retry failures, config errors) |
 | `WANDERER_BASE_URL` / `WANDERER_API_KEY` | yes | Wanderer instance + the **ACL's own** API key (the map API key returns 401 on `/api/acls/*`) |
 | `WANDERER_ACL_ID` | yes | the managed ACL — dedicated to authGD, reconciled destructively |
@@ -386,7 +386,7 @@ service that actually pages — keep the endpoint, delete the workflow.
 
 `STANDINGS_LABEL` names an in-game contact label that authGD **owns outright**.
 On every contacts run it deletes every contact carrying that label that is not a
-current FlyGD member (`src/core/contacts-diff.ts`). Point it at a label created
+current member (`src/core/contacts-diff.ts`). Point it at a label created
 for authGD; never at one people also curate by hand, or their contacts are
 deleted on the first run.
 
@@ -586,10 +586,10 @@ It seeds six accounts covering every tier, an admin, alts, and the `cryo` and
 prints a cookie:
 
 ```text
-admin   Admin Prime        (flygd, admin, 2 alt(s))
+admin   Admin Prime        (member, admin, 2 alt(s))
   authgd_session=Ux7...redacted...
 
-blue    Blue Pilot         (blue)
+member  Member Pilot       (member, 1 alt(s))
   authgd_session=Qa2...redacted...
 ```
 
