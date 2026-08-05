@@ -171,18 +171,23 @@ export type CollapsedRun<T extends CollapsibleRun = CollapsibleRun> =
       /** Latest `finishedAt` in the group. Never null: every run inside a
        * group has finished — see `sameOutcome` below. */
       to: Date;
-      /** Shortest/longest run duration in the group, in ms. Both null only
-       * when no run in the group recorded a `startedAt` — `finishedAt` is
+      /** Shortest and longest run duration in the group, in ms, or null when
+       * no run in the group recorded a `startedAt` — `finishedAt` is
        * guaranteed by `sameOutcome`, but `startedAt` can still be null (see
-       * `RunLike`). Collapsing folds five "OK, same counts" runs into one row
-       * and, with it, the one detail that made a single run stand out: a
-       * 47-minute run during an ESI slowdown reads identically to a 2-minute
-       * one once only status/counts survive. `sameOutcome` deliberately never
-       * compares duration (durations are near-never equal, so that would stop
-       * anything from ever collapsing) — this carries the span forward
-       * instead of hiding it. */
-      minDurationMs: number | null;
-      maxDurationMs: number | null;
+       * `RunLike`). One nullable field rather than a nullable `min` beside a
+       * nullable `max`: they are computed from the same set and are always
+       * both present or both absent, so two of them would spell four states
+       * for the two that exist and make every consumer test both to rule out
+       * the two that cannot happen.
+       *
+       * Collapsing folds five "OK, same counts" runs into one row and, with
+       * it, the one detail that made a single run stand out: a 47-minute run
+       * during an ESI slowdown reads identically to a 2-minute one once only
+       * status/counts survive. `sameOutcome` deliberately never compares
+       * duration (durations are near-never equal, so that would stop anything
+       * from ever collapsing) — this carries the span forward instead of
+       * hiding it. */
+      durationMs: { min: number; max: number } | null;
     };
 
 /**
@@ -249,8 +254,14 @@ function toGroup<T extends CollapsibleRun>(runs: T[]): CollapsedRun<T> {
     throw new Error("toGroup invariant violated: a grouped run has no finishedAt");
   }
   const durations = runs
-    .filter((r): r is T & { startedAt: Date } => r.startedAt !== null)
-    .map((r) => r.finishedAt!.getTime() - r.startedAt.getTime());
+    // Both ends, not just `startedAt`: `finishedAt` is non-null by the same
+    // invariant `to` rests on, but filtering on it here is free and buys the
+    // subtraction below its types without a `!` the compiler cannot check.
+    .filter(
+      (r): r is T & { startedAt: Date; finishedAt: Date } =>
+        r.startedAt !== null && r.finishedAt !== null,
+    )
+    .map((r) => r.finishedAt.getTime() - r.startedAt.getTime());
   return {
     kind: "group",
     runs,
@@ -260,8 +271,10 @@ function toGroup<T extends CollapsibleRun>(runs: T[]): CollapsedRun<T> {
     errorSummary: runs[0].errorSummary,
     from: earliest(runs.map((r) => r.startedAt)),
     to,
-    minDurationMs: durations.length > 0 ? Math.min(...durations) : null,
-    maxDurationMs: durations.length > 0 ? Math.max(...durations) : null,
+    durationMs:
+      durations.length > 0
+        ? { min: Math.min(...durations), max: Math.max(...durations) }
+        : null,
   };
 }
 

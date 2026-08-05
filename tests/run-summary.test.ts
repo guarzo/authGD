@@ -135,8 +135,7 @@ describe("collapseRuns", () => {
         errorSummary: null,
         from: run(1).startedAt,
         to: run(3).finishedAt,
-        minDurationMs: 500,
-        maxDurationMs: 500,
+        durationMs: { min: 500, max: 500 },
       },
     ]);
   });
@@ -160,8 +159,7 @@ describe("collapseRuns", () => {
         errorSummary: null,
         from: runs[2].startedAt,
         to: runs[1].finishedAt,
-        minDurationMs: 500,
-        maxDurationMs: 500,
+        durationMs: { min: 500, max: 500 },
       },
       { kind: "run", run: runs[3] },
     ]);
@@ -194,8 +192,7 @@ describe("collapseRuns", () => {
         errorSummary: null,
         from: run(1).startedAt,
         to: run(2).finishedAt,
-        minDurationMs: 500,
-        maxDurationMs: 500,
+        durationMs: { min: 500, max: 500 },
       },
     ]);
   });
@@ -221,8 +218,7 @@ describe("collapseRuns", () => {
         errorSummary: null,
         from: run(1).startedAt,
         to: run(2).finishedAt,
-        minDurationMs: 500,
-        maxDurationMs: 500,
+        durationMs: { min: 500, max: 500 },
       },
     ]);
     // null counts and {} are not the same fact.
@@ -273,8 +269,7 @@ describe("collapseRuns", () => {
     expect(groups).toEqual([
       expect.objectContaining({
         kind: "group",
-        minDurationMs: 300,
-        maxDurationMs: 118_000,
+        durationMs: { min: 300, max: 118_000 },
       }),
     ]);
   });
@@ -285,8 +280,7 @@ describe("collapseRuns", () => {
     expect(groups).toEqual([
       expect.objectContaining({
         kind: "group",
-        minDurationMs: null,
-        maxDurationMs: null,
+        durationMs: null,
       }),
     ]);
   });
@@ -298,7 +292,7 @@ describe("collapseRuns", () => {
     ];
     const groups = collapseRuns(runs);
     expect(groups).toEqual([
-      expect.objectContaining({ kind: "group", minDurationMs: 700, maxDurationMs: 700 }),
+      expect.objectContaining({ kind: "group", durationMs: { min: 700, max: 700 } }),
     ]);
   });
 });

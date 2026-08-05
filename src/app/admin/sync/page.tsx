@@ -468,24 +468,23 @@ export default async function AdminSyncPage({
                                       degraded, used to collapse to a row that
                                       said nothing about the 47 minutes. This
                                       is the one column whose header already
-                                      promises it. `minDurationMs`/
-                                      `maxDurationMs` are null only when no run
-                                      in the group has a `startedAt` — every
-                                      member has a `finishedAt` (see above), so
-                                      that is a missing start, not a run still
-                                      in flight, and gets the "not recorded"
-                                      treatment rather than the single-run
-                                      branch's "still running" below. */}
-                                          {entry.minDurationMs === null ||
-                                          entry.maxDurationMs === null ? (
+                                      promises it. `durationMs` is null only
+                                      when no run in the group has a
+                                      `startedAt` — every member has a
+                                      `finishedAt` (see above), so that is a
+                                      missing start, not a run still in flight,
+                                      and gets the "not recorded" treatment
+                                      rather than the single-run branch's
+                                      "still running" below. */}
+                                          {entry.durationMs === null ? (
                                             <span className="dim">
                                               <Absent glyph="—">not recorded</Absent>
                                             </span>
-                                          ) : entry.minDurationMs ===
-                                            entry.maxDurationMs ? (
-                                            formatDurationMs(entry.minDurationMs)
+                                          ) : entry.durationMs.min ===
+                                            entry.durationMs.max ? (
+                                            formatDurationMs(entry.durationMs.min)
                                           ) : (
-                                            `${formatDurationMs(entry.minDurationMs)} – ${formatDurationMs(entry.maxDurationMs)}`
+                                            `${formatDurationMs(entry.durationMs.min)} – ${formatDurationMs(entry.durationMs.max)}`
                                           )}
                                         </td>
                                         <td>
