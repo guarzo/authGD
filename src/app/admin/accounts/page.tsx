@@ -499,8 +499,15 @@ function AccountRow({
               // other confirm in this row. Names its row for the same reason the
               // Actions cell does: "unlink" read out of context says whose Discord
               // is about to be disconnected to nobody.
-              <span className="inline-pair">
-                <Status tone="ok">linked</Status>
+              //
+              // No `linked` token beside it. The else-branch renders `none`
+              // because an unlinked row has no control and the cell would
+              // otherwise be empty; a linked row has the button, and the verb
+              // answers the column's question on its own. Two objects per linked
+              // row against one per unlinked row was the asymmetry that made
+              // this cell read as cluttered — and this column is scanned far
+              // more often than it is used (PRODUCT.md principle 3).
+              <>
                 <form action={unlinkDiscordAction.bind(null, r.accountId, listSearch)}>
                   <ConfirmSubmit
                     className="btn btn--micro"
@@ -545,7 +552,7 @@ function AccountRow({
                   Unlinking queues removal of the Discord roles authGD manages for this
                   member.
                 </span>
-              </span>
+              </>
             ) : (
               <Status tone="off">none</Status>
             )}
