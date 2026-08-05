@@ -1188,9 +1188,10 @@ h3.rule-head__label {
    with a large line saying so.
 
    `.st` is nowrap and inline-flex, so this copy cannot wrap: at 320px the
-   content box is 288px and the longest current verdict measures ~250px in
-   mono at this size. That is the budget. Lengthening the copy overflows
-   rather than wraps, so measure before rewording it. */
+   content box is 288px and the longest current verdict — "Discord roles
+   behind schedule", 29 characters — measures ~268px in mono at this size.
+   That is the budget. Lengthening the copy overflows rather than wraps, so
+   measure before rewording it. */
 .st--lead {
   font-size: var(--t-body);
   /* The badge it has to outrank is 600 inside a border and a tint. Matching
@@ -2327,7 +2328,7 @@ h3.rule-head__label {
   max-width: var(--measure);
 }
 
-/* --- Last pushed -------------------------------------------------------- */
+/* --- Sync schedule -------------------------------------------------------- */
 
 .push {
   display: flex;

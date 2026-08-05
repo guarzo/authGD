@@ -28,10 +28,11 @@ const MANIFEST_COLUMN_COUNT = 6;
 
 /** The id a contacts cell's `aria-describedby` points at when — and only
  *  when — `ContactRemedy` has something to say about that character. Unlike
- *  `CONTACTS_NOTE_ID` below, which is always in the DOM and merely toggles
- *  between visible and visually-hidden, this element is not rendered at all
- *  for a character with no remedy. The reference and the element are gated on
- *  the same `hasContactRemedy` predicate, so the id can never dangle. */
+ *  the CONTACTS column's caption below, which is always in the accessible
+ *  tree regardless of whether its sighted copy is shown, this element is not
+ *  rendered at all for a character with no remedy. The reference and the
+ *  element are gated on the same `hasContactRemedy` predicate, so the id can
+ *  never dangle. */
 const contactRemedyId = (characterId: number) => `contact-remedy-${characterId}`;
 
 // Reads the session cookie and hits the DB on every request; getConfig() also
@@ -47,13 +48,6 @@ export const metadata: Metadata = {
 // builder its producers go through. Nearly all are emitted by a callback route
 // redirect; the distinction the copy has to carry is "retry works"
 // (expired/failed) versus "retrying will do the same thing" (already_linked).
-
-/**
- * The id the CONTACTS column header points `aria-describedby` at. The note is
- * a standing property of that column, not news, so it lives there once instead
- * of as a disclaimer every member reads on every visit.
- */
-const CONTACTS_NOTE_ID = "contacts-note";
 
 /** A contacts state the note actually explains. "ok" needs no explanation, and
  *  "missing_label" and "label_mismatch" already carry more specific instructions
@@ -101,17 +95,31 @@ export default async function AccountPage({
   // never had has ended. `resolveAdmin` draws the same line for the admin
   // pages.
   if (!sess) redirect(sid ? loginErrorUrl("session_expired") : "/login");
-  const view = await getAccountView(getDb(), cfg, sess.accountId);
-  const { error } = await searchParams;
+  // Independent reads, each needing only `sess.accountId` (plus `cfg` for the
+  // first): run in parallel so TTFB is the slowest of the three rather than
+  // their sum. `searchParams` is a Next-supplied promise with no DB dependency
+  // of its own, so it joins the same `Promise.all` instead of a separate await.
+  //
+  // Three concurrent queries against a pool of `max = 5` (src/db/index.ts).
+  // Total connection-milliseconds are unchanged — the same three reads, just
+  // overlapped — so average pool occupancy is what it was; only the per-request
+  // burst grew from 1 slot to 3. That fits, but it is most of the headroom:
+  // anything added to this array should be weighed against that 5, whose
+  // `connectionTimeoutMillis` turns a long wait for a free client into a
+  // thrown error rather than a slow page.
+  const [view, { error }, showPayoutsLink, payouts] = await Promise.all([
+    getAccountView(getDb(), cfg, sess.accountId),
+    searchParams,
+    // Same tier-only gate the payouts pages themselves re-check — this only
+    // decides whether the link appears, never whether the route is reachable.
+    canReadPayouts(getDb(), sess.accountId),
+    // Finalized operations only, and only rows whose participant resolved to
+    // this account — see listAccountPayouts for both, including what the second
+    // one cannot show.
+    listAccountPayouts(getDb(), sess.accountId),
+  ]);
   const message = lookupErrorMessage(ACCOUNT_ERRORS, error);
   const now = Date.now();
-  // Same tier-only gate the payouts pages themselves re-check — this only
-  // decides whether the link appears, never whether the route is reachable.
-  const showPayoutsLink = await canReadPayouts(getDb(), sess.accountId);
-  // Finalized operations only, and only rows whose participant resolved to
-  // this account — see listAccountPayouts for both, including what the second
-  // one cannot show.
-  const payouts = await listAccountPayouts(getDb(), sess.accountId);
 
   const nav = [
     // These two sit side by side for an admin, so they must not share a word.
@@ -137,8 +145,14 @@ export default async function AccountPage({
 
   // One derivation feeds three surfaces: the verdict line, the first-sync
   // notice below (previously computed inline here, separately), and the
-  // colour grade on "Add character" further down.
-  const health = computeAccountHealth(view.characters);
+  // colour grade on "Add character" further down. `now` is the same clock
+  // read used by the "Sync schedule" rows below, so the page renders against
+  // one instant rather than two.
+  const health = computeAccountHealth(view.characters, {
+    linked: view.discordLinked,
+    lastPushedAt: view.pushes.discord.lastPushedAt,
+    now: new Date(now),
+  });
 
   const contactRemedies = view.characters.filter((c) =>
     hasContactRemedy(c.contactSyncResult, c.contactsTarget),
@@ -179,6 +193,18 @@ export default async function AccountPage({
               <p className="verdict">
                 <Status tone="warn" size="lead">
                   {health.stalled} character{health.stalled === 1 ? "" : "s"} not syncing
+                </Status>
+              </p>
+            ) : health.verdict === "discord-stale" ? (
+              // getPushStatus (services/account-view.ts) reports the newest
+              // completed discord-roles run ANYWHERE, not per account, and
+              // counts a "partial" run as pushed — so this can only ever mean
+              // the job itself stopped running corp-wide, never that this
+              // member's own roles are wrong. Wording stays about the
+              // schedule, never "your roles".
+              <p className="verdict">
+                <Status tone="warn" size="lead">
+                  Discord roles behind schedule
                 </Status>
               </p>
             ) : health.verdict === "first-sync-pending" ? (
@@ -269,22 +295,34 @@ export default async function AccountPage({
 
         <RuleHead as="h2">Crew manifest</RuleHead>
 
-        {/* One element, always in the accessible tree as the CONTACTS column's
-            description, so a keyboard user reaches it by navigating the header
-            and never needs a hover-only title attribute. It becomes visible
-            copy only when some row's contacts state is one the note explains —
-            a caption on the manifest, not a disclaimer on the account. */}
-        <p
-          id={CONTACTS_NOTE_ID}
-          className={showContactsNote ? "table-note" : "visually-hidden"}
-        >
-          authGD owns the <code>{cfg.standings.label}</code> contact label on your
-          characters: contacts under that label are managed automatically and may be
-          added, changed, or removed.
-        </p>
+        {/* Purely visual now: the accessible copy moved to the table's own
+            `<caption>` below, which reaches a member landing on any cell in
+            the CONTACTS column, not just the header a `<th>`'s
+            aria-describedby could reach. Omitted entirely rather than
+            visually-hidden when no row needs it — the caption alone carries
+            the standing fact for a screen-reader user — and `aria-hidden`
+            keeps a sighted user's screen reader from hearing it said twice. */}
+        {showContactsNote && (
+          <p className="table-note" aria-hidden="true">
+            authGD owns the <code>{cfg.standings.label}</code> contact label on your
+            characters: contacts under that label are managed automatically and may be
+            added, changed, or removed.
+          </p>
+        )}
 
         <Scroller label="Your characters">
           <table className="log">
+            {/* Always present, unlike the visual copy above: a `<caption>` is
+                announced for the table as a whole, so this is the one place a
+                standing fact about the CONTACTS column reaches a member no
+                matter which cell they navigate to. Visually hidden — the
+                sighted copy above (when shown) says the same thing where the
+                eye already is. */}
+            <caption className="visually-hidden">
+              authGD owns the <code>{cfg.standings.label}</code> contact label on your
+              characters: contacts under that label are managed automatically and may be
+              added, changed, or removed.
+            </caption>
             <thead>
               <tr>
                 <th scope="col">
@@ -292,9 +330,7 @@ export default async function AccountPage({
                 </th>
                 <th scope="col">Name</th>
                 <th scope="col">Token</th>
-                <th scope="col" aria-describedby={CONTACTS_NOTE_ID}>
-                  Contacts
-                </th>
+                <th scope="col">Contacts</th>
                 <th scope="col">Map</th>
                 <th scope="col">
                   <span className="visually-hidden">Actions</span>
@@ -400,8 +436,10 @@ export default async function AccountPage({
                 {view.characters.length === 0 && (
                   <tr>
                     <td className="log__empty" colSpan={MANIFEST_COLUMN_COUNT}>
-                      No characters linked yet. Add one to start pushing standings, map
-                      access, and Discord roles for it.
+                      <span className="log__empty-text">
+                        No characters linked yet. Add one to start pushing standings, map
+                        access, and Discord roles for it.
+                      </span>
                     </td>
                   </tr>
                 )}
@@ -455,7 +493,7 @@ export default async function AccountPage({
           </a>
         </p>
 
-        {/* Omitted entirely when there are none, like the "Last pushed" block
+        {/* Omitted entirely when there are none, like the "Sync schedule" block
             below: an empty table under "Your payouts" on every green member's
             page is a section that never says anything. */}
         {payouts.length > 0 && (
@@ -468,8 +506,18 @@ export default async function AccountPage({
         {view.characters.length > 0 && (
           <>
             <RuleHead as="h2" aside={<span className="dim mono">UTC</span>}>
-              Last pushed
+              Sync schedule
             </RuleHead>
+            {/* getPushStatus (services/account-view.ts) reports the newest
+                completed run of each job ACROSS THE WHOLE CORP, not this
+                account's own. Renamed from "Last pushed", which read as a
+                personal fact ("my standings were written at 14:02") when it
+                is really "the job last completed, corp-wide, at 14:02". The
+                per-character truth lives in the manifest above. */}
+            <p className="table-note">
+              When each job last completed corp-wide, and when it runs next. For your own
+              characters, read the CONTACTS and MAP columns above.
+            </p>
             <dl className="facts">
               <dt>Standings</dt>
               <PushRow push={view.pushes.standings} now={now} />
