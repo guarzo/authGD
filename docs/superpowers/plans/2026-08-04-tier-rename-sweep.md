@@ -37,6 +37,20 @@ Postgres 16, pg-boss, Vitest, Playwright.
 - Do not add a back-compat shim for the old `DISCORD_ROLE_ID_*` names (spec D8).
 - Do not add a legacy audit alias map (spec D4) — pre-rename audit rows render
   their raw stored string, and that is intended.
+- **User-visible tier copy is in scope; corp branding is not.** `"Approve as
+  Green"`, `"Set Zed to blue"`, and `"Operation pages are FlyGD-only"` all name
+  a *tier* and must track the rename (`"Approve as Alumni"`, `"Set Zed to
+  associate"`, `"Operation pages are Member-only"`). `[FLYGD]` in
+  `src/app/layout.tsx` and `src/app/login/page.tsx` is the corporation's ticker
+  — leave it for PR2.
+- **Incidental English is not tier vocabulary.** `e2e/shell.spec.ts` ("with this
+  test still green") and `e2e/admin.spec.ts` ("went green against CSS") use the
+  word in its ordinary sense. Renaming them makes the comment nonsense. Only
+  rename `blue`/`green` where the surrounding code or sentence is about a tier.
+- **Line numbers in this plan are advisory, not authoritative.** They were taken
+  at plan time and every task's own commits shift the ones after it. Locate work
+  by grepping for the literal in the named file; if a cited line does not contain
+  what the plan says it does, trust the grep and say so in your report.
 
 ---
 
@@ -56,9 +70,11 @@ Postgres 16, pg-boss, Vitest, Playwright.
 | `src/services/{accounts,admin-accounts,account-view,payouts}.ts` | tier literals | 4 |
 | `src/jobs/{membership,contacts,wanderer}.ts` | tier literals + renamed imports | 5 |
 | `src/app/**` | server actions, pages, `ui.tsx` | 6 |
+| `src/app/account/standing.tsx` | runtime `tier === "green"/"blue"` branches | 6 |
+| `src/app/account/account-payouts.tsx` | the `FlyGD-only` visible line | 6 |
 | `src/app/globals.css` | `--tier-*` tokens and `.tier--*` classes | 7 |
-| `tests/helpers/seed.ts`, `e2e/helpers.ts` | seed defaults | 8 |
-| `playwright.config.ts`, `tests/helpers/config.ts`, `tests/config.test.ts`, `tests/contacts-job.test.ts` | **standings label**, not tiers | 9 |
+| `tests/helpers/seed.ts`, `e2e/helpers.ts`, `scripts/seed-dev.ts` | seed defaults | 8 |
+| `playwright.config.ts`, `tests/helpers/config.ts`, `tests/config.test.ts`, `tests/contacts-job.test.ts`, `tests/esi-client.test.ts` | **standings label**, not tiers | 9 |
 | `e2e/*.spec.ts` | tier assertions | 10 |
 | `docs/ops.md` | deploy + rollback runbook | 11 |
 
@@ -277,8 +293,8 @@ git commit -m "feat(db): rename tier enum values to generic vocabulary"
 | File | Lines | Form |
 | ---- | ----- | ---- |
 | `playwright.config.ts` | 41-43 | object literal |
-| `tests/helpers/config.ts` | (role vars only) | object literal |
-| `tests/config.test.ts` | 23 area | object literal |
+| `tests/helpers/config.ts` | 17-19 | object literal |
+| `tests/config.test.ts` | 17-19 | object literal |
 | `tests/accounts.test.ts` | 60-62 | object literal |
 | `tests/account-view.test.ts` | 39-41 | object literal |
 | `tests/payouts-service.test.ts` | 58-60 | object literal |
@@ -288,7 +304,13 @@ git commit -m "feat(db): rename tier enum values to generic vocabulary"
 | `tests/auth-routes.test.ts` | 21-23 | `process.env.X = "10"` |
 
 The last two use assignment rather than an object literal, so an
-object-literal-shaped search-and-replace silently skips them.
+object-literal-shaped search-and-replace silently skips them. Ten files, thirty
+lines — that is the whole set; Step 5's grep proves it.
+
+Also rename the Discord **role name** fixture in `tests/discord-rest.test.ts:21,26`
+(`name: "FlyGD"` → `name: "Member"`). That string is the guild role's display
+name in a REST-shape fixture, not a tier value and not a role id — it is renamed
+for de-branding, and nothing asserts on its content beyond round-tripping it.
 
 
 **Interfaces:**
@@ -368,6 +390,9 @@ here.
 - [ ] **Step 5: Verify no fixture was missed**
 
 Run: `grep -rn "DISCORD_ROLE_ID_\(FLYGD\|BLUE\|GREEN\)" src tests e2e scripts playwright.config.ts .env.example`
+Expected: no output.
+
+Run: `grep -rn "FlyGD" tests/discord-rest.test.ts`
 Expected: no output.
 
 - [ ] **Step 6: Run tests**
@@ -506,7 +531,9 @@ git commit -m "refactor(core): rename tier vocabulary in tier and role-diff"
 - Modify: `src/services/account-view.ts:22,99,212,230,369`
 - Modify: `src/services/payouts.ts:32,36,37,41,44`
 - Test: `tests/desired.test.ts`, `tests/accounts.test.ts`, `tests/admin-accounts.test.ts`,
-  `tests/account-view.test.ts`, `tests/deprovision-flow.test.ts`
+  `tests/account-view.test.ts`, `tests/deprovision-flow.test.ts`,
+  `tests/payouts-service.test.ts`, `tests/payout-view.test.ts`,
+  `tests/payout-loot.test.ts`
 
 **Interfaces:**
 - Consumes: `Tier` from Task 3.
@@ -521,9 +548,14 @@ git commit -m "refactor(core): rename tier vocabulary in tier and role-diff"
 
 - [ ] **Step 1: Update the tests first**
 
-Across the five test files: `"flygd"` → `"member"`, `"blue"` → `"associate"`,
+Across the eight test files: `"flygd"` → `"member"`, `"blue"` → `"associate"`,
 `"green"` → `"alumni"`, `getFlygdCharacters` → `getMemberCharacters`,
 `FlygdCharacter` → `MemberCharacter`. Test names change with them.
+
+In `tests/payout-loot.test.ts` the three `const green = await seedAccount(…)`
+bindings (lines 202, 374, 537) are local variable *names* that echo the tier —
+rename each to `alumnus` along with its uses in that test body, so the fixture
+still reads as what it is.
 
 - [ ] **Step 2: Run to verify they fail**
 
@@ -612,7 +644,7 @@ member character whose contact list is…".
 
 - [ ] **Step 5: Run the service tests**
 
-Run: `npm test -- tests/desired.test.ts tests/accounts.test.ts tests/admin-accounts.test.ts tests/account-view.test.ts tests/deprovision-flow.test.ts`
+Run: `npm test -- tests/desired.test.ts tests/accounts.test.ts tests/admin-accounts.test.ts tests/account-view.test.ts tests/deprovision-flow.test.ts tests/payouts-service.test.ts tests/payout-view.test.ts tests/payout-loot.test.ts`
 Expected: PASS.
 
 - [ ] **Step 6: Verify**
@@ -637,7 +669,7 @@ git commit -m "refactor(services): rename tier vocabulary and desired-set helper
 - Modify: `src/jobs/contacts.ts:9,24,75,76,88`
 - Modify: `src/jobs/wanderer.ts:13,38`
 - Test: `tests/contacts-job.test.ts`, `tests/wanderer-job.test.ts`,
-  `tests/discord-roles-job.test.ts`
+  `tests/discord-roles-job.test.ts`, `tests/token-health-job.test.ts`
 
 **Interfaces:**
 - Consumes: `getMemberCharacters`, `MemberCharacter` (Task 4); `decideTier`,
@@ -657,6 +689,11 @@ properties and the `getFlygdCharacters` mention in the comment on line 124.
 
 In `tests/discord-roles-job.test.ts`, update any `managed: {flygd,blue,green}`
 fixtures to the new keys.
+
+`tests/token-health-job.test.ts` has fourteen `seedAccount(ctx.db, { tier:
+"flygd" })` calls and three `expect(after.tier).toBe("green")` assertions —
+straight tier renames, plus the trailing comment on the deprovision case
+(`// deprovisioned, not left flygd` → `not left member`).
 
 - [ ] **Step 2: Run to verify they fail**
 
@@ -683,7 +720,7 @@ Expected: FAIL — invalid input value for enum tier: "flygd", or a missing impo
 
 - [ ] **Step 4: Run tests**
 
-Run: `npm test -- tests/contacts-job.test.ts tests/wanderer-job.test.ts tests/discord-roles-job.test.ts`
+Run: `npm test -- tests/contacts-job.test.ts tests/wanderer-job.test.ts tests/discord-roles-job.test.ts tests/token-health-job.test.ts`
 Expected: PASS.
 
 - [ ] **Step 5: Verify — note the deliberate exclusion**
@@ -704,14 +741,16 @@ git commit -m "refactor(jobs): rename tier vocabulary in membership, contacts an
 ### Task 6: App — actions, pages, primitives
 
 **Files:**
-- Modify: `src/app/_components/ui.tsx:220`
-- Modify: `src/app/admin/accounts/actions.ts:78,90`
-- Modify: `src/app/admin/accounts/page.tsx:53,429,430,503,515`
-- Modify: `src/app/payouts/access.ts:17,35,55`
+- Modify: `src/app/_components/ui.tsx:220,221,301`
+- Modify: `src/app/admin/accounts/actions.ts:82,95`
+- Modify: `src/app/admin/accounts/page.tsx:53,502-503,576,587,589,599,601`
+- Modify: `src/app/admin/audit/summarize.ts:38,49,159` (doc comments only)
+- Modify: `src/app/payouts/access.ts:17,35,36,55`
 - Modify: `src/app/payouts/actions.ts:58`
-- Modify: `src/app/payouts/page.tsx:79-81`
-- Modify: `src/app/payouts/new/page.tsx:33`
-- Modify: `src/app/account/account-payouts.tsx:19`
+- Modify: `src/app/payouts/page.tsx:84-86`
+- Modify: `src/app/payouts/new/page.tsx:43`
+- Modify: `src/app/account/account-payouts.tsx:20,35,48,54`
+- Modify: `src/app/account/standing.tsx:17,20,36,48`
 - Modify: `src/app/_components/submit.tsx:42`
 - Test: `tests/admin-accounts.test.ts`, `tests/account-payouts.test.ts`,
   `tests/audit-summarize.test.ts`
@@ -723,7 +762,20 @@ git commit -m "refactor(jobs): rename tier vocabulary in membership, contacts an
 
 - [ ] **Step 1: Update the tests first**
 
-Replace tier literals in the three test files as in previous tasks.
+Replace tier literals in the three test files as in previous tasks. Two of them
+need more than a literal swap:
+
+- `tests/audit-summarize.test.ts` — the role-name map on lines 44-46
+  (`["100","flygd"], ["200","blue"], ["300","green"]`) is a Discord role-name
+  lookup keyed by id; rename the *names* to `member`/`associate`/`alumni` and
+  update the `"+green −flygd"` expectations to `"+alumni −member"`. Line 248's
+  `new Map([["1", "green"]])` and its assertion move together. **Keep one case
+  on the old vocabulary** — Task 10 Step 3 specifies which and why; if you are
+  running Task 6 first, leave lines 6-12's `flygd → green` case alone and Task
+  10 will formalise it.
+- `tests/account-payouts.test.ts` — line 40's comment, and the two test names
+  and two assertions on lines 88-96 that quote `"FlyGD-only"`. Those become
+  `"Member-only"`, matching the copy change in Step 3.
 
 - [ ] **Step 2: Run to verify they fail**
 
@@ -739,16 +791,65 @@ Expected: FAIL on tier literals.
     tier === "member" || tier === "associate" || tier === "alumni" || tier === "pending";
 ```
 
+Line 221's following comment says "not a blue member" → "not an associate
+member". Line 301's doc comment quotes an example peek (`audit log's
+`green → flygd``) → `alumni → member`.
+
 `src/app/admin/accounts/actions.ts`:
-- line 78: `tier: "member" | "associate" | "alumni",`
-- line 90: `tier: "alumni" | "associate",`
+- line 82: `tier: "member" | "associate" | "alumni",`
+- line 95: `tier: "alumni" | "associate",`
 
 `src/app/admin/accounts/page.tsx`:
 - line 53: `const TIERS = ["member", "associate", "alumni"] as const;`
-- line 503: `action={approveAction.bind(null, r.accountId, "alumni")}`
-- line 515: `action={approveAction.bind(null, r.accountId, "associate")}`
-- comments on lines 429-430: "Every character of a member account is meant to be
+- line 581: `action={approveAction.bind(null, r.accountId, "alumni", listSearch)}`
+- line 593: `action={approveAction.bind(null, r.accountId, "associate", listSearch)}`
+  — note the **fourth argument `listSearch`**; keep it, only the tier changes.
+- the visible button copy and its matching `aria-label`, which must stay
+  character-identical to each other (WCAG 2.5.3 — the comment on line 576 says
+  so, and `e2e/admin.spec.ts` asserts both):
+  - line 587 `aria-label={`Approve as Alumni for ${identity}`}`, line 589 text
+    `Approve as Alumni`
+  - line 599 `aria-label={`Approve as Associate for ${identity}`}`, line 601
+    text `Approve as Associate`
+  - line 576's comment quotes `"Approve as Green"` as its example → `"Approve as
+    Alumni"`
+- comments on lines 502-503: "Every character of a member account is meant to be
   on the map ACL … Non-member".
+
+The `Set ${identity} to ${t}` label on line 628 is templated from `TIERS` and
+follows the rename on its own — do not hand-edit it.
+
+`src/app/account/standing.tsx` — this file branches on the tier at runtime:
+- line 36: `if (tier === "alumni") {`
+- line 48: `if (tier === "associate") {`
+- the doc comment on lines 15-22 explains both branches by name: "Green and blue
+  get the same badge-plus-sentence treatment" → "Alumni and associate get…";
+  "desired.ts targets `tier === "member"` only"; "Alumni is the system's own call
+  (tier.ts) and converges back to member on its own; associate is admin-set".
+
+The two `<span className="dim">` sentences themselves say nothing tier-named —
+leave their wording alone.
+
+`src/app/account/account-payouts.tsx`:
+- line 20 comment: "Reading an OPERATION needs tier member. A member demoted to
+  associate/alumni…"
+- line 48 comment: "a member below member loses the operation page" reads badly
+  after the rename — write "an account below member tier loses the operation
+  page behind these names (canReadPayouts)".
+- line 54, **visible copy**:
+
+```tsx
+          Operation pages are Member-only. Your own payout history here stays regardless of
+```
+
+  This is the tier, not the corporation — see Global Constraints.
+- line 35's comment mentions "standing.tsx's green/blue sentences" →
+  "standing.tsx's alumni/associate sentences".
+
+`src/app/admin/audit/summarize.ts` — doc comments only, no code:
+- line 38: `` `member → alumni`, or `→ alumni` when… ``
+- line 49: `` `+alumni −member`. Ids the app manages… ``
+- line 159: `` `tier.changed` -> `member → alumni` ``
 
 `src/app/payouts/access.ts`:
 - line 17 comment: "tier member AND status active"
@@ -759,14 +860,11 @@ Expected: FAIL on tier literals.
 `src/app/payouts/actions.ts:58` comment: "anyone not member+active — a cryo
 member".
 
-`src/app/payouts/page.tsx:79-81` comment: "Any member reads every operation …
+`src/app/payouts/page.tsx:84-86` comment: "Any member reads every operation …
 only an operator — member AND active … A cryo member".
 
-`src/app/payouts/new/page.tsx:33` comment: "A cryo member (or any non-operator
+`src/app/payouts/new/page.tsx:43` comment: "A cryo member (or any non-operator
 member reader)".
-
-`src/app/account/account-payouts.tsx:19` comment: "OPERATION needs tier member.
-A member demoted to associate/alumni".
 
 `src/app/_components/submit.tsx:42` — the `aria-label` doc comment lists the
 admin-row buttons by their visible text, and "blue" there is the tier button
@@ -785,12 +883,15 @@ Expected: tests PASS; `typecheck` clean — quote the output.
 
 Run: `grep -rniE "flygd|\"blue\"|\"green\"" src/app/ --include="*.ts" --include="*.tsx"`
 Expected: only `src/app/layout.tsx:27` (`[FLYGD]` in the description string,
-which is branding and belongs to PR2) and `src/app/login/page.tsx:82`
+which is branding and belongs to PR2) and `src/app/login/page.tsx:120`
 (`[FLYGD]` footer, also PR2). Anything else is a miss — fix it before
 committing. Then check the prose too:
 
 Run: `grep -rniE "\bblue\b|\bgreen\b" src/app/ --include="*.ts" --include="*.tsx"`
 Expected: no output.
+
+Run: `grep -rn "FlyGD-only" src/app/`
+Expected: no output — the visible line now reads `Member-only`.
 
 - [ ] **Step 6: Commit**
 
@@ -805,7 +906,8 @@ git commit -m "refactor(app): rename tier vocabulary in actions, pages and primi
 ### Task 7: CSS tokens
 
 **Files:**
-- Modify: `src/app/globals.css:29,31,52,53,54,1233,1234,1237,1238,1241,1242`
+- Modify: `src/app/globals.css:29,31,52,53,54,1107,1309,1310,1313,1314,1317,1318`
+- Test: `tests/account-page.test.ts:228`
 
 **Interfaces:**
 - Consumes: the class names `Tier` emits (`tier tier--${tier}`) from Task 6.
@@ -826,7 +928,7 @@ Values are unchanged — the palette must look identical.
 
 - [ ] **Step 2: Rename the tone classes**
 
-Lines 1233-1243:
+Lines 1309-1319:
 
 ```css
 .tier--member {
@@ -844,10 +946,23 @@ Lines 1233-1243:
 
 Leave `.tier--unknown`, `.tier--pending` and `.tier--lead` exactly as they are.
 
-- [ ] **Step 3: Update the two comments**
+- [ ] **Step 3: Update the three comments**
 
 Line 29: "from --gold / --tier-member with near-identical chroma…".
 Line 31: "tell a gold MEMBER tier badge from an amber CRYO token…".
+Line 1107: the `.json__peek` comment quotes an example audit peek,
+`` `flygd -> green, alliance_left` `` → `` `member -> alumni, alliance_left` ``.
+
+- [ ] **Step 3a: Update the class-name assertion in the unit test**
+
+`tests/account-page.test.ts:228` asserts the rendered class name:
+
+```ts
+    expect(render("alumni")).toContain("tier--alumni");
+```
+
+Run: `npm test -- tests/account-page.test.ts`
+Expected: PASS.
 
 - [ ] **Step 4: Verify no tier token was missed and no colour was over-renamed**
 
@@ -863,7 +978,7 @@ if the number dropped, a colour identifier was renamed by mistake. Check with
 
 ```bash
 npm run format:check
-git add src/app/globals.css
+git add src/app/globals.css tests/account-page.test.ts
 git commit -m "refactor(css): rename tier colour tokens and tone classes"
 ```
 
@@ -874,7 +989,8 @@ git commit -m "refactor(css): rename tier colour tokens and tone classes"
 **Files:**
 - Modify: `tests/helpers/seed.ts:10,20`
 - Modify: `e2e/helpers.ts:26,43`
-- Modify: `scripts/seed-dev.ts:30,53,61,64,67,68,74,81,160,161`
+- Modify: `scripts/seed-dev.ts:30,53,61,62,64,65,67,68,74,81,160,161`
+- Test: `tests/seed-dev.test.ts:32,70,79`
 
 **Interfaces:**
 - Consumes: the enum from Task 1.
@@ -896,11 +1012,10 @@ git commit -m "refactor(css): rename tier colour tokens and tone classes"
 
 `e2e/helpers.ts` lines 26 and 43 — identical changes.
 
-- [ ] **Step 2: Edit the dev seed script**
+- [ ] **Step 2: Edit the dev seed script and its test**
 
-`scripts/seed-dev.ts` is not covered by any test, so nothing will catch a miss
-here except the grep in Step 4. It has its own `Tier` union that shadows the one
-in `src/core/tier.ts`:
+`scripts/seed-dev.ts` has its own `Tier` union that shadows the one in
+`src/core/tier.ts`:
 
 ```ts
 type Tier = "member" | "associate" | "alumni";
@@ -908,7 +1023,17 @@ type Tier = "member" | "associate" | "alumni";
 
 Then the seeded fixtures. Lines 53, 64, 74 and 81 are `tier:` properties — map
 them by the standard rule. Lines 61, 67 and 68 carry a `label` that doubles as
-the display name for the seeded account, so both fields move together:
+the display name for the seeded account, so both fields move together, and lines
+62 and 65's character names go with them:
+
+```ts
+    label: "member",
+    name: "Member Pilot",
+```
+
+```ts
+    alts: [{ id: 91_000_103, name: "Member Pilot Alt" }],
+```
 
 ```ts
   { label: "associate", name: "Associate Pilot", mainId: 91_000_003, tier: "associate" },
@@ -921,6 +1046,10 @@ Line 160-161's comment and its condition:
         // member tier is derived from alliance membership by the sync jobs.
         allianceId: spec.tier === "member" ? cfg.allianceId : null,
 ```
+
+`tests/seed-dev.test.ts` asserts the seeded tier set and the convergence case:
+line 32 `new Set(["member", "associate", "alumni"])`, line 70's drift `.set({
+tier: "alumni", … })`, line 79 `expect(restored.tier).toBe("member")`.
 
 - [ ] **Step 3: Run the unit suite**
 
@@ -935,8 +1064,9 @@ Expected: no output.
 
 - [ ] **Step 5: Smoke-test the seed script against the scratch database**
 
-`npm test` does not execute `seed-dev.ts`, so run it once to prove the rename
-did not break it:
+`tests/seed-dev.test.ts` covers `seedDev()` as a function, but nothing exercises
+the script's own entrypoint — its config load, migration assumptions and exit
+path. Run it once end to end:
 
 ```bash
 createdb -h localhost -p 5433 -U authgd seed_smoke
@@ -953,7 +1083,7 @@ Expected: the seed completes without error and the tier counts use only
 
 ```bash
 npm run format:check
-git add tests/helpers/seed.ts e2e/helpers.ts scripts/seed-dev.ts
+git add tests/helpers/seed.ts e2e/helpers.ts scripts/seed-dev.ts tests/seed-dev.test.ts
 git commit -m "test: seed helpers and dev seed script use the generic tier vocabulary"
 ```
 
@@ -972,7 +1102,8 @@ would keep the suite green while making it describe something that never happens
 - Modify: `tests/helpers/config.ts:24`
 - Modify: `tests/config.test.ts:23`
 - Modify: `tests/contacts-job.test.ts:11,41,256,270,276,289,290,295,313,315,317,331,345`
-- Modify: `e2e/account.spec.ts:67,82,101`
+- Modify: `tests/esi-client.test.ts:219,224`
+- Modify: `e2e/account.spec.ts:94,109,125,153`
 
 **Interfaces:**
 - Consumes: nothing.
@@ -1000,24 +1131,36 @@ In `tests/contacts-job.test.ts`, replace the label *strings* only:
 The case-sensitivity and whitespace assertions must keep exactly the same shape —
 only the word changes.
 
+`tests/esi-client.test.ts:219,224` carry the same fixture one layer lower — the
+raw ESI payload `{ label_id: 7, label_name: "flygd" }` and the camel-cased object
+the client is expected to return. Both become `authgd`.
+
 - [ ] **Step 3: Update the e2e comments and assertion**
 
 `e2e/account.spec.ts`:
-- line 67: the comment explaining the collision is now obsolete. Replace with:
+- line 94: the comment explaining the collision is now obsolete. Replace with:
   `// STANDINGS_LABEL is "authgd" in the e2e env, which the page echoes.`
-- line 82: "MEMBER, because only a member account's characters are contacts
+- line 109: "MEMBER, because only a member account's characters are contacts
   targets at…"
-- line 101: `await expect(note).toHaveText(/authGD owns the authgd contact label/);`
+- lines 125 and 153: `/authGD owns the authgd contact label/` — there are **two**
+  of these assertions, not one; the second is inside a different test.
+
+Note line 97's `toContainText("flygd")` is the *tier* badge, not the label — it
+belongs to Task 10 and becomes `"member"`. If Task 10 ran first it is already
+done; if not, leave it.
 
 - [ ] **Step 4: Run both suites**
 
-Run: `npm test -- tests/contacts-job.test.ts tests/config.test.ts`
+Run: `npm test -- tests/contacts-job.test.ts tests/config.test.ts tests/esi-client.test.ts`
 Expected: PASS.
 
 - [ ] **Step 5: Verify the label no longer collides with a tier name**
 
-Run: `grep -rn "flygd" tests/ playwright.config.ts`
-Expected: no output.
+Run: `grep -rn "flygd" -i tests/ playwright.config.ts`
+Expected: **only** the deliberately-retained legacy audit case in
+`tests/audit-summarize.test.ts` (Task 6 Step 1 left it alone; Task 10 Step 3
+formalises it with a comment). Every remaining hit is either a tier Tasks 3-6
+missed or a label this task missed — resolve it rather than committing.
 
 - [ ] **Step 6: Commit**
 
@@ -1032,14 +1175,17 @@ git commit -m "test: use authgd as the standings label fixture, not the tier nam
 ### Task 10: E2E specs
 
 **Files:**
-- Modify: `e2e/account.spec.ts:58,70,79,229,270,293,296,313,395,399,405`
-- Modify: `e2e/audit.spec.ts` — every `seedMember(..., tier: "flygd")`, the
-  `details: {from,to}` fixtures on lines 22 and 247, and the rendered-text
-  assertion on line 56. **The fixture on line 858 and its assertion on 870 are
-  deliberately left on the old vocabulary — see Step 3.**
+- Modify: `e2e/account.spec.ts:85,97,106,163,209,263,300,304,305,308,323,330,333,353,394,405,407,435,439,445,448`
+- Modify: `e2e/audit.spec.ts` — every `seedMember(..., tier: "flygd")` (~25
+  occurrences), every `details: {from,to}` fixture, and the rendered-text
+  assertions on lines 69 and 658. **The fixture on line 1269 and its assertion
+  on 1281 are deliberately left on the old vocabulary — see Step 3.**
 - Modify: `tests/audit-summarize.test.ts` (new legacy-history regression test)
-- Modify: `e2e/not-found.spec.ts:79,138,160`
-- Modify: `e2e/sync.spec.ts`, `e2e/admin.spec.ts`, `e2e/submit-guard.spec.ts` —
+- Modify: `e2e/not-found.spec.ts:26,178,179`
+- Modify: `e2e/payouts.spec.ts:62,63,234,453,1074`
+- Modify: `e2e/admin.spec.ts` — every tier literal **and** the visible-copy
+  assertions (`"Approve as Green"`, `"Approve as Blue"`, `"Set Zed to blue"`)
+- Modify: `e2e/sync.spec.ts`, `e2e/submit-guard.spec.ts`, `e2e/error-boundary.spec.ts` —
   every tier literal
 
 **Interfaces:**
@@ -1052,22 +1198,56 @@ Across all `e2e/*.spec.ts`: `tier: "flygd"` → `tier: "member"`, `"blue"` →
 `"associate"`, `"green"` → `"alumni"`, including inside `details:` fixtures —
 except the one held back in Step 3.
 
+**Two hits in `e2e/` are ordinary English and must not change:**
+`e2e/shell.spec.ts:55` ("with this test still green") and
+`e2e/admin.spec.ts:931` ("went green against CSS"). Both describe a passing
+test, not a tier.
+
+Local variable names that echo a tier move with it — `e2e/not-found.spec.ts:178`
+`const green = await seedMember(…)` becomes `const alumnus`, and its use on the
+next line follows.
+
 - [ ] **Step 2: Update rendered-text assertions**
 
 These assert what the page displays, and PR1 ships no label config, so they read
 the raw enum value:
 
-`e2e/account.spec.ts:70`:
+`e2e/account.spec.ts:97`:
 
 ```ts
   await expect(page.locator("[data-field='tier']")).toContainText("member");
 ```
 
-`e2e/audit.spec.ts:56`:
+`e2e/audit.spec.ts:69`:
 
 ```ts
   await expect(adminDetails.locator(".json__peek")).toHaveText("alumni → member, admin");
 ```
+
+`e2e/audit.spec.ts:658`:
+
+```ts
+    "member → alumni, alliance_left",
+```
+
+`e2e/admin.spec.ts` asserts the admin table's visible tier copy, which Task 6
+renamed. Every one of these must move with it or the spec fails:
+- lines 417, 423, 474, 477, 531, 637: `"Approve as Green"` /
+  `"Approve as Green for Waiting Pilot"` → `"Approve as Alumni"` /
+  `"Approve as Alumni for Waiting Pilot"`
+- lines 480, 483: `"Approve as Blue"` → `"Approve as Associate"`
+- lines 185, 277, 1138, 1575: the `Set Zed to blue` accessible name →
+  `Set Zed to associate` (it is templated from `TIERS`, so the *page* follows
+  automatically — only the spec's expected string is hand-written)
+- line 281: `await expect(zedRow.locator(".tier")).toHaveText(/associate/);`
+- line 178's comment explains why the query keys on the full accessible name
+  rather than the visible word (`name: "blue"` now matches nothing) — update the
+  quoted word, keep the explanation.
+- lines 452 and 1563: `for (const tier of ["member", "associate", "alumni"])`
+- line 431's comment: "alumni is the unlocked…"
+
+`tests/account-payouts.test.ts`'s `"Member-only"` assertions were handled in
+Task 6; do not touch them again here.
 
 - [ ] **Step 3: Keep one legacy fixture on purpose**
 
@@ -1093,7 +1273,8 @@ whatever `tests/audit-summarize.test.ts` already passes in its neighbouring
 cases rather than inventing a shape.
 
 And in `e2e/audit.spec.ts`, leave **one** seeded row on the old vocabulary — the
-line 858 fixture — with its assertion at 870 unchanged:
+line 1269 fixture, `cause: "main left alliance"` — with its assertion at 1281
+(`"flygd → green, main left alliance"`) unchanged. Add the comment above it:
 
 ```ts
   // Deliberately NOT renamed: this row stands in for audit history written
@@ -1101,15 +1282,27 @@ line 858 fixture — with its assertion at 870 unchanged:
   details: { from: "flygd", to: "green", cause: "main left alliance" },
 ```
 
-Rename the fixtures at lines 22 and 247 as normal.
+Note there is a **second, near-identical** fixture at line 599,
+`{ from: "flygd", to: "green", cause: "alliance_left" }`. That one is renamed as
+normal — only the `"main left alliance"` row is held back. Distinguish them by
+`cause`, not by shape.
+
+Rename the fixtures at lines 23 and 269 — and every other `details` object in the
+file — as normal.
 
 - [ ] **Step 4: Update test names and prose**
 
-`e2e/account.spec.ts:293` → `test("a member still sees the first-run notice", …)`;
-line 296's seeded name `"Flygd Pilot"` → `"Member Pilot"`; line 399 →
+`e2e/account.spec.ts:330` → `test("a member still sees the first-run notice", …)`;
+line 333's seeded name `"Flygd Pilot"` → `"Member Pilot"`; line 439 →
 `test("a member who is no longer a member sees their payout row with no link to the operation", …)`
 — reword to `"a demoted member sees their payout row with no link to the operation"`
-to avoid the awkward repetition. Lines 270 and 395's comments likewise.
+to avoid the awkward repetition. Line 435's doc comment ("tier flygd. A member
+demoted out of flygd…") likewise.
+
+Line 300 → `test("an associate is not told their first sync is pending", …)`;
+line 308's seeded name `"Blue Pilot"` → `"Associate Pilot"`; lines 304-307's
+comment ("only ever writes FLYGD members' contact lists, so a blue member…")
+becomes "only ever writes MEMBER accounts' contact lists, so an associate…".
 
 - [ ] **Step 5: Run the e2e suite**
 
@@ -1284,17 +1477,28 @@ grep -rniE "flygd" src tests e2e scripts docs/ops.md .env.example playwright.con
 ```
 
 Expected: **only**
-- `src/app/layout.tsx:27` and `src/app/login/page.tsx:82` — `[FLYGD]` branding
-  strings owned by PR2
-- the retained legacy audit fixture in `e2e/audit.spec.ts` and the matching
-  case in `tests/audit-summarize.test.ts` (Task 10 Step 3)
+- `src/app/layout.tsx:27` (`"Corporation auth for Zoo Landers [FLYGD]."`) and
+  `src/app/login/page.tsx:120` (`Est. MMXXV · [FLYGD]`) — corp-ticker branding
+  strings owned by PR2, not tier names
+- the retained legacy audit fixture in `e2e/audit.spec.ts` (its `details`
+  object, its assertion, and the comment above it) and the matching case in
+  `tests/audit-summarize.test.ts` (Task 10 Step 3)
 - `docs/ops.md`'s rollback SQL, which names the old values deliberately
+
+Anything else is a miss. In particular the grep must return **nothing** from
+`src/core/`, `src/services/`, `src/jobs/`, `src/config.ts`, `scripts/`,
+`.env.example`, or `playwright.config.ts` — every one of those had hits before
+this sweep.
 
 ```bash
 grep -rnE '"(blue|green)"' src tests e2e scripts
 ```
 
 Expected: only the retained legacy audit fixture and its unit-test counterpart.
+(The word "green" appears unquoted in `e2e/shell.spec.ts:55` and
+`e2e/admin.spec.ts:931` as ordinary English about a passing test — this pattern
+requires the quotes precisely so those do not match. If you widen it, expect
+them and leave them alone.)
 
 ```bash
 grep -rn "DISCORD_ROLE_ID_\(FLYGD\|BLUE\|GREEN\)" src tests e2e scripts playwright.config.ts .env.example
