@@ -375,8 +375,21 @@ test("a member can unlink their own Discord", async ({ page, context }) => {
   await context.addCookies([await sessionCookieFor(db, member.id)]);
 
   await page.goto("/account");
+  // The control has to say what it costs before it is pressed, not after: the
+  // unlink strips every managed Discord role. Asserted through the button's
+  // own aria-describedby rather than as loose page text, because the text is
+  // only useful if it reaches a member who tabbed straight to the button —
+  // it sits AFTER the control in reading order, so the association is the
+  // whole point of it.
+  const unlink = page.getByRole("button", { name: "unlink Discord", exact: true });
+  const describedBy = await unlink.getAttribute("aria-describedby");
+  expect(describedBy).toBeTruthy();
+  await expect(page.locator(`#${describedBy}`)).toContainText(
+    "removes the Discord roles authGD manages",
+  );
+
   // Two clicks by design: ConfirmSubmit arms first, submits second.
-  await page.getByRole("button", { name: "unlink Discord", exact: true }).click();
+  await unlink.click();
   await page.getByRole("button", { name: "confirm unlink Discord", exact: true }).click();
 
   await expect(page.getByRole("link", { name: "Link Discord" })).toBeVisible();
