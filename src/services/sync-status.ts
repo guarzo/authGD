@@ -3,7 +3,7 @@ import type { Dbx } from "@/db";
 import { JOB_CRON } from "@/core/schedules";
 import { jobsFor } from "@/core/dispatch-plan";
 import { syncRun } from "@/db/schema";
-import { undispatchedPayloads } from "@/services/outbox";
+import { undispatchedSummary } from "@/services/outbox";
 
 const KNOWN_ORDER = [
   "membership",
@@ -15,12 +15,22 @@ const KNOWN_ORDER = [
   "purge",
 ];
 
+export type SyncStatusGroup = {
+  jobType: string;
+  runs: Array<typeof syncRun.$inferSelect>;
+  queued: boolean;
+  /** Oldest undispatched-row `createdAt` targeting this jobType, or null when
+   * nothing is queued for it. Per job type, not global: an "all" payload sits
+   * in the outbox once but ages the same instant for every job type it fans
+   * out to, so this is the min across every payload that maps here, not a
+   * single page-wide timestamp. */
+  queuedSince: Date | null;
+};
+
 export async function getSyncStatus(
   dbx: Dbx,
   runsPerJob = 5,
-): Promise<
-  Array<{ jobType: string; runs: Array<typeof syncRun.$inferSelect>; queued: boolean }>
-> {
+): Promise<Array<SyncStatusGroup>> {
   // One limited query per job type (~8 total): a single global row window
   // would drop rare jobs (weekly membership-recheck) behind the ~122
   // hourly/half-hourly runs recorded per day.
@@ -33,16 +43,20 @@ export async function getSyncStatus(
   const known = KNOWN_ORDER.filter((j) => all.has(j));
   const unknown = [...all].filter((j) => !KNOWN_ORDER.includes(j)).sort();
 
-  // One extra query for the whole page, not one per job type: every
-  // undispatched row's payload is expanded through the SAME mapping the
-  // dispatcher itself sends through (`jobsFor`, `@/core/dispatch-plan`), so
-  // this can never claim a job is queued that the worker would not actually
-  // enqueue. "Queued" means work targets that job type, not "you queued it" —
-  // a member-triggered account/discord-user row counts the same as an admin's.
-  const payloads = await undispatchedPayloads(dbx);
-  const queuedTypes = new Set<string>(
-    payloads.flatMap((payload) => jobsFor(payload).map((j) => j.jobType)),
-  );
+  // One extra query for the whole page, not one per job type: every distinct
+  // undispatched payload is expanded through the SAME mapping the dispatcher
+  // itself sends through (`jobsFor`, `@/core/dispatch-plan`), so this can
+  // never claim a job is queued that the worker would not actually enqueue.
+  // "Queued" means work targets that job type, not "you queued it" — a
+  // member-triggered account/discord-user row counts the same as an admin's.
+  const summary = await undispatchedSummary(dbx);
+  const queuedSinceByType = new Map<string, Date>();
+  for (const { payload, oldest } of summary) {
+    for (const { jobType } of jobsFor(payload)) {
+      const current = queuedSinceByType.get(jobType);
+      if (!current || oldest < current) queuedSinceByType.set(jobType, oldest);
+    }
+  }
 
   return Promise.all(
     [...known, ...unknown].map(async (jobType) => ({
@@ -56,7 +70,8 @@ export async function getSyncStatus(
             .orderBy(desc(syncRun.id))
             .limit(runsPerJob)
         : [],
-      queued: queuedTypes.has(jobType),
+      queued: queuedSinceByType.has(jobType),
+      queuedSince: queuedSinceByType.get(jobType) ?? null,
     })),
   );
 }

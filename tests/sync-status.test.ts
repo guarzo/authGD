@@ -98,4 +98,38 @@ describe("getSyncStatus", () => {
     const groups = await getSyncStatus(ctx.db);
     expect(groups.find((g) => g.jobType === "membership-recheck")?.queued).toBe(false);
   });
+
+  it("reports queuedSince as the oldest undispatched row targeting that job type, per job type", async () => {
+    // "all" targets membership/contacts/wanderer/discord-roles; a lone
+    // membership-recheck row is older than it but targets a different job
+    // type entirely, so it must not affect membership's queuedSince.
+    await ctx.db.insert(outbox).values({
+      payload: { kind: "membership-recheck" },
+      createdAt: new Date(2000, 0, 1),
+    });
+    await ctx.db
+      .insert(outbox)
+      .values({ payload: { kind: "all" }, createdAt: new Date(2020, 0, 1) });
+    const groups = await getSyncStatus(ctx.db);
+    const byType = new Map(groups.map((g) => [g.jobType, g]));
+    expect(byType.get("membership")?.queuedSince).toEqual(new Date(2020, 0, 1));
+    expect(byType.get("membership-recheck")?.queuedSince).toEqual(new Date(2000, 0, 1));
+    expect(byType.get("purge")?.queuedSince).toBeNull();
+  });
+
+  it("takes the min queuedSince across every payload fanning out to a job type", async () => {
+    // Two payloads both target contacts: an "all" row and an account row.
+    // contacts' queuedSince must be the older of the two, not whichever
+    // payload happens to be read last.
+    await ctx.db.insert(outbox).values({
+      payload: { kind: "account", accountId: "acc-1" },
+      createdAt: new Date(2020, 0, 1),
+    });
+    await ctx.db
+      .insert(outbox)
+      .values({ payload: { kind: "all" }, createdAt: new Date(2010, 0, 1) });
+    const groups = await getSyncStatus(ctx.db);
+    const contacts = groups.find((g) => g.jobType === "contacts");
+    expect(contacts?.queuedSince).toEqual(new Date(2010, 0, 1));
+  });
 });

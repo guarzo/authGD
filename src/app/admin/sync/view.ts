@@ -2,6 +2,7 @@ import type { RowHealth } from "@/core/run-health";
 import type { SyncRunStatus } from "@/db/schema";
 import { cronFor, isJobType, nextRunAt } from "@/core/schedules";
 import type { Tone } from "@/app/_components/ui";
+import { elapsedShort } from "@/app/_components/format-ago";
 
 /**
  * The pure decisions behind the admin sync strip.
@@ -212,35 +213,41 @@ export function queuedStamp(at: string | undefined): string | null {
  */
 export function queuedNotice(
   queued: string | undefined,
-  at?: string,
-  // Defaults to fresh so every existing caller and test keeps the promise
-  // the copy always made. The worker line above the strip is the one thing
-  // on the page that knows whether that promise is still true — a queue
-  // enqueued behind a worker that has not run in 4h will not be picked up
-  // "within a few seconds", and the notice repeating that unconditionally is
-  // exactly the reassurance PRODUCT.md's "state before action" rules out.
-  workerFresh = true,
+  at: string | undefined,
+  // Required, not defaulted: a default here would let a forgetful caller
+  // silently borrow whatever string the default implies, which is exactly
+  // how this used to assert a "few seconds" pickup regardless of whether the
+  // worker had run in 90 minutes or 4 hours. The caller already computes this
+  // for the worker line above the strip (`workerAge` in page.tsx), so passing
+  // it is one extra argument, not a lookup.
+  workerAge: string | null,
 ): string {
   const stamp = queuedStamp(at);
   const when = stamp === null ? "" : ` at ${stamp}`;
-  // Plurality is the fan-out's alone: "all" queues four distinct jobs, so the
-  // freshness clause it shares with the three singular callers below still
-  // needs to say "them" rather than "it" for that one caller.
-  const pickup = (plural: boolean): string =>
-    workerFresh
-      ? `The worker picks ${plural ? "them" : "it"} up within a few seconds`
-      : "The worker is not running right now, so this waits until it is";
+  // State the age, not a verdict about it. The old boolean read as a checked
+  // fact ("the worker is not running right now") when the check behind it
+  // (`evaluateFreshness`, 90 minutes of slack) could not actually support
+  // that within ten minutes of a worker dying, and a `null` newest run — a
+  // fresh deploy, or a purge that emptied sync_run — collapsed into the same
+  // "not running" claim from the absence of any evidence either way. The age
+  // itself is the whole differentiator: a worker that ran 30s ago and one
+  // that ran 89 minutes ago both get this sentence, honestly dated, so fresh
+  // and stale need no separate strings and no second threshold constant.
+  const worker =
+    workerAge === null
+      ? "No runs have been recorded yet, so there is nothing to date the worker by"
+      : `The worker last ran ${workerAge} ago`;
   if (queued === "all") {
     // The four job keys the fan-out actually enqueues, spelled the way the
     // strip above spells them, so the nouns are findable in the column the
     // admin is looking at rather than translated into a second vocabulary.
-    return `membership, contacts, wanderer and discord-roles queued for every account${when}. ${pickup(true)}; reload this page to see the runs land.`;
+    return `membership, contacts, wanderer and discord-roles queued for every account${when}. ${worker}; reload this page to see the runs land.`;
   }
   if (queued === "recheck") {
-    return `Affiliation recheck queued${when}. ${pickup(false)}; reload this page to see the run land.`;
+    return `Affiliation recheck queued${when}. ${worker}; reload this page to see the run land.`;
   }
   if (isJobType(queued)) {
-    return `${queued} queued${when}. ${pickup(false)}; reload this page to see the run land.`;
+    return `${queued} queued${when}. ${worker}; reload this page to see the run land.`;
   }
   return "";
 }
@@ -274,4 +281,47 @@ export function evidenceSince(
     }
   }
   return oldest;
+}
+
+/**
+ * The dispatcher polls the outbox every ~2s (`startDispatcher`,
+ * src/worker/dispatcher.ts), so a queued marker under this age is the normal
+ * gap between an enqueue and the next poll, not a finding — every "Sync now"
+ * press spends a moment here, and stating an age on it would manufacture
+ * urgency out of routine latency.
+ */
+export const QUEUED_AGE_NOTABLE_MS = 2 * 60 * 1000;
+
+/**
+ * Ten times `QUEUED_AGE_NOTABLE_MS`: past this the dispatcher is not merely
+ * behind its ~2s poll, it is wedged. `startDispatcher` swallows a dispatch
+ * failure into `console.error` and retries forever rather than surfacing it
+ * anywhere else on this page, so the marker is the only thing that can.
+ */
+export const QUEUED_AGE_STUCK_MS = 15 * 60 * 1000;
+
+/**
+ * Whether the queued ring's own shape should escalate past the quiet outline
+ * every row with work queued already gets. Kept separate from
+ * `queuedMarkerText` below only so the visible (aria-hidden) dot and the
+ * accessible sentence can each read the one instant they need without
+ * duplicating the threshold between them.
+ */
+export function queuedMarkerStuck(queuedSince: Date, now: Date): boolean {
+  return now.getTime() - queuedSince.getTime() >= QUEUED_AGE_STUCK_MS;
+}
+
+/**
+ * The accessible words beside the ring. Below `QUEUED_AGE_NOTABLE_MS` this is
+ * the bare ", queued" the marker has always carried — the common case, work
+ * that has not yet had its next ~2s dispatcher poll, and naming an age on it
+ * would be noise on every healthy row it appears on. Past it, the age is the
+ * finding: "queued 5m ago" says the dispatcher is behind, and past
+ * `QUEUED_AGE_STUCK_MS` it says so about a process that is not coming back on
+ * its own.
+ */
+export function queuedMarkerText(queuedSince: Date, now: Date): string {
+  const ageMs = now.getTime() - queuedSince.getTime();
+  if (ageMs < QUEUED_AGE_NOTABLE_MS) return ", queued";
+  return `, queued ${elapsedShort(ageMs)} ago`;
 }
