@@ -57,9 +57,9 @@ beforeAll(async () => {
     DISCORD_CLIENT_SECRET: "d",
     DISCORD_BOT_TOKEN: "d",
     DISCORD_GUILD_ID: "1",
-    DISCORD_ROLE_ID_FLYGD: "10",
-    DISCORD_ROLE_ID_BLUE: "11",
-    DISCORD_ROLE_ID_GREEN: "12",
+    DISCORD_ROLE_ID_MEMBER: "10",
+    DISCORD_ROLE_ID_ASSOCIATE: "11",
+    DISCORD_ROLE_ID_ALUMNI: "12",
     WANDERER_BASE_URL: "https://w.example",
     WANDERER_API_KEY: "k",
     WANDERER_ACL_ID: "a",
@@ -84,11 +84,11 @@ const demote = (actor: string, accountId: string) =>
 const wake = (accountId: string) => ctx.db.transaction((tx) => wakeSelf(tx, accountId));
 
 describe("handleEveLogin", () => {
-  it("creates a pending account with outbox + audit, not a green one", async () => {
+  it("creates a pending account with outbox + audit, not an alumni one", async () => {
     const { accountId } = await login(ch());
     const [acc] = await ctx.db.select().from(account).where(eq(account.id, accountId));
-    // Pending, not green: a first login grants no tier and no Discord role.
-    // The membership sync promotes it to flygd once it confirms the main is in
+    // Pending, not alumni: a first login grants no tier and no Discord role.
+    // The membership sync promotes it to member once it confirms the main is in
     // the alliance; anyone else waits for an admin.
     expect(acc.tier).toBe("pending");
     expect(acc.tierLocked).toBe(false);
@@ -117,10 +117,10 @@ describe("handleEveLogin", () => {
 
   it("reclaims a sold character: unlinks, demotes old account, revokes its sessions", async () => {
     const old = await login(ch());
-    // make old account flygd so we can observe demotion
+    // make old account member so we can observe demotion
     await ctx.db
       .update(account)
-      .set({ tier: "flygd" })
+      .set({ tier: "member" })
       .where(eq(account.id, old.accountId));
     const sid = await createSession(ctx.db, old.accountId);
 
@@ -132,7 +132,7 @@ describe("handleEveLogin", () => {
       .from(account)
       .where(eq(account.id, old.accountId));
     expect(oldAcc.mainCharacterId).toBeNull();
-    expect(oldAcc.tier).toBe("green");
+    expect(oldAcc.tier).toBe("alumni");
     expect(await getSessionAccount(ctx.db, sid)).toBeNull();
 
     const [chr] = await ctx.db.select().from(character);
@@ -163,11 +163,11 @@ describe("linkCharacter", () => {
     await link(a.accountId, ch({ characterId: 90000004, characterName: "Spare" }));
     await ctx.db
       .update(account)
-      .set({ tier: "blue", tierLocked: true })
+      .set({ tier: "associate", tierLocked: true })
       .where(eq(account.id, a.accountId));
     expect(await unlink("system", 90000001)).toEqual({ ok: true });
     const [acc] = await ctx.db.select().from(account);
-    expect(acc.tier).toBe("blue");
+    expect(acc.tier).toBe("associate");
     expect(acc.mainCharacterId).toBeNull();
   });
 
@@ -257,7 +257,7 @@ describe("linkCharacter", () => {
   });
 
   it("flags an unlink of the main character, which is what triggers the derole", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    const acc = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, cfg, {
       id: 90000001,
       accountId: acc.id,
@@ -276,8 +276,8 @@ describe("linkCharacter", () => {
     // The unlink row still precedes the derole row it explains.
     const tier = audits.find((a) => a.action === "tier.changed");
     expect(tier?.details).toMatchObject({
-      from: "flygd",
-      to: "green",
+      from: "member",
+      to: "alumni",
       cause: "main unlinked",
     });
     expect(unlinked!.id).toBeLessThan(tier!.id);
@@ -286,7 +286,7 @@ describe("linkCharacter", () => {
 
 describe("linkCharacter absorbing an accidental account", () => {
   it("folds a bare single-character account into the caller's account", async () => {
-    const main = await seedAccount(ctx.db, { tier: "flygd" });
+    const main = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, cfg, { id: 90000301, accountId: main.id, main: true });
     // The accident: a fresh SSO login created its own account for this char.
     const stray = await ctx.db.transaction((tx) =>
@@ -309,7 +309,7 @@ describe("linkCharacter absorbing an accidental account", () => {
   });
 
   it("deletes the absorbed account's sessions", async () => {
-    const main = await seedAccount(ctx.db, { tier: "flygd" });
+    const main = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, cfg, { id: 90000311, accountId: main.id, main: true });
     const stray = await ctx.db.transaction((tx) =>
       handleEveLogin(tx, cfg, ch({ characterId: 90000312, ownerHash: "oh-312" })),
@@ -328,7 +328,7 @@ describe("linkCharacter absorbing an accidental account", () => {
   });
 
   it("adopts the character as main when the target has none", async () => {
-    const main = await seedAccount(ctx.db, { tier: "green" });
+    const main = await seedAccount(ctx.db, { tier: "alumni" });
     await seedCharacter(ctx.db, cfg, { id: 90000321, accountId: main.id });
     await ctx.db
       .update(account)
@@ -347,7 +347,7 @@ describe("linkCharacter absorbing an accidental account", () => {
   });
 
   it("audits the merge and leaves the source's own audit rows unresolved", async () => {
-    const main = await seedAccount(ctx.db, { tier: "flygd" });
+    const main = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, cfg, { id: 90000331, accountId: main.id, main: true });
     const stray = await ctx.db.transaction((tx) =>
       handleEveLogin(tx, cfg, ch({ characterId: 90000332, ownerHash: "oh-332" })),
@@ -390,7 +390,7 @@ describe("linkCharacter refusing a real account", () => {
     blocker: MergeBlocker,
     mutate: (accountId: string) => Promise<unknown>,
   ) => {
-    const main = await seedAccount(ctx.db, { tier: "flygd" });
+    const main = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, cfg, { id: 90000401, accountId: main.id, main: true });
     const stray = await ctx.db.transaction((tx) =>
       handleEveLogin(tx, cfg, ch({ characterId: 90000402, ownerHash: "oh-402" })),

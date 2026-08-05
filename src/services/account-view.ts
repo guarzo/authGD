@@ -19,8 +19,8 @@ import { isContactsTarget } from "@/services/desired";
  * Sourced from `sync_run` rather than from per-character state, which reads
  * like the more precise choice and is not:
  *
- * - `contact_sync_state` is keyed by the FLYGD character whose contact list is
- *   written (src/jobs/contacts.ts). A blue or green member is the *content* of
+ * - `contact_sync_state` is keyed by the member character whose contact list is
+ *   written (src/jobs/contacts.ts). An associate or alumni member is the *content* of
  *   that push, never a target, so their rows are structurally absent — a
  *   per-character aggregate would tell most of the corp "never run" forever.
  * - `wanderer_acl_observation` is a delete-and-replace snapshot of current ACL
@@ -96,7 +96,7 @@ export async function getPushStatus(
 }
 
 export interface AccountView {
-  tier: "pending" | "flygd" | "blue" | "green";
+  tier: "pending" | "member" | "associate" | "alumni";
   status: "active" | "cryo";
   isAdmin: boolean;
   mainCharacterId: number | null;
@@ -109,7 +109,7 @@ export interface AccountView {
     needsReauthForScopes: boolean;
     /**
      * Whether the contacts job writes THIS character's contact list, i.e.
-     * whether it is in `getFlygdCharacters`. False for every blue and green
+     * whether it is in `getMemberCharacters`. False for every associate and alumni
      * member — their standing is the content of someone else's push, never a
      * target — and for a character CCP reports as gone.
      *
@@ -209,7 +209,7 @@ export interface AdminCharacterRow {
 export interface AdminAccountRow {
   accountId: string;
   isAdmin: boolean;
-  tier: "pending" | "flygd" | "blue" | "green";
+  tier: "pending" | "member" | "associate" | "alumni";
   tierLocked: boolean;
   tierChangedAt: Date | null;
   tierChangedByName: string | null;
@@ -227,7 +227,7 @@ export interface AdminAccountRow {
 export type AdminListSort = "name" | "tier" | "status" | "tierChangedAt";
 
 export interface AdminListFilters {
-  tier?: "pending" | "flygd" | "blue" | "green";
+  tier?: "pending" | "member" | "associate" | "alumni";
   status?: "active" | "cryo";
   sort?: AdminListSort;
   dir?: "asc" | "desc";
@@ -237,7 +237,7 @@ export interface AdminListFilters {
 // on, so the tier-sorted view puts the queue at the top. This is NOT how an
 // admin finds the queue — the table defaults to name sort — see the pending
 // count link on the accounts page.
-const TIER_RANK = { pending: 0, flygd: 1, blue: 2, green: 3 } as const;
+const TIER_RANK = { pending: 0, member: 1, associate: 2, alumni: 3 } as const;
 
 export async function getAdminAccountsList(
   dbx: Dbx,
@@ -366,7 +366,7 @@ export async function getAdminAccountsList(
  */
 export async function countAccountsByTier(
   dbx: Dbx,
-  tier: "pending" | "flygd" | "blue" | "green",
+  tier: "pending" | "member" | "associate" | "alumni",
 ): Promise<number> {
   const [row] = await dbx
     .select({ n: count() })

@@ -71,14 +71,14 @@ function fakeWanderer(
   return { client, members: () => members, reads: () => reads };
 }
 
-async function seedFlygdChar(id: number) {
-  const acc = await seedAccount(ctx.db, { tier: "flygd" });
+async function seedMemberChar(id: number) {
+  const acc = await seedAccount(ctx.db, { tier: "member" });
   await seedCharacter(ctx.db, cfg, { id, accountId: acc.id, main: true });
 }
 
 describe("runWandererJob", () => {
   it("adds desired, removes undesired (never admins), persists the POST-mutation read", async () => {
-    await seedFlygdChar(1);
+    await seedMemberChar(1);
     const w = fakeWanderer([
       { characterId: 2, role: "member" },
       { characterId: 3, role: "admin" },
@@ -103,7 +103,7 @@ describe("runWandererJob", () => {
   });
 
   it("aborts before ANY mutation when the initial read fails", async () => {
-    await seedFlygdChar(1);
+    await seedMemberChar(1);
     const w = fakeWanderer([{ characterId: 2, role: "member" }], { failFirstRead: true });
     await expect(
       runWandererJob({ db: ctx.db, cfg, wanderer: w.client }),
@@ -113,7 +113,7 @@ describe("runWandererJob", () => {
   });
 
   it("alerts the ops webhook on a PERMANENT initial read failure (e.g. rotated API key)", async () => {
-    await seedFlygdChar(1);
+    await seedMemberChar(1);
     const w = fakeWanderer([{ characterId: 2, role: "member" }], {
       permanentFirstReadFailure: true,
     });
@@ -137,7 +137,7 @@ describe("runWandererJob", () => {
   });
 
   it("does NOT alert the ops webhook on a transient initial read failure", async () => {
-    await seedFlygdChar(1);
+    await seedMemberChar(1);
     const w = fakeWanderer([{ characterId: 2, role: "member" }], { failFirstRead: true });
     const webhook = vi.fn(async () => new Response("", { status: 200 }));
     await expect(
@@ -152,7 +152,7 @@ describe("runWandererJob", () => {
   });
 
   it("persists the initial read as the observation when nothing needs mutating", async () => {
-    await seedFlygdChar(1);
+    await seedMemberChar(1);
     const w = fakeWanderer([{ characterId: 1, role: "member" }]);
     await runWandererJob({ db: ctx.db, cfg, wanderer: w.client });
     expect(w.reads()).toBe(1);
@@ -162,7 +162,7 @@ describe("runWandererJob", () => {
   });
 
   it("still re-reads and persists after a partial mutation failure, then retries", async () => {
-    await seedFlygdChar(1);
+    await seedMemberChar(1);
     const w = fakeWanderer(
       [
         { characterId: 2, role: "member" },
@@ -180,7 +180,7 @@ describe("runWandererJob", () => {
   });
 
   it("unblocks a desired blocked member and observes the new role", async () => {
-    await seedFlygdChar(1);
+    await seedMemberChar(1);
     const w = fakeWanderer([{ characterId: 1, role: "blocked" }]);
     const result = await runWandererJob({ db: ctx.db, cfg, wanderer: w.client });
     expect(result.status).toBe("ok");
@@ -193,7 +193,7 @@ describe("runWandererJob", () => {
   });
 
   it("does NOT retry when every failure was permanent", async () => {
-    await seedFlygdChar(1);
+    await seedMemberChar(1);
     const w = fakeWanderer(
       [
         { characterId: 1, role: "viewer" },
@@ -208,8 +208,8 @@ describe("runWandererJob", () => {
   });
 
   it("records the role a removed member held", async () => {
-    // 1 is desired (a flygd main); 2 is not, and holds an elevated grant.
-    await seedFlygdChar(1);
+    // 1 is desired (a member main); 2 is not, and holds an elevated grant.
+    await seedMemberChar(1);
     const w = fakeWanderer([
       { characterId: 1, role: "member" },
       { characterId: 2, role: "manager" },
@@ -227,7 +227,7 @@ describe("runWandererJob", () => {
     // wanderer.removed row can carry either. Removing a blocked entry would be
     // equivalent to un-banning. This is what stops a later "record a cause"
     // change from quietly widening what a removal row can say.
-    await seedFlygdChar(1);
+    await seedMemberChar(1);
     const w = fakeWanderer([
       { characterId: 1, role: "member" },
       { characterId: 2, role: "admin" },
@@ -239,7 +239,7 @@ describe("runWandererJob", () => {
   });
 
   it("leaves the previous observation untouched when the re-read fails", async () => {
-    await seedFlygdChar(1);
+    await seedMemberChar(1);
     await ctx.db.insert(wandererAclObservation).values({
       characterId: 42,
       role: "member",

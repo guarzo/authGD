@@ -33,8 +33,8 @@ async function getAccount(id: string) {
 }
 
 describe("runMembershipJob", () => {
-  it("promotes green → flygd on a confirmed main in alliance, transactionally with the outbox row", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "green" });
+  it("promotes alumni → member on a confirmed main in alliance, transactionally with the outbox row", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "alumni" });
     await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
     const result = await runMembershipJob({
       db: ctx.db,
@@ -44,7 +44,7 @@ describe("runMembershipJob", () => {
     expect(result.status).toBe("ok");
     expect(result.counts).toMatchObject({ promoted: 1, demoted: 0 });
     const after = await getAccount(acc.id);
-    expect(after.tier).toBe("flygd");
+    expect(after.tier).toBe("member");
     expect(after.tierChangedBy).toBe("system");
     const outboxRows = await ctx.db.select().from(outbox);
     expect(outboxRows.map((r) => r.payload)).toContainEqual({
@@ -57,29 +57,29 @@ describe("runMembershipJob", () => {
     );
   });
 
-  it("demotes flygd → green when the main left the alliance", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+  it("demotes member → alumni when the main left the alliance", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, cfg, { id: 2, accountId: acc.id, main: true });
     await runMembershipJob({ db: ctx.db, cfg, esi: esiWith({ 2: null }) });
-    expect((await getAccount(acc.id)).tier).toBe("green");
+    expect((await getAccount(acc.id)).tier).toBe("alumni");
   });
 
   it("never touches tier_locked accounts", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "flygd", tierLocked: true });
+    const acc = await seedAccount(ctx.db, { tier: "member", tierLocked: true });
     await seedCharacter(ctx.db, cfg, { id: 3, accountId: acc.id, main: true });
     await runMembershipJob({ db: ctx.db, cfg, esi: esiWith({ 3: null }) });
-    expect((await getAccount(acc.id)).tier).toBe("flygd");
+    expect((await getAccount(acc.id)).tier).toBe("member");
   });
 
   it("skips null-main accounts", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    const acc = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, cfg, { id: 4, accountId: acc.id }); // not main
     await runMembershipJob({ db: ctx.db, cfg, esi: esiWith({ 4: null }) });
-    expect((await getAccount(acc.id)).tier).toBe("flygd");
+    expect((await getAccount(acc.id)).tier).toBe("member");
   });
 
   it("leaves accounts with unresolved mains untouched and retries", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    const acc = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, cfg, { id: 5, accountId: acc.id, main: true });
     const esi = {
       postAffiliation: async (): Promise<Affiliation[]> => {
@@ -89,11 +89,11 @@ describe("runMembershipJob", () => {
     await expect(runMembershipJob({ db: ctx.db, cfg, esi })).rejects.toBeInstanceOf(
       JobRetryError,
     );
-    expect((await getAccount(acc.id)).tier).toBe("flygd"); // an ESI outage can never mass-demote
+    expect((await getAccount(acc.id)).tier).toBe("member"); // an ESI outage can never mass-demote
   });
 
   it("flags only bisected 400 ids as affiliation_invalid and audits them", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "green" });
+    const acc = await seedAccount(ctx.db, { tier: "alumni" });
     await seedCharacter(ctx.db, cfg, { id: 6, accountId: acc.id, main: true });
     await seedCharacter(ctx.db, cfg, { id: 7, accountId: acc.id });
     const esi = {
@@ -139,16 +139,16 @@ describe("runMembershipJob", () => {
   });
 
   it("scopes to one account when accountId is passed", async () => {
-    const a1 = await seedAccount(ctx.db, { tier: "green" });
-    const a2 = await seedAccount(ctx.db, { tier: "green" });
+    const a1 = await seedAccount(ctx.db, { tier: "alumni" });
+    const a2 = await seedAccount(ctx.db, { tier: "alumni" });
     await seedCharacter(ctx.db, cfg, { id: 10, accountId: a1.id, main: true });
     await seedCharacter(ctx.db, cfg, { id: 11, accountId: a2.id, main: true });
     await runMembershipJob(
       { db: ctx.db, cfg, esi: esiWith({ 10: 99000001, 11: 99000001 }) },
       { accountId: a1.id },
     );
-    expect((await getAccount(a1.id)).tier).toBe("flygd");
-    expect((await getAccount(a2.id)).tier).toBe("green"); // untouched
+    expect((await getAccount(a1.id)).tier).toBe("member");
+    expect((await getAccount(a2.id)).tier).toBe("alumni"); // untouched
   });
 
   it("labels recheck runs membership-recheck in sync_run (F7)", async () => {
@@ -162,7 +162,7 @@ describe("runMembershipJob", () => {
   });
 
   it("a slower OLDER run cannot overwrite a newer overlapping run or transition on it", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    const acc = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
     // GENUINELY overlapping runs: the newer run executes entirely inside the
     // older run's external ESI phase — i.e. after the older run captured its
@@ -186,12 +186,12 @@ describe("runMembershipJob", () => {
     const [ch] = await ctx.db.select().from(character).where(eq(character.id, 1));
     expect(ch.allianceId).toBe(99000001); // the newer (inner) run's write survives
     const after = await getAccount(acc.id);
-    expect(after.tier).toBe("flygd"); // no demotion from the stale outer read
+    expect(after.tier).toBe("member"); // no demotion from the stale outer read
     expect(result.counts).toMatchObject({ demoted: 0, stale: 1 });
   });
 
   it("a losing invalid-flag write is neither flagged nor audited, and counts stale", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    const acc = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
     // Same overlap shape: a newer run confirms the character VALID while the
     // older run's ESI phase is in flight; the older run then 400-bisects the
@@ -218,7 +218,7 @@ describe("runMembershipJob", () => {
   });
 
   it("applyTierTransition refuses when the run's write was superseded before the transaction", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    const acc = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
     const myToken = new Date("2026-08-03T10:00:00Z");
     const newerToken = new Date("2026-08-03T10:00:01Z");
@@ -235,16 +235,16 @@ describe("runMembershipJob", () => {
     const applied = await applyTierTransition(ctx.db, {
       accountId: acc.id,
       mainCharacterId: 1,
-      next: "green",
+      next: "alumni",
       checkedAt: myToken,
     });
     expect(applied).toBe(false);
-    expect((await getAccount(acc.id)).tier).toBe("flygd");
+    expect((await getAccount(acc.id)).tier).toBe("member");
     expect(await ctx.db.select().from(outbox)).toHaveLength(0); // nothing enqueued
   });
 
   it("applyTierTransition applies when its write is still the latest", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    const acc = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
     const myToken = new Date("2026-08-03T10:00:00Z");
     await ctx.db
@@ -254,11 +254,11 @@ describe("runMembershipJob", () => {
     const applied = await applyTierTransition(ctx.db, {
       accountId: acc.id,
       mainCharacterId: 1,
-      next: "green",
+      next: "alumni",
       checkedAt: myToken,
     });
     expect(applied).toBe(true);
-    expect((await getAccount(acc.id)).tier).toBe("green");
+    expect((await getAccount(acc.id)).tier).toBe("alumni");
     expect(await ctx.db.select().from(outbox)).toHaveLength(1);
   });
 });

@@ -82,7 +82,7 @@ test("account page shows characters, main marker, and tier", async ({
 }) => {
   const acc = await seedMember(db, {
     name: "Pilot Prime",
-    tier: "flygd",
+    tier: "member",
     alts: ["Pilot Alt"],
   });
   await context.addCookies([await sessionCookieFor(db, acc.id)]);
@@ -91,10 +91,8 @@ test("account page shows characters, main marker, and tier", async ({
   await expect(page.getByText("Pilot Prime")).toBeVisible();
   await expect(page.getByText("(main)")).toBeVisible();
   await expect(page.getByText("Pilot Alt")).toBeVisible();
-  // "flygd" also happens to be STANDINGS_LABEL in the e2e env, which the page
-  // renders again in the contacts note now attached to the STANDINGS column —
-  // so scope to the tier field rather than matching the bare word.
-  await expect(page.locator("[data-field='tier']")).toContainText("flygd");
+  // STANDINGS_LABEL is "authgd" in the e2e env, which the page echoes.
+  await expect(page.locator("[data-field='tier']")).toContainText("member");
 });
 
 test("the contacts note describes the column via a table caption, and shows visible prose only where it explains something", async ({
@@ -103,10 +101,10 @@ test("the contacts note describes the column via a table caption, and shows visi
 }) => {
   const acc = await seedMember(db, {
     name: "Synced Main",
-    tier: "flygd",
+    tier: "member",
     alts: ["Unsynced Alt"],
   });
-  // FLYGD, because only a FLYGD account's characters are contacts targets at
+  // MEMBER, because only a member account's characters are contacts targets at
   // all — the note explains a column that says nothing to anyone else. Only the
   // main has ever synced, so the alt's never-run state is one the note explains
   // and the note earns its space above the manifest.
@@ -122,7 +120,7 @@ test("the contacts note describes the column via a table caption, and shows visi
   // any cell in the CONTACTS column, unlike a `<th>`'s aria-describedby, which
   // only ever reached the header.
   const caption = page.locator("table.log caption");
-  await expect(caption).toHaveText(/authGD owns the flygd contact label/);
+  await expect(caption).toHaveText(/authGD owns the authgd contact label/);
   await expect(caption).toHaveClass(/visually-hidden/);
   await expect(page.locator("[title]")).toHaveCount(0);
   await expect(page.locator(".footnote")).toHaveCount(0);
@@ -150,7 +148,7 @@ test("the contacts note describes the column via a table caption, and shows visi
     0,
   );
   await expect(page.locator("table.log caption")).toHaveText(
-    /authGD owns the flygd contact label/,
+    /authGD owns the authgd contact label/,
   );
 });
 
@@ -160,7 +158,7 @@ test("unlink is quiet at rest and lands on one vertical with make main", async (
 }) => {
   const acc = await seedMember(db, {
     name: "Pilot Prime",
-    tier: "green",
+    tier: "alumni",
     alts: ["Pilot Alt"],
   });
   await context.addCookies([await sessionCookieFor(db, acc.id)]);
@@ -206,7 +204,7 @@ test("unlink arms on the first click, confirms on the second, and Escape disarms
 }) => {
   const acc = await seedMember(db, {
     name: "Pilot Prime",
-    tier: "green",
+    tier: "alumni",
     alts: ["Pilot Alt"],
   });
   await context.addCookies([await sessionCookieFor(db, acc.id)]);
@@ -260,7 +258,7 @@ test("sync schedule reports per surface, and drops Discord when it isn't linked"
   page,
   context,
 }) => {
-  const acc = await seedMember(db, { name: "Pilot Prime", tier: "flygd" });
+  const acc = await seedMember(db, { name: "Pilot Prime", tier: "member" });
   // Contacts has pushed; wanderer has not. Discord is not linked at all, which
   // is a different state from "the job has not run" and must read differently.
   await db.insert(syncRun).values({
@@ -297,15 +295,15 @@ test("sync schedule reports per surface, and drops Discord when it isn't linked"
   expect(nextEdges[0]).toBe(nextEdges[1]);
 });
 
-test("a blue member is not told their first sync is pending", async ({
+test("an associate is not told their first sync is pending", async ({
   page,
   context,
 }) => {
-  // The contacts job only ever writes FLYGD members' contact lists, so a blue
-  // member accrues no per-character result and never will. Reading that
+  // The contacts job only ever writes MEMBER accounts' contact lists, so an
+  // associate accrues no per-character result and never will. Reading that
   // absence as "not yet run" told most of the corp their first sync was
   // pending, permanently.
-  const acc = await seedMember(db, { name: "Blue Pilot", tier: "blue" });
+  const acc = await seedMember(db, { name: "Associate Pilot", tier: "associate" });
   await context.addCookies([await sessionCookieFor(db, acc.id)]);
   await page.goto("/account");
 
@@ -320,17 +318,17 @@ test("a blue member is not told their first sync is pending", async ({
   await expect(page.getByRole("heading", { name: "Sync schedule" })).toBeVisible();
   // The contact-label note stays in the accessible tree as the whole table's
   // caption, but it is not visible copy: authGD writes no contact label on a
-  // blue member's characters, so there is nothing for it to explain.
+  // associate member's characters, so there is nothing for it to explain.
   await expect(page.locator("table.log caption")).toHaveClass(/visually-hidden/);
   await expect(page.locator("p.table-note", { hasText: "authGD owns the" })).toHaveCount(
     0,
   );
 });
 
-test("a flygd member still sees the first-run notice", async ({ page, context }) => {
+test("a member still sees the first-run notice", async ({ page, context }) => {
   // The notice is correct here and must survive: this account has a target
   // character, and it has no recorded result yet.
-  const acc = await seedMember(db, { name: "Flygd Pilot", tier: "flygd" });
+  const acc = await seedMember(db, { name: "Member Pilot", tier: "member" });
   await context.addCookies([await sessionCookieFor(db, acc.id)]);
   await page.goto("/account");
   await expect(page.getByText("First sync has not run yet")).toBeVisible();
@@ -350,7 +348,7 @@ test("the first-run notice promises Discord roles once Discord is linked", async
   page,
   context,
 }) => {
-  const acc = await seedMember(db, { name: "Linked Pilot", tier: "flygd" });
+  const acc = await seedMember(db, { name: "Linked Pilot", tier: "member" });
   await db.insert(discordLink).values({
     accountId: acc.id,
     discordUserId: "606060606060606060",
@@ -367,7 +365,7 @@ test("the first-run notice promises Discord roles once Discord is linked", async
 });
 
 test("a member can unlink their own Discord", async ({ page, context }) => {
-  const member = await seedMember(db, { name: "Pilot", tier: "green" });
+  const member = await seedMember(db, { name: "Pilot", tier: "alumni" });
   await db.insert(discordLink).values({
     accountId: member.id,
     discordUserId: "duid-e2e",
@@ -411,7 +409,7 @@ test("sync schedule is omitted entirely before any character is linked", async (
 }) => {
   // An account with nothing linked has nothing being pushed for it; three
   // "not yet run" rows would read as a broken system rather than an empty one.
-  const [acc] = await db.insert(account).values({ tier: "green" }).returning();
+  const [acc] = await db.insert(account).values({ tier: "alumni" }).returning();
   await context.addCookies([await sessionCookieFor(db, acc.id)]);
   await page.goto("/account");
   await expect(page.getByRole("heading", { name: "Your account" })).toBeVisible();
@@ -424,7 +422,7 @@ test("unlinking a character that already left the account lands on a styled noti
 }) => {
   const acc = await seedMember(db, {
     name: "Pilot Prime",
-    tier: "green",
+    tier: "alumni",
     alts: ["Pilot Alt"],
   });
   await context.addCookies([await sessionCookieFor(db, acc.id)]);
@@ -452,20 +450,20 @@ test("unlinking a character that already left the account lands on a styled noti
 
 /**
  * Reading your own history needs only a session; reading an OPERATION needs
- * tier flygd. A member demoted out of flygd still gets the answer to "did I
+ * tier member. A member demoted out of member still gets the answer to "did I
  * get paid for that Thursday roam" — as plain text, because a link would
  * silently redirect them straight back to this page.
  */
-test("a member who is no longer flygd sees their payout row with no link to the operation", async ({
+test("a demoted member sees their payout row with no link to the operation", async ({
   page,
   context,
 }) => {
   const operator = await seedMember(db, {
     name: "FC Prime",
-    tier: "flygd",
+    tier: "member",
     status: "active",
   });
-  const member = await seedMember(db, { name: "Demoted Pilot", tier: "green" });
+  const member = await seedMember(db, { name: "Demoted Pilot", tier: "alumni" });
 
   const [op] = await db
     .insert(payoutOperation)

@@ -44,15 +44,15 @@ test.afterAll(() => pool.end());
 test.beforeEach(() => resetDb(db));
 
 async function seedWorld() {
-  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
-  await seedMember(db, { name: "Azzy", tier: "green", status: "cryo" });
-  await seedMember(db, { name: "Zed", tier: "flygd" });
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
+  await seedMember(db, { name: "Azzy", tier: "alumni", status: "cryo" });
+  await seedMember(db, { name: "Zed", tier: "member" });
   return admin;
 }
 
 /** Enough rows that the accounts table overflows the capped scroll region. */
 async function seedDenseWorld() {
-  const admin = await seedMember(db, { name: "Aaa Boss", tier: "flygd", isAdmin: true });
+  const admin = await seedMember(db, { name: "Aaa Boss", tier: "member", isAdmin: true });
   for (let i = 0; i < 24; i++) {
     await seedMember(db, { name: `Member ${String(i).padStart(2, "0")}` });
   }
@@ -154,7 +154,7 @@ test("admin list sorts by name and by tier, and filters cryo", async ({
   const mains = page.locator(`${ROWS} > td:first-child .row-toggle`);
   await expect(mains).toHaveText(["Azzy", "Boss", "Zed"]); // default name asc
   await page.getByRole("link", { name: "Tier", exact: true }).click();
-  await expect(mains.first()).toHaveText(/Boss|Zed/); // flygd ranks first
+  await expect(mains.first()).toHaveText(/Boss|Zed/); // member ranks first
   await page.goto("/admin/accounts?status=cryo");
   await expect(mains).toHaveText(["Azzy"]);
 });
@@ -173,16 +173,16 @@ test("tier and cryo read as values; their controls live behind the row expander"
   await expect(page.locator(`${ROWS} > td:nth-child(2) button`)).toHaveCount(0);
   await expect(page.locator(`${ROWS} > td:nth-child(3) button`)).toHaveCount(0);
   const zedRow = rowFor(page, "Zed");
-  await expect(zedRow.locator("td:nth-child(2) .tier")).toHaveText(/flygd/);
+  await expect(zedRow.locator("td:nth-child(2) .tier")).toHaveText(/member/);
   // The tier controls name their row in their accessible name, so match on that
-  // rather than on the visible word alone — `name: "blue"` now matches nothing
+  // rather than on the visible word alone — `name: "associate"` now matches nothing
   // at all, and toBeHidden() is satisfied by an element that does not exist.
   //
   // Scoped to the drawer rather than the row: the drawer is the row's sibling
   // now, so a control inside it is not a descendant of the collapsed row and
   // `zedRow.getByRole(...)` would find nothing whether the rule holds or not.
   await expect(
-    drawerOf(zedRow).getByRole("button", { name: "Set Zed to blue" }),
+    drawerOf(zedRow).getByRole("button", { name: "Set Zed to associate" }),
   ).toBeHidden();
 });
 
@@ -274,11 +274,11 @@ test("tier controls: manual set locks; return-to-auto unlocks", async ({
   const zedRow = rowFor(page, "Zed");
   const zedDrawer = drawerOf(zedRow);
   await toggleOf(zedRow).click();
-  await zedDrawer.getByRole("button", { name: "Set Zed to blue" }).click();
+  await zedDrawer.getByRole("button", { name: "Set Zed to associate" }).click();
   // The lock mark is a CSS ::after (see ui.tsx/globals.css), not text, so it's
   // asserted via the element it's drawn on rather than getByText.
   await expect(zedRow.locator(".tier__lock")).toBeVisible();
-  await expect(zedRow.locator(".tier")).toHaveText(/blue/);
+  await expect(zedRow.locator(".tier")).toHaveText(/associate/);
   // The drawer holds the controls, so it has to survive the revalidation the
   // server action triggers or the next click has nothing to land on. The open
   // state is React state in Disclosure and the closed drawer row is
@@ -359,8 +359,8 @@ test("the skip link moves focus to the main landmark", async ({ page, context })
 });
 
 test("an admin can unlink a member's Discord", async ({ page, context }) => {
-  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
-  const member = await seedMember(db, { name: "Pilot", tier: "green" });
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
+  const member = await seedMember(db, { name: "Pilot", tier: "alumni" });
   await db.insert(discordLink).values({
     accountId: member.id,
     discordUserId: "duid-e2e",
@@ -394,9 +394,9 @@ test("an admin can unlink a member's Discord", async ({ page, context }) => {
  */
 
 async function seedQueue() {
-  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
   const waiting = await seedMember(db, { name: "Waiting Pilot", tier: "pending" });
-  await seedMember(db, { name: "Settled Pilot", tier: "green" });
+  await seedMember(db, { name: "Settled Pilot", tier: "alumni" });
   return { admin, waiting };
 }
 
@@ -437,13 +437,13 @@ test("an admin reaches the queue from the count link and approves", async ({
   const drawer = drawerOf(row);
   await toggleOf(row).click();
   // Named for the row like every other per-account control: the visible label
-  // is "Approve as Green" on every queued account, and this is the press that
+  // is "Approve as Alumni" on every queued account, and this is the press that
   // grants someone access. The row goes after the visible label rather than
   // inside it, so the label survives as one contiguous run of the accessible
   // name and speech input can still reach the button by what is written on it
   // (WCAG 2.5.3) — the same convention the Actions cell uses.
   await drawer
-    .getByRole("button", { name: "Approve as Green for Waiting Pilot", exact: true })
+    .getByRole("button", { name: "Approve as Alumni for Waiting Pilot", exact: true })
     .click();
 
   // The queue is empty, so the standing reminder is gone...
@@ -451,10 +451,10 @@ test("an admin reaches the queue from the count link and approves", async ({
   // ...and the ?tier=pending view it linked to is empty too, which is also the
   // second half of the filter claim above: the approved account left this view.
   await expect(page.locator("td.log__empty")).toHaveText("No members match this filter.");
-  // Read from the database rather than from the page: green is the unlocked
+  // Read from the database rather than from the page: alumni is the unlocked
   // grant, so the membership job may still move it later.
   const [approved] = await db.select().from(account).where(eq(account.id, waiting.id));
-  expect(approved.tier).toBe("green");
+  expect(approved.tier).toBe("alumni");
   expect(approved.tierLocked).toBe(false);
 });
 
@@ -472,7 +472,7 @@ test("pending is never offered as a manual tier an admin can assign", async ({
   const settled = rowFor(page, "Settled Pilot");
   const settledDrawer = drawerOf(settled);
   await toggleOf(settled).click();
-  for (const tier of ["flygd", "blue", "green"]) {
+  for (const tier of ["member", "associate", "alumni"]) {
     await expect(
       settledDrawer.getByRole("button", {
         name: `Set Settled Pilot to ${tier}`,
@@ -494,16 +494,16 @@ test("pending is never offered as a manual tier an admin can assign", async ({
   await toggleOf(waiting).click();
   await expect(
     waitingDrawer.getByRole("button", {
-      name: "Approve as Green for Waiting Pilot",
+      name: "Approve as Alumni for Waiting Pilot",
       exact: true,
     }),
-  ).toHaveText("Approve as Green");
+  ).toHaveText("Approve as Alumni");
   await expect(
     waitingDrawer.getByRole("button", {
-      name: "Approve as Blue for Waiting Pilot",
+      name: "Approve as Associate for Waiting Pilot",
       exact: true,
     }),
-  ).toHaveText("Approve as Blue");
+  ).toHaveText("Approve as Associate");
   await expect(
     waitingDrawer.getByRole("button", { name: /^Set Waiting Pilot to/ }),
   ).toHaveCount(0);
@@ -519,10 +519,10 @@ test("the awaiting-approval count survives a status filter that hides the queue"
   page,
   context,
 }) => {
-  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
   // Active, so ?status=cryo excludes it from the table below.
   await seedMember(db, { name: "Waiting Pilot", tier: "pending" });
-  await seedMember(db, { name: "Frozen Pilot", tier: "green", status: "cryo" });
+  await seedMember(db, { name: "Frozen Pilot", tier: "alumni", status: "cryo" });
   await context.addCookies([await sessionCookieFor(db, admin.id)]);
   await page.goto("/admin/accounts?status=cryo");
 
@@ -543,7 +543,7 @@ test("approving an account someone else already approved lands on a notice, not 
   page,
   context,
 }) => {
-  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
   const waiting = await seedMember(db, { name: "Waiting Pilot", tier: "pending" });
   await context.addCookies([await sessionCookieFor(db, admin.id)]);
   await page.goto("/admin/accounts?tier=pending");
@@ -551,7 +551,7 @@ test("approving an account someone else already approved lands on a notice, not 
   const row = rowFor(page, "Waiting Pilot");
   await toggleOf(row).click();
   const approve = drawerOf(row).getByRole("button", {
-    name: "Approve as Green for Waiting Pilot",
+    name: "Approve as Alumni for Waiting Pilot",
     exact: true,
   });
   await expect(approve).toBeVisible();
@@ -559,7 +559,7 @@ test("approving an account someone else already approved lands on a notice, not 
   // The other admin's approval, landing between this render and the click
   // below. Written directly rather than through the action so that
   // approveAccount's own re-check under the row lock is what has to catch it.
-  await db.update(account).set({ tier: "blue" }).where(eq(account.id, waiting.id));
+  await db.update(account).set({ tier: "associate" }).where(eq(account.id, waiting.id));
 
   await approve.click();
   // Back to the queue, not to the unfiltered list: the admin was working the
@@ -580,7 +580,7 @@ test("approving an account someone else already approved lands on a notice, not 
   await expect(page.getByText("Something broke")).toHaveCount(0);
   // The other admin's grant stands — the losing click must not re-stamp it.
   const [after] = await db.select().from(account).where(eq(account.id, waiting.id));
-  expect(after.tier).toBe("blue");
+  expect(after.tier).toBe("associate");
 });
 
 /**
@@ -603,7 +603,7 @@ test("an error returns the admin to the filter and sort they were working", asyn
   // them: an empty list would make the assertions below vacuous.
   const admin = await seedMember(db, {
     name: "Boss",
-    tier: "flygd",
+    tier: "member",
     status: "cryo",
     isAdmin: true,
   });
@@ -649,7 +649,7 @@ test("a de-roled admin's approve click gets the notice, not the error boundary",
   page,
   context,
 }) => {
-  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
   await seedMember(db, { name: "Waiting Pilot", tier: "pending" });
   await context.addCookies([await sessionCookieFor(db, admin.id)]);
   await page.goto("/admin/accounts?tier=pending");
@@ -657,7 +657,7 @@ test("a de-roled admin's approve click gets the notice, not the error boundary",
   const row = rowFor(page, "Waiting Pilot");
   await toggleOf(row).click();
   const approve = drawerOf(row).getByRole("button", {
-    name: "Approve as Green for Waiting Pilot",
+    name: "Approve as Alumni for Waiting Pilot",
     exact: true,
   });
   await expect(approve).toBeVisible();
@@ -1158,7 +1158,7 @@ test("an open drawer does not widen the shared first column", async ({
  * group, and the note field with its save button.
  */
 const DRAWER_CONTROLS = {
-  "set tier": '[aria-label="Set Zed to blue"]',
+  "set tier": '[aria-label="Set Zed to associate"]',
   freeze: '[aria-label="freeze Zed"]',
   "note field": '[aria-label="Note for Zed"]',
   "save note": '[aria-label="save note for Zed"]',
@@ -1381,7 +1381,7 @@ test("the empty-state row does not inherit the pinned column", async ({
   page,
   context,
 }) => {
-  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
   await context.addCookies([await sessionCookieFor(db, admin.id)]);
   await page.setViewportSize({ width: 320, height: 720 });
   await page.goto("/admin/accounts?status=cryo");
@@ -1436,13 +1436,13 @@ test("an account with no main is still identified in the pinned column", async (
   page,
   context,
 }) => {
-  const admin = await seedMember(db, { name: "Aaa Boss", tier: "flygd", isAdmin: true });
+  const admin = await seedMember(db, { name: "Aaa Boss", tier: "member", isAdmin: true });
   // Characters linked, no main set: the row the fallback exists for. The row
   // data carries no link order, so the page picks the alphabetically first
   // name — "Sam Alt", not the seed's own first argument.
   await seedMember(db, { name: "Wandering Sam", mainless: true, alts: ["Sam Alt"] });
   // And an account with nothing linked at all, which only the id can name.
-  const [orphan] = await db.insert(account).values({ tier: "green" }).returning();
+  const [orphan] = await db.insert(account).values({ tier: "alumni" }).returning();
 
   await context.addCookies([await sessionCookieFor(db, admin.id)]);
   await page.setViewportSize({ width: 320, height: 720 });
@@ -1511,7 +1511,7 @@ test("a blank character name never becomes a row's identity", async ({
   page,
   context,
 }) => {
-  const admin = await seedMember(db, { name: "Aaa Boss", tier: "flygd", isAdmin: true });
+  const admin = await seedMember(db, { name: "Aaa Boss", tier: "member", isAdmin: true });
   // ESI has handed back an empty name before. `??` only falls through on
   // null/undefined, so an empty main produced `aria-label="Note for "` and a
   // row toggle announced as " — crew and controls" — no identity at all, in
@@ -1583,7 +1583,7 @@ test("every per-account control names the row it acts on", async ({ page, contex
   const zedRow = rowFor(page, "Zed");
   const zedDrawer = drawerOf(zedRow);
   await toggleOf(zedRow).click();
-  for (const tier of ["flygd", "blue", "green"]) {
+  for (const tier of ["member", "associate", "alumni"]) {
     const btn = zedDrawer.getByRole("button", {
       name: `Set Zed to ${tier}`,
       exact: true,
@@ -1595,7 +1595,9 @@ test("every per-account control names the row it acts on", async ({ page, contex
   await expect(cryo).toHaveText("freeze");
 
   // The lock-releasing control is in the same group and had the same gap.
-  await zedDrawer.getByRole("button", { name: "Set Zed to blue", exact: true }).click();
+  await zedDrawer
+    .getByRole("button", { name: "Set Zed to associate", exact: true })
+    .click();
   await expect(zedRow.locator(".tier__lock")).toBeVisible();
   await expect(
     zedDrawer.getByRole("button", { name: "return Zed to auto tier", exact: true }),
@@ -1634,10 +1636,10 @@ test("revoke arms on the first click, confirms on the second, and Escape disarms
   page,
   context,
 }) => {
-  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
   // A second admin so revoking it doesn't hit the "last admin" guard — this
   // test is about the confirm mechanism, not that error path.
-  const zed = await seedMember(db, { name: "Zed", tier: "flygd", isAdmin: true });
+  const zed = await seedMember(db, { name: "Zed", tier: "member", isAdmin: true });
   await context.addCookies([await sessionCookieFor(db, admin.id)]);
   await page.goto("/admin/accounts");
 

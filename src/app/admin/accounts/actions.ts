@@ -80,7 +80,7 @@ function redirectOnMutationError(
 
 export async function setTierAction(
   accountId: string,
-  tier: "flygd" | "blue" | "green",
+  tier: "member" | "associate" | "alumni",
   listSearch: string,
 ): Promise<void> {
   const { accountId: actor } = await requireAdminAction();
@@ -93,7 +93,7 @@ export async function setTierAction(
 
 export async function approveAction(
   accountId: string,
-  tier: "green" | "blue",
+  tier: "alumni" | "associate",
   listSearch: string,
 ): Promise<void> {
   const { accountId: actor } = await requireAdminAction();

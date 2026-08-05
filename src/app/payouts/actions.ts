@@ -55,8 +55,8 @@ async function requireOperatorAccount(): Promise<string> {
   if (!sid) throw new Error("not signed in");
   const sess = await getSessionAccount(getDb(), sid);
   if (!sess) throw new Error("not signed in");
-  // Throws PayoutForbiddenError for anyone not flygd+active — a cryo flygd
-  // member reaches every action here and is rejected right here, not by a
+  // Throws PayoutForbiddenError for anyone not member+active — a cryo member
+  // reaches every action here and is rejected right here, not by a
   // guard the page merely hoped was upstream.
   await requirePayoutOperator(getDb(), sess.accountId);
   return sess.accountId;

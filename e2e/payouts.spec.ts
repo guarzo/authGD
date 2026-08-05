@@ -18,7 +18,7 @@ test.afterAll(() => pool.end());
 test.beforeEach(() => resetDb(db));
 
 test("the payouts list pages with an Older link", async ({ page, context }) => {
-  const reader = await seedMember(db, { name: "List Reader", tier: "flygd" });
+  const reader = await seedMember(db, { name: "List Reader", tier: "member" });
   await context.addCookies([await sessionCookieFor(db, reader.id)]);
 
   // 51 operations: one more than PAYOUTS_PAGE_SIZE, newest first by date.
@@ -48,7 +48,7 @@ test("a malformed before param renders page 1 instead of failing", async ({
   page,
   context,
 }) => {
-  const reader = await seedMember(db, { name: "Cursor Reader", tier: "flygd" });
+  const reader = await seedMember(db, { name: "Cursor Reader", tier: "member" });
   await context.addCookies([await sessionCookieFor(db, reader.id)]);
   await db.insert(payoutOperation).values({
     name: "Only fight",
@@ -59,17 +59,17 @@ test("a malformed before param renders page 1 instead of failing", async ({
   await expect(page.getByRole("link", { name: "Only fight" })).toBeVisible();
 });
 
-test("a green member is denied /payouts", async ({ page, context }) => {
-  const acc = await seedMember(db, { name: "Green Pilot", tier: "green" });
+test("an alumni member is denied /payouts", async ({ page, context }) => {
+  const acc = await seedMember(db, { name: "Alumni Pilot", tier: "alumni" });
   await context.addCookies([await sessionCookieFor(db, acc.id)]);
   await page.goto("/payouts");
   await expect(page).toHaveURL(/\/account/);
 });
 
-test("a cryo flygd member can read but not mutate", async ({ page, context }) => {
+test("a cryo member can read but not mutate", async ({ page, context }) => {
   const operator = await seedMember(db, {
     name: "Active Operator",
-    tier: "flygd",
+    tier: "member",
     status: "active",
   });
   await context.addCookies([await sessionCookieFor(db, operator.id)]);
@@ -83,20 +83,20 @@ test("a cryo flygd member can read but not mutate", async ({ page, context }) =>
 
   const cryo = await seedMember(db, {
     name: "Cryo Pilot",
-    tier: "flygd",
+    tier: "member",
     status: "cryo",
   });
   await context.clearCookies();
   await context.addCookies([await sessionCookieFor(db, cryo.id)]);
 
-  // Read: the list and the detail both render for a cryo flygd member.
+  // Read: the list and the detail both render for a cryo member.
   await page.goto("/payouts");
   await expect(page.getByRole("heading", { name: "Payouts" })).toBeVisible();
   await expect(page.getByText("Thursday roam")).toBeVisible();
   // No create control for a non-operator reader.
   await expect(page.getByRole("link", { name: "New operation" })).toHaveCount(0);
 
-  // Mutate: /payouts/new redirects a cryo flygd member straight back out.
+  // Mutate: /payouts/new redirects a cryo member straight back out.
   await page.goto("/payouts/new");
   await expect(page).toHaveURL(/\/payouts$/);
 
@@ -123,7 +123,7 @@ test("create, add a flat pool, paste a roster, finalize, mark paid", async ({
 
   const operator = await seedMember(db, {
     name: "FC Prime",
-    tier: "flygd",
+    tier: "member",
     status: "active",
   });
   await context.addCookies([await sessionCookieFor(db, operator.id)]);
@@ -226,12 +226,12 @@ test("pasting two alts of one account collapses them into one participant row", 
 }) => {
   const operator = await seedMember(db, {
     name: "FC Prime",
-    tier: "flygd",
+    tier: "member",
     status: "active",
   });
   await seedMember(db, {
     name: "Stealthbot",
-    tier: "green",
+    tier: "alumni",
     alts: ["Stealthbot Alt"],
   });
   await context.addCookies([await sessionCookieFor(db, operator.id)]);
@@ -272,7 +272,7 @@ test("an unresolved loot item is named on the page, not silently priced at zero"
 }) => {
   const operator = await seedMember(db, {
     name: "FC Prime",
-    tier: "flygd",
+    tier: "member",
     status: "active",
   });
   await context.addCookies([await sessionCookieFor(db, operator.id)]);
@@ -341,7 +341,7 @@ test("a resolved sub-cent unit price is marked as real value, distinct from unre
 }) => {
   const operator = await seedMember(db, {
     name: "FC Prime",
-    tier: "flygd",
+    tier: "member",
     status: "active",
   });
   await context.addCookies([await sessionCookieFor(db, operator.id)]);
@@ -401,7 +401,7 @@ test("two participant rows sharing an unresolved name trigger the duplicate-name
 }) => {
   const operator = await seedMember(db, {
     name: "FC Prime",
-    tier: "flygd",
+    tier: "member",
     status: "active",
   });
   await context.addCookies([await sessionCookieFor(db, operator.id)]);
@@ -447,10 +447,10 @@ test("adding a linked pilot under a name already on the roster unresolved warns 
 }) => {
   const operator = await seedMember(db, {
     name: "FC Prime",
-    tier: "flygd",
+    tier: "member",
     status: "active",
   });
-  await seedMember(db, { name: "Echo Pilot", tier: "green" });
+  await seedMember(db, { name: "Echo Pilot", tier: "alumni" });
   await context.addCookies([await sessionCookieFor(db, operator.id)]);
 
   const [op] = await db
@@ -514,7 +514,7 @@ test("setting shares, excluding, and removing a participant each recompute exact
 }) => {
   const operator = await seedMember(db, {
     name: "FC Prime",
-    tier: "flygd",
+    tier: "member",
     status: "active",
   });
   await context.addCookies([await sessionCookieFor(db, operator.id)]);
@@ -620,7 +620,7 @@ for (const [code, phrase] of [
   test(`/payouts/new explains ?error=${code}`, async ({ page, context }) => {
     const operator = await seedMember(db, {
       name: "FC Codes",
-      tier: "flygd",
+      tier: "member",
       status: "active",
     });
     await context.addCookies([await sessionCookieFor(db, operator.id)]);
@@ -657,7 +657,7 @@ for (const [code, phrase] of [
   test(`the operation page explains ?error=${code}`, async ({ page, context }) => {
     const operator = await seedMember(db, {
       name: "FC Codes",
-      tier: "flygd",
+      tier: "member",
       status: "active",
     });
     await context.addCookies([await sessionCookieFor(db, operator.id)]);
@@ -680,7 +680,7 @@ for (const [code, phrase] of [
 test("payout pages ignore an unrecognised error code", async ({ page, context }) => {
   const operator = await seedMember(db, {
     name: "FC Unknown",
-    tier: "flygd",
+    tier: "member",
     status: "active",
   });
   await context.addCookies([await sessionCookieFor(db, operator.id)]);
@@ -699,7 +699,7 @@ test("payout pages ignore an unrecognised error code", async ({ page, context })
 test("a rejected create form comes back filled in", async ({ page, context }) => {
   const operator = await seedMember(db, {
     name: "FC Roundtrip",
-    tier: "flygd",
+    tier: "member",
     status: "active",
   });
   await context.addCookies([await sessionCookieFor(db, operator.id)]);
@@ -742,7 +742,7 @@ test("corp share can be corrected after creation, and the split follows", async 
 }) => {
   const operator = await seedMember(db, {
     name: "FC Corpshare",
-    tier: "flygd",
+    tier: "member",
     status: "active",
   });
   await context.addCookies([await sessionCookieFor(db, operator.id)]);
@@ -799,7 +799,7 @@ test("corp share can be corrected after creation, and the split follows", async 
 test("bad shares land on the page, not the error boundary", async ({ page, context }) => {
   const operator = await seedMember(db, {
     name: "FC Shares",
-    tier: "flygd",
+    tier: "member",
     status: "active",
   });
   await context.addCookies([await sessionCookieFor(db, operator.id)]);
@@ -845,7 +845,7 @@ test("override an item price, finalize, pay, revert, and pay again", async ({
 }) => {
   const operator = await seedMember(db, {
     name: "FC Prime",
-    tier: "flygd",
+    tier: "member",
     status: "active",
   });
   await context.addCookies([await sessionCookieFor(db, operator.id)]);
@@ -1003,7 +1003,7 @@ test("bad unit price lands on the page, not the error boundary", async ({
 }) => {
   const operator = await seedMember(db, {
     name: "FC Price",
-    tier: "flygd",
+    tier: "member",
     status: "active",
   });
   await context.addCookies([await sessionCookieFor(db, operator.id)]);
@@ -1068,10 +1068,10 @@ test("manual participant entry offers known character names and adds one", async
 }) => {
   const operator = await seedMember(db, {
     name: "FC Prime",
-    tier: "flygd",
+    tier: "member",
     status: "active",
   });
-  await seedMember(db, { name: "Latecomer Pilot", tier: "green" });
+  await seedMember(db, { name: "Latecomer Pilot", tier: "alumni" });
   await context.addCookies([await sessionCookieFor(db, operator.id)]);
 
   const [op] = await db
@@ -1110,7 +1110,7 @@ test("adding the same name twice is refused on the page, not on the error bounda
 }) => {
   const operator = await seedMember(db, {
     name: "FC Prime",
-    tier: "flygd",
+    tier: "member",
     status: "active",
   });
   await context.addCookies([await sessionCookieFor(db, operator.id)]);
@@ -1161,10 +1161,10 @@ test("open info appears only for an operator whose character granted the scope",
 }) => {
   const operator = await seedMember(db, {
     name: "FC Prime",
-    tier: "flygd",
+    tier: "member",
     status: "active",
   });
-  const recipient = await seedMember(db, { name: "Paid Pilot", tier: "flygd" });
+  const recipient = await seedMember(db, { name: "Paid Pilot", tier: "member" });
   await context.addCookies([await sessionCookieFor(db, operator.id)]);
 
   // The control also needs a resolved recipient — it is the ESI target_id, and

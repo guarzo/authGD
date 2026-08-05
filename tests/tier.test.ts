@@ -4,71 +4,71 @@ import { decideTier } from "@/core/tier";
 describe("decideTier", () => {
   const cases: Array<{
     name: string;
-    tier: "pending" | "flygd" | "blue" | "green";
+    tier: "pending" | "member" | "associate" | "alumni";
     tierLocked: boolean;
     mainConfirmed: boolean;
     mainInAlliance: boolean;
-    expected: "flygd" | "green" | null;
+    expected: "member" | "alumni" | null;
   }> = [
     {
-      name: "green + main in alliance → flygd",
-      tier: "green",
+      name: "alumni + main in alliance → member",
+      tier: "alumni",
       tierLocked: false,
       mainConfirmed: true,
       mainInAlliance: true,
-      expected: "flygd",
+      expected: "member",
     },
     {
-      name: "flygd + main left alliance → green",
-      tier: "flygd",
+      name: "member + main left alliance → alumni",
+      tier: "member",
       tierLocked: false,
       mainConfirmed: true,
       mainInAlliance: false,
-      expected: "green",
+      expected: "alumni",
     },
     {
-      name: "flygd + main in alliance → no change",
-      tier: "flygd",
+      name: "member + main in alliance → no change",
+      tier: "member",
       tierLocked: false,
       mainConfirmed: true,
       mainInAlliance: true,
       expected: null,
     },
     {
-      name: "green + main out → no change",
-      tier: "green",
+      name: "alumni + main out → no change",
+      tier: "alumni",
       tierLocked: false,
       mainConfirmed: true,
       mainInAlliance: false,
       expected: null,
     },
     {
-      name: "unlocked blue converges to flygd",
-      tier: "blue",
+      name: "unlocked associate converges to member",
+      tier: "associate",
       tierLocked: false,
       mainConfirmed: true,
       mainInAlliance: true,
-      expected: "flygd",
+      expected: "member",
     },
     {
-      name: "unlocked blue converges to green",
-      tier: "blue",
+      name: "unlocked associate converges to alumni",
+      tier: "associate",
       tierLocked: false,
       mainConfirmed: true,
       mainInAlliance: false,
-      expected: "green",
+      expected: "alumni",
     },
     {
       name: "locked accounts are never touched",
-      tier: "flygd",
+      tier: "member",
       tierLocked: true,
       mainConfirmed: true,
       mainInAlliance: false,
       expected: null,
     },
     {
-      name: "locked blue stays blue",
-      tier: "blue",
+      name: "locked associate stays associate",
+      tier: "associate",
       tierLocked: true,
       mainConfirmed: true,
       mainInAlliance: true,
@@ -76,7 +76,7 @@ describe("decideTier", () => {
     },
     {
       name: "unconfirmed main is never transitioned",
-      tier: "flygd",
+      tier: "member",
       tierLocked: false,
       mainConfirmed: false,
       mainInAlliance: false,
@@ -84,22 +84,22 @@ describe("decideTier", () => {
     },
     {
       name: "unconfirmed main never promotes either",
-      tier: "green",
+      tier: "alumni",
       tierLocked: false,
       mainConfirmed: false,
       mainInAlliance: true,
       expected: null,
     },
     {
-      name: "pending + main in alliance → flygd (real members skip the queue)",
+      name: "pending + main in alliance → member (real members skip the queue)",
       tier: "pending",
       tierLocked: false,
       mainConfirmed: true,
       mainInAlliance: true,
-      expected: "flygd",
+      expected: "member",
     },
     {
-      name: "pending + main out of alliance → stays pending, never auto-green",
+      name: "pending + main out of alliance → stays pending, never auto-alumni",
       tier: "pending",
       tierLocked: false,
       mainConfirmed: true,

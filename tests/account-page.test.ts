@@ -225,6 +225,6 @@ describe("StandingTier", () => {
   });
 
   it("still renders a badge for a granted tier", () => {
-    expect(render("green")).toContain("tier--green");
+    expect(render("alumni")).toContain("tier--alumni");
   });
 });

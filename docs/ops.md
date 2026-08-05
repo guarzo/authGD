@@ -20,8 +20,8 @@ fly secrets set \
   EVE_SSO_CLIENT_ID=... EVE_SSO_CLIENT_SECRET=... \
   EVE_SSO_SCOPES="esi-characters.read_contacts.v1 esi-characters.write_contacts.v1 esi-ui.open_window.v1" \
   DISCORD_CLIENT_ID=... DISCORD_CLIENT_SECRET=... DISCORD_BOT_TOKEN=... \
-  DISCORD_GUILD_ID=... DISCORD_ROLE_ID_FLYGD=... DISCORD_ROLE_ID_BLUE=... \
-  DISCORD_ROLE_ID_GREEN=... DISCORD_OPS_WEBHOOK_URL=... \
+  DISCORD_GUILD_ID=... DISCORD_ROLE_ID_MEMBER=... DISCORD_ROLE_ID_ASSOCIATE=... \
+  DISCORD_ROLE_ID_ALUMNI=... DISCORD_OPS_WEBHOOK_URL=... \
   WANDERER_BASE_URL=... WANDERER_API_KEY=... WANDERER_ACL_ID=... \
   STANDINGS_LABEL=authgd STANDINGS_VALUE=5 \
   ESI_CONTACT="you@example.com" \
@@ -166,14 +166,14 @@ character already on the ACL.
 | `SESSION_COOKIE_NAME` | no (default `authgd_session`) | session cookie name |
 | `TOKEN_ENCRYPTION_KEY` | yes | base64, exactly 32 bytes; encrypts EVE refresh tokens at rest |
 | `APP_BASE_URL` | yes | public URL; OAuth redirect URIs derive from it |
-| `ALLIANCE_ID` | yes | membership anchor: main in this alliance ⇒ FlyGD |
+| `ALLIANCE_ID` | yes | membership anchor: main in this alliance ⇒ member |
 | `BOOTSTRAP_ADMIN_CHARACTER_IDS` | no | comma-separated; see recovery caveat below |
 | `EVE_SSO_CLIENT_ID` / `EVE_SSO_CLIENT_SECRET` | yes | EVE application credentials |
 | `EVE_SSO_SCOPES` | yes | space-separated full scope set requested at every login. Adding a scope flips every existing character to `needs_reauth` until its holder logs in again — a capability warning, not an outage: `src/jobs/contacts.ts` gates per job on the scopes it actually needs |
 | `DISCORD_CLIENT_ID` / `DISCORD_CLIENT_SECRET` | yes | Discord OAuth (identify only) |
 | `DISCORD_BOT_TOKEN` | yes | bot with Manage Roles above the three managed roles |
 | `DISCORD_GUILD_ID` | yes | the guild whose roles are managed |
-| `DISCORD_ROLE_ID_FLYGD` / `_BLUE` / `_GREEN` | yes | the three managed role ids (distinct) |
+| `DISCORD_ROLE_ID_MEMBER` / `_ASSOCIATE` / `_ALUMNI` | yes | the three managed role ids (distinct) |
 | `DISCORD_OPS_WEBHOOK_URL` | no | ops alerts (final retry failures, config errors) |
 | `WANDERER_BASE_URL` / `WANDERER_API_KEY` | yes | Wanderer instance + the **ACL's own** API key (the map API key returns 401 on `/api/acls/*`) |
 | `WANDERER_ACL_ID` | yes | the managed ACL — dedicated to authGD, reconciled destructively |
@@ -386,7 +386,7 @@ service that actually pages — keep the endpoint, delete the workflow.
 
 `STANDINGS_LABEL` names an in-game contact label that authGD **owns outright**.
 On every contacts run it deletes every contact carrying that label that is not a
-current FlyGD member (`src/core/contacts-diff.ts`). Point it at a label created
+current member (`src/core/contacts-diff.ts`). Point it at a label created
 for authGD; never at one people also curate by hand, or their contacts are
 deleted on the first run.
 
@@ -586,10 +586,10 @@ It seeds six accounts covering every tier, an admin, alts, and the `cryo` and
 prints a cookie:
 
 ```text
-admin   Admin Prime        (flygd, admin, 2 alt(s))
+admin   Admin Prime        (member, admin, 2 alt(s))
   authgd_session=Ux7...redacted...
 
-blue    Blue Pilot         (blue)
+member  Member Pilot       (member, 1 alt(s))
   authgd_session=Qa2...redacted...
 ```
 
@@ -793,3 +793,97 @@ rejects `--env-file-if-exists` outright and every deploy fails. The floor now
 sits at 24 to track Active LTS, well clear of that, but the Dockerfile copies
 `.npmrc` before `npm ci` in both stages so `engine-strict` turns any regression
 below the floor into a **build** failure instead of a release-time one.
+
+## Tier rename migration (0007)
+
+The tier enum values were renamed in place: `flygd → member`, `blue →
+associate`, `green → alumni`. `RENAME VALUE` rewrites no rows, but the old image
+cannot run against the new enum — its queries use values Postgres no longer
+accepts. **This deploy requires a maintenance window.**
+
+### Deploy
+
+`docs/ops.md` § "Sizing and redundancy" runs **`web=2`, `worker=1`** — `web=2`
+is a deliberate choice that closes the deploy gap, not a default. Record the
+live counts before scaling down and restore those, rather than trusting the
+numbers written here:
+
+```bash
+fly scale show   # record the current web and worker counts
+```
+
+1. `fly scale count web=0 worker=0`
+2. Set the new role secrets, copying each value verbatim from the old one.
+   Read the three old values first and substitute them for the placeholders —
+   the `<…>` below are not shell syntax and will be set literally if pasted
+   as-is. Leave the old three set:
+   ```bash
+   fly secrets set DISCORD_ROLE_ID_MEMBER='<paste value of DISCORD_ROLE_ID_FLYGD>' \
+                   DISCORD_ROLE_ID_ASSOCIATE='<paste value of DISCORD_ROLE_ID_BLUE>' \
+                   DISCORD_ROLE_ID_ALUMNI='<paste value of DISCORD_ROLE_ID_GREEN>'
+   ```
+3. Merge the pull request. **Merging is the deploy** — this repo deploys from
+   `main` through Fly's GitHub integration, so there is no `fly deploy` to run
+   by hand, and merging before step 1 would start a rolling replacement with
+   the old image still serving against the new enum. Watch `fly releases` until
+   the release command reports the migration applied.
+4. `fly scale count web=2 worker=1` (or the counts recorded above), then verify
+   `/api/health` and load `/admin/accounts`
+5. Confirm the renamed role secrets actually resolve. `/api/health` and
+   `/admin/accounts` prove the enum rename took; they say nothing about Discord,
+   and a mistyped or omitted `DISCORD_ROLE_ID_*` fails silently as "no role
+   managed" rather than as an outage. On `/admin/sync`, run the
+   "Sync membership, contacts, wanderer, discord-roles" action and wait for the
+   `discord-roles` runs to land green — a bad role ID surfaces there as a
+   Discord role configuration error (and on the ops webhook).
+6. Only after steps 4 and 5 are confirmed healthy:
+   ```bash
+   fly secrets unset DISCORD_ROLE_ID_FLYGD DISCORD_ROLE_ID_BLUE DISCORD_ROLE_ID_GREEN
+   ```
+
+Step 6 is last and separate so a rollback still has a bootable old image.
+
+### Rollback
+
+Keeping the old secrets is **necessary but not sufficient** — the enum must be
+reverted before the old image starts, or it fails on every tier read regardless
+of configuration.
+
+1. `fly scale count web=0 worker=0`
+2. Revert the enum:
+   ```sql
+   ALTER TYPE "public"."tier" RENAME VALUE 'member' TO 'flygd';
+   ALTER TYPE "public"."tier" RENAME VALUE 'associate' TO 'blue';
+   ALTER TYPE "public"."tier" RENAME VALUE 'alumni' TO 'green';
+   ALTER TABLE "account" ALTER COLUMN "tier" SET DEFAULT 'green';
+   ```
+3. Remove the migration's row so the next forward deploy re-applies it.
+   **`__drizzle_migrations.hash` is a SHA-256 of the file contents, not the
+   filename — matching on `'%0007%'` finds nothing and silently leaves the row
+   in place.** The row is identified by `created_at`, which is the `when` value
+   drizzle-kit recorded in `drizzle/meta/_journal.json` for the `0007_*` entry.
+   Read that number out of the journal in the deployed image, then, in the same
+   transaction as step 2:
+
+   ```sql
+   -- <when> is the "when" field of the 0007 entry in drizzle/meta/_journal.json
+   -- <hash> is the output of: sha256sum drizzle/0007_<name>.sql
+   SELECT id, hash, created_at FROM drizzle.__drizzle_migrations
+    WHERE created_at = <when>;
+   -- confirm exactly one row, and that its hash equals <hash>, then:
+   DELETE FROM drizzle.__drizzle_migrations
+    WHERE created_at = <when> AND hash = '<hash>';
+   ```
+
+   Run steps 2 and 3 inside one `BEGIN`/`COMMIT`, and check the `DELETE` reported
+   `DELETE 1` before committing. If the `SELECT` or the `DELETE` touches zero or
+   more than one row, `ROLLBACK` and stop — reverting the enum without clearing
+   the record leaves the next deploy unable to move forward, and clearing the
+   wrong record is worse. Keying the `DELETE` on the hash as well as `created_at`
+   means a mistyped `<when>` deletes nothing rather than something else.
+4. Re-set `DISCORD_ROLE_ID_FLYGD/_BLUE/_GREEN` if step 6 of the deploy already ran
+5. `fly deploy --image <previous image ref>`
+6. `fly scale count web=2 worker=1` (or the counts recorded before the deploy)
+
+A Fly version bump does not guarantee a new image — check `ImageRef` before
+concluding the rollback took effect.

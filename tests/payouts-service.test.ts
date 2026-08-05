@@ -55,9 +55,9 @@ beforeAll(async () => {
     DISCORD_CLIENT_SECRET: "d",
     DISCORD_BOT_TOKEN: "d",
     DISCORD_GUILD_ID: "1",
-    DISCORD_ROLE_ID_FLYGD: "10",
-    DISCORD_ROLE_ID_BLUE: "11",
-    DISCORD_ROLE_ID_GREEN: "12",
+    DISCORD_ROLE_ID_MEMBER: "10",
+    DISCORD_ROLE_ID_ASSOCIATE: "11",
+    DISCORD_ROLE_ID_ALUMNI: "12",
     WANDERER_BASE_URL: "https://w.example",
     WANDERER_API_KEY: "k",
     WANDERER_ACL_ID: "a",
@@ -69,7 +69,7 @@ afterAll(() => ctx.cleanup());
 beforeEach(() => truncateAll(ctx.db));
 
 async function seedOperator() {
-  return seedAccount(ctx.db, { tier: "flygd", status: "active" });
+  return seedAccount(ctx.db, { tier: "member", status: "active" });
 }
 
 /** A finalized operation with one unpaid participant owed the whole 1000.00.
@@ -122,21 +122,21 @@ async function seedFightWithOnePaidParticipant() {
 }
 
 describe("requirePayoutOperator", () => {
-  it("refuses a cryo flygd account", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "flygd", status: "cryo" });
+  it("refuses a cryo member account", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "member", status: "cryo" });
     await expect(requirePayoutOperator(ctx.db, acc.id)).rejects.toThrow(
       PayoutForbiddenError,
     );
   });
 
-  it("refuses an active green account", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "green", status: "active" });
+  it("refuses an active alumni account", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "alumni", status: "active" });
     await expect(requirePayoutOperator(ctx.db, acc.id)).rejects.toThrow(
       PayoutForbiddenError,
     );
   });
 
-  it("allows an active flygd account", async () => {
+  it("allows an active member account", async () => {
     const acc = await seedOperator();
     await expect(requirePayoutOperator(ctx.db, acc.id)).resolves.toBeUndefined();
   });
@@ -149,13 +149,13 @@ describe("canReadPayouts", () => {
    * promise that a demoted or cryo member keeps read access — a later
    * "consistency" edit adding `&& status === "active"` here must fail this.
    */
-  it("allows a cryo flygd account to read", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "flygd", status: "cryo" });
+  it("allows a cryo member account to read", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "member", status: "cryo" });
     await expect(canReadPayouts(ctx.db, acc.id)).resolves.toBe(true);
   });
 
-  it("refuses an active green account", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "green", status: "active" });
+  it("refuses an active alumni account", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "alumni", status: "active" });
     await expect(canReadPayouts(ctx.db, acc.id)).resolves.toBe(false);
   });
 
@@ -168,7 +168,7 @@ describe("canReadPayouts", () => {
 
 describe("resolveRosterNames", () => {
   it("collapses two alts of one account into one entry named for the main", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    const acc = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, cfg, {
       id: 500001,
       accountId: acc.id,
@@ -249,7 +249,7 @@ describe("recalculation safety", () => {
 
   it("unlinking a character in a paid operation leaves the participant row intact and readable", async () => {
     const operator = await seedOperator();
-    const member = await seedAccount(ctx.db, { tier: "blue", status: "active" });
+    const member = await seedAccount(ctx.db, { tier: "associate", status: "active" });
     await seedCharacter(ctx.db, cfg, {
       id: 600001,
       accountId: member.id,
@@ -498,7 +498,7 @@ describe("unlockOperation", () => {
   it("allows an admin who did not create the operation", async () => {
     const creator = await seedOperator();
     const admin = await seedAccount(ctx.db, {
-      tier: "flygd",
+      tier: "member",
       status: "active",
       isAdmin: true,
     });
@@ -527,7 +527,7 @@ describe("finalization freezes the operation", () => {
    */
   it("rejects payout-affecting edits on a finalized, UNPAID operation", async () => {
     const operator = await seedOperator();
-    const member = await seedAccount(ctx.db, { tier: "blue", status: "active" });
+    const member = await seedAccount(ctx.db, { tier: "associate", status: "active" });
     const { id: operationId } = await ctx.db.transaction((tx) =>
       createOperation(tx, operator.id, {
         name: "Frozen fight",
@@ -589,10 +589,10 @@ describe("the service layer is the authorization boundary", () => {
    * deletePool, setCorpSharePct, revertPayment, addParticipant, setItemPrice.
    * addFlatPool is covered separately in payout-loot.test.ts.
    */
-  it("rejects every mutation when the actor is not an active flygd account", async () => {
+  it("rejects every mutation when the actor is not an active member account", async () => {
     const operator = await seedOperator();
-    const green = await seedAccount(ctx.db, { tier: "green", status: "active" });
-    const cryo = await seedAccount(ctx.db, { tier: "flygd", status: "cryo" });
+    const alumni = await seedAccount(ctx.db, { tier: "alumni", status: "active" });
+    const cryo = await seedAccount(ctx.db, { tier: "member", status: "cryo" });
     const { id: operationId } = await ctx.db.transaction((tx) =>
       createOperation(tx, operator.id, {
         name: "Guarded",
@@ -644,7 +644,7 @@ describe("the service layer is the authorization boundary", () => {
     // be misled by it.
     await ctx.db.transaction((tx) => finalizeOperation(tx, operator.id, operationId));
 
-    for (const actor of [green.id, cryo.id]) {
+    for (const actor of [alumni.id, cryo.id]) {
       await expect(
         ctx.db.transaction((tx) =>
           createOperation(tx, actor, {
@@ -1092,7 +1092,7 @@ describe("addParticipant", () => {
    * pasted as their main and typed in as their alt draws two full shares.
    */
   it("collapses an alt into the existing participant rather than adding a second share", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    const acc = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, cfg, {
       id: 700001,
       accountId: acc.id,
@@ -1158,7 +1158,7 @@ describe("addParticipant", () => {
     // everyone's ESI link is in place.
     const { operator, operationId } = await seedDraftWithRoster(["Bob"]);
 
-    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    const acc = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, cfg, {
       id: 700101,
       accountId: acc.id,
@@ -1215,7 +1215,7 @@ describe("addParticipant", () => {
    * exactly what keeps the two cases distinct.
    */
   it("inserts an unresolved entry alongside an existing resolved row whose name has gone stale", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    const acc = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, cfg, {
       id: 700102,
       accountId: acc.id,

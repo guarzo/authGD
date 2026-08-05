@@ -251,8 +251,8 @@ export function Tier({
   size?: "lead";
 }) {
   const known =
-    tier === "flygd" || tier === "blue" || tier === "green" || tier === "pending";
-  // An unknown tier is a data problem, not a blue member: give it a neutral
+    tier === "member" || tier === "associate" || tier === "alumni" || tier === "pending";
+  // An unknown tier is a data problem, not an associate member: give it a neutral
   // badge rather than borrowing another tier's colour and asserting a lie.
   const tone = known ? `tier tier--${tier}` : "tier tier--unknown";
   return (
@@ -332,7 +332,7 @@ export function Notice({
  * IDs and trailing failure counters live at the end of these blobs, and a
  * CSS-only ellipsis would put them out of reach for good. Pass `summary` when
  * the caller can render a one-line, human summary of the payload (e.g. the
- * audit log's `green → flygd`) rather than falling back to raw JSON.
+ * audit log's `alumni → member`) rather than falling back to raw JSON.
  */
 export function Json({ value, summary }: { value: unknown; summary?: string }) {
   return (

@@ -12,21 +12,21 @@ test("resolved names, distinguishable system actor, one-line details, filtered c
   page,
   context,
 }) => {
-  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
-  const member = await seedMember(db, { name: "Zed", tier: "green" });
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
+  const member = await seedMember(db, { name: "Zed", tier: "alumni" });
 
   await db.insert(auditLog).values([
     {
       actor: admin.id,
       action: "tier.changed",
       target: member.id,
-      details: { from: "green", to: "flygd", cause: "admin" },
+      details: { from: "alumni", to: "member", cause: "admin" },
     },
     {
       actor: "system",
       action: "tier.changed",
       target: member.id,
-      details: { to: "green", cause: "membership" },
+      details: { to: "alumni", cause: "membership" },
     },
   ]);
 
@@ -66,13 +66,13 @@ test("resolved names, distinguishable system actor, one-line details, filtered c
   // Details render a one-line human summary collapsed, with the full JSON
   // still reachable behind the "+" disclosure.
   const adminDetails = adminRow.locator("details.json");
-  await expect(adminDetails.locator(".json__peek")).toHaveText("green → flygd, admin");
+  await expect(adminDetails.locator(".json__peek")).toHaveText("alumni → member, admin");
   await expect(adminDetails.locator(".json__full")).toBeHidden();
   await adminDetails.locator("summary").click();
   await expect(adminDetails.locator(".json__full")).toContainText('"cause": "admin"');
 
   const systemDetails = systemRow.locator("details.json");
-  await expect(systemDetails.locator(".json__peek")).toHaveText("→ green, membership");
+  await expect(systemDetails.locator(".json__peek")).toHaveText("→ alumni, membership");
 
   // The count states it is a filtered subset, not a total, once a filter is
   // applied.
@@ -96,7 +96,7 @@ test("no spurious horizontal overflow at desktop width, even with unresolved ids
   page,
   context,
 }) => {
-  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
   const orphan = "edfe996e-9497-4dc2-9afa-8e4bd0955daa"; // no such account: stays raw
 
   await db.insert(auditLog).values(
@@ -144,7 +144,7 @@ test("mono columns fit their widest value instead of painting over the next one"
   page,
   context,
 }) => {
-  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
 
   await db.insert(auditLog).values([
     // The longest action name in the vocabulary, next to the longest actor and
@@ -225,7 +225,7 @@ test("filter labels, fields, and submit each sit on one line", async ({
   page,
   context,
 }) => {
-  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
   await context.addCookies([await sessionCookieFor(db, admin.id)]);
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/admin/audit");
@@ -253,8 +253,8 @@ test("names are clickable filters, and a name unions a person's identifier forms
   page,
   context,
 }) => {
-  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
-  const member = await seedMember(db, { name: "Zed", tier: "green" });
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
+  const member = await seedMember(db, { name: "Zed", tier: "alumni" });
   await db.insert(discordLink).values({
     accountId: member.id,
     discordUserId: "555555555555555555",
@@ -266,7 +266,7 @@ test("names are clickable filters, and a name unions a person's identifier forms
       actor: admin.id,
       action: "tier.changed",
       target: member.id,
-      details: { from: "green", to: "flygd" },
+      details: { from: "alumni", to: "member" },
     },
     {
       actor: "system",
@@ -277,13 +277,13 @@ test("names are clickable filters, and a name unions a person's identifier forms
       actor: "system",
       action: "discord.role_changed",
       target: "555555555555555555",
-      details: { added: "10", removed: "", tier: "flygd" },
+      details: { added: "10", removed: "", tier: "member" },
     },
     {
       actor: admin.id,
       action: "tier.changed",
       target: admin.id,
-      details: { to: "flygd" },
+      details: { to: "member" },
     },
   ]);
 
@@ -321,15 +321,15 @@ test("raw ids and the literal 'all' target stay filterable", async ({
   page,
   context,
 }) => {
-  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
-  const member = await seedMember(db, { name: "Zed", tier: "green" });
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
+  const member = await seedMember(db, { name: "Zed", tier: "alumni" });
 
   await db.insert(auditLog).values([
     {
       actor: admin.id,
       action: "tier.changed",
       target: member.id,
-      details: { to: "flygd" },
+      details: { to: "member" },
     },
     { actor: admin.id, action: "sync.requested", target: "all" },
   ]);
@@ -373,18 +373,23 @@ test("an ambiguous name reports how many accounts it spans", async ({
   page,
   context,
 }) => {
-  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
-  const zedA = await seedMember(db, { name: "Zed", tier: "green" });
-  const zedB = await seedMember(db, { name: "Zed", tier: "blue" });
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
+  const zedA = await seedMember(db, { name: "Zed", tier: "alumni" });
+  const zedB = await seedMember(db, { name: "Zed", tier: "associate" });
 
   await db.insert(auditLog).values([
     {
       actor: admin.id,
       action: "tier.changed",
       target: zedA.id,
-      details: { to: "green" },
+      details: { to: "alumni" },
     },
-    { actor: admin.id, action: "tier.changed", target: zedB.id, details: { to: "blue" } },
+    {
+      actor: admin.id,
+      action: "tier.changed",
+      target: zedB.id,
+      details: { to: "associate" },
+    },
   ]);
 
   await context.addCookies([await sessionCookieFor(db, admin.id)]);
@@ -427,13 +432,13 @@ test("a paged view offers a way back to the newest entries", async ({
   page,
   context,
 }) => {
-  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
   await db.insert(auditLog).values(
     Array.from({ length: AUDIT_PAGE_SIZE + 5 }, (_, i) => ({
       actor: admin.id,
       action: "tier.changed",
       target: admin.id,
-      details: { to: i % 2 ? "green" : "blue" },
+      details: { to: i % 2 ? "alumni" : "associate" },
     })),
   );
   await context.addCookies([await sessionCookieFor(db, admin.id)]);
@@ -475,13 +480,13 @@ test("a filtered paged view keeps its filter on the way back", async ({
   page,
   context,
 }) => {
-  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
   await db.insert(auditLog).values(
     Array.from({ length: AUDIT_PAGE_SIZE + 2 }, () => ({
       actor: admin.id,
       action: "tier.changed",
       target: admin.id,
-      details: { to: "green" },
+      details: { to: "alumni" },
     })),
   );
   await context.addCookies([await sessionCookieFor(db, admin.id)]);
@@ -504,13 +509,13 @@ test("a malformed cursor is not described as an older page", async ({
   page,
   context,
 }) => {
-  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
   await db.insert(auditLog).values(
     Array.from({ length: 3 }, () => ({
       actor: admin.id,
       action: "tier.changed",
       target: admin.id,
-      details: { to: "green" },
+      details: { to: "alumni" },
     })),
   );
   await context.addCookies([await sessionCookieFor(db, admin.id)]);
@@ -536,7 +541,7 @@ test("an expanded payload is not a keyboard-unreachable scroll container", async
   page,
   context,
 }) => {
-  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
   await db.insert(auditLog).values([
     {
       actor: admin.id,
@@ -568,7 +573,7 @@ test("an expanded payload is not a keyboard-unreachable scroll container", async
   // Content that only a pointer could reach would need scrollWidth > clientWidth.
   expect(metrics.scrollWidth).toBeLessThanOrEqual(metrics.clientWidth + 1);
   // `auto` as well as `scroll`: the rule this replaced was `overflow-x: auto`,
-  // which computes to "auto", so excluding only "scroll" would stay green if
+  // which computes to "auto", so excluding only "scroll" would stay alumni if
   // someone restored it.
   expect(metrics.overflowX).not.toMatch(/^(auto|scroll)$/);
   expect(metrics.tabIndex).toBeLessThan(0);
@@ -589,14 +594,14 @@ test("an expanded payload is not a keyboard-unreachable scroll container", async
  * nothing about the cap.
  */
 test("the details peek uses the whole column it was given", async ({ page, context }) => {
-  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
-  const member = await seedMember(db, { name: "Zed", tier: "green" });
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
+  const member = await seedMember(db, { name: "Zed", tier: "alumni" });
   await db.insert(auditLog).values([
     {
       actor: "system",
       action: "tier.changed",
       target: member.id,
-      details: { from: "flygd", to: "green", cause: "alliance_left" },
+      details: { from: "member", to: "alumni", cause: "alliance_left" },
     },
     {
       actor: "system",
@@ -655,7 +660,7 @@ test("the details peek uses the whole column it was given", async ({ page, conte
   // whole. Under the 34ch cap it was cut mid-answer.
   expect(fit!.shortClipped).toBe(false);
   await expect(page.locator(".json__peek").nth(1)).toHaveText(
-    "flygd → green, alliance_left",
+    "member → alumni, alliance_left",
   );
 });
 
@@ -666,7 +671,7 @@ test("the details peek uses the whole column it was given", async ({ page, conte
  * to leave that table alone.
  */
 test("the sync log keeps its 34ch peek cap", async ({ page, context }) => {
-  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
   await db.insert(syncRun).values({
     jobType: "membership",
     startedAt: new Date(Date.now() - 120_000),
@@ -709,13 +714,13 @@ test("the sync log keeps its 34ch peek cap", async ({ page, context }) => {
  * not click, on a page that already splits it at the dot and dims the prefix.
  */
 test("the action is a filter link like actor and target", async ({ page, context }) => {
-  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
   await db.insert(auditLog).values([
     {
       actor: admin.id,
       action: "tier.changed",
       target: admin.id,
-      details: { to: "green" },
+      details: { to: "alumni" },
     },
     {
       actor: admin.id,
@@ -753,14 +758,14 @@ test("the action is a filter link like actor and target", async ({ page, context
  * and says nothing about the log actually being silent on that person.
  */
 test("an empty actor filter points at the target column", async ({ page, context }) => {
-  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
-  const member = await seedMember(db, { name: "Zed", tier: "green" });
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
+  const member = await seedMember(db, { name: "Zed", tier: "alumni" });
   await db.insert(auditLog).values([
     {
       actor: "system",
       action: "tier.changed",
       target: member.id,
-      details: { to: "green" },
+      details: { to: "alumni" },
     },
   ]);
   await context.addCookies([await sessionCookieFor(db, admin.id)]);
@@ -784,15 +789,15 @@ test("an empty actor filter points at the target column", async ({ page, context
 });
 
 test("linking the system actor does not un-dim it", async ({ page, context }) => {
-  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
-  const member = await seedMember(db, { name: "Zed", tier: "green" });
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
+  const member = await seedMember(db, { name: "Zed", tier: "alumni" });
 
   await db.insert(auditLog).values([
     {
       actor: "system",
       action: "tier.changed",
       target: member.id,
-      details: { to: "green" },
+      details: { to: "alumni" },
     },
   ]);
 
@@ -819,13 +824,13 @@ test("linking the system actor does not un-dim it", async ({ page, context }) =>
 
 /** Enough entries that the table overflows the capped scroll region. */
 async function seedDenseLog() {
-  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
   await db.insert(auditLog).values(
     Array.from({ length: 40 }, (_, i) => ({
       actor: "system",
       action: "tier.changed",
       target: `char:${i}`,
-      details: { from: "green", to: "blue" },
+      details: { from: "alumni", to: "associate" },
     })),
   );
   return admin;
@@ -1104,7 +1109,7 @@ test("expanding an audit payload keeps the timestamp column pinned at 320px", as
 });
 
 test("a repeated filter param does not break the page", async ({ page, context }) => {
-  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
   await context.addCookies([await sessionCookieFor(db, admin.id)]);
 
   const res = await page.goto("/admin/audit?actor=alpha&actor=beta");
@@ -1118,7 +1123,7 @@ test("a repeated filter param does not break the page", async ({ page, context }
 });
 
 test("the empty state is readable at 320px", async ({ page, context }) => {
-  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
   await context.addCookies([await sessionCookieFor(db, admin.id)]);
 
   await page.setViewportSize({ width: 320, height: 800 });
@@ -1140,7 +1145,7 @@ test("the empty state is readable at 320px", async ({ page, context }) => {
 });
 
 test("the empty state does not pick up the row hover tint", async ({ page, context }) => {
-  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
   await context.addCookies([await sessionCookieFor(db, admin.id)]);
 
   await db
@@ -1187,19 +1192,19 @@ test("paging past the end says so instead of claiming an empty log", async ({
   page,
   context,
 }) => {
-  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
   await db.insert(auditLog).values([
     {
       actor: "system",
       action: "tier.changed",
       target: admin.id,
-      details: { to: "green" },
+      details: { to: "alumni" },
     },
     {
       actor: "system",
       action: "tier.changed",
       target: admin.id,
-      details: { to: "blue" },
+      details: { to: "associate" },
     },
   ]);
   await context.addCookies([await sessionCookieFor(db, admin.id)]);
@@ -1223,19 +1228,19 @@ test("paging past the end with an active filter keeps that filter on the exit li
   page,
   context,
 }) => {
-  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
   await db.insert(auditLog).values([
     {
       actor: admin.id,
       action: "tier.changed",
       target: admin.id,
-      details: { to: "green" },
+      details: { to: "alumni" },
     },
     {
       actor: admin.id,
       action: "tier.changed",
       target: admin.id,
-      details: { to: "blue" },
+      details: { to: "associate" },
     },
   ]);
   await context.addCookies([await sessionCookieFor(db, admin.id)]);
@@ -1258,14 +1263,16 @@ test("a tier demotion row shows why it happened without opening the payload", as
   page,
   context,
 }) => {
-  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
-  const member = await seedMember(db, { name: "Zed", tier: "green" });
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
+  const member = await seedMember(db, { name: "Zed", tier: "alumni" });
 
   await db.insert(auditLog).values([
     {
       actor: "system",
       action: "tier.changed",
       target: member.id,
+      // Deliberately NOT renamed: this row stands in for audit history written
+      // before migration 0007. Per spec D4 it must still render its stored values.
       details: { from: "flygd", to: "green", cause: "main left alliance" },
     },
   ]);

@@ -51,7 +51,7 @@ describe("computeAccountHealth", () => {
   });
 
   it("is nominal for a non-target character regardless of its (absent) sync result", () => {
-    // Blue/green members are never contacts targets, so a null result here is
+    // Associate/alumni members are never contacts targets, so a null result here is
     // structural, not a pending first sync — see account-view.ts.
     expect(computeAccountHealth([char({ contactsTarget: false })], discord())).toEqual(
       health(0, 0, false, "nominal"),

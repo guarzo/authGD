@@ -51,7 +51,7 @@ const SORTS: Array<{ key: AdminListSort; label: string }> = [
 ];
 // What an admin may manually assign. Pending is deliberately absent: it is a
 // state accounts are born in, and setTierManual locks whatever it sets.
-const TIERS = ["flygd", "blue", "green"] as const;
+const TIERS = ["member", "associate", "alumni"] as const;
 // What an admin may filter by — a superset, since pending accounts exist and
 // have to be findable. Drives the ?tier= whitelist and the filter chips only.
 const TIER_FILTERS = ["pending", ...TIERS] as const;
@@ -515,8 +515,8 @@ function AccountRow({
           </td>
 
           <td>
-            {/* Every character of a flygd account is meant to be on the map ACL, so
-                a partial count is a gap to chase, not a healthy state. Non-flygd
+            {/* Every character of a member account is meant to be on the map ACL, so
+                a partial count is a gap to chase, not a healthy state. Non-member
                 accounts have none by design, which is the "off" case. */}
             {r.mapCount === 0 ? (
               <Status tone="off">off</Status>
@@ -589,32 +589,32 @@ function AccountRow({
             {r.tier === "pending" ? (
               <>
                 {/* The row goes AFTER the visible label, not into the middle of
-                    it: "Approve as Green" has to survive in the accessible name
+                    it: "Approve as Alumni" has to survive in the accessible name
                     as one contiguous run, or a speech-control user saying what
                     is written on the button matches nothing (WCAG 2.5.3). Same
                     convention as the Actions cell above. */}
                 <form
-                  action={approveAction.bind(null, r.accountId, "green", listSearch)}
+                  action={approveAction.bind(null, r.accountId, "alumni", listSearch)}
                   className="inline-form"
                 >
                   <Submit
                     className="btn btn--micro"
                     pendingLabel="approving…"
-                    aria-label={`Approve as Green for ${identity}`}
+                    aria-label={`Approve as Alumni for ${identity}`}
                   >
-                    Approve as Green
+                    Approve as Alumni
                   </Submit>
                 </form>
                 <form
-                  action={approveAction.bind(null, r.accountId, "blue", listSearch)}
+                  action={approveAction.bind(null, r.accountId, "associate", listSearch)}
                   className="inline-form"
                 >
                   <Submit
                     className="btn btn--micro"
                     pendingLabel="approving…"
-                    aria-label={`Approve as Blue for ${identity}`}
+                    aria-label={`Approve as Associate for ${identity}`}
                   >
-                    Approve as Blue
+                    Approve as Associate
                   </Submit>
                 </form>
               </>

@@ -10,7 +10,7 @@ import {
 import { postOpsWebhook } from "@/lib/ops-webhook";
 import { isDryRun } from "@/lib/sync-mode";
 import { logAudit } from "@/services/audit";
-import { getFlygdCharacters } from "@/services/desired";
+import { getMemberCharacters } from "@/services/desired";
 import { runJob, type JobResult } from "@/services/sync-run";
 
 type CharacterEntry = { characterId: number; role: string };
@@ -35,7 +35,7 @@ export async function runWandererJob(deps: {
 }): Promise<JobResult> {
   const { db, cfg, wanderer } = deps;
   return runJob(db, "wanderer", async () => {
-    const desiredIds = (await getFlygdCharacters(db)).map((c) => c.characterId);
+    const desiredIds = (await getMemberCharacters(db)).map((c) => c.characterId);
 
     // Never remove on unknown state: a failed read aborts before ANY mutation.
     let members;

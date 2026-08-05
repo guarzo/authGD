@@ -8,7 +8,7 @@ import { setupTestDb, truncateAll } from "./helpers/db";
 import { testConfig } from "./helpers/config";
 import { seedAccount, seedCharacter } from "./helpers/seed";
 
-const cfg = testConfig(); // label "flygd", standing 5
+const cfg = testConfig(); // label "authgd", standing 5
 const LABEL_ID = 77;
 
 let ctx: Awaited<ReturnType<typeof setupTestDb>>;
@@ -38,7 +38,7 @@ function fakeEsi(perChar: {
   const calls: Calls = { adds: [], edits: [], deletes: [] };
   const esi: ContactsEsi = {
     getContactLabels: async (characterId) =>
-      perChar.labels?.[characterId] ?? [{ labelId: LABEL_ID, labelName: "flygd" }],
+      perChar.labels?.[characterId] ?? [{ labelId: LABEL_ID, labelName: "authgd" }],
     getAllContacts: async (characterId) => {
       const c = perChar.contacts?.[characterId] ?? [];
       if (c === "fail") throw new EsiError("page read failed", 500, "transient");
@@ -94,10 +94,10 @@ describe("canPushContacts", () => {
 
 describe("runContactsJob", () => {
   it("fully reconciles: add, take over, remove ours, never touch unlabeled", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    const acc = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
     await seedCharacter(ctx.db, cfg, { id: 2, accountId: acc.id });
-    const acc2 = await seedAccount(ctx.db, { tier: "flygd" });
+    const acc2 = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, cfg, { id: 3, accountId: acc2.id, main: true });
     // Only character 1 has interesting contacts; keep the others empty.
     const { esi, calls } = fakeEsi({
@@ -121,7 +121,7 @@ describe("runContactsJob", () => {
     expect(calls.deletes).toContainEqual({ characterId: 1, ids: [99] });
     expect(calls.adds.filter((c) => c.characterId === 1)).toEqual([]);
     // characters 2 and 3 each get the other two added — order-independent,
-    // since getFlygdCharacters carries no ORDER BY guarantee.
+    // since getMemberCharacters carries no ORDER BY guarantee.
     const sortedAdds = calls.adds.map((c) => ({
       ...c,
       ids: [...c.ids].sort((a, b) => a - b),
@@ -141,7 +141,7 @@ describe("runContactsJob", () => {
   });
 
   it("records missing_label and skips ALL writes for that character", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    const acc = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
     await seedCharacter(ctx.db, cfg, { id: 2, accountId: acc.id });
     const { esi, calls } = fakeEsi({
@@ -155,7 +155,7 @@ describe("runContactsJob", () => {
   });
 
   it("aborts a character on a partial contact read — no destructive writes", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    const acc = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
     await seedCharacter(ctx.db, cfg, { id: 2, accountId: acc.id });
     const { esi, calls } = fakeEsi({ contacts: { 1: "fail" } });
@@ -169,7 +169,7 @@ describe("runContactsJob", () => {
   });
 
   it("skips non-pushable characters but keeps them in the desired set", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    const acc = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
     await seedCharacter(ctx.db, cfg, {
       id: 2,
@@ -188,7 +188,7 @@ describe("runContactsJob", () => {
   });
 
   it("records missing_scope for targets lacking the contact scopes", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    const acc = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
     await seedCharacter(ctx.db, cfg, {
       id: 2,
@@ -202,7 +202,7 @@ describe("runContactsJob", () => {
   });
 
   it("needs_reauth with contact scopes still syncs (per-job gating)", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    const acc = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, cfg, {
       id: 1,
       accountId: acc.id,
@@ -216,7 +216,7 @@ describe("runContactsJob", () => {
   });
 
   it("still deletes stale contacts when addContacts permanently fails on another id", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    const acc = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
     await seedCharacter(ctx.db, cfg, { id: 2, accountId: acc.id });
     const { esi, calls } = fakeEsi({
@@ -244,7 +244,7 @@ describe("runContactsJob", () => {
   });
 
   it("marks the character needs_reauth when ESI rejects the scope", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    const acc = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
     await seedCharacter(ctx.db, cfg, { id: 2, accountId: acc.id });
     const esi: ContactsEsi = {
@@ -253,7 +253,7 @@ describe("runContactsJob", () => {
         if (characterId === 1) {
           throw new EsiError("token has no scope", 403, "needs_reauth");
         }
-        return [{ labelId: LABEL_ID, labelName: "flygd" }];
+        return [{ labelId: LABEL_ID, labelName: "authgd" }];
       },
     };
     const result = await runContactsJob({ db: ctx.db, cfg, esi, fetchImpl: okToken });
@@ -264,16 +264,16 @@ describe("runContactsJob", () => {
   });
 
   it("records label_mismatch with the found name and writes nothing", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    const acc = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
     const { esi, calls } = fakeEsi({
-      labels: { 1: [{ labelId: LABEL_ID, labelName: "FLYGD" }] },
+      labels: { 1: [{ labelId: LABEL_ID, labelName: "AUTHGD" }] },
     });
     await runContactsJob({ db: ctx.db, cfg, esi, fetchImpl: okToken });
 
     const row = await lastResult(1);
     expect(row?.lastResult).toBe("label_mismatch");
-    expect(row?.lastDetail).toBe(JSON.stringify(["FLYGD"]));
+    expect(row?.lastDetail).toBe(JSON.stringify(["AUTHGD"]));
     expect(row?.lastSyncedAt).toBeNull();
     expect(calls.adds).toEqual([]);
     expect(calls.edits).toEqual([]);
@@ -281,22 +281,22 @@ describe("runContactsJob", () => {
   });
 
   it("reports every fold-equal candidate rather than picking one", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    const acc = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
     const { esi } = fakeEsi({
       labels: {
         1: [
-          { labelId: 1, labelName: "FLYGD" },
-          { labelId: 2, labelName: "flygd " },
+          { labelId: 1, labelName: "AUTHGD" },
+          { labelId: 2, labelName: "authgd " },
         ],
       },
     });
     await runContactsJob({ db: ctx.db, cfg, esi, fetchImpl: okToken });
-    expect((await lastResult(1))?.lastDetail).toBe(JSON.stringify(["FLYGD", "flygd "]));
+    expect((await lastResult(1))?.lastDetail).toBe(JSON.stringify(["AUTHGD", "authgd "]));
   });
 
   it("still records missing_label when no label is even close", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    const acc = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
     const { esi } = fakeEsi({ labels: { 1: [{ labelId: 9, labelName: "Blues" }] } });
     await runContactsJob({ db: ctx.db, cfg, esi, fetchImpl: okToken });
@@ -307,14 +307,14 @@ describe("runContactsJob", () => {
   });
 
   it("clears a stale detail once the member fixes the label", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    const acc = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
 
-    const bad = fakeEsi({ labels: { 1: [{ labelId: LABEL_ID, labelName: "FLYGD" }] } });
+    const bad = fakeEsi({ labels: { 1: [{ labelId: LABEL_ID, labelName: "AUTHGD" }] } });
     await runContactsJob({ db: ctx.db, cfg, esi: bad.esi, fetchImpl: okToken });
-    expect((await lastResult(1))?.lastDetail).toBe(JSON.stringify(["FLYGD"]));
+    expect((await lastResult(1))?.lastDetail).toBe(JSON.stringify(["AUTHGD"]));
 
-    const good = fakeEsi({ labels: { 1: [{ labelId: LABEL_ID, labelName: "flygd" }] } });
+    const good = fakeEsi({ labels: { 1: [{ labelId: LABEL_ID, labelName: "authgd" }] } });
     await runContactsJob({ db: ctx.db, cfg, esi: good.esi, fetchImpl: okToken });
 
     const row = await lastResult(1);
@@ -325,10 +325,10 @@ describe("runContactsJob", () => {
 
 describe("needs_reauth CAS (F5)", () => {
   it("marks needs_reauth when the token blob is unchanged", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    const acc = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
     const esi: ContactsEsi = {
-      ...fakeEsi({ labels: { 1: [{ labelId: 7, labelName: "flygd" }] } }).esi,
+      ...fakeEsi({ labels: { 1: [{ labelId: 7, labelName: "authgd" }] } }).esi,
       getAllContacts: async () => {
         throw new EsiError("missing scope", 403, "needs_reauth");
       },
@@ -339,10 +339,10 @@ describe("needs_reauth CAS (F5)", () => {
   });
 
   it("does NOT downgrade a row whose token rotated underneath the job", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    const acc = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
     const esi: ContactsEsi = {
-      ...fakeEsi({ labels: { 1: [{ labelId: 7, labelName: "flygd" }] } }).esi,
+      ...fakeEsi({ labels: { 1: [{ labelId: 7, labelName: "authgd" }] } }).esi,
       getAllContacts: async () => {
         // concurrent re-auth: someone else stored a fresh blob mid-flight
         await ctx.db

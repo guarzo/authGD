@@ -64,9 +64,9 @@ describe("SYNC_MODE config", () => {
       DISCORD_CLIENT_SECRET: "d",
       DISCORD_BOT_TOKEN: "d",
       DISCORD_GUILD_ID: "1",
-      DISCORD_ROLE_ID_FLYGD: "10",
-      DISCORD_ROLE_ID_BLUE: "11",
-      DISCORD_ROLE_ID_GREEN: "12",
+      DISCORD_ROLE_ID_MEMBER: "10",
+      DISCORD_ROLE_ID_ASSOCIATE: "11",
+      DISCORD_ROLE_ID_ALUMNI: "12",
       WANDERER_BASE_URL: "https://w.example",
       WANDERER_API_KEY: "k",
       WANDERER_ACL_ID: "a",
@@ -290,7 +290,7 @@ describe("job reporting honesty in dry-run", () => {
   });
 
   it("wanderer writes NO audit rows in dry-run and reports would* counters", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "flygd" });
+    const acc = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, dryCfg, {
       id: 90000001,
       accountId: acc.id,
@@ -316,13 +316,13 @@ describe("job reporting honesty in dry-run", () => {
   });
 
   it("discord-roles writes NO audit rows in dry-run and reports wouldChangeRoles", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "flygd", discordUserId: "u1" });
+    const acc = await seedAccount(ctx.db, { tier: "member", discordUserId: "u1" });
     await seedCharacter(ctx.db, dryCfg, { id: 90000001, accountId: acc.id, main: true });
     const client: DiscordClient = {
       getGuildRoles: async () => [
-        { id: "10", name: "FlyGD", position: 5, permissions: "0" },
-        { id: "11", name: "Blue", position: 4, permissions: "0" },
-        { id: "12", name: "Green", position: 3, permissions: "0" },
+        { id: "10", name: "Member", position: 5, permissions: "0" },
+        { id: "11", name: "Associate", position: 4, permissions: "0" },
+        { id: "12", name: "Alumni", position: 3, permissions: "0" },
         { id: "bot-role", name: "Bot", position: 9, permissions: "268435456" },
       ],
       getBotUserId: async () => "bot-user",
@@ -347,9 +347,9 @@ describe("job reporting honesty in dry-run", () => {
   it("discord-roles deprovision path writes NO audit rows in dry-run and reports wouldRemove", async () => {
     const client: DiscordClient = {
       getGuildRoles: async () => [
-        { id: "10", name: "FlyGD", position: 5, permissions: "0" },
-        { id: "11", name: "Blue", position: 4, permissions: "0" },
-        { id: "12", name: "Green", position: 3, permissions: "0" },
+        { id: "10", name: "Member", position: 5, permissions: "0" },
+        { id: "11", name: "Associate", position: 4, permissions: "0" },
+        { id: "12", name: "Alumni", position: 3, permissions: "0" },
         { id: "bot-role", name: "Bot", position: 9, permissions: "268435456" },
       ],
       getBotUserId: async () => "bot-user",

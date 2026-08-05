@@ -216,12 +216,12 @@ describe("contacts", () => {
   it("parses contact labels", async () => {
     server.use(
       http.get(`${BASE}/characters/90000001/contacts/labels/`, () =>
-        HttpResponse.json([{ label_id: 7, label_name: "flygd" }]),
+        HttpResponse.json([{ label_id: 7, label_name: "authgd" }]),
       ),
     );
     const esi = createEsiClient();
     expect(await esi.getContactLabels(90000001, "at")).toEqual([
-      { labelId: 7, labelName: "flygd" },
+      { labelId: 7, labelName: "authgd" },
     ]);
   });
 });

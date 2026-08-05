@@ -23,7 +23,7 @@ export async function seedMember(
   db: ReturnType<typeof testDb>["db"],
   opts: {
     name: string;
-    tier?: "pending" | "flygd" | "blue" | "green";
+    tier?: "pending" | "member" | "associate" | "alumni";
     tierLocked?: boolean;
     status?: "active" | "cryo";
     isAdmin?: boolean;
@@ -40,7 +40,7 @@ export async function seedMember(
     const [acc] = await tx
       .insert(account)
       .values({
-        tier: opts.tier ?? "green",
+        tier: opts.tier ?? "alumni",
         tierLocked: opts.tierLocked ?? false,
         status: opts.status ?? "active",
         isAdmin: opts.isAdmin ?? false,

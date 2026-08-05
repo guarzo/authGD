@@ -29,7 +29,7 @@ describe("seedDev", () => {
     expect(accounts).toHaveLength(seeded.length);
     expect(accounts.filter((a) => a.isAdmin)).toHaveLength(1);
     expect(new Set(accounts.map((a) => a.tier))).toEqual(
-      new Set(["flygd", "blue", "green"]),
+      new Set(["member", "associate", "alumni"]),
     );
     expect(accounts.some((a) => a.status === "cryo")).toBe(true);
     expect(accounts.some((a) => a.tierLocked)).toBe(true);
@@ -67,7 +67,7 @@ describe("seedDev", () => {
     const [first] = await seedDev(ctx.db, cfg);
     await ctx.db
       .update(account)
-      .set({ tier: "green", isAdmin: false, status: "cryo" })
+      .set({ tier: "alumni", isAdmin: false, status: "cryo" })
       .where(eq(account.id, first.accountId));
 
     await seedDev(ctx.db, cfg);
@@ -76,7 +76,7 @@ describe("seedDev", () => {
       .select()
       .from(account)
       .where(eq(account.id, first.accountId));
-    expect(restored.tier).toBe("flygd");
+    expect(restored.tier).toBe("member");
     expect(restored.isAdmin).toBe(true);
     expect(restored.status).toBe("active");
   });

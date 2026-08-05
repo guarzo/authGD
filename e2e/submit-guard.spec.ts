@@ -29,7 +29,7 @@ test("double-clicking Create operation makes one operation, not two", async ({
 }) => {
   const operator = await seedMember(db, {
     name: "FC Doubletap",
-    tier: "flygd",
+    tier: "member",
     status: "active",
   });
   await context.addCookies([await sessionCookieFor(db, operator.id)]);
@@ -58,7 +58,7 @@ test("the pressed button keeps focus while its form is in flight", async ({
 }) => {
   const operator = await seedMember(db, {
     name: "FC Focus",
-    tier: "flygd",
+    tier: "member",
     status: "active",
   });
   await context.addCookies([await sessionCookieFor(db, operator.id)]);

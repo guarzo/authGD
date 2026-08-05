@@ -35,7 +35,7 @@ afterAll(() => ctx.cleanup());
 beforeEach(() => truncateAll(ctx.db));
 
 async function seedOperation() {
-  const operator = await seedAccount(ctx.db, { tier: "flygd", status: "active" });
+  const operator = await seedAccount(ctx.db, { tier: "member", status: "active" });
   const { id: operationId } = await ctx.db.transaction((tx) =>
     createOperation(tx, operator.id, {
       name: "Fight",
@@ -199,10 +199,10 @@ describe("addFlatPool", () => {
 
   it("rejects requirePayoutOperator before the note check, so a forbidden actor sees the authorization error first", async () => {
     const { operationId } = await seedOperation();
-    const green = await seedAccount(ctx.db, { tier: "green", status: "active" });
+    const alumnus = await seedAccount(ctx.db, { tier: "alumni", status: "active" });
     await expect(
       ctx.db.transaction((tx) =>
-        addFlatPool(tx, green.id, operationId, { totalValue: "1.00", notes: "" }),
+        addFlatPool(tx, alumnus.id, operationId, { totalValue: "1.00", notes: "" }),
       ),
     ).rejects.toThrow(PayoutForbiddenError);
   });
@@ -371,10 +371,10 @@ describe("payment lock", () => {
 
   it("rejects a non-operator actor at the service layer, not just in the action", async () => {
     const { operationId } = await seedOperation();
-    const green = await seedAccount(ctx.db, { tier: "green", status: "active" });
+    const alumnus = await seedAccount(ctx.db, { tier: "alumni", status: "active" });
     await expect(
       ctx.db.transaction((tx) =>
-        addFlatPool(tx, green.id, operationId, { totalValue: "1.00", notes: "n" }),
+        addFlatPool(tx, alumnus.id, operationId, { totalValue: "1.00", notes: "n" }),
       ),
     ).rejects.toThrow(PayoutForbiddenError);
   });
@@ -534,9 +534,9 @@ describe("setItemPrice", () => {
 
   it("rejects a non-operator actor at the service layer", async () => {
     const { itemId } = await seedPricedItem(2);
-    const green = await seedAccount(ctx.db, { tier: "green", status: "active" });
+    const alumnus = await seedAccount(ctx.db, { tier: "alumni", status: "active" });
     await expect(
-      ctx.db.transaction((tx) => setItemPrice(tx, green.id, itemId, "9.00")),
+      ctx.db.transaction((tx) => setItemPrice(tx, alumnus.id, itemId, "9.00")),
     ).rejects.toThrow(PayoutForbiddenError);
   });
 

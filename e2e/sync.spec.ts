@@ -80,7 +80,7 @@ async function seedRuns() {
 }
 
 async function asAdmin(context: import("@playwright/test").BrowserContext) {
-  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
   await context.addCookies([await sessionCookieFor(db, admin.id)]);
   return admin;
 }

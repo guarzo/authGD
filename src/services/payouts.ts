@@ -29,19 +29,19 @@ export class PayoutDuplicateParticipantError extends Error {}
  * caller that needs more does its own lookup. This is that lookup for
  * payouts: a cryo account (this project's representation of someone who has
  * stepped away) must not be able to move alliance ISK, even with a perfectly
- * valid session, and neither can anyone below flygd.
+ * valid session, and neither can anyone below member.
  */
 export async function requirePayoutOperator(dbx: Dbx, accountId: string): Promise<void> {
   const [acc] = await dbx.select().from(account).where(eq(account.id, accountId));
-  if (!acc || acc.tier !== "flygd" || acc.status !== "active") {
-    throw new PayoutForbiddenError("payout mutation requires an active flygd account");
+  if (!acc || acc.tier !== "member" || acc.status !== "active") {
+    throw new PayoutForbiddenError("payout mutation requires an active member account");
   }
 }
 
-/** Reading is far less restrictive than mutating: any flygd member, any status. */
+/** Reading is far less restrictive than mutating: any member account, any status. */
 export async function canReadPayouts(dbx: Dbx, accountId: string): Promise<boolean> {
   const [acc] = await dbx.select().from(account).where(eq(account.id, accountId));
-  return acc?.tier === "flygd";
+  return acc?.tier === "member";
 }
 
 export async function lockOperation(

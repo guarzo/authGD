@@ -23,7 +23,7 @@ test("a typed-in bad URL renders the app's own 404, not the framework's", async 
   page,
   context,
 }) => {
-  const member = await seedMember(db, { name: "Lost Pilot", tier: "green" });
+  const member = await seedMember(db, { name: "Lost Pilot", tier: "alumni" });
   await context.addCookies([await sessionCookieFor(db, member.id)]);
 
   const res = await page.goto("/no-such-page");
@@ -76,7 +76,7 @@ test("clicking a since-deleted operation announces the 404 and lands focus in it
 }) => {
   const operator = await seedMember(db, {
     name: "List Reader",
-    tier: "flygd",
+    tier: "member",
     status: "active",
   });
   await context.addCookies([await sessionCookieFor(db, operator.id)]);
@@ -135,7 +135,7 @@ test("a truncated operation id pasted in gets the operation 404, not the error b
 }) => {
   const member = await seedMember(db, {
     name: "Link Follower",
-    tier: "flygd",
+    tier: "member",
     status: "active",
   });
   await context.addCookies([await sessionCookieFor(db, member.id)]);
@@ -157,7 +157,7 @@ test("a malformed operation id gets the operation 404, not the error boundary", 
 }) => {
   const member = await seedMember(db, {
     name: "Typo Follower",
-    tier: "flygd",
+    tier: "member",
     status: "active",
   });
   await context.addCookies([await sessionCookieFor(db, member.id)]);
@@ -175,8 +175,8 @@ test("a malformed operation id gets the operation 404, not the error boundary", 
 });
 
 test("the payouts 404 stays behind the payouts guard", async ({ page, context }) => {
-  const green = await seedMember(db, { name: "Outsider", tier: "green" });
-  await context.addCookies([await sessionCookieFor(db, green.id)]);
+  const alumnus = await seedMember(db, { name: "Outsider", tier: "alumni" });
+  await context.addCookies([await sessionCookieFor(db, alumnus.id)]);
 
   // `requirePayoutReader()` runs before `notFound()`, so a member without read
   // access is redirected out rather than being shown a payouts-flavoured 404

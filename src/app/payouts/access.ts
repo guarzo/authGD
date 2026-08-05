@@ -14,7 +14,7 @@ import { OPEN_WINDOW_SCOPE } from "@/lib/esi/client";
 
 export type PayoutAccess = {
   accountId: string;
-  /** tier flygd AND status active — the requirePayoutOperator gate, mirrored
+  /** tier member AND status active — the requirePayoutOperator gate, mirrored
    *  here only to decide what to render; every mutation re-checks itself. */
   isOperator: boolean;
   isAdmin: boolean;
@@ -32,8 +32,8 @@ export type PayoutAccess = {
 
 /**
  * Session → payout read access, or null when there is no session or the
- * account is not tier `flygd` (canReadPayouts is tier-only, any status —
- * a cryo flygd member still reads everything, per the design's "Access and
+ * account is not tier `member` (canReadPayouts is tier-only, any status —
+ * a cryo member account still reads everything, per the design's "Access and
  * visibility" section). Pages redirect on null; they do not render a partial
  * page and hide pieces of it.
  */
@@ -52,7 +52,7 @@ export async function requirePayoutReader(): Promise<PayoutAccess | null> {
     await requirePayoutOperator(db, sess.accountId);
     isOperator = true;
   } catch (err) {
-    // Only "not an active flygd account" means "reader, not operator" — any
+    // Only "not an active member account" means "reader, not operator" — any
     // other failure (DB error, etc.) must surface, not be silently read as
     // "just hide the operator controls".
     if (!(err instanceof PayoutForbiddenError)) throw err;

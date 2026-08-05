@@ -3,13 +3,13 @@ import { summarizeDetails } from "@/app/admin/audit/summarize";
 
 describe("summarizeDetails", () => {
   it("renders a tier transition with its from value", () => {
-    expect(summarizeDetails("tier.changed", { from: "flygd", to: "green" })).toBe(
-      "flygd → green",
+    expect(summarizeDetails("tier.changed", { from: "member", to: "alumni" })).toBe(
+      "member → alumni",
     );
   });
 
   it("renders a tier transition without from", () => {
-    expect(summarizeDetails("tier.changed", { to: "green" })).toBe("→ green");
+    expect(summarizeDetails("tier.changed", { to: "alumni" })).toBe("→ alumni");
   });
 
   it("renders a labelled scalar action", () => {
@@ -112,9 +112,9 @@ describe("summarizeDetails", () => {
 });
 
 const ROLE_NAMES = new Map([
-  ["100", "flygd"],
-  ["200", "blue"],
-  ["300", "green"],
+  ["100", "member"],
+  ["200", "associate"],
+  ["300", "alumni"],
 ]);
 
 describe("summarizeDetails, declared fields and role rendering", () => {
@@ -155,7 +155,7 @@ describe("summarizeDetails, declared fields and role rendering", () => {
         { added: ["300"], removed: ["100"] },
         ROLE_NAMES,
       ),
-    ).toBe("+green −flygd");
+    ).toBe("+alumni −member");
   });
 
   it("collapses unresolvable ids alongside known ones", () => {
@@ -165,7 +165,7 @@ describe("summarizeDetails, declared fields and role rendering", () => {
         { added: ["300"], removed: ["100", "999888777"] },
         ROLE_NAMES,
       ),
-    ).toBe("+green −flygd, −1 other");
+    ).toBe("+alumni −member, −1 other");
   });
 
   it("truncates a lone unresolvable id", () => {
@@ -200,32 +200,32 @@ describe("summarizeDetails, declared fields and role rendering", () => {
   it("surfaces the cause a tier change was written with", () => {
     expect(
       summarizeDetails("tier.changed", {
-        from: "flygd",
-        to: "green",
+        from: "member",
+        to: "alumni",
         cause: "main unlinked",
       }),
-    ).toBe("flygd → green, main unlinked");
+    ).toBe("member → alumni, main unlinked");
   });
 
   it("renders a truthy flag as its word and a falsy one as nothing", () => {
-    expect(summarizeDetails("tier.changed", { to: "blue", locked: true })).toBe(
-      "→ blue, locked",
+    expect(summarizeDetails("tier.changed", { to: "associate", locked: true })).toBe(
+      "→ associate, locked",
     );
-    expect(summarizeDetails("tier.changed", { to: "blue", locked: false })).toBe(
-      "→ blue",
+    expect(summarizeDetails("tier.changed", { to: "associate", locked: false })).toBe(
+      "→ associate",
     );
   });
 
   it("does not count a declared key that rendered blank as hidden", () => {
     // Rule 1: declared-and-deliberately-silent is not nobody-looked-at-it.
-    expect(summarizeDetails("tier.changed", { to: "blue", locked: false })).not.toContain(
-      "more",
-    );
+    expect(
+      summarizeDetails("tier.changed", { to: "associate", locked: false }),
+    ).not.toContain("more");
   });
 
   it("appends the remainder for an undeclared key on a declared action", () => {
-    expect(summarizeDetails("tier.changed", { to: "blue", surprise: 1 })).toBe(
-      "→ blue, +1 more",
+    expect(summarizeDetails("tier.changed", { to: "associate", surprise: 1 })).toBe(
+      "→ associate, +1 more",
     );
   });
 
@@ -241,12 +241,12 @@ describe("summarizeDetails, declared fields and role rendering", () => {
     // hand-curated declaration's.
     expect(
       summarizeDetails("tier.changed", {
-        from: "flygd",
-        to: "green",
+        from: "member",
+        to: "alumni",
         cause: "manual",
         locked: true,
       }),
-    ).toBe("flygd → green, manual, locked");
+    ).toBe("member → alumni, manual, locked");
   });
 
   it("renders one or two missing scopes in full and collapses three or more", () => {
@@ -288,7 +288,7 @@ describe("summarizeDetails, declared fields and role rendering", () => {
   });
 
   it("renders the tier automation was handed back", () => {
-    expect(summarizeDetails("tier.unlocked", { tier: "flygd" })).toBe("was flygd");
+    expect(summarizeDetails("tier.unlocked", { tier: "member" })).toBe("was member");
   });
 
   it("renders a status note change as added, replaced, or cleared", () => {
@@ -316,22 +316,31 @@ describe("summarizeDetails, declared fields and role rendering", () => {
   });
 
   it("surfaces the tier and cause a discord role change was written with", () => {
-    const names = new Map([["1", "green"]]);
+    const names = new Map([["1", "alumni"]]);
     expect(
       summarizeDetails(
         "discord.role_changed",
-        { added: ["1"], tier: "green", cause: "tier change" },
+        { added: ["1"], tier: "alumni", cause: "tier change" },
         names,
       ),
-    ).toBe("+green, tier green, tier change");
+    ).toBe("+alumni, tier alumni, tier change");
   });
 
   it("still degrades on rows written before this change", () => {
     // The no-migration guarantee, expressed as tests.
     expect(
-      summarizeDetails("tier.changed", { to: "green", cause: "main unlinked" }),
-    ).toBe("→ green, main unlinked");
+      summarizeDetails("tier.changed", { to: "alumni", cause: "main unlinked" }),
+    ).toBe("→ alumni, main unlinked");
     expect(summarizeDetails("status.changed", { to: "cryo" })).toBe("→ cryo");
     expect(summarizeDetails("character.unlinked", {})).toBe("—");
+  });
+
+  it("renders a pre-rename audit detail verbatim", () => {
+    // Spec D4: audit_log.details is history, not live state. Rows written before
+    // migration 0007 keep the old tier strings and are shown as stored — there is
+    // no alias map, and adding one would rewrite history to match today's config.
+    expect(
+      summarizeDetails("tier.changed", { from: "green", to: "flygd", cause: "admin" }),
+    ).toBe("green → flygd, admin");
   });
 });

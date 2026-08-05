@@ -25,13 +25,13 @@ const okToken = (async () =>
     headers: { "content-type": "application/json" },
   })) as typeof fetch;
 
-it("main leaves alliance → green → contacts removed, ACL removed, role changed, audited", async () => {
-  // leaver: flygd account with main (10) + alt (11), discord-linked
-  const leaver = await seedAccount(ctx.db, { tier: "flygd", discordUserId: "u-leaver" });
+it("main leaves alliance → alumni → contacts removed, ACL removed, role changed, audited", async () => {
+  // leaver: member account with main (10) + alt (11), discord-linked
+  const leaver = await seedAccount(ctx.db, { tier: "member", discordUserId: "u-leaver" });
   await seedCharacter(ctx.db, cfg, { id: 10, accountId: leaver.id, main: true });
   await seedCharacter(ctx.db, cfg, { id: 11, accountId: leaver.id });
-  // stayer: flygd account whose contacts currently include the leaver's chars
-  const stayer = await seedAccount(ctx.db, { tier: "flygd", discordUserId: "u-stayer" });
+  // stayer: member account whose contacts currently include the leaver's chars
+  const stayer = await seedAccount(ctx.db, { tier: "member", discordUserId: "u-stayer" });
   await seedCharacter(ctx.db, cfg, { id: 20, accountId: stayer.id, main: true });
 
   // --- fake integrations (same shapes as the Task 8–10 tests) ---
@@ -44,7 +44,7 @@ it("main leaves alliance → green → contacts removed, ACL removed, role chang
         corporationId: 1,
         allianceId: id === 20 ? 99000001 : null,
       })),
-    getContactLabels: async () => [{ labelId: LABEL_ID, labelName: "flygd" }],
+    getContactLabels: async () => [{ labelId: LABEL_ID, labelName: "authgd" }],
     // stayer's char 20 currently has 10 and 11 under our label
     getAllContacts: async (characterId) =>
       characterId === 20
@@ -91,7 +91,7 @@ it("main leaves alliance → green → contacts removed, ACL removed, role chang
     },
   };
 
-  // Discord: both users currently carry the FlyGD role.
+  // Discord: both users currently carry the Member role.
   const MANAGE_ROLES = String(1 << 28);
   const roleOps = {
     added: [] as Array<[string, string]>,
@@ -104,9 +104,9 @@ it("main leaves alliance → green → contacts removed, ACL removed, role chang
   };
   const discord: DiscordClient = {
     getGuildRoles: async () => [
-      { id: "10", name: "FlyGD", position: 5, permissions: "0" },
-      { id: "11", name: "Blue", position: 4, permissions: "0" },
-      { id: "12", name: "Green", position: 3, permissions: "0" },
+      { id: "10", name: "Member", position: 5, permissions: "0" },
+      { id: "11", name: "Associate", position: 4, permissions: "0" },
+      { id: "12", name: "Alumni", position: 3, permissions: "0" },
       { id: "bot-role", name: "Bot", position: 9, permissions: MANAGE_ROLES },
     ],
     getBotUserId: async () => "bot-user",
@@ -130,7 +130,7 @@ it("main leaves alliance → green → contacts removed, ACL removed, role chang
     fetchImpl: okToken,
   });
 
-  // 1) A scheduled membership run demotes the leaver (green + outbox row).
+  // 1) A scheduled membership run demotes the leaver (alumni + outbox row).
   await handlers["membership"]({ jobType: "membership" });
 
   // 2) The demotion's outbox row fans out through the real dispatcher…
@@ -158,7 +158,7 @@ it("main leaves alliance → green → contacts removed, ACL removed, role chang
   const observed = await ctx.db.select().from(wandererAclObservation);
   expect(observed.map((o) => o.characterId)).toEqual([20]);
 
-  // 6) Discord: leaver ends with EXACTLY green; stayer untouched (the fan-out
+  // 6) Discord: leaver ends with EXACTLY alumni; stayer untouched (the fan-out
   //    was scoped to the demoted account).
   expect(roleOps.added).toContainEqual(["u-leaver", "12"]);
   expect(roleOps.removed).toContainEqual(["u-leaver", "10"]);
@@ -168,7 +168,10 @@ it("main leaves alliance → green → contacts removed, ACL removed, role chang
   // 7) Audit trail: demotion cause + downstream actions all recorded.
   const audits = await ctx.db.select().from(auditLog);
   const tierChange = audits.find((a) => a.action === "tier.changed");
-  expect(tierChange?.details).toMatchObject({ to: "green", cause: "main left alliance" });
+  expect(tierChange?.details).toMatchObject({
+    to: "alumni",
+    cause: "main left alliance",
+  });
   expect(audits.filter((a) => a.action === "wanderer.removed")).toHaveLength(2);
   expect(audits.some((a) => a.action === "discord.role_changed")).toBe(true);
 

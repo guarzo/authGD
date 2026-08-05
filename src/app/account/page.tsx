@@ -142,7 +142,7 @@ export default async function AccountPage({
   // is about the column as a whole, not about one character.
   //
   // Non-targets are excluded: their cell reads "— not managed", not a state the
-  // note explains. Telling a blue member authGD manages a contact label on their
+  // note explains. Telling an associate member authGD manages a contact label on their
   // characters describes something that never happens to them.
   const showContactsNote = view.characters.some(
     (c) => c.contactsTarget && contactsNoteApplies(c.contactSyncResult),
@@ -226,13 +226,14 @@ export default async function AccountPage({
         {message && <Notice tone="bad">{message}</Notice>}
 
         {/* Only the characters the contacts job actually targets can be waiting
-            on a first run. Testing every character instead meant a blue member,
-            who has no targets and never will, was told their first sync was
-            pending for as long as they stayed blue. Reads `firstSyncPending`
-            rather than the verdict: a just-linked character has no scopes yet,
-            so it is simultaneously "needs attention" and "waiting on its first
-            run", and this notice — the one that says the wait is minutes, not
-            broken — must survive the verdict leading with the fault. */}
+            on a first run. Testing every character instead meant an associate
+            member, who has no targets and never will, was told their first sync
+            was pending for as long as they stayed associate. Reads
+            `firstSyncPending` rather than the verdict: a just-linked character
+            has no scopes yet, so it is simultaneously "needs attention" and
+            "waiting on its first run", and this notice — the one that says the
+            wait is minutes, not broken — must survive the verdict leading with
+            the fault. */}
         {health.firstSyncPending && (
           <Notice>
             First sync has not run yet.{" "}
@@ -512,7 +513,7 @@ export default async function AccountPage({
         </p>
 
         {/* Omitted entirely when there are none, like the "Sync schedule" block
-            below: an empty table under "Your payouts" on every green member's
+            below: an empty table under "Your payouts" on every alumni member's
             page is a section that never says anything. */}
         {payouts.length > 0 && (
           <AccountPayouts rows={payouts} linkToOperations={showPayoutsLink} />

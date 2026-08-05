@@ -53,7 +53,7 @@ const BROKEN_ROUTE = "/payouts";
 test("the tab stops naming the page that failed", async ({ page, context }) => {
   const member = await seedMember(db, {
     name: "Link Follower",
-    tier: "flygd",
+    tier: "member",
     status: "active",
   });
   await context.addCookies([await sessionCookieFor(db, member.id)]);
@@ -75,7 +75,7 @@ test("the tab stops naming the page that failed", async ({ page, context }) => {
 test("focus lands in the boundary rather than on <body>", async ({ page, context }) => {
   const member = await seedMember(db, {
     name: "Link Follower",
-    tier: "flygd",
+    tier: "member",
     status: "active",
   });
   await context.addCookies([await sessionCookieFor(db, member.id)]);
@@ -99,7 +99,7 @@ test("a retry that fails again re-announces instead of looking like a dead click
 }) => {
   const member = await seedMember(db, {
     name: "Link Follower",
-    tier: "flygd",
+    tier: "member",
     status: "active",
   });
   await context.addCookies([await sessionCookieFor(db, member.id)]);
@@ -145,7 +145,7 @@ test("the boundary keeps an admin inside the admin section", async ({
 }) => {
   const admin = await seedMember(db, {
     name: "Boss",
-    tier: "flygd",
+    tier: "member",
     status: "active",
     isAdmin: true,
   });
@@ -191,7 +191,7 @@ test("the boundary keeps a payouts reader inside payouts, and offers no admin li
 }) => {
   const member = await seedMember(db, {
     name: "Link Follower",
-    tier: "flygd",
+    tier: "member",
     status: "active",
   });
   await context.addCookies([await sessionCookieFor(db, member.id)]);
@@ -227,7 +227,7 @@ test("the reference is inside the instruction that asks for it", async ({
 }) => {
   const member = await seedMember(db, {
     name: "Link Follower",
-    tier: "flygd",
+    tier: "member",
     status: "active",
   });
   await context.addCookies([await sessionCookieFor(db, member.id)]);
@@ -263,7 +263,7 @@ test("the lede no longer claims the request didn't go through", async ({
 }) => {
   const member = await seedMember(db, {
     name: "Link Follower",
-    tier: "flygd",
+    tier: "member",
     status: "active",
   });
   await context.addCookies([await sessionCookieFor(db, member.id)]);
