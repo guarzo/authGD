@@ -145,6 +145,23 @@ export function InlineEdit({
         }
       }}
     >
+      {/* `defaultValue`, not a controlled value — and that is safe here only
+          because of what every action this component wraps does on rejection.
+          React 19 resets an uncontrolled field once a `<form action>` submit
+          settles, which is exactly how `AppraiseForm` and the composer lost
+          their pastes (both are controlled now for that reason). This one gets
+          away with it because no action here ever settles into a rendered
+          rejection: a success closes the editor (`setEditing(false)`), and a
+          failure goes through `operationFailed`'s `redirect()` in
+          `../actions.ts`, which is a hard navigation that remounts this
+          component from the server anyway.
+
+          So the invariant is: every action passed to InlineEdit rejects by
+          redirecting, never by returning state. An editor added later whose
+          action returns `{ ok: false }` would render its rejection in place,
+          React would blank the field underneath it, and the operator would
+          lose what they typed with nothing to show why. If that day comes,
+          control the value here rather than adding a special case. */}
       {as === "textarea" ? (
         <textarea
           className={fieldClassName}
