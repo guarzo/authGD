@@ -111,7 +111,7 @@ describe("appraiseLoot", () => {
   // by a visible, non-rounding-noise amount. A prior version of this test
   // asserted a plain sum of three lines and passed under BOTH the naive
   // and the correct implementation, so it never actually guarded the
-  // rounding order — see design doc discussion in the task-8 fix round.
+  // rounding order.
   // A second, differently-scaled line (small qty, ordinary 2dp price) is
   // included so this is also the only test with two nonzero-priced lines,
   // checking each line total AND the combined pool total.

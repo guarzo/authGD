@@ -39,7 +39,7 @@ import { seedAccount, seedCharacter } from "./helpers/seed";
  * written" — absence, not behavior.
  */
 
-const liveCfg = testConfig(); // helper defaults to live (spec D10)
+const liveCfg = testConfig(); // helper defaults to live
 const dryCfg = testConfig({ SYNC_MODE: "dry-run" });
 
 // onUnhandledRequest: "error" is the real assertion in the client sections: a
@@ -212,7 +212,7 @@ describe("esi client guard", () => {
   });
 });
 
-describe("ops webhook guard (D9)", () => {
+describe("ops webhook guard", () => {
   it("posts nothing in dry-run", async () => {
     const fetchImpl = vi.fn(async () => new Response(null, { status: 204 }));
     await postOpsWebhook(dryCfg, "alert", fetchImpl);
@@ -228,7 +228,7 @@ describe("ops webhook guard (D9)", () => {
   });
 });
 
-describe("token refresh guard (D4)", () => {
+describe("token refresh guard", () => {
   let ctx: Awaited<ReturnType<typeof setupTestDb>>;
   beforeAll(async () => {
     ctx = await setupTestDb();

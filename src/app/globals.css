@@ -1487,7 +1487,7 @@ h3.rule-head__label {
    and describes `quiet` as a *colour* grade alongside primary and default, not
    a size. Its 1.875rem was a third size nobody had committed to: 30px, two
    pixels off one grade and six off the other, which made "how tall is a
-   button here" unanswerable from the spec. Joined to the in-row grade, since
+   button here" unanswerable. Joined to the in-row grade, since
    that is where nearly all of these live. */
 .btn--quiet {
   background: transparent;

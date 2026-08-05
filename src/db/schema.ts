@@ -93,7 +93,7 @@ export const session = pgTable(
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  // supports the Plan 2 expired-session sweep
+  // supports the expired-session sweep
   (t) => [index("session_expires_at_idx").on(t.expiresAt)],
 );
 

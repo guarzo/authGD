@@ -240,16 +240,18 @@ personality choices as requirements.
 
 - [Contributing](CONTRIBUTING.md) — setup, the checks CI runs, and the handful of
   rules that keep a live deployment's data safe.
-- [Design spec](docs/superpowers/specs/2026-08-02-authgd-design.md) — the authoritative
-  description of the tier model, data model, sync jobs, auth flows, and error handling.
-- [Implementation plans](docs/superpowers/plans/) — the phased build plans.
 - [Operations guide](docs/ops.md) — deployment, the Fly.io runbook, and the full
   environment-variable reference.
+
+The tier model, data model, sync jobs, and auth flows are documented in the code
+itself: `src/db/schema.ts` for the data model, `src/core/` for the tier and diff
+rules, `src/jobs/` and `src/worker/` for the sync jobs, and `src/app/auth/` for
+the OAuth flows.
 
 ## Status
 
 Built in phases: foundation and auth, then the sync engine, then the admin UI and ops
-tooling. See the plans linked above for what each phase covers.
+tooling. All three are in production.
 
 ## License
 

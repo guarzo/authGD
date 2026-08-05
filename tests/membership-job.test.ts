@@ -151,7 +151,7 @@ describe("runMembershipJob", () => {
     expect((await getAccount(a2.id)).tier).toBe("alumni"); // untouched
   });
 
-  it("labels recheck runs membership-recheck in sync_run (F7)", async () => {
+  it("labels recheck runs membership-recheck in sync_run", async () => {
     await runMembershipJob(
       { db: ctx.db, cfg, esi: esiWith({}) },
       { recheckInvalid: true },

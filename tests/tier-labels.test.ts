@@ -2,21 +2,21 @@ import { describe, expect, it } from "vitest";
 import { resolveTierLabel } from "@/core/tier-labels";
 
 const LABELS = {
-  member: "FlyGD",
-  associate: "Blue",
-  alumni: "Green",
+  member: "Pilot",
+  associate: "Cadet",
+  alumni: "Veteran",
   pending: "Pending",
 };
 
 describe("resolveTierLabel", () => {
   it("returns the configured label for a known tier", () => {
-    expect(resolveTierLabel("member", LABELS)).toBe("FlyGD");
-    expect(resolveTierLabel("associate", LABELS)).toBe("Blue");
-    expect(resolveTierLabel("alumni", LABELS)).toBe("Green");
+    expect(resolveTierLabel("member", LABELS)).toBe("Pilot");
+    expect(resolveTierLabel("associate", LABELS)).toBe("Cadet");
+    expect(resolveTierLabel("alumni", LABELS)).toBe("Veteran");
     expect(resolveTierLabel("pending", LABELS)).toBe("Pending");
   });
 
-  // Pre-rename audit rows store the old vocabulary verbatim (spec D4) and
+  // Pre-rename audit rows store the old vocabulary verbatim and
   // reach this function as plain strings with no entry in the label map.
   it("returns the raw string for a legacy tier value", () => {
     expect(resolveTierLabel("flygd", LABELS)).toBe("flygd");

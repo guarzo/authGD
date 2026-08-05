@@ -82,14 +82,13 @@ const envSchema = z.object({
   // it at a label created for authGD, never one humans also curate.
   STANDINGS_LABEL: z.string().min(1).default("authgd"),
   STANDINGS_VALUE: z.coerce.number().min(-10).max(10).default(5),
-  // CCP requires ESI consumers to send identifying contact info (F6).
+  // CCP requires ESI consumers to send identifying contact info.
   ESI_CONTACT: z.string().min(1),
   // REQUIRED with no default, deliberately: every other arrangement has a
   // silent failure mode. Defaulting to "dry-run" would let a missing
   // production secret turn sync into an unnoticed no-op; defaulting to "live"
   // would make the destructive configuration the one you get by forgetting.
-  // Requiring it means both environments state intent. See
-  // docs/superpowers/specs/2026-08-03-local-dev-setup.md (D1).
+  // Requiring it means both environments state intent.
   SYNC_MODE: z.enum(["live", "dry-run"]),
 
   // Display only. The enum values are member|associate|alumni|pending and do

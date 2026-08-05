@@ -89,9 +89,8 @@ describe("summarizeDetails", () => {
   });
 
   // Every action emitted with no `details` at all. Derived mechanically from
-  // `grep -rho 'action: "…"' src/`; see the spec's "How this inventory was
-  // derived". A renderer for any of these would be machinery for an empty
-  // payload, and the em dash is already correct.
+  // `grep -rho 'action: "…"' src/`. A renderer for any of these would be
+  // machinery for an empty payload, and the em dash is already correct.
   it.each([
     "character.linked",
     "character.reauthed",
@@ -336,7 +335,7 @@ describe("summarizeDetails, declared fields and role rendering", () => {
   });
 
   it("renders a pre-rename audit detail verbatim", () => {
-    // Spec D4: audit_log.details is history, not live state. Rows written before
+    // audit_log.details is history, not live state. Rows written before
     // migration 0007 keep the old tier strings and are shown as stored — there is
     // no alias map, and adding one would rewrite history to match today's config.
     expect(
@@ -347,9 +346,9 @@ describe("summarizeDetails, declared fields and role rendering", () => {
 
 describe("summarizeDetails with configured tier labels", () => {
   const LABELS = {
-    member: "FlyGD",
-    associate: "Blue",
-    alumni: "Green",
+    member: "Pilot",
+    associate: "Cadet",
+    alumni: "Veteran",
     pending: "Waiting",
   };
 
@@ -361,7 +360,7 @@ describe("summarizeDetails with configured tier labels", () => {
         new Map(),
         LABELS,
       ),
-    ).toBe("FlyGD → Green");
+    ).toBe("Pilot → Veteran");
   });
 
   it("labels an approval, which has no from value", () => {
@@ -374,12 +373,12 @@ describe("summarizeDetails with configured tier labels", () => {
         new Map(),
         LABELS,
       ),
-    ).toBe("→ Blue, locked");
+    ).toBe("→ Cadet, locked");
   });
 
   it("labels an unlock's prior tier", () => {
     expect(summarizeDetails("tier.unlocked", { tier: "member" }, new Map(), LABELS)).toBe(
-      "was FlyGD",
+      "was Pilot",
     );
   });
 
@@ -391,7 +390,7 @@ describe("summarizeDetails with configured tier labels", () => {
         new Map(),
         LABELS,
       ),
-    ).toBe("tier Green, tier change");
+    ).toBe("tier Veteran, tier change");
   });
 
   it("leaves a status transition alone", () => {
@@ -408,7 +407,7 @@ describe("summarizeDetails with configured tier labels", () => {
   });
 
   it("passes a pre-rename tier value through unchanged", () => {
-    // Spec D4 again, now with labels configured: `flygd` is not a key in the
+    // A pre-rename value with labels configured: `flygd` is not a key in the
     // map, so it renders as stored rather than resolving to anything.
     expect(
       summarizeDetails("tier.changed", { from: "green", to: "flygd" }, new Map(), LABELS),

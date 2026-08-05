@@ -298,7 +298,7 @@ describe("resolveIds", () => {
   });
 });
 
-describe("User-Agent (F6)", () => {
+describe("User-Agent", () => {
   it("sends the configured User-Agent on every request", async () => {
     let ua: string | null = null;
     server.use(

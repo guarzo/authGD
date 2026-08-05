@@ -97,9 +97,9 @@ export async function addFlatPool(
   operationId: string,
   input: { rawPaste?: string | null; totalValue: string; notes: string },
 ): Promise<{ poolId: string }> {
-  // requirePayoutOperator is the FIRST statement, per the plan's Global
-  // Constraints — an actor who cannot mutate payouts is rejected before any
-  // other validation runs, note-content included.
+  // requirePayoutOperator is deliberately the FIRST statement: an actor who
+  // cannot mutate payouts is rejected before any other validation runs,
+  // note-content included.
   await requirePayoutOperator(dbtx, actor);
   // Mirrors the DB CHECK (loot_pool_flat_note_ck) with a friendlier message,
   // checked before taking any lock since it needs no operation state.

@@ -71,7 +71,7 @@ export async function getFreshAccessToken(
   ) {
     return { ok: false, reason: "no_token" };
   }
-  // Dry-run guard (spec D4). EVE SSO ROTATES the refresh token on every use,
+  // Dry-run guard. EVE SSO ROTATES the refresh token on every use,
   // so refreshing against production credentials silently invalidates the
   // stored copy — destruction disguised as a read. Refusing before the call is
   // the only safe option: refreshing without persisting would invalidate the
