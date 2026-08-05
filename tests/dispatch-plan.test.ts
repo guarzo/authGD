@@ -11,26 +11,34 @@ describe("jobsFor", () => {
       "wanderer",
     ]);
     expect(jobs.find((j) => j.jobType === "membership")).toEqual({
+      scope: "account",
       jobType: "membership",
       accountId: "acc-1",
     });
     expect(jobs.find((j) => j.jobType === "discord-roles")).toEqual({
+      scope: "account",
       jobType: "discord-roles",
       accountId: "acc-1",
     });
-    expect(jobs.find((j) => j.jobType === "contacts")).toEqual({ jobType: "contacts" });
-    expect(jobs.find((j) => j.jobType === "wanderer")).toEqual({ jobType: "wanderer" });
+    expect(jobs.find((j) => j.jobType === "contacts")).toEqual({
+      scope: "global",
+      jobType: "contacts",
+    });
+    expect(jobs.find((j) => j.jobType === "wanderer")).toEqual({
+      scope: "global",
+      jobType: "wanderer",
+    });
   });
 
   it("maps a discord-user payload to a discord-user-scoped roles job", () => {
     expect(jobsFor({ kind: "discord-user", discordUserId: "u9" })).toEqual([
-      { jobType: "discord-roles", discordUserId: "u9" },
+      { scope: "discord-user", jobType: "discord-roles", discordUserId: "u9" },
     ]);
   });
 
   it("maps membership-recheck to itself, unscoped", () => {
     expect(jobsFor({ kind: "membership-recheck" })).toEqual([
-      { jobType: "membership-recheck" },
+      { scope: "global", jobType: "membership-recheck" },
     ]);
   });
 
@@ -51,7 +59,7 @@ describe("jobsFor", () => {
     "token-health",
     "purge",
   ])("maps a job re-run of %s to itself, unscoped", (jobType) => {
-    expect(jobsFor({ kind: "job", jobType })).toEqual([{ jobType }]);
+    expect(jobsFor({ kind: "job", jobType })).toEqual([{ scope: "global", jobType }]);
   });
 
   it.each(["ops-dead-letter", "not-a-queue", "", "membership; DROP"])(

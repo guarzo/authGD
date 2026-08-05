@@ -40,7 +40,7 @@ export async function getSyncStatus(
   // enqueue. "Queued" means work targets that job type, not "you queued it" —
   // a member-triggered account/discord-user row counts the same as an admin's.
   const payloads = await undispatchedPayloads(dbx);
-  const queuedTypes = new Set(
+  const queuedTypes = new Set<string>(
     payloads.flatMap((payload) => jobsFor(payload).map((j) => j.jobType)),
   );
 

@@ -1,5 +1,5 @@
 import type { outbox } from "@/db/schema";
-import { isJobType } from "@/core/schedules";
+import { isJobType, type JobType } from "@/core/schedules";
 
 /** Derived from the schema's payload column so the two can never drift. */
 export type OutboxPayload = typeof outbox.$inferSelect.payload;
@@ -12,11 +12,19 @@ export type OutboxPayload = typeof outbox.$inferSelect.payload;
  * (see `jobsFor` below). A `PlannedJob` is the pure fact "this payload targets
  * this job type, with this scoping"; the worker turns that into a send, and
  * the sync-status service projects it down to just the job type.
+ *
+ * Discriminated on `scope`, not structural: a structural union whose account
+ * and discord-user arms are both subsumed by the bare `{ jobType }` arm let
+ * `{ jobType, accountId, discordUserId }` typecheck (silently dropping the
+ * discord scoping at the narrower branch `sendFor` would take) and let a
+ * fourth arm compile with `sendFor` unchanged, falling through to the global
+ * send path with no compile error. `scope` closes both holes and makes
+ * `sendFor`'s switch exhaustively checkable.
  */
 export type PlannedJob =
-  | { jobType: string; accountId: string }
-  | { jobType: string; discordUserId: string }
-  | { jobType: string };
+  | { scope: "global"; jobType: JobType }
+  | { scope: "account"; jobType: JobType; accountId: string }
+  | { scope: "discord-user"; jobType: JobType; discordUserId: string };
 
 /**
  * The ONE mapping from an outbox payload to the job types it targets. Both
@@ -41,28 +49,36 @@ export function jobsFor(payload: OutboxPayload): PlannedJob[] {
       // member), so an account change still fans out to global contacts and
       // wanderer reconciliations.
       return [
-        { jobType: "membership", accountId: payload.accountId },
-        { jobType: "contacts" },
-        { jobType: "wanderer" },
-        { jobType: "discord-roles", accountId: payload.accountId },
+        { scope: "account", jobType: "membership", accountId: payload.accountId },
+        { scope: "global", jobType: "contacts" },
+        { scope: "global", jobType: "wanderer" },
+        { scope: "account", jobType: "discord-roles", accountId: payload.accountId },
       ];
     case "discord-user":
-      return [{ jobType: "discord-roles", discordUserId: payload.discordUserId }];
+      return [
+        {
+          scope: "discord-user",
+          jobType: "discord-roles",
+          discordUserId: payload.discordUserId,
+        },
+      ];
     case "membership-recheck":
-      return [{ jobType: "membership-recheck" }];
+      return [{ scope: "global", jobType: "membership-recheck" }];
     case "all":
       return [
-        { jobType: "membership" },
-        { jobType: "contacts" },
-        { jobType: "wanderer" },
-        { jobType: "discord-roles" },
+        { scope: "global", jobType: "membership" },
+        { scope: "global", jobType: "contacts" },
+        { scope: "global", jobType: "wanderer" },
+        { scope: "global", jobType: "discord-roles" },
       ];
     case "job":
       // Mirrors planDispatch's former RERUNNABLE gate: an unrunnable jobType
       // targets nothing, matching the queue it will actually never reach.
       // RERUNNABLE and JOB_CRON's keys are proven equal by
       // tests/dispatcher.test.ts, so isJobType is the same gate.
-      return isJobType(payload.jobType) ? [{ jobType: payload.jobType }] : [];
+      return isJobType(payload.jobType)
+        ? [{ scope: "global", jobType: payload.jobType }]
+        : [];
     default:
       return [];
   }

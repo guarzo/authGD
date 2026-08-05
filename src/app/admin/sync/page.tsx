@@ -39,7 +39,7 @@ export const metadata: Metadata = {
 /**
  * The order the strip's three groups render in, and the label above each —
  * so the primary button's scope ("sweep") is answerable by looking at the
- * strip rather than by parsing 48 characters of uppercase mono on the button
+ * strip rather than by parsing 50 characters of uppercase mono on the button
  * itself. `"other"` is not a `JobGroup`: it catches a job type present in
  * `sync_run` but absent from `JOB_CRON` (retired or hand-queued), which
  * `groupFor` reports as `null` rather than assigning to any of the three real
@@ -193,7 +193,7 @@ export default async function AdminSyncPage({
           about a state the page cannot reach. */}
       {/* The one thing hiding the group labels from the accessibility tree
           would have deleted: which jobs the primary button's own scope
-          covers — the fact the button's label used to spell out in 48
+          covers — the fact the button's label used to spell out in 50
           characters of uppercase mono ("Sync membership, contacts, wanderer,
           discord-roles") before it shrank to "Sync now" on the strength of
           the strip now carrying that answer visually. A screen reader user

@@ -48,26 +48,32 @@ function sendFor(job: PlannedJob): {
   singletonKey: string;
 } {
   const queue = job.jobType;
-  if ("accountId" in job) {
-    const prefix = ACCOUNT_SINGLETON_PREFIX[queue] ?? queue;
-    return {
-      queue,
-      data: { jobType: queue, accountId: job.accountId },
-      singletonKey: `${prefix}:${job.accountId}`,
-    };
+  switch (job.scope) {
+    case "account": {
+      const prefix = ACCOUNT_SINGLETON_PREFIX[queue] ?? queue;
+      return {
+        queue,
+        data: { jobType: queue, accountId: job.accountId },
+        singletonKey: `${prefix}:${job.accountId}`,
+      };
+    }
+    case "discord-user":
+      return {
+        queue,
+        data: { jobType: queue, discordUserId: job.discordUserId },
+        singletonKey: `roles:user:${job.discordUserId}`,
+      };
+    case "global":
+      return {
+        queue,
+        data: { jobType: queue },
+        singletonKey: globalSingletonKey(queue),
+      };
+    default: {
+      const exhaustive: never = job;
+      throw new Error(`unhandled PlannedJob scope: ${JSON.stringify(exhaustive)}`);
+    }
   }
-  if ("discordUserId" in job) {
-    return {
-      queue,
-      data: { jobType: queue, discordUserId: job.discordUserId },
-      singletonKey: `roles:user:${job.discordUserId}`,
-    };
-  }
-  return {
-    queue,
-    data: { jobType: queue },
-    singletonKey: globalSingletonKey(queue),
-  };
 }
 
 /**

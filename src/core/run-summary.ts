@@ -138,8 +138,11 @@ export type CollapsibleRun = RunLike & {
 /**
  * One row of the (possibly collapsed) runs drawer: either a single run
  * rendered as-is, or a run of consecutive runs that recorded the same
- * outcome, collapsed to save the ~440px five identical `19 / 19 / OK` rows
- * would otherwise spend saying nothing changed.
+ * outcome, collapsed to save the ~187px five identical `19 / 19 / OK` rows
+ * would otherwise spend saying nothing changed. (`.log td` is `--s-3` (12px)
+ * padding top and bottom plus a 1px `border-top`, around a `--t-data`
+ * (0.875rem = 14px) line box at the body's 1.55 line-height — 14 * 1.55 ≈
+ * 21.7px — for ~46.7px per row; four collapsed rows save ~187px.)
  */
 export type CollapsedRun<T extends CollapsibleRun = CollapsibleRun> =
   | { kind: "run"; run: T }

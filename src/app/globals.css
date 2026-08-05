@@ -857,16 +857,16 @@ h3.rule-head__label {
    cell crushes an error string into a one-word column — under that the Scroller
    takes over. Column widths otherwise come from content.
 
-   These three blocks sit here, above the narrow media query, rather than at the
+   These two blocks sit here, above the narrow media query, rather than at the
    end of the file where they used to: the query releases both floors at 40rem,
    and same-specificity rules declared after it would win regardless. */
 .log--runs {
   width: 100%;
   min-width: 44rem;
   /* `width: 100%` alone hands every byte of the container's leftover space to
-     auto-layout's one flexible column — Status, the only cell with no
-     explicit width and the one holding the folded-in error string — because
-     that is the column the algorithm has nowhere else to put it. Measured on
+     auto-layout's content-sized columns, and Status — the widest of them, the
+     one holding the folded-in error string — absorbs the largest share of
+     that surplus. Measured on
      a 6-counter job at the page's own 1164px content width: Status stretched
      to 336px for "ok" or a one-line error, nearly three columns' worth of
      blank cell between the badge and the first counter it's supposed to sit
@@ -887,15 +887,6 @@ h3.rule-head__label {
 .log--runs th:nth-child(3),
 .log--runs td:nth-child(3) {
   min-width: 26ch;
-}
-
-/* A collapsed run of `count` consecutive runs sharing one outcome
-   (`collapseRuns`, run-summary.ts) reads as one line, not `count` of them — the
-   whole reason it collapses. Italic marks that this row stands for several
-   without relying on the "N runs" text alone to say so, the same "value plus a
-   quiet visual cue" split the rest of this table uses for dim/absent cells. */
-.log--group td {
-  font-style: italic;
 }
 
 /* Audit log: fixed layout so a bare id in the actor column can't wrap and
@@ -2321,8 +2312,9 @@ h3.rule-head__label {
    while `getSyncStatus` reports `queued` — a marker beside it. `.st` alone
    used to be the direct child this track's `justify-self` and the header's
    alignment comment (above) were both written against; wrapping it preserves
-   both without either needing to know the other exists. `.strip__queued`'s
-   own margin, not this gap, spaces the two — see its comment for why. */
+   both without either needing to know the other exists. `.strip__health`
+   declares no gap of its own; `.strip__queued`'s own `margin-left` is what
+   spaces the two. */
 .strip__health {
   display: inline-flex;
   align-items: center;
@@ -2376,7 +2368,7 @@ h3.rule-head__label {
 /* --- Fan-out grouping ---------------------------------------------------- */
 /* Which of the page's own controls can reach a row (see `JOB_GROUP` in
    `@/core/schedules`), made visible: before this, the primary button's scope
-   was answerable only by reading its own label, 48 characters of uppercase
+   was answerable only by reading its own label, 50 characters of uppercase
    mono at the most expensive spot in the interface. This is the section-header
    vocabulary DESIGN.md already commits to — a mono uppercase label, then a
    hairline to the edge — scaled to the strip's own row density rather than a
@@ -3084,6 +3076,18 @@ h3.rule-head__label {
   .log--audit td {
     padding: var(--s-2) var(--s-1);
   }
+}
+
+/* A collapsed run of `count` consecutive runs sharing one outcome
+   (`collapseRuns`, run-summary.ts) reads as one line, not `count` of them — the
+   whole reason it collapses. Italic marks that this row stands for several
+   without relying on the "N runs" text alone to say so, the same "value plus a
+   quiet visual cue" split the rest of this table uses for dim/absent cells. Sits
+   below the narrow media query, unlike the two floors and the padding above:
+   nothing there overrides `font-style`, so it has no cascade-order argument for
+   sitting above it. */
+.log--group td {
+  font-style: italic;
 }
 
 /* The crew table inside the accounts drawer: four short columns with the
