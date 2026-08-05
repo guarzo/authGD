@@ -816,7 +816,16 @@ fly scale show   # record the current web and worker counts
 2. Set the new role secrets, copying each value verbatim from the old one.
    Read the three old values first and substitute them for the placeholders —
    the `<…>` below are not shell syntax and will be set literally if pasted
-   as-is. Leave the old three set:
+   as-is. Fly secrets are **write-only**: `fly secrets list` shows digests, not
+   values, so the only way to read them back is off a running machine, before
+   step 1 scales the machines to zero:
+   ```bash
+   fly ssh console -C "printenv DISCORD_ROLE_ID_FLYGD"
+   fly ssh console -C "printenv DISCORD_ROLE_ID_BLUE"
+   fly ssh console -C "printenv DISCORD_ROLE_ID_GREEN"
+   ```
+   That prints each value to your terminal, where it lands in scrollback and
+   shell history — treat the session accordingly. Leave the old three set:
    ```bash
    fly secrets set DISCORD_ROLE_ID_MEMBER='<paste value of DISCORD_ROLE_ID_FLYGD>' \
                    DISCORD_ROLE_ID_ASSOCIATE='<paste value of DISCORD_ROLE_ID_BLUE>' \
@@ -827,6 +836,12 @@ fly scale show   # record the current web and worker counts
    by hand, and merging before step 1 would start a rolling replacement with
    the old image still serving against the new enum. Watch `fly releases` until
    the release command reports the migration applied.
+
+   **Do not arm auto-merge on a migration PR.** Merging is the deploy, and
+   auto-merge fires whenever the last required check goes green — which may be
+   long after you clicked it. On this migration it fired roughly 90 minutes
+   later and took the deploy with it, machines still up, with nobody watching.
+   Merge by hand, at the moment you are ready for the window.
 4. `fly scale count web=2 worker=1` (or the counts recorded above), then verify
    `/api/health` and load `/admin/accounts`
 5. Confirm the renamed role secrets actually resolve. `/api/health` and
@@ -887,3 +902,46 @@ of configuration.
 
 A Fly version bump does not guarantee a new image — check `ImageRef` before
 concluding the rollback took effect.
+
+## Branding deploy — set the secrets before you merge
+
+The tier rename above changed what the database stores. This one changes only
+what the page says: `TIER_LABEL_*` and `BRAND_*` are read at request time and
+have defaults, so **there is no migration and no maintenance window** — a plain
+rolling deploy, nothing to scale down.
+
+The one thing that is order-dependent is the vocabulary. Unset, the labels fall
+back to the enum values (`Member`, `Associate`, `Alumni`), so an image that
+boots before its secrets exist serves the generic words to whoever is logged in
+until the next release. Set them first and the new image comes up already
+speaking the corp's language:
+
+```bash
+fly secrets set BRAND_NAME='Zoo Landers' \
+                BRAND_TAGLINE='Flight Ops' \
+                BRAND_MOTTO=$'Center for kids\nwho can\'t fly good' \
+                BRAND_FOOTER='Est. MMXXV · [FLYGD]' \
+                TIER_LABEL_MEMBER='FlyGD' \
+                TIER_LABEL_ASSOCIATE='Blue' \
+                TIER_LABEL_ALUMNI='Green'
+```
+
+`BRAND_MOTTO` is the only value with structure: it renders as two lines, and
+the line break has to survive the shell, which is what `$'…'` is for — plain
+single quotes would set a literal backslash-n. Everything else is an ordinary
+string.
+
+Setting secrets triggers a release on its own, so the sequence is: set the
+secrets (the old image ignores the new names and keeps serving), wait for that
+release to finish, then merge the PR. Watch `fly releases` for the second one.
+
+`TIER_LABEL_PENDING`, `BRAND_MARK_URL`, and `BRAND_SEAL_URL` are left unset —
+their defaults are correct for this deployment. See `.env.example` for the full
+list.
+
+### Rollback
+
+`fly secrets unset` the names above and the app returns to its defaults, which
+is a valid state rather than a broken one. To go back to the previous code as
+well, `fly deploy --image <previous image ref>` — no database work, because
+this deploy did none.
