@@ -2328,7 +2328,7 @@ h3.rule-head__label {
   max-width: var(--measure);
 }
 
-/* --- Sync schedule -------------------------------------------------------- */
+/* --- Sync schedule ------------------------------------------------------ */
 
 .push {
   display: flex;

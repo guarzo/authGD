@@ -64,7 +64,7 @@ export interface AccountHealth {
  * Account-level Discord-push facts, kept apart from `CharacterHealthInput`
  * because "the last push happened" is a fact about the account's Discord
  * link, not about any one character. A second, required parameter rather than
- * an optional one: this module's own `MEMBER_FIXABLE` comment above tells the
+ * an optional one: this module's own `MEMBER_FIXABLE` comment below tells the
  * story of what an easy-to-forget input does when it is allowed to default
  * away silently — a verdict that quietly under-counts forever. Required makes
  * a call site that forgets Discord entirely a compile error instead.
