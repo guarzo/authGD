@@ -211,7 +211,10 @@ test("unlink arms on the first click, confirms on the second, and Escape disarms
   await page.goto("/account");
 
   const altRow = page.locator("tr", { hasText: "Pilot Alt" });
-  const unlink = altRow.getByRole("button", { name: "unlink", exact: true });
+  // Named, not bare "unlink": the character rows carry a `restName` of
+  // "unlink <character>" so a screen-reader or speech-input member reaching the
+  // control out of visual context is told which character it unlinks.
+  const unlink = altRow.getByRole("button", { name: "unlink Pilot Alt", exact: true });
   const restBox = await unlink.boundingBox();
 
   // A server action is a POST to the current route. Counting them is the only
@@ -234,7 +237,9 @@ test("unlink arms on the first click, confirms on the second, and Escape disarms
 
   // Escape disarms without a reload.
   await confirm.press("Escape");
-  await expect(altRow.getByRole("button", { name: "unlink", exact: true })).toBeVisible();
+  await expect(
+    altRow.getByRole("button", { name: "unlink Pilot Alt", exact: true }),
+  ).toBeVisible();
   await expect(altRow.getByRole("button", { name: /^confirm unlink/ })).toHaveCount(0);
   expect(posts).toBe(0);
   // And the roster genuinely still holds both characters, read from the
@@ -382,12 +387,23 @@ test("a member can unlink their own Discord", async ({ page, context }) => {
   const unlink = page.getByRole("button", { name: "unlink Discord", exact: true });
   const describedBy = await unlink.getAttribute("aria-describedby");
   expect(describedBy).toBeTruthy();
-  await expect(page.locator(`#${describedBy}`)).toContainText(
-    "queues removal of the Discord roles authGD manages",
-  );
+  const cost = page.locator(`#${describedBy}`);
+  await expect(cost).toContainText("Queues removal of the Discord roles authGD manages");
+
+  // Present for AT from the start (above), but hidden from sighted readers
+  // until the action is armed: a permanent explanation of an action almost
+  // nobody takes does not belong on a page whose job is to show state.
+  // Measured rather than asserted with toBeHidden(): `.visually-hidden` is a
+  // 1px clip, not display:none, so Playwright counts it visible by design —
+  // that is exactly what keeps it readable to a screen reader.
+  const restWidth = (await cost.boundingBox())?.width ?? 0;
+  expect(restWidth).toBeLessThanOrEqual(1);
 
   // Two clicks by design: ConfirmSubmit arms first, submits second.
   await unlink.click();
+  await expect
+    .poll(async () => (await cost.boundingBox())?.width ?? 0)
+    .toBeGreaterThan(1);
   await page.getByRole("button", { name: "confirm unlink Discord", exact: true }).click();
 
   await expect(page.getByRole("link", { name: "Link Discord" })).toBeVisible();

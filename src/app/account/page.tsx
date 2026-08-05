@@ -15,7 +15,11 @@ import { RelativeTime } from "@/app/_components/relative-time";
 import { formatAgo } from "@/app/_components/format-ago";
 import { utcHhmm } from "@/app/_components/utc-time";
 import { Submit } from "@/app/_components/submit";
-import { ConfirmArmScope, ConfirmSubmit } from "@/app/_components/confirm-submit";
+import {
+  ConfirmArmScope,
+  ConfirmCost,
+  ConfirmSubmit,
+} from "@/app/_components/confirm-submit";
 import { ContactRemedy, ContactState, hasContactRemedy } from "./contact-state";
 import { StandingTier } from "./standing";
 import {
@@ -296,6 +300,16 @@ export default async function AccountPage({
                 <span className="inline-pair">
                   <Status>linked</Status>
                   <form action={unlinkDiscordAction} className="inline-form">
+                    {/* A grade heavier at rest than the character-row unlinks
+                        below (`.btn--quiet .btn--danger-quiet`), and
+                        deliberately so: those drop one character from an
+                        account that keeps every other one, while this one
+                        enqueues a deprovision that strips every managed role
+                        in the guild. There is one of these and up to a dozen
+                        of those, so the quiet grade that keeps a dense table
+                        from reading as a wall of buttons buys nothing here.
+                        Both still upgrade to full `.btn--danger` only once
+                        armed. */}
                     <ConfirmSubmit
                       className="btn btn--micro"
                       armedClassName="btn btn--micro btn--danger"
@@ -315,11 +329,23 @@ export default async function AccountPage({
                     spoken ahead of every press and has to stay short and match
                     the visible label, and this sits AFTER the control in reading
                     order, so a member who tabs straight to it would otherwise
-                    never hear it at all. */}
-                <span id="discord-unlink-cost" className="dim">
-                  Unlinking queues removal of the Discord roles authGD manages for you.
-                  You can link again any time.
-                </span>
+                    never hear it at all.
+
+                    Shown to sighted users only once armed (see ConfirmCost):
+                    at rest this row's job is to answer "is Discord linked?",
+                    and a permanent sentence about undoing it answers a question
+                    the member has not asked. It stays in the accessible tree at
+                    rest either way — the aria-describedby above depends on it.
+
+                    "Queues", not "removes": the action enqueues a deprovision
+                    and a worker runs it (jobs/discord-roles.ts), so a member who
+                    unlinks and still sees the role a minute later has been told
+                    the truth rather than contradicted. The verb survived the
+                    trim from 18 words to 10 because it is the one fact in the
+                    sentence a member can catch this page being wrong about. */}
+                <ConfirmCost id="discord-unlink-cost" className="dim">
+                  Queues removal of the Discord roles authGD manages. Relink any time.
+                </ConfirmCost>
               </ConfirmArmScope>
             ) : (
               // Raised to the default button grade: high-value but was the
@@ -464,6 +490,13 @@ export default async function AccountPage({
                               className="btn btn--quiet btn--micro btn--danger-quiet"
                               armedClassName="btn btn--micro btn--danger"
                               label="unlink"
+                              // Named, like the Discord unlink above and every
+                              // unlink on the admin table: three rows each
+                              // offering a bare "unlink" gives a screen-reader
+                              // or speech-input member the verb three times
+                              // with no object, and the manifest is exactly
+                              // where they cannot see which row they are on.
+                              restName={`unlink ${c.name}`}
                               confirmName={`confirm unlink ${c.name}`}
                             />
                           </form>

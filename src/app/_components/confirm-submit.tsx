@@ -41,6 +41,53 @@ export function ConfirmArmScope({ children }: { children: ReactNode }) {
 }
 
 /**
+ * What the destructive action in this scope costs, shown to sighted users only
+ * once that action is armed.
+ *
+ * The cost sentence used to render unconditionally beside the control. That put
+ * a permanent explanation of an action almost nobody takes on a page whose job
+ * is to let a member confirm state and leave — PRODUCT.md's "state before
+ * action", where the member should be able to read the page and go without
+ * clicking anything. Arming is the moment the sentence becomes load-bearing, so
+ * that is when it appears.
+ *
+ * It is hidden with `.visually-hidden`, never unmounted, for two reasons. The
+ * element is the target of the button's `aria-describedby`, and a description
+ * that only exists after the first press would not be spoken ahead of it — the
+ * exact failure `ConfirmSubmit`'s own `describedBy` doc argues against.
+ * `.visually-hidden` is `position: absolute`, so at rest it is also out of flow
+ * and adds no gap to the flex row it sits in.
+ *
+ * Scope-level, not control-level: this reads "something in this scope is
+ * armed", not "that particular button is armed". Correct only in a scope
+ * holding ONE `ConfirmSubmit`, which is what the account page's Discord row is
+ * (`account/page.tsx`). Adding a second control to a scope that also holds a
+ * `ConfirmCost` would reveal the cost when either one arms; give the second
+ * control its own scope instead.
+ */
+export function ConfirmCost({
+  id,
+  className,
+  children,
+}: {
+  id: string;
+  className?: string;
+  children: ReactNode;
+}) {
+  const ctx = useContext(ArmContext);
+  if (!ctx) {
+    throw new Error("ConfirmCost must be rendered inside a ConfirmArmScope");
+  }
+  const revealed = ctx.armedId !== null;
+
+  return (
+    <span id={id} className={revealed ? className : `${className ?? ""} visually-hidden`}>
+      {children}
+    </span>
+  );
+}
+
+/**
  * A destructive row action that arms on the first click and only submits the
  * form on the second, rather than firing immediately — too easy to hit by
  * accident scanning a dense table — or interrupting with `window.confirm()`,
