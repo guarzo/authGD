@@ -8,6 +8,7 @@ import {
   listPayoutOperations,
 } from "@/services/payout-view";
 import { RuleHead, Scroller, SiteHeader, Status } from "@/app/_components/ui";
+import { brandProps } from "@/app/_components/brand-server";
 import { fmtIsk } from "@/app/_components/format-isk";
 import { PendingLink } from "./pending-link";
 import { requirePayoutReader } from "./access";
@@ -70,7 +71,7 @@ export default async function PayoutsPage({
 
   return (
     <>
-      <SiteHeader items={nav} current="/payouts" />
+      <SiteHeader items={nav} current="/payouts" {...brandProps()} />
       <main id="main" tabIndex={-1} className="page">
         <div className="page__head">
           <h1>Payouts</h1>

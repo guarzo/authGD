@@ -1,6 +1,7 @@
 "use client";
 
 import { usePathname } from "next/navigation";
+import { useBrand } from "./brand-context";
 import { SiteHeader } from "./ui";
 
 // "Members", not "Accounts": the member nav links to this same route, so it
@@ -24,6 +25,10 @@ const ITEMS = [
  */
 export function AdminNav({ pendingCount }: { pendingCount: number }) {
   const pathname = usePathname();
+  // Being a client component, this cannot call getConfig() — the branding
+  // comes down through the root layout's provider instead. Without it the
+  // admin section would be the one place that ignores BRAND_*.
+  const brand = useBrand();
   // ITEMS stays static: the badge is derived per render, so the array is
   // still a module constant and the label text still cannot drift.
   const items = ITEMS.map((i) =>
@@ -31,5 +36,14 @@ export function AdminNav({ pendingCount }: { pendingCount: number }) {
       ? { ...i, badge: { count: pendingCount, description: "awaiting approval" } }
       : i,
   );
-  return <SiteHeader items={items} current={pathname} admin />;
+  return (
+    <SiteHeader
+      items={items}
+      current={pathname}
+      admin
+      brandName={brand.name}
+      brandTagline={brand.tagline}
+      brandMarkUrl={brand.markUrl}
+    />
+  );
 }

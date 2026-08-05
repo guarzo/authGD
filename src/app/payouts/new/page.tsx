@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { Notice, SiteHeader } from "@/app/_components/ui";
+import { brandProps } from "@/app/_components/brand-server";
 import { Submit } from "@/app/_components/submit";
 import { requirePayoutReader } from "../access";
 import { createOperationAction } from "../actions";
@@ -71,7 +72,7 @@ export default async function NewPayoutPage({
 
   return (
     <>
-      <SiteHeader items={nav} current="/payouts" section />
+      <SiteHeader items={nav} current="/payouts" section {...brandProps()} />
       <main id="main" tabIndex={-1} className="page page--narrow">
         <div className="page__head">
           <h1>New operation</h1>

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { FocusHeading } from "@/app/_components/focus-heading";
+import { brandProps } from "@/app/_components/brand-server";
 import { SiteHeader } from "@/app/_components/ui";
 
 /**
@@ -37,7 +38,10 @@ export const metadata: Metadata = {
 export default function NotFound() {
   return (
     <>
-      <SiteHeader items={[{ href: "/account", label: "Your account" }]} />
+      <SiteHeader
+        items={[{ href: "/account", label: "Your account" }]}
+        {...brandProps()}
+      />
       <main id="main" tabIndex={-1} className="page page--narrow">
         <div className="page__head">
           <FocusHeading>Nothing at that address</FocusHeading>

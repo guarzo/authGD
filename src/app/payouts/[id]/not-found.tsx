@@ -1,4 +1,5 @@
 import { FocusHeading } from "@/app/_components/focus-heading";
+import { brandProps } from "@/app/_components/brand-server";
 import { SiteHeader } from "@/app/_components/ui";
 
 /**
@@ -49,6 +50,7 @@ export default function PayoutOperationNotFound() {
         ]}
         current="/payouts"
         section
+        {...brandProps()}
       />
       <main id="main" tabIndex={-1} className="page page--narrow">
         <div className="page__head">

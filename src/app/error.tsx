@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { FocusHeading } from "@/app/_components/focus-heading";
 import { utcHhmm } from "@/app/_components/utc-time";
 import { Notice, RuleHead, SiteHeader, type NavItem } from "@/app/_components/ui";
+import { useBrand } from "@/app/_components/brand-context";
 
 /**
  * Route-level error boundary (App Router: client component, `{error, reset}`).
@@ -114,6 +115,11 @@ export default function Error({
 }) {
   const pathname = usePathname();
   const section = sectionFor(pathname);
+  // A client component cannot read config; the root layout's provider carries
+  // the values down. `useBrand()` falls back to the generic defaults rather
+  // than throwing — an error boundary is the last place that should be able
+  // to fail for a second reason.
+  const brand = useBrand();
   const [retrying, startRetry] = useTransition();
 
   // Set after mount rather than during render. This boundary renders on the
@@ -141,13 +147,19 @@ export default function Error({
       {/* React hoists this into <head>, and it wins: measured on `/payouts`
           with its list query broken, whose `page.tsx` exports a static
           `metadata.title = "Payouts"` that resolves regardless, the tab reads
-          "Something broke · Zoo Landers". Do not carry that result across to
+          "Something broke · <brand name>". Do not carry that result across to
           `payouts/[id]/not-found.tsx` — the opposite was measured there, and
           that file's comment records it. A not-found boundary loses to the
           segment's resolved `metadata`; an error boundary, which replaces the
           segment rather than rendering beside its metadata, does not. */}
-      <title>Something broke · Zoo Landers</title>
-      <SiteHeader items={section.items} admin={section.admin} />
+      <title>{`Something broke · ${brand.name}`}</title>
+      <SiteHeader
+        items={section.items}
+        admin={section.admin}
+        brandName={brand.name}
+        brandTagline={brand.tagline}
+        brandMarkUrl={brand.markUrl}
+      />
       <main id="main" tabIndex={-1} className="page page--narrow">
         <div className="page__head">
           {/* Same mechanism and the same reason as the two 404 boundaries: the

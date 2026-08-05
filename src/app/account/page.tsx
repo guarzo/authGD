@@ -11,6 +11,7 @@ import { listAccountPayouts } from "@/services/payout-view";
 import { getSessionAccount } from "@/services/session";
 import { computeAccountHealth } from "@/core/account-health";
 import { Notice, RuleHead, Scroller, SiteHeader, Status } from "@/app/_components/ui";
+import { brandProps } from "@/app/_components/brand-server";
 import { RelativeTime } from "@/app/_components/relative-time";
 import { formatAgo } from "@/app/_components/format-ago";
 import { utcHhmm } from "@/app/_components/utc-time";
@@ -165,7 +166,7 @@ export default async function AccountPage({
 
   return (
     <>
-      <SiteHeader items={nav} current="/account" />
+      <SiteHeader items={nav} current="/account" {...brandProps()} />
       <main id="main" tabIndex={-1} className="page page--narrow">
         <div className="page__head">
           <h1>Your account</h1>

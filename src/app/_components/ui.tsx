@@ -88,6 +88,9 @@ export function SiteHeader({
   current,
   section = false,
   admin = false,
+  brandName,
+  brandTagline,
+  brandMarkUrl,
 }: {
   items: NavItem[];
   current?: string;
@@ -95,6 +98,12 @@ export function SiteHeader({
    *  this page's own route (`/payouts/new` under `/payouts`). */
   section?: boolean;
   admin?: boolean;
+  /** Brand values. Defaulted so a caller that forgets them degrades to the
+   *  generic names rather than crashing. Server callers pass
+   *  `getConfig().brand`; the two client callers pass `useBrand()`. */
+  brandName?: string;
+  brandTagline?: string;
+  brandMarkUrl?: string;
 }) {
   return (
     <header className="shell">
@@ -103,17 +112,18 @@ export function SiteHeader({
       </a>
       <div className="shell__bar">
         <a className="shell__mark" href={admin ? "/admin/accounts" : "/account"}>
-          <img src="/brand/mark.webp" alt="" width={34} height={34} />
+          <img src={brandMarkUrl ?? "/brand/mark.webp"} alt="" width={34} height={34} />
           <span className="shell__wordmark">
-            <b>Zoo Landers</b>
-            <span>Flight Ops</span>
+            <b>{brandName ?? "authGD"}</b>
+            <span>{brandTagline ?? "Auth"}</span>
           </span>
         </a>
         {admin && <span className="shell__register">Admin</span>}
         <nav className="shell__nav" aria-label={admin ? "Admin" : "Main"}>
           {items.map((i) => {
-            // Derived from href, not useId: SiteHeader is a server component
-            // and cannot use hooks, and href is already the nav's identity key.
+            // Derived from href, not useId: SiteHeader renders on both sides of
+            // the client boundary and cannot use hooks, and href is already the
+            // nav's identity key.
             const badgeId = `nav-badge-${i.href}`;
             const badge = i.badge && i.badge.count > 0 ? i.badge : undefined;
             return (
