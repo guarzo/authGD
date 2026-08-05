@@ -13,7 +13,10 @@ import {
  * `test:e2e:clean`, which removes the e2e container for the same reason.
  *
  * Refuses to touch anything it did not derive: an explicit TEST_DATABASE_URL is
- * the developer's own, and CI's shared database belongs to the workflow.
+ * the developer's own, and CI's shared database belongs to the workflow. The
+ * OWNS_TEST_DB check below is what enforces that; PROTECTED is a backstop
+ * against a future change to deriveWorktreeDbName's construction, not a filter
+ * on input this script ever sees today.
  */
 const PROTECTED = new Set([
   "authgd",
@@ -33,6 +36,11 @@ async function main(): Promise<void> {
   }
 
   const name = deriveWorktreeDbName(process.cwd());
+  // Not reachable today: deriveWorktreeDbName always prefixes with
+  // "authgd_test_", which none of PROTECTED is, so this can never fire against
+  // present input. It's an assertion against a future change to that function
+  // rather than a live filter — the OWNS_TEST_DB gate above is what actually
+  // keeps this script off databases it doesn't own.
   if (PROTECTED.has(name)) {
     throw new Error(`refusing to drop ${name}`);
   }
