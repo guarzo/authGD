@@ -10,6 +10,7 @@ import { Submit } from "@/app/_components/submit";
 import { formatAgo } from "@/app/_components/format-ago";
 import { renderedAt } from "@/app/_components/utc-time";
 import { summarizeDetails } from "@/app/admin/audit/summarize";
+import { tierLabel } from "@/app/_components/labels";
 
 export const dynamic = "force-dynamic";
 
@@ -307,10 +308,16 @@ export default async function AdminAuditPage({
 
   const now = Date.now();
 
-  // tier -> role id in config; this table needs role id -> tier.
+  // tier -> role id in config; this table needs role id -> tier. Through
+  // tierLabel(), because the value is rendered to an admin as a role's name:
+  // a deployment that calls its members "FlyGD" wants `+FlyGD`, not `+member`.
   const roleNames = new Map(
-    Object.entries(getConfig().discord.roleIds).map(([tier, id]) => [id, tier]),
+    Object.entries(getConfig().discord.roleIds).map(([tier, id]) => [
+      id,
+      tierLabel(tier),
+    ]),
   );
+  const tierLabels = getConfig().tierLabels;
 
   const filtered = Boolean(params.actor || params.action || params.target);
   const activeFilters = [
@@ -608,7 +615,12 @@ export default async function AdminAuditPage({
                     {r.details ? (
                       <Json
                         value={r.details}
-                        summary={summarizeDetails(r.action, r.details, roleNames)}
+                        summary={summarizeDetails(
+                          r.action,
+                          r.details,
+                          roleNames,
+                          tierLabels,
+                        )}
                       />
                     ) : (
                       <span className="dim">&mdash;</span>

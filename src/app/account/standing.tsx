@@ -1,4 +1,5 @@
-import { Status, Tier } from "@/app/_components/ui";
+import { Status } from "@/app/_components/ui";
+import { Tier } from "@/app/_components/tier";
 import type { Tier as TierValue } from "@/core/tier";
 
 /**

@@ -10,7 +10,8 @@ import {
   type AdminCharacterRow,
   type AdminListSort,
 } from "@/services/account-view";
-import { Notice, RuleHead, Scroller, Status, Tier } from "@/app/_components/ui";
+import { Notice, RuleHead, Scroller, Status } from "@/app/_components/ui";
+import { Tier } from "@/app/_components/tier";
 // Shared with the member's own character table rather than reimplemented here:
 // the near-miss label copy and the "not managed" wording are the same question
 // asked about the same character, and two copies drift.
