@@ -259,8 +259,13 @@ See docs/ops.md — "npm test cannot touch your dev database".`;
  * with no migration history yet are both ordinary (a brand-new database has no
  * `drizzle` schema until `setupTestDb()` migrates it). Only a confirmed foreign
  * hash is worth failing a run over.
+ *
+ * Exported for `tests/schema-drift.test.ts`, which drives it against a real
+ * connection — the SQL string, the query-failure catch, and the argument
+ * order passed to `findForeignMigrations` are only exercised end-to-end there,
+ * not by the pure-function unit tests above.
  */
-async function assertNoSchemaDrift(client: Client, url: URL): Promise<void> {
+export async function assertNoSchemaDrift(client: Client, url: URL): Promise<void> {
   let expected: string[];
   try {
     expected = readMigrationFiles({ migrationsFolder: "drizzle" }).map((m) => m.hash);
@@ -286,7 +291,12 @@ async function assertNoSchemaDrift(client: Client, url: URL): Promise<void> {
   const port = url.port || "5432";
   throw new Error(
     buildSchemaDriftMessage({
-      database: decodeURIComponent(url.pathname.replace(/^\//, "")),
+      // Matches buildContentionMessage's derivation below: url.pathname is
+      // never percent-escaped by our own database names (test-db-url.ts emits
+      // only [a-z0-9_]), and decodeURIComponent can throw on a malformed
+      // TEST_DATABASE_URL, which would replace this diagnosis with "URI
+      // malformed" instead of delivering it.
+      database: url.pathname.replace(/^\//, ""),
       host: url.hostname,
       port,
       appliedCount: applied.length,
