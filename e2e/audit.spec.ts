@@ -425,9 +425,9 @@ for (const width of [320, 390]) {
   // the pinned first column is therefore load-bearing. 768px used to be in here
   // as the control that kept the full stamp; it is now in the loop below
   // instead, because at 768px this table forces no horizontal scroll at all and
-  // there is nothing left for a pin to do. 64rem, not 40rem, is the breakpoint
+  // there is nothing left for a pin to do. 66rem, not 40rem, is the breakpoint
   // the elapsed-time rendering hangs off.
-  const narrow = width <= 1024;
+  const narrow = width <= 1056;
 
   test(`audit at ${width}px: the timestamp column and the header stay put`, async ({
     page,
@@ -498,11 +498,11 @@ for (const width of [320, 390]) {
  * The band this table used to fail hardest in. There were two width stops in
  * the stylesheet — 46rem and 40rem — so every viewport from 641px up got the
  * desktop setting and its 62rem floor: 0px of forced horizontal scroll at
- * 639px, 399px at 641px, 272px at 768px, 16px at 1024px, none from 1040px up.
+ * 639px, 399px at 641px, 272px at 768px, 17px at 1025px, none from 1050px up.
  * A tablet was the worst place to read the audit log and it got better as the
  * screen grew, which is the reverse of what a reader would predict.
  *
- * A 64rem stop carrying a middle column setting closes it. These two widths are
+ * A 66rem stop carrying a middle column setting closes it. These widths are
  * the ones that were broken and the one that never was, asserted the same way,
  * so a future change that reintroduces a floor above the viewport fails here
  * rather than in a screenshot nobody takes at 768px.
@@ -511,11 +511,22 @@ for (const width of [320, 390]) {
  * about a pinned column inside a region that scrolls, and the entire point of
  * these widths is that nothing scrolls.
  */
-for (const width of [768, 1280]) {
-  // The same 64rem boundary the stylesheet uses. 768 is inside the middle band
+for (const width of [768, 1025, 1056, 1057, 1280]) {
+  // The same 66rem boundary the stylesheet uses. 768 is inside the middle band
   // and takes the elapsed rendering; 1280 is above it and keeps the stamp the
-  // At column exists for.
-  const narrow = width <= 1024;
+  // At column exists for. 1056 and 1057 straddle the stop itself: `max-width:
+  // 66rem` is inclusive, so 1056 must still be narrow and 1057 must not. Both
+  // sides are asserted because the two ways to get this wrong — writing the
+  // wrong rem figure, or writing `min-width` — each leave one side right, and
+  // a single sample anywhere in the band passes through either mistake.
+  //
+  // 1025 is here because it is where this test earned its keep. The stop was
+  // first written at 64rem, which reads like the obvious round number and
+  // closes 641–1024 — leaving 1025–1049 forcing up to 17px of scroll, the
+  // exact defect the block exists to remove, in a 25px window that neither 768
+  // nor 1280 goes anywhere near. Keep this width even though 1056 now covers
+  // the boundary: it is the regression case, not the boundary case.
+  const narrow = width <= 1056;
 
   test(`audit at ${width}px: the table fits its column and the header still sticks`, async ({
     page,

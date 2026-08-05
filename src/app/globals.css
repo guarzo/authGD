@@ -29,12 +29,21 @@
      from --gold / --tier-flygd with near-identical chroma and 0.03 of
      lightness between them — 0.057 apart in OKLab, which is not enough to
      tell a gold FLYGD tier badge from an amber CRYO token two columns away in
-     the same mono uppercase with the same leading dot. Hue 50 doubles that to
-     0.104 while staying 0.146 from --signal-bad (hue 25), so warn is no
-     longer nearer to identity than it is to failure. Contrast is unchanged in
-     kind: 9.43 / 8.54 / 7.44 / 8.41 against --void / --hull / --hull-hi / a
-     hovered row, all far above the 4.5:1 it needs as text and the 3:1 it
-     needs as the .notice--warn border. */
+     the same mono uppercase with the same leading dot. Hue 50 nearly doubles
+     that, to 0.104, while holding 0.146 from --signal-bad (hue 25).
+
+     Warn is still nearer to gold (0.104) than to bad (0.146), and that is on
+     purpose rather than a shortfall. Equalising the two would mean rotating to
+     about hue 37, which buys separation from identity by spending it on
+     failure — and confusing a warning with an error is the worse of the two
+     confusions, since one of them is the colour that means a token is dead.
+     The bar warn has to clear is legibility against gold, not equidistance;
+     0.104 clears it, and colour is never the only carrier anyway (the token
+     carries its own word and glyph).
+
+     Contrast is unchanged in kind: 9.43 / 8.54 / 7.44 / 8.41 against --void /
+     --hull / --hull-hi / a hovered row, all far above the 4.5:1 it needs as
+     text and the 3:1 it needs as the .notice--warn border. */
   --signal-warn: oklch(0.8 0.15 50);
   --signal-bad: oklch(0.68 0.19 25);
 
@@ -211,7 +220,9 @@ a:hover {
 /* DESIGN.md specifies one label style — 0.6875rem / 600 / uppercase, mono —
    and the file had redeclared it at thirteen sites in two different weights.
    Nine of them inherited 400 because they simply never said; the other four
-   said 600. The two met on /admin/sync, where `.log th` (600) and
+   said 600. Twelve are in the list below; the thirteenth, `.btn-row__stamp`,
+   turned out not to be a label at all (see the end of this comment). The two
+   weights met on /admin/sync, where `.log th` (600) and
    `.strip__head` (400) render labels at the same size, the same tracking and
    the same colour about 40px apart, which reads as two kinds of label rather
    than one applied twice.
@@ -235,14 +246,18 @@ a:hover {
    leaving it at the inherited 400 while its neighbour moved to 600 would have
    rebuilt, inside one component, the exact split this block exists to close.
 
-   `.push__next` was enumerated by the audit and is deliberately NOT here. It
-   is the only one of the fourteen with no `text-transform` of its own, because
-   it is not a label: it renders "next 14:32", a prose word and a value, beside
-   a `.ago` that reads "3m ago" in sentence case at weight 400. Folding
-   it in would uppercase and embolden one half of a two-item metadata row and
-   leave the other half alone — a visible copy change, in a component nobody
-   reported, to satisfy a rule about labels it isn't an instance of. It keeps
-   its own three properties below and takes the tracking token. */
+   `.push__next` and `.btn-row__stamp` were enumerated by the audit and are
+   deliberately NOT here. Neither is a label: they render "next 14:32" and
+   "checked 20:25:25 UTC", a prose word and a value. Both reach for
+   `--track-value`, the tracking token for values, which is the tell that
+   sorted them — a component asking for value tracking is telling you what it
+   holds. Both keep their own properties below and inherit the 400 they have
+   always rendered at; the register would have moved them to 600. Folding
+   `.push__next` in would also have uppercased one half of a two-item metadata
+   row — it sits beside a `.ago` reading "3m ago" in sentence case — and left
+   the other half alone. `.btn-row__stamp` is already uppercase and keeps that;
+   case is not what makes something a register label, or `.btn` and `.tier`
+   would be in this list too. */
 .rule-head__label,
 .log th,
 .strip__name,
@@ -254,8 +269,7 @@ a:hover {
 .launch__scopes dt,
 .shell__register,
 .shell__nav a,
-.worker,
-.btn-row__stamp {
+.worker {
   font-family: var(--font-mono), ui-monospace, monospace;
   font-size: var(--t-label);
   font-weight: 600;
@@ -1509,8 +1523,15 @@ h3.rule-head__label {
    strip: it is a fact about this render, not about any job. Joining the label
    register also puts it in mono, which it was not before — it is a timestamp,
    and "prose is proportional, state is monospaced" makes that not optional. */
+/* Uppercase, but not a register label: it is already uppercase on main and
+   dropping that would be an unasked-for copy change. Weight is left to
+   inherit, which is the 400 it has always rendered at — the register would
+   have moved it to 600. */
 .btn-row__stamp {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: var(--t-label);
   letter-spacing: var(--track-value);
+  text-transform: uppercase;
   color: var(--ink-faint);
 }
 
@@ -2405,14 +2426,15 @@ h3.rule-head__label {
 
 /* The band this file did not serve. There were exactly two width breakpoints
    in 2300 lines — 46rem and 40rem, and the 46rem one touches only the sync
-   strip — so every viewport from 641px to 1039px got /admin/audit's full
+   strip — so every viewport from 641px to 1049px got /admin/audit's full
    desktop table, and its 62rem floor made that a cliff rather than a slope:
    at 639px the table is in its narrow setting and forces
    0px of horizontal scroll; at 641px it snaps to the desktop setting and
    forces 399px. Two pixels of viewport, 399 pixels of scroll, and it improves
-   from there rather than getting worse — 272px at 768px, 16px at 1024px, 0
-   from 1040px up. A tablet is the worst place to read the audit log, which is
-   the reverse of what a reader would predict from the width.
+   from there rather than getting worse — 272px at 768px, 17px at 1025px, 3px
+   at 1039px, 1px at 1041px, 0 from 1050px up. A tablet is the worst place to
+   read the audit log, which is the reverse of what a reader would predict
+   from the width.
 
    One stop, carrying a middle setting for the audit table only, because that
    table is the only thing in the file with a floor wide enough to produce the
@@ -2420,6 +2442,18 @@ h3.rule-head__label {
    content box, so the tablet case that forced 272px of scroll now forces none,
    and 641px forces 95px instead of 399px (same 48px of page padding the four
    figures above are computed against).
+
+   66rem, not the 64rem this was first written at. 64rem closes 641–1024 and
+   leaves 1025–1049 — the tail of the cliff, where the desktop floor still
+   overhangs by 17px down to 1px — exactly as broken as before, in a window
+   narrow enough that no hand-picked test width lands in it. The e2e spec's
+   1025px case is what found that; the boundary is measured rather than
+   reasoned, because the number depends on the scroller's padding and not just
+   on the floor. 66rem (1056px) clears the last overflowing width with 6px in
+   hand rather than sitting on it. The cost of the overshoot is that viewports
+   from 1050px to 1056px take the relative-time rendering when the ISO stamp
+   would also have fit; that is a visibility swap on seven pixels of viewport,
+   against a 25px-wide band that would otherwise still force scroll.
 
    All five columns move, not just the first. The first attempt lowered column
    1 alone and left the desktop widths on 2-4; the four sized columns then
@@ -2446,7 +2480,7 @@ h3.rule-head__label {
    not what produces the cliff. Flipping them globally here would render "3h
    ago" into a column still sized for a 19ch stamp on a page that had no
    problem. */
-@media (max-width: 64rem) {
+@media (max-width: 66rem) {
   .log--audit {
     min-width: 43rem;
   }
@@ -2636,7 +2670,7 @@ h3.rule-head__label {
     width: 6rem;
   }
 
-  /* Same reason as the 64rem stop: the pin is 5rem here. */
+  /* Same reason as the 66rem stop: the pin is 5rem here. */
   .log--audit.log--sticky-col thead th:not(:first-child) :is(a, button) {
     scroll-margin-left: 5rem;
   }

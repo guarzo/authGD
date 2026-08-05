@@ -48,7 +48,7 @@ Gold is identity and emphasis. The three signals are semantic and never decorati
 | `--gold` | `oklch(0.83 0.155 88)` | Brand mark, active nav, primary action, FlyGD tier. |
 | `--gold-dim` | `oklch(0.72 0.14 84)` | Gold borders, hover on gold surfaces. |
 | `--signal-ok` | `oklch(0.76 0.13 158)` | Healthy token, present on map, linked. |
-| `--signal-warn` | `oklch(0.80 0.15 50)` | Needs re-auth, scope shortfall, cryo (admin table only — an admin scans for it; the member's own account page reads cryo in `--ink-dim` instead, since it's a pause the member asked for, not a fault). Hue 50 rather than the 70 this started at: at 70 the warn signal sat 18° from `--gold`/`--tier-flygd` at near-identical chroma and lightness — 0.057 apart in OKLab, not enough to tell a gold FlyGD badge from an amber CRYO token two columns away in the same mono uppercase. 50 doubles that separation while staying 0.146 from `--signal-bad`, so warn is no longer nearer to identity than to failure. |
+| `--signal-warn` | `oklch(0.80 0.15 50)` | Needs re-auth, scope shortfall, cryo (admin table only — an admin scans for it; the member's own account page reads cryo in `--ink-dim` instead, since it's a pause the member asked for, not a fault). Hue 50 rather than the 70 this started at: at 70 the warn signal sat 18° from `--gold`/`--tier-flygd` at near-identical chroma and lightness — 0.057 apart in OKLab, not enough to tell a gold FlyGD badge from an amber CRYO token two columns away in the same mono uppercase. 50 nearly doubles that to 0.104 while holding 0.146 from `--signal-bad`. Warn remains nearer to gold than to bad, deliberately: equalising the two means rotating to about hue 37, buying separation from identity by spending it on failure, and mistaking a warning for an error is the worse confusion. The bar is legibility against gold, not equidistance. |
 | `--signal-bad` | `oklch(0.68 0.19 25)` | Dead token, failed sync, destructive action. |
 
 ### Tier colours
@@ -128,9 +128,12 @@ else. (`.st` is currently the one exception to the weight rule — it declares n
 `font-weight` and so renders at 400. That is a defect, not a variant.)
 
 The register is for **labels** — a fixed word naming a field. Small mono text that is
-itself a value, or a value with a prose word attached ("next 14:32"), is not a label
-and does not join: uppercasing it changes copy, and the 600 would set it apart from the
-sentence-case metadata it sits beside.
+itself a value, or a value with a prose word attached ("next 14:32", "checked 20:25:25
+UTC"), is not a label and does not join: uppercasing it changes copy, and the 600 would
+set it apart from the sentence-case metadata it sits beside. Case is not the test — a
+stamp may already be uppercase and still not be a label, exactly as `.btn` and `.tier`
+are. The tell is `--track-value`: a component asking for the value tracking is telling
+you what it holds.
 
 ## Layout
 
