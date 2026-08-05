@@ -115,4 +115,36 @@ describe("loadConfig", () => {
       ).toBe("https://auth.example/app");
     });
   });
+
+  describe("branding and tier labels", () => {
+    it("defaults to generic vocabulary when nothing is set", () => {
+      const cfg = loadConfig(validEnv);
+      expect(cfg.tierLabels).toEqual({
+        member: "Member",
+        associate: "Associate",
+        alumni: "Alumni",
+        pending: "Pending",
+      });
+      expect(cfg.brand.name).toBe("authGD");
+      expect(cfg.brand.tagline).toBe("Auth");
+      expect(cfg.brand.motto).toBe("");
+      expect(cfg.brand.footer).toBe("");
+      expect(cfg.brand.markUrl).toBe("/brand/mark.webp");
+      expect(cfg.brand.sealUrl).toBe("/brand/emblem.webp");
+    });
+
+    it("takes the configured values when set", () => {
+      const cfg = loadConfig({
+        ...validEnv,
+        TIER_LABEL_MEMBER: "FlyGD",
+        BRAND_NAME: "Zoo Landers",
+        BRAND_MOTTO: "Center for kids\nwho can't fly good",
+      });
+      expect(cfg.tierLabels.member).toBe("FlyGD");
+      // Unset siblings keep their generic defaults — labels are independent.
+      expect(cfg.tierLabels.associate).toBe("Associate");
+      expect(cfg.brand.name).toBe("Zoo Landers");
+      expect(cfg.brand.motto).toBe("Center for kids\nwho can't fly good");
+    });
+  });
 });

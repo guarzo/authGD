@@ -91,6 +91,26 @@ const envSchema = z.object({
   // Requiring it means both environments state intent. See
   // docs/superpowers/specs/2026-08-03-local-dev-setup.md (D1).
   SYNC_MODE: z.enum(["live", "dry-run"]),
+
+  // Display only. The enum values are member|associate|alumni|pending and do
+  // not change; these decide what a member reads. Optional with generic
+  // defaults so a fresh clone carries no deployment's vocabulary, and
+  // deliberately unvalidated beyond "is a string" — a corp's own tier names
+  // are not ours to constrain.
+  TIER_LABEL_MEMBER: z.string().default("Member"),
+  TIER_LABEL_ASSOCIATE: z.string().default("Associate"),
+  TIER_LABEL_ALUMNI: z.string().default("Alumni"),
+  TIER_LABEL_PENDING: z.string().default("Pending"),
+
+  BRAND_NAME: z.string().default("authGD"),
+  BRAND_TAGLINE: z.string().default("Auth"),
+  // Empty means "render nothing", not "render an empty element" — the login
+  // page omits the node entirely. A newline is a line break; the login page
+  // splits on it.
+  BRAND_MOTTO: z.string().default(""),
+  BRAND_FOOTER: z.string().default(""),
+  BRAND_MARK_URL: z.string().default("/brand/mark.webp"),
+  BRAND_SEAL_URL: z.string().default("/brand/emblem.webp"),
 });
 
 export type Config = ReturnType<typeof loadConfig>;
@@ -129,6 +149,20 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     standings: { label: e.STANDINGS_LABEL, value: e.STANDINGS_VALUE },
     esiContact: e.ESI_CONTACT,
     syncMode: e.SYNC_MODE,
+    tierLabels: {
+      member: e.TIER_LABEL_MEMBER,
+      associate: e.TIER_LABEL_ASSOCIATE,
+      alumni: e.TIER_LABEL_ALUMNI,
+      pending: e.TIER_LABEL_PENDING,
+    },
+    brand: {
+      name: e.BRAND_NAME,
+      tagline: e.BRAND_TAGLINE,
+      motto: e.BRAND_MOTTO,
+      footer: e.BRAND_FOOTER,
+      markUrl: e.BRAND_MARK_URL,
+      sealUrl: e.BRAND_SEAL_URL,
+    },
   };
 }
 
