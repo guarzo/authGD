@@ -67,6 +67,7 @@ export default async function NewPayoutPage({
       <SiteHeader items={nav} current="/payouts" section {...brandProps()} />
       <main id="main" tabIndex={-1} className="page page--narrow">
         <div className="page__head">
+          <p className="page__stamp">Flight log</p>
           <h1>New operation</h1>
           <p className="page__lede">
             One row per fight. Give it a name and a date; battle report, corp share, and
@@ -83,29 +84,43 @@ export default async function NewPayoutPage({
             so it is the one that most needs the announcement to land. */}
         <Notice tone="bad">{errorMessage}</Notice>
 
-        <form action={createOperationAction} className="form-stack">
-          {/* Requiredness is spelled into the label rather than left to the
-              `required` attribute alone. Both fields here are required, so
-              there is no "optional" case left to distinguish them from. */}
-          <label className="form-stack__field">
-            Name (required)
-            <input className="field" name="name" defaultValue={submitted.name} required />
-          </label>
-          <label className="form-stack__field">
-            Date (required)
-            <input
-              className="field"
-              type="date"
-              name="occurredAt"
-              defaultValue={submitted.occurredAt ?? today}
-              max={today}
-              required
-            />
-          </label>
-          <Submit className="btn btn--primary" pendingLabel="Creating…">
-            Create operation
-          </Submit>
-        </form>
+        {/* The form gets its own ground: a bare two-field form on the page
+            void read as a settings row rather than the start of a mission.
+            `--hull` is what DESIGN.md names for an inset region, and a
+            `--void` field inset into it is the contrast the field spec
+            already assumes. The H1 and lede stay on the page ground; only the
+            form itself is boxed, and it wears no registration ticks (those
+            are the login panel's alone). */}
+        <div className="form-panel">
+          <form action={createOperationAction} className="form-stack">
+            {/* Requiredness is spelled into the label rather than left to the
+                `required` attribute alone. Both fields here are required, so
+                there is no "optional" case left to distinguish them from. */}
+            <label className="form-stack__field">
+              Name (required)
+              <input
+                className="field"
+                name="name"
+                defaultValue={submitted.name}
+                required
+              />
+            </label>
+            <label className="form-stack__field">
+              Date (required)
+              <input
+                className="field"
+                type="date"
+                name="occurredAt"
+                defaultValue={submitted.occurredAt ?? today}
+                max={today}
+                required
+              />
+            </label>
+            <Submit className="btn btn--primary" pendingLabel="Creating…">
+              Create operation
+            </Submit>
+          </form>
+        </div>
       </main>
     </>
   );

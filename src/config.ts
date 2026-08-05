@@ -101,6 +101,27 @@ const envSchema = z.object({
   TIER_LABEL_ALUMNI: z.string().default("Alumni"),
   TIER_LABEL_PENDING: z.string().default("Pending"),
 
+  // The corp's cut of a payout, applied to operations at creation. Kept as a
+  // STRING all the way to the `numeric(5, 2)` column rather than parsed to a
+  // number: a float round-trip is exactly how "12.10" becomes "12.099999" in a
+  // money column, and every other consumer of corpSharePct already speaks
+  // strings (setCorpSharePct, the action's own `/^\d+(\.\d{1,2})?$/` guard).
+  //
+  // Only ever read when an operation is CREATED. The value is then persisted
+  // per-operation, so changing this env var re-rates new operations and leaves
+  // every finalized one showing the rate it was actually paid at. That is the
+  // whole reason the column survives the UI editor's removal — see
+  // `setCorpShareAction`.
+  PAYOUT_CORP_SHARE_PCT: z
+    .string()
+    .default("10")
+    .refine((s) => /^\d+(\.\d{1,2})?$/.test(s), {
+      message: "PAYOUT_CORP_SHARE_PCT must be a percentage like 10 or 12.50",
+    })
+    .refine((s) => Number(s) <= 100, {
+      message: "PAYOUT_CORP_SHARE_PCT must be between 0 and 100",
+    }),
+
   BRAND_NAME: z.string().default("authGD"),
   BRAND_TAGLINE: z.string().default("Auth"),
   // Empty means "render nothing", not "render an empty element" — the login
@@ -148,6 +169,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     standings: { label: e.STANDINGS_LABEL, value: e.STANDINGS_VALUE },
     esiContact: e.ESI_CONTACT,
     syncMode: e.SYNC_MODE,
+    payoutCorpSharePct: e.PAYOUT_CORP_SHARE_PCT,
     tierLabels: {
       member: e.TIER_LABEL_MEMBER,
       associate: e.TIER_LABEL_ASSOCIATE,

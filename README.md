@@ -215,6 +215,12 @@ The tier labels are display-only: the database enum, the audit log, and the API
 keep the internal names, so relabelling is safe at any time and changes nothing
 persisted.
 
+One knob is policy rather than display: `PAYOUT_CORP_SHARE_PCT` (default `10`)
+sets the corp's cut of a payout. Unlike the labels above it is *not* display-only
+— it is stamped onto each operation when the operation is created, so changing it
+affects new payouts and deliberately leaves finished ones showing the rate they
+were actually paid at. See `docs/ops.md` for the full note.
+
 Four images live in `public/brand/`. Two are reachable by config — point
 `BRAND_MARK_URL` and `BRAND_SEAL_URL` anywhere you like, including an external
 URL. The other two are referenced by path and can only be changed by replacing

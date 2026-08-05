@@ -1,12 +1,5 @@
 export type PricingMode = "sell_best" | "sell_p05" | "buy_best" | "buy_p05";
 
-export const PRICING_MODES: readonly PricingMode[] = [
-  "sell_best",
-  "sell_p05",
-  "buy_best",
-  "buy_p05",
-];
-
 export type QuoteSides = {
   sell: { best: number | null; p05: number | null };
   buy: { best: number | null; p05: number | null };

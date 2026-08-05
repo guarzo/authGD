@@ -74,26 +74,28 @@ export default async function PayoutsPage({
       <SiteHeader items={nav} current="/payouts" {...brandProps()} />
       <main id="main" tabIndex={-1} className="page">
         <div className="page__head">
-          <h1>Payouts</h1>
+          <p className="page__stamp">Flight log</p>
+          {/* Any member reads every operation (transparency is the cheapest
+              reconciliation mechanism the design has); only an operator —
+              member AND active — gets the control that starts a new one. A
+              cryo member sees the list with no button here, and the action
+              rejects regardless if they reach it another way. It sits beside
+              the H1 rather than in its own row below the lede, so it reads at
+              a glance as the one gold thing on this view. */}
+          <div className="page__head-row">
+            <h1>Payouts</h1>
+            {access.isOperator && (
+              <PendingLink className="btn btn--primary" href="/payouts/new">
+                New operation
+              </PendingLink>
+            )}
+          </div>
           <p className="page__lede">
             Every fight operation authGD has recorded: what it was worth, who was in it,
             and who has been paid. Your own share of each one is on{" "}
             <Link href="/account">your account</Link>.
           </p>
         </div>
-
-        {/* Any member reads every operation (transparency is the cheapest
-            reconciliation mechanism the design has); only an operator — member
-            AND active — gets the control that starts a new one. A cryo member
-            sees the list with no button here, and the action rejects
-            regardless if they reach it another way. */}
-        {access.isOperator && (
-          <p className="btn-row pager">
-            <PendingLink className="btn btn--primary" href="/payouts/new">
-              New operation
-            </PendingLink>
-          </p>
-        )}
 
         <RuleHead
           as="h2"
@@ -102,7 +104,7 @@ export default async function PayoutsPage({
           Operations
         </RuleHead>
         <Scroller label="Operations">
-          <table className="log">
+          <table className="log log--payouts">
             <thead>
               <tr>
                 <th scope="col">Name</th>
@@ -167,8 +169,23 @@ export default async function PayoutsPage({
                       <Status tone="ok">
                         {op.paidCount}/{op.participantCount} paid
                       </Status>
-                    ) : (
+                    ) : op.status === "finalized" ? (
+                      // A finalized operation with unpaid rows is the one
+                      // genuinely stalled case: the roster is locked and
+                      // nothing further should change it, so rows still
+                      // unpaid past that point are the fault the warn colour
+                      // exists for.
                       <Status tone="warn">
+                        {op.paidCount}/{op.participantCount} paid
+                      </Status>
+                    ) : (
+                      // A draft mid-payment is the normal state of active
+                      // work, not a fault — most rows on a live list are
+                      // exactly this, and rendering them amber burned the
+                      // alarm colour on nothing. Neutral (--ink-dim, Status's
+                      // default tone) matches how the account page already
+                      // reads a pause nobody asked to be alarmed about.
+                      <Status tone="neutral">
                         {op.paidCount}/{op.participantCount} paid
                       </Status>
                     )}
@@ -184,7 +201,11 @@ export default async function PayoutsPage({
                         <Link href="/payouts">Back to the latest operations</Link>
                       </span>
                     ) : (
-                      <span className="log__empty-text">No operations recorded yet.</span>
+                      <span className="log__empty-text">
+                        {access.isOperator
+                          ? "No operations recorded yet. Start the first one with New operation, above."
+                          : "No operations recorded yet."}
+                      </span>
                     )}
                   </td>
                 </tr>

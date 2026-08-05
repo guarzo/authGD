@@ -41,11 +41,25 @@ import { getFreshAccessToken, getMainCharacterWithScope } from "@/services/token
 import { createEsiClient, EsiError, OPEN_WINDOW_SCOPE } from "@/lib/esi/client";
 import { classifyOpenInfoFailure } from "@/core/open-info-error";
 import { createTriffClient, TriffError } from "@/lib/triff/client";
-import { PRICING_MODES, type PricingMode } from "@/core/pricing";
+import type { PricingMode } from "@/core/pricing";
 import { parseRosterPaste } from "@/core/roster-paste";
 import { iskToCents } from "@/core/payout-split";
 import { encodeDropped } from "./dropped";
 import type { NewOperationErrorCode, OperationErrorCode } from "./errors";
+
+/**
+ * `addAppraisedPoolAction` used to read these from the form: a "Pricing"
+ * `<select>` of four modes, a "Price at" `<select>` of station/region, and a
+ * free-numeric station/region id defaulted to 60003760 (Jita 4-4). This
+ * deployment has exactly one pricing policy and always will, so those were
+ * three user-facing controls that only ever took their own default — removed
+ * from `AppraiseForm` entirely, and hardcoded here instead. `pricing_mode`
+ * column and `loot_pool_appraised_fields_ck` (exactly one of station/region
+ * id) still require these fields on every pool row; a fixed pair satisfies
+ * both identically to what the removed controls always submitted.
+ */
+const APPRAISAL_PRICING_MODE: PricingMode = "sell_best";
+const APPRAISAL_STATION_ID = 60003760;
 
 /** FormData.get() is string | File | null; a File coerced with String() would
  *  stringify to "[object File]" rather than fail loudly, so every text field
@@ -102,8 +116,9 @@ function operationFailed(operationId: string, code: OperationErrorCode): never {
  *  Just the two fields the slimmed-down form still asks for. Battle report,
  *  corp share, and notes all moved to the detail page's own editors (see
  *  `setBattleReportUrlAction`, `setCorpShareAction`, `setNotesAction` below) —
- *  `createOperation` defaults corp share to 10% and leaves the other two null
- *  when the create form does not send them. */
+ *  `createOperation` reads corp share from `getConfig().payoutCorpSharePct`
+ *  (a deployment-wide default, not a per-operation one) and leaves the other
+ *  two null when the create form does not send them. */
 const CREATE_FIELDS = ["name", "occurredAt"] as const;
 
 function createFailed(formData: FormData, code: NewOperationErrorCode): never {
@@ -125,9 +140,16 @@ export async function createOperationAction(formData: FormData): Promise<void> {
   // Battle report, corp share, and notes are no longer collected here — they
   // moved to the detail page's own editors once the operation exists (see
   // `setBattleReportUrlAction`, `setCorpShareAction`, `setNotesAction` below).
-  // `createOperation` defaults corp share to 10% and leaves the other two null.
+  // Corp share comes from config rather than a literal: it is set once per
+  // deployment, not once per operation, and `createOperation`'s own
+  // `input.corpSharePct ?? "10"` fallback exists only for callers (tests)
+  // that omit the field entirely.
   const { id } = await getDb().transaction((dbtx) =>
-    createOperation(dbtx, actor, { name, occurredAt }),
+    createOperation(dbtx, actor, {
+      name,
+      occurredAt,
+      corpSharePct: getConfig().payoutCorpSharePct,
+    }),
   );
   revalidatePath("/payouts");
   redirect(`/payouts/${id}`);
@@ -149,37 +171,13 @@ export async function addAppraisedPoolAction(
 ): Promise<AppraiseActionState> {
   const actor = await requireOperatorAccount();
   const rawPaste = field(formData, "rawPaste");
-  const pricingModeRaw = field(formData, "pricingMode");
-  if (!PRICING_MODES.includes(pricingModeRaw as PricingMode)) {
-    operationFailed(operationId, "pricing_mode");
-  }
-  const pricingMode = pricingModeRaw as PricingMode;
-  // The form posts a location *kind* plus a single id, so "exactly one of
-  // station or region" — loot_pool_appraised_fields_ck, and triff's own rule —
-  // is structurally true rather than checked after the fact. That matters more
-  // here than anywhere else on the page: a redirect cannot carry the loot paste
-  // back, so the only acceptable place to catch a mis-filled location is before
-  // the form submits at all.
-  const locationKind = field(formData, "locationKind");
-  const locationRaw = field(formData, "locationId").trim();
-  if (locationKind !== "station" && locationKind !== "region") {
-    operationFailed(operationId, "location_kind");
-  }
-  // A non-numeric id must reject here, not travel to triff as a query param
-  // or reach the lootPool insert's bigint column as NaN.
-  if (!/^\d+$/.test(locationRaw)) {
-    operationFailed(
-      operationId,
-      locationKind === "station" ? "station_invalid" : "region_invalid",
-    );
-  }
-  const locationId = Number(locationRaw);
-  const stationId = locationKind === "station" ? locationId : undefined;
-  const regionId = locationKind === "region" ? locationId : undefined;
+  const pricingMode = APPRAISAL_PRICING_MODE;
+  const stationId = APPRAISAL_STATION_ID;
+  const regionId = undefined;
 
   // ARCHITECTURAL EXCEPTION to "enqueue, don't execute": appraisal is
-  // interactive — the operator pastes loot and waits for a number, adjusts the
-  // pricing mode, and pastes again — and this call is read-only and idempotent,
+  // interactive — the operator pastes loot, waits for a number, and pastes
+  // again if it looks wrong — and this call is read-only and idempotent,
   // so a lost or duplicated call is a re-click, not a corrupted record. That is
   // what makes calling triff/ESI directly from the web tier safe here and
   // nowhere else.
@@ -364,7 +362,9 @@ export async function setParticipantSharesAction(
  *  rejection through `operationFailed`, the same conversion every other input
  *  rejection on this page already goes through, and every service call is
  *  gated by `assertEditable` underneath — reachable only while `canEdit` is
- *  true on the page, same as `setCorpShareAction` below. */
+ *  true on the page. `setCorpShareAction` below is NOT one of the four its
+ *  own action-per-field editor moved with it — see that action's own
+ *  comment. */
 export async function setNameAction(
   operationId: string,
   formData: FormData,
@@ -423,9 +423,17 @@ export async function setNotesAction(
   revalidateOperation(operationId);
 }
 
-/** The fifth operation-level field with an edit path. Same codes as the
- *  create form's share checks, so both surfaces reject identically; they
- *  land on different pages, which is why each page carries its own copy. */
+/** No longer called from the page: corp share editing was an inline `<form>`
+ *  in the facts grid, removed because the share is set once per deployment
+ *  (a config default), not once per operation — an operator adjusting it here
+ *  was correcting a number that shouldn't have varied operation to operation
+ *  in the first place. The action, `setCorpSharePct` underneath it, and the
+ *  `corpSharePct` column all stay: `tests/payouts-service.test.ts` still
+ *  exercises `setCorpSharePct` directly, and a future admin-facing override
+ *  (if one is ever added) would call through this same action rather than a
+ *  new one. `share_format` / `share_range` in `errors.ts` are consequently
+ *  unreachable by this page's own UI now, same as the appraisal backstops —
+ *  see that file's docblock. */
 export async function setCorpShareAction(
   operationId: string,
   formData: FormData,

@@ -117,13 +117,16 @@ export async function createOperation(
       name: input.name,
       occurredAt: input.occurredAt,
       battleReportUrl: input.battleReportUrl ?? null,
-      // The create form only asks for name + date now, so most callers omit
-      // this. The column itself still defaults to "0" (schema.ts) -- that
-      // default states no policy, deliberately, since a bare DB insert (a
+      // No product default here. It used to be `?? "10"`, which became a
+      // second source of truth the moment PAYOUT_CORP_SHARE_PCT arrived: a
+      // deployment on 15% still got 10 from any caller that omitted the
+      // field. The web tier states the policy once
+      // (`createOperationAction` passes `getConfig().payoutCorpSharePct`),
+      // and a caller that omits it falls to the column's own "0" (schema.ts)
+      // — which states no policy, deliberately, since a bare DB insert (a
       // migration backfill, a script) should not silently commit anyone to a
-      // number. 10% is the product default and belongs at the layer that
-      // knows it is one, not baked into the schema.
-      corpSharePct: input.corpSharePct ?? "10",
+      // number.
+      corpSharePct: input.corpSharePct,
       notes: input.notes ?? null,
       createdBy: actor,
     })

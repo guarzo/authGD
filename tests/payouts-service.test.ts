@@ -1400,7 +1400,14 @@ describe("getOpenInfoTarget", () => {
 });
 
 describe("createOperation corp share default", () => {
-  it("defaults corpSharePct to 10 when the caller omits it", async () => {
+  // This used to assert "10.00": `createOperation` carried its own
+  // `?? "10"` product default. PAYOUT_CORP_SHARE_PCT made that a second
+  // source of truth — a deployment on 15% still got 10 from any caller that
+  // omitted the field — so the literal is gone and the policy is stated once,
+  // in config, by `createOperationAction`. What is left here is the column's
+  // own default, which deliberately states no policy: a bare insert from a
+  // backfill or a script commits nobody to a number.
+  it("falls to the column's no-policy default when the caller omits it", async () => {
     const operator = await seedOperator();
     const { id: operationId } = await ctx.db.transaction((tx) =>
       createOperation(tx, operator.id, {
@@ -1412,7 +1419,7 @@ describe("createOperation corp share default", () => {
       .select()
       .from(payoutOperation)
       .where(eq(payoutOperation.id, operationId));
-    expect(op.corpSharePct).toBe("10.00");
+    expect(op.corpSharePct).toBe("0.00");
   });
 
   it("still honours an explicit corpSharePct, including 0", async () => {
