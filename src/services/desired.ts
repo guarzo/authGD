@@ -1,4 +1,5 @@
 import { and, eq } from "drizzle-orm";
+import type { Tier } from "@/core/tier";
 import type { Dbx } from "@/db";
 import { account, character } from "@/db/schema";
 
@@ -17,7 +18,7 @@ export type MemberCharacter = {
  * set. Kept next to the query so the two cannot drift: change one, change both.
  */
 export function isContactsTarget(input: {
-  tier: string;
+  tier: Tier;
   affiliationInvalid: boolean;
 }): boolean {
   return input.tier === "member" && !input.affiliationInvalid;

@@ -112,7 +112,7 @@ Added to `docs/ops.md` **in PR1**, alongside the migration it describes.
 2. Set `DISCORD_ROLE_ID_MEMBER`, `_ASSOCIATE`, `_ALUMNI` — values copied
    verbatim from the existing three secrets. Leave the old three set.
 3. Deploy; the release command runs the migration
-4. `fly scale count web=1 worker=1`, verify `/api/health` and one admin page
+4. `fly scale count web=2 worker=1`, verify `/api/health` and one admin page
 5. `fly secrets unset DISCORD_ROLE_ID_FLYGD DISCORD_ROLE_ID_BLUE DISCORD_ROLE_ID_GREEN`
 
 Step 5 is last and separate so a rollback still has a bootable old image.
@@ -135,7 +135,7 @@ on every tier read regardless of its configuration. The enum must be reverted
 3. Confirm the old `DISCORD_ROLE_ID_FLYGD/_BLUE/_GREEN` secrets are still set;
    re-set them if step 5 above already ran
 4. Deploy the previous image
-5. `fly scale count web=1 worker=1`
+5. `fly scale count web=2 worker=1`
 
 Also delete the applied row for this migration from `__drizzle_migrations`,
 or the next forward deploy will skip re-applying it.
@@ -165,8 +165,8 @@ BRAND_NAME      optional, default "authGD"
 BRAND_TAGLINE   optional, default "Auth"
 BRAND_MOTTO     optional, default "" (hidden when empty)
 BRAND_FOOTER    optional, default "" (hidden when empty)
-BRAND_MARK_URL  optional, default "/brand/seal-sm.webp"
-BRAND_SEAL_URL  optional, default "/brand/seal.webp"
+BRAND_MARK_URL  optional, default "/brand/mark.webp"
+BRAND_SEAL_URL  optional, default "/brand/emblem.webp"
 ```
 
 `layout.tsx` exports a static `metadata` object today; it becomes
@@ -311,18 +311,38 @@ Three PRs, each in its own linked worktree.
    `drizzle/`; `frontend-dev` takes `src/app/` and `e2e/`. They run in parallel
    against the shared rename map recorded in the implementation plan, so the two
    halves cannot drift.
-2. **Labels, branding config, and neutral assets.** `TIER_LABEL_*`, `BRAND_*`,
+2. **Labels, branding config, and asset renames.** `TIER_LABEL_*`, `BRAND_*`,
    `resolveTierLabel`/`tierLabel`, `generateMetadata()`, the client-boundary
-   provider — *and* the neutral placeholder art in `public/`. Assets ship here,
-   not in PR3: shipping configurable branding whose defaults still point at corp
-   artwork would leave a deployable state that violates goal 1. This deployment
-   sets its own secrets and asset URLs and reads "FlyGD / Blue / Green" again.
+   provider — *and* the `public/brand/` renames. This deployment sets its own
+   secrets and reads "FlyGD / Blue / Green" again.
+
+   The artwork ships as-is rather than being replaced by neutral placeholders
+   (revised 2026-08-05). The artist, Faoble, has agreed to its redistribution
+   with the project on condition of continued credit, so the constraint is
+   attribution rather than removal. Files are renamed by role so a forker can
+   see what to swap:
+
+   | Now | Becomes | Role |
+   | --- | ------- | ---- |
+   | `seal-sm.webp` | `mark.webp` | 34px header mark (`_components/ui.tsx`) |
+   | `seal.webp` | `emblem.webp` | login page emblem (`login/page.tsx`) |
+   | `lander.webp` | `hero.webp` | login background (`globals.css`) |
+   | `lander-moon.webp` | `hero-account.webp` | account page illustration (`account/page.tsx`) |
+
+   `eve-sso-login-white-large.png` is CCP's SSO button and keeps its name.
+   Only the first two are reachable through `BRAND_MARK_URL`/`BRAND_SEAL_URL`;
+   the other two are referenced directly, so replacing the file is the only
+   route for them. PR3's fork instructions must say so.
 3. **Documentation.** README rewritten with a generic tier table, the stated
    audience, and a real setup section (EVE SSO app registration, Discord bot and
    three roles, Wanderer ACL key, `TOKEN_ENCRYPTION_KEY` generation, Postgres,
    `SYNC_MODE`); `PRODUCT.md` and `DESIGN.md` de-branded; `CONTRIBUTING.md`.
    `art/` and `docs/assets/hero.png` move out of the repo as source art rather
-   than runtime assets.
+   than runtime assets. The licence section states Faoble's grant — the art may
+   be redistributed with the project, credit required, all other rights reserved
+   — and a "replacing the branding" section lists the four files above beside
+   the `BRAND_*` variables.
+
 
 ## Publication prerequisites
 

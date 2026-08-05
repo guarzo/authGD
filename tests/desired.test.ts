@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import type { Tier } from "@/core/tier";
 import { getMemberCharacters, isContactsTarget } from "@/services/desired";
 import { setupTestDb, truncateAll } from "./helpers/db";
 import { testConfig } from "./helpers/config";
@@ -53,7 +54,7 @@ describe("getMemberCharacters", () => {
     await seedCharacter(ctx.db, cfg, { id: 3, accountId: associate.id });
 
     const inSet = new Set((await getMemberCharacters(ctx.db)).map((r) => r.characterId));
-    const cases = [
+    const cases: { id: number; tier: Tier; affiliationInvalid: boolean }[] = [
       { id: 1, tier: "member", affiliationInvalid: false },
       { id: 2, tier: "member", affiliationInvalid: true },
       { id: 3, tier: "associate", affiliationInvalid: false },

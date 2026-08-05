@@ -1430,7 +1430,7 @@ A Fly version bump does not guarantee a new image — check `ImageRef` before
 concluding the rollback took effect.
 ````
 
-- [ ] **Step 2: Verify the doc has no stale corp references introduced**
+- [ ] **Step 2: Verify formatting**
 
 Run: `npm run format:check`
 Expected: pass.

@@ -814,21 +814,34 @@ fly scale show   # record the current web and worker counts
 
 1. `fly scale count web=0 worker=0`
 2. Set the new role secrets, copying each value verbatim from the old one.
-   Leave the old three set:
+   Read the three old values first and substitute them for the placeholders —
+   the `<…>` below are not shell syntax and will be set literally if pasted
+   as-is. Leave the old three set:
    ```bash
-   fly secrets set DISCORD_ROLE_ID_MEMBER=<value of DISCORD_ROLE_ID_FLYGD> \
-                   DISCORD_ROLE_ID_ASSOCIATE=<value of DISCORD_ROLE_ID_BLUE> \
-                   DISCORD_ROLE_ID_ALUMNI=<value of DISCORD_ROLE_ID_GREEN>
+   fly secrets set DISCORD_ROLE_ID_MEMBER='<paste value of DISCORD_ROLE_ID_FLYGD>' \
+                   DISCORD_ROLE_ID_ASSOCIATE='<paste value of DISCORD_ROLE_ID_BLUE>' \
+                   DISCORD_ROLE_ID_ALUMNI='<paste value of DISCORD_ROLE_ID_GREEN>'
    ```
-3. `fly deploy` — the release command runs the migration
+3. Merge the pull request. **Merging is the deploy** — this repo deploys from
+   `main` through Fly's GitHub integration, so there is no `fly deploy` to run
+   by hand, and merging before step 1 would start a rolling replacement with
+   the old image still serving against the new enum. Watch `fly releases` until
+   the release command reports the migration applied.
 4. `fly scale count web=2 worker=1` (or the counts recorded above), then verify
    `/api/health` and load `/admin/accounts`
-5. Only after step 4 is confirmed healthy:
+5. Confirm the renamed role secrets actually resolve. `/api/health` and
+   `/admin/accounts` prove the enum rename took; they say nothing about Discord,
+   and a mistyped or omitted `DISCORD_ROLE_ID_*` fails silently as "no role
+   managed" rather than as an outage. On `/admin/sync`, run the
+   "Sync membership, contacts, wanderer, discord-roles" action and wait for the
+   `discord-roles` runs to land green — a bad role ID surfaces there as a
+   Discord role configuration error (and on the ops webhook).
+6. Only after steps 4 and 5 are confirmed healthy:
    ```bash
    fly secrets unset DISCORD_ROLE_ID_FLYGD DISCORD_ROLE_ID_BLUE DISCORD_ROLE_ID_GREEN
    ```
 
-Step 5 is last and separate so a rollback still has a bootable old image.
+Step 6 is last and separate so a rollback still has a bootable old image.
 
 ### Rollback
 
@@ -854,18 +867,21 @@ of configuration.
 
    ```sql
    -- <when> is the "when" field of the 0007 entry in drizzle/meta/_journal.json
+   -- <hash> is the output of: sha256sum drizzle/0007_<name>.sql
    SELECT id, hash, created_at FROM drizzle.__drizzle_migrations
     WHERE created_at = <when>;
-   -- confirm exactly one row, and that its hash matches:
-   --   sha256sum drizzle/0007_<name>.sql
-   DELETE FROM drizzle.__drizzle_migrations WHERE created_at = <when>;
+   -- confirm exactly one row, and that its hash equals <hash>, then:
+   DELETE FROM drizzle.__drizzle_migrations
+    WHERE created_at = <when> AND hash = '<hash>';
    ```
 
-   Run steps 2 and 3 inside one `BEGIN`/`COMMIT`. If the `SELECT` returns zero
-   or more than one row, `ROLLBACK` and stop — reverting the enum without
-   clearing the record leaves the next deploy unable to move forward, and
-   clearing the wrong record is worse.
-4. Re-set `DISCORD_ROLE_ID_FLYGD/_BLUE/_GREEN` if step 5 of the deploy already ran
+   Run steps 2 and 3 inside one `BEGIN`/`COMMIT`, and check the `DELETE` reported
+   `DELETE 1` before committing. If the `SELECT` or the `DELETE` touches zero or
+   more than one row, `ROLLBACK` and stop — reverting the enum without clearing
+   the record leaves the next deploy unable to move forward, and clearing the
+   wrong record is worse. Keying the `DELETE` on the hash as well as `created_at`
+   means a mistyped `<when>` deletes nothing rather than something else.
+4. Re-set `DISCORD_ROLE_ID_FLYGD/_BLUE/_GREEN` if step 6 of the deploy already ran
 5. `fly deploy --image <previous image ref>`
 6. `fly scale count web=2 worker=1` (or the counts recorded before the deploy)
 
