@@ -1059,6 +1059,21 @@ h3.rule-head__label {
   max-height: min(80svh, max(18rem, 100svh - 29rem));
 }
 
+/* The payouts roster table borrows `.log--dense`'s look (tight rows, sticky
+   head/col) for the same reason /admin/accounts does, but not its chrome: the
+   -29rem subtraction two rules up was measured against THAT page's head,
+   standing notice, filter row and count rule, none of which this page carries
+   — a roster sitting under a name/date head and a Loot section has an
+   entirely different amount of chrome above it, unmeasured here. Rather than
+   guess a second constant, `.log--roster` opts this table out of the
+   accounts-specific cap and back to the plain 80vh/80svh ceiling every other
+   `.scroller--tall` gets; same specificity as the rule above, so source order
+   (this one is later) decides it. */
+.scroller--tall:has(.log--roster) {
+  max-height: 80vh;
+  max-height: 80svh;
+}
+
 /* Opening a row drawer gives the chrome subtraction back. The `- 29rem` term
    above buys one thing: the region ends inside the viewport, so the page
    itself never scrolls and the only scrollbar on screen is the region's. That
@@ -1630,6 +1645,21 @@ h3.rule-head__label {
   background: var(--hull-hi);
   border-color: var(--rule-strong);
   color: var(--ink);
+}
+
+/* `InlineEdit` (payouts/[id]/inline-edit.tsx) reuses `.btn--quiet .btn--micro`
+   for its trigger/save/cancel controls everywhere, because the in-row uses
+   (per-item unit price, per-participant shares) are exactly the 28px grade
+   `.btn--quiet` already commits to. Its page-level uses — operation name,
+   date, corp share, notes, battle report — are standalone controls under
+   DESIGN.md's OWN two-size rule, not in-row ones, so they need the 36px floor
+   back without losing the quiet colouring `.btn--quiet` still earns them.
+   Higher specificity than the bare `.btn--quiet`/`.btn--micro` pair (two
+   classes vs. one), so it wins on cascade order regardless of where either
+   rule sits. */
+.inline-edit--standalone .btn--quiet {
+  min-height: 2.25rem;
+  padding: var(--s-2) var(--s-3);
 }
 
 .btn--danger {
@@ -2381,6 +2411,45 @@ h3.rule-head__label {
   min-height: 1.75rem;
   padding: 0.2rem 0;
   align-items: center;
+}
+
+/* Page-level disclosures that sit directly in document flow rather than
+   nested inside a `.log` table — the payouts detail page's "Or enter a flat
+   value", "Add another paste", "Replace roster from a paste" and "Add one
+   participant". `.log summary` above never matched these: the selector needs
+   a `.log`-classed ANCESTOR, and these summaries sit in a plain `.form-stack`,
+   so they rendered with the bare UA triangle and no hover state. Same look,
+   generic selector — a class rather than a bare `summary` rule so it stays
+   opt-in and cannot repaint some future disclosure that wants the browser
+   default. */
+.disc > summary {
+  cursor: pointer;
+  color: var(--ink);
+  font-weight: 600;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-height: 1.75rem;
+}
+
+.disc > summary::-webkit-details-marker {
+  display: none;
+}
+
+.disc > summary::before {
+  content: "+";
+  font-family: var(--font-mono), ui-monospace, monospace;
+  color: var(--ink-faint);
+  width: 1ch;
+}
+
+.disc[open] > summary::before {
+  content: "\2212";
+}
+
+.disc > summary:hover {
+  color: var(--gold);
 }
 
 /* The accounts row toggle: a plain `<button>` rather than `<summary>`, since
@@ -3182,6 +3251,15 @@ h3.rule-head__label {
   }
 
   .launch__panel {
+    padding: var(--s-6) var(--s-4) var(--s-5);
+  }
+
+  /* `.form-panel` (payouts/new) never got this narrow-viewport override, so at
+     320px `.page--narrow`'s own narrow padding (`var(--s-4)` a side) plus this
+     panel's still-wide `var(--s-6)` a side left fields only ~224px to work
+     with — measured, not estimated: 320 - 2*16 - 2*32 = 224. Same fix as
+     `.launch__panel` above, same reasoning: give the fields the width back. */
+  .form-panel {
     padding: var(--s-6) var(--s-4) var(--s-5);
   }
 

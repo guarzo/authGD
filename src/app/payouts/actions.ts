@@ -17,7 +17,7 @@ import {
   PayoutDuplicateParticipantError,
   PayoutHasPaidError,
   addParticipant,
-  createOperation,
+  createOperationWithContents,
   deleteOperation,
   finalizeOperation,
   getOpenInfoTarget,
@@ -46,6 +46,7 @@ import { parseRosterPaste } from "@/core/roster-paste";
 import { iskToCents } from "@/core/payout-split";
 import { encodeDropped } from "./dropped";
 import type { NewOperationErrorCode, OperationErrorCode } from "./errors";
+import type { AppraisalResult } from "@/services/appraisal";
 
 /**
  * `addAppraisedPoolAction` used to read these from the form: a "Pricing"
@@ -108,51 +109,132 @@ function operationFailed(operationId: string, code: OperationErrorCode): never {
   redirect(`/payouts/${operationId}?error=${code}`);
 }
 
-/** The create form has nowhere to fall back to — a rejected operation does not
- *  exist yet, so /payouts/new is both the origin and the destination. Echo the
- *  submitted values back so the operator corrects one field instead of retyping
- *  the other.
+/** The composer's own rejection state. `null` is `useActionState`'s initial
+ *  value, matching `AppraiseActionState`'s own convention: `state === null`
+ *  never renders a notice, whether that means "hasn't submitted yet" or
+ *  "still pending".
  *
- *  Just the two fields the slimmed-down form still asks for. Battle report,
- *  corp share, and notes all moved to the detail page's own editors (see
- *  `setBattleReportUrlAction`, `setCorpShareAction`, `setNotesAction` below) —
- *  `createOperation` reads corp share from `getConfig().payoutCorpSharePct`
- *  (a deployment-wide default, not a per-operation one) and leaves the other
- *  two null when the create form does not send them. */
-const CREATE_FIELDS = ["name", "occurredAt"] as const;
+ *  Every rejection here RETURNS this rather than redirecting through a
+ *  `?error=` query string, and that is the entire point of the composer: a
+ *  loot paste runs hundreds of lines and a redirect cannot carry it, so
+ *  losing the redirect is what keeps `useActionState` mounted with the
+ *  operator's pastes still sitting in their textareas. `createFailed`, the
+ *  echo-through-query-string helper the old two-field create form used, is
+ *  gone — nothing else in this file needs it now that every path through
+ *  this action returns instead. */
+export type CreateOperationState = { ok: false; code: NewOperationErrorCode } | null;
 
-function createFailed(formData: FormData, code: NewOperationErrorCode): never {
-  const params = new URLSearchParams({ error: code });
-  for (const key of CREATE_FIELDS) {
-    const value = field(formData, key);
-    if (value && value.length <= 500) params.set(key, value);
-  }
-  redirect(`/payouts/new?${params.toString()}`);
-}
-
-export async function createOperationAction(formData: FormData): Promise<void> {
+/**
+ * Collects name, date, an optional loot paste and an optional roster paste in
+ * one submit, landing on a fully-populated operation — see
+ * `createOperationWithContents` (src/services/payouts.ts) for what "fully
+ * populated" does inside the one transaction this opens.
+ *
+ * Order matters and is deliberate:
+ *
+ *   1. validate name/date — the two required fields, checked before any
+ *      network call so a typo never triggers an appraisal.
+ *   2. appraise the loot paste (network: triff/ESI), OUTSIDE any transaction,
+ *      the same rule `addAppraisedPoolAction` already follows and for the
+ *      same reason — a slow upstream must never hold a row lock.
+ *   3. parse the roster paste (pure, no I/O).
+ *   4. ONE transaction: `resolveRosterNames` (a DB read) then
+ *      `createOperationWithContents`, mirroring `setRosterAction`'s own
+ *      resolve-then-set order.
+ *
+ * Appraisal runs BEFORE the transaction opens, and its failure returns
+ * immediately without touching the database at all — no operation is
+ * created, empty or otherwise. That is the point of running it first: a
+ * paste that cannot be priced must not leave an orphaned shell behind for the
+ * operator to notice and delete later.
+ *
+ * `redirect()` throws NEXT_REDIRECT and must never sit inside a `try` — an
+ * enclosing `catch` would swallow it and the operator would land on
+ * error.tsx instead of the new operation. The transaction call below is
+ * therefore NOT wrapped in try/catch: nothing it can throw is meant to
+ * become `{ ok: false }` (an appraisal failure is caught earlier, before the
+ * transaction ever opens), so anything it does throw is a genuine fault and
+ * belongs on error.tsx. See `addAppraisedPoolAction`'s own comment, which
+ * solved this same problem first.
+ */
+export async function createOperationAction(
+  _prevState: CreateOperationState,
+  formData: FormData,
+): Promise<CreateOperationState> {
   const actor = await requireOperatorAccount();
   const name = field(formData, "name").trim();
-  if (!name) createFailed(formData, "name_required");
+  if (!name) return { ok: false, code: "name_required" };
   const occurredAt = new Date(field(formData, "occurredAt"));
-  if (Number.isNaN(occurredAt.getTime())) createFailed(formData, "date_invalid");
+  if (Number.isNaN(occurredAt.getTime())) return { ok: false, code: "date_invalid" };
 
-  // Battle report, corp share, and notes are no longer collected here — they
-  // moved to the detail page's own editors once the operation exists (see
-  // `setBattleReportUrlAction`, `setCorpShareAction`, `setNotesAction` below).
-  // Corp share comes from config rather than a literal: it is set once per
-  // deployment, not once per operation, and `createOperation`'s own
-  // `input.corpSharePct ?? "10"` fallback exists only for callers (tests)
-  // that omit the field entirely.
-  const { id } = await getDb().transaction((dbtx) =>
-    createOperation(dbtx, actor, {
+  const lootPaste = field(formData, "lootPaste").trim();
+  const rosterPaste = field(formData, "rosterPaste").trim();
+
+  let appraisalInput:
+    | {
+        rawPaste: string;
+        pricingMode: PricingMode;
+        stationId: number | null;
+        regionId: number | null;
+        appraisal: AppraisalResult;
+      }
+    | undefined;
+  // Same "dropped lines travel through the query string" mechanism
+  // `addAppraisedPoolAction` uses, carried onto the SUCCESS redirect below so
+  // the ledger the operator lands on can report them.
+  let droppedParam: string | null = null;
+
+  if (lootPaste) {
+    const cfg = getConfig();
+    const esi = createEsiClient({ userAgent: `authgd/0.1.0 (${cfg.esiContact})` });
+    const triff = createTriffClient();
+    try {
+      const appraisal = await appraiseLoot(
+        lootPaste,
+        {
+          pricingMode: APPRAISAL_PRICING_MODE,
+          stationId: APPRAISAL_STATION_ID,
+          regionId: undefined,
+        },
+        { esi, triff },
+      );
+      appraisalInput = {
+        rawPaste: lootPaste,
+        pricingMode: APPRAISAL_PRICING_MODE,
+        stationId: APPRAISAL_STATION_ID,
+        regionId: null,
+        appraisal,
+      };
+      if (appraisal.dropped.length > 0) {
+        droppedParam = encodeDropped(appraisal.dropped);
+      }
+    } catch (err) {
+      if (err instanceof TriffError || err instanceof EsiError) {
+        // Nothing was created — see this function's own docblock for why
+        // appraisal runs before the transaction ever opens.
+        return { ok: false, code: "appraisal_failed" };
+      }
+      throw err;
+    }
+  }
+
+  const names = rosterPaste ? parseRosterPaste(rosterPaste) : [];
+
+  const { id } = await getDb().transaction(async (dbtx) => {
+    const rosterEntries =
+      names.length > 0 ? await resolveRosterNames(dbtx, names) : undefined;
+    return createOperationWithContents(dbtx, actor, {
       name,
       occurredAt,
+      // A deployment-wide default, not a per-operation one — same source
+      // the old create action read it from.
       corpSharePct: getConfig().payoutCorpSharePct,
-    }),
-  );
+      appraisal: appraisalInput,
+      rosterEntries,
+    });
+  });
   revalidatePath("/payouts");
-  redirect(`/payouts/${id}`);
+  redirect(droppedParam ? `/payouts/${id}?dropped=${droppedParam}` : `/payouts/${id}`);
 }
 
 /** The one rejection on this page that `useActionState` handles instead of a
