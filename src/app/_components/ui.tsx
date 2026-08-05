@@ -1,10 +1,4 @@
 import type { ReactNode } from "react";
-// Type-only: erased at compile time, so this never pulls drizzle-orm/pg or
-// the `pg` driver into whatever bundle renders <Tier> — schema.ts itself
-// only imports drizzle-orm/pg-core, and `import type` guarantees zero
-// runtime import regardless. Same pattern already used for the sync status
-// enum at admin/sync/page.tsx.
-import type { tierEnum } from "@/db/schema";
 
 /**
  * `href` is the only identity a nav item has — there used to be a separate
@@ -88,6 +82,9 @@ export function SiteHeader({
   current,
   section = false,
   admin = false,
+  brandName,
+  brandTagline,
+  brandMarkUrl,
 }: {
   items: NavItem[];
   current?: string;
@@ -95,6 +92,12 @@ export function SiteHeader({
    *  this page's own route (`/payouts/new` under `/payouts`). */
   section?: boolean;
   admin?: boolean;
+  /** Brand values. Defaulted so a caller that forgets them degrades to the
+   *  generic names rather than crashing. Server callers pass
+   *  `getConfig().brand`; the two client callers pass `useBrand()`. */
+  brandName?: string;
+  brandTagline?: string;
+  brandMarkUrl?: string;
 }) {
   return (
     <header className="shell">
@@ -103,17 +106,18 @@ export function SiteHeader({
       </a>
       <div className="shell__bar">
         <a className="shell__mark" href={admin ? "/admin/accounts" : "/account"}>
-          <img src="/brand/seal-sm.webp" alt="" width={34} height={34} />
+          <img src={brandMarkUrl ?? "/brand/mark.webp"} alt="" width={34} height={34} />
           <span className="shell__wordmark">
-            <b>Zoo Landers</b>
-            <span>Flight Ops</span>
+            <b>{brandName ?? "authGD"}</b>
+            <span>{brandTagline ?? "Auth"}</span>
           </span>
         </a>
         {admin && <span className="shell__register">Admin</span>}
         <nav className="shell__nav" aria-label={admin ? "Admin" : "Main"}>
           {items.map((i) => {
-            // Derived from href, not useId: SiteHeader is a server component
-            // and cannot use hooks, and href is already the nav's identity key.
+            // Derived from href, not useId: SiteHeader renders on both sides of
+            // the client boundary and cannot use hooks, and href is already the
+            // nav's identity key.
             const badgeId = `nav-badge-${i.href}`;
             const badge = i.badge && i.badge.count > 0 ? i.badge : undefined;
             return (
@@ -224,53 +228,6 @@ export function Status({
   if (tone !== "neutral") classes.push(`st--${tone}`);
   if (size === "lead") classes.push("st--lead");
   return <span className={classes.join(" ")}>{children}</span>;
-}
-
-/**
- * The tier enum's own value set, not re-typed here. `(string & {})` keeps the
- * union open: the audit log renders historic tier values straight from the
- * DB (`admin/accounts/page.tsx`'s audit rows), and those can outlive the enum
- * if a tier is ever renamed or retired, so this prop must still accept a
- * plain string rather than close on today's three tiers.
- */
-export type TierName = (typeof tierEnum.enumValues)[number] | (string & {});
-
-/**
- * `size="lead"` is for the one place a tier is the subject of the page rather
- * than a cell in a list. It buys hierarchy with size alone: the badge already
- * carries its tier's hue, so growing it spends no extra colour against
- * DESIGN.md's ration.
- */
-export function Tier({
-  tier,
-  locked,
-  size,
-}: {
-  tier: TierName;
-  locked?: boolean;
-  size?: "lead";
-}) {
-  const known =
-    tier === "member" || tier === "associate" || tier === "alumni" || tier === "pending";
-  // An unknown tier is a data problem, not an associate member: give it a neutral
-  // badge rather than borrowing another tier's colour and asserting a lie.
-  const tone = known ? `tier tier--${tier}` : "tier tier--unknown";
-  return (
-    <span className={size === "lead" ? `${tone} tier--lead` : tone}>
-      {tier}
-      {locked && (
-        <>
-          {/* CSS-drawn, not the 🔒 emoji: a vendor glyph ignored --tone (a
-              fourth uncommanded colour on the one badge that carries exactly
-              one) and its advance width broke the mono column's tabular
-              rhythm. .tier__lock::after draws in currentColor at the mono
-              advance instead. */}
-          <span className="tier__lock" aria-hidden="true" />
-          <span className="visually-hidden">pinned by an admin</span>
-        </>
-      )}
-    </span>
-  );
 }
 
 /**

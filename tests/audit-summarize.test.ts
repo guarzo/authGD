@@ -344,3 +344,74 @@ describe("summarizeDetails, declared fields and role rendering", () => {
     ).toBe("green → flygd, admin");
   });
 });
+
+describe("summarizeDetails with configured tier labels", () => {
+  const LABELS = {
+    member: "FlyGD",
+    associate: "Blue",
+    alumni: "Green",
+    pending: "Waiting",
+  };
+
+  it("labels both sides of a tier transition", () => {
+    expect(
+      summarizeDetails(
+        "tier.changed",
+        { from: "member", to: "alumni" },
+        new Map(),
+        LABELS,
+      ),
+    ).toBe("FlyGD → Green");
+  });
+
+  it("labels an approval, which has no from value", () => {
+    // tier.approved shares tier.changed's renderer; this is the assertion that
+    // catches it being reverted to the unlabelled one.
+    expect(
+      summarizeDetails(
+        "tier.approved",
+        { to: "associate", locked: true },
+        new Map(),
+        LABELS,
+      ),
+    ).toBe("→ Blue, locked");
+  });
+
+  it("labels an unlock's prior tier", () => {
+    expect(summarizeDetails("tier.unlocked", { tier: "member" }, new Map(), LABELS)).toBe(
+      "was FlyGD",
+    );
+  });
+
+  it("labels the tier a discord role change was written for", () => {
+    expect(
+      summarizeDetails(
+        "discord.role_changed",
+        { tier: "alumni", cause: "tier change" },
+        new Map(),
+        LABELS,
+      ),
+    ).toBe("tier Green, tier change");
+  });
+
+  it("leaves a status transition alone", () => {
+    // status.changed keeps the unlabelled renderer on purpose: its values are
+    // statuses, and a deployment naming a tier "Active" must not rename them.
+    expect(
+      summarizeDetails(
+        "status.changed",
+        { from: "active", to: "cryo" },
+        new Map(),
+        LABELS,
+      ),
+    ).toBe("active → cryo");
+  });
+
+  it("passes a pre-rename tier value through unchanged", () => {
+    // Spec D4 again, now with labels configured: `flygd` is not a key in the
+    // map, so it renders as stored rather than resolving to anything.
+    expect(
+      summarizeDetails("tier.changed", { from: "green", to: "flygd" }, new Map(), LABELS),
+    ).toBe("green → flygd");
+  });
+});

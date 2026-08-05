@@ -92,7 +92,7 @@ test("account page shows characters, main marker, and tier", async ({
   await expect(page.getByText("(main)")).toBeVisible();
   await expect(page.getByText("Pilot Alt")).toBeVisible();
   // STANDINGS_LABEL is "authgd" in the e2e env, which the page echoes.
-  await expect(page.locator("[data-field='tier']")).toContainText("member");
+  await expect(page.locator("[data-field='tier']")).toContainText("Testers");
 });
 
 test("the contacts note describes the column via a table caption, and shows visible prose only where it explains something", async ({
@@ -404,9 +404,11 @@ test("a pending member is told their access is awaiting approval", async ({
 
   // Scoped to the Standing row's own field rather than a bare page-wide text
   // match: the word "pending" also appears in the first-sync copy elsewhere on
-  // this page, and the claim here is about the tier value specifically.
+  // this page, and the claim here is about the tier value specifically. The
+  // tier reads as its configured label ("Queued" in the e2e env), which is the
+  // half a page-wide match could not tell from the unconfigured word.
   const standing = page.locator("[data-field='tier']");
-  await expect(standing).toContainText("pending");
+  await expect(standing).toContainText("Queued");
   await expect(standing).toContainText("awaiting approval from an admin");
 
   // Not a fault. DESIGN.md reserves warning colour for the admin table and

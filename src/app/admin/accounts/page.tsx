@@ -10,7 +10,9 @@ import {
   type AdminCharacterRow,
   type AdminListSort,
 } from "@/services/account-view";
-import { Notice, RuleHead, Scroller, Status, Tier } from "@/app/_components/ui";
+import { Notice, RuleHead, Scroller, Status } from "@/app/_components/ui";
+import { Tier } from "@/app/_components/tier";
+import { tierLabel } from "@/app/_components/labels";
 // Shared with the member's own character table rather than reimplemented here:
 // the near-miss label copy and the "not managed" wording are the same question
 // asked about the same character, and two copies drift.
@@ -189,7 +191,7 @@ export default async function AdminAccountsPage({
               href={qs({ tier: t })}
               aria-current={tier === t ? "true" : undefined}
             >
-              {t}
+              {tierLabel(t)}
             </a>
           ))}
         </div>
@@ -600,9 +602,9 @@ function AccountRow({
                   <Submit
                     className="btn btn--micro"
                     pendingLabel="approving…"
-                    aria-label={`Approve as Alumni for ${identity}`}
+                    aria-label={`Approve as ${tierLabel("alumni")} for ${identity}`}
                   >
-                    Approve as Alumni
+                    Approve as {tierLabel("alumni")}
                   </Submit>
                 </form>
                 <form
@@ -612,9 +614,9 @@ function AccountRow({
                   <Submit
                     className="btn btn--micro"
                     pendingLabel="approving…"
-                    aria-label={`Approve as Associate for ${identity}`}
+                    aria-label={`Approve as ${tierLabel("associate")} for ${identity}`}
                   >
-                    Approve as Associate
+                    Approve as {tierLabel("associate")}
                   </Submit>
                 </form>
               </>
@@ -641,9 +643,9 @@ function AccountRow({
                     className="btn btn--micro"
                     disabled={r.tierLocked && r.tier === t}
                     aria-pressed={r.tier === t}
-                    aria-label={`Set ${identity} to ${t}`}
+                    aria-label={`Set ${identity} to ${tierLabel(t)}`}
                   >
-                    {t}
+                    {tierLabel(t)}
                   </Submit>
                 </form>
               ))

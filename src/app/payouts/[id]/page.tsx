@@ -4,6 +4,7 @@ import { notFound, redirect } from "next/navigation";
 import { getDb } from "@/db";
 import { getPayoutOperationDetail, listCharacterNames } from "@/services/payout-view";
 import { Notice, RuleHead, Scroller, SiteHeader, Status } from "@/app/_components/ui";
+import { brandProps } from "@/app/_components/brand-server";
 import { Disclosure } from "@/app/_components/disclosure";
 import { Submit } from "@/app/_components/submit";
 import { ConfirmArmScope, ConfirmSubmit } from "@/app/_components/confirm-submit";
@@ -182,7 +183,7 @@ export default async function PayoutOperationPage({
 
   return (
     <>
-      <SiteHeader items={nav} current="/payouts" section />
+      <SiteHeader items={nav} current="/payouts" section {...brandProps()} />
       <main id="main" tabIndex={-1} className="page">
         <div className="page__head">
           <h1>{operation.name}</h1>

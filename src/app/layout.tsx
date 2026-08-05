@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import { Archivo, IBM_Plex_Mono } from "next/font/google";
+import { BrandProvider } from "@/app/_components/brand-context";
+import { getConfig } from "@/config";
 import "./globals.css";
 
 // Self-hosted at build time by next/font — no runtime request to Google, no
@@ -19,20 +21,32 @@ const mono = IBM_Plex_Mono({
   display: "swap",
 });
 
-export const metadata: Metadata = {
-  title: {
-    default: "Zoo Landers · Flight Ops",
-    template: "%s · Zoo Landers",
-  },
-  description: "Corporation auth for Zoo Landers [FLYGD].",
-  icons: {
-    icon: [
-      { url: "/favicon.ico", sizes: "any" },
-      { url: "/icon.png", type: "image/png", sizes: "512x512" },
-    ],
-    apple: "/apple-icon.png",
-  },
-};
+// Reading config in generateMetadata() and in the layout body makes both
+// request-time work. Declared for the same reason login/page.tsx documents:
+// the ordering is load-bearing and undeclared otherwise, and a Docker build
+// has no config env present.
+export const dynamic = "force-dynamic";
+
+// Synchronous: this reads config, which is a plain in-process lookup. Next
+// accepts either form, and an `async` with nothing to await trips
+// @typescript-eslint/require-await.
+export function generateMetadata(): Metadata {
+  const { brand } = getConfig();
+  return {
+    title: {
+      default: `${brand.name} · ${brand.tagline}`,
+      template: `%s · ${brand.name}`,
+    },
+    description: `Corporation auth for ${brand.name}.`,
+    icons: {
+      icon: [
+        { url: "/favicon.ico", sizes: "any" },
+        { url: "/icon.png", type: "image/png", sizes: "512x512" },
+      ],
+      apple: "/apple-icon.png",
+    },
+  };
+}
 
 export const viewport = {
   themeColor: "#080f1f",
@@ -40,9 +54,16 @@ export const viewport = {
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
+  const { brand } = getConfig();
   return (
     <html lang="en" className={`${sans.variable} ${mono.variable}`}>
-      <body>{children}</body>
+      <body>
+        <BrandProvider
+          value={{ name: brand.name, tagline: brand.tagline, markUrl: brand.markUrl }}
+        >
+          {children}
+        </BrandProvider>
+      </body>
     </html>
   );
 }

@@ -1,3 +1,5 @@
+import { resolveTierLabel } from "@/core/tier-labels";
+
 /** Renders a JSON value inline where it can't throw: a string/number/boolean
  * as itself, anything else as compact JSON. Never lets a malformed payload
  * take the whole row down. */
@@ -23,6 +25,7 @@ function shortId(id: string): string {
 type Render = (
   d: Record<string, unknown>,
   roleNames: ReadonlyMap<string, string>,
+  labels: Record<string, string>,
 ) => string;
 
 /**
@@ -45,6 +48,27 @@ function transition(fromKey: string, toKey: string): Part {
       ? `${fmt(d[fromKey])} → ${fmt(d[toKey])}`
       : `→ ${fmt(d[toKey])}`,
   );
+}
+
+/**
+ * `transition`, but both sides are tier values, so they render through this
+ * deployment's configured labels: `Member → Alumni`.
+ *
+ * A separate builder rather than resolving inside `transition` itself: the
+ * generic one also carries `status.changed` and `payout.item_repriced`, whose
+ * values are statuses and item names. Passing those through a tier map would
+ * be a coincidence-driven rename waiting for the first deployment that calls a
+ * tier "Active".
+ *
+ * Any action whose payload names a tier belongs on this builder (or on
+ * `tierLabelled` below), not on the generic pair.
+ */
+function tierTransition(fromKey: string, toKey: string): Part {
+  return part([fromKey, toKey], (d, _roleNames, labels) => {
+    const to = resolveTierLabel(fmt(d[toKey]), labels);
+    if (d[fromKey] === undefined) return `→ ${to}`;
+    return `${resolveTierLabel(fmt(d[fromKey]), labels)} → ${to}`;
+  });
 }
 
 /** `+alumni −member`. Ids the app manages resolve to their tier name; anything
@@ -79,6 +103,14 @@ function scalar(key: string): Part {
 /** A payload value behind a fixed word, e.g. `character 90000001`. */
 function labelled(word: string, key: string): Part {
   return part([key], (d) => (d[key] === undefined ? "" : `${word} ${fmt(d[key])}`));
+}
+
+/** `labelled`, for a key whose value is a tier. See `tierTransition` for why
+ * this is its own builder rather than a flag on the generic one. */
+function tierLabelled(word: string, key: string): Part {
+  return part([key], (d, _roleNames, labels) =>
+    d[key] === undefined ? "" : `${word} ${resolveTierLabel(fmt(d[key]), labels)}`,
+  );
 }
 
 /** A boolean that is only worth words when it is true: `locked`, `was main`.
@@ -149,11 +181,16 @@ function noteChange(hadKey: string, hasKey: string): Part {
  * the declaration described seeded test data.
  */
 const PARTS: Record<string, readonly Part[]> = {
-  "tier.changed": [transition("from", "to"), scalar("cause"), flag("locked", "locked")],
+  "tier.changed": [
+    tierTransition("from", "to"),
+    scalar("cause"),
+    flag("locked", "locked"),
+  ],
   // Same shape as tier.changed on purpose: an approval IS a tier transition,
   // and the payload has no `from` because a pending account has no prior tier
-  // an admin would recognise. `transition` already renders `→ green` for that.
-  "tier.approved": [transition("from", "to"), flag("locked", "locked")],
+  // an admin would recognise. `tierTransition` already renders `→ Alumni` for
+  // that.
+  "tier.approved": [tierTransition("from", "to"), flag("locked", "locked")],
   "account.merged": [
     shortRef("absorbed", "sourceAccountId"),
     labelled("character", "characterId"),
@@ -174,13 +211,13 @@ const PARTS: Record<string, readonly Part[]> = {
   "token.verify_failed": [scalar("error")],
   "token.subject_mismatch": [labelled("subject", "subjectCharacterId")],
   "token.needs_reauth": [list("missingScopes", "missing", "scopes")],
-  "tier.unlocked": [labelled("was", "tier")],
+  "tier.unlocked": [tierLabelled("was", "tier")],
   "status.note_changed": [noteChange("had", "has")],
   "character.owner_mismatch": [labelled("detected by", "detectedBy")],
   "discord.unlinked": [scalar("reason")],
   "discord.role_changed": [
     roles("added", "removed"),
-    labelled("tier", "tier"),
+    tierLabelled("tier", "tier"),
     scalar("cause"),
   ],
   "wanderer.removed": [labelled("role", "role")],
@@ -199,7 +236,8 @@ const FALLBACK_KEYS = 3;
  * to a generic key=value rendering rather than throwing, since new action names
  * appear over time and the DB does not enforce a shape.
  *
- * `roleNames` maps a Discord role id to its tier name. Passed in rather than
+ * `roleNames` maps a Discord role id to its display name. `labels` maps a raw
+ * tier value to this deployment's configured label. Both passed in rather than
  * imported so this module stays a pure function of its arguments and needs no
  * env to test.
  */
@@ -207,6 +245,7 @@ export function summarizeDetails(
   action: string,
   details: unknown,
   roleNames: ReadonlyMap<string, string> = new Map(),
+  labels: Record<string, string> = {},
 ): string {
   const d = (details && typeof details === "object" ? details : {}) as Record<
     string,
@@ -215,7 +254,7 @@ export function summarizeDetails(
   try {
     const parts = PARTS[action];
     if (parts) {
-      const rendered = parts.map((p) => p(d, roleNames)).filter(Boolean);
+      const rendered = parts.map((p) => p(d, roleNames, labels)).filter(Boolean);
       const declared = new Set(parts.flatMap((p) => p.keys));
       const hidden = Object.keys(d).filter((k) => !declared.has(k)).length;
       const line = rendered.join(", ");

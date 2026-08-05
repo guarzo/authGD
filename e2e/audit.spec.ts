@@ -66,13 +66,15 @@ test("resolved names, distinguishable system actor, one-line details, filtered c
   // Details render a one-line human summary collapsed, with the full JSON
   // still reachable behind the "+" disclosure.
   const adminDetails = adminRow.locator("details.json");
-  await expect(adminDetails.locator(".json__peek")).toHaveText("alumni → member, admin");
+  await expect(adminDetails.locator(".json__peek")).toHaveText(
+    "Veterans → Testers, admin",
+  );
   await expect(adminDetails.locator(".json__full")).toBeHidden();
   await adminDetails.locator("summary").click();
   await expect(adminDetails.locator(".json__full")).toContainText('"cause": "admin"');
 
   const systemDetails = systemRow.locator("details.json");
-  await expect(systemDetails.locator(".json__peek")).toHaveText("→ alumni, membership");
+  await expect(systemDetails.locator(".json__peek")).toHaveText("→ Veterans, membership");
 
   // The count states it is a filtered subset, not a total, once a filter is
   // applied.
@@ -660,7 +662,7 @@ test("the details peek uses the whole column it was given", async ({ page, conte
   // whole. Under the 34ch cap it was cut mid-answer.
   expect(fit!.shortClipped).toBe(false);
   await expect(page.locator(".json__peek").nth(1)).toHaveText(
-    "member → alumni, alliance_left",
+    "Testers → Veterans, alliance_left",
   );
 });
 
