@@ -73,7 +73,7 @@ function debugLog(...args: unknown[]): void {
 const UNDEFINED_DATABASE = "3D000"; // invalid_catalog_name
 const DUPLICATE_DATABASE = "42P04"; // lost a create race with a sibling run
 
-function hasCode(err: unknown, code: string): boolean {
+export function hasCode(err: unknown, code: string): boolean {
   return typeof err === "object" && err !== null && "code" in err && err.code === code;
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildContentionMessage } from "./helpers/global-setup";
+import { buildContentionMessage, hasCode } from "./helpers/global-setup";
 import {
   deriveWorktreeDbName,
   ownsTestDatabase,
@@ -90,6 +90,32 @@ describe("buildContentionMessage", () => {
     });
 
     expect(message).toContain("docker exec <postgres-container> psql");
+  });
+});
+
+describe("hasCode", () => {
+  it("matches an object carrying the given code", () => {
+    expect(hasCode({ code: "3D000" }, "3D000")).toBe(true);
+  });
+
+  it("does not match an object with a different code", () => {
+    expect(hasCode({ code: "42P04" }, "3D000")).toBe(false);
+  });
+
+  it("does not match a plain Error with no code", () => {
+    expect(hasCode(new Error("boom"), "3D000")).toBe(false);
+  });
+
+  it("does not match null", () => {
+    expect(hasCode(null, "3D000")).toBe(false);
+  });
+
+  it("does not match undefined", () => {
+    expect(hasCode(undefined, "3D000")).toBe(false);
+  });
+
+  it("does not match a string", () => {
+    expect(hasCode("3D000", "3D000")).toBe(false);
   });
 });
 
