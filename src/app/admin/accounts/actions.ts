@@ -21,8 +21,8 @@ import { enqueueSync } from "@/services/outbox";
 // the click, since actions don't re-run the page's guard on soft navigation.
 // Redirect to the styled notice rather than throw, same as demoteAdminAction's
 // `last_admin` case below.
-function redirectNotAdmin(): never {
-  redirect(adminAccountsErrorUrl("not_admin"));
+function redirectNotAdmin(listSearch: string): never {
+  redirect(adminAccountsErrorUrl("not_admin", listSearch));
 }
 
 /**
@@ -43,10 +43,16 @@ function redirectNotAdmin(): never {
  * control targeting an account can find the row gone between page render and
  * the click — a race between two legitimate users, not a server fault.
  *
- * `fromQueue` sends `not_found` back to the pending-tier filter rather than
- * the unfiltered list: only approveAction's callers were looking at that
- * filter when they clicked. `not_pending` always goes there regardless of the
- * flag, since it can only ever be produced by approveAccount.
+ * `listSearch` is the page's own tier/status/sort/dir query string, bound into
+ * every control by admin/accounts/page.tsx. It replaces the old `fromQueue`
+ * flag and the forced `tier=pending` on `not_pending`: both were the same
+ * guess, that an admin hitting one of these races was looking at the approval
+ * queue, and both were wrong for everyone who was not — an admin who filtered
+ * to `?status=cryo`, sorted by tier changed, and lost a race was returned to
+ * an unfiltered list sorted by name. The page now hands over the view it
+ * actually rendered, so nothing here has to infer it. Approval controls only
+ * appear on `pending` rows, so a caller who WAS working the queue still
+ * carries `tier=pending` — by observation instead of by assumption.
  *
  * Exhaustive on a SECOND axis since the destination URLs moved behind
  * `adminAccountsErrorUrl`: the `?error=` codes below are `keyof
@@ -57,64 +63,68 @@ function redirectNotAdmin(): never {
  */
 function redirectOnMutationError(
   error: "not_authorized" | "not_found" | "not_pending",
-  opts: { fromQueue?: boolean } = {},
+  listSearch: string,
 ): never {
   switch (error) {
     case "not_authorized":
-      return redirectNotAdmin();
+      return redirectNotAdmin(listSearch);
     case "not_pending":
       // Two admins working the queue, or one with a stale tab: the account is
       // approved, just not by them.
-      return redirect(adminAccountsErrorUrl("not_pending", { tier: "pending" }));
+      return redirect(adminAccountsErrorUrl("not_pending", listSearch));
     case "not_found":
-      return redirect(
-        adminAccountsErrorUrl("not_found", opts.fromQueue ? { tier: "pending" } : {}),
-      );
+      return redirect(adminAccountsErrorUrl("not_found", listSearch));
   }
 }
 
 export async function setTierAction(
   accountId: string,
   tier: "flygd" | "blue" | "green",
+  listSearch: string,
 ): Promise<void> {
   const { accountId: actor } = await requireAdminAction();
   const result = await getDb().transaction((tx) =>
     setTierManual(tx, actor, accountId, tier),
   );
-  if (!result.ok) redirectOnMutationError(result.error);
+  if (!result.ok) redirectOnMutationError(result.error, listSearch);
   revalidatePath("/admin/accounts");
 }
 
 export async function approveAction(
   accountId: string,
   tier: "green" | "blue",
+  listSearch: string,
 ): Promise<void> {
   const { accountId: actor } = await requireAdminAction();
   const result = await getDb().transaction((tx) =>
     approveAccount(tx, actor, accountId, tier),
   );
-  if (!result.ok) redirectOnMutationError(result.error, { fromQueue: true });
+  if (!result.ok) redirectOnMutationError(result.error, listSearch);
   revalidatePath("/admin/accounts");
 }
 
-export async function returnToAutoAction(accountId: string): Promise<void> {
+export async function returnToAutoAction(
+  accountId: string,
+  listSearch: string,
+): Promise<void> {
   const { accountId: actor } = await requireAdminAction();
   const result = await getDb().transaction((tx) =>
     returnTierToAuto(tx, actor, accountId),
   );
-  if (!result.ok) redirectOnMutationError(result.error);
+  if (!result.ok) redirectOnMutationError(result.error, listSearch);
   revalidatePath("/admin/accounts");
 }
 
 export async function setStatusAction(
   accountId: string,
   status: "active" | "cryo",
+  listSearch: string,
 ): Promise<void> {
   const { accountId: actor } = await requireAdminAction();
   const result = await getDb().transaction((tx) =>
     setAccountStatus(tx, actor, accountId, status),
   );
-  if (!result.ok) redirectOnMutationError(result.error);
+  if (!result.ok) redirectOnMutationError(result.error, listSearch);
   revalidatePath("/admin/accounts");
 }
 
@@ -127,8 +137,12 @@ export async function setStatusAction(
 // millisecond would return the same value, and the client's "did a save just
 // land" check (a `state !== seen` comparison) would never fire for the
 // second one, silently dropping its confirmation.
+//
+// Both bound args therefore sit AHEAD of `prevState`: `useActionState` supplies
+// the last two, so anything the caller binds has to come first.
 export async function saveNoteAction(
   accountId: string,
+  listSearch: string,
   prevState: number,
   formData: FormData,
 ): Promise<number> {
@@ -145,7 +159,7 @@ export async function saveNoteAction(
   const result = await getDb().transaction((tx) =>
     setStatusNote(tx, actor, accountId, raw),
   );
-  if (!result.ok) redirectOnMutationError(result.error);
+  if (!result.ok) redirectOnMutationError(result.error, listSearch);
   revalidatePath("/admin/accounts");
   return prevState + 1;
 }
@@ -155,6 +169,9 @@ export async function syncAccountAction(
   // The page's current tier/status/sort/dir query string, plus queued=account,
   // bound in by the caller: without it the redirect below would always land
   // on the unfiltered list, dropping whatever filter the admin was scanning.
+  // A full href rather than the bare search string every other action takes,
+  // because this one is the success path and picks its own destination; the
+  // error paths go through `adminAccountsErrorUrl`, which owns the path.
   redirectTo: string,
 ): Promise<void> {
   const { accountId: actor } = await requireAdminAction();
@@ -166,7 +183,10 @@ export async function syncAccountAction(
   redirect(redirectTo);
 }
 
-export async function promoteAdminAction(accountId: string): Promise<void> {
+export async function promoteAdminAction(
+  accountId: string,
+  listSearch: string,
+): Promise<void> {
   const { accountId: actor } = await requireAdminAction();
   const result = await getDb().transaction((tx) => promoteAdmin(tx, actor, accountId));
   if (!result.ok) {
@@ -177,19 +197,22 @@ export async function promoteAdminAction(accountId: string): Promise<void> {
     if (result.error === undefined) {
       throw new Error("promoteAdmin: ok:false without an error code");
     }
-    redirectOnMutationError(result.error);
+    redirectOnMutationError(result.error, listSearch);
   }
   revalidatePath("/admin/accounts");
 }
 
-export async function demoteAdminAction(accountId: string): Promise<void> {
+export async function demoteAdminAction(
+  accountId: string,
+  listSearch: string,
+): Promise<void> {
   const { accountId: actor } = await requireAdminAction();
   const result = await getDb().transaction((tx) => demoteAdmin(tx, actor, accountId));
   if (!result.ok && result.error === "last_admin") {
     // Surface the service's protection instead of a 500 (carry-over).
-    redirect(adminAccountsErrorUrl("last_admin"));
+    redirect(adminAccountsErrorUrl("last_admin", listSearch));
   }
-  if (!result.ok && result.error === "not_authorized") redirectNotAdmin();
+  if (!result.ok && result.error === "not_authorized") redirectNotAdmin(listSearch);
   if (!result.ok) throw new Error(result.error);
   revalidatePath("/admin/accounts");
 }

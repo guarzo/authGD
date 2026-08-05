@@ -120,13 +120,22 @@ export default async function AdminAccountsPage({
   const pendingCount = await countAccountsByTier(getDb(), "pending");
   const errorMessage = lookupErrorMessage(ADMIN_ACCOUNTS_ERRORS, params.error);
 
-  const qs = (over: Record<string, string | undefined>) => {
+  const listParams = (over: Record<string, string | undefined> = {}) => {
     const p = new URLSearchParams();
     for (const [k, v] of Object.entries({ tier, status, sort, dir, ...over })) {
       if (v) p.set(k, v);
     }
-    return `/admin/accounts?${p.toString()}`;
+    return p;
   };
+  const qs = (over: Record<string, string | undefined>) =>
+    `/admin/accounts?${listParams(over).toString()}`;
+  // The admin's current view — tier, status, sort, dir — as a bare query
+  // string. Bound into every mutation below so that an error redirect can
+  // rebuild the list the admin was actually scanning instead of dropping them
+  // on the unfiltered default. syncAccountAction has taken a full href on this
+  // principle since it was written; the rest take the search string and let
+  // adminAccountsErrorUrl own the path.
+  const listSearch = listParams().toString();
   const syncQueuedHref = qs({ queued: "account" });
 
   return (
@@ -153,7 +162,15 @@ export default async function AdminAccountsPage({
         </Notice>
       )}
 
-      <RuleHead as="h2">Filter</RuleHead>
+      {/* Not a RuleHead. The two groups below already carry their own visible
+          labels ("Tier", "Status") and their own `role="group"` names, so a
+          third visible heading saying "Filter" was furniture restating them —
+          and a rule plus its --s-7 gap cost ~79px of a vertical budget this
+          page does not have (the table region below it starts ~445px down).
+          The heading itself still has to exist, so screen-reader heading
+          navigation can reach the filters as a landmark-sized unit; it just
+          has nothing left to say on screen. */}
+      <h2 className="visually-hidden">Filter</h2>
       <div className="filters">
         <div className="filters__group" role="group" aria-label="Filter by tier">
           <span className="filters__label">Tier</span>
@@ -226,9 +243,15 @@ export default async function AdminAccountsPage({
                     sort === s.key ? (dir === "asc" ? "ascending" : "descending") : "none"
                   }
                 >
-                  {/* The arrow is aria-hidden because aria-sort on the header
-                      already carries the state; it keeps the link's accessible
-                      name stable at just the column label. */}
+                  {/* Both glyphs are aria-hidden because aria-sort on the
+                      header already carries the state; they keep the link's
+                      accessible name stable at just the column label.
+
+                      The inactive `↕` is not decoration: four of these ten
+                      columns sort and six do not, and at rest the two kinds of
+                      header were pixel-identical — nothing said a column could
+                      be sorted until the pointer was already on it, which a
+                      keyboard or touch user never discovers. */}
                   <a
                     href={qs({
                       sort: s.key,
@@ -236,8 +259,13 @@ export default async function AdminAccountsPage({
                     })}
                   >
                     {s.label}
-                    {sort === s.key && (
+                    {sort === s.key ? (
                       <span aria-hidden="true"> {dir === "asc" ? "↑" : "↓"}</span>
+                    ) : (
+                      <span aria-hidden="true" className="log__sortable">
+                        {" "}
+                        ↕
+                      </span>
                     )}
                   </a>
                 </th>
@@ -257,14 +285,25 @@ export default async function AdminAccountsPage({
                   r={r}
                   cfg={cfg}
                   syncQueuedHref={syncQueuedHref}
+                  listSearch={listSearch}
                 />
               ))}
               {rows.length === 0 && (
                 <tr>
+                  {/* The cell spans every column, so under this table's width
+                      its box is far wider than the scroller and the message
+                      centred out at x≈375 — entirely off screen at 320px, with
+                      the start fade deliberately suppressed on sticky-column
+                      tables so nothing cued scrolling to it either. The inner
+                      span pins to the scrollport's left edge and wraps within
+                      it; the cell keeps its layout width. Same element and
+                      same reason as /admin/audit's empty state. */}
                   <td className="log__empty" colSpan={COLUMN_COUNT}>
-                    {filtered
-                      ? "No members match this filter."
-                      : "No accounts yet. They appear here after someone signs in with EVE."}
+                    <span className="log__empty-text">
+                      {filtered
+                        ? "No members match this filter."
+                        : "No accounts yet. They appear here after someone signs in with EVE."}
+                    </span>
                   </td>
                 </tr>
               )}
@@ -277,6 +316,22 @@ export default async function AdminAccountsPage({
 }
 
 /**
+ * Whether the account's main is the character that went dark. Hoisted out of
+ * `tokenTone` because it is not only a colour input: it is the one token fact
+ * that has to be readable as text. Two accounts with the same 4/5 summary and
+ * the same one dead alt-or-main rendered byte-identical text and differed only
+ * in the tone of the badge, which is colour carrying meaning on its own
+ * (WCAG 1.4.1).
+ */
+function isMainDead(r: AdminAccountRow): boolean {
+  const main = r.characters.find((c) => c.isMain);
+  return (
+    main !== undefined &&
+    (main.tokenStatus === "invalid" || main.tokenStatus === "missing")
+  );
+}
+
+/**
  * Token colour is proportional, not absolute. A long-dead token on a
  * forgotten alt is a routine standing state, not an alarm; the one case that
  * actually means the account is cut off is the main going dark, so that is
@@ -284,14 +339,13 @@ export default async function AdminAccountsPage({
  * for zero healthy tokens (every character is dead or needs re-auth), and
  * amber covers everything short of that. "nothing reads as punishment"
  * (PRODUCT.md) otherwise fails on any account with one stale alt.
+ *
+ * `mainDead` is passed in rather than recomputed here so the badge's tone and
+ * the `main dead` marker beside it can never disagree about the same fact.
  */
-function tokenTone(r: AdminAccountRow): "ok" | "warn" | "bad" | "off" {
+function tokenTone(r: AdminAccountRow, mainDead: boolean): "ok" | "warn" | "bad" | "off" {
   const tokens = r.tokenSummary;
   if (tokens.total === 0) return "off";
-  const main = r.characters.find((c) => c.isMain);
-  const mainDead =
-    main !== undefined &&
-    (main.tokenStatus === "invalid" || main.tokenStatus === "missing");
   if (tokens.healthy === 0 || mainDead) return "bad";
   if (tokens.dead > 0 || tokens.needsReauth > 0) return "warn";
   return "ok";
@@ -312,12 +366,15 @@ function AccountRow({
   r,
   cfg,
   syncQueuedHref,
+  listSearch,
 }: {
   r: AdminAccountRow;
   cfg: Config;
   syncQueuedHref: string;
+  listSearch: string;
 }) {
   const tokens = r.tokenSummary;
+  const mainDead = isMainDead(r);
 
   // Shown once above the crew table rather than once per character on the map:
   // the ACL observation is a single job run, so every character on it shares
@@ -405,9 +462,16 @@ function AccountRow({
 
           <td>
             <div className="stack">
-              <Status tone={tokenTone(r)}>
+              <Status tone={tokenTone(r, mainDead)}>
                 {tokens.healthy}/{tokens.total} ok
               </Status>
+              {/* First, and undimmed. This is the severe case — the account is
+                  cut off, not merely ragged — so it leads the sub-lines, and it
+                  is told apart from them by lightness and by different words
+                  rather than by colour, which the badge above already spends.
+                  Without it, "4/5 ok · 1 dead" reads identically whether the
+                  dead token is a forgotten alt or the main. */}
+              {mainDead && <span className="mono nowrap">main dead</span>}
               {tokens.needsReauth > 0 && (
                 <span className="dim mono nowrap">{tokens.needsReauth} re-auth</span>
               )}
@@ -457,7 +521,7 @@ function AccountRow({
           <td>
             <div className="btn-row btn-row--tight">
               {r.isAdmin ? (
-                <form action={demoteAdminAction.bind(null, r.accountId)}>
+                <form action={demoteAdminAction.bind(null, r.accountId, listSearch)}>
                   <ConfirmSubmit
                     className="btn btn--micro btn--danger"
                     label="revoke"
@@ -466,7 +530,7 @@ function AccountRow({
                   />
                 </form>
               ) : (
-                <form action={promoteAdminAction.bind(null, r.accountId)}>
+                <form action={promoteAdminAction.bind(null, r.accountId, listSearch)}>
                   <Submit
                     className="btn btn--micro"
                     pendingLabel="granting…"
@@ -499,26 +563,31 @@ function AccountRow({
           <div className="btn-group">
             {r.tier === "pending" ? (
               <>
+                {/* The row goes AFTER the visible label, not into the middle of
+                    it: "Approve as Green" has to survive in the accessible name
+                    as one contiguous run, or a speech-control user saying what
+                    is written on the button matches nothing (WCAG 2.5.3). Same
+                    convention as the Actions cell above. */}
                 <form
-                  action={approveAction.bind(null, r.accountId, "green")}
+                  action={approveAction.bind(null, r.accountId, "green", listSearch)}
                   className="inline-form"
                 >
                   <Submit
                     className="btn btn--micro"
                     pendingLabel="approving…"
-                    aria-label={`approve ${identity} as green`}
+                    aria-label={`Approve as Green for ${identity}`}
                   >
                     Approve as Green
                   </Submit>
                 </form>
                 <form
-                  action={approveAction.bind(null, r.accountId, "blue")}
+                  action={approveAction.bind(null, r.accountId, "blue", listSearch)}
                   className="inline-form"
                 >
                   <Submit
                     className="btn btn--micro"
                     pendingLabel="approving…"
-                    aria-label={`approve ${identity} as blue`}
+                    aria-label={`Approve as Blue for ${identity}`}
                   >
                     Approve as Blue
                   </Submit>
@@ -528,7 +597,7 @@ function AccountRow({
               TIERS.map((t) => (
                 <form
                   key={t}
-                  action={setTierAction.bind(null, r.accountId, t)}
+                  action={setTierAction.bind(null, r.accountId, t, listSearch)}
                   className="inline-form"
                 >
                   {/* No `pendingLabel` here, unlike every other control in this
@@ -556,7 +625,7 @@ function AccountRow({
             )}
             {r.tierLocked && (
               <form
-                action={returnToAutoAction.bind(null, r.accountId)}
+                action={returnToAutoAction.bind(null, r.accountId, listSearch)}
                 className="inline-form"
               >
                 <Submit
@@ -581,6 +650,7 @@ function AccountRow({
               null,
               r.accountId,
               r.status === "cryo" ? "active" : "cryo",
+              listSearch,
             )}
           >
             {r.status === "cryo" ? (
@@ -609,10 +679,40 @@ function AccountRow({
         <section className="drawer__group">
           <span className="drawer__label">Note</span>
           <NoteForm
-            action={saveNoteAction.bind(null, r.accountId)}
+            action={saveNoteAction.bind(null, r.accountId, listSearch)}
             identity={identity}
             defaultValue={r.statusNote ?? ""}
           />
+        </section>
+
+        {/* "Why is this person's role wrong?" is the question PRODUCT.md gives
+            the audit log a minute to answer, and until now the only route into
+            it was the nav item — so answering it started by retyping a name
+            from memory into the filter.
+
+            In the drawer rather than as an eleventh column: the table is
+            already ten columns wide and width-constrained at 320px, and this is
+            a follow-up action on one account, not a value to scan down.
+
+            Filtered by NAME when the row has one, not by account id.
+            `resolveFilterIdentity` (services/audit.ts) expands a name into the
+            account, every character carrying it, AND the linked discord id —
+            all three of the identifier forms a person's target rows are spread
+            across. A bare uuid is treated as `kind: "raw"` and matches only the
+            rows that happen to name the account itself, which is strictly less
+            of the person's history. The uuid is the fallback for a row with no
+            character name at all, where it is the only handle that exists. */}
+        <section className="drawer__group">
+          <span className="drawer__label">History</span>
+          <a
+            className="btn btn--micro"
+            href={`/admin/audit?${new URLSearchParams({
+              target: mainName ?? firstName ?? r.accountId,
+            }).toString()}`}
+            aria-label={`audit log for ${identity}`}
+          >
+            audit log
+          </a>
         </section>
       </div>
 

@@ -698,6 +698,30 @@ h3.rule-head__label {
   color: var(--gold);
 }
 
+/* The "this column sorts" glyph on a header that is not the current sort. Four
+   of the accounts table's ten headers are links and six are plain text, and at
+   rest the two were pixel-identical — the only thing that said a column could
+   be sorted was the hover colour above, which a keyboard or touch user never
+   sees before committing to a click.
+
+   --rule-strong rather than a step below --ink-faint: this is a hint, so it has
+   to sit under the header label rather than compete with it, but it is also the
+   only affordance the control has, which puts it under WCAG 1.4.11's 3:1 floor
+   for a UI component's own indicator. --rule-strong is the token chosen for
+   exactly that guarantee against --void, --hull and --hull-hi (DESIGN.md), and
+   --hull is what .log th sits on.
+
+   It carries no state: aria-sort on the <th> already says "none", and the glyph
+   is aria-hidden, so no accessible name changes. It follows the label to gold on
+   hover rather than staying behind, so a hovered header reads as one control. */
+.log__sortable {
+  color: var(--rule-strong);
+}
+
+.log th a:hover .log__sortable {
+  color: inherit;
+}
+
 .log td {
   padding: var(--s-3) var(--s-4);
   border-top: 1px solid var(--rule);
@@ -894,6 +918,36 @@ h3.rule-head__label {
      collapsing — but the vh line keeps the behaviour on engines without it. */
   max-height: 80vh;
   max-height: 80svh;
+}
+
+/* The accounts table only. `.scroller--tall` is shared with /admin/audit,
+   whose region sits under far less chrome, so this narrows to the one table
+   carrying `.log--dense` rather than moving the shared cap.
+
+   80svh alone is a blind claim: it describes the region without reference to
+   what is above it. On /admin/accounts that is the page head and lede, the
+   standing "awaiting approval" notice, the filter row and the count rule — and
+   at 900px tall an 80svh region ended 246px below the fold, so the sticky
+   header the cap exists to enable had nothing on screen to pin against.
+   Subtracting the chrome makes the region end inside the viewport instead.
+
+   29rem is measured, not derived: the chrome above this region comes out at
+   426px at 1280px wide and 461px at 768px, both with the pending notice
+   showing, which is the taller of the two standing cases. 29rem clears the
+   worse of the two, and undershooting only shortens the region where
+   overshooting recreates the bug. Measured after the Filter rule came out;
+   revisit if the head, the notices or the filter row change height.
+
+   The 18rem floor is the narrow-viewport case, and it deliberately does not
+   chase it. Below about 700px wide the filter row wraps and the chrome grows
+   to 580px (390px wide) and 647px (320px), which no single constant covers —
+   and there the page is a long vertical scroll anyway, so tightening a nested
+   scroll region past this point buys nothing and costs reach. Same standing as
+   `.log__empty-text`'s calc above: both are measurements with a stated bound,
+   not formulas. */
+.scroller--tall:has(.log--dense) {
+  max-height: min(80vh, max(18rem, 100vh - 29rem));
+  max-height: min(80svh, max(18rem, 100svh - 29rem));
 }
 
 .log--sticky-head thead th {
