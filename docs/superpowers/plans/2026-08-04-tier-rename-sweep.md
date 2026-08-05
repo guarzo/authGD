@@ -12,7 +12,7 @@ that migration needs.
 No display-label configuration in this PR — the UI reads the generic names until
 PR2 lands. Spec: `docs/superpowers/specs/2026-08-04-open-source-de-branding-design.md`.
 
-**Tech Stack:** TypeScript, Next.js 15 App Router, Drizzle ORM + drizzle-kit,
+**Tech Stack:** TypeScript, Next.js 16, Drizzle ORM 0.45 + drizzle-kit 0.31,
 Postgres 16, pg-boss, Vitest, Playwright.
 
 ## Global Constraints
@@ -151,26 +151,104 @@ contents with the four statements above by hand, and note the substitution in
 the commit message. This is the documented D3 exception. Do not renumber or
 rename the file.
 
-- [ ] **Step 5: Apply and run the test**
+- [ ] **Step 5: Apply to the test database and run the test**
 
-Run: `npm run db:migrate && npm test -- tests/db-schema.test.ts`
-Expected: PASS.
-
-- [ ] **Step 6: Verify the round trip on a scratch database**
+`npm run db:migrate` reads **`DATABASE_URL`**, not `TEST_DATABASE_URL`. Set it
+explicitly for this command every time, or it will migrate whatever your `.env`
+points at — most likely your dev database:
 
 ```bash
+DATABASE_URL="$TEST_DATABASE_URL" npm run db:migrate
+npm test -- tests/db-schema.test.ts
+```
+
+Expected: PASS.
+
+- [ ] **Step 6: Prove the migration and its rollback on a disposable database**
+
+The point is to exercise the committed `0007` file through Drizzle — including
+the journal bookkeeping the runbook depends on — not just the enum statements in
+isolation. First bring a scratch database up to `0006` only, the state
+production is in today, by moving the new migration aside. Do **not** use
+`git stash` for this — the stash stack is shared across worktrees.
+
+```bash
+export SCRATCH="postgres://authgd:authgd@localhost:5433/tier_roundtrip"
 createdb -h localhost -p 5433 -U authgd tier_roundtrip
-psql -h localhost -p 5433 -U authgd -d tier_roundtrip -c "CREATE TYPE tier AS ENUM('flygd','blue','green','pending');"
-psql -h localhost -p 5433 -U authgd -d tier_roundtrip -c "ALTER TYPE tier RENAME VALUE 'flygd' TO 'member'; ALTER TYPE tier RENAME VALUE 'blue' TO 'associate'; ALTER TYPE tier RENAME VALUE 'green' TO 'alumni';"
-psql -h localhost -p 5433 -U authgd -d tier_roundtrip -c "SELECT enumlabel FROM pg_enum e JOIN pg_type t ON t.oid=e.enumtypid WHERE t.typname='tier' ORDER BY enumsortorder;"
-psql -h localhost -p 5433 -U authgd -d tier_roundtrip -c "ALTER TYPE tier RENAME VALUE 'member' TO 'flygd'; ALTER TYPE tier RENAME VALUE 'associate' TO 'blue'; ALTER TYPE tier RENAME VALUE 'alumni' TO 'green';"
-psql -h localhost -p 5433 -U authgd -d tier_roundtrip -c "SELECT enumlabel FROM pg_enum e JOIN pg_type t ON t.oid=e.enumtypid WHERE t.typname='tier' ORDER BY enumsortorder;"
+
+mkdir -p /tmp/tier-hold
+mv drizzle/0007_*.sql /tmp/tier-hold/
+python3 - <<'PY'
+import json, pathlib
+p = pathlib.Path("drizzle/meta/_journal.json")
+j = json.loads(p.read_text())
+j["entries"] = [e for e in j["entries"] if not e["tag"].startswith("0007")]
+p.write_text(json.dumps(j, indent=2))
+PY
+
+# Migrate to 0006 and seed every tier value.
+DATABASE_URL="$SCRATCH" npm run db:migrate
+psql "$SCRATCH" -c "INSERT INTO account (tier) VALUES ('flygd'),('blue'),('green'),('pending');"
+psql "$SCRATCH" -c "SELECT tier, count(*) FROM account GROUP BY tier ORDER BY tier;"
+
+# Restore 0007 and apply it through Drizzle.
+mv /tmp/tier-hold/0007_*.sql drizzle/
+git checkout -- drizzle/meta/_journal.json
+DATABASE_URL="$SCRATCH" npm run db:migrate
+```
+
+Verify all four properties:
+
+```bash
+psql "$SCRATCH" -c "SELECT enumlabel FROM pg_enum e JOIN pg_type t ON t.oid=e.enumtypid WHERE t.typname='tier' ORDER BY enumsortorder;"
+psql "$SCRATCH" -c "SELECT tier, count(*) FROM account GROUP BY tier ORDER BY tier;"
+psql "$SCRATCH" -c "SELECT column_default FROM information_schema.columns WHERE table_name='account' AND column_name='tier';"
+psql "$SCRATCH" -c "SELECT id, hash, created_at FROM drizzle.__drizzle_migrations ORDER BY created_at DESC LIMIT 2;"
+```
+
+Expected: labels `member, associate, alumni, pending` in that order; one row
+each for `member`, `associate`, `alumni`, `pending` — **the same four counts as
+before the migration, with the names changed**; default `'alumni'::tier`; a new
+migrations row whose `created_at` equals the `when` field of the `0007` entry in
+`drizzle/meta/_journal.json`.
+
+Now run the documented rollback against the scratch DB — the exact SQL from
+`docs/ops.md` (Task 11), including the `created_at` delete:
+
+```bash
+psql "$SCRATCH" -c "BEGIN;
+ALTER TYPE tier RENAME VALUE 'member' TO 'flygd';
+ALTER TYPE tier RENAME VALUE 'associate' TO 'blue';
+ALTER TYPE tier RENAME VALUE 'alumni' TO 'green';
+ALTER TABLE account ALTER COLUMN tier SET DEFAULT 'green';
+DELETE FROM drizzle.__drizzle_migrations WHERE created_at = <when>;
+COMMIT;"
+psql "$SCRATCH" -c "SELECT enumlabel FROM pg_enum e JOIN pg_type t ON t.oid=e.enumtypid WHERE t.typname='tier' ORDER BY enumsortorder;"
+psql "$SCRATCH" -c "SELECT tier, count(*) FROM account GROUP BY tier ORDER BY tier;"
+```
+
+Expected: `flygd, blue, green, pending`; the same four counts again, original
+names. Then prove the forward path still works after a rollback:
+
+```bash
+DATABASE_URL="$SCRATCH" npm run db:migrate
+psql "$SCRATCH" -c "SELECT enumlabel FROM pg_enum e JOIN pg_type t ON t.oid=e.enumtypid WHERE t.typname='tier' ORDER BY enumsortorder;"
 dropdb -h localhost -p 5433 -U authgd tier_roundtrip
 ```
 
-Expected: forward query prints `member, associate, alumni, pending` in that
-order; inverse query prints `flygd, blue, green, pending`. Order preserved both
-ways. Quote both outputs in the commit or PR description.
+Expected: prints `migrations applied` and the generic labels again. **If it
+prints nothing applied, the `DELETE` did not match — that is the P0 this step
+exists to catch.** Quote every output above in the PR description.
+
+Finally confirm you left no journal edit behind:
+
+```bash
+git status --short drizzle/
+```
+
+Expected: only the new `0007_*.sql` and `drizzle/meta/0007_snapshot.json` as
+untracked/added; `_journal.json` modified only by `db:generate`, not by the
+Python above.
 
 - [ ] **Step 7: Commit**
 
@@ -187,7 +265,25 @@ git commit -m "feat(db): rename tier enum values to generic vocabulary"
 **Files:**
 - Modify: `src/config.ts:71-73,118-120`
 - Modify: `.env.example:49-51`
-- Test: `tests/config.test.ts`
+- Modify: **every fixture that sets the old names.** This is the complete list —
+  do not go hunting, and do not defer any of it to a later task:
+
+| File | Lines | Form |
+| ---- | ----- | ---- |
+| `playwright.config.ts` | 41-43 | object literal |
+| `tests/helpers/config.ts` | (role vars only) | object literal |
+| `tests/config.test.ts` | 23 area | object literal |
+| `tests/accounts.test.ts` | 60-62 | object literal |
+| `tests/account-view.test.ts` | 39-41 | object literal |
+| `tests/payouts-service.test.ts` | 58-60 | object literal |
+| `tests/eve-sso.test.ts` | 24-26 | object literal |
+| `tests/sync-mode.test.ts` | 67-69 | object literal |
+| `tests/discord-link.test.ts` | 19-21 | `process.env.X = "10"` |
+| `tests/auth-routes.test.ts` | 21-23 | `process.env.X = "10"` |
+
+The last two use assignment rather than an object literal, so an
+object-literal-shaped search-and-replace silently skips them.
+
 
 **Interfaces:**
 - Consumes: nothing.
@@ -252,24 +348,34 @@ DISCORD_ROLE_ID_ASSOCIATE=11
 DISCORD_ROLE_ID_ALUMNI=12
 ```
 
-- [ ] **Step 4: Update the shared test config helper**
+- [ ] **Step 4: Update every fixture in the table above**
 
 `tests/helpers/config.ts` — replace the three old role vars with the new names.
 **Do not touch `STANDINGS_LABEL` on line 24 in this task**; that is Task 9 and a
 different concern.
 
-- [ ] **Step 5: Run tests**
+Do the same in the other nine files. Config is validated by a strict zod schema
+that fails at boot, so a single missed fixture fails that whole test file with
+`DISCORD_ROLE_ID_MEMBER: Required` — there is no partial-credit failure mode
+here.
+
+- [ ] **Step 5: Verify no fixture was missed**
+
+Run: `grep -rn "DISCORD_ROLE_ID_\(FLYGD\|BLUE\|GREEN\)" src tests e2e scripts playwright.config.ts .env.example`
+Expected: no output.
+
+- [ ] **Step 6: Run tests**
 
 Run: `npm test -- tests/config.test.ts && npm run typecheck`
 Expected: config test PASS. `typecheck` will still report errors in
 `role-diff.ts` and its callers — that is expected until Task 3 and is not a
 regression.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 npm run format:check
-git add src/config.ts .env.example tests/config.test.ts tests/helpers/config.ts
+git add src/config.ts .env.example tests/ playwright.config.ts
 git commit -m "feat(config): rename discord role id vars to generic tiers"
 ```
 
@@ -757,11 +863,12 @@ git commit -m "refactor(css): rename tier colour tokens and tone classes"
 
 ---
 
-### Task 8: Seed helpers
+### Task 8: Seed helpers and the dev seed script
 
 **Files:**
 - Modify: `tests/helpers/seed.ts:10,20`
 - Modify: `e2e/helpers.ts:26,43`
+- Modify: `scripts/seed-dev.ts:30,53,61,64,67,68,74,81,160,161`
 
 **Interfaces:**
 - Consumes: the enum from Task 1.
@@ -769,7 +876,7 @@ git commit -m "refactor(css): rename tier colour tokens and tone classes"
   `tier?: "pending" | "member" | "associate" | "alumni"` and default to `"alumni"`.
   Task 10's specs rely on this default.
 
-- [ ] **Step 1: Edit both helpers**
+- [ ] **Step 1: Edit both test helpers**
 
 `tests/helpers/seed.ts`:
 
@@ -783,18 +890,65 @@ git commit -m "refactor(css): rename tier colour tokens and tone classes"
 
 `e2e/helpers.ts` lines 26 and 43 — identical changes.
 
-- [ ] **Step 2: Run the unit suite**
+- [ ] **Step 2: Edit the dev seed script**
+
+`scripts/seed-dev.ts` is not covered by any test, so nothing will catch a miss
+here except the grep in Step 4. It has its own `Tier` union that shadows the one
+in `src/core/tier.ts`:
+
+```ts
+type Tier = "member" | "associate" | "alumni";
+```
+
+Then the seeded fixtures. Lines 53, 64, 74 and 81 are `tier:` properties — map
+them by the standard rule. Lines 61, 67 and 68 carry a `label` that doubles as
+the display name for the seeded account, so both fields move together:
+
+```ts
+  { label: "associate", name: "Associate Pilot", mainId: 91_000_003, tier: "associate" },
+  { label: "alumni", name: "Alumni Pilot", mainId: 91_000_004, tier: "alumni" },
+```
+
+Line 160-161's comment and its condition:
+
+```ts
+        // member tier is derived from alliance membership by the sync jobs.
+        allianceId: spec.tier === "member" ? cfg.allianceId : null,
+```
+
+- [ ] **Step 3: Run the unit suite**
 
 Run: `npm test`
 Expected: PASS. Quote the summary line. If anything fails, it is a tier literal
 missed in Tasks 3-6 — fix it here rather than deferring.
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 4: Verify the seed script**
+
+Run: `grep -rniE "flygd|\"blue\"|\"green\"" scripts/ tests/helpers/ e2e/helpers.ts`
+Expected: no output.
+
+- [ ] **Step 5: Smoke-test the seed script against the scratch database**
+
+`npm test` does not execute `seed-dev.ts`, so run it once to prove the rename
+did not break it:
+
+```bash
+createdb -h localhost -p 5433 -U authgd seed_smoke
+DATABASE_URL="postgres://authgd:authgd@localhost:5433/seed_smoke" npm run db:migrate
+DATABASE_URL="postgres://authgd:authgd@localhost:5433/seed_smoke" npm run db:seed
+psql "postgres://authgd:authgd@localhost:5433/seed_smoke" -c "SELECT tier, count(*) FROM account GROUP BY tier ORDER BY tier;"
+dropdb -h localhost -p 5433 -U authgd seed_smoke
+```
+
+Expected: the seed completes without error and the tier counts use only
+`member`, `associate`, `alumni`, `pending`.
+
+- [ ] **Step 6: Commit**
 
 ```bash
 npm run format:check
-git add tests/helpers/seed.ts e2e/helpers.ts
-git commit -m "test: seed helpers use the generic tier vocabulary"
+git add tests/helpers/seed.ts e2e/helpers.ts scripts/seed-dev.ts
+git commit -m "test: seed helpers and dev seed script use the generic tier vocabulary"
 ```
 
 ---
@@ -873,9 +1027,11 @@ git commit -m "test: use authgd as the standings label fixture, not the tier nam
 
 **Files:**
 - Modify: `e2e/account.spec.ts:58,70,79,229,270,293,296,313,395,399,405`
-- Modify: `e2e/audit.spec.ts` (24 occurrences — every `seedMember(..., tier: "flygd")`,
-  the `details: {from,to}` fixtures on lines 22, 247, 858, and the rendered-text
-  assertions on lines 56 and 870)
+- Modify: `e2e/audit.spec.ts` — every `seedMember(..., tier: "flygd")`, the
+  `details: {from,to}` fixtures on lines 22 and 247, and the rendered-text
+  assertion on line 56. **The fixture on line 858 and its assertion on 870 are
+  deliberately left on the old vocabulary — see Step 3.**
+- Modify: `tests/audit-summarize.test.ts` (new legacy-history regression test)
 - Modify: `e2e/not-found.spec.ts:79,138,160`
 - Modify: `e2e/sync.spec.ts`, `e2e/admin.spec.ts`, `e2e/submit-guard.spec.ts` —
   every tier literal
@@ -887,7 +1043,8 @@ git commit -m "test: use authgd as the standings label fixture, not the tier nam
 - [ ] **Step 1: Replace tier literals**
 
 Across all `e2e/*.spec.ts`: `tier: "flygd"` → `tier: "member"`, `"blue"` →
-`"associate"`, `"green"` → `"alumni"`, including inside `details:` fixtures.
+`"associate"`, `"green"` → `"alumni"`, including inside `details:` fixtures —
+except the one held back in Step 3.
 
 - [ ] **Step 2: Update rendered-text assertions**
 
@@ -906,13 +1063,41 @@ the raw enum value:
   await expect(adminDetails.locator(".json__peek")).toHaveText("alumni → member, admin");
 ```
 
-`e2e/audit.spec.ts:870`:
+- [ ] **Step 3: Keep one legacy fixture on purpose**
+
+Spec D4 decides that pre-rename audit rows keep their stored strings and render
+them verbatim — there is no alias map. That is a behaviour, so it needs a test,
+and a blanket fixture rename would delete the only coverage of it.
+
+Add to `tests/audit-summarize.test.ts`:
 
 ```ts
-    "member → alumni, main left alliance",
+it("renders a pre-rename audit detail verbatim", () => {
+  // Spec D4: audit_log.details is history, not live state. Rows written before
+  // migration 0007 keep the old tier strings and are shown as stored — there is
+  // no alias map, and adding one would rewrite history to match today's config.
+  expect(summarizeDetails("tier_change", { from: "green", to: "flygd", cause: "admin" }, {})).toBe(
+    "green → flygd, admin",
+  );
+});
 ```
 
-- [ ] **Step 3: Update test names and prose**
+If `summarizeDetails`' third parameter is not a bare `roleNames` record, match
+whatever `tests/audit-summarize.test.ts` already passes in its neighbouring
+cases rather than inventing a shape.
+
+And in `e2e/audit.spec.ts`, leave **one** seeded row on the old vocabulary — the
+line 858 fixture — with its assertion at 870 unchanged:
+
+```ts
+  // Deliberately NOT renamed: this row stands in for audit history written
+  // before migration 0007. Per spec D4 it must still render its stored values.
+  details: { from: "flygd", to: "green", cause: "main left alliance" },
+```
+
+Rename the fixtures at lines 22 and 247 as normal.
+
+- [ ] **Step 4: Update test names and prose**
 
 `e2e/account.spec.ts:293` → `test("a member still sees the first-run notice", …)`;
 line 296's seeded name `"Flygd Pilot"` → `"Member Pilot"`; line 399 →
@@ -920,24 +1105,26 @@ line 296's seeded name `"Flygd Pilot"` → `"Member Pilot"`; line 399 →
 — reword to `"a demoted member sees their payout row with no link to the operation"`
 to avoid the awkward repetition. Lines 270 and 395's comments likewise.
 
-- [ ] **Step 4: Run the e2e suite**
+- [ ] **Step 5: Run the e2e suite**
 
 Run: `npm run test:e2e`
 Expected: PASS. Quote the summary. If `tsconfig.json` or `AGENTS.md` show as
 modified afterwards, restore them with `git checkout --` — `next dev` rewrites
 both, and they are tracked files. Do not delete them.
 
-- [ ] **Step 5: Verify**
+- [ ] **Step 6: Verify**
 
 Run: `grep -rniE "flygd|\"blue\"|\"green\"" e2e/`
-Expected: no output.
+Expected: **exactly** the retained legacy fixture in `e2e/audit.spec.ts` (its
+`details` object, its assertion, and the comment above it). Nothing else. If the
+grep is empty, Step 3's deliberate exclusion was renamed by mistake — restore it.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 npm run format:check
-git add e2e/
-git commit -m "test(e2e): rename tier vocabulary across specs"
+git add e2e/ tests/audit-summarize.test.ts
+git commit -m "test(e2e): rename tier vocabulary, keep one pre-rename audit fixture"
 ```
 
 ---
@@ -966,6 +1153,15 @@ accepts. **This deploy requires a maintenance window.**
 
 ### Deploy
 
+`docs/ops.md` § "Sizing and redundancy" runs **`web=2`, `worker=1`** — `web=2`
+is a deliberate choice that closes the deploy gap, not a default. Record the
+live counts before scaling down and restore those, rather than trusting the
+numbers written here:
+
+```bash
+fly scale show   # record the current web and worker counts
+```
+
 1. `fly scale count web=0 worker=0`
 2. Set the new role secrets, copying each value verbatim from the old one.
    Leave the old three set:
@@ -975,8 +1171,8 @@ accepts. **This deploy requires a maintenance window.**
                    DISCORD_ROLE_ID_ALUMNI=<value of DISCORD_ROLE_ID_GREEN>
    ```
 3. `fly deploy` — the release command runs the migration
-4. `fly scale count web=1 worker=1`, then verify `/api/health` and load
-   `/admin/accounts`
+4. `fly scale count web=2 worker=1` (or the counts recorded above), then verify
+   `/api/health` and load `/admin/accounts`
 5. Only after step 4 is confirmed healthy:
    ```bash
    fly secrets unset DISCORD_ROLE_ID_FLYGD DISCORD_ROLE_ID_BLUE DISCORD_ROLE_ID_GREEN
@@ -998,14 +1194,30 @@ of configuration.
    ALTER TYPE "public"."tier" RENAME VALUE 'alumni' TO 'green';
    ALTER TABLE "account" ALTER COLUMN "tier" SET DEFAULT 'green';
    ```
-3. Remove the migration's row so the next forward deploy re-applies it:
+3. Remove the migration's row so the next forward deploy re-applies it.
+   **`__drizzle_migrations.hash` is a SHA-256 of the file contents, not the
+   filename — matching on `'%0007%'` finds nothing and silently leaves the row
+   in place.** The row is identified by `created_at`, which is the `when` value
+   drizzle-kit recorded in `drizzle/meta/_journal.json` for the `0007_*` entry.
+   Read that number out of the journal in the deployed image, then, in the same
+   transaction as step 2:
+
    ```sql
-   DELETE FROM drizzle.__drizzle_migrations WHERE hash LIKE '%0007%';
+   -- <when> is the "when" field of the 0007 entry in drizzle/meta/_journal.json
+   SELECT id, hash, created_at FROM drizzle.__drizzle_migrations
+    WHERE created_at = <when>;
+   -- confirm exactly one row, and that its hash matches:
+   --   sha256sum drizzle/0007_<name>.sql
+   DELETE FROM drizzle.__drizzle_migrations WHERE created_at = <when>;
    ```
-   Confirm exactly one row matched before committing the transaction.
+
+   Run steps 2 and 3 inside one `BEGIN`/`COMMIT`. If the `SELECT` returns zero
+   or more than one row, `ROLLBACK` and stop — reverting the enum without
+   clearing the record leaves the next deploy unable to move forward, and
+   clearing the wrong record is worse.
 4. Re-set `DISCORD_ROLE_ID_FLYGD/_BLUE/_GREEN` if step 5 of the deploy already ran
 5. `fly deploy --image <previous image ref>`
-6. `fly scale count web=1 worker=1`
+6. `fly scale count web=2 worker=1` (or the counts recorded before the deploy)
 
 A Fly version bump does not guarantee a new image — check `ImageRef` before
 concluding the rollback took effect.
@@ -1045,7 +1257,16 @@ Run: `npm run test:e2e`
 Expected: PASS. Quote the summary. Restore `tsconfig.json` / `AGENTS.md` with
 `git checkout --` if `next dev` rewrote them.
 
-- [ ] **Step 4: Format**
+- [ ] **Step 4: Lint, build and format**
+
+Run: `npm run lint`
+Expected: clean. This sweep touches ~40 files across `src/`, so an unused import
+left behind by a rename is a real risk that `typecheck` alone will not catch.
+
+Run: `npm run build`
+Expected: succeeds. A production build is the only check that exercises Next.js
+route collection and static generation over the renamed pages — `npm run dev`
+and the e2e suite both run in dev mode.
 
 Run: `npm run format:check`
 Expected: pass. Quote the output.
@@ -1053,31 +1274,41 @@ Expected: pass. Quote the output.
 - [ ] **Step 5: Whole-repo sweep for missed literals**
 
 ```bash
-grep -rniE "flygd" src tests e2e scripts docs/ops.md .env.example
+grep -rniE "flygd" src tests e2e scripts docs/ops.md .env.example playwright.config.ts
 ```
 
-Expected: **only** `src/app/layout.tsx:27` and `src/app/login/page.tsx:82`
-(both `[FLYGD]` branding strings owned by PR2), plus `docs/ops.md`'s rollback SQL
-and the spec/plan documents, which name the old values deliberately.
+Expected: **only**
+- `src/app/layout.tsx:27` and `src/app/login/page.tsx:82` — `[FLYGD]` branding
+  strings owned by PR2
+- the retained legacy audit fixture in `e2e/audit.spec.ts` and the matching
+  case in `tests/audit-summarize.test.ts` (Task 10 Step 3)
+- `docs/ops.md`'s rollback SQL, which names the old values deliberately
 
 ```bash
-grep -rnE '"(blue|green)"' src tests e2e
+grep -rnE '"(blue|green)"' src tests e2e scripts
 ```
 
-Expected: no output.
+Expected: only the retained legacy audit fixture and its unit-test counterpart.
+
+```bash
+grep -rn "DISCORD_ROLE_ID_\(FLYGD\|BLUE\|GREEN\)" src tests e2e scripts playwright.config.ts .env.example
+```
+
+Expected: no output. (`docs/ops.md` keeps them in the rollback and `unset` steps.)
 
 - [ ] **Step 6: Code review**
 
 Dispatch the `code-reviewer` agent on the full diff. Ask it explicitly to check
 for: a missed tier literal; an over-eager colour rename in `globals.css`; a
-category-3 standings-label fixture rewritten as a tier; and whether the
-migration is a `RENAME VALUE` rather than a drop-and-recreate.
+category-3 standings-label fixture rewritten as a tier; whether the migration is
+a `RENAME VALUE` rather than a drop-and-recreate; and whether the rollback's
+`__drizzle_migrations` delete keys on `created_at` rather than the filename.
 
 - [ ] **Step 7: Open the PR**
 
-Include in the description: the migration SQL, both round-trip outputs from
-Task 1 Step 6, the inverse SQL, and a note that this deploy needs the
-maintenance window documented in `docs/ops.md`.
+Include in the description: the migration SQL, every output from Task 1 Step 6
+(forward, rollback, and re-apply), the inverse SQL, and a note that this deploy
+needs the maintenance window documented in `docs/ops.md`.
 
 ---
 
