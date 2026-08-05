@@ -10,10 +10,18 @@ import { useSubmitGuard } from "./submit-guard";
  * then FREEZE in another row's drawer would leave both mid-confirm, and
  * whichever the pointer lands on next would fire on a single click the
  * member never meant as a second one.
+ *
+ * `armedDescribedBy` carries the armed control's `describedBy` id alongside its
+ * internal `useId`, so a `ConfirmCost` can tell whether the thing that armed is
+ * the thing it describes. The two ids answer different questions and neither
+ * substitutes for the other: `armedId` is unique per control and decides which
+ * button renders armed, while `describedBy` is the id of a separate element and
+ * is shared by every control pointing at the same sentence.
  */
 const ArmContext = createContext<{
   armedId: string | null;
-  arm: (id: string) => void;
+  armedDescribedBy: string | null;
+  arm: (id: string, describedBy?: string) => void;
   disarm: () => void;
 } | null>(null);
 
@@ -29,11 +37,22 @@ const ArmContext = createContext<{
  *  Abandonment is already covered by the three events that actually mean it:
  *  blur, Escape, and the pointer leaving the control. */
 export function ConfirmArmScope({ children }: { children: ReactNode }) {
-  const [armedId, setArmedId] = useState<string | null>(null);
+  // One state object rather than two, so the id and the description it points
+  // at can never be read half-updated: a render that saw the new armedId beside
+  // the previous armedDescribedBy would reveal the wrong row's sentence for a
+  // frame.
+  const [armed, setArmed] = useState<{ id: string; describedBy: string | null } | null>(
+    null,
+  );
 
   return (
     <ArmContext.Provider
-      value={{ armedId, arm: setArmedId, disarm: () => setArmedId(null) }}
+      value={{
+        armedId: armed?.id ?? null,
+        armedDescribedBy: armed?.describedBy ?? null,
+        arm: (id, describedBy) => setArmed({ id, describedBy: describedBy ?? null }),
+        disarm: () => setArmed(null),
+      }}
     >
       {children}
     </ArmContext.Provider>
@@ -41,8 +60,8 @@ export function ConfirmArmScope({ children }: { children: ReactNode }) {
 }
 
 /**
- * What the destructive action in this scope costs, shown to sighted users only
- * once that action is armed.
+ * What a destructive action costs, shown to sighted users only once that
+ * action is armed.
  *
  * The cost sentence used to render unconditionally beside the control. That put
  * a permanent explanation of an action almost nobody takes on a page whose job
@@ -59,12 +78,24 @@ export function ConfirmArmScope({ children }: { children: ReactNode }) {
  * ahead of it. `.visually-hidden` is `position: absolute`, so at rest it is also
  * out of flow and adds no gap to the flex row it sits in.
  *
- * Scope-level, not control-level: this reads "something in this scope is
- * armed", not "that particular button is armed". Correct only in a scope
- * holding ONE `ConfirmSubmit`, which is what the account page's Discord row is
- * (`account/page.tsx`). Adding a second control to a scope that also holds a
- * `ConfirmCost` would reveal the cost when either one arms; give the second
- * control its own scope instead.
+ * Reveals for its own control only, matched on `describedBy` rather than on
+ * "something in this scope is armed". The scope-wide reading is correct in a
+ * scope holding one control and silently wrong in every other one: a scope
+ * wrapping a whole table body would reveal one row's sentence when a different
+ * row armed. Matching on the id means a scope may hold as many controls and as
+ * many cost sentences as it likes, and controls that share a sentence (the same
+ * `describedBy`) reveal it together, which is what sharing one is for.
+ *
+ * That makes this component safe to put in a table; it does NOT make revealing
+ * on arm a good idea there, and #112 established that empirically before
+ * reverting the attempt. Revealing inside a `td` widens the cell, the widening
+ * moves the armed button out from under a stationary mouse, `pointerLeave`
+ * below fires, and the control disarms itself — the reveal undoes the arm. The
+ * admin accounts table therefore keeps its cost sentence `.visually-hidden`
+ * always (#111) rather than using this component. The account page's Discord
+ * row can reveal because it is a `dd` in a `.facts` grid that already reserves
+ * a wrapping line, so nothing moves. Before reaching for this in a new dense
+ * layout, check what the reveal reflows.
  */
 export function ConfirmCost({
   id,
@@ -79,7 +110,7 @@ export function ConfirmCost({
   if (!ctx) {
     throw new Error("ConfirmCost must be rendered inside a ConfirmArmScope");
   }
-  const revealed = ctx.armedId !== null;
+  const revealed = ctx.armedDescribedBy === id;
 
   return (
     <span id={id} className={revealed ? className : `${className ?? ""} visually-hidden`}>
@@ -191,7 +222,7 @@ export function ConfirmSubmit({
             // The first click arms rather than fires: never let it reach the
             // server.
             e.preventDefault();
-            ctx.arm(id);
+            ctx.arm(id, describedBy);
             return;
           }
           // The second click proceeds as an ordinary submit, unless one is
