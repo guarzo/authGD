@@ -1,19 +1,8 @@
 "use client";
 
-import {
-  createContext,
-  useContext,
-  useEffect,
-  useId,
-  useState,
-  type ReactNode,
-} from "react";
+import { createContext, useContext, useId, useState, type ReactNode } from "react";
 import { useFormStatus } from "react-dom";
-
-/** How long an armed control holds before it quietly reverts. Long enough to
- *  read the label change, short enough that a control armed and abandoned
- *  isn't still live as a one-click destructive action minutes later. */
-const REVERT_MS = 4000;
+import { useSubmitGuard } from "./submit-guard";
 
 /**
  * Shared arm state for every `ConfirmSubmit` inside one scope: at most one
@@ -30,19 +19,17 @@ const ArmContext = createContext<{
 
 /** Wraps one table (or list) of `ConfirmSubmit` controls that should share
  *  the "only one armed at a time" rule. Renders no DOM element of its own, so
- *  it can wrap a `<tbody>` without breaking table structure.
+ *  it can wrap a `<tbody>` without breaking table structure — which is also why
+ *  the armed-state announcement lives in the button rather than here.
  *
- *  The revert timer lives here rather than in the button because the arm state
- *  does: a timer per button would keep running after the scope handed the arm
- *  to a different row, and disarm whatever was armed by then. */
+ *  There is deliberately no revert timer. One used to disarm after 4s, which is
+ *  a time limit on a user action with no way to turn it off, extend it or ask
+ *  for more (WCAG 2.2.1) — and 4s is short enough that a member reading the
+ *  label change with a screen magnifier can lose the arm mid-sentence.
+ *  Abandonment is already covered by the three events that actually mean it:
+ *  blur, Escape, and the pointer leaving the control. */
 export function ConfirmArmScope({ children }: { children: ReactNode }) {
   const [armedId, setArmedId] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (armedId === null) return;
-    const timer = setTimeout(() => setArmedId(null), REVERT_MS);
-    return () => clearTimeout(timer);
-  }, [armedId]);
 
   return (
     <ArmContext.Provider
@@ -60,16 +47,29 @@ export function ConfirmArmScope({ children }: { children: ReactNode }) {
  * a banned first reflex here: the whole point of an inline confirm is that it
  * never rips the member out of the page.
  *
- * The armed state has to reach assistive tech, not just sighted users. The
- * visible label swaps to `confirmLabel` ("confirm"), which already changes
- * the control's accessible name the same way `Submit`'s `pendingLabel`
- * already changes it for "saving…" — no separate live region needed, that
- * convention is established elsewhere in this codebase. `confirmName` layers
- * `aria-label` on top purely for a member who tabs away mid-arm and back:
- * the bare word "confirm" announces a verb with no object, so the armed
- * state's accessible name spells out what it will do. It still starts with
- * the visible word ("confirm …"), which is what keeps it a WCAG 2.5.3
- * label-in-name match rather than a mismatched name.
+ * The armed state has to reach assistive tech, not just sighted users, and
+ * neither the visible label swap nor the `aria-label` swap does that on its
+ * own: both change the control's accessible name, and a name change on a
+ * control that is already focused is not reliably re-announced. So the armed
+ * state is spoken by a live region — an always-mounted `role="status"` span,
+ * empty at rest and written with `confirmName` on arm. Always mounted because a
+ * region that appears already holding its text is the shape AT most often
+ * misses (`note-form.tsx:62-78` makes the same argument for its own region).
+ *
+ * The span is a sibling of the button, not a child of it: `button` is
+ * children-presentational in ARIA, so roles on its descendants are stripped
+ * from the accessibility tree and a region nested inside it would never be
+ * exposed. It cannot go in `ConfirmArmScope` either — that renders no DOM of
+ * its own precisely so it can wrap a `<tbody>`. Every call site puts this
+ * button inside its own `<form>`, which is where the sibling lands, and
+ * `.visually-hidden` is `position: absolute`, so it is not a flex or grid item
+ * and adds no gap to the button rows it sits in. Only one control per scope can
+ * be armed, so only one region is ever non-empty.
+ *
+ * `confirmName` is also the armed `aria-label`, for a member who tabs away
+ * mid-arm and back: the bare word "confirm" announces a verb with no object.
+ * It still starts with the visible word ("confirm …"), which is what keeps it a
+ * WCAG 2.5.3 label-in-name match rather than a mismatched name.
  *
  * `restName` does the same job for the rest state, and for the same reason the
  * plain `Submit` controls in the accounts drawer carry one: on a row-per-account
@@ -117,49 +117,64 @@ export function ConfirmSubmit({
   const id = useId();
   const armed = ctx.armedId === id;
   const { pending } = useFormStatus();
+  const guard = useSubmitGuard(pending);
   // +4 for the letter-spacing the monospace label carries across every
   // character, which `ch` alone (sized off the "0" glyph) undercounts; a
   // smaller buffer measured short by several px in practice.
   const widthCh = Math.max(label.length, confirmLabel.length) + 4;
 
   return (
-    <button
-      type="submit"
-      className={armed ? (armedClassName ?? className) : className}
-      style={{ minWidth: `${widthCh}ch` }}
-      disabled={pending}
-      aria-busy={pending}
-      aria-label={armed ? confirmName : restName}
-      onClick={(e) => {
-        if (!armed) {
-          // The first click arms rather than fires: never let it reach the
-          // server.
-          e.preventDefault();
-          ctx.arm(id);
-        } else {
-          // Let the click proceed as an ordinary submit. Disarming here is
-          // just tidy-up for the (rare) case the action doesn't navigate or
-          // revalidate this control away.
+    <>
+      <button
+        type="submit"
+        className={armed ? (armedClassName ?? className) : className}
+        style={{ minWidth: `${widthCh}ch` }}
+        aria-busy={pending}
+        aria-label={armed ? confirmName : restName}
+        onClick={(e) => {
+          if (!armed) {
+            // The first click arms rather than fires: never let it reach the
+            // server.
+            e.preventDefault();
+            ctx.arm(id);
+            return;
+          }
+          // The second click proceeds as an ordinary submit, unless one is
+          // already in flight. Disarming is just tidy-up for the (rare) case
+          // the action doesn't navigate or revalidate this control away.
+          if (!guard(e)) return;
           ctx.disarm();
-        }
-      }}
-      onBlur={() => {
-        // Tabbing or clicking away is as clear a "not that one" as Escape, and
-        // it means an armed control never outlives the member's attention on
-        // it. Guarded on `armed` so a blur from a different row's button can't
-        // disarm whatever the scope handed the arm to next.
-        if (armed) ctx.disarm();
-      }}
-      onKeyDown={(e) => {
-        // A member who armed the wrong row must not have to reload to get out
-        // of it.
-        if (armed && e.key === "Escape") {
-          e.preventDefault();
-          ctx.disarm();
-        }
-      }}
-    >
-      {pending && pendingLabel ? pendingLabel : armed ? confirmLabel : label}
-    </button>
+        }}
+        onBlur={() => {
+          // Tabbing or clicking away is as clear a "not that one" as Escape, and
+          // it means an armed control never outlives the member's attention on
+          // it. Guarded on `armed` so a blur from a different row's button can't
+          // disarm whatever the scope handed the arm to next.
+          if (armed) ctx.disarm();
+        }}
+        onPointerLeave={(e) => {
+          // The case blur misses: arming with the mouse leaves focus on the
+          // button, so moving the pointer to another row disarms nothing and the
+          // arm outlives the intent. Mouse only — on touch the pointer is
+          // destroyed on lift, so `pointerleave` fires immediately after the tap
+          // that armed it and no control would ever stay armed long enough to
+          // confirm.
+          if (armed && e.pointerType === "mouse") ctx.disarm();
+        }}
+        onKeyDown={(e) => {
+          // A member who armed the wrong row must not have to reload to get out
+          // of it.
+          if (armed && e.key === "Escape") {
+            e.preventDefault();
+            ctx.disarm();
+          }
+        }}
+      >
+        {pending && pendingLabel ? pendingLabel : armed ? confirmLabel : label}
+      </button>
+      <span className="visually-hidden" role="status">
+        {armed ? confirmName : ""}
+      </span>
+    </>
   );
 }

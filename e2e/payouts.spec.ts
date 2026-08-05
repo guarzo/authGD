@@ -469,6 +469,9 @@ test("adding a linked pilot under a name already on the roster unresolved warns 
   });
 
   await page.goto(`/payouts/${op.id}`);
+  // The roster is already populated here, so the edit disclosure starts closed —
+  // unlike every other test on this page, which builds an operation up from empty.
+  await page.locator("summary", { hasText: "Edit roster" }).click();
   await page.getByLabel("Character name").fill("Echo Pilot");
   await page.getByRole("button", { name: "Add participant" }).click();
 

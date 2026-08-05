@@ -48,6 +48,7 @@ export default function PayoutOperationNotFound() {
           { href: "/payouts", label: "Payouts" },
         ]}
         current="/payouts"
+        section
       />
       <main id="main" tabIndex={-1} className="page page--narrow">
         <div className="page__head">

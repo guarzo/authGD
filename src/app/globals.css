@@ -398,15 +398,23 @@ a:hover {
    Note that --ink is also the :hover colour, so a hovered inactive tab now
    matches the active tab's text exactly; the two are told apart by hover's
    --hull-hi fill versus the active hairline, not by colour. That is why this
-   selector no longer needs to outrank .shell__nav a:hover — they agree. */
-.shell__nav a[aria-current="page"] {
+   selector no longer needs to outrank .shell__nav a:hover — they agree.
+
+   Matched on the bare attribute rather than ="page". A tab whose route is an
+   ancestor of the current one — /payouts while on /payouts/new, /payouts/[id]
+   or the payout 404 — correctly emits "true" rather than "page", because it is
+   not the current page (ui.tsx:111). Both tokens mean "this is the active tab"
+   for painting purposes. The only other aria-current in the app is on the
+   /admin/accounts filter chips, which are .btn under .filters and outside this
+   selector's .shell__nav scope. */
+.shell__nav a[aria-current] {
   color: var(--ink);
 }
 
 /* Inset to the item's padding so the rule underlines the label rather than the
    hit area. Sits on the pseudo-element, not on a border, so it cannot shift
    the item's box or interfere with the global focus ring. */
-.shell__nav a[aria-current="page"]::after {
+.shell__nav a[aria-current]::after {
   content: "";
   position: absolute;
   left: var(--s-3);
@@ -1522,6 +1530,17 @@ h3.rule-head__label {
   letter-spacing: var(--track-value);
 }
 
+/* The copy button's result line. It holds the width of its longest message
+   even while empty, because it sits in a right-aligned row of buttons: without
+   the reservation, "copied" appearing shoves every control beside it sideways
+   at the exact moment an operator is still moving between them. */
+.copy-result {
+  display: inline-block;
+  min-width: 5rem;
+  font-size: 0.6875rem;
+  letter-spacing: 0.08em;
+}
+
 /* --- Fields ------------------------------------------------------------- */
 
 .field {
@@ -1554,28 +1573,32 @@ h3.rule-head__label {
   border-color: var(--gold);
 }
 
-/* .stack is `justify-items: start`, which is right for the tier badges and
-   status tokens it holds inside table cells and wrong for a form control: an
-   input's default `size` is 20 characters, so every field in a stacked form
-   rendered about 20ch wide regardless of what it held — a date, a percentage
-   and a wallet division all the same width, none of them the right one.
-   Stretch them back to the row and let --measure do the capping.
-
-   `:where(.field)` for the same reason C3 uses it on .page--narrow: written
-   plainly the selector is (0,2,0) and outranks .field--short below, so every
-   short field inside a stacked form — which is all of them — would silently
-   take the full measure back. At (0,1,0) the variant wins on source order. */
-.stack > :where(.field) {
-  justify-self: stretch;
-  width: 100%;
+/* The payout flow's five forms used to reuse `.stack`, whose
+   `justify-items: start` exists so a status token doesn't blow out to the
+   full width of its table cell (see `.stack` below). Applied to a form that
+   rule stops every field from stretching, so each control falls back to its
+   own intrinsic width instead — which is type-dependent and engine-dependent
+   both: a `<select>` sizes to its longest option, a `<textarea>` to its `cols`
+   default regardless of `rows`, and the various `<input>` types disagree with
+   each other and across browsers. Measured in Chromium, the five controls on
+   these forms spanned 106px to 210px. The column reads ragged rather than
+   aligned. `.form-stack` is the same vertical grid without that override, at a
+   roomier gap, so fields take grid's default stretch and share one edge;
+   `max-width` keeps that edge from running the full width of `.page--narrow`
+   when nothing else caps it. */
+.form-stack {
+  display: grid;
+  gap: var(--s-4);
   max-width: var(--measure);
 }
 
-/* For the inputs whose content has a known short maximum — a date, a
-   percentage. A full --measure box in front of "12" reads as an invitation to
-   type a sentence. */
-.field--short {
-  max-width: 12rem;
+/* One field: its label, its control, and optionally a hint below (the
+   corp-share and appraise-location hints, both outside their `<label>` so they
+   don't get folded into its accessible name). Tighter gap than the form's, so
+   a field's own parts read as one unit against the space between fields. */
+.form-stack__field {
+  display: grid;
+  gap: var(--s-1);
 }
 
 .filters {
