@@ -62,12 +62,12 @@ export function NoteForm({
       {/* Same role choice as `Notice`'s info tone (ui.tsx): a confirmation
           meant to be announced without stealing focus. Rendered
           unconditionally, only its text content toggling, rather than the
-          element itself mounting already populated (`Notice`'s own pattern):
-          AT announces a *change* to a live region far more reliably than a
-          region born already holding text, and a screen-reader user getting
-          nothing here is exactly the dead-click failure this whole feature
-          exists to fix. `Notice` still uses the mount-and-populate shape —
-          bringing it in line is a separate, app-wide pass, not this one's job.
+          element itself mounting already populated: AT announces a *change* to
+          a live region far more reliably than a region born already holding
+          text, and a screen-reader user getting nothing here is exactly the
+          dead-click failure this whole feature exists to fix. `Notice` now
+          holds the same behaviour in its empty-slot mode, so this is the same
+          argument made twice rather than a local deviation.
 
           `note-form__saved` carries no style rule of its own — `dim mono` do
           that. It exists so the e2e test has a selector that survives a

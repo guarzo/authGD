@@ -10,6 +10,7 @@ import {
   needsAttention,
   nextRunFor,
   queuedNotice,
+  queuedStamp,
   tone,
 } from "@/app/admin/sync/view";
 
@@ -125,6 +126,34 @@ describe("nextRunFor", () => {
   });
 });
 
+describe("queuedStamp", () => {
+  it("prints the enqueue instant in the page's own UTC register", () => {
+    expect(queuedStamp("1785240432000")).toBe("12:07:12.000 UTC");
+  });
+
+  it("refuses anything that is not a plain millisecond count", () => {
+    // A 20-digit paste must not reach copy as "Invalid Date UTC".
+    for (const bad of [undefined, "", " 1", "1.5", "1e9", "-1", "99999999999999999999"]) {
+      expect(queuedStamp(bad), String(bad)).toBeNull();
+    }
+  });
+
+  /**
+   * The values that pass the digit check and the NaN check and still have no
+   * clock in them. `new Date(999999999999999).toISOString()` is
+   * `+033658-09-27T01:46:39.999Z` — three characters wider than the usual
+   * form, because the year field goes from four digits to seven, so the fixed
+   * slice lands on `27T01:46:39` and renders it as a time of day.
+   */
+  it("refuses an instant so far out that ISO switches to extended years", () => {
+    for (const bad of ["999999999999999", "253402300800000"]) {
+      expect(queuedStamp(bad), bad).toBeNull();
+    }
+    // The boundary itself still works: the last millisecond of year 9999.
+    expect(queuedStamp("253402300799999")).toBe("23:59:59.999 UTC");
+  });
+});
+
 describe("queuedNotice", () => {
   it("names the job for a per-row re-run", () => {
     expect(queuedNotice("wanderer")).toMatch(/^wanderer queued\./);
@@ -133,6 +162,61 @@ describe("queuedNotice", () => {
   it("has copy for the two fan-out buttons", () => {
     expect(queuedNotice("all")).toMatch(/every account/);
     expect(queuedNotice("recheck")).toMatch(/^Affiliation recheck queued\./);
+  });
+
+  /**
+   * The fan-out's four nouns have to be the strip's own row names. `map` was
+   * not one of them — the row is called `wanderer` — so the one noun that
+   * needed translating was the only one that got translated, and an admin had
+   * to diff four nouns against seven rows to learn what was excluded.
+   */
+  it("names the fan-out's jobs the way the strip names them", () => {
+    const all = queuedNotice("all");
+    for (const job of ["membership", "contacts", "wanderer", "discord-roles"]) {
+      expect(all, job).toContain(job);
+    }
+    expect(all).not.toMatch(/\bmap\b/);
+  });
+
+  /**
+   * The notice lives in a permanently-mounted `role="status"` region, and a
+   * live region announces a *mutation*. Two presses of one button produced a
+   * byte-identical string, so React wrote nothing and the second enqueue —
+   * which really did happen — was silent.
+   */
+  it("differs between two presses of the same button", () => {
+    const first = queuedNotice("wanderer", "1785240432000");
+    const second = queuedNotice("wanderer", "1785240471000");
+    expect(first).not.toBe(second);
+    expect(first).toContain("12:07:12.000 UTC");
+    expect(second).toContain("12:07:51.000 UTC");
+  });
+
+  /**
+   * And two presses inside one second, which is the interval that actually
+   * occurs. `Submit` is deliberately not disabled while its form is in flight,
+   * so the second press lands the moment the first round-trip returns — under
+   * a second on localhost. A stamp cut at whole seconds would leave exactly
+   * this case silent, which is the case the stamp exists for.
+   */
+  it("differs between two presses inside the same second", () => {
+    expect(queuedNotice("wanderer", "1785240432120")).not.toBe(
+      queuedNotice("wanderer", "1785240432880"),
+    );
+  });
+
+  it("drops the instant rather than echoing a hand-typed one", () => {
+    // Same posture as `queued` itself: untrusted input reaching copy.
+    for (const bad of [undefined, "", "now", "-1", "1e9", "99999999999999999999"]) {
+      expect(queuedNotice("wanderer", bad), String(bad)).toBe(queuedNotice("wanderer"));
+    }
+  });
+
+  it("points at the browser reload, not at a control off the bottom of the page", () => {
+    for (const q of ["all", "recheck", ...Object.keys(JOB_CRON)]) {
+      expect(queuedNotice(q), q).toMatch(/reload this page/);
+      expect(queuedNotice(q), q).not.toMatch(/use Refresh/);
+    }
   });
 
   it("says nothing about a hand-typed query flag", () => {

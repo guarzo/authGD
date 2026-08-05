@@ -13,6 +13,52 @@ import { formatAgo } from "./format-ago";
  * formatAgo lives in its own module rather than here: a "use client" module's
  * exports cannot be called from a server component, only rendered.
  */
+
+/**
+ * One 30-second timer for the whole document, not one per instance.
+ *
+ * The sync page mounts up to 42 of these — seven summary rows plus five table
+ * rows per open job — and neither `display: none` (the `.only-narrow` stamp is
+ * hidden above 40rem) nor a collapsed `<details>` unmounts a React subtree, so
+ * every one of them was ticking and re-rendering, most of them behind
+ * `display: none`. It is a small cost in absolute terms, but it is background
+ * work on the page that specifically argues against moving under its reader.
+ *
+ * The interval exists only while something is subscribed, so a page with no
+ * relative times on it holds no timer. Sharing the phase also means the whole
+ * page's ages step together rather than at 42 unrelated offsets.
+ */
+const subscribers = new Set<() => void>();
+let ticker: ReturnType<typeof setInterval> | null = null;
+
+function subscribe(tick: () => void): () => void {
+  subscribers.add(tick);
+  ticker ??= setInterval(() => {
+    // Per-subscriber try/catch, because sharing the loop also shares the
+    // failures: a throw aborts the iteration, and `Set` iterates in insertion
+    // order, so one bad subscriber would freeze every timestamp registered
+    // after it — on every subsequent tick, not once. The per-instance timers
+    // this replaced isolated that by construction; the shared one has to say
+    // so. Nothing reachable throws today (`formatAgo` returns a string for a
+    // malformed instant rather than raising), which is exactly why the guard
+    // has to be here rather than assumed.
+    for (const fn of subscribers) {
+      try {
+        fn();
+      } catch {
+        // A stalled clock beside a working one; not worth taking the rest down.
+      }
+    }
+  }, 30_000);
+  return () => {
+    subscribers.delete(tick);
+    if (subscribers.size === 0 && ticker !== null) {
+      clearInterval(ticker);
+      ticker = null;
+    }
+  };
+}
+
 export function RelativeTime({ iso, initial }: { iso: string | null; initial: string }) {
   const [text, setText] = useState(initial);
 
@@ -20,8 +66,7 @@ export function RelativeTime({ iso, initial }: { iso: string | null; initial: st
     if (!iso) return;
     const tick = () => setText(formatAgo(iso, Date.now()));
     tick();
-    const id = setInterval(tick, 30_000);
-    return () => clearInterval(id);
+    return subscribe(tick);
   }, [iso]);
 
   // No instant, no `<time>`: a `<time>` with no `datetime` takes its machine

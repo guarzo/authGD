@@ -147,6 +147,44 @@ test("a scheduled job that has never run gets a row saying so", async ({
   );
 });
 
+/**
+ * The scroll region inside a collapsed row measures 0×0, so it correctly holds
+ * no tab stop while shut — and getting the stop back when the drawer opens
+ * rests entirely on the ResizeObserver firing. That is engine-dependent:
+ * Chromium hides closed `<details>` content with `content-visibility: hidden`
+ * rather than `display: none`, which puts the observed element in skipped
+ * contents. If the observation is missed the runs table's overflow is
+ * permanently unreachable by keyboard, with nothing on screen saying so — the
+ * edge fades are suppressed by the same 0×0 measurement.
+ */
+test("opening a healthy row hands its scroll region a tab stop", async ({
+  page,
+  context,
+}) => {
+  await asAdmin(context);
+  await seedRuns();
+  // Narrow enough that the runs table genuinely overflows: at desktop width it
+  // fits, and a region that fits is meant to have no stop.
+  await page.setViewportSize({ width: 320, height: 720 });
+  await page.goto("/admin/sync");
+
+  const membership = summaryFor(page, "membership");
+  await expect(membership).toHaveAttribute("aria-expanded", "false");
+
+  const region = page
+    .locator(".strip__job", { hasText: "membership" })
+    .locator(".scroller");
+  await membership.click();
+  await expect(membership).toHaveAttribute("aria-expanded", "true");
+  await expect(region).toHaveAttribute("tabindex", "0");
+
+  // ...and it is reachable, not merely marked: the region is the next stop
+  // after the summary that opened it.
+  await membership.focus();
+  await page.keyboard.press("Tab");
+  await expect(region).toBeFocused();
+});
+
 test("a collapsed job opens from the keyboard", async ({ page, context }) => {
   await asAdmin(context);
   await seedRuns();
@@ -371,10 +409,12 @@ test("the fan-out reports back, and Refresh clears the flag", async ({
   await expect(page.getByRole("status")).toHaveCount(1);
 
   await page
-    .getByRole("button", { name: "Sync membership, contacts, map, Discord" })
+    .getByRole("button", { name: "Sync membership, contacts, wanderer, discord-roles" })
     .click();
   const notice = page.getByRole("status");
-  await expect(notice).toContainText("Membership, contacts, map and Discord queued");
+  await expect(notice).toContainText(
+    "membership, contacts, wanderer and discord-roles queued for every account",
+  );
   await expect(page).toHaveURL(/queued=all/);
 
   // Refresh drops ?queued=, so a reload hours later does not re-show a stale

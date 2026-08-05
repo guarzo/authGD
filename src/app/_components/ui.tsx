@@ -253,10 +253,11 @@ export function Tier({
  * the one shape that defeats the live region it just asked for: it inserts a
  * `role="alert"` node with its text already inside it, and AT announces a
  * *change* to a region far more reliably than a region born holding text.
- * `admin/sync/page.tsx:85-99` hand-rolled exactly this and is the reference;
- * `note-form.tsx:62-78` makes the same argument for its own region. Keeping
- * the behaviour in the primitive is the point: the next caller cannot omit it
- * by writing `&&`. An empty slot carries no `notice--bad`/`notice--warn`
+ * `admin/sync/page.tsx` hand-rolled exactly this and was the reference; it now
+ * renders this primitive instead, so there is one copy of the behaviour rather
+ * than two. `note-form.tsx:62-78` makes the same argument for its own region.
+ * Keeping the behaviour in the primitive is the point: the next caller cannot
+ * omit it by writing `&&`. An empty slot carries no `notice--bad`/`notice--warn`
  * class and no glyph, so "is there a message" is still `p.notice--bad`.
  *
  * `live={false}` opts out of the region entirely, for the one case where a

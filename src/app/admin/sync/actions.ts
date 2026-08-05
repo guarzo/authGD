@@ -17,7 +17,11 @@ export async function syncAllAction(): Promise<void> {
   revalidatePath("/admin/sync");
   // The worker hasn't run by the time this re-renders, so the enqueue itself
   // is invisible; redirect carries a query flag the page turns into a notice.
-  redirect("/admin/sync?queued=all");
+  // `at` is the enqueue instant, and it is what makes the *second* press of
+  // the same button announce: the notice lives in a permanently-mounted
+  // `role="status"` region, and a region only announces a mutation, so a
+  // byte-identical string is silence. See `queuedNotice`.
+  redirect(`/admin/sync?queued=all&at=${Date.now()}`);
 }
 
 /**
@@ -47,7 +51,7 @@ export async function syncJobAction(formData: FormData): Promise<void> {
     await enqueueSync(tx, { kind: "job", jobType });
   });
   revalidatePath("/admin/sync");
-  redirect(`/admin/sync?queued=${encodeURIComponent(jobType)}`);
+  redirect(`/admin/sync?queued=${encodeURIComponent(jobType)}&at=${Date.now()}`);
 }
 
 export async function recheckInvalidAction(): Promise<void> {
@@ -57,5 +61,5 @@ export async function recheckInvalidAction(): Promise<void> {
     await enqueueSync(tx, { kind: "membership-recheck" });
   });
   revalidatePath("/admin/sync");
-  redirect("/admin/sync?queued=recheck");
+  redirect(`/admin/sync?queued=recheck&at=${Date.now()}`);
 }

@@ -38,6 +38,34 @@ function fmt(d: Date | null): string {
   return d ? d.toISOString().replace("T", " ").slice(0, 19) : "…";
 }
 
+/**
+ * An absence glyph and the words it stands for. The runs table distinguishes
+ * several kinds of absence by eye — `—` for a finished run that recorded
+ * nothing, `…` for one still in flight, `—` again for a counter this run did
+ * not report — but at the default punctuation verbosity of NVDA, JAWS and
+ * VoiceOver an em dash and an ellipsis are both dropped, so every one of those
+ * cells announced as empty: indistinguishable from each other and from a
+ * missing cell. Each call site supplies the words its own glyph means, which
+ * is why this takes the string rather than deriving it.
+ *
+ * `fmt()` above still returns a bare `…` for a null start instant. It is left
+ * alone deliberately: it returns a string into several call sites, only one of
+ * which is a table cell, and no run in the schema reaches it with a null
+ * `startedAt`.
+ *
+ * The hidden span is `position: absolute` and takes its containing block from
+ * `.scroller`'s `position: relative`, so it costs no layout and cannot stretch
+ * the table it sits in — or inflate the `scrollWidth` the Scroller measures.
+ */
+function Absent({ glyph, children }: { glyph: string; children: string }) {
+  return (
+    <>
+      <span aria-hidden="true">{glyph}</span>
+      <span className="visually-hidden">{children}</span>
+    </>
+  );
+}
+
 function utcHhmm(d: Date): string {
   return d.toISOString().slice(11, 16);
 }
@@ -49,10 +77,10 @@ function utcHhmmss(d: Date): string {
 export default async function AdminSyncPage({
   searchParams,
 }: {
-  searchParams: Promise<{ queued?: string }>;
+  searchParams: Promise<{ queued?: string; at?: string }>;
 }) {
   await requireAdminPage();
-  const { queued } = await searchParams;
+  const { queued, at } = await searchParams;
   const db = getDb();
   const [groups, newest] = await Promise.all([getSyncStatus(db), newestSyncRun(db)]);
   // One instant for the whole render: the worker line, every row's health and
@@ -68,7 +96,7 @@ export default async function AdminSyncPage({
       : worker.fresh
         ? `worker · last run ${workerAge} ago`
         : `worker · no run in ${workerAge}`;
-  const notice = queuedNotice(queued);
+  const notice = queuedNotice(queued, at);
   // How far back this page can see the worker doing anything at all. Only this
   // lets a never-run row escalate: see `evidenceSince` and `rowHealth`.
   const seenSince = evidenceSince(worker.fresh, groups);
@@ -83,20 +111,15 @@ export default async function AdminSyncPage({
         </p>
       </div>
 
-      {/* Deliberately not <Notice>: that renders only when there is something
-          to say, and a live region *inserted* with its content already in
-          place is announced unreliably, NVDA and JAWS especially, because the
-          region has to be registered before the mutation it is meant to
-          report. A server action redirect re-renders without a document load,
-          so this element stays in the tree across the press and only its text
-          changes. It matches Notice's role and glyph derivation by hand. */}
-      <p
-        role="status"
-        className={notice ? "notice" : "notice-slot"}
-        data-glyph={notice ? "·" : undefined}
-      >
-        {notice}
-      </p>
+      {/* Mounted unconditionally, empty string and all. A live region
+          *inserted* with its content already in place is announced unreliably,
+          NVDA and JAWS especially, because the region has to be registered
+          before the mutation it is meant to report — and a server action
+          redirect re-renders without a document load, so this element stays in
+          the tree across the press and only its text changes. This page
+          hand-rolled that behaviour before `Notice` had it; the slot mode in
+          the primitive is the same thing, so the local copy is gone. */}
+      <Notice>{notice}</Notice>
 
       {/* Every row below reports on one job. This line reports on the process
           that runs all of them: without it a worker that died at 02:00 leaves
@@ -114,7 +137,14 @@ export default async function AdminSyncPage({
           in JOB_CRON whether or not it has ever run, so the list is never
           empty and a "nothing has come due" message could only ever be a lie
           about a state the page cannot reach. */}
-      <ul className="strip">
+      {/* role="list": WebKit drops the implicit `list` role from a <ul> whose
+          markers are removed with `list-style: none` (globals.css `.strip`),
+          and VoiceOver then reports seven adjacent disclosures with no "list,
+          7 items" and no "3 of 7" — on the one surface whose whole premise is
+          that the answer is found by scanning a fixed set of rows. The header
+          row below is aria-hidden, so the count is recoverable from nowhere
+          else on the page. */}
+      <ul className="strip" role="list">
         {/* aria-hidden: these label the summary rows visually, but each row
             is a single disclosure control whose accessible name already
             carries job, health, age and cadence in that order. */}
@@ -164,6 +194,12 @@ export default async function AdminSyncPage({
                       {cadence ?? "on demand"}
                       {nextRun && (
                         <>
+                          {/* An explicit space: accessible-name computation
+                              inserts no separator for a <br> in Chromium, and
+                              the row's whole accessible name is this
+                              four-value concatenation, because the column
+                              header above is aria-hidden. Without it the last
+                              two values compute as "every 30mnext 14:30". */}{" "}
                           <br />
                           next {utcHhmm(nextRun)}
                         </>
@@ -229,7 +265,9 @@ export default async function AdminSyncPage({
                               </td>
                               <td className="mono nowrap num">
                                 {formatDuration(r.startedAt, r.finishedAt) ?? (
-                                  <span className="dim">…</span>
+                                  <span className="dim">
+                                    <Absent glyph="…">still running</Absent>
+                                  </span>
                                 )}
                               </td>
                               {/* The error lives here rather than in a column
@@ -258,14 +296,24 @@ export default async function AdminSyncPage({
                                 <td colSpan={span} className="dim">
                                   {!r.counts ? (
                                     r.finishedAt ? (
-                                      <>&mdash;</>
+                                      <Absent glyph="—">not recorded</Absent>
                                     ) : (
-                                      <>&hellip;</>
+                                      <Absent glyph="…">not reported yet</Absent>
                                     )
                                   ) : isNoChange(r.counts) ? (
                                     "no change"
                                   ) : (
-                                    <>&mdash;</>
+                                    // Not "not recorded": counts *were*
+                                    // recorded, the Raw column beside this
+                                    // renders them, and they are simply not
+                                    // all zero and not countable either — a
+                                    // payload like `{ removed: 0, lastError:
+                                    // null }` clears isNoChange and yields no
+                                    // columns. The glyph was ambiguous about
+                                    // that; hidden words would state it as a
+                                    // fact, so they have to state the right
+                                    // one.
+                                    <Absent glyph="—">nothing counted</Absent>
                                   )}
                                 </td>
                               ) : isNoChange(r.counts) ? (
@@ -280,7 +328,14 @@ export default async function AdminSyncPage({
                                       key={k}
                                       className={v ? "mono num" : "mono num dim"}
                                     >
-                                      {v ?? "—"}
+                                      {/* The column exists because some other
+                                          run in the window moved this counter;
+                                          this run did not report it. Same
+                                          absence as the cells above, in the
+                                          same table, so it gets the same
+                                          treatment rather than announcing as
+                                          an empty cell. */}
+                                      {v ?? <Absent glyph="—">not reported</Absent>}
                                     </td>
                                   );
                                 })
@@ -289,7 +344,9 @@ export default async function AdminSyncPage({
                                 {r.counts ? (
                                   <Json value={r.counts} summary="json" />
                                 ) : (
-                                  <span className="dim">&mdash;</span>
+                                  <span className="dim">
+                                    <Absent glyph="—">no payload</Absent>
+                                  </span>
                                 )}
                               </td>
                             </tr>
@@ -298,6 +355,17 @@ export default async function AdminSyncPage({
                       </tbody>
                     </table>
                   </Scroller>
+                )}
+                {/* The window, stated. This table shows a fixed handful of the
+                    most recent runs, so a job that has failed forty times
+                    looks identical to one that has failed five — on the row
+                    most likely to be open. Counted from the rendered rows
+                    rather than restating the service's `runsPerJob`, so it
+                    cannot claim a depth the table does not have. */}
+                {g.runs.length > 0 && (
+                  <p className="dim strip__window">
+                    last {g.runs.length === 1 ? "run" : `${g.runs.length} runs`}
+                  </p>
                 )}
                 {/* Below the history, not above it: the admin opened this row
                     to read why it failed, and the error string is the top
@@ -324,7 +392,12 @@ export default async function AdminSyncPage({
       <div className="btn-row btn-row--controls">
         <form action={syncAllAction}>
           <Submit className="btn btn--primary" pendingLabel="Queueing…">
-            Sync membership, contacts, map, Discord
+            {/* The strip's own words, not a second vocabulary: three of the
+                four nouns were row names and `map` was not — the row is called
+                `wanderer` — so the one noun that needed translating was the
+                only one translated. These four are findable in the column
+                above. */}
+            Sync membership, contacts, wanderer, discord-roles
           </Submit>
         </form>
         <form action={recheckInvalidAction}>
@@ -335,12 +408,16 @@ export default async function AdminSyncPage({
         {/* A plain anchor, not a router link: this page is the only thing on
             screen that can answer "did the run land", and a soft navigation to
             the URL you are already on is exactly the case a client router is
-            entitled to serve from its own cache. It drops `?queued=` on the
-            way, which is the point — otherwise a refresh three hours later
-            re-shows "queued a few seconds ago" as if it were fresh.
+            entitled to serve from its own cache. It drops `?queued=` and
+            `?at=` on the way, which is still worth having even now that the
+            notice stamps itself: the canonical URL is the one an admin leaves
+            open, and it should not carry a press from an hour ago at all.
 
             No polling behind it: an admin reading an expanded failed row must
-            not have the page move under them. */}
+            not have the page move under them. The notice copy names the
+            browser reload rather than this control, because the notice renders
+            at the top of the page and this sits below seven rows and however
+            many open drawers. */}
         <a className="btn" href="/admin/sync">
           Refresh
         </a>
