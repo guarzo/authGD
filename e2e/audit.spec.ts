@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
-import { auditLog, discordLink } from "../src/db/schema";
+import { auditLog, discordLink, syncRun } from "../src/db/schema";
+import { AUDIT_PAGE_SIZE } from "../src/services/audit";
 import { pinGeometry } from "./geometry";
 import { resetDb, seedMember, sessionCookieFor, testDb } from "./helpers";
 
@@ -38,9 +39,21 @@ test("resolved names, distinguishable system actor, one-line details, filtered c
   // Actor and target render as resolved human names, not raw account ids.
   const adminRow = rows.filter({ hasText: "Boss" });
   await expect(adminRow).toHaveCount(1);
-  await expect(adminRow.getByText("Zed", { exact: true })).toBeVisible();
-  await expect(page.getByText(admin.id)).toHaveCount(0);
-  await expect(page.getByText(member.id)).toHaveCount(0);
+  await expect(adminRow.getByRole("link", { name: /^Zed\b/ })).toBeVisible();
+
+  // The raw id rides along inside the link for assistive tech -- it is the
+  // only place it is stated, since `title` is hover-only -- but it must never
+  // reach the paint. Strip the clipped spans and the ids are gone.
+  const painted = await page.locator("tbody").evaluate((tb) => {
+    const clone = tb.cloneNode(true) as HTMLElement;
+    clone.querySelectorAll(".visually-hidden").forEach((n) => n.remove());
+    return clone.textContent ?? "";
+  });
+  expect(painted).not.toContain(admin.id);
+  expect(painted).not.toContain(member.id);
+  await expect(adminRow.locator("td").nth(3).locator("a")).toHaveText(
+    `Zed (id ${member.id})`,
+  );
 
   // The system actor is distinguishable from a human actor by more than
   // colour: it renders the literal word "system" in the same mono/dimmed
@@ -185,13 +198,22 @@ test("mono columns fit their widest value instead of painting over the next one"
   // The action is the column an admin scans, so it must fit rather than
   // ellipsise: the truncation on that cell is a backstop for a longer name
   // added later, not the normal rendering of a name that exists today.
-  const truncated = await page.evaluate(() =>
-    [...document.querySelectorAll("tbody tr")]
-      .map((tr) => tr.querySelectorAll("td")[2].querySelector("span"))
-      .filter((s): s is HTMLElement => !!s && s.scrollWidth > s.clientWidth)
-      .map((s) => s.textContent),
-  );
-  expect(truncated).toEqual([]);
+  const action = await page.evaluate(() => {
+    const cells = [...document.querySelectorAll("tbody tr")]
+      .map((tr) => tr.querySelectorAll("td")[2].querySelector(".ellipsis-cell"))
+      .filter((s): s is HTMLElement => !!s);
+    return {
+      found: cells.length,
+      truncated: cells
+        .filter((s) => s.scrollWidth > s.clientWidth)
+        .map((s) => s.textContent),
+    };
+  });
+  // The probe has to have found something: `.ellipsis-cell` is a class, and a
+  // rename would otherwise leave an empty list that reads exactly like "nothing
+  // truncated".
+  expect(action.found).toBe(await page.locator("tbody tr").count());
+  expect(action.truncated).toEqual([]);
 });
 
 /**
@@ -370,6 +392,395 @@ test("an ambiguous name reports how many accounts it spans", async ({
 
   await expect(page.locator("tbody tr")).toHaveCount(2);
   await expect(page.getByText('target "Zed" matches 2 accounts')).toBeVisible();
+
+  // Not dimmed on the rule beside the render stamp, where it read as another
+  // freshness note. It is a warning: these rows are a union of two people's
+  // histories, which is the one way this page answers the question wrongly
+  // while looking right.
+  const notice = page.locator(".notice--warn");
+  await expect(notice).toHaveText('target "Zed" matches 2 accounts');
+
+  // Above the table, not below it and not inside it.
+  const order = await page.evaluate(() => {
+    const n = document.querySelector(".notice--warn");
+    const t = document.querySelector("table.log--audit");
+    if (!n || !t) return "missing";
+    return n.compareDocumentPosition(t) & Node.DOCUMENT_POSITION_FOLLOWING
+      ? "before"
+      : "after";
+  });
+  expect(order).toBe("before");
+
+  // The rule's aside keeps the render stamp and nothing else.
+  await expect(page.locator(".rule-head").last().locator(".dim")).toHaveText(
+    /^as of \d{2}:\d{2} UTC$/,
+  );
+});
+
+/**
+ * The pager used to render only on a full page, so the page after a full one
+ * was a dead end: no Older, no way back to the newest entries, and a heading
+ * that read the same on every page. AUDIT_PAGE_SIZE is 100, so this is the one
+ * test that has to seed past it.
+ */
+test("a paged view offers a way back to the newest entries", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  await db.insert(auditLog).values(
+    Array.from({ length: AUDIT_PAGE_SIZE + 5 }, (_, i) => ({
+      actor: admin.id,
+      action: "tier.changed",
+      target: admin.id,
+      details: { to: i % 2 ? "green" : "blue" },
+    })),
+  );
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.goto("/admin/audit");
+
+  // Page one: a full page, an Older control, and no way "back" to offer.
+  await expect(page.locator("tbody tr")).toHaveCount(AUDIT_PAGE_SIZE);
+  await expect(page.getByRole("link", { name: "Older entries" })).toHaveCount(2);
+  await expect(page.getByRole("link", { name: "Latest entries" })).toHaveCount(0);
+
+  // Reachable from a keyboard without traversing 100 rows of links: there is a
+  // pager above the table as well as below it.
+  const aboveTable = await page.evaluate(() => {
+    const p = document.querySelector(".pager--top");
+    const t = document.querySelector("table.log--audit");
+    return Boolean(
+      p && t && p.compareDocumentPosition(t) & Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+  });
+  expect(aboveTable).toBe(true);
+
+  await page.getByRole("link", { name: "Older entries" }).first().click();
+
+  // Page two: five rows, so the old condition rendered nothing at all here.
+  await expect(page.locator("tbody tr")).toHaveCount(5);
+  const latest = page.getByRole("link", { name: "Latest entries" });
+  await expect(latest).toHaveCount(2);
+  await expect(latest.first()).toHaveAttribute("href", "/admin/audit");
+
+  // And the heading no longer claims to be the same page it was.
+  await expect(page.getByRole("heading", { name: "5 older entries" })).toBeVisible();
+
+  await latest.first().click();
+  await expect(page).toHaveURL(/\/admin\/audit$/);
+  await expect(page.locator("tbody tr")).toHaveCount(AUDIT_PAGE_SIZE);
+});
+
+test("a filtered paged view keeps its filter on the way back", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  await db.insert(auditLog).values(
+    Array.from({ length: AUDIT_PAGE_SIZE + 2 }, () => ({
+      actor: admin.id,
+      action: "tier.changed",
+      target: admin.id,
+      details: { to: "green" },
+    })),
+  );
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.goto("/admin/audit?actor=Boss");
+
+  await page.getByRole("link", { name: "Older entries" }).first().click();
+  await expect(
+    page.getByRole("link", { name: "Latest entries" }).first(),
+  ).toHaveAttribute("href", "/admin/audit?actor=Boss");
+});
+
+/**
+ * A cursor that does not parse is discarded by the query, so the rows are the
+ * newest ones. Everything describing them has to agree with that: `?before=abc`
+ * is truthy, and reading the raw param rather than the parsed cursor labelled
+ * the newest page "older" and offered a way "back" to the page already on
+ * screen.
+ */
+test("a malformed cursor is not described as an older page", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  await db.insert(auditLog).values(
+    Array.from({ length: 3 }, () => ({
+      actor: admin.id,
+      action: "tier.changed",
+      target: admin.id,
+      details: { to: "green" },
+    })),
+  );
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.goto("/admin/audit?before=abc");
+
+  // The rows really are the newest ones -- the same three the unfiltered page
+  // shows -- so this is about what the page SAYS, not about what it queried.
+  await expect(page.locator("tbody tr")).toHaveCount(3);
+  await expect(page.locator(".log__empty")).toHaveCount(0);
+
+  await expect(page.getByRole("heading", { name: "3 entries" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /older/ })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Latest entries" })).toHaveCount(0);
+});
+
+/**
+ * The full payload was `white-space: pre` in an `overflow-x: auto` box: a
+ * scroll container with no way into it from a keyboard (WCAG 2.1.1). Adding a
+ * tab stop was the wrong fix -- a full page carries AUDIT_PAGE_SIZE of these.
+ * It wraps instead, so there is no scroll to reach.
+ */
+test("an expanded payload is not a keyboard-unreachable scroll container", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  await db.insert(auditLog).values([
+    {
+      actor: admin.id,
+      action: "token.needs_reauth",
+      target: admin.id,
+      details: {
+        missingScopes: [
+          "esi-characters.read_corporation_roles.v1",
+          "esi-alliances.read_contacts.v1",
+          "esi-characters.read_notifications.v1",
+        ],
+      },
+    },
+  ]);
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/admin/audit");
+
+  const full = page.locator("details.json .json__full");
+  await page.locator("details.json summary").click();
+  await expect(full).toBeVisible();
+
+  const metrics = await full.evaluate((el) => ({
+    scrollWidth: el.scrollWidth,
+    clientWidth: el.clientWidth,
+    overflowX: getComputedStyle(el).overflowX,
+    tabIndex: el.tabIndex,
+  }));
+  // Content that only a pointer could reach would need scrollWidth > clientWidth.
+  expect(metrics.scrollWidth).toBeLessThanOrEqual(metrics.clientWidth + 1);
+  // `auto` as well as `scroll`: the rule this replaced was `overflow-x: auto`,
+  // which computes to "auto", so excluding only "scroll" would stay green if
+  // someone restored it.
+  expect(metrics.overflowX).not.toMatch(/^(auto|scroll)$/);
+  expect(metrics.tabIndex).toBeLessThan(0);
+
+  // Long unbroken scope strings still wrap rather than spilling.
+  await expect(full).toContainText("esi-characters.read_corporation_roles.v1");
+});
+
+/**
+ * The collapsed summary is where the product question gets answered, and its
+ * `max-width: min(34ch, 100%)` was written for the sync page's auto-layout
+ * table, where a cap is what stops one long payload from setting the column
+ * width for every row. This table is fixed-layout with a `<colgroup>`, so the
+ * cell is already a bound and the 34ch stopped the peek short inside it.
+ *
+ * Two rows, because "uses the column" only means something for a line long
+ * enough to need it: the peek shrink-wraps its content, so a short line proves
+ * nothing about the cap.
+ */
+test("the details peek uses the whole column it was given", async ({ page, context }) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  const member = await seedMember(db, { name: "Zed", tier: "green" });
+  await db.insert(auditLog).values([
+    {
+      actor: "system",
+      action: "tier.changed",
+      target: member.id,
+      details: { from: "flygd", to: "green", cause: "alliance_left" },
+    },
+    {
+      actor: "system",
+      action: "token.needs_reauth",
+      target: member.id,
+      details: {
+        missingScopes: [
+          "esi-characters.read_corporation_roles.v1",
+          "esi-alliances.read_contacts.v1",
+        ],
+      },
+    },
+  ]);
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/admin/audit");
+  await expect(page.locator("tbody tr")).toHaveCount(2);
+
+  const fit = await page.evaluate(() => {
+    const peeks = [...document.querySelectorAll(".json__peek")] as HTMLElement[];
+    // Newest first: the long token row, then the short tier row.
+    const [long, short] = peeks;
+    if (!long || !short) return null;
+
+    // 34ch in the peek's own inherited font, rather than a guessed pixel count.
+    const probe = document.createElement("span");
+    probe.style.cssText = "position:absolute;visibility:hidden;width:34ch";
+    long.appendChild(probe);
+    const ch34 = probe.getBoundingClientRect().width;
+    probe.remove();
+
+    const summary = long.closest("summary") as HTMLElement;
+    const sRect = summary.getBoundingClientRect();
+    const sPad = getComputedStyle(summary);
+    return {
+      ch34,
+      longWidth: long.getBoundingClientRect().width,
+      // The right edges, not the widths: the summary is a flex row and the
+      // +/- marker takes the first slot, so the peek is legitimately narrower
+      // than the summary. What matters is that it runs out to the same edge.
+      peekRight: long.getBoundingClientRect().right,
+      roomRight: sRect.right - parseFloat(sPad.paddingRight),
+      shortClipped: short.scrollWidth > short.clientWidth + 1,
+      longClipped: long.scrollWidth > long.clientWidth + 1,
+    };
+  });
+  expect(fit).not.toBeNull();
+
+  // Past the old cap, and out to the room the summary actually has.
+  expect(fit!.longWidth).toBeGreaterThan(fit!.ch34);
+  expect(fit!.peekRight).toBeGreaterThan(fit!.roomRight - 1);
+  // Still bounded by the cell -- widening the peek must not spill it.
+  expect(fit!.longClipped).toBe(true);
+
+  // And the line that answers "why is this person's role wrong?" now fits
+  // whole. Under the 34ch cap it was cut mid-answer.
+  expect(fit!.shortClipped).toBe(false);
+  await expect(page.locator(".json__peek").nth(1)).toHaveText(
+    "flygd → green, alliance_left",
+  );
+});
+
+/**
+ * The flip side of the same change: the sync log is auto-layout, where the cell
+ * has no width of its own and the 34ch cap is the only thing stopping one long
+ * payload from setting the column width for every row. Re-scoping the cap has
+ * to leave that table alone.
+ */
+test("the sync log keeps its 34ch peek cap", async ({ page, context }) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  await db.insert(syncRun).values({
+    jobType: "membership",
+    startedAt: new Date(Date.now() - 120_000),
+    finishedAt: new Date(Date.now() - 60_000),
+    status: "ok",
+    counts: { scanned: 42, changed: 3, deroled: 1, skipped: 0 },
+  });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/admin/sync");
+
+  const peek = page.locator(".log--runs .json__peek");
+  await expect(peek).toHaveCount(1);
+
+  const fit = await peek.evaluate((el) => {
+    const ruler = (css: string) => {
+      const probe = document.createElement("span");
+      probe.style.cssText = `position:absolute;visibility:hidden;${css}`;
+      el.appendChild(probe);
+      const w = probe.getBoundingClientRect().width;
+      probe.remove();
+      return w;
+    };
+    // A sibling peek carrying more text than the column could ever hold. The
+    // computed `max-width` reads back as an unresolved `min()` expression, so
+    // this measures what the rule DOES rather than what it says.
+    const long = document.createElement("span");
+    long.className = "json__peek";
+    long.textContent = "x".repeat(400);
+    el.after(long);
+    const longWidth = long.getBoundingClientRect().width;
+    long.remove();
+    return { longWidth, ch34: ruler("width:34ch") };
+  });
+  expect(fit.longWidth).toBeLessThanOrEqual(fit.ch34 + 1);
+});
+
+/**
+ * Action is one of the three filterable fields and was the only one you could
+ * not click, on a page that already splits it at the dot and dims the prefix.
+ */
+test("the action is a filter link like actor and target", async ({ page, context }) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  await db.insert(auditLog).values([
+    {
+      actor: admin.id,
+      action: "tier.changed",
+      target: admin.id,
+      details: { to: "green" },
+    },
+    {
+      actor: admin.id,
+      action: "status.changed",
+      target: admin.id,
+      details: { to: "active" },
+    },
+  ]);
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.goto("/admin/audit");
+  await expect(page.locator("tbody tr")).toHaveCount(2);
+
+  const action = page.locator("tbody tr").first().locator("td").nth(2).locator("a");
+  await expect(action).toHaveAttribute("href", "/admin/audit?action=status.changed");
+  await action.click();
+
+  await expect(page.locator("tbody tr")).toHaveCount(1);
+  // Content, not just the count: the empty state is also exactly one <tr>, so
+  // a filter that matched nothing would satisfy the count above. The form
+  // value alone proves nothing either -- it is `defaultValue` echoed back off
+  // the URL and reads the same whether or not the query used it.
+  await expect(page.locator(".log__empty")).toHaveCount(0);
+  await expect(page.locator("tbody tr").first().locator("td").nth(2)).toHaveText(
+    "status.changed",
+  );
+  await expect(page.getByLabel("Action prefix", { exact: true })).toHaveValue(
+    "status.changed",
+  );
+});
+
+/**
+ * A member reaches `actor` only for what they did to their own account; every
+ * tier change, derole and token event puts them in `target` with `system` or an
+ * admin acting. Filtering the wrong column returns "no results", which is true
+ * and says nothing about the log actually being silent on that person.
+ */
+test("an empty actor filter points at the target column", async ({ page, context }) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  const member = await seedMember(db, { name: "Zed", tier: "green" });
+  await db.insert(auditLog).values([
+    {
+      actor: "system",
+      action: "tier.changed",
+      target: member.id,
+      details: { to: "green" },
+    },
+  ]);
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+
+  // The columns say which is which before anyone guesses.
+  await page.goto("/admin/audit");
+  await expect(page.getByLabel("Actor", { exact: true })).toBeVisible();
+  await expect(page.locator("#filter-actor-hint")).toHaveText("who did it");
+  await expect(page.locator("#filter-target-hint")).toHaveText("who it happened to");
+
+  await page.goto("/admin/audit?actor=Zed");
+  const empty = page.locator(".log__empty");
+  await expect(empty).toContainText("Nothing matches this filter.");
+  await expect(empty).toContainText("target of an entry, not the actor");
+
+  const retry = empty.getByRole("link");
+  await expect(retry).toHaveAttribute("href", "/admin/audit?target=Zed");
+  await retry.click();
+  await expect(page.locator("tbody tr")).toHaveCount(1);
+  await expect(page.locator(".log__empty")).toHaveCount(0);
 });
 
 test("linking the system actor does not un-dim it", async ({ page, context }) => {
@@ -870,4 +1281,76 @@ test("a tier demotion row shows why it happened without opening the payload", as
     "flygd → green, main left alliance",
   );
   await expect(row.locator("details.json .json__full")).toBeHidden();
+});
+
+/**
+ * WCAG 2.2 2.4.11, Focus Not Obscured, on this table. The accounts page has the
+ * same shape and its own version of this test; the shared rule
+ * (`.log--sticky-head :is(a, button, summary, ...) { scroll-margin-top }`) is
+ * declared once and applies here, but a declaration is not proof the engine
+ * applies it to this markup. The audit table is the harder case: every row
+ * carries three links and a disclosure, so it is the page where sequential
+ * focus navigation actually walks a hundred targets under a pinned header.
+ *
+ * Rects, not the CSS property, and `scrollIntoView({block: "nearest"})` as the
+ * trigger rather than `focus()` -- Chromium's programmatic focus scroll centres
+ * an off-screen element, which makes the alignment this rule governs a no-op.
+ * See the longer note on the accounts-page version in admin.spec.ts.
+ */
+test("an audit row's control stays clear of the sticky header when focused", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedDenseLog();
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto("/admin/audit");
+  await page.waitForSelector(".scroller tbody tr");
+
+  const ROW = 12;
+  const geom = await page.evaluate((row) => {
+    const sc = document.querySelector(".scroller") as HTMLElement;
+    const tr = sc.querySelectorAll(".log--audit > tbody > tr")[row] as
+      HTMLElement | undefined;
+    const control = tr?.querySelector("summary") as HTMLElement | null;
+    const th = sc.querySelector<HTMLElement>(".log--audit > thead th");
+    if (!tr || !control || !th) return null;
+
+    // One short scroll past the row: from the very bottom the browser runs the
+    // region back to 0 instead, landing the row below the header for a reason
+    // that has nothing to do with scroll-margin.
+    sc.scrollTop = tr.offsetTop + tr.offsetHeight + 40;
+    const scrolled = sc.scrollTop > 0 && sc.scrollTop >= tr.offsetTop;
+    const before = control.getBoundingClientRect().top;
+    const headTop = th.getBoundingClientRect().top;
+
+    control.scrollIntoView({ block: "nearest" });
+    control.focus();
+
+    return {
+      scrolled,
+      startedAbove: before < headTop,
+      focused: document.activeElement === control,
+      controlTop: control.getBoundingClientRect().top,
+      headBottom: th.getBoundingClientRect().bottom,
+    };
+  }, ROW);
+
+  expect(geom, "the audit table, its header and row 12's summary all resolved").not.toBe(
+    null,
+  );
+  // The same three guards as the accounts version: without them this passes
+  // when the region never scrolled, when the target was on screen all along, or
+  // when it was never focusable.
+  expect(
+    geom!.scrolled,
+    "the region scrolled far enough to put the target above it",
+  ).toBe(true);
+  expect(geom!.startedAbove, "the target starts above the sticky header").toBe(true);
+  expect(geom!.focused, "the disclosure actually took focus").toBe(true);
+
+  expect(
+    geom!.controlTop,
+    "the focused control's top edge is below the sticky header's bottom edge",
+  ).toBeGreaterThanOrEqual(geom!.headBottom);
 });
