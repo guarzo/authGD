@@ -88,8 +88,7 @@ const envSchema = z.object({
   // silent failure mode. Defaulting to "dry-run" would let a missing
   // production secret turn sync into an unnoticed no-op; defaulting to "live"
   // would make the destructive configuration the one you get by forgetting.
-  // Requiring it means both environments state intent. See
-  // docs/superpowers/specs/2026-08-03-local-dev-setup.md (D1).
+  // Requiring it means both environments state intent.
   SYNC_MODE: z.enum(["live", "dry-run"]),
 
   // Display only. The enum values are member|associate|alumni|pending and do

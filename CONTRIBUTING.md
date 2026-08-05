@@ -84,6 +84,13 @@ If you find yourself typing a real corporation's name into `src/`, it belongs in
 a `BRAND_*` or `TIER_LABEL_*` variable instead — see
 [Making it yours](README.md#making-it-yours).
 
+**Planning artifacts stay local.** `docs/superpowers/` is gitignored. Specs,
+plans, and handovers written while working on a change are a record of one
+deployment's internal reasoning and vocabulary, not documentation for anyone
+running a fork — don't force-add them. Anything durable that comes out of that
+work belongs in `README.md`, `CONTRIBUTING.md`, `docs/ops.md`, or a code comment
+next to the decision it explains.
+
 ## Pull requests
 
 - One change per PR, with the reasoning in the description. If it touches a

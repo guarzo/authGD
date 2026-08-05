@@ -12,11 +12,9 @@
  * it is written. Reads are NEVER suppressed: dry-run is not offline mode, and
  * seeing real upstream state is the point of running against real credentials.
  *
- * Authentication is deliberately NOT guarded (spec D3): the login and link
+ * Authentication is deliberately NOT guarded: the login and link
  * OAuth exchanges mint new credentials from a fresh authorization code and
  * invalidate nothing, and guarding them would break local OAuth testing.
- *
- * See docs/superpowers/specs/2026-08-03-local-dev-setup.md (D2, D3, D4, D9).
  */
 
 /** True when outbound mutations must be suppressed. */

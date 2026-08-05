@@ -16,10 +16,7 @@ import { deriveWorktreeDbName, OWNS_TEST_DB } from "./test-db-url";
  * (`tests/helpers/test-db-url.ts`), so this contention case is mostly
  * confined to CI's shared `authgd_test` and to anyone using the explicit
  * `TEST_DATABASE_URL` escape hatch to point multiple checkouts at the same
- * database on purpose. See
- * docs/superpowers/specs/2026-08-05-per-worktree-unit-test-db-design.md for
- * why per-worktree isolation was reversed from an earlier "deliberately not"
- * stance.
+ * database on purpose.
  */
 
 /**
