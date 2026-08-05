@@ -83,3 +83,58 @@ export async function linkDiscord(
   await enqueueSync(dbx, { kind: "account", accountId });
   return { ok: true };
 }
+
+/**
+ * Remove an account's Discord link and leave it with none.
+ *
+ * The counterpart `linkDiscord` never had: its only `discord.unlinked` row is
+ * the implicit one for a REPLACEMENT, so until now no path could end at zero
+ * links. That gap is also why `merge_discord` had no remedy to name.
+ *
+ * Locks the account row first for the same reason `linkDiscord` does — a
+ * concurrent link and unlink must serialize rather than interleave, or the
+ * loser's deprovision can be written against a link the winner still owns.
+ *
+ * `enqueueSync` is not optional: the row deletion alone leaves the member
+ * holding every managed Discord role. The deprovision handler
+ * (src/jobs/discord-roles.ts) is written for exactly this payload and
+ * re-checks for a link before stripping, so a re-link that lands mid-flight is
+ * handled there rather than here.
+ *
+ * Deliberately does NOT enqueue `{kind:"account"}`. The replacement path does,
+ * because it has a new Discord user to provision; an unlink has none, and
+ * contacts and wanderer sync do not depend on Discord state.
+ */
+export async function unlinkDiscord(
+  dbx: DbTx,
+  actor: string,
+  accountId: string,
+  reason: "self" | "admin",
+): Promise<{ ok: true } | { ok: false; error: "not_found" | "not_linked" }> {
+  const locked = await dbx
+    .select()
+    .from(account)
+    .where(eq(account.id, accountId))
+    .for("update");
+  // The merge deletes accounts outright, so an admin's control can outlive the
+  // row it targets. Same race ADMIN_ACCOUNTS_ERRORS.not_found already explains.
+  if (locked.length === 0) return { ok: false, error: "not_found" };
+
+  const [removed] = await dbx
+    .delete(discordLink)
+    .where(eq(discordLink.accountId, accountId))
+    .returning();
+  if (!removed) return { ok: false, error: "not_linked" };
+
+  await logAudit(dbx, {
+    actor,
+    action: "discord.unlinked",
+    target: removed.discordUserId,
+    details: { reason },
+  });
+  await enqueueSync(dbx, {
+    kind: "discord-user",
+    discordUserId: removed.discordUserId,
+  });
+  return { ok: true };
+}

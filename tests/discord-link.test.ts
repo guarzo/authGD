@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { sql } from "drizzle-orm";
-import { account, discordLink, outbox } from "@/db/schema";
-import { linkDiscord } from "@/services/discord-link";
+import { account, auditLog, discordLink, outbox } from "@/db/schema";
+import { linkDiscord, unlinkDiscord } from "@/services/discord-link";
 import { setupTestDb, TEST_URL } from "./helpers/db";
 
 // Route modules read config + db lazily via getConfig()/getDb(); set env first.
@@ -32,13 +32,19 @@ beforeAll(async () => {
   ctx = await setupTestDb();
 });
 beforeEach(() =>
-  ctx.db.execute(sql`TRUNCATE account, discord_link, outbox RESTART IDENTITY CASCADE`),
+  ctx.db.execute(
+    sql`TRUNCATE account, discord_link, outbox, audit_log RESTART IDENTITY CASCADE`,
+  ),
 );
 afterAll(() => ctx.cleanup());
 
 // helper: run linkDiscord in a transaction (DbTx required)
 const ld = (accountId: string, discordUserId: string) =>
   ctx.db.transaction((tx) => linkDiscord(tx, accountId, discordUserId));
+
+// helper: run unlinkDiscord in a transaction (DbTx required)
+const ud = (actor: string, accountId: string, reason: "self" | "admin" = "self") =>
+  ctx.db.transaction((tx) => unlinkDiscord(tx, actor, accountId, reason));
 
 describe("linkDiscord", () => {
   it("links and writes outbox", async () => {
@@ -102,6 +108,87 @@ describe("linkDiscord", () => {
       expect(values).toContainEqual({ ok: false, error: "already_linked" });
     }
     expect(await ctx.db.select().from(discordLink)).toHaveLength(1);
+  });
+});
+
+describe("unlinkDiscord", () => {
+  it("deletes the link and enqueues the deprovision", async () => {
+    const [a] = await ctx.db.insert(account).values({}).returning();
+    await ld(a.id, "duid-1");
+    await ctx.db.delete(outbox);
+
+    expect(await ud(a.id, a.id)).toEqual({ ok: true });
+    expect(await ctx.db.select().from(discordLink)).toHaveLength(0);
+
+    const payloads = (await ctx.db.select().from(outbox)).map((b) => b.payload);
+    expect(payloads).toContainEqual({ kind: "discord-user", discordUserId: "duid-1" });
+    // No new Discord user to provision, and contacts/wanderer do not depend on
+    // Discord state, so an {kind:"account"} row here would be work for nothing.
+    expect(payloads).toHaveLength(1);
+  });
+
+  it("writes an audit row naming who unlinked and why", async () => {
+    const [a] = await ctx.db.insert(account).values({}).returning();
+    const [admin] = await ctx.db.insert(account).values({}).returning();
+    await ld(a.id, "duid-1");
+
+    expect(await ud(admin.id, a.id, "admin")).toEqual({ ok: true });
+
+    const rows = (await ctx.db.select().from(auditLog)).filter(
+      (r) => r.action === "discord.unlinked",
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].actor).toBe(admin.id);
+    // The freed discord user, not the account: matches the replacement path.
+    expect(rows[0].target).toBe("duid-1");
+    expect(rows[0].details).toEqual({ reason: "admin" });
+  });
+
+  it("reports an account that has no link", async () => {
+    const [a] = await ctx.db.insert(account).values({}).returning();
+    expect(await ud(a.id, a.id)).toEqual({ ok: false, error: "not_linked" });
+    expect(await ctx.db.select().from(outbox)).toHaveLength(0);
+  });
+
+  it("reports an account that no longer exists", async () => {
+    const gone = "00000000-0000-4000-8000-000000000000";
+    expect(await ud(gone, gone)).toEqual({ ok: false, error: "not_found" });
+  });
+
+  // The account-row FOR UPDATE lock is the basis of the whole design, and the
+  // sequential cases above never exercise it. Both operations lock the SAME
+  // account row, so unlike the cross-account link race above they serialize
+  // rather than conflict: neither is allowed to throw, and neither is allowed
+  // to return an error. Promise.all, not allSettled — a rejection here is a
+  // failure of the design, not an outcome to tolerate.
+  it("concurrent link and unlink leave a consistent link and deprovision set", async () => {
+    const [a] = await ctx.db.insert(account).values({}).returning();
+    await ld(a.id, "duid-1");
+    await ctx.db.delete(outbox);
+
+    const [linked, unlinked] = await Promise.all([ld(a.id, "duid-2"), ud(a.id, a.id)]);
+    // Whichever order the lock granted, both operations had work to do:
+    // unlink-then-link finds duid-1 to free and then links duid-2;
+    // link-then-unlink replaces duid-1 with duid-2 and then frees duid-2.
+    expect(linked).toEqual({ ok: true });
+    expect(unlinked).toEqual({ ok: true });
+
+    const links = await ctx.db.select().from(discordLink);
+    const deprovisioned = (await ctx.db.select().from(outbox))
+      .map((b) => b.payload)
+      .filter((p) => p.kind === "discord-user")
+      .map((p) => (p as { discordUserId: string }).discordUserId);
+
+    if (links.length === 0) {
+      // unlink ran last: whatever it freed must be deprovisioned.
+      expect(deprovisioned).toContain("duid-2");
+    } else {
+      // link ran last: it survives, and it must NOT be deprovisioned.
+      expect(links[0].discordUserId).toBe("duid-2");
+      expect(deprovisioned).not.toContain("duid-2");
+    }
+    // duid-1 is freed in either ordering.
+    expect(deprovisioned).toContain("duid-1");
   });
 });
 
