@@ -81,10 +81,10 @@ export default async function PayoutsPage({
           </p>
         </div>
 
-        {/* Any flygd member reads every operation (transparency is the cheapest
-            reconciliation mechanism the design has); only an operator — flygd
-            AND active — gets the control that starts a new one. A cryo flygd
-            member sees the list with no button here, and the action rejects
+        {/* Any member reads every operation (transparency is the cheapest
+            reconciliation mechanism the design has); only an operator — member
+            AND active — gets the control that starts a new one. A cryo member
+            sees the list with no button here, and the action rejects
             regardless if they reach it another way. */}
         {access.isOperator && (
           <p className="btn-row pager">

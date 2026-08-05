@@ -40,7 +40,7 @@ export default async function NewPayoutPage({
 }) {
   const access = await requirePayoutReader();
   if (!access) redirect("/account");
-  // A cryo flygd member (or any non-operator flygd reader) can reach this URL
+  // A cryo member (or any non-operator member reader) can reach this URL
   // directly; the list page hides the link, this page hides the form, and the
   // action rejects anyway. Reading a form that will only reject on submit is
   // worse than not being handed the form.

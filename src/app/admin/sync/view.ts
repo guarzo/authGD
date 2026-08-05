@@ -42,7 +42,7 @@ export function tone(status: SyncRunStatus | null): Tone {
  *
  * `overdue`, `stuck` and `missing` are warn, not bad: nothing has reported a
  * failure, the schedule has simply not been kept. `never` is off rather than
- * warn for the same reason PRODUCT.md keeps green tier and a dead token out of
+ * warn for the same reason PRODUCT.md keeps alumni tier and a dead token out of
  * alarm colour — a job that has not run yet, on a worker too young to say it
  * should have, is a state and not a fault.
  */

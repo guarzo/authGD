@@ -112,9 +112,9 @@ describe("summarizeDetails", () => {
 });
 
 const ROLE_NAMES = new Map([
-  ["100", "flygd"],
-  ["200", "blue"],
-  ["300", "green"],
+  ["100", "member"],
+  ["200", "associate"],
+  ["300", "alumni"],
 ]);
 
 describe("summarizeDetails, declared fields and role rendering", () => {
@@ -155,7 +155,7 @@ describe("summarizeDetails, declared fields and role rendering", () => {
         { added: ["300"], removed: ["100"] },
         ROLE_NAMES,
       ),
-    ).toBe("+green −flygd");
+    ).toBe("+alumni −member");
   });
 
   it("collapses unresolvable ids alongside known ones", () => {
@@ -165,7 +165,7 @@ describe("summarizeDetails, declared fields and role rendering", () => {
         { added: ["300"], removed: ["100", "999888777"] },
         ROLE_NAMES,
       ),
-    ).toBe("+green −flygd, −1 other");
+    ).toBe("+alumni −member, −1 other");
   });
 
   it("truncates a lone unresolvable id", () => {
@@ -288,7 +288,7 @@ describe("summarizeDetails, declared fields and role rendering", () => {
   });
 
   it("renders the tier automation was handed back", () => {
-    expect(summarizeDetails("tier.unlocked", { tier: "flygd" })).toBe("was flygd");
+    expect(summarizeDetails("tier.unlocked", { tier: "member" })).toBe("was member");
   });
 
   it("renders a status note change as added, replaced, or cleared", () => {
@@ -316,14 +316,14 @@ describe("summarizeDetails, declared fields and role rendering", () => {
   });
 
   it("surfaces the tier and cause a discord role change was written with", () => {
-    const names = new Map([["1", "green"]]);
+    const names = new Map([["1", "alumni"]]);
     expect(
       summarizeDetails(
         "discord.role_changed",
-        { added: ["1"], tier: "green", cause: "tier change" },
+        { added: ["1"], tier: "alumni", cause: "tier change" },
         names,
       ),
-    ).toBe("+green, tier green, tier change");
+    ).toBe("+alumni, tier alumni, tier change");
   });
 
   it("still degrades on rows written before this change", () => {

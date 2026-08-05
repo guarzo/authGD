@@ -39,7 +39,7 @@ export function Submit({
   "aria-pressed": ariaPressed,
   // Opt-in only: a button whose visible text already names the thing it acts on
   // should not carry one. Every control on an admin accounts row needs it,
-  // drawer or not, because "blue", "freeze" and "sync now" all say nothing
+  // drawer or not, because "associate", "freeze" and "sync now" all say nothing
   // about whose account is about to change.
   "aria-label": ariaLabel,
 }: {

@@ -36,7 +36,7 @@ type Part = Render & { readonly keys: readonly string[] };
 const part = (keys: readonly string[], render: Render): Part =>
   Object.assign(render, { keys });
 
-/** `flygd → green`, or `→ green` when the payload has no prior value. One
+/** `member → alumni`, or `→ alumni` when the payload has no prior value. One
  * renderer shared by every transition action, so the two can't drift apart
  * the way tier.changed and status.changed did. */
 function transition(fromKey: string, toKey: string): Part {
@@ -47,7 +47,7 @@ function transition(fromKey: string, toKey: string): Part {
   );
 }
 
-/** `+green −flygd`. Ids the app manages resolve to their tier name; anything
+/** `+alumni −member`. Ids the app manages resolve to their tier name; anything
  * else collapses to a count, or to a truncated id when it stands alone. An
  * operator asking which roles changed gets an answer, and an id that changed
  * since the row was written degrades instead of lying. */
@@ -190,7 +190,7 @@ const PARTS: Record<string, readonly Part[]> = {
 const FALLBACK_KEYS = 3;
 
 /**
- * One factual line per action, e.g. `tier.changed` -> `flygd → green`. This is
+ * One factual line per action, e.g. `tier.changed` -> `member → alumni`. This is
  * what a scanning admin actually reads; the full payload stays behind the `+`
  * disclosure, so the line's job is not to be complete, it is to not lie about
  * being complete.

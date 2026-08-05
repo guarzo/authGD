@@ -17,7 +17,7 @@ function fmtDate(d: Date): string {
  *
  * `linkToOperations` is the viewer's `canReadPayouts` verdict, passed in rather
  * than re-derived. Reading your own history needs only a session; reading an
- * OPERATION needs tier flygd. A member demoted to blue/green, or moved to
+ * OPERATION needs tier member. A member demoted to associate/alumni, or moved to
  * cryo, still gets the answer to "did I get paid for that Thursday roam"
  * without regaining access to the operation — and always linking would hand
  * them a link that silently redirects back to this page.
@@ -32,7 +32,7 @@ function fmtDate(d: Date): string {
  * `linkToOperations === false` also drives one short dim line above the
  * table: without it, the operation names below simply stop being links with
  * no stated reason, which is the same "a member finds things quietly gone"
- * problem the bare tier badge had before standing.tsx's green/blue sentences.
+ * problem the bare tier badge had before standing.tsx's alumni/associate sentences.
  */
 export function AccountPayouts({
   rows,
@@ -44,15 +44,15 @@ export function AccountPayouts({
   return (
     <>
       <RuleHead as="h2">Your payouts</RuleHead>
-      {/* Same "derole, don't boot" fact as the Standing row: a member below
-          flygd loses the operation page behind these names (canReadPayouts),
+      {/* Same "derole, don't boot" fact as the Standing row: an account below
+          member tier loses the operation page behind these names (canReadPayouts),
           not the payment history itself. Left silent, the names below just go
           quietly inert — the same "things vanish with no explanation" problem
           the tier badge alone had. */}
       {!linkToOperations && (
         <p className="table-note">
-          Operation pages are FlyGD-only. Your own payout history here stays regardless of
-          tier.
+          Operation pages are Member-only. Your own payout history here stays regardless
+          of tier.
         </p>
       )}
       {/* Distinct from the RuleHead above it: both otherwise announce "Your

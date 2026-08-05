@@ -12,14 +12,14 @@ import type { Tier as TierValue } from "@/core/tier";
  * colour for the admin table. Nothing here reads as a fault (PRODUCT.md); the
  * member has done nothing wrong and is waiting on someone else.
  *
- * Green and blue get the same badge-plus-sentence treatment for the same
+ * Alumni and associate get the same badge-plus-sentence treatment for the same
  * reason: both are the account's state AFTER standings and map access stop
- * being pushed (desired.ts targets `tier === "flygd"` only), and PRODUCT.md's
+ * being pushed (desired.ts targets `tier === "member"` only), and PRODUCT.md's
  * core promise — "derole, don't boot" — means that fact must not land as a
- * bare uppercase badge with no reassurance attached. Green is the system's own
- * call (tier.ts) and converges back to flygd on its own; blue is admin-set and
- * does not self-correct. The two sentences say which is true, never the word
- * "demoted" and never that anything was "removed".
+ * bare uppercase badge with no reassurance attached. Alumni is the system's own
+ * call (tier.ts) and converges back to member on its own; associate is
+ * admin-set and does not self-correct. The two sentences say which is true,
+ * never the word "demoted" and never that anything was "removed".
  */
 export function StandingTier({ tier }: { tier: TierValue }) {
   if (tier === "pending") {
@@ -33,7 +33,7 @@ export function StandingTier({ tier }: { tier: TierValue }) {
       </>
     );
   }
-  if (tier === "green") {
+  if (tier === "alumni") {
     return (
       <>
         <Tier tier={tier} size="lead" />
@@ -45,7 +45,7 @@ export function StandingTier({ tier }: { tier: TierValue }) {
       </>
     );
   }
-  if (tier === "blue") {
+  if (tier === "associate") {
     return (
       <>
         <Tier tier={tier} size="lead" />

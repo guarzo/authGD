@@ -37,7 +37,7 @@ describe("AccountPayouts", () => {
   });
 
   // Reading your own history needs only a session; reading an OPERATION needs
-  // tier flygd. A member demoted to blue/green still gets the answer to "did I
+  // tier member. A member demoted to associate/alumni still gets the answer to "did I
   // get paid for that Thursday roam" — and a link that silently redirected
   // them back to /account would be worse than no link.
   it("renders the operation as plain text for a viewer who cannot", () => {
@@ -85,14 +85,14 @@ describe("AccountPayouts", () => {
 
   // The other half of "demoted, not booted": without this line the operation
   // names below silently stop being links, with nothing said about why.
-  it("explains that operation pages are FlyGD-only when the viewer can't reach them", () => {
+  it("explains that operation pages are Member-only when the viewer can't reach them", () => {
     const html = render(false);
-    expect(html).toContain("FlyGD-only");
+    expect(html).toContain("Member-only");
     expect(html).toContain("stays regardless of tier");
   });
 
-  it("omits the FlyGD-only line for a viewer who can reach operations", () => {
+  it("omits the Member-only line for a viewer who can reach operations", () => {
     const html = render(true);
-    expect(html).not.toContain("FlyGD-only");
+    expect(html).not.toContain("Member-only");
   });
 });
