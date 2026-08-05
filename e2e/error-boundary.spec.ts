@@ -68,7 +68,7 @@ test("the tab stops naming the page that failed", async ({ page, context }) => {
     // segment-scoped `not-found.tsx` was measured going the other way — the
     // two boundaries genuinely differ, and a reader who knows one case will
     // guess the other one wrong.
-    await expect(page).toHaveTitle("Something broke · Zoo Landers");
+    await expect(page).toHaveTitle("Something broke · Test Corp");
   });
 });
 

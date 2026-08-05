@@ -50,6 +50,21 @@ const env = {
   // e2e never exercises an external integration, so nothing here depends on
   // live behavior — and dry-run is the correct default for a browsable app.
   SYNC_MODE: "dry-run",
+  // Deliberately not the defaults. A spec asserting the fallback strings
+  // cannot tell "config was read" from "the string was hardcoded"; these
+  // values appear nowhere in src/, so seeing them in the DOM proves the whole
+  // path. The defaults are covered by the unit tests instead, which set none
+  // of these. BRAND_MARK_URL points at a real file that is not the mark's
+  // default, for the same reason.
+  BRAND_NAME: "Test Corp",
+  BRAND_TAGLINE: "Test Ops",
+  BRAND_MARK_URL: "/brand/emblem.webp",
+  BRAND_MOTTO: "Test motto line",
+  BRAND_FOOTER: "Test footer line",
+  TIER_LABEL_MEMBER: "Testers",
+  TIER_LABEL_ASSOCIATE: "Friends",
+  TIER_LABEL_ALUMNI: "Veterans",
+  TIER_LABEL_PENDING: "Queued",
   // Lets the guard prove, on a later run, that a server on this port is one we
   // started and may therefore restart. See e2e/server-guard.ts.
   [MANAGED_ENV_KEY]: WORKTREE_ROOT,

@@ -39,7 +39,7 @@ test("a typed-in bad URL renders the app's own 404, not the framework's", async 
   // The root boundary's `metadata` export does apply — no page segment matched,
   // so nothing competes with it. Worth pinning: the segment-scoped boundary is
   // the opposite case (see its comment), and the difference is not guessable.
-  await expect(page).toHaveTitle("Not found · Zoo Landers");
+  await expect(page).toHaveTitle("Not found · Test Corp");
 
   // The three things the framework fallback does not have. The header brings
   // the seal, the nav and the skip link with it.
@@ -113,7 +113,7 @@ test("clicking a since-deleted operation announces the 404 and lands focus in it
   // operation that isn't there. Asserted on the soft-nav path specifically:
   // it is the one where the document is never reloaded, so a stale title
   // would simply persist.
-  await expect(page).toHaveTitle("No such operation · Zoo Landers");
+  await expect(page).toHaveTitle("No such operation · Test Corp");
 
   // Focus is the half that is deterministic and ours. The pressed link is
   // gone; without `FocusHeading` this is `BODY`, and the member's next Tab
@@ -171,7 +171,7 @@ test("a malformed operation id gets the operation 404, not the error boundary", 
   expect(res?.status()).toBe(404);
   await expect(page.getByRole("heading", { name: "No such operation" })).toBeVisible();
   await expect(page.getByText("Something broke")).toHaveCount(0);
-  await expect(page).toHaveTitle("No such operation · Zoo Landers");
+  await expect(page).toHaveTitle("No such operation · Test Corp");
 });
 
 test("the payouts 404 stays behind the payouts guard", async ({ page, context }) => {

@@ -1,5 +1,6 @@
 import { Status } from "@/app/_components/ui";
 import { Tier } from "@/app/_components/tier";
+import { tierLabel } from "@/app/_components/labels";
 import type { Tier as TierValue } from "@/core/tier";
 
 /**
@@ -26,7 +27,10 @@ export function StandingTier({ tier }: { tier: TierValue }) {
   if (tier === "pending") {
     return (
       <>
-        <Status>pending</Status>
+        {/* `Status` rather than `Tier` for the token's tone (see the doc
+            comment), but the word is still a tier name, so it takes the
+            configured label like every other one. */}
+        <Status>{tierLabel("pending")}</Status>
         <span className="dim">
           Your access is awaiting approval from an admin. Nothing is wrong — someone on
           the team will review your account.

@@ -306,7 +306,7 @@ test("approving an account updates the nav badge, and the new count carries to t
   await row.locator(".row-toggle").click();
   await row
     .locator("xpath=following-sibling::tr[1]")
-    .getByRole("button", { name: "Approve as Alumni for Waiting One", exact: true })
+    .getByRole("button", { name: "Approve as Veterans for Waiting One", exact: true })
     .click();
 
   // The layout re-ran for the action that changed it.

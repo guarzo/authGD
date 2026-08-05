@@ -137,13 +137,13 @@ describe("loadConfig", () => {
       const cfg = loadConfig({
         ...validEnv,
         TIER_LABEL_MEMBER: "FlyGD",
-        BRAND_NAME: "Zoo Landers",
+        BRAND_NAME: "Test Corp",
         BRAND_MOTTO: "Center for kids\nwho can't fly good",
       });
       expect(cfg.tierLabels.member).toBe("FlyGD");
       // Unset siblings keep their generic defaults — labels are independent.
       expect(cfg.tierLabels.associate).toBe("Associate");
-      expect(cfg.brand.name).toBe("Zoo Landers");
+      expect(cfg.brand.name).toBe("Test Corp");
       expect(cfg.brand.motto).toBe("Center for kids\nwho can't fly good");
     });
   });

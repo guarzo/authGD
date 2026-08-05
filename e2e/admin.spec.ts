@@ -173,16 +173,16 @@ test("tier and cryo read as values; their controls live behind the row expander"
   await expect(page.locator(`${ROWS} > td:nth-child(2) button`)).toHaveCount(0);
   await expect(page.locator(`${ROWS} > td:nth-child(3) button`)).toHaveCount(0);
   const zedRow = rowFor(page, "Zed");
-  await expect(zedRow.locator("td:nth-child(2) .tier")).toHaveText(/member/);
+  await expect(zedRow.locator("td:nth-child(2) .tier")).toHaveText(/Testers/);
   // The tier controls name their row in their accessible name, so match on that
-  // rather than on the visible word alone — `name: "associate"` now matches nothing
+  // rather than on the visible word alone — `name: "Friends"` now matches nothing
   // at all, and toBeHidden() is satisfied by an element that does not exist.
   //
   // Scoped to the drawer rather than the row: the drawer is the row's sibling
   // now, so a control inside it is not a descendant of the collapsed row and
   // `zedRow.getByRole(...)` would find nothing whether the rule holds or not.
   await expect(
-    drawerOf(zedRow).getByRole("button", { name: "Set Zed to associate" }),
+    drawerOf(zedRow).getByRole("button", { name: "Set Zed to Friends" }),
   ).toBeHidden();
 });
 
@@ -274,11 +274,11 @@ test("tier controls: manual set locks; return-to-auto unlocks", async ({
   const zedRow = rowFor(page, "Zed");
   const zedDrawer = drawerOf(zedRow);
   await toggleOf(zedRow).click();
-  await zedDrawer.getByRole("button", { name: "Set Zed to associate" }).click();
+  await zedDrawer.getByRole("button", { name: "Set Zed to Friends" }).click();
   // The lock mark is a CSS ::after (see ui.tsx/globals.css), not text, so it's
   // asserted via the element it's drawn on rather than getByText.
   await expect(zedRow.locator(".tier__lock")).toBeVisible();
-  await expect(zedRow.locator(".tier")).toHaveText(/associate/);
+  await expect(zedRow.locator(".tier")).toHaveText(/Friends/);
   // The drawer holds the controls, so it has to survive the revalidation the
   // server action triggers or the next click has nothing to land on. The open
   // state is React state in Disclosure and the closed drawer row is
@@ -437,13 +437,13 @@ test("an admin reaches the queue from the count link and approves", async ({
   const drawer = drawerOf(row);
   await toggleOf(row).click();
   // Named for the row like every other per-account control: the visible label
-  // is "Approve as Alumni" on every queued account, and this is the press that
+  // is "Approve as Veterans" on every queued account, and this is the press that
   // grants someone access. The row goes after the visible label rather than
   // inside it, so the label survives as one contiguous run of the accessible
   // name and speech input can still reach the button by what is written on it
   // (WCAG 2.5.3) — the same convention the Actions cell uses.
   await drawer
-    .getByRole("button", { name: "Approve as Alumni for Waiting Pilot", exact: true })
+    .getByRole("button", { name: "Approve as Veterans for Waiting Pilot", exact: true })
     .click();
 
   // The queue is empty, so the standing reminder is gone...
@@ -472,7 +472,7 @@ test("pending is never offered as a manual tier an admin can assign", async ({
   const settled = rowFor(page, "Settled Pilot");
   const settledDrawer = drawerOf(settled);
   await toggleOf(settled).click();
-  for (const tier of ["member", "associate", "alumni"]) {
+  for (const tier of ["Testers", "Friends", "Veterans"]) {
     await expect(
       settledDrawer.getByRole("button", {
         name: `Set Settled Pilot to ${tier}`,
@@ -481,9 +481,9 @@ test("pending is never offered as a manual tier an admin can assign", async ({
     ).toBeVisible();
   }
   // Matched on the accessible name pattern rather than on the bare word: the
-  // tier controls all name their row, so `name: "pending"` would match nothing
+  // tier controls all name their row, so `name: "Queued"` would match nothing
   // whether the rule holds or not.
-  await expect(settledDrawer.getByRole("button", { name: /to pending$/ })).toHaveCount(0);
+  await expect(settledDrawer.getByRole("button", { name: /to Queued$/ })).toHaveCount(0);
   await expect(settledDrawer.getByRole("button", { name: /^approve /i })).toHaveCount(0);
 
   // ...and the converse on a pending row: the approve pair replaces the manual
@@ -494,16 +494,16 @@ test("pending is never offered as a manual tier an admin can assign", async ({
   await toggleOf(waiting).click();
   await expect(
     waitingDrawer.getByRole("button", {
-      name: "Approve as Alumni for Waiting Pilot",
+      name: "Approve as Veterans for Waiting Pilot",
       exact: true,
     }),
-  ).toHaveText("Approve as Alumni");
+  ).toHaveText("Approve as Veterans");
   await expect(
     waitingDrawer.getByRole("button", {
-      name: "Approve as Associate for Waiting Pilot",
+      name: "Approve as Friends for Waiting Pilot",
       exact: true,
     }),
-  ).toHaveText("Approve as Associate");
+  ).toHaveText("Approve as Friends");
   await expect(
     waitingDrawer.getByRole("button", { name: /^Set Waiting Pilot to/ }),
   ).toHaveCount(0);
@@ -551,7 +551,7 @@ test("approving an account someone else already approved lands on a notice, not 
   const row = rowFor(page, "Waiting Pilot");
   await toggleOf(row).click();
   const approve = drawerOf(row).getByRole("button", {
-    name: "Approve as Alumni for Waiting Pilot",
+    name: "Approve as Veterans for Waiting Pilot",
     exact: true,
   });
   await expect(approve).toBeVisible();
@@ -657,7 +657,7 @@ test("a de-roled admin's approve click gets the notice, not the error boundary",
   const row = rowFor(page, "Waiting Pilot");
   await toggleOf(row).click();
   const approve = drawerOf(row).getByRole("button", {
-    name: "Approve as Alumni for Waiting Pilot",
+    name: "Approve as Veterans for Waiting Pilot",
     exact: true,
   });
   await expect(approve).toBeVisible();
@@ -1084,13 +1084,18 @@ test("an open row drawer keeps the pin, and is not itself pinned", async ({
     );
   }
   // ...and that zero is a real result, not one offset that happened to miss:
-  // at rest the first tier button sits squarely inside the pin's x-band and on
-  // screen, so an x-only measure — `clearOfPin` — would call it fully occluded.
+  // at rest the first tier button sits inside the pin's x-band and on screen,
+  // so an x-only measure — `clearOfPin` — would call it occluded.
+  //
+  // A threshold rather than ~1: the button's width is its tier's configured
+  // label, so the exact fraction moves with TIER_LABEL_MEMBER. Any large
+  // majority makes the point that an x-only measure would get this wrong; an
+  // equality here only pinned the length of one word.
   const rest = await coveredByPin(page, ".scroller", tier, 0);
-  expect(rest.xOverlap, "the drawer's first control shares the pin's x-band").toBeCloseTo(
-    1,
-    1,
-  );
+  expect(
+    rest.xOverlap,
+    "the drawer's first control shares the pin's x-band",
+  ).toBeGreaterThan(0.8);
   expect(rest.inRegion, "...and is on screen while it does").toBeCloseTo(1, 1);
 });
 
@@ -1158,7 +1163,7 @@ test("an open drawer does not widen the shared first column", async ({
  * group, and the note field with its save button.
  */
 const DRAWER_CONTROLS = {
-  "set tier": '[aria-label="Set Zed to associate"]',
+  "set tier": '[aria-label="Set Zed to Friends"]',
   freeze: '[aria-label="freeze Zed"]',
   "note field": '[aria-label="Note for Zed"]',
   "save note": '[aria-label="save note for Zed"]',
@@ -1583,7 +1588,7 @@ test("every per-account control names the row it acts on", async ({ page, contex
   const zedRow = rowFor(page, "Zed");
   const zedDrawer = drawerOf(zedRow);
   await toggleOf(zedRow).click();
-  for (const tier of ["member", "associate", "alumni"]) {
+  for (const tier of ["Testers", "Friends", "Veterans"]) {
     const btn = zedDrawer.getByRole("button", {
       name: `Set Zed to ${tier}`,
       exact: true,
@@ -1596,7 +1601,7 @@ test("every per-account control names the row it acts on", async ({ page, contex
 
   // The lock-releasing control is in the same group and had the same gap.
   await zedDrawer
-    .getByRole("button", { name: "Set Zed to associate", exact: true })
+    .getByRole("button", { name: "Set Zed to Friends", exact: true })
     .click();
   await expect(zedRow.locator(".tier__lock")).toBeVisible();
   await expect(
