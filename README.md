@@ -227,8 +227,9 @@ the file:
 | `public/brand/hero.webp`         | login page background     | no — replace the file  |
 | `public/brand/hero-account.webp` | account page illustration | no — replace the file  |
 
-The shipped images are the reference deployment's artwork and are **not** MIT
-licensed — see [License](#license). A fork should replace all four.
+The shipped images are the reference deployment's artwork. They are **not** MIT
+licensed but you may keep them — see [License](#license) for the terms, which
+come down to crediting the artist.
 
 `PRODUCT.md` and `DESIGN.md` describe the reference deployment's own voice and
 visual language. They are a design record, not a template: if you are actively
@@ -255,11 +256,10 @@ tooling. See the plans linked above for what each phase covers.
 [MIT](LICENSE) for the source code.
 
 The artwork in `docs/assets/` and `public/` is **not** covered by the MIT
-license. It was created by **Faoble** and is used here with permission; all
-rights remain with the artist, and it is not licensed for reuse or
-redistribution outside this repository. If you are running a fork for your own
-corp, replace the four images listed under [Making it yours](#making-it-yours)
-with your own.
+license. It was created by **Faoble**, who permits it to be used and
+redistributed — including in a fork or your own deployment — **as long as Faoble
+is credited**. All other rights remain with the artist. You are welcome to keep
+the images or replace them; if you keep them, carry the credit.
 
 EVE Online and all related logos and images are trademarks or registered trademarks
 of CCP hf. authGD is a third-party tool, not affiliated with or endorsed by CCP hf.

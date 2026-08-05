@@ -198,9 +198,10 @@ you what it holds.
 
 ## Assets
 
-Artwork by **Faoble**, used with permission and not covered by the repository's MIT
-licence. A fork replaces all four — the two `BRAND_*_URL` ones by configuration, the
-other two by overwriting the file.
+Artwork by **Faoble**, not covered by the repository's MIT licence: usable and
+redistributable in a fork as long as Faoble is credited (see `LICENSE`). A fork
+that wants its own identity replaces all four — the two `BRAND_*_URL` ones by
+configuration, the other two by overwriting the file.
 
 - `public/brand/emblem.webp` — the corporation seal (navy, gold, cream). The identity
   mark, used large on login. Configurable: `BRAND_SEAL_URL`.
