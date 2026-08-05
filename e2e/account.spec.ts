@@ -385,7 +385,7 @@ test("a member can unlink their own Discord", async ({ page, context }) => {
   const describedBy = await unlink.getAttribute("aria-describedby");
   expect(describedBy).toBeTruthy();
   await expect(page.locator(`#${describedBy}`)).toContainText(
-    "removes the Discord roles authGD manages",
+    "queues removal of the Discord roles authGD manages",
   );
 
   // Two clicks by design: ConfirmSubmit arms first, submits second.

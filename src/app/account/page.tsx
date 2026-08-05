@@ -316,8 +316,8 @@ export default async function AccountPage({
                     order, so a member who tabs straight to it would otherwise
                     never hear it at all. */}
                 <span id="discord-unlink-cost" className="dim">
-                  Unlinking removes the Discord roles authGD manages for you. You can link
-                  again any time.
+                  Unlinking queues removal of the Discord roles authGD manages for you.
+                  You can link again any time.
                 </span>
               </ConfirmArmScope>
             ) : (
