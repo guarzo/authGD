@@ -273,6 +273,51 @@ test("the pending count reaches the admin nav, without renaming the tab", async 
   ).not.toHaveAttribute("aria-describedby");
 });
 
+/**
+ * The badge is computed in the admin LAYOUT, and an approval only revalidates
+ * the page beneath it — so the first half asserts the thing that is easy to
+ * get wrong: that the count reflects the very action that changed it.
+ *
+ * The second half is a guard rather than a reproduction. Today it cannot fail:
+ * the admin nav renders plain `<a href>` (ui.tsx), and `next/link` appears
+ * nowhere outside `/payouts`, so every admin navigation is a full document
+ * load and the layout is recomputed each time. Swap those anchors for `Link`
+ * and the client Router Cache becomes free to serve the pre-approval layout on
+ * the soft navigation that follows — which is exactly when this half starts
+ * earning its place. `.click()` on the nav link, never `page.goto()`: a goto
+ * would be a fresh document load even after such a swap, and would keep
+ * passing through the bug.
+ */
+test("approving an account updates the nav badge, and the new count carries to the next admin route", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  await seedMember(db, { name: "Waiting One", tier: "pending" });
+  await seedMember(db, { name: "Waiting Two", tier: "pending" });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+
+  await page.goto("/admin/accounts");
+  await expect(page.locator(".shell__badge")).toHaveText("2 awaiting approval");
+
+  const row = page.locator(".log--dense > tbody > tr:not(.drawer-row)", {
+    hasText: "Waiting One",
+  });
+  await row.locator(".row-toggle").click();
+  await row
+    .locator("xpath=following-sibling::tr[1]")
+    .getByRole("button", { name: "Approve as Green for Waiting One", exact: true })
+    .click();
+
+  // The layout re-ran for the action that changed it.
+  await expect(page.locator(".shell__badge")).toHaveText("1 awaiting approval");
+
+  // ...and the corrected count is what the next admin route shows.
+  await page.getByRole("link", { name: "Audit log", exact: true }).click();
+  await expect(page).toHaveURL(/\/admin\/audit/);
+  await expect(page.locator(".shell__badge")).toHaveText("1 awaiting approval");
+});
+
 test("sign-out ends the session and a subsequent protected request bounces to login", async ({
   page,
   context,

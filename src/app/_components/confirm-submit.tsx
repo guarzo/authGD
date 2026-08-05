@@ -96,6 +96,7 @@ export function ConfirmSubmit({
   restName,
   confirmName,
   pendingLabel,
+  describedBy,
 }: {
   className: string;
   /** Classes to use only while armed; defaults to `className` when the rest
@@ -109,6 +110,11 @@ export function ConfirmSubmit({
   /** The armed state's accessible name, e.g. "confirm revoke admin for Zed". */
   confirmName: string;
   pendingLabel?: ReactNode;
+  /** Id of an element stating what the action costs, when that consequence is
+   *  not obvious from the label. A description, not a name: it stays out of
+   *  `restName`/`confirmName`, which have to remain short enough to be spoken
+   *  ahead of every press and have to keep matching the visible label. */
+  describedBy?: string;
 }) {
   const ctx = useContext(ArmContext);
   if (!ctx) {
@@ -131,6 +137,7 @@ export function ConfirmSubmit({
         style={{ minWidth: `${widthCh}ch` }}
         aria-busy={pending}
         aria-label={armed ? confirmName : restName}
+        aria-describedby={describedBy}
         onClick={(e) => {
           if (!armed) {
             // The first click arms rather than fires: never let it reach the

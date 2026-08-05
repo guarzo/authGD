@@ -282,7 +282,12 @@ export default async function AccountPage({
           </dd>
 
           <dt>Discord</dt>
-          <dd>
+          {/* Same `.facts__lead` the tier row uses, and for the same reason:
+              the consequence line below has to be able to wrap onto a second
+              line inside the value column, and a `.facts` grid can't be given a
+              row of its own without a dt to pair it with. A layout-only class,
+              despite the "lead" in its name. */}
+          <dd className="facts__lead">
             {view.discordLinked ? (
               // Its own arm scope, not the manifest's: ConfirmSubmit throws outside
               // one (confirm-submit.tsx:115), and a scope of one is right here —
@@ -297,8 +302,23 @@ export default async function AccountPage({
                       label="unlink"
                       restName="unlink Discord"
                       confirmName="confirm unlink Discord"
+                      describedBy="discord-unlink-cost"
                     />
                   </form>
+                </span>
+                {/* The unlink is not just a disconnected account: the deprovision
+                    it enqueues strips every managed role
+                    (jobs/discord-roles.ts:79), so a member who reads only the
+                    word "unlink" loses their tier role in the guild without
+                    having been told. Carried by the button's aria-describedby
+                    rather than folded into its accessible name — a name is
+                    spoken ahead of every press and has to stay short and match
+                    the visible label, and this sits AFTER the control in reading
+                    order, so a member who tabs straight to it would otherwise
+                    never hear it at all. */}
+                <span id="discord-unlink-cost" className="dim">
+                  Unlinking queues removal of the Discord roles authGD manages for you.
+                  You can link again any time.
                 </span>
               </ConfirmArmScope>
             ) : (
