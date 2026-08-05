@@ -368,12 +368,28 @@ test("an admin can unlink a member's Discord", async ({ page, context }) => {
   await context.addCookies([await sessionCookieFor(db, admin.id)]);
 
   await page.goto("/admin/accounts");
-  await page
-    .getByRole("button", { name: "unlink Discord for Pilot", exact: true })
-    .click();
-  await page
-    .getByRole("button", { name: "confirm unlink Discord for Pilot", exact: true })
-    .click();
+  // The cost of the unlink is carried as a description, not folded into the
+  // accessible name: the name is spoken ahead of every press and has to keep
+  // matching the visible label (WCAG 2.5.3). Asserted at rest AND armed because
+  // ConfirmSubmit swaps the name on arm (confirm-submit.tsx:139) while leaving
+  // aria-describedby alone (:140) — the description has to survive that swap,
+  // and nothing else in the suite would notice if the id link broke.
+  const unlink = page.getByRole("button", {
+    name: "unlink Discord for Pilot",
+    exact: true,
+  });
+  await expect(unlink).toHaveAccessibleDescription(
+    "Unlinking queues removal of the Discord roles authGD manages for this member.",
+  );
+  await unlink.click();
+  const confirm = page.getByRole("button", {
+    name: "confirm unlink Discord for Pilot",
+    exact: true,
+  });
+  await expect(confirm).toHaveAccessibleDescription(
+    "Unlinking queues removal of the Discord roles authGD manages for this member.",
+  );
+  await confirm.click();
 
   await expect(
     page.getByRole("button", { name: "unlink Discord for Pilot", exact: true }),
