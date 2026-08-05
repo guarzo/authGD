@@ -1,6 +1,6 @@
 import { Client } from "pg";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { TEST_URL } from "./helpers/db";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { setupTestDb, TEST_URL } from "./helpers/db";
 import { assertNoSchemaDrift } from "./helpers/global-setup";
 
 vi.mock("drizzle-orm/migrator", async (importOriginal) => {
@@ -21,6 +21,15 @@ const { readMigrationFiles } = await import("drizzle-orm/migrator");
 describe("assertNoSchemaDrift", () => {
   const FOREIGN_HASH = "bogus-foreign-hash-test";
   let client: Client;
+
+  // Every case here reads or writes `drizzle.__drizzle_migrations`, which only
+  // exists once something has migrated. In a full run an alphabetically earlier
+  // file happens to do that first; alone against a freshly created per-worktree
+  // database, nothing has. Migrate explicitly rather than inherit the order.
+  beforeAll(async () => {
+    const { cleanup } = await setupTestDb();
+    await cleanup();
+  });
 
   afterEach(async () => {
     await client
