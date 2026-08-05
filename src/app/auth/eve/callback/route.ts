@@ -2,16 +2,40 @@ import { NextRequest, NextResponse } from "next/server";
 import { getConfig } from "@/config";
 import { getDb } from "@/db";
 import { exchangeEveCode, verifyEveAccessToken } from "@/lib/esi/sso";
-import { accountErrorUrl, loginErrorUrl } from "@/lib/error-redirects";
+import {
+  accountErrorUrl,
+  loginErrorUrl,
+  type AccountErrorCode,
+} from "@/lib/error-redirects";
 import { getRequestAccount } from "@/lib/request-session";
 import { sessionCookieAttrs } from "@/lib/session-cookie";
 import {
   handleEveLogin,
   linkCharacter,
   type EveCallbackCharacter,
+  type MergeBlocker,
 } from "@/services/accounts";
 import { consumeOauthTransaction } from "@/services/oauth-tx";
 import { createSession } from "@/services/session";
+
+/**
+ * A refused merge's reason, as the code whose copy explains it.
+ *
+ * The map lives here and not in error-redirects.ts because that module
+ * deliberately imports nothing (see its header): a service type crossing into
+ * it would make it the first inversion, for a lookup table. Typed as a total
+ * Record, so adding a `MergeBlocker` with no copy to show for it is a
+ * typecheck failure rather than a member seeing an unexplained page.
+ */
+const MERGE_BLOCKER_ERRORS: Record<MergeBlocker, AccountErrorCode> = {
+  admin: "merge_admin",
+  tier_locked: "merge_tier_locked",
+  status: "merge_status",
+  note: "merge_note",
+  characters: "merge_characters",
+  discord: "merge_discord",
+  payouts: "merge_payouts",
+};
 
 export async function GET(req: NextRequest) {
   const cfg = getConfig();
@@ -63,7 +87,12 @@ export async function GET(req: NextRequest) {
       const result = await db.transaction((dbtx) =>
         linkCharacter(dbtx, cfg, sess!.accountId, ch),
       );
-      return to(result.ok ? "/account" : accountErrorUrl("already_linked"));
+      if (result.ok) return to("/account");
+      return to(
+        accountErrorUrl(
+          result.blocker ? MERGE_BLOCKER_ERRORS[result.blocker] : "already_linked",
+        ),
+      );
     }
 
     const { accountId } = await db.transaction((dbtx) => handleEveLogin(dbtx, cfg, ch));

@@ -247,7 +247,27 @@ export async function handleEveLogin(
 }
 
 /**
- * Is this account nothing but the character being moved?
+ * Why this account is more than the character being moved — or null when it is
+ * nothing more, and the merge may proceed.
+ *
+ * The reason is returned rather than a bare boolean because it is the only
+ * thing that makes the refusal actionable. Four of these (`admin`,
+ * `tier_locked`, `status`, `note`) name a field an admin can clear from
+ * /admin/accounts in seconds, and a member who is told which one can go and
+ * ask for exactly that. The remaining three are genuine refusals with no
+ * cheap fix, and say so.
+ *
+ * FIRST MATCH WINS, in declaration order. An account can trip several at once;
+ * reporting one keeps the copy a single sentence, and the member retries after
+ * clearing it, which surfaces the next. The order below is deliberate — the
+ * cheap-to-clear fields come first, so a member is never sent to ask about
+ * payout history when clearing a note would have been enough.
+ */
+export type MergeBlocker =
+  "admin" | "tier_locked" | "status" | "note" | "characters" | "discord" | "payouts";
+
+/**
+ * What makes this account more than the character being moved, if anything.
  *
  * An account created by an accidental SSO login holds exactly one character
  * and no other trace: no admin bit, no Discord link, no payout history of any
@@ -266,36 +286,38 @@ export async function handleEveLogin(
  *
  * Callers must already hold the source account row FOR UPDATE.
  */
-async function isAbsorbable(
+async function mergeBlocker(
   dbx: DbTx,
   acc: typeof account.$inferSelect,
   characterId: number,
-): Promise<boolean> {
-  if (acc.isAdmin || acc.tierLocked) return false;
-  if (acc.status !== "active" || acc.statusNote !== null) return false;
+): Promise<MergeBlocker | null> {
+  if (acc.isAdmin) return "admin";
+  if (acc.tierLocked) return "tier_locked";
+  if (acc.status !== "active") return "status";
+  if (acc.statusNote !== null) return "note";
   const chars = await dbx.select().from(character).where(eq(character.accountId, acc.id));
-  if (chars.length !== 1 || chars[0].id !== characterId) return false;
+  if (chars.length !== 1 || chars[0].id !== characterId) return "characters";
   const [linked] = await dbx
     .select()
     .from(discordLink)
     .where(eq(discordLink.accountId, acc.id));
-  if (linked) return false;
+  if (linked) return "discord";
   const [participant] = await dbx
     .select()
     .from(payoutParticipant)
     .where(eq(payoutParticipant.accountId, acc.id));
-  if (participant) return false;
+  if (participant) return "payouts";
   const [operation] = await dbx
     .select()
     .from(payoutOperation)
     .where(eq(payoutOperation.createdBy, acc.id));
-  if (operation) return false;
+  if (operation) return "payouts";
   const [payment] = await dbx
     .select()
     .from(payoutPayment)
     .where(eq(payoutPayment.actor, acc.id));
-  if (payment) return false;
-  return true;
+  if (payment) return "payouts";
+  return null;
 }
 
 /**
@@ -351,7 +373,9 @@ export async function linkCharacter(
   cfg: Config,
   accountId: string,
   ch: EveCallbackCharacter,
-): Promise<{ ok: true } | { ok: false; error: "already_linked" }> {
+): Promise<
+  { ok: true } | { ok: false; error: "already_linked"; blocker?: MergeBlocker }
+> {
   const existing = await findCharacterForUpdate(dbx, ch.characterId);
   if (existing) {
     if (existing.accountId === accountId) {
@@ -364,15 +388,19 @@ export async function linkCharacter(
       // so this state is reachable ONLY when the same owner authenticated
       // twice — an accidental second login, provably the same person as the
       // caller. Absorb that account if it holds nothing but this character;
-      // anything richer is a real account and still refuses.
+      // anything richer is a real account and still refuses — with the reason,
+      // so the member can be told which field to have an admin clear.
       await lockAccounts(dbx, [existing.accountId, accountId]);
       const [source] = await dbx
         .select()
         .from(account)
         .where(eq(account.id, existing.accountId));
-      if (!source || !(await isAbsorbable(dbx, source, ch.characterId))) {
-        return { ok: false, error: "already_linked" };
-      }
+      // A missing source row is unreachable through the FK on
+      // character.account_id, and names no field anyone could clear: it
+      // refuses with the generic copy rather than inventing a reason.
+      if (!source) return { ok: false, error: "already_linked" };
+      const blocker = await mergeBlocker(dbx, source, ch.characterId);
+      if (blocker) return { ok: false, error: "already_linked", blocker };
       await mergeAccountInto(dbx, existing.accountId, accountId, ch.characterId);
       // Store the credentials this SSO round just produced, audit the re-auth
       // and enqueue the target's sync — all three are reauthCharacter's job.
