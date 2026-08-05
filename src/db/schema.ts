@@ -79,6 +79,21 @@ export const discordLink = pgTable("discord_link", {
     .primaryKey()
     .references(() => account.id),
   discordUserId: text("discord_user_id").notNull().unique(),
+  // Both nullable and both purely cosmetic: the link is identified by
+  // `discordUserId`, and every code path here works with neither set. They
+  // exist so a member's Discord row can say who it is in the words the member
+  // would use, rather than a snowflake nobody recognises.
+  //
+  // Fork operators: this is personal data about your members that the schema
+  // did not hold before. `username` is the stable @handle, globally unique
+  // and how a person is @-mentioned; `displayName` is the guild nickname
+  // falling back to the global display name, so it is whatever they chose to
+  // be called in your server. Neither is a secret — both are visible to
+  // anyone in the same guild — but both land in your database and on the
+  // admin members screen, all of them on one page. Dropping the columns
+  // degrades the UI to a button with no name beside it and nothing else.
+  username: text("username"),
+  displayName: text("display_name"),
   linkedAt: timestamp("linked_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

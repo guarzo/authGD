@@ -397,8 +397,58 @@ test("an admin can unlink a member's Discord", async ({ page, context }) => {
   expect(await db.select().from(discordLink)).toHaveLength(0);
 });
 
-/* --- The approval queue --------------------------------------------------- */
+/**
+ * The Discord column names the account it is about to disconnect. Before this,
+ * a linked row said only `unlink` — the admin could see that a link existed but
+ * not where it pointed, which is exactly the fact you want confirmed before
+ * severing it.
+ *
+ * The null case is the important half. Nothing backfills these columns; they
+ * fill in on each account's next roles sync, so on the deploy that ships this
+ * every row is null and has to keep working. It renders what shipped before:
+ * the control alone, no placeholder standing in for a name.
+ */
+test("the Discord column names the account behind the link, when it knows it", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
+  const named = await seedMember(db, { name: "Alpha Pilot", tier: "member" });
+  const unnamed = await seedMember(db, { name: "Bravo Pilot", tier: "member" });
+  await db.insert(discordLink).values({
+    accountId: named.id,
+    discordUserId: "duid-named",
+    username: "guarzo",
+    // Set, and deliberately not expected below: the display name is the account
+    // page's business. A row here is already identified by its EVE name in the
+    // pinned first column.
+    displayName: "Wardec Wally",
+  });
+  await db.insert(discordLink).values({
+    accountId: unnamed.id,
+    discordUserId: "duid-unnamed",
+  });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.goto("/admin/accounts");
 
+  // `.discord-cell` rather than the whole `<td>`: the cell also carries the
+  // always-hidden consequence sentence the unlink's aria-describedby points at,
+  // which `toHaveText` reads as content.
+  const cellFor = (name: string) => rowFor(page, name).locator(".discord-cell");
+
+  await expect(cellFor("Alpha Pilot")).toContainText("@guarzo");
+  await expect(cellFor("Alpha Pilot")).not.toContainText("Wardec Wally");
+  // No handle known: the control alone, and no placeholder in its place.
+  await expect(cellFor("Bravo Pilot")).toHaveText("unlink");
+  await expect(
+    rowFor(page, "Bravo Pilot").getByRole("button", {
+      name: "unlink Discord for Bravo Pilot",
+      exact: true,
+    }),
+  ).toBeVisible();
+});
+
+/* --- The approval queue --------------------------------------------------- */
 /**
  * `TIERS` and `TIER_FILTERS` in admin/accounts/page.tsx are the whole mechanism
  * behind this section, and neither is reachable from a unit test: both are

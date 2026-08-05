@@ -39,8 +39,8 @@ beforeEach(() =>
 afterAll(() => ctx.cleanup());
 
 // helper: run linkDiscord in a transaction (DbTx required)
-const ld = (accountId: string, discordUserId: string) =>
-  ctx.db.transaction((tx) => linkDiscord(tx, accountId, discordUserId));
+const ld = (accountId: string, discordUserId: string, username?: string) =>
+  ctx.db.transaction((tx) => linkDiscord(tx, accountId, discordUserId, username));
 
 // helper: run unlinkDiscord in a transaction (DbTx required)
 const ud = (actor: string, accountId: string, reason: "self" | "admin" = "self") =>
@@ -74,6 +74,29 @@ describe("linkDiscord", () => {
     const payloads = (await ctx.db.select().from(outbox)).map((b) => b.payload);
     expect(payloads).toContainEqual({ kind: "discord-user", discordUserId: "duid-1" });
     expect(payloads).toContainEqual({ kind: "account", accountId: a.id });
+  });
+
+  it("stores the handle the OAuth exchange already fetched", async () => {
+    const [a] = await ctx.db.insert(account).values({}).returning();
+    await ld(a.id, "duid-1", "guarzo");
+    const [link] = await ctx.db.select().from(discordLink);
+    expect(link.username).toBe("guarzo");
+    // `/users/@me` is not guild-scoped, so there is no nickname to write here.
+    // The roles run that the `{kind:"account"}` enqueue triggers fills it in.
+    expect(link.displayName).toBeNull();
+  });
+
+  // A replacement points the row at a different person. Carrying the old
+  // display name over would label the new link with the previous member's
+  // guild nickname, which is worse than showing no name at all.
+  it("a replacement does not inherit the previous discord user's display name", async () => {
+    const [a] = await ctx.db.insert(account).values({}).returning();
+    await ld(a.id, "duid-1", "guarzo");
+    await ctx.db.update(discordLink).set({ displayName: "Wardec Wally" });
+    await ld(a.id, "duid-2", "someone-else");
+    const [link] = await ctx.db.select().from(discordLink);
+    expect(link.username).toBe("someone-else");
+    expect(link.displayName).toBeNull();
   });
 
   it("concurrent replacements deprovision every intermediate discord user", async () => {

@@ -40,7 +40,7 @@ export async function GET(req: NextRequest) {
     let ok: boolean;
     try {
       const result = await db.transaction((dbtx) =>
-        linkDiscord(dbtx, sess.accountId, user.id),
+        linkDiscord(dbtx, sess.accountId, user.id, user.username),
       );
       ok = result.ok;
     } catch (err) {

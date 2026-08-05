@@ -508,16 +508,40 @@ function AccountRow({
               // this cell read as cluttered — and this column is scanned far
               // more often than it is used (PRODUCT.md principle 3).
               <>
-                <form action={unlinkDiscordAction.bind(null, r.accountId, listSearch)}>
-                  <ConfirmSubmit
-                    className="btn btn--micro"
-                    armedClassName="btn btn--micro btn--danger"
-                    label="unlink"
-                    restName={`unlink Discord for ${identity}`}
-                    confirmName={`confirm unlink Discord for ${identity}`}
-                    describedBy={`discord-unlink-cost-${r.accountId}`}
-                  />
-                </form>
+                {/* Handle only. The account page pairs a display name with the
+                    handle; here the row's identity is already the member's EVE
+                    name, pinned in the first column, so a second soft name for
+                    the same person is noise in a column being scanned for
+                    something else. The @handle is the one thing this screen
+                    cannot already tell an admin — it is what they need to go
+                    find the person in the guild, and what tells them the link
+                    points where they think it does before disconnecting it.
+
+                    One line with the button, not stacked above it: two lines
+                    per linked row against one per unlinked row is the same
+                    asymmetry #115 removed from this cell, and it would set the
+                    row height for the whole table. `.discord-cell` wraps rather
+                    than overflowing, so a long handle at 320px drops the button
+                    to a second line for that row alone.
+
+                    Null until a roles sync has seen the member (and forever for
+                    someone who has left the guild), in which case this renders
+                    exactly what shipped in #115: the button alone. */}
+                <div className="discord-cell">
+                  {r.discordUsername && (
+                    <span className="dim mono">@{r.discordUsername}</span>
+                  )}
+                  <form action={unlinkDiscordAction.bind(null, r.accountId, listSearch)}>
+                    <ConfirmSubmit
+                      className="btn btn--micro"
+                      armedClassName="btn btn--micro btn--danger"
+                      label="unlink"
+                      restName={`unlink Discord for ${identity}`}
+                      confirmName={`confirm unlink Discord for ${identity}`}
+                      describedBy={`discord-unlink-cost-${r.accountId}`}
+                    />
+                  </form>
+                </div>
                 {/* Hidden always, rather than revealed on arm like the account
                     page's `ConfirmCost`. That component reads scope-level arm
                     state, and this scope is the whole tbody — three confirms per

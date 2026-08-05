@@ -310,6 +310,32 @@ export default async function AccountPage({
                     drops its Discord row rather than render an inert "not
                     linked" token, on the grounds that a nearby element states
                     the fact with the action attached. */}
+                {/* ...but a name is not a status token. `linked` restated what
+                    the button already said; this says WHICH Discord account is
+                    on the hook, which is the one thing the row could not
+                    answer before and the only question a member with two
+                    Discord accounts actually has when they see `unlink`.
+
+                    Display name first and in full ink, handle second and
+                    dimmed: the guild nickname is what they are called by the
+                    people they play with, and the @handle is the identifier
+                    that settles it when the nickname is ambiguous. Either may
+                    be missing on its own — a member with no nickname and no
+                    global name has only a handle, and a link made before the
+                    first roles sync has only a handle too — so each is
+                    rendered independently rather than as one string.
+
+                    Both null renders exactly what shipped in #115: the button
+                    alone. That is the reason no backfill has to run before
+                    this is correct. */}
+                {(view.discordDisplayName || view.discordUsername) && (
+                  <span className="discord-id">
+                    {view.discordDisplayName && <span>{view.discordDisplayName}</span>}
+                    {view.discordUsername && (
+                      <span className="dim mono">@{view.discordUsername}</span>
+                    )}
+                  </span>
+                )}
                 <form action={unlinkDiscordAction} className="inline-form">
                   {/* A grade heavier at rest than the character-row unlinks
                       below (`.btn--quiet .btn--danger-quiet`), and

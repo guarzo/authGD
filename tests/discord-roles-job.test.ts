@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { auditLog, outbox, syncRun } from "@/db/schema";
+import { auditLog, discordLink, outbox, syncRun } from "@/db/schema";
 import { runDiscordRolesJob } from "@/jobs/discord-roles";
 import { DiscordApiError, type DiscordClient } from "@/lib/discord/rest";
 import { setupTestDb, truncateAll } from "./helpers/db";
@@ -23,10 +23,18 @@ const validGuildRoles = [
   { id: "bot-role", name: "Bot", position: 9, permissions: MANAGE_ROLES },
 ];
 
-function fakeDiscord(
-  members: Record<string, string[] | null>,
-  guildRoles = validGuildRoles,
-) {
+/** A member entry is either its role ids, or the full payload when a test
+ *  cares about the names the job now lifts off it. */
+type FakeMember =
+  | string[]
+  | null
+  | {
+      roles: string[];
+      nick?: string | null;
+      user?: { username?: string | null; global_name?: string | null } | null;
+    };
+
+function fakeDiscord(members: Record<string, FakeMember>, guildRoles = validGuildRoles) {
   const added: Array<[string, string]> = [];
   const removed: Array<[string, string]> = [];
   const client: DiscordClient = {
@@ -34,8 +42,9 @@ function fakeDiscord(
     getBotUserId: async () => "bot-user",
     getGuildMember: async (userId) => {
       if (userId === "bot-user") return { roles: ["bot-role"] };
-      const roles = members[userId];
-      return roles === null || roles === undefined ? null : { roles };
+      const entry = members[userId];
+      if (entry === null || entry === undefined) return null;
+      return Array.isArray(entry) ? { roles: entry } : entry;
     },
     addMemberRole: async (userId, roleId) => {
       added.push([userId, roleId]);
@@ -58,6 +67,72 @@ describe("runDiscordRolesJob", () => {
     expect(d.removed).toEqual([["u1", "11"]]); // 999 untouched
     const audits = await ctx.db.select().from(auditLog);
     expect(audits.some((a) => a.action === "discord.role_changed")).toBe(true);
+  });
+
+  // The backfill. Links made before these columns existed, and links whose
+  // owner has since renamed, are corrected here rather than by a migration —
+  // `getGuildMember` was already being called for the role diff, so this costs
+  // no extra API call and needs no separate job.
+  it("records the member's handle and guild display name off the role read", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "member", discordUserId: "u1" });
+    await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
+    const d = fakeDiscord({
+      u1: {
+        roles: ["10"],
+        nick: "Wardec Wally",
+        user: { username: "guarzo", global_name: "Guarzo" },
+      },
+    });
+    await runDiscordRolesJob({ db: ctx.db, cfg, discord: d.client });
+    const [link] = await ctx.db.select().from(discordLink);
+    expect(link.username).toBe("guarzo");
+    // nick wins over global_name: it is what this guild calls them.
+    expect(link.displayName).toBe("Wardec Wally");
+  });
+
+  it("falls back to the global name when the member set no guild nickname", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "member", discordUserId: "u1" });
+    await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
+    const d = fakeDiscord({
+      u1: { roles: ["10"], user: { username: "guarzo", global_name: "Guarzo" } },
+    });
+    await runDiscordRolesJob({ db: ctx.db, cfg, discord: d.client });
+    const [link] = await ctx.db.select().from(discordLink);
+    expect(link.displayName).toBe("Guarzo");
+  });
+
+  it("leaves both names null when Discord sends neither, rather than writing a placeholder", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "member", discordUserId: "u1" });
+    await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
+    const d = fakeDiscord({ u1: ["10"] });
+    await runDiscordRolesJob({ db: ctx.db, cfg, discord: d.client });
+    const [link] = await ctx.db.select().from(discordLink);
+    expect(link.username).toBeNull();
+    expect(link.displayName).toBeNull();
+  });
+
+  // Unguarded, unlike every role write in this job. Same line `wanderer.ts`
+  // draws for its ACL observation: dry-run suppresses what we do TO the
+  // outside world, not what the outside world told us. Guarding it would leave
+  // the names permanently stale on an instance that only ever runs dry.
+  it("records the names in dry-run, where the role changes are suppressed", async () => {
+    const dryCfg = testConfig({ SYNC_MODE: "dry-run" });
+    const acc = await seedAccount(ctx.db, { tier: "member", discordUserId: "u1" });
+    await seedCharacter(ctx.db, dryCfg, { id: 1, accountId: acc.id, main: true });
+    const d = fakeDiscord({
+      u1: { roles: ["11"], nick: "Wardec Wally", user: { username: "guarzo" } },
+    });
+    const result = await runDiscordRolesJob({
+      db: ctx.db,
+      cfg: dryCfg,
+      discord: d.client,
+    });
+    expect(result.status).toBe("ok");
+    // The run really was suppressed, or the assertion below proves nothing.
+    expect(result.counts).toHaveProperty("wouldChangeRoles", 1);
+    const [link] = await ctx.db.select().from(discordLink);
+    expect(link.username).toBe("guarzo");
+    expect(link.displayName).toBe("Wardec Wally");
   });
 
   it("config validation failure is permanent: failed run, webhook, NO retry", async () => {

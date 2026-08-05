@@ -94,6 +94,69 @@ describe("createDiscordClient", () => {
     expect((err as DiscordApiError).transient).toBe(false);
   });
 
+  it("carries the member's names through, and survives a payload without them", async () => {
+    server.use(
+      http.get(`${API}/guilds/9000/members/u1`, () =>
+        HttpResponse.json({
+          roles: ["10"],
+          nick: "Wardec Wally",
+          user: { username: "guarzo", global_name: "Guarzo" },
+        }),
+      ),
+    );
+    expect(await createDiscordClient(cfg).getGuildMember("u1")).toMatchObject({
+      roles: ["10"],
+      nick: "Wardec Wally",
+      user: { username: "guarzo", global_name: "Guarzo" },
+    });
+
+    // A member who set no nickname: `nick` is absent, not null-valued.
+    server.use(
+      http.get(`${API}/guilds/9000/members/u1`, () =>
+        HttpResponse.json({ roles: ["10"], user: { username: "guarzo" } }),
+      ),
+    );
+    const bare = await createDiscordClient(cfg).getGuildMember("u1");
+    expect(bare?.roles).toEqual(["10"]);
+    expect(bare?.nick ?? null).toBeNull();
+  });
+
+  // The names are decoration; the roles are the job. `parseBody` classifies a
+  // schema failure as PERMANENT, so a strict name field would turn a shape
+  // change in Discord's member payload into every member's role sync failing
+  // to protect a caption. Asserted here because the laxness is deliberate and
+  // reads like an oversight.
+  it("a malformed name field degrades to no name rather than failing the roles read", async () => {
+    server.use(
+      http.get(`${API}/guilds/9000/members/u1`, () =>
+        HttpResponse.json({
+          roles: ["10", "11"],
+          nick: { localized: "nope" },
+          user: "not-an-object",
+        }),
+      ),
+    );
+    const member = await createDiscordClient(cfg).getGuildMember("u1");
+    expect(member?.roles).toEqual(["10", "11"]);
+    expect(member?.nick ?? null).toBeNull();
+    expect(member?.user ?? null).toBeNull();
+  });
+
+  // ...but only the names are lax. A body that cannot yield roles is still a
+  // permanent failure, which is what stops the rule above from being a hole.
+  it("still fails permanently when the roles themselves are malformed", async () => {
+    server.use(
+      http.get(`${API}/guilds/9000/members/u1`, () =>
+        HttpResponse.json({ nick: "Wardec Wally" }),
+      ),
+    );
+    const err = await createDiscordClient(cfg)
+      .getGuildMember("u1")
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(DiscordApiError);
+    expect((err as DiscordApiError).transient).toBe(false);
+  });
+
   it("classifies 429 as transient", async () => {
     server.use(
       http.get(`${API}/guilds/9000/members/u1`, () =>

@@ -101,6 +101,11 @@ export interface AccountView {
   isAdmin: boolean;
   mainCharacterId: number | null;
   discordLinked: boolean;
+  /** @handle and guild display name, both null until a roles sync has seen the
+   *  member — and permanently null for anyone who has left the guild. Every
+   *  reader renders the link without them. */
+  discordUsername: string | null;
+  discordDisplayName: string | null;
   characters: Array<{
     id: number;
     name: string;
@@ -174,6 +179,8 @@ export async function getAccountView(
     isAdmin: acc.isAdmin,
     mainCharacterId: acc.mainCharacterId,
     discordLinked: links.length > 0,
+    discordUsername: links[0]?.username ?? null,
+    discordDisplayName: links[0]?.displayName ?? null,
     characters: chars.map((c) => ({
       id: c.id,
       name: c.name,
@@ -219,6 +226,7 @@ export interface AdminAccountRow {
   lastLoginAt: Date | null;
   mainName: string | null;
   discordLinked: boolean;
+  discordUsername: string | null;
   characters: AdminCharacterRow[];
   tokenSummary: { total: number; healthy: number; needsReauth: number; dead: number };
   mapCount: number;
@@ -258,7 +266,7 @@ export async function getAdminAccountsList(
     list.push(c);
     charsByAccount.set(c.accountId, list);
   }
-  const linked = new Set(links.map((l) => l.accountId));
+  const linked = new Map(links.map((l) => [l.accountId, l]));
   const syncByChar = new Map(syncStates.map((s) => [s.characterId, s]));
   const obsByChar = new Map(aclObs.map((o) => [o.characterId, o]));
   const nameById = new Map(chars.map((c) => [c.id, c.name]));
@@ -309,6 +317,11 @@ export async function getAdminAccountsList(
       lastLoginAt: acc.lastLoginAt,
       mainName: mainNameOf.get(acc.id) ?? null,
       discordLinked: linked.has(acc.id),
+      // Handle only. The guild display name is the account page's business —
+      // this table already carries the member's EVE identity in the pinned
+      // first column, so a second, softer name for the same person is noise in
+      // a row scanned for something else.
+      discordUsername: linked.get(acc.id)?.username ?? null,
       characters,
       tokenSummary: {
         total: characters.length,
