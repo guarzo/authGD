@@ -27,7 +27,10 @@ const mono = IBM_Plex_Mono({
 // has no config env present.
 export const dynamic = "force-dynamic";
 
-export async function generateMetadata(): Promise<Metadata> {
+// Synchronous: this reads config, which is a plain in-process lookup. Next
+// accepts either form, and an `async` with nothing to await trips
+// @typescript-eslint/require-await.
+export function generateMetadata(): Metadata {
   const { brand } = getConfig();
   return {
     title: {
