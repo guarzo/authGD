@@ -210,20 +210,37 @@ export function queuedStamp(at: string | undefined): string | null {
  * page nothing — the anchor's `?queued=`-dropping behaviour still matters, but
  * only for the canonical URL, which a reload of *this* URL is not.
  */
-export function queuedNotice(queued: string | undefined, at?: string): string {
+export function queuedNotice(
+  queued: string | undefined,
+  at?: string,
+  // Defaults to fresh so every existing caller and test keeps the promise
+  // the copy always made. The worker line above the strip is the one thing
+  // on the page that knows whether that promise is still true — a queue
+  // enqueued behind a worker that has not run in 4h will not be picked up
+  // "within a few seconds", and the notice repeating that unconditionally is
+  // exactly the reassurance PRODUCT.md's "state before action" rules out.
+  workerFresh = true,
+): string {
   const stamp = queuedStamp(at);
   const when = stamp === null ? "" : ` at ${stamp}`;
+  // Plurality is the fan-out's alone: "all" queues four distinct jobs, so the
+  // freshness clause it shares with the three singular callers below still
+  // needs to say "them" rather than "it" for that one caller.
+  const pickup = (plural: boolean): string =>
+    workerFresh
+      ? `The worker picks ${plural ? "them" : "it"} up within a few seconds`
+      : "The worker is not running right now, so this waits until it is";
   if (queued === "all") {
     // The four job keys the fan-out actually enqueues, spelled the way the
     // strip above spells them, so the nouns are findable in the column the
     // admin is looking at rather than translated into a second vocabulary.
-    return `membership, contacts, wanderer and discord-roles queued for every account${when}. The worker picks them up within a few seconds; reload this page to see the runs land.`;
+    return `membership, contacts, wanderer and discord-roles queued for every account${when}. ${pickup(true)}; reload this page to see the runs land.`;
   }
   if (queued === "recheck") {
-    return `Affiliation recheck queued${when}. The worker picks it up within a few seconds; reload this page to see the run land.`;
+    return `Affiliation recheck queued${when}. ${pickup(false)}; reload this page to see the run land.`;
   }
   if (isJobType(queued)) {
-    return `${queued} queued${when}. The worker picks it up within a few seconds; reload this page to see the run land.`;
+    return `${queued} queued${when}. ${pickup(false)}; reload this page to see the run land.`;
   }
   return "";
 }

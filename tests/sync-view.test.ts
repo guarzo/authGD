@@ -235,6 +235,38 @@ describe("queuedNotice", () => {
       expect(queuedNotice(q), q).toMatch(/worker picks/);
     }
   });
+
+  it("says 'them' for the four-job fan-out and 'it' for every single-job case", () => {
+    // A regex loose enough to match either pronoun is how the wrong one slips
+    // through: "all" names four jobs and must read "picks them up"; every
+    // other accepted value names one and must read "picks it up".
+    expect(queuedNotice("all")).toMatch(/worker picks them up/);
+    expect(queuedNotice("all")).not.toMatch(/worker picks it up/);
+    for (const q of ["recheck", ...Object.keys(JOB_CRON)]) {
+      expect(queuedNotice(q), q).toMatch(/worker picks it up/);
+      expect(queuedNotice(q), q).not.toMatch(/worker picks them up/);
+    }
+  });
+
+  /**
+   * The "within a few seconds" promise is only true while the worker is
+   * actually running. A dead worker is exactly the state `worker.fresh`
+   * reports, and the notice has to stop making a promise the worker line
+   * above it is simultaneously contradicting.
+   */
+  it("drops the pickup promise when the worker is not fresh", () => {
+    for (const q of ["all", "recheck", ...Object.keys(JOB_CRON)]) {
+      const stale = queuedNotice(q, undefined, false);
+      expect(stale, q).toMatch(/queued/);
+      expect(stale, q).not.toMatch(/worker picks it up within a few seconds/);
+      expect(stale, q).not.toMatch(/worker picks them up within a few seconds/);
+      expect(stale, q).not.toMatch(/use Refresh/);
+    }
+  });
+
+  it("defaults to fresh, unaffected by the new parameter", () => {
+    expect(queuedNotice("wanderer", undefined, true)).toBe(queuedNotice("wanderer"));
+  });
 });
 
 describe("evidenceSince", () => {

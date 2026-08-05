@@ -124,15 +124,13 @@ test("an admin de-roled after the page loaded gets the notice, not the error bou
   await page.goto("/admin/sync");
   await expect(
     page.getByRole("button", {
-      name: "Sync membership, contacts, wanderer, discord-roles",
+      name: "Sync now",
     }),
   ).toBeVisible();
 
   await db.update(account).set({ isAdmin: false }).where(eq(account.id, admin.id));
 
-  await page
-    .getByRole("button", { name: "Sync membership, contacts, wanderer, discord-roles" })
-    .click();
+  await page.getByRole("button", { name: "Sync now" }).click();
   await expect(page).toHaveURL(/\/account\?error=not_admin/);
   // Scoped rather than a bare `getByRole("alert")`: Next's
   // `__next-route-announcer__` is also `role="alert"`, so a bare role query

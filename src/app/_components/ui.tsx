@@ -155,8 +155,16 @@ export function SiteHeader({
               form/POST rather than a link — see auth/signout/route.ts for why
               a GET here would be CSRF-triggerable. Quiet grade, reused rather
               than invented: it has to sit among the nav's own text links
-              without out-shouting them or the page's one primary action. */}
-          <form action="/auth/signout" method="post" className="inline-form">
+              without out-shouting them or the page's one primary action. The
+              `shell__signout` hairline is what actually tells it apart from
+              those links — same size, same case, same colour as the four
+              destinations beside it, so nothing but a rule said "this one
+              ends the session instead of loading a page." */}
+          <form
+            action="/auth/signout"
+            method="post"
+            className="inline-form shell__signout"
+          >
             <button type="submit" className="btn btn--quiet btn--micro">
               sign out
             </button>
@@ -198,7 +206,7 @@ export type Tone = "ok" | "warn" | "bad" | "off" | "neutral";
  *
  * `tone` and `children` stay separate props rather than one bound
  * `{tone, label}` pair. A bound pair was considered — it's what would make
- * `<Status tone="ok">dead</Status>` a type error — but the 18 call sites
+ * `<Status tone="ok">dead</Status>` a type error — but the 56 call sites
  * don't share a vocabulary: "ok" tone alone backs "ok", "valid", "linked",
  * "on" and a computed "3/5 ok" across four unrelated domains (token health,
  * map presence, Discord link, cryo), and two sites pass a tone computed from

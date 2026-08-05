@@ -117,6 +117,48 @@ test("the strip answers per job, and only the unhealthy one is open", async ({
 });
 
 /**
+ * The fact the primary button's own label used to spell out ("Sync
+ * membership, contacts, wanderer, discord-roles") and now doesn't, on the
+ * strength of the strip carrying it instead — asserted on the accessibility
+ * tree, not just on the page's visible text, since a group label painted on
+ * with `aria-hidden` would look identical here to a sighted reviewer while
+ * losing the fact for anyone using a screen reader. One `role="list"` per
+ * group, each one's accessible name its own visible heading, and each job
+ * still reachable inside it.
+ */
+test("the strip's three groups are three named lists, not one flat one with the labels painted over", async ({
+  page,
+  context,
+}) => {
+  await asAdmin(context);
+  await seedRuns();
+  await page.goto("/admin/sync");
+
+  // sweep: membership, contacts, wanderer, discord-roles.
+  const sweep = page.getByRole("list", { name: "Sweep" });
+  await expect(sweep).toBeVisible();
+  await expect(sweep.getByRole("listitem")).toHaveCount(4);
+
+  // on-demand: membership-recheck alone.
+  const onDemand = page.getByRole("list", { name: "On-demand" });
+  await expect(onDemand.getByRole("listitem")).toHaveCount(1);
+
+  // housekeeping: token-health, purge.
+  const housekeeping = page.getByRole("list", { name: "Housekeeping" });
+  await expect(housekeeping.getByRole("listitem")).toHaveCount(2);
+
+  // Every job is reachable from inside its own group's list, not just from
+  // the page as a whole.
+  await expect(sweep.locator(".strip__job", { hasText: "membership" })).toHaveCount(1);
+  await expect(housekeeping.locator(".strip__job", { hasText: "purge" })).toHaveCount(1);
+
+  // The visible label itself renders as ordinary text — not aria-hidden —
+  // since it is what names the list an assistive technology user reaches.
+  const sweepHeading = page.locator(".strip__group", { hasText: "Sweep" });
+  await expect(sweepHeading).not.toHaveAttribute("aria-hidden", "true");
+});
+
+/**
  * A job JOB_CRON schedules but that has no rows at all. Before this it was an
  * absent row, and an absent row is the hardest thing on a page for an eye to
  * catch.
@@ -408,9 +450,7 @@ test("the fan-out reports back, and Refresh clears the flag", async ({
   // update to a registered region rather than an inserted one.
   await expect(page.getByRole("status")).toHaveCount(1);
 
-  await page
-    .getByRole("button", { name: "Sync membership, contacts, wanderer, discord-roles" })
-    .click();
+  await page.getByRole("button", { name: "Sync now" }).click();
   const notice = page.getByRole("status");
   await expect(notice).toContainText(
     "membership, contacts, wanderer and discord-roles queued for every account",
@@ -526,4 +566,112 @@ test("the runs table gives up its width floor and its ISO stamp at 320px", async
   await expect(started.locator(".only-wide")).toHaveText(
     stamp(seeded.wanderer.startedAt),
   );
+});
+
+/* --- Queued ---------------------------------------------------------------- */
+
+/**
+ * An undispatched outbox row that fans out to a job is a fact about the job,
+ * not about the health token that already sits on that row — `queued` is not
+ * a `RowHealth` member (see run-health.ts), so the row must still read its own
+ * status (here: healthy, and closed) while separately marking that something
+ * is coming. Also proves the marker never opens a drawer on its own — the same
+ * "visible, not actionable" rule `overdue` already gets.
+ */
+test("a job with work queued for it gets a marker, and it does not open the drawer", async ({
+  page,
+  context,
+}) => {
+  await asAdmin(context);
+  await seedRuns();
+  // Targets exactly one job type — see jobsFor's "job" arm.
+  await db.insert(outbox).values({ payload: { kind: "job", jobType: "contacts" } });
+  await page.goto("/admin/sync");
+
+  const contacts = summaryFor(page, "contacts");
+  await expect(contacts.locator(".strip__queued")).toHaveCount(1);
+  await expect(contacts.locator(".visually-hidden", { hasText: "queued" })).toHaveCount(
+    1,
+  );
+  await expect(contacts).toHaveAttribute("aria-expanded", "false");
+
+  // A job with nothing queued for it carries no marker at all.
+  const membership = summaryFor(page, "membership");
+  await expect(membership.locator(".strip__queued")).toHaveCount(0);
+});
+
+/**
+ * A member-triggered fan-out (an account merge, a Discord link) reaches the
+ * same jobs the same way an admin's own "Sync now" does, and counts as
+ * queued identically — the marker names the job, never the requester.
+ */
+test("an account-kind payload queues its jobs the same as an admin fan-out", async ({
+  page,
+  context,
+}) => {
+  await asAdmin(context);
+  await seedRuns();
+  await db.insert(outbox).values({
+    payload: { kind: "account", accountId: "11111111-1111-1111-1111-111111111111" },
+  });
+  await page.goto("/admin/sync");
+
+  // account fans out to membership, contacts, wanderer and discord-roles.
+  for (const job of ["membership", "contacts", "wanderer", "discord-roles"]) {
+    await expect(summaryFor(page, job).locator(".strip__queued")).toHaveCount(1);
+  }
+  await expect(summaryFor(page, "purge").locator(".strip__queued")).toHaveCount(0);
+});
+
+/* --- Run collapsing --------------------------------------------------------- */
+
+/**
+ * Four consecutive runs sharing one outcome collapse to a single row that
+ * still carries how many runs it stands for — as cell text, not as a count a
+ * screen reader has to infer from a shape — and the range they span.
+ * `collapseRuns` never folds a still-running run into a finished one's row,
+ * so the newest, in-flight run stays its own row above the group. Four, not
+ * five: `getSyncStatus` windows each job to its newest 5 runs, and a fifth
+ * finished run here would silently fall outside that window rather than
+ * testing the collapse itself.
+ */
+test("consecutive identical runs collapse to one row; an in-flight run never joins one", async ({
+  page,
+  context,
+}) => {
+  await asAdmin(context);
+  const finished = Array.from({ length: 4 }, (_, i) => ({
+    jobType: "purge",
+    startedAt: ago((10 - i) * MIN),
+    finishedAt: ago((10 - i) * MIN - 500),
+    status: "ok" as const,
+    counts: { sessions: 0, oauthTransactions: 0, outbox: 0 },
+  }));
+  await db.insert(syncRun).values([
+    ...finished,
+    // Newest row: still running, identical shape aside from finishedAt/status
+    // — the one difference `sameOutcome` exists to catch.
+    {
+      jobType: "purge",
+      startedAt: ago(30_000),
+      finishedAt: null,
+      status: null,
+      counts: null,
+    },
+  ]);
+  await page.goto("/admin/sync");
+
+  const purge = page.locator(".strip__job", { hasText: "purge" });
+  await purge.locator("> .strip__disc > summary").click();
+  const rows = purge.locator("tbody tr");
+  // The in-flight run plus one collapsed row for the four finished runs.
+  await expect(rows).toHaveCount(2);
+
+  await expect(rows.nth(0)).toContainText("still running");
+
+  const group = rows.nth(1);
+  await expect(group).toContainText("4 runs");
+  // The count is not the only thing that says "several": the row also states
+  // the span of time it covers, readable straight from the cell.
+  await expect(group.locator("td").first().locator(".only-wide")).toContainText("–");
 });
