@@ -302,6 +302,9 @@ describe("queuedMarkerText", () => {
   it("stays a bare marker under the notable threshold, matching a healthy dispatcher's ~2s poll", () => {
     expect(queuedMarkerText(at(-1000), NOON)).toBe(", queued");
     expect(queuedMarkerText(at(-119_000), NOON)).toBe(", queued");
+    // The boundary itself is inclusive of the age-bearing branch: exactly
+    // QUEUED_AGE_NOTABLE_MS is no longer the routine enqueue-to-poll gap.
+    expect(queuedMarkerText(at(-2 * MIN), NOON)).toBe(", queued 2m ago");
   });
 
   it("states the age past the notable threshold", () => {

@@ -295,4 +295,28 @@ describe("collapseRuns", () => {
       expect.objectContaining({ kind: "group", durationMs: { min: 700, max: 700 } }),
     ]);
   });
+
+  it("ignores a member whose finishedAt precedes its startedAt", () => {
+    // A clock adjustment between the two writes can invert the pair. Counting
+    // it would report a negative minimum for a group that stands in for
+    // several runs that did happen — the single-run path already refuses this
+    // via formatDuration's `ms < 0` guard.
+    const runs = [
+      run(2, { startedAt: t(5000), finishedAt: t(4000) }),
+      run(1, { startedAt: t(0), finishedAt: t(700) }),
+    ];
+    expect(collapseRuns(runs)).toEqual([
+      expect.objectContaining({ kind: "group", durationMs: { min: 700, max: 700 } }),
+    ]);
+  });
+
+  it("leaves the span null when every member's pair is invalid", () => {
+    const runs = [
+      run(2, { startedAt: t(5000), finishedAt: t(4000) }),
+      run(1, { startedAt: new Date(NaN) }),
+    ];
+    expect(collapseRuns(runs)).toEqual([
+      expect.objectContaining({ kind: "group", durationMs: null }),
+    ]);
+  });
 });

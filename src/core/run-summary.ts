@@ -261,7 +261,14 @@ function toGroup<T extends CollapsibleRun>(runs: T[]): CollapsedRun<T> {
       (r): r is T & { startedAt: Date; finishedAt: Date } =>
         r.startedAt !== null && r.finishedAt !== null,
     )
-    .map((r) => r.finishedAt.getTime() - r.startedAt.getTime());
+    .map((r) => r.finishedAt.getTime() - r.startedAt.getTime())
+    // The same validation `formatDuration` applies to a single run, for the
+    // same reasons: an Invalid Date subtracts to NaN, and a clock adjustment
+    // between the two writes can land `finishedAt` before `startedAt`. Either
+    // would let Math.min/max below report a span the group cannot have taken —
+    // and unlike the single-run path, one bad member would poison a row that
+    // stands in for several good ones.
+    .filter((ms) => Number.isFinite(ms) && ms >= 0);
   return {
     kind: "group",
     runs,
