@@ -11,6 +11,7 @@ import {
   collapseRuns,
   countColumns,
   formatDuration,
+  formatDurationMs,
   humanizeKey,
   isNoChange,
 } from "@/core/run-summary";
@@ -26,6 +27,8 @@ import {
   HEALTH_TONE,
   needsAttention,
   nextRunFor,
+  queuedMarkerStuck,
+  queuedMarkerText,
   queuedNotice,
   tone,
 } from "./view";
@@ -116,7 +119,7 @@ export default async function AdminSyncPage({
       : worker.fresh
         ? `worker · last run ${workerAge} ago`
         : `worker · no run in ${workerAge}`;
-  const notice = queuedNotice(queued, at, worker.fresh);
+  const notice = queuedNotice(queued, at, workerAge);
   // How far back this page can see the worker doing anything at all. Only this
   // lets a never-run row escalate: see `evidenceSince` and `rowHealth`.
   const seenSince = evidenceSince(worker.fresh, groups);
@@ -290,15 +293,43 @@ export default async function AdminSyncPage({
                                 // account merge or Discord link fans out to the
                                 // same jobs and reads identically here — this
                                 // says work targets the job, not who asked for
-                                // it. Also honest about how long it stays true:
-                                // the dispatcher polls every ~2s, so this is only
-                                // up for the couple of seconds before an
-                                // in-flight `sync_run` row — and the `inflight`
-                                // health above, a `RowHealth` member this
-                                // deliberately is not — takes over the signal.
+                                // it.
+                                //
+                                // Below `QUEUED_AGE_NOTABLE_MS` this is only up
+                                // for the couple of seconds before an in-flight
+                                // `sync_run` row — and the `inflight` health
+                                // above, a `RowHealth` member this deliberately
+                                // is not — takes over the signal, so the visible
+                                // shape stays a bare ring and the accessible
+                                // word stays a bare ", queued". Past it the
+                                // dispatcher (`startDispatcher`, ~2s poll) is
+                                // running behind, and past `QUEUED_AGE_STUCK_MS`
+                                // it is wedged — `queuedMarkerText` states the
+                                // age rather than a verdict, and
+                                // `queuedMarkerStuck` is the one place that
+                                // escalation is allowed to change the ring's own
+                                // shape, since the fixed-width track has no room
+                                // for a second visible word.
+                                //
+                                // Gated on `queued` alone, never on
+                                // `queuedSince`: the age is a detail the two
+                                // helpers below each degrade on their own, and
+                                // hiding the whole marker over a missing one
+                                // would make a job with work waiting read as
+                                // idle — the one thing this ring exists to
+                                // prevent.
                                 <>
-                                  <span className="strip__queued" aria-hidden="true" />
-                                  <span className="visually-hidden">, queued</span>
+                                  <span
+                                    className={
+                                      queuedMarkerStuck(g.queuedSince, renderedAt)
+                                        ? "strip__queued strip__queued--stuck"
+                                        : "strip__queued"
+                                    }
+                                    aria-hidden="true"
+                                  />
+                                  <span className="visually-hidden">
+                                    {queuedMarkerText(g.queuedSince, renderedAt)}
+                                  </span>
                                 </>
                               )}
                             </span>
@@ -357,28 +388,46 @@ export default async function AdminSyncPage({
                                   if (entry.kind === "group") {
                                     const first = entry.runs[0];
                                     const last = entry.runs[entry.runs.length - 1];
+                                    // `to` is never null for a group — every
+                                    // member has finished, see `sameOutcome` —
+                                    // so only `from` needs the null guard here.
                                     const sameStamp =
-                                      entry.from &&
-                                      entry.to &&
+                                      entry.from !== null &&
                                       entry.from.getTime() === entry.to.getTime();
                                     return (
                                       <tr
                                         key={`group-${first.id}-${last.id}`}
                                         className="log--group"
                                       >
-                                        {/* "N runs" is table-cell text, read the same
-                                    way any other cell is — not a badge whose
-                                    count needs an aria-label to be more than a
-                                    shape. The range beside it in Started is the
-                                    other half of "how many runs are behind it":
-                                    a count alone says five identical outcomes
-                                    happened, not over what span. */}
+                                        {/* "N runs" moved here from Took, below:
+                                    the header above this cell says "Started",
+                                    not "Took", and a screen reader in
+                                    table-navigation mode used to announce the
+                                    count under the wrong column's promise. It
+                                    is still plain cell text, read the same way
+                                    any other cell is — not a badge whose count
+                                    needs an aria-label to be more than a shape
+                                    — and the range beside it is the other half
+                                    of "how many runs are behind it": a count
+                                    alone says five identical outcomes
+                                    happened, not over what span.
+
+                                    That range is a SPAN, not a claim of
+                                    continuity: `collapseRuns` only folds
+                                    CONSECUTIVE runs it was given, so a
+                                    multi-hour gap between two of them (a
+                                    missed schedule tick, say) reads
+                                    identically to five runs an hour apart.
+                                    Accepted — the alternative is restating
+                                    every run's own instant, which is the row
+                                    this collapse exists to avoid re-adding. */}
                                         <td className="mono nowrap">
                                           <span className="only-wide">
                                             {fmt(entry.from)}
-                                            {!sameStamp && entry.to
-                                              ? ` – ${fmt(entry.to)}`
-                                              : ""}
+                                            {!sameStamp ? ` – ${fmt(entry.to)}` : ""}
+                                          </span>
+                                          <span className="strip__group-count">
+                                            {entry.count} runs
                                           </span>
                                           <span className="only-narrow">
                                             <RelativeTime
@@ -394,17 +443,73 @@ export default async function AdminSyncPage({
                                                 now,
                                               )}
                                             />
+                                            {/* Both ends: this used to say only
+                                        `started {from} UTC`, so below 40rem —
+                                        where `.only-wide` beside it is
+                                        `display: none` and out of the
+                                        accessibility tree — the group's END
+                                        was unreachable to a screen reader
+                                        entirely. Same "started X UTC" phrasing
+                                        convention as the single-run branch
+                                        below, said twice.
+
+                                        The count is deliberately NOT restated
+                                        here: `.strip__group-count` above is
+                                        unconditional, so at this width it is
+                                        the one thing in the cell still in the
+                                        tree beside this, and naming the count
+                                        again would announce it twice. */}
                                             <span className="visually-hidden">
-                                              {`started ${fmt(entry.from)} UTC`}
+                                              {`started ${fmt(entry.from)} UTC, ended ${fmt(entry.to)} UTC`}
                                             </span>
                                           </span>
                                         </td>
                                         <td className="mono nowrap num">
-                                          {entry.count} runs
+                                          {/* The group's DURATION SPAN, not its
+                                      count: `sameOutcome` deliberately never
+                                      compares duration (durations are
+                                      near-never equal, so nothing would ever
+                                      collapse if it did), so a group can hide
+                                      an outlier this wide — five hourly runs
+                                      all OK with identical counts, one of
+                                      which took 47 minutes because ESI was
+                                      degraded, used to collapse to a row that
+                                      said nothing about the 47 minutes. This
+                                      is the one column whose header already
+                                      promises it. `durationMs` is null only
+                                      when no run in the group has a
+                                      `startedAt` — every member has a
+                                      `finishedAt` (see above), so that is a
+                                      missing start, not a run still in flight,
+                                      and gets the "not recorded" treatment
+                                      rather than the single-run branch's
+                                      "still running" below. */}
+                                          {entry.durationMs === null ? (
+                                            <span className="dim">
+                                              <Absent glyph="—">not recorded</Absent>
+                                            </span>
+                                          ) : entry.durationMs.min ===
+                                            entry.durationMs.max ? (
+                                            formatDurationMs(entry.durationMs.min)
+                                          ) : (
+                                            `${formatDurationMs(entry.durationMs.min)} – ${formatDurationMs(entry.durationMs.max)}`
+                                          )}
                                         </td>
                                         <td>
                                           <Status tone={tone(entry.status)}>
-                                            {entry.status ?? "running"}
+                                            {/* No `?? "running"` here: unlike the
+                                        single-run branch below, where null
+                                        really is a run in flight,
+                                        `sameOutcome` requires
+                                        `finishedAt !== null` on every run in
+                                        the group, and `finishSyncRun`
+                                        (src/services/sync-run.ts) sets
+                                        `finishedAt` and `status` in the same
+                                        UPDATE — so a group's `status` can
+                                        never be null. Keeping the fallback
+                                        here would claim a finished group is
+                                        running. */}
+                                            {entry.status}
                                           </Status>
                                           {/* `sameOutcome` requires every run in
                                       the group to agree on `errorSummary` too,

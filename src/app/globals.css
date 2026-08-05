@@ -2523,6 +2523,19 @@ h3.rule-head__label {
   flex-shrink: 0;
 }
 
+/* Past `QUEUED_AGE_STUCK_MS` (view.ts) the dispatcher is not merely behind
+   its own ~2s poll, it is wedged — `startDispatcher` swallows a dispatch
+   failure into `console.error` and retries forever, so nothing else on this
+   page will ever say so on its own. Filled and in the warn colour rather
+   than a second visible word: the health track is a fixed 7.5rem with no
+   room to spare, so the escalation has to be a shape change on the mark
+   that is already there, the same move `.st--off::before` makes in reverse
+   (outline for quiet, fill for something worth a look). */
+.strip__queued--stuck {
+  background: var(--signal-warn);
+  border-color: var(--signal-warn);
+}
+
 .strip__head > .strip__h-last,
 .strip__head > .strip__h-cadence,
 .strip__disc > summary > .ago,
@@ -3298,6 +3311,16 @@ h3.rule-head__label {
    sitting above it. */
 .log--group td {
   font-style: italic;
+}
+
+/* "N runs" beside the Started range, on its own line rather than run into
+   it: `14:00 – 18:00` and `5 runs` are two different facts (a span and a
+   count) and reading them as one run-on sentence is harder than the same two
+   facts stacked. Unconditional — unlike `.only-wide`/`.only-narrow` beside
+   it, which trade places at the 40rem breakpoint, the count matters at every
+   width and stays in the accessibility tree at both. */
+.strip__group-count {
+  display: block;
 }
 
 /* The crew table inside the accounts drawer: four short columns with the

@@ -9,6 +9,8 @@ import {
   HEALTH_TONE,
   needsAttention,
   nextRunFor,
+  queuedMarkerStuck,
+  queuedMarkerText,
   queuedNotice,
   queuedStamp,
   tone,
@@ -155,13 +157,20 @@ describe("queuedStamp", () => {
 });
 
 describe("queuedNotice", () => {
+  // Most of these tests don't care about the worker's age, only about the
+  // rest of the notice — an arbitrary, non-null age keeps them from having to
+  // reason about the null branch (`queuedMarkerText` below covers that case).
+  const AGE = "5m";
+
   it("names the job for a per-row re-run", () => {
-    expect(queuedNotice("wanderer")).toMatch(/^wanderer queued\./);
+    expect(queuedNotice("wanderer", undefined, AGE)).toMatch(/^wanderer queued\./);
   });
 
   it("has copy for the two fan-out buttons", () => {
-    expect(queuedNotice("all")).toMatch(/every account/);
-    expect(queuedNotice("recheck")).toMatch(/^Affiliation recheck queued\./);
+    expect(queuedNotice("all", undefined, AGE)).toMatch(/every account/);
+    expect(queuedNotice("recheck", undefined, AGE)).toMatch(
+      /^Affiliation recheck queued\./,
+    );
   });
 
   /**
@@ -171,7 +180,7 @@ describe("queuedNotice", () => {
    * to diff four nouns against seven rows to learn what was excluded.
    */
   it("names the fan-out's jobs the way the strip names them", () => {
-    const all = queuedNotice("all");
+    const all = queuedNotice("all", undefined, AGE);
     for (const job of ["membership", "contacts", "wanderer", "discord-roles"]) {
       expect(all, job).toContain(job);
     }
@@ -185,8 +194,8 @@ describe("queuedNotice", () => {
    * which really did happen — was silent.
    */
   it("differs between two presses of the same button", () => {
-    const first = queuedNotice("wanderer", "1785240432000");
-    const second = queuedNotice("wanderer", "1785240471000");
+    const first = queuedNotice("wanderer", "1785240432000", AGE);
+    const second = queuedNotice("wanderer", "1785240471000", AGE);
     expect(first).not.toBe(second);
     expect(first).toContain("12:07:12.000 UTC");
     expect(second).toContain("12:07:51.000 UTC");
@@ -200,72 +209,69 @@ describe("queuedNotice", () => {
    * this case silent, which is the case the stamp exists for.
    */
   it("differs between two presses inside the same second", () => {
-    expect(queuedNotice("wanderer", "1785240432120")).not.toBe(
-      queuedNotice("wanderer", "1785240432880"),
+    expect(queuedNotice("wanderer", "1785240432120", AGE)).not.toBe(
+      queuedNotice("wanderer", "1785240432880", AGE),
     );
   });
 
   it("drops the instant rather than echoing a hand-typed one", () => {
     // Same posture as `queued` itself: untrusted input reaching copy.
     for (const bad of [undefined, "", "now", "-1", "1e9", "99999999999999999999"]) {
-      expect(queuedNotice("wanderer", bad), String(bad)).toBe(queuedNotice("wanderer"));
+      expect(queuedNotice("wanderer", bad, AGE), String(bad)).toBe(
+        queuedNotice("wanderer", undefined, AGE),
+      );
     }
   });
 
   it("points at the browser reload, not at a control off the bottom of the page", () => {
     for (const q of ["all", "recheck", ...Object.keys(JOB_CRON)]) {
-      expect(queuedNotice(q), q).toMatch(/reload this page/);
-      expect(queuedNotice(q), q).not.toMatch(/use Refresh/);
+      expect(queuedNotice(q, undefined, AGE), q).toMatch(/reload this page/);
+      expect(queuedNotice(q, undefined, AGE), q).not.toMatch(/use Refresh/);
     }
   });
 
   it("says nothing about a hand-typed query flag", () => {
     // `?queued=` is untrusted input reaching copy, not a lookup that fails safe
     // on its own.
-    expect(queuedNotice(undefined)).toBe("");
-    expect(queuedNotice("")).toBe("");
-    expect(queuedNotice("<script>alert(1)</script>")).toBe("");
-    expect(queuedNotice("ops-dead-letter")).toBe("");
-    expect(queuedNotice("toString")).toBe("");
+    expect(queuedNotice(undefined, undefined, AGE)).toBe("");
+    expect(queuedNotice("", undefined, AGE)).toBe("");
+    expect(queuedNotice("<script>alert(1)</script>", undefined, AGE)).toBe("");
+    expect(queuedNotice("ops-dead-letter", undefined, AGE)).toBe("");
+    expect(queuedNotice("toString", undefined, AGE)).toBe("");
   });
 
   it("promises enqueue, never execution, for every accepted value", () => {
     for (const q of ["all", "recheck", ...Object.keys(JOB_CRON)]) {
-      expect(queuedNotice(q), q).toMatch(/queued/);
-      expect(queuedNotice(q), q).toMatch(/worker picks/);
-    }
-  });
-
-  it("says 'them' for the four-job fan-out and 'it' for every single-job case", () => {
-    // A regex loose enough to match either pronoun is how the wrong one slips
-    // through: "all" names four jobs and must read "picks them up"; every
-    // other accepted value names one and must read "picks it up".
-    expect(queuedNotice("all")).toMatch(/worker picks them up/);
-    expect(queuedNotice("all")).not.toMatch(/worker picks it up/);
-    for (const q of ["recheck", ...Object.keys(JOB_CRON)]) {
-      expect(queuedNotice(q), q).toMatch(/worker picks it up/);
-      expect(queuedNotice(q), q).not.toMatch(/worker picks them up/);
+      expect(queuedNotice(q, undefined, AGE), q).toMatch(/queued/);
+      expect(queuedNotice(q, undefined, AGE), q).toMatch(/worker last ran/);
     }
   });
 
   /**
-   * The "within a few seconds" promise is only true while the worker is
-   * actually running. A dead worker is exactly the state `worker.fresh`
-   * reports, and the notice has to stop making a promise the worker line
-   * above it is simultaneously contradicting.
+   * The age is the whole differentiator now, so the notice needs no separate
+   * fresh/stale strings and no second threshold constant of its own — a
+   * worker that ran 5m ago and one that ran 89m ago both get the same shape
+   * of sentence, honestly aged.
    */
-  it("drops the pickup promise when the worker is not fresh", () => {
-    for (const q of ["all", "recheck", ...Object.keys(JOB_CRON)]) {
-      const stale = queuedNotice(q, undefined, false);
-      expect(stale, q).toMatch(/queued/);
-      expect(stale, q).not.toMatch(/worker picks it up within a few seconds/);
-      expect(stale, q).not.toMatch(/worker picks them up within a few seconds/);
-      expect(stale, q).not.toMatch(/use Refresh/);
-    }
+  it("states the worker's age rather than a freshness verdict", () => {
+    expect(queuedNotice("wanderer", undefined, "5m")).toMatch(
+      /The worker last ran 5m ago/,
+    );
+    expect(queuedNotice("wanderer", undefined, "89m")).toMatch(
+      /The worker last ran 89m ago/,
+    );
   });
 
-  it("defaults to fresh, unaffected by the new parameter", () => {
-    expect(queuedNotice("wanderer", undefined, true)).toBe(queuedNotice("wanderer"));
+  /**
+   * `workerAge === null` is a third state the old boolean collapsed into "not
+   * running": a fresh deploy, or a purge that emptied `sync_run`, has no
+   * evidence either way, and asserting the worker is down would be a claim
+   * from the absence of evidence, not from a check.
+   */
+  it("says no runs are recorded yet rather than asserting the worker is down", () => {
+    const notice = queuedNotice("wanderer", undefined, null);
+    expect(notice).toMatch(/no runs have been recorded yet/i);
+    expect(notice).not.toMatch(/not running/);
   });
 });
 
@@ -289,5 +295,54 @@ describe("evidenceSince", () => {
   it("is null when nothing has ever run", () => {
     expect(evidenceSince(true, [])).toBeNull();
     expect(evidenceSince(true, [group(), group(null)])).toBeNull();
+  });
+});
+
+describe("queuedMarkerText", () => {
+  it("stays a bare marker under the notable threshold, matching a healthy dispatcher's ~2s poll", () => {
+    expect(queuedMarkerText(at(-1000), NOON)).toBe(", queued");
+    expect(queuedMarkerText(at(-119_000), NOON)).toBe(", queued");
+    // The boundary itself is inclusive of the age-bearing branch: exactly
+    // QUEUED_AGE_NOTABLE_MS is no longer the routine enqueue-to-poll gap.
+    expect(queuedMarkerText(at(-2 * MIN), NOON)).toBe(", queued 2m ago");
+  });
+
+  it("states the age past the notable threshold", () => {
+    expect(queuedMarkerText(at(-5 * MIN), NOON)).toBe(", queued 5m ago");
+  });
+
+  it("keeps stating the age, not a second escalated string, past the stuck threshold", () => {
+    // `queuedMarkerStuck` is what escalates the mark's own shape; the text
+    // itself has only one shape for every age past the notable threshold.
+    expect(queuedMarkerText(at(-20 * MIN), NOON)).toBe(", queued 20m ago");
+  });
+
+  it("still says queued when the age is unknown", () => {
+    // A null age means the row is queued but `undispatchedSummary` could not
+    // date it. The marker must survive that: dropping it would make a job with
+    // work waiting read as idle, which is worse than losing the "5m ago".
+    expect(queuedMarkerText(null, NOON)).toBe(", queued");
+  });
+});
+
+describe("queuedMarkerStuck", () => {
+  it("is false under the stuck threshold, however notable the age already is", () => {
+    expect(queuedMarkerStuck(at(-5 * MIN), NOON)).toBe(false);
+    expect(queuedMarkerStuck(at(-14 * MIN), NOON)).toBe(false);
+  });
+
+  it("is true past the stuck threshold", () => {
+    // Ten times the notable threshold: the dispatcher polls every ~2s, so 15
+    // minutes of an undispatched row is not "running behind", it is wedged —
+    // `startDispatcher` swallows a dispatch failure into `console.error` and
+    // retries forever rather than surfacing it anywhere else.
+    expect(queuedMarkerStuck(at(-15 * MIN), NOON)).toBe(true);
+    expect(queuedMarkerStuck(at(-60 * MIN), NOON)).toBe(true);
+  });
+
+  it("never escalates on an unknown age", () => {
+    // Escalation is a claim about how long something has waited; a null age
+    // cannot support one, however long the row has actually been there.
+    expect(queuedMarkerStuck(null, NOON)).toBe(false);
   });
 });

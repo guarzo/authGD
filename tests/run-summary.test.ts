@@ -135,6 +135,7 @@ describe("collapseRuns", () => {
         errorSummary: null,
         from: run(1).startedAt,
         to: run(3).finishedAt,
+        durationMs: { min: 500, max: 500 },
       },
     ]);
   });
@@ -158,6 +159,7 @@ describe("collapseRuns", () => {
         errorSummary: null,
         from: runs[2].startedAt,
         to: runs[1].finishedAt,
+        durationMs: { min: 500, max: 500 },
       },
       { kind: "run", run: runs[3] },
     ]);
@@ -190,6 +192,7 @@ describe("collapseRuns", () => {
         errorSummary: null,
         from: run(1).startedAt,
         to: run(2).finishedAt,
+        durationMs: { min: 500, max: 500 },
       },
     ]);
   });
@@ -215,6 +218,7 @@ describe("collapseRuns", () => {
         errorSummary: null,
         from: run(1).startedAt,
         to: run(2).finishedAt,
+        durationMs: { min: 500, max: 500 },
       },
     ]);
     // null counts and {} are not the same fact.
@@ -248,27 +252,71 @@ describe("collapseRuns", () => {
     ]);
   });
 
-  it("treats a null and an undefined errorSummary as the same fact", () => {
-    const withNull = run(2, { errorSummary: null });
-    // Drop the field entirely to exercise `undefined`, distinct from `null`.
-    const { errorSummary: _drop, ...withoutField } = run(1);
-    const withUndefined = withoutField as CollapsibleRun;
-    const groups = collapseRuns([withNull, withUndefined]);
+  it("returns an empty array for no runs", () => {
+    expect(collapseRuns([] as CollapsibleRun[])).toEqual([]);
+  });
+
+  it("carries the min/max run duration through a group instead of dropping the time axis", () => {
+    // Five hourly runs, all OK with identical counts, would otherwise collapse
+    // to one row indistinguishable from a healthy run — even though one of
+    // them took far longer than the rest (e.g. ESI degraded mid-sync).
+    const runs = [
+      run(3, { startedAt: t(2000), finishedAt: t(2 * 60_000) }), // 118s
+      run(2, { startedAt: t(1000), finishedAt: t(1500) }), // 500ms
+      run(1, { startedAt: t(0), finishedAt: t(300) }), // 300ms
+    ];
+    const groups = collapseRuns(runs);
     expect(groups).toEqual([
-      {
+      expect.objectContaining({
         kind: "group",
-        runs: [withNull, withUndefined],
-        count: 2,
-        status: "ok",
-        counts: { checked: 19 },
-        errorSummary: null,
-        from: withUndefined.startedAt,
-        to: withNull.finishedAt,
-      },
+        durationMs: { min: 300, max: 118_000 },
+      }),
     ]);
   });
 
-  it("returns an empty array for no runs", () => {
-    expect(collapseRuns([] as CollapsibleRun[])).toEqual([]);
+  it("leaves the duration span null when no run in the group recorded a startedAt", () => {
+    const runs = [run(2, { startedAt: null }), run(1, { startedAt: null })];
+    const groups = collapseRuns(runs);
+    expect(groups).toEqual([
+      expect.objectContaining({
+        kind: "group",
+        durationMs: null,
+      }),
+    ]);
+  });
+
+  it("ignores runs with no startedAt when others in the same group have one", () => {
+    const runs = [
+      run(2, { startedAt: null }),
+      run(1, { startedAt: t(0), finishedAt: t(700) }),
+    ];
+    const groups = collapseRuns(runs);
+    expect(groups).toEqual([
+      expect.objectContaining({ kind: "group", durationMs: { min: 700, max: 700 } }),
+    ]);
+  });
+
+  it("ignores a member whose finishedAt precedes its startedAt", () => {
+    // A clock adjustment between the two writes can invert the pair. Counting
+    // it would report a negative minimum for a group that stands in for
+    // several runs that did happen — the single-run path already refuses this
+    // via formatDuration's `ms < 0` guard.
+    const runs = [
+      run(2, { startedAt: t(5000), finishedAt: t(4000) }),
+      run(1, { startedAt: t(0), finishedAt: t(700) }),
+    ];
+    expect(collapseRuns(runs)).toEqual([
+      expect.objectContaining({ kind: "group", durationMs: { min: 700, max: 700 } }),
+    ]);
+  });
+
+  it("leaves the span null when every member's pair is invalid", () => {
+    const runs = [
+      run(2, { startedAt: t(5000), finishedAt: t(4000) }),
+      run(1, { startedAt: new Date(NaN) }),
+    ];
+    expect(collapseRuns(runs)).toEqual([
+      expect.objectContaining({ kind: "group", durationMs: null }),
+    ]);
   });
 });

@@ -1,4 +1,4 @@
-import { inArray, isNull } from "drizzle-orm";
+import { inArray, isNull, min } from "drizzle-orm";
 import type { Dbx } from "@/db";
 import type { OutboxPayload } from "@/core/dispatch-plan";
 import { outbox } from "@/db/schema";
@@ -31,19 +31,43 @@ export async function takeUndispatched(
   return rows.map((r) => ({ id: r.id, payload: r.payload }));
 }
 
+export type UndispatchedRow = {
+  payload: OutboxPayload;
+  /** Oldest `createdAt` in the group. Null only in a case the database cannot
+   * actually produce (see `undispatchedSummary`) — kept nullable so that case
+   * costs the caller an age it can render without, rather than the row. */
+  oldest: Date | null;
+};
+
 /**
- * The payloads of every undispatched row, for a read-only status view. Unlike
- * `takeUndispatched` this takes no lock and is not paired with
+ * One row per DISTINCT undispatched payload, for a read-only status view.
+ * Unlike `takeUndispatched` this takes no lock and is not paired with
  * `markDispatched` — the admin sync page only needs to know whether work is
  * queued, never to claim it, and a `FOR UPDATE` read here would contend with
  * the dispatcher's own claim on the same rows.
+ *
+ * Grouped by payload rather than one row per outbox row: `{kind:"all"}` and
+ * `{kind:"membership-recheck"}` repeat every scheduler tick the worker is
+ * down, so an ungrouped SELECT grows without bound for exactly as long as the
+ * worker is down — which is when an admin loads this page. The consumer
+ * (`getSyncStatus`) only ever turns these into a Set of job types plus an
+ * age, never individual rows, so the group loses nothing it used.
  */
-export async function undispatchedPayloads(dbx: Dbx): Promise<OutboxPayload[]> {
-  const rows = await dbx
-    .select({ payload: outbox.payload })
+export async function undispatchedSummary(dbx: Dbx): Promise<UndispatchedRow[]> {
+  // `min()` over a timestamptz column comes back as `Date | null` from both
+  // drizzle's typing and node-postgres's OID 1184 parser. The null stands for
+  // an empty group, which GROUP BY cannot produce — but it is passed through
+  // rather than filtered out, because the caller derives "is anything queued
+  // for this job type" from the PRESENCE of a row and only the age from
+  // `oldest`. Dropping the row would turn an impossible null into a job type
+  // that silently looks idle while work sits in the outbox, which is the exact
+  // failure the queued marker exists to make visible; carrying it forward
+  // costs at most the "3d ago" suffix.
+  return dbx
+    .select({ payload: outbox.payload, oldest: min(outbox.createdAt) })
     .from(outbox)
-    .where(isNull(outbox.dispatchedAt));
-  return rows.map((r) => r.payload);
+    .where(isNull(outbox.dispatchedAt))
+    .groupBy(outbox.payload);
 }
 
 export async function markDispatched(dbx: Dbx, ids: number[]): Promise<void> {

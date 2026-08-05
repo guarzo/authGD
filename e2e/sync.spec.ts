@@ -623,6 +623,39 @@ test("an account-kind payload queues its jobs the same as an admin fan-out", asy
   await expect(summaryFor(page, "purge").locator(".strip__queued")).toHaveCount(0);
 });
 
+/**
+ * The dispatcher polls the outbox every ~2s, so a marker under that age is
+ * the normal gap between an enqueue and the next poll — quiet on purpose.
+ * Once it has sat unpicked for a while, the accessible text says how long,
+ * and past 15 minutes the ring itself escalates: at that distance the
+ * dispatcher (`startDispatcher`) is wedged, not merely busy.
+ */
+test("a queue that has sat unpicked for a while says so, and escalates past 15 minutes", async ({
+  page,
+  context,
+}) => {
+  await asAdmin(context);
+  await seedRuns();
+  await db.insert(outbox).values([
+    { payload: { kind: "job", jobType: "contacts" }, createdAt: ago(5 * MIN) },
+    { payload: { kind: "job", jobType: "membership" }, createdAt: ago(20 * MIN) },
+  ]);
+  await page.goto("/admin/sync");
+
+  const contacts = summaryFor(page, "contacts");
+  await expect(contacts.locator(".strip__queued")).toHaveCount(1);
+  await expect(contacts.locator(".strip__queued--stuck")).toHaveCount(0);
+  await expect(contacts.locator(".visually-hidden", { hasText: "queued" })).toHaveText(
+    ", queued 5m ago",
+  );
+
+  const membership = summaryFor(page, "membership");
+  await expect(membership.locator(".strip__queued--stuck")).toHaveCount(1);
+  await expect(membership.locator(".visually-hidden", { hasText: "queued" })).toHaveText(
+    ", queued 20m ago",
+  );
+});
+
 /* --- Run collapsing --------------------------------------------------------- */
 
 /**
@@ -671,7 +704,58 @@ test("consecutive identical runs collapse to one row; an in-flight run never joi
 
   const group = rows.nth(1);
   await expect(group).toContainText("4 runs");
+  // The count now lives in Started (cell 1) beside the range, not in Took —
+  // Took's own header promises a duration, and a screen reader in
+  // table-navigation mode used to hear the count under that column's
+  // header instead.
+  const startedCell = group.locator("td").first();
+  await expect(startedCell.locator(".strip__group-count")).toHaveText("4 runs");
   // The count is not the only thing that says "several": the row also states
   // the span of time it covers, readable straight from the cell.
-  await expect(group.locator("td").first().locator(".only-wide")).toContainText("–");
+  await expect(startedCell.locator(".only-wide")).toContainText("–");
+  // All four seeded runs take exactly 500ms, so Took shows the single value,
+  // not a degenerate "500ms – 500ms" range.
+  await expect(group.locator("td").nth(1)).toHaveText("500ms");
+});
+
+/**
+ * Below 40rem the group row's Started cell swaps to `RelativeTime` plus a
+ * visually-hidden precise stamp — same swap the single-run branch makes. That
+ * hidden text used to name only the group's start, so the group's END, and
+ * the count beside it, were unreachable in the accessibility tree entirely
+ * below this breakpoint.
+ */
+test("a collapsed row's hidden text carries both ends, and the count exactly once", async ({
+  page,
+  context,
+}) => {
+  await asAdmin(context);
+  const finished = Array.from({ length: 3 }, (_, i) => ({
+    jobType: "purge",
+    startedAt: ago((10 - i) * MIN),
+    finishedAt: ago((10 - i) * MIN - 500),
+    status: "ok" as const,
+    counts: { sessions: 0, oauthTransactions: 0, outbox: 0 },
+  }));
+  await db.insert(syncRun).values(finished);
+  await page.setViewportSize({ width: 320, height: 720 });
+  await page.goto("/admin/sync");
+
+  const purge = page.locator(".strip__job", { hasText: "purge" });
+  await purge.locator("> .strip__disc > summary").click();
+  const group = purge.locator("tbody tr").first();
+  const startedCell = group.locator("td").first();
+
+  await expect(startedCell.locator(".only-wide")).toBeHidden();
+  await expect(startedCell.locator(".only-narrow")).toBeVisible();
+  await expect(startedCell.locator(".visually-hidden")).toHaveText(
+    `started ${stamp(finished[0].startedAt)} UTC, ended ${stamp(finished[2].finishedAt)} UTC`,
+  );
+  // The count reaches a screen reader from `.strip__group-count`, which is
+  // unconditional, so it must NOT also appear in the visually-hidden text
+  // beside it — at this width that span and this one are the only two things
+  // in the cell still in the accessibility tree, and restating the count
+  // there announced "3 runs" twice.
+  await expect(startedCell.locator(".strip__group-count")).toBeVisible();
+  await expect(startedCell.locator(".strip__group-count")).toHaveText("3 runs");
 });

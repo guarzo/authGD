@@ -106,11 +106,21 @@ export function formatDuration(
   if (!started || !finished) return null;
   const ms = finished.getTime() - started.getTime();
   if (!Number.isFinite(ms) || ms < 0) return null;
+  return formatDurationMs(ms);
+}
+
+/**
+ * The ms/s/m/h ladder `formatDuration` uses, pulled out so a caller with an
+ * already-computed span (the min/max group duration below, which has no
+ * single start/finish pair to hand `formatDuration`) can format it without
+ * duplicating the rounding rules — in particular the "round to whole seconds
+ * once, then decompose" step, since rounding each part separately let 5m 59.6s
+ * come out as "5m 60s".
+ */
+export function formatDurationMs(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
   const s = ms / 1000;
   if (s < 10) return `${s.toFixed(1)}s`;
-  // Round to whole seconds once, then decompose. Rounding each part separately
-  // lets the remainder carry past its own unit — 5m 59.6s came out as "5m 60s".
   const total = Math.round(s);
   if (total < 60) return `${total}s`;
   const m = Math.floor(total / 60);
@@ -126,13 +136,15 @@ export function formatDuration(
  * because both matter to collapsing: identical counts on a `failed` and an
  * `ok` run are still two different facts, and `id` gives the page a stable
  * React key per group without re-deriving one from a range of timestamps.
- * `errorSummary` is optional because the column is: `RunLike` predates it and
- * some job rows (`purge.ts`) never set it at all.
+ * `errorSummary` is required, not optional: `syncRun.errorSummary` is `text()`,
+ * so `$inferSelect` yields `string | null`, never `undefined` — every real
+ * producer already has a value here, so a caller that types it optional is
+ * making room for a case that cannot happen from the database.
  */
 export type CollapsibleRun = RunLike & {
   id: number;
   status: SyncRunStatus | null;
-  errorSummary?: string | null;
+  errorSummary: string | null;
 };
 
 /**
@@ -158,7 +170,24 @@ export type CollapsedRun<T extends CollapsibleRun = CollapsibleRun> =
       from: Date | null;
       /** Latest `finishedAt` in the group. Never null: every run inside a
        * group has finished — see `sameOutcome` below. */
-      to: Date | null;
+      to: Date;
+      /** Shortest and longest run duration in the group, in ms, or null when
+       * no run in the group recorded a `startedAt` — `finishedAt` is
+       * guaranteed by `sameOutcome`, but `startedAt` can still be null (see
+       * `RunLike`). One nullable field rather than a nullable `min` beside a
+       * nullable `max`: they are computed from the same set and are always
+       * both present or both absent, so two of them would spell four states
+       * for the two that exist and make every consumer test both to rule out
+       * the two that cannot happen.
+       *
+       * Collapsing folds five "OK, same counts" runs into one row and, with
+       * it, the one detail that made a single run stand out: a 47-minute run
+       * during an ESI slowdown reads identically to a 2-minute one once only
+       * status/counts survive. `sameOutcome` deliberately never compares
+       * duration (durations are near-never equal, so that would stop anything
+       * from ever collapsing) — this carries the span forward instead of
+       * hiding it. */
+      durationMs: { min: number; max: number } | null;
     };
 
 /**
@@ -176,16 +205,6 @@ function sameCounts(
   const bKeys = Object.keys(b).sort();
   if (aKeys.length !== bKeys.length) return false;
   return aKeys.every((k, i) => k === bKeys[i] && a[k] === b[k]);
-}
-
-/**
- * `undefined` (the field was never selected) and `null` (selected, and the
- * job recorded no error text) both mean "nothing to show" here, unlike
- * `counts` above where absent and empty are different facts — there is no
- * "recorded an empty error string on purpose" case to distinguish it from.
- */
-function normalizeErrorSummary(v: string | null | undefined): string | null {
-  return v ?? null;
 }
 
 /**
@@ -209,7 +228,7 @@ function sameOutcome(a: CollapsibleRun, b: CollapsibleRun): boolean {
     b.finishedAt !== null &&
     a.status === b.status &&
     sameCounts(a.counts, b.counts) &&
-    normalizeErrorSummary(a.errorSummary) === normalizeErrorSummary(b.errorSummary)
+    a.errorSummary === b.errorSummary
   );
 }
 
@@ -226,15 +245,43 @@ function latest(dates: Array<Date | null>): Date | null {
 }
 
 function toGroup<T extends CollapsibleRun>(runs: T[]): CollapsedRun<T> {
+  // Every run reaching here matched its neighbour via sameOutcome, which
+  // requires finishedAt !== null on both sides of every comparison — so by
+  // the time a run is IN a group (of any size), its own finishedAt is known,
+  // and `latest` over the group can never come back null.
+  const to = latest(runs.map((r) => r.finishedAt));
+  if (to === null) {
+    throw new Error("toGroup invariant violated: a grouped run has no finishedAt");
+  }
+  const durations = runs
+    // Both ends, not just `startedAt`: `finishedAt` is non-null by the same
+    // invariant `to` rests on, but filtering on it here is free and buys the
+    // subtraction below its types without a `!` the compiler cannot check.
+    .filter(
+      (r): r is T & { startedAt: Date; finishedAt: Date } =>
+        r.startedAt !== null && r.finishedAt !== null,
+    )
+    .map((r) => r.finishedAt.getTime() - r.startedAt.getTime())
+    // The same validation `formatDuration` applies to a single run, for the
+    // same reasons: an Invalid Date subtracts to NaN, and a clock adjustment
+    // between the two writes can land `finishedAt` before `startedAt`. Either
+    // would let Math.min/max below report a span the group cannot have taken —
+    // and unlike the single-run path, one bad member would poison a row that
+    // stands in for several good ones.
+    .filter((ms) => Number.isFinite(ms) && ms >= 0);
   return {
     kind: "group",
     runs,
     count: runs.length,
     status: runs[0].status,
     counts: runs[0].counts,
-    errorSummary: normalizeErrorSummary(runs[0].errorSummary),
+    errorSummary: runs[0].errorSummary,
     from: earliest(runs.map((r) => r.startedAt)),
-    to: latest(runs.map((r) => r.finishedAt)),
+    to,
+    durationMs:
+      durations.length > 0
+        ? { min: Math.min(...durations), max: Math.max(...durations) }
+        : null,
   };
 }
 

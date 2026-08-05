@@ -11,13 +11,13 @@ export type QueueSend = (
 
 /**
  * Queues a "job" payload is allowed to name. Built from QUEUES minus the
- * dead-letter queue, which is ops plumbing and not a job anyone re-runs. This
- * is the allow-list that stops a bad `jobType` from becoming an arbitrary
- * queue name at send time.
- *
- * Exported for the set-equality test in tests/dispatcher.test.ts: the admin
- * page renders a re-run button per `JOB_CRON` key, and a key with no queue
- * here would render a button whose outbox row this module silently drops.
+ * dead-letter queue, which is ops plumbing and not a job anyone re-runs.
+ * `isJobType` (`@/core/dispatch-plan`) is the actual runtime gate on a `job`
+ * re-run now; this set has no production consumer of its own. Its remaining
+ * job is as the fixture for the set-equality test in tests/dispatcher.test.ts:
+ * the admin page renders a re-run button per `JOB_CRON` key, and a key with
+ * no queue here would render a button whose outbox row this module silently
+ * drops.
  */
 export const RERUNNABLE: ReadonlySet<string> = new Set(
   Object.values(QUEUES).filter((q) => q !== QUEUES.deadLetter),
