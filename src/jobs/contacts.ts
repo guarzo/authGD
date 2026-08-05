@@ -116,7 +116,7 @@ export async function runContactsJob(deps: {
         if (token.reason === "dry_run") {
           // The guard refused the refresh, so there is no access token and no
           // way to read contacts — this character is skipped, not failed, and
-          // MUST NOT be recorded as synced (spec D4).
+          // MUST NOT be recorded as synced.
           counts.targets--;
           counts.skipped++;
           await recordResult(db, target.characterId, "dry_run", false);
@@ -216,7 +216,7 @@ export async function runContactsJob(deps: {
         const transient = err instanceof EsiError ? err.kind === "transient" : true;
         if (needsReauth) {
           counts.failed++;
-          // CAS on the blob our refresh just stored (F5): if the row rotated
+          // CAS on the blob our refresh just stored: if the row rotated
           // or was reclaimed since, this stale decision must not touch it.
           await db
             .update(character)

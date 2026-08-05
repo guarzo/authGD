@@ -30,7 +30,7 @@ export async function runTokenHealthJob(deps: {
       if (!token.ok) {
         // dry_run is NOT a token problem — the refresh was refused by the
         // safety guard, not by EVE. Falling through to counts.invalid would
-        // report every character as having a broken token (spec D4).
+        // report every character as having a broken token.
         if (token.reason === "dry_run") counts.skipped++;
         else if (token.reason === "transient") transientFailures++;
         else counts.invalid++; // permanent-only invalidation done in the service

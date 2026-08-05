@@ -200,12 +200,12 @@ export async function addAppraisedPoolAction(
   const stationId = locationKind === "station" ? locationId : undefined;
   const regionId = locationKind === "region" ? locationId : undefined;
 
-  // ARCHITECTURAL EXCEPTION to "enqueue, don't execute" (see the design doc's
-  // "An architectural exception, stated plainly"): appraisal is interactive —
-  // the operator pastes loot and waits for a number, adjusts the pricing mode,
-  // and pastes again — and this call is read-only and idempotent, so a lost or
-  // duplicated call is a re-click, not a corrupted record. That is what makes
-  // calling triff/ESI directly from the web tier safe here and nowhere else.
+  // ARCHITECTURAL EXCEPTION to "enqueue, don't execute": appraisal is
+  // interactive — the operator pastes loot and waits for a number, adjusts the
+  // pricing mode, and pastes again — and this call is read-only and idempotent,
+  // so a lost or duplicated call is a re-click, not a corrupted record. That is
+  // what makes calling triff/ESI directly from the web tier safe here and
+  // nowhere else.
   const cfg = getConfig();
   const esi = createEsiClient({ userAgent: `authgd/0.1.0 (${cfg.esiContact})` });
   const triff = createTriffClient();

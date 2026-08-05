@@ -20,7 +20,7 @@ export async function runDiscordRolesJob(
   // Audit rows would therefore record role changes that never happened, and
   // audit_log is the record an operator trusts when reconstructing what the
   // system did to someone's account. Suppress the rows and rename the counters
-  // so neither can be mistaken for an applied change (spec D6).
+  // so neither can be mistaken for an applied change.
   const dry = isDryRun(cfg);
   return runJob(db, "discord-roles", async () => {
     // Config validation FIRST, every run. A validation failure is
@@ -179,7 +179,7 @@ export async function runDiscordRolesJob(
     }
 
     // Rename the applied-change counter in dry-run so a reader of sync_run
-    // cannot mistake a suppressed run for an effective one (spec D6).
+    // cannot mistake a suppressed run for an effective one.
     const { changed, ...rest } = counts;
     const reported: Record<string, number> = dry
       ? { wouldChangeRoles: changed, ...rest }

@@ -16,7 +16,7 @@ describe("resolveTierLabel", () => {
     expect(resolveTierLabel("pending", LABELS)).toBe("Pending");
   });
 
-  // Pre-rename audit rows store the old vocabulary verbatim (spec D4) and
+  // Pre-rename audit rows store the old vocabulary verbatim and
   // reach this function as plain strings with no entry in the label map.
   it("returns the raw string for a legacy tier value", () => {
     expect(resolveTierLabel("flygd", LABELS)).toBe("flygd");

@@ -523,7 +523,7 @@ describe("finalization freezes the operation", () => {
   /**
    * Without this, finalizing means nothing: the numbers stay editable, and
    * `unlockOperation` has no job to do. `assertEditable` refuses on status, not
-   * only on payments — see "Lifecycle" in the design doc.
+   * only on payments.
    */
   it("rejects payout-affecting edits on a finalized, UNPAID operation", async () => {
     const operator = await seedOperator();

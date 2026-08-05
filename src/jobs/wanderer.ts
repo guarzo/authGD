@@ -68,7 +68,7 @@ export async function runWandererJob(deps: {
     // rows here would fabricate a permanent record of mutations that never
     // happened — audit_log is what an operator reconstructs an incident from.
     // Suppress the rows, and report under would* keys so the counts cannot be
-    // mistaken for applied changes either (spec D6).
+    // mistaken for applied changes either.
     const dry = isDryRun(cfg);
     for (const id of diff.add) {
       try {

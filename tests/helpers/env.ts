@@ -32,7 +32,7 @@ export const BASE_ENV = {
   STANDINGS_LABEL: "authgd",
   STANDINGS_VALUE: "5",
   ESI_CONTACT: "ops@example.com",
-  // "live", deliberately (spec D10): 13 test files build config through
+  // "live", deliberately: 13 test files build config through
   // testConfig() and assert LIVE behavior — real refreshes, real request
   // counts. Defaulting to dry-run would suppress the very requests those tests
   // exist to verify and leave them passing, which is worse than breaking them.

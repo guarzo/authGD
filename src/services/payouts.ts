@@ -71,13 +71,13 @@ export async function hasPayments(dbx: Dbx, operationId: string): Promise<boolea
  * The single gate every payout-affecting edit passes through. Two conditions,
  * for two different reasons:
  *
- *   1. status must be `draft`. Finalization is a commitment ("Lifecycle" in the
- *      design doc) — if a finalized operation stayed editable, finalizing would
- *      mean nothing and `unlockOperation` would have no purpose. Correcting a
+ *   1. status must be `draft`. Finalization is a commitment — if a finalized
+ *      operation stayed editable, finalizing would mean nothing and
+ *      `unlockOperation` would have no purpose. Correcting a
  *      finalized operation is legal, but it goes through an audited unlock.
  *   2. no payment may exist. This outlives the status check, because unlock is
- *      itself refused once money has moved — mechanism 3 in "Recalculation
- *      safety". Checking it here as well means no path can reach an edit.
+ *      itself refused once money has moved. Checking it here as well means no
+ *      path can reach an edit.
  *
  * Callers hold the operation row lock (via `lockOperation`) before calling this,
  * so neither condition can change underneath the edit that follows.
@@ -481,10 +481,10 @@ export async function removeParticipant(
 
 /**
  * Sums loot_pool.totalValue, runs computeSplit, UPDATEs payout_participant.amount
- * ONLY. Never touches paidAmount, never deletes anything — see "Recalculation
- * safety" in the design doc. Deliberately takes no `actor` (contract signature)
- * and writes no audit row of its own; every caller above already logged its own
- * actor-attributed action before calling this.
+ * ONLY. Never touches paidAmount, never deletes anything: a recalculation must
+ * never disturb money that has already moved. Deliberately takes no `actor`
+ * (contract signature) and writes no audit row of its own; every caller above
+ * already logged its own actor-attributed action before calling this.
  */
 export async function recalculate(dbtx: DbTx, operationId: string): Promise<void> {
   const op = await lockOperation(dbtx, operationId);
@@ -534,9 +534,8 @@ export async function finalizeOperation(
 }
 
 /** Unlock (finalized -> draft) exists to correct an UNPAID operation; once any
- * payment exists there is no unlock, per "Recalculation safety" mechanism 3.
- * Restricted to the operation's `createdBy` or an admin ("Lifecycle" in the
- * design doc): unlock reopens a commitment someone else made, so it is not a
+ * payment exists there is no unlock. Restricted to the operation's `createdBy`
+ * or an admin: unlock reopens a commitment someone else made, so it is not a
  * thing any operator should be able to do to any other operator's numbers. */
 export async function unlockOperation(
   dbtx: DbTx,

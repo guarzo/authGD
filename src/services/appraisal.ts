@@ -30,9 +30,9 @@ const ZERO_PRICE = { unitPrice: "0.00", totalValue: "0.00" } as const;
 /**
  * Orchestrates esi.resolveIds -> triff.quote -> parseLootPaste -> selectPrice.
  * No database access (contract: appraisal is a pure orchestration layer over
- * two injected clients so it can run interactively, see design doc "An
- * architectural exception, stated plainly"). An item with no type id, or a
- * type id with no price for the chosen mode, becomes `priceSource:
+ * two injected clients so it can run interactively — the documented exception
+ * to "enqueue, don't execute"). An item with no type id, or a type id with no
+ * price for the chosen mode, becomes `priceSource:
  * "unresolved"` at "0.00" — it is NEVER dropped from `items`, only from the
  * money side of the total.
  */

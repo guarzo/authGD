@@ -47,7 +47,7 @@ export async function postOpsWebhookOrThrow(
 ): Promise<void> {
   const url = cfg.discord.opsWebhookUrl;
   if (!url) return;
-  // Dry-run suppression (spec D9). Returns SUCCESSFULLY rather than throwing:
+  // Dry-run suppression. Returns SUCCESSFULLY rather than throwing:
   // the dead-letter handler treats a throw as "retry the alert", so throwing
   // here would spin forever. A local worker must never page the real ops
   // channel with alerts about someone's laptop.

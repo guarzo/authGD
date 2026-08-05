@@ -82,7 +82,7 @@ const envSchema = z.object({
   // it at a label created for authGD, never one humans also curate.
   STANDINGS_LABEL: z.string().min(1).default("authgd"),
   STANDINGS_VALUE: z.coerce.number().min(-10).max(10).default(5),
-  // CCP requires ESI consumers to send identifying contact info (F6).
+  // CCP requires ESI consumers to send identifying contact info.
   ESI_CONTACT: z.string().min(1),
   // REQUIRED with no default, deliberately: every other arrangement has a
   // silent failure mode. Defaulting to "dry-run" would let a missing

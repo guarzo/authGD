@@ -323,7 +323,7 @@ describe("runContactsJob", () => {
   });
 });
 
-describe("needs_reauth CAS (F5)", () => {
+describe("needs_reauth CAS", () => {
   it("marks needs_reauth when the token blob is unchanged", async () => {
     const acc = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });

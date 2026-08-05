@@ -89,9 +89,8 @@ describe("summarizeDetails", () => {
   });
 
   // Every action emitted with no `details` at all. Derived mechanically from
-  // `grep -rho 'action: "…"' src/`; see the spec's "How this inventory was
-  // derived". A renderer for any of these would be machinery for an empty
-  // payload, and the em dash is already correct.
+  // `grep -rho 'action: "…"' src/`. A renderer for any of these would be
+  // machinery for an empty payload, and the em dash is already correct.
   it.each([
     "character.linked",
     "character.reauthed",
@@ -408,7 +407,7 @@ describe("summarizeDetails with configured tier labels", () => {
   });
 
   it("passes a pre-rename tier value through unchanged", () => {
-    // Spec D4 again, now with labels configured: `flygd` is not a key in the
+    // A pre-rename value with labels configured: `flygd` is not a key in the
     // map, so it renders as stored rather than resolving to anything.
     expect(
       summarizeDetails("tier.changed", { from: "green", to: "flygd" }, new Map(), LABELS),
