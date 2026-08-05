@@ -18,12 +18,12 @@ describe("createDiscordClient", () => {
       http.get(`${API}/guilds/9000/roles`, ({ request }) => {
         expect(request.headers.get("authorization")).toBe("Bot bot-token");
         return HttpResponse.json([
-          { id: "10", name: "FlyGD", position: 5, permissions: "0", extra: "ignored" },
+          { id: "10", name: "Member", position: 5, permissions: "0", extra: "ignored" },
         ]);
       }),
     );
     expect(await createDiscordClient(cfg).getGuildRoles()).toEqual([
-      { id: "10", name: "FlyGD", position: 5, permissions: "0" },
+      { id: "10", name: "Member", position: 5, permissions: "0" },
     ]);
   });
 

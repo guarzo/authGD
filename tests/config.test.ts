@@ -14,9 +14,9 @@ const validEnv = {
   DISCORD_CLIENT_SECRET: "d",
   DISCORD_BOT_TOKEN: "d",
   DISCORD_GUILD_ID: "1",
-  DISCORD_ROLE_ID_FLYGD: "10",
-  DISCORD_ROLE_ID_BLUE: "11",
-  DISCORD_ROLE_ID_GREEN: "12",
+  DISCORD_ROLE_ID_MEMBER: "10",
+  DISCORD_ROLE_ID_ASSOCIATE: "11",
+  DISCORD_ROLE_ID_ALUMNI: "12",
   WANDERER_BASE_URL: "https://wanderer.example",
   WANDERER_API_KEY: "k",
   WANDERER_ACL_ID: "acl-1",
@@ -57,6 +57,20 @@ describe("loadConfig", () => {
     expect(() =>
       loadConfig({ ...validEnv, BOOTSTRAP_ADMIN_CHARACTER_IDS: "123,123" }),
     ).toThrow(/duplicates/);
+  });
+
+  it("exposes discord role ids under the generic tier keys", () => {
+    const cfg = loadConfig({
+      ...validEnv,
+      DISCORD_ROLE_ID_MEMBER: "10",
+      DISCORD_ROLE_ID_ASSOCIATE: "11",
+      DISCORD_ROLE_ID_ALUMNI: "12",
+    });
+    expect(cfg.discord.roleIds).toEqual({
+      member: "10",
+      associate: "11",
+      alumni: "12",
+    });
   });
 
   // The OAuth redirect_uri strings CONCATENATE appBaseUrl, so a trailing slash
