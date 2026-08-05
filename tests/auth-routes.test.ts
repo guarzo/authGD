@@ -199,6 +199,57 @@ describe("EVE auth flow", () => {
     expect(res.headers.get("set-cookie") ?? "").not.toContain("authgd_session=");
   });
 
+  it("sends a refused merge to the code naming the blocker", async () => {
+    // The service unit tests prove which blocker each guard reports, and the
+    // route's Record<MergeBlocker, AccountErrorCode> proves every blocker has
+    // copy. Neither proves the route READS result.blocker: a leftover
+    // accountErrorUrl("already_linked") passes both. This closes that.
+    const { createOauthTransaction } = await import("@/services/oauth-tx");
+    const { createSession } = await import("@/services/session");
+    const { eq } = await import("drizzle-orm");
+
+    // A stray account holding the character, non-absorbable for exactly one
+    // reason an admin can clear.
+    const [stray] = await ctx.db
+      .insert(account)
+      .values({ statusNote: "keep an eye on this one" })
+      .returning();
+    await ctx.db.insert(character).values({
+      id: 90000021,
+      accountId: stray.id,
+      name: "Stray",
+      ownerHash: "oh-21",
+    });
+
+    const [main] = await ctx.db.insert(account).values({}).returning();
+    const sid = await createSession(ctx.db, main.id);
+    const tx = await createOauthTransaction(ctx.db, {
+      intent: "link-character",
+      sessionId: sid,
+      accountId: main.id,
+    });
+
+    // Same owner hash as the stray's character: the merge path, not a reclaim.
+    const jwt = await signToken(90000021, "oh-21");
+    msw.use(
+      http.post("https://login.eveonline.com/v2/oauth/token", () =>
+        HttpResponse.json({ access_token: jwt, refresh_token: "rt" }),
+      ),
+    );
+    const req = new NextRequest(
+      `http://localhost:3000/auth/eve/callback?code=abc&state=${encodeURIComponent(tx.state)}`,
+    );
+    req.cookies.set("authgd_session", sid);
+
+    expectRedirect(await callbackRoute(req), "/account?error=merge_note");
+    // and the refusal is a refusal: the character never moved
+    const [still] = await ctx.db
+      .select()
+      .from(character)
+      .where(eq(character.id, 90000021));
+    expect(still.accountId).toBe(stray.id);
+  });
+
   it("rejects a link-discord transaction presented to the EVE callback without consuming it", async () => {
     const { createOauthTransaction, consumeOauthTransaction } =
       await import("@/services/oauth-tx");

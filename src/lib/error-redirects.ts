@@ -59,11 +59,40 @@ export const LOGIN_ERRORS = {
 /** Codes reaching `/account`. All but `not_admin` and `stale_character` are
  *  emitted by a callback route redirect. The distinction the copy has to carry
  *  is "retry works" (expired/failed) versus "retrying will do the same thing"
- *  (already_linked). Sign-in links expire 10 minutes after you start them
- *  (src/services/oauth-tx.ts). */
+ *  (`merge_*`). Sign-in links expire 10 minutes after you start them
+ *  (src/services/oauth-tx.ts).
+ *
+ *  THE `merge_*` SET IS ONE REFUSAL WITH SEVEN REASONS, not seven failures.
+ *  Each maps 1:1 to a `MergeBlocker` from src/services/accounts.ts, and the
+ *  split exists because the remedies differ: the first four name a field an
+ *  admin clears from /admin/accounts in seconds, and the last three have no
+ *  cheap fix and must not pretend otherwise. The generic `already_linked` this
+ *  set replaced said only "ask an admin" — which sent members looking for an
+ *  admin merge tool that does not exist, when clearing a stale status note
+ *  would have done it.
+ *
+ *  Both audiences read these. A member who isn't an admin still gets a usable
+ *  sentence ("ask an admin to clear X") rather than a dead end, and the admin
+ *  they forward it to is told the lever by name. Nothing here leaks: this copy
+ *  is reachable only after EVE confirmed the caller's owner hash matches the
+ *  account being described, so they provably own both sides. */
 export const ACCOUNT_ERRORS = {
   already_linked:
     "That character belongs to an account with its own history, so it can't be merged automatically. Ask an admin.",
+  merge_admin:
+    "That character sits on an account with admin rights. An admin can remove those, then link it again.",
+  merge_tier_locked:
+    "That character sits on an account with a manually set tier. An admin can return it to automatic, then link it again.",
+  merge_status:
+    "That character sits on an account that isn't active. An admin can reactivate it, then link it again.",
+  merge_note:
+    "That character sits on an account carrying an admin note. An admin can clear the note, then link it again.",
+  merge_characters:
+    "That character sits on an account with other characters of its own, so it can't be merged automatically. Ask an admin.",
+  merge_discord:
+    "That character sits on an account with its own Discord link, so it can't be merged automatically. Ask an admin.",
+  merge_payouts:
+    "That character sits on an account with payout history, so it can't be merged automatically. Ask an admin.",
   discord_already_linked: "That Discord account is already linked to another account.",
   discord_denied: "Discord authorization was cancelled.",
   discord_expired:

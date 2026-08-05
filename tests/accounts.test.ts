@@ -22,6 +22,7 @@ import {
   unlinkCharacter,
   wakeSelf,
   type EveCallbackCharacter,
+  type MergeBlocker,
 } from "@/services/accounts";
 import { createSession, getSessionAccount } from "@/services/session";
 import { decryptToken } from "@/lib/crypto";
@@ -150,9 +151,10 @@ describe("linkCharacter", () => {
     const alt = ch({ characterId: 90000003, characterName: "Alt", ownerHash: "oh-1" });
     expect(await link(a.accountId, alt)).toEqual({ ok: true });
 
-    // same character, same owner, other account → rejected
+    // same character, same owner, other account → rejected. Account a holds
+    // its own main as well as the alt, so the count guard is what refuses.
     const res = await link(b.accountId, alt);
-    expect(res).toEqual({ ok: false, error: "already_linked" });
+    expect(res).toEqual({ ok: false, error: "already_linked", blocker: "characters" });
   });
 
   it("does not demote a tier_locked account on main unlink", async () => {
@@ -380,7 +382,14 @@ describe("linkCharacter refusing a real account", () => {
   // exactly one test and names itself.
   // `mutate` returns Promise<unknown>, not Promise<void>: the one-liner cases
   // hand back a drizzle query builder, which resolves to a QueryResult.
-  const refuses = async (mutate: (accountId: string) => Promise<unknown>) => {
+  // `blocker` is asserted, not just the refusal: the reason reaches the member
+  // as the page copy telling them WHICH thing an admin has to clear, so a
+  // guard reporting its neighbour's reason is a user-visible defect that a
+  // bare `ok: false` assertion would pass straight over.
+  const refuses = async (
+    blocker: MergeBlocker,
+    mutate: (accountId: string) => Promise<unknown>,
+  ) => {
     const main = await seedAccount(ctx.db, { tier: "flygd" });
     await seedCharacter(ctx.db, cfg, { id: 90000401, accountId: main.id, main: true });
     const stray = await ctx.db.transaction((tx) =>
@@ -392,7 +401,7 @@ describe("linkCharacter refusing a real account", () => {
       linkCharacter(tx, cfg, main.id, ch({ characterId: 90000402, ownerHash: "oh-402" })),
     );
 
-    expect(res).toEqual({ ok: false, error: "already_linked" });
+    expect(res).toEqual({ ok: false, error: "already_linked", blocker });
     const [still] = await ctx.db
       .select()
       .from(character)
@@ -401,22 +410,22 @@ describe("linkCharacter refusing a real account", () => {
   };
 
   it("refuses an admin account", () =>
-    refuses((id) =>
+    refuses("admin", (id) =>
       ctx.db.update(account).set({ isAdmin: true }).where(eq(account.id, id)),
     ));
 
   it("refuses a tier-locked account", () =>
-    refuses((id) =>
+    refuses("tier_locked", (id) =>
       ctx.db.update(account).set({ tierLocked: true }).where(eq(account.id, id)),
     ));
 
   it("refuses a cryo account", () =>
-    refuses((id) =>
+    refuses("status", (id) =>
       ctx.db.update(account).set({ status: "cryo" }).where(eq(account.id, id)),
     ));
 
   it("refuses an account carrying an admin's status note", () =>
-    refuses((id) =>
+    refuses("note", (id) =>
       ctx.db
         .update(account)
         .set({ statusNote: "inactive since March, keep the tier" })
@@ -424,7 +433,7 @@ describe("linkCharacter refusing a real account", () => {
     ));
 
   it("refuses an account with a Discord link", () =>
-    refuses(async (id) => {
+    refuses("discord", async (id) => {
       await ctx.db.insert(discordLink).values({ accountId: id, discordUserId: "d-1" });
     }));
 
@@ -439,12 +448,12 @@ describe("linkCharacter refusing a real account", () => {
   };
 
   it("refuses an account that created a payout operation", () =>
-    refuses(async (id) => {
+    refuses("payouts", async (id) => {
       await seedOperation(id);
     }));
 
   it("refuses an account that is a payout participant", () =>
-    refuses(async (id) => {
+    refuses("payouts", async (id) => {
       const op = await seedOperation(null);
       await ctx.db
         .insert(payoutParticipant)
@@ -452,7 +461,7 @@ describe("linkCharacter refusing a real account", () => {
     }));
 
   it("refuses an account that recorded a payment", () =>
-    refuses(async (id) => {
+    refuses("payouts", async (id) => {
       const op = await seedOperation(null);
       const [p] = await ctx.db
         .insert(payoutParticipant)
@@ -466,7 +475,7 @@ describe("linkCharacter refusing a real account", () => {
     }));
 
   it("refuses an account holding a second character", () =>
-    refuses(async (id) => {
+    refuses("characters", async (id) => {
       await seedCharacter(ctx.db, cfg, { id: 90000403, accountId: id });
     }));
 });
