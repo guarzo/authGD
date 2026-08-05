@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { Client } from "pg";
 import { TEST_URL } from "./db";
-import { deriveWorktreeDbName } from "./test-db-url";
+import { deriveWorktreeDbName, OWNS_TEST_DB } from "./test-db-url";
 
 /**
  * Vitest `globalSetup`: take a session-scoped advisory lock on the test
@@ -69,6 +69,105 @@ function debugLog(...args: unknown[]): void {
   if (process.env.DEBUG) console.debug("[global-setup]", ...args);
 }
 
+/** Postgres error codes we treat as expected rather than exceptional. */
+const UNDEFINED_DATABASE = "3D000"; // invalid_catalog_name
+const DUPLICATE_DATABASE = "42P04"; // lost a create race with a sibling run
+
+function hasCode(err: unknown, code: string): boolean {
+  return typeof err === "object" && err !== null && "code" in err && err.code === code;
+}
+
+/**
+ * Connects to the `postgres` maintenance database on the same server and
+ * creates this worktree's database.
+ *
+ * Returns false rather than throwing on every failure: the caller falls open,
+ * and a developer with Postgres down must still be able to run the large share
+ * of the suite that never touches it. The same 3s connect timeout as the main
+ * client — without it an unreachable port hangs the whole run instead of
+ * failing, because this sandbox's loopback drops packets rather than sending RST.
+ */
+async function createDatabase(url: URL): Promise<boolean> {
+  const name = decodeURIComponent(url.pathname.replace(/^\//, ""));
+  const admin = new Client({
+    host: url.hostname,
+    port: Number(url.port || "5432"),
+    user: decodeURIComponent(url.username),
+    password: decodeURIComponent(url.password),
+    database: "postgres",
+    connectionTimeoutMillis: 3000,
+  });
+  admin.on("error", (err) => debugLog("maintenance connection error:", err));
+  try {
+    await admin.connect();
+    // Identifier, not a value — it cannot be a bound parameter. The name comes
+    // from deriveWorktreeDbName, which emits only [a-z0-9_], so quoting it is
+    // belt-and-braces rather than the only defence.
+    await admin.query(`CREATE DATABASE "${name}" OWNER authgd`);
+    debugLog(`created ${name}`);
+    return true;
+  } catch (err) {
+    // A sibling run in this same worktree got there first. That is the goal
+    // state; the advisory lock below handles the concurrency it implies.
+    if (hasCode(err, DUPLICATE_DATABASE)) return true;
+    debugLog("could not create the test database:", err);
+    return false;
+  } finally {
+    try {
+      await admin.end();
+    } catch (err) {
+      debugLog("could not close the maintenance connection:", err);
+    }
+  }
+}
+
+/**
+ * This client is held open and idle for the whole run — ~70s for the full
+ * suite — so it is far more exposed than a borrowed pool client to the
+ * database going away mid-run (Postgres restarted, laptop slept). Without a
+ * listener, node-postgres emits `error` as an *unhandled* event and takes
+ * the process down with it, losing an otherwise-green run to a stack trace.
+ * Nothing is lost by ignoring it: the advisory lock releases itself when the
+ * connection dies, which is the entire reason this design needs no
+ * stale-lock handling. `src/worker/index.ts` and `tests/worker-queues.test.ts`
+ * attach the same guard to their long-lived pg-boss connections.
+ */
+function newClient(): Client {
+  const client = new Client({
+    connectionString: TEST_URL,
+    connectionTimeoutMillis: 3000,
+  });
+  client.on("error", (err) => debugLog("lost the connection holding the lock:", err));
+  return client;
+}
+
+/**
+ * Connects, creating this worktree's database first if it does not exist yet.
+ * Returns null when the run should fail open.
+ */
+async function connectOrCreate(url: URL): Promise<Client | null> {
+  const client = newClient();
+  try {
+    await client.connect();
+    return client;
+  } catch (err) {
+    if (!hasCode(err, UNDEFINED_DATABASE) || !OWNS_TEST_DB) {
+      debugLog("could not connect for advisory lock:", err);
+      return null;
+    }
+  }
+  if (!(await createDatabase(url))) return null;
+
+  const retry = newClient();
+  try {
+    await retry.connect();
+    return retry;
+  } catch (err) {
+    debugLog("could not connect after creating the database:", err);
+    return null;
+  }
+}
+
 export function buildContentionMessage(opts: {
   host: string;
   port: string;
@@ -95,32 +194,12 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   // packets to a closed/unreachable port instead of sending RST, so pg's
   // default of no connection timeout would hang the whole run rather than
   // failing open. A few seconds is generous for a real local Postgres.
-  const client = new Client({
-    connectionString: TEST_URL,
-    connectionTimeoutMillis: 3000,
-  });
-
-  // This client is held open and idle for the whole run — ~70s for the full
-  // suite — so it is far more exposed than a borrowed pool client to the
-  // database going away mid-run (Postgres restarted, laptop slept). Without a
-  // listener, node-postgres emits `error` as an *unhandled* event and takes
-  // the process down with it, losing an otherwise-green run to a stack trace.
-  // Nothing is lost by ignoring it: the advisory lock releases itself when the
-  // connection dies, which is the entire reason this design needs no
-  // stale-lock handling. `src/worker/index.ts` and `tests/worker-queues.test.ts`
-  // attach the same guard to their long-lived pg-boss connections.
-  client.on("error", (err) => debugLog("lost the connection holding the lock:", err));
-
-  try {
-    await client.connect();
-  } catch (err) {
-    // Fail open: a large share of the suite never touches the database at all
-    // and must keep passing with Postgres down entirely. A connection failure
-    // here is not this lock's problem to report — whatever DB code the test
-    // itself exercises will surface its own error.
-    debugLog("could not connect for advisory lock:", err);
-    return async () => {};
-  }
+  const client = await connectOrCreate(url);
+  // Fail open: a large share of the suite never touches the database at all and
+  // must keep passing with Postgres down entirely. A connection failure here is
+  // not this lock's problem to report — whatever DB code the test itself
+  // exercises will surface its own error.
+  if (!client) return async () => {};
 
   const {
     rows: [{ pg_try_advisory_lock: acquired }],
