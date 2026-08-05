@@ -16,7 +16,7 @@ import {
 import { sql } from "drizzle-orm";
 import type { ContactSyncResult } from "@/core/contact-result";
 
-export const tierEnum = pgEnum("tier", ["flygd", "blue", "green", "pending"]);
+export const tierEnum = pgEnum("tier", ["member", "associate", "alumni", "pending"]);
 export const accountStatusEnum = pgEnum("account_status", ["active", "cryo"]);
 export const tokenStatusEnum = pgEnum("token_status", [
   "valid",
@@ -42,7 +42,7 @@ export const account = pgTable("account", {
   id: uuid("id").primaryKey().defaultRandom(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
-  tier: tierEnum("tier").notNull().default("green"),
+  tier: tierEnum("tier").notNull().default("alumni"),
   tierChangedAt: timestamp("tier_changed_at", { withTimezone: true }),
   tierChangedBy: text("tier_changed_by"), // account uuid or "system"
   tierLocked: boolean("tier_locked").notNull().default(false),

@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { account, character, discordLink } from "@/db/schema";
 import { setupTestDb } from "./helpers/db";
@@ -12,7 +12,7 @@ afterAll(() => ctx.cleanup());
 describe("schema", () => {
   it("creates an account with defaults and a character", async () => {
     const [acc] = await ctx.db.insert(account).values({}).returning();
-    expect(acc.tier).toBe("green");
+    expect(acc.tier).toBe("alumni");
     expect(acc.tierLocked).toBe(false);
     expect(acc.status).toBe("active");
     expect(acc.isAdmin).toBe(false);
@@ -62,5 +62,29 @@ describe("schema", () => {
           .where(eq(account.id, a2.id));
       }),
     ).rejects.toThrow();
+  });
+
+  it("tier enum carries the generic vocabulary in declaration order", async () => {
+    const res = await ctx.db.execute(
+      sql`SELECT e.enumlabel AS label
+          FROM pg_enum e
+          JOIN pg_type t ON t.oid = e.enumtypid
+          WHERE t.typname = 'tier'
+          ORDER BY e.enumsortorder`,
+    );
+    expect(res.rows.map((r) => r.label)).toEqual([
+      "member",
+      "associate",
+      "alumni",
+      "pending",
+    ]);
+  });
+
+  it("account.tier defaults to alumni", async () => {
+    const res = await ctx.db.execute(
+      sql`SELECT column_default FROM information_schema.columns
+          WHERE table_name = 'account' AND column_name = 'tier'`,
+    );
+    expect(String(res.rows[0]?.column_default)).toContain("alumni");
   });
 });
