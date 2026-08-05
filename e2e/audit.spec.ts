@@ -198,13 +198,22 @@ test("mono columns fit their widest value instead of painting over the next one"
   // The action is the column an admin scans, so it must fit rather than
   // ellipsise: the truncation on that cell is a backstop for a longer name
   // added later, not the normal rendering of a name that exists today.
-  const truncated = await page.evaluate(() =>
-    [...document.querySelectorAll("tbody tr")]
+  const action = await page.evaluate(() => {
+    const cells = [...document.querySelectorAll("tbody tr")]
       .map((tr) => tr.querySelectorAll("td")[2].querySelector(".ellipsis-cell"))
-      .filter((s): s is HTMLElement => !!s && s.scrollWidth > s.clientWidth)
-      .map((s) => s.textContent),
-  );
-  expect(truncated).toEqual([]);
+      .filter((s): s is HTMLElement => !!s);
+    return {
+      found: cells.length,
+      truncated: cells
+        .filter((s) => s.scrollWidth > s.clientWidth)
+        .map((s) => s.textContent),
+    };
+  });
+  // The probe has to have found something: `.ellipsis-cell` is a class, and a
+  // rename would otherwise leave an empty list that reads exactly like "nothing
+  // truncated".
+  expect(action.found).toBe(await page.locator("tbody tr").count());
+  expect(action.truncated).toEqual([]);
 });
 
 /**
@@ -485,6 +494,39 @@ test("a filtered paged view keeps its filter on the way back", async ({
 });
 
 /**
+ * A cursor that does not parse is discarded by the query, so the rows are the
+ * newest ones. Everything describing them has to agree with that: `?before=abc`
+ * is truthy, and reading the raw param rather than the parsed cursor labelled
+ * the newest page "older" and offered a way "back" to the page already on
+ * screen.
+ */
+test("a malformed cursor is not described as an older page", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });
+  await db.insert(auditLog).values(
+    Array.from({ length: 3 }, () => ({
+      actor: admin.id,
+      action: "tier.changed",
+      target: admin.id,
+      details: { to: "green" },
+    })),
+  );
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.goto("/admin/audit?before=abc");
+
+  // The rows really are the newest ones -- the same three the unfiltered page
+  // shows -- so this is about what the page SAYS, not about what it queried.
+  await expect(page.locator("tbody tr")).toHaveCount(3);
+  await expect(page.locator(".log__empty")).toHaveCount(0);
+
+  await expect(page.getByRole("heading", { name: "3 entries" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /older/ })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Latest entries" })).toHaveCount(0);
+});
+
+/**
  * The full payload was `white-space: pre` in an `overflow-x: auto` box: a
  * scroll container with no way into it from a keyboard (WCAG 2.1.1). Adding a
  * tab stop was the wrong fix -- a full page carries AUDIT_PAGE_SIZE of these.
@@ -525,7 +567,10 @@ test("an expanded payload is not a keyboard-unreachable scroll container", async
   }));
   // Content that only a pointer could reach would need scrollWidth > clientWidth.
   expect(metrics.scrollWidth).toBeLessThanOrEqual(metrics.clientWidth + 1);
-  expect(metrics.overflowX).not.toBe("scroll");
+  // `auto` as well as `scroll`: the rule this replaced was `overflow-x: auto`,
+  // which computes to "auto", so excluding only "scroll" would stay green if
+  // someone restored it.
+  expect(metrics.overflowX).not.toMatch(/^(auto|scroll)$/);
   expect(metrics.tabIndex).toBeLessThan(0);
 
   // Long unbroken scope strings still wrap rather than spilling.
@@ -688,16 +733,24 @@ test("the action is a filter link like actor and target", async ({ page, context
   await action.click();
 
   await expect(page.locator("tbody tr")).toHaveCount(1);
+  // Content, not just the count: the empty state is also exactly one <tr>, so
+  // a filter that matched nothing would satisfy the count above. The form
+  // value alone proves nothing either -- it is `defaultValue` echoed back off
+  // the URL and reads the same whether or not the query used it.
+  await expect(page.locator(".log__empty")).toHaveCount(0);
+  await expect(page.locator("tbody tr").first().locator("td").nth(2)).toHaveText(
+    "status.changed",
+  );
   await expect(page.getByLabel("Action prefix", { exact: true })).toHaveValue(
     "status.changed",
   );
 });
 
 /**
- * A member is written to `actor` by exactly one service; every tier, status and
- * token event puts them in `target`. Filtering the wrong column returns "no
- * results", which is true and says nothing about the log actually being silent
- * on that person.
+ * A member reaches `actor` only for what they did to their own account; every
+ * tier change, derole and token event puts them in `target` with `system` or an
+ * admin acting. Filtering the wrong column returns "no results", which is true
+ * and says nothing about the log actually being silent on that person.
  */
 test("an empty actor filter points at the target column", async ({ page, context }) => {
   const admin = await seedMember(db, { name: "Boss", tier: "flygd", isAdmin: true });

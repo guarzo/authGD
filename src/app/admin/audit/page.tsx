@@ -165,11 +165,16 @@ function TargetCell({
 /**
  * Both ends of the keyset pager.
  *
- * Renders whenever there is a full page OR a cursor is set. The old condition
- * was `rows.length === AUDIT_PAGE_SIZE` alone, which made the last page a dead
- * end: at exactly AUDIT_PAGE_SIZE rows there is a page 2, page 2 has fewer
- * rows, so page 2 rendered no pager at all -- no way back, and no indication
- * you were not looking at the newest entries.
+ * Renders whenever there is a full page OR a valid cursor is set. The old
+ * condition was `rows.length === AUDIT_PAGE_SIZE` alone, which made the last
+ * page a dead end: at exactly AUDIT_PAGE_SIZE rows there is a page 2, page 2
+ * has fewer rows, so page 2 rendered no pager at all -- no way back, and no
+ * indication you were not looking at the newest entries.
+ *
+ * `hasLatest` is passed in rather than read off `params.before` here: a
+ * malformed cursor (`?before=abc`) is truthy but is discarded by the query, so
+ * reading the raw param would offer a `← Latest` control that leads to the
+ * result set already on screen.
  *
  * `← Latest` reuses `filterHrefBase`, so it keeps the active filter and drops
  * only the cursor.
@@ -180,19 +185,18 @@ function TargetCell({
  */
 function Pager({
   rows,
-  params,
+  hasLatest,
   older,
   filterHrefBase,
   top = false,
 }: {
   rows: ResolvedAuditRow[];
-  params: Record<string, string | undefined>;
+  hasLatest: boolean;
   older: URLSearchParams;
   filterHrefBase: string;
   top?: boolean;
 }) {
   const hasOlder = rows.length === AUDIT_PAGE_SIZE;
-  const hasLatest = Boolean(params.before);
   if (!hasOlder && !hasLatest) return null;
   return (
     <div className={`btn-row pager${top ? " pager--top" : ""}`}>
@@ -253,6 +257,12 @@ export default async function AdminAuditPage({
     before: one(raw.before),
   };
   const beforeId = params.before ? Number(params.before) : undefined;
+  // The one place the cursor is judged valid, so the query, the past-the-end
+  // state, the heading and the pager cannot disagree about it. `?before=abc`
+  // is truthy but parses to NaN, and the query discards it and returns the
+  // newest page -- anything reading the raw param would then label those rows
+  // "older" and offer a way "back" to the page already on screen.
+  const hasCursor = beforeId !== undefined && Number.isFinite(beforeId);
 
   const db = getDb();
   // Both filters resolve concurrently; each costs 0 queries when absent or
@@ -279,7 +289,7 @@ export default async function AdminAuditPage({
         actorIds: idsOf(actorRes),
         action: params.action || undefined,
         targetIds: idsOf(targetRes),
-        beforeId: Number.isFinite(beforeId) ? beforeId : undefined,
+        beforeId: hasCursor ? beforeId : undefined,
       });
 
   // The active filters, cursor dropped. Shared by the pager (which then adds
@@ -328,18 +338,14 @@ export default async function AdminAuditPage({
   // (or the filtered subset of it) genuinely having zero rows. Mirrors the
   // priority `emptyMessage` below uses: an unmatched name still names the
   // field that failed, even if `before` also happens to be set.
-  const pastEnd =
-    !unmatched.length &&
-    beforeId !== undefined &&
-    Number.isFinite(beforeId) &&
-    rows.length === 0;
+  const pastEnd = !unmatched.length && hasCursor && rows.length === 0;
 
-  // "older" whenever a cursor is set. Without it the heading read
+  // "older" whenever a valid cursor is set. Without it the heading read
   // `100+ entries` byte-identical on page 1 and page 7, so the one piece of
   // text describing the result set never admitted you had paged away from the
   // newest rows. It says which KIND of page this is; the `← Latest` control
   // beside it is the way back.
-  const pageQualifier = params.before ? "older " : "";
+  const pageQualifier = hasCursor ? "older " : "";
   const countLabel =
     rows.length === 0
       ? pastEnd
@@ -365,11 +371,12 @@ export default async function AdminAuditPage({
       <a href={filterHrefBase}>Back to the latest entries</a>
     </>
   ) : filtered ? (
-    // The actor/target asymmetry bites hardest here: a member almost never
-    // appears as an actor, so "no results" for an actor filter usually means
-    // the filter was pointed at the wrong column, not that the log is silent
-    // about that person. The nudge only appears when it can actually help --
-    // when actor is set and target is not.
+    // The actor/target asymmetry bites hardest here: a member appears as an
+    // actor only for what they did to their own account, so "no results" for
+    // an actor filter usually means the filter was pointed at the wrong
+    // column, not that the log is silent about that person. The nudge only
+    // appears when it can actually help -- when actor is set and target is
+    // not.
     <>
       Nothing matches this filter.
       {params.actor && !params.target && (
@@ -410,11 +417,14 @@ export default async function AdminAuditPage({
           tier."), so it is wired up with aria-describedby instead.
 
           Actor and Target are not symmetrical and nothing on the page said so.
-          A member is written to `actor` by exactly one service (Discord
-          linking); every tier change, status change and token event puts them
-          in `target`, with the admin or `system` as the actor. Guessing wrong
-          gets you "Nothing matches this filter." -- true, and completely
-          misleading about whether the log has anything on that person. */}
+          A member reaches `actor` only for what they did to their own account
+          -- linking or reauthing a character, changing their main, leaving
+          cryo, linking Discord (accounts.ts, discord-link.ts). Everything done
+          TO them is on `target` with `system` or an admin as the actor, and
+          that is most of the log: every tier change, every derole, every token
+          event. Guessing wrong gets you "Nothing matches this filter." --
+          true, and completely misleading about whether the log has anything on
+          that person. */}
         <div className="filter-form__cell">
           <label className="filter-form__label" htmlFor="filter-actor">
             Actor
@@ -491,7 +501,7 @@ export default async function AdminAuditPage({
           next page was to traverse every link in every row. */}
       <Pager
         rows={rows}
-        params={params}
+        hasLatest={hasCursor}
         older={older}
         filterHrefBase={filterHrefBase}
         top
@@ -623,7 +633,12 @@ export default async function AdminAuditPage({
         </table>
       </Scroller>
 
-      <Pager rows={rows} params={params} older={older} filterHrefBase={filterHrefBase} />
+      <Pager
+        rows={rows}
+        hasLatest={hasCursor}
+        older={older}
+        filterHrefBase={filterHrefBase}
+      />
     </main>
   );
 }
