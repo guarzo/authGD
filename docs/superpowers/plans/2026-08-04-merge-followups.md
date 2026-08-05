@@ -394,11 +394,11 @@ git commit -m "feat(discord): add unlinkDiscord, the counterpart linkDiscord nev
 
 **Files:**
 - Modify: `src/app/account/actions.ts` (add one action)
-- Modify: `src/app/account/page.tsx:252-268` (the Discord row)
+- Modify: `src/app/account/page.tsx:278-293` (the Discord row)
 - Test: `e2e/account.spec.ts`
 
 **Interfaces:**
-- Consumes: `unlinkDiscord` from Task 2, and the existing `requireAccount()` helper in `actions.ts:16-24`.
+- Consumes: `unlinkDiscord` from Task 2, and the existing `requireAccount()` helper in `actions.ts:14-22`.
 - Produces: `unlinkDiscordAction(): Promise<void>`, bound with no arguments — it only ever acts on the caller's own account.
 
 - [ ] **Step 1: Add the server action**
@@ -424,13 +424,13 @@ export async function unlinkDiscordAction(): Promise<void> {
 
 - [ ] **Step 2: Render the control**
 
-In `src/app/account/page.tsx`, extend the actions import to include `unlinkDiscordAction`. Replace the Discord `<dd>` (currently `:253-267`) with:
+In `src/app/account/page.tsx`, extend the actions import to include `unlinkDiscordAction`. Replace the Discord `<dd>` (currently `:279-293`) with:
 
 ```tsx
 <dd>
   {view.discordLinked ? (
     // Its own arm scope, not the manifest's: ConfirmSubmit throws outside
-    // one (confirm-submit.tsx:113-116), and a scope of one is right here —
+    // one (confirm-submit.tsx:115), and a scope of one is right here —
     // arming this must not disarm a character row three sections down.
     <ConfirmArmScope>
       <span className="inline-pair">
@@ -518,7 +518,7 @@ The copy change ships here rather than on its own: it promises an admin control,
 
 **Files:**
 - Modify: `src/app/admin/accounts/actions.ts` (add one action)
-- Modify: `src/app/admin/accounts/page.tsx:420-426` (the Discord cell)
+- Modify: `src/app/admin/accounts/page.tsx:493-499` (the Discord cell)
 - Modify: `src/lib/error-redirects.ts` (the `merge_discord` copy and the module doc)
 - Test: `e2e/admin.spec.ts`
 
@@ -557,12 +557,12 @@ Note the narrowing: `redirectOnMutationError` is exhaustive over `"not_authorize
 
 - [ ] **Step 2: Render the control**
 
-In `src/app/admin/accounts/page.tsx`, extend the actions import to include `unlinkDiscordAction`, then replace the Discord `<td>` (currently `:420-426`) with:
+In `src/app/admin/accounts/page.tsx`, extend the actions import to include `unlinkDiscordAction`, then replace the Discord `<td>` (currently `:493-499`) with:
 
 ```tsx
 <td>
   {r.discordLinked ? (
-    // Already inside the tbody-wide ConfirmArmScope (:253), like every
+    // Already inside the tbody-wide ConfirmArmScope (:281), like every
     // other confirm in this row. Names its row for the same reason the
     // Actions cell does: "unlink" read out of context says whose Discord
     // is about to be disconnected to nobody.
