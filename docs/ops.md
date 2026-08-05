@@ -180,7 +180,24 @@ character already on the ACL.
 | `STANDINGS_LABEL` | no (default `authgd`) | in-game contact label the app OWNS — see the warning below |
 | `STANDINGS_VALUE` | no (default 5) | standing pushed for members |
 | `ESI_CONTACT` | yes | operator contact sent in the ESI User-Agent (CCP requirement) |
+| `PAYOUT_CORP_SHARE_PCT` | no (default `10`) | the corp's cut, stamped onto each operation **at creation**. Changing it re-rates new operations only — see below |
 | `SYNC_MODE` | **yes, no default** | `live` \| `dry-run`. `dry-run` suppresses every outbound mutation (see below). Production MUST be `live` |
+
+### Changing the corp share
+
+`PAYOUT_CORP_SHARE_PCT` is read once, when an operation is created, and the
+value is then persisted on that operation's own row. Changing the secret does
+**not** re-rate anything that already exists — a payout finalized at 10% keeps
+rendering and paying at 10% forever, which is the point: the number people were
+actually paid at has to stay recoverable from the operation itself.
+
+Accepts a plain percentage — `10`, `12.5`, `7.25`. Two decimal places maximum
+(the column is `numeric(5, 2)`), 0 to 100 inclusive. A malformed value fails
+startup rather than silently falling back, the same as every other config error.
+
+There is deliberately no per-operation override in the UI. If a single operation
+genuinely needs a different share, `setCorpSharePct` still exists in the service
+layer and is still audited; it just has no page that calls it.
 
 ### Adding an SSO scope
 

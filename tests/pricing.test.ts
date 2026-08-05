@@ -1,16 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  selectPrice,
-  PRICING_MODES,
-  type PricingMode,
-  type QuoteSides,
-} from "@/core/pricing";
-
-describe("PRICING_MODES", () => {
-  it("lists all four modes", () => {
-    expect(PRICING_MODES).toEqual(["sell_best", "sell_p05", "buy_best", "buy_p05"]);
-  });
-});
+import { selectPrice, type PricingMode, type QuoteSides } from "@/core/pricing";
 
 describe("selectPrice", () => {
   const full: QuoteSides = {

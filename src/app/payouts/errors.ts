@@ -33,15 +33,26 @@ export const NEW_OPERATION_ERRORS = {
 
 /** Every code an action on `/payouts/[id]` can redirect with.
  *
- *  Several of these are backstops rather than everyday errors: the appraisal
- *  form's pricing mode and location kind are <select>s and its location id is
- *  pattern-guarded, so `pricing_mode`, `location_kind`, `station_invalid` and
- *  `region_invalid` are unreachable by filling the form in. That is deliberate
- *  — a redirect cannot carry the loot paste back, so those failures are
- *  prevented at the input rather than explained after the fact. None of these
- *  messages claims the paste survived, because on those paths it did not.
+ *  Several of these are backstops rather than everyday errors, unreachable by
+ *  using the page as it stands today, kept anyway because each action still
+ *  accepts a raw `FormData` and a hand-built request can still hit it:
  *
- *  `appraisal_failed` is the one everyday rejection from that same form, and
+ *  - `pricing_mode`, `location_kind`, `station_invalid`, `region_invalid` —
+ *    `AppraiseForm` used to submit a pricing-mode `<select>`, a location-kind
+ *    `<select>`, and a pattern-guarded location id; all three are gone now
+ *    that `addAppraisedPoolAction` hardcodes Jita sell-best (see that
+ *    action's own comment), so these four codes have no path through the
+ *    current form at all, let alone an invalid one.
+ *  - `share_format`, `share_range` — `setCorpShareAction`'s own `<form>` was
+ *    removed from the facts grid (corp share is a deployment-wide default
+ *    now, not a per-operation field); the action and its validation stayed
+ *    (see `setCorpShareAction`'s comment), so these two still guard a caller
+ *    that no longer exists on this page.
+ *
+ *  None of these messages claims the paste or the roster survived, because on
+ *  those paths it did not — a redirect cannot carry either back.
+ *
+ *  `appraisal_failed` is the one everyday rejection from the appraisal form, and
  *  it is the one exception to "a redirect cannot carry the loot paste back":
  *  `addAppraisedPoolAction` no longer redirects on this code at all.
  *  `AppraiseForm` (`[id]/appraise-form.tsx`) calls it through `useActionState`

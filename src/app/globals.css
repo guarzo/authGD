@@ -487,6 +487,36 @@ a:hover {
   margin-top: var(--s-2);
 }
 
+/* Mission-patch furniture: a small designation above the page's own H1,
+   naming the instrument rather than the page ("Flight log", not "Payouts") —
+   DESIGN.md's own metaphor for this surface ("the flight log, not the
+   cockpit display"). Same four properties as `.launch__motto` and
+   `.shell__wordmark span` (mono, `--track-furniture`, `--ink-faint`), and
+   deliberately not weight 600: the label register above is for a fixed word
+   naming a field, and this names nothing — it is a running masthead, the same
+   job `.launch__motto` already does at login. Joining the register would move
+   it to 600 and misrepresent it as a label. */
+.page__stamp {
+  margin: 0 0 var(--s-2);
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: var(--t-label);
+  letter-spacing: var(--track-furniture);
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+/* The page's H1 and its one primary action share a line, so a control like
+   "New operation" reads as this view's single gold action at a glance rather
+   than a button stranded in its own row below the lede. Wraps at its own gap
+   on narrow viewports instead of forcing the row to scroll. */
+.page__head-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-4);
+  flex-wrap: wrap;
+}
+
 /* The account page's one-line verdict: whether there is anything below the
    fold worth reading. It is always a `.st` Status token, same as everything
    else this page calls state, so "the mono word is what the system computed"
@@ -819,6 +849,22 @@ h3.rule-head__label {
    one that should absorb the leftover width. */
 .log__col--fit {
   width: 1%;
+}
+
+/* Payouts list only. The edge columns get more room than the interior ones,
+   so the row's rhythm varies with the step (DESIGN.md: "rhythm comes from
+   varying the step, not from repeating one padding value") instead of
+   spending .log's one padding value identically across all five columns.
+   Name is the row's link and the first thing the eye lands on; Paid is the
+   last fact and sits against the table's own outer rule. */
+.log--payouts th:first-child,
+.log--payouts td:first-child {
+  padding-left: var(--s-5);
+}
+
+.log--payouts th:last-child,
+.log--payouts td:last-child {
+  padding-right: var(--s-5);
 }
 
 /* Ten columns of state per row: the standard cell padding pushes the accounts
@@ -1781,6 +1827,28 @@ h3.rule-head__label {
 .form-stack__field {
   display: grid;
   gap: var(--s-1);
+}
+
+/* --- Form panel (payouts/new) -------------------------------------------- */
+/* The second genuine "object on an empty field" in the system, alongside the
+   login panel: a short two-field form with nothing to sit on read as a
+   settings row rather than the start of a mission. `--hull` is the token
+   DESIGN.md names for exactly this use ("panels, table headers, inset
+   regions"), so the ground under the form differs from `--void` without
+   inventing a new one. The page's own H1 and lede stay on the page ground
+   — only the form itself is boxed. */
+/* No registration ticks here, deliberately. They are the obvious way to make
+   this panel rhyme with the login one, and DESIGN.md rules them out by name:
+   "on the login panel only. Used once, deliberately, not as a repeating
+   motif." A second use is the repetition the rule exists to prevent, and it
+   costs the login panel the thing that made it worth marking. The ground
+   change alone carries the panel. */
+.form-panel {
+  max-width: var(--measure);
+  padding: var(--s-7) var(--s-6) var(--s-6);
+  background: var(--hull);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius);
 }
 
 .filters {

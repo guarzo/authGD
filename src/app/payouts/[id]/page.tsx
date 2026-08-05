@@ -7,7 +7,11 @@ import { Notice, RuleHead, Scroller, SiteHeader, Status } from "@/app/_component
 import { brandProps } from "@/app/_components/brand-server";
 import { Disclosure } from "@/app/_components/disclosure";
 import { Submit } from "@/app/_components/submit";
-import { ConfirmArmScope, ConfirmSubmit } from "@/app/_components/confirm-submit";
+import {
+  ConfirmArmScope,
+  ConfirmCost,
+  ConfirmSubmit,
+} from "@/app/_components/confirm-submit";
 import { requirePayoutReader } from "../access";
 import {
   addFlatPoolAction,
@@ -20,7 +24,6 @@ import {
   removeParticipantAction,
   revertPaymentAction,
   setBattleReportUrlAction,
-  setCorpShareAction,
   setItemPriceAction,
   setNameAction,
   setNotesAction,
@@ -38,7 +41,6 @@ import { CopyAmountButton } from "./copy-amount-button";
 import { PaymentHistory } from "./payment-history";
 import { deriveRosterWarnings } from "./roster-warnings";
 import type { PricingMode } from "@/core/pricing";
-import { iskToCents } from "@/core/payout-split";
 import { fmtIsk } from "@/app/_components/format-isk";
 
 export const dynamic = "force-dynamic";
@@ -181,6 +183,26 @@ export default async function PayoutOperationPage({
   const { duplicateUnresolvedNames, crossStateClashes } =
     deriveRosterWarnings(participants);
 
+  // An unresolved item priced at 0.00 is the one thing on this page an
+  // operator MUST see before finalizing: it means the total is quietly low
+  // and everyone is about to be underpaid. This used to render one `Notice`
+  // per affected pool (N pools with unresolved items produced N alarm
+  // blocks); collapsed here into a single page-level list so the notice
+  // below renders once regardless of how many pools it spans. Naming the
+  // items, not just a count, is the part that actually matters — a bare
+  // count doesn't tell you whether it's a junk module or the faction
+  // battleship.
+  const poolsWithUnresolvedItems = pools
+    .map((pool, index) => ({
+      index,
+      unresolved: pool.items.filter((i) => i.priceSource === "unresolved"),
+    }))
+    .filter(({ unresolved }) => unresolved.length > 0);
+  const totalUnresolvedItems = poolsWithUnresolvedItems.reduce(
+    (sum, p) => sum + p.unresolved.length,
+    0,
+  );
+
   // Same semantics as the list page's paidCount (payout-view.ts): an excluded
   // row is owed nothing and drops out of the denominator too, so an
   // all-excluded roster reads 0/0 rather than 0/N.
@@ -262,215 +284,174 @@ export default async function PayoutOperationPage({
         <dl className="facts">
           <dt>Status</dt>
           <dd>
-            {operation.status === "finalized" ? (
-              <Status tone="ok">finalized</Status>
-            ) : (
-              <Status tone="off">draft</Status>
-            )}
+            <div className="stack">
+              {operation.status === "finalized" ? (
+                <Status tone="ok">finalized</Status>
+              ) : (
+                <Status tone="off">draft</Status>
+              )}
+              {/* Frozen (a payment recorded, every number fixed for good) used
+                  to be a permanent `warn` Notice below this grid. That read as
+                  an alarm on a workflow's successful terminal state — DESIGN.md's
+                  "nothing reads as punishment" applies here as much as it does to
+                  a tier or a dead token — and it rendered for every reader
+                  regardless of role, so a member checking their own share read
+                  editing rules ("Unlock reopens…") that never applied to them;
+                  they cannot edit this page either way. A neutral Status token
+                  states the fact to everyone in `--ink-dim`; the editing-rules
+                  prose worth keeping for an operator moved to a `.dim` sentence
+                  beside the roster's payment controls, gated on
+                  `access.isOperator`, below. */}
+              {locked && <Status tone="off">frozen</Status>}
+            </div>
           </dd>
           <dt>Name</dt>
+          <dd>{operation.name}</dd>
+          <dt>Date</dt>
+          <dd className="mono">{fmtDate(operation.occurredAt)}</dd>
+          <dt>Battle report</dt>
           <dd>
-            {/* Unlike Corp share below, this fact and its editor would say the
-                SAME string twice: corp share's line is derived (an ISK amount
-                and a percentage the input does not contain), while the name is
-                simply the input's own value. So the read-only line renders only
-                for a reader who cannot edit — for an operator the field IS the
-                current value, and `<h1>` above already states it. The create
-                form collects name + date only, so this is the whole correction
-                path if either was mistyped. */}
-            <div className="stack">
-              {!canEdit && <span>{operation.name}</span>}
-              {canEdit && (
-                <form
-                  action={setNameAction.bind(null, operation.id)}
-                  className="inline-form"
-                >
+            {/* The clickable link is worth keeping for a reader, but for an
+                operator it is the second copy of the same URL on this page —
+                the lede above already carries it. Editing lives in the
+                disclosure below rather than here. */}
+            {operation.battleReportUrl ? (
+              <a href={operation.battleReportUrl} target="_blank" rel="noreferrer">
+                {operation.battleReportUrl}
+              </a>
+            ) : (
+              <span className="dim">Not set</span>
+            )}
+          </dd>
+          <dt>Corp share</dt>
+          <dd className="mono">
+            {/* This used to also carry an inline editor here — an operator who
+                accepted the create form's default committed the whole roster
+                to a percentage with no way back, so the correction path sat
+                inside the fact it corrected. The user has since decided corp
+                share is set once per deployment rather than per operation, so
+                the control is gone; this is now a plain fact, derived the same
+                way. `setCorpShareAction` and the column it writes are
+                unchanged and still exercised by services/payouts.ts's own
+                tests — see that action's comment for why it stays reachable
+                with no caller on this page. */}
+            {fmtIsk(corpAmount)} ISK{" "}
+            <span className="dim">({operation.corpSharePct}% + remainder)</span>
+          </dd>
+          <dt>Total loot</dt>
+          <dd className="mono">{fmtIsk(totalValue)} ISK</dd>
+          {/* Unlike the facts above, this row itself is conditional rather
+              than always-rendered-with-a-placeholder: a reader whose operation
+              has no notes gets no empty "Notes" label pointing at nothing. An
+              operator who wants to add a first note reaches the textarea
+              through "Edit details" below regardless of whether one exists
+              yet, so this row does not need the always-present-while-editable
+              exception it used to carry. */}
+          {operation.notes && (
+            <>
+              <dt>Notes</dt>
+              <dd>{operation.notes}</dd>
+            </>
+          )}
+        </dl>
+
+        {canEdit && (
+          // Name, Date, Battle report and Notes used to render four
+          // always-open forms directly in the facts grid above — permanently
+          // expanded editors for values that were either just typed on the
+          // create screen or rarely change again. The grid's job is "what is
+          // true right now?" (PRODUCT.md's "state before action"); editing is
+          // the rare case, so it collapses behind one disclosure instead.
+          // Each field keeps its own form and its own server action
+          // (setNameAction / setOccurredAtAction / setBattleReportUrlAction /
+          // setNotesAction) rather than merging into one submit, so the four
+          // distinct audit rows each action writes stay four distinct audit
+          // rows.
+          <Disclosure
+            summary="Edit details"
+            ariaLabel="Edit details — operation name, date, battle report link, and notes"
+          >
+            <div className="form-stack">
+              <form
+                action={setNameAction.bind(null, operation.id)}
+                className="form-stack__field"
+              >
+                <label htmlFor="detail-name">Operation name</label>
+                <div className="inline-form">
                   <input
+                    id="detail-name"
                     className="field field--grow"
                     name="name"
                     required
                     defaultValue={operation.name}
-                    aria-label="Operation name"
                   />
                   <Submit className="btn btn--micro" aria-label="save operation name">
                     save
                   </Submit>
-                </form>
-              )}
-            </div>
-          </dd>
-          <dt>Date</dt>
-          <dd className="mono">
-            <div className="stack">
-              {!canEdit && <span>{fmtDate(operation.occurredAt)}</span>}
-              {canEdit && (
-                <form
-                  action={setOccurredAtAction.bind(null, operation.id)}
-                  className="inline-form"
-                >
+                </div>
+              </form>
+              <form
+                action={setOccurredAtAction.bind(null, operation.id)}
+                className="form-stack__field"
+              >
+                <label htmlFor="detail-date">Operation date</label>
+                <div className="inline-form">
                   <input
-                    className="field"
+                    id="detail-date"
+                    className="field mono"
                     type="date"
                     name="occurredAt"
                     max={today}
                     required
                     defaultValue={fmtDate(operation.occurredAt)}
-                    aria-label="Operation date"
                   />
                   <Submit className="btn btn--micro" aria-label="save operation date">
                     save
                   </Submit>
-                </form>
-              )}
-            </div>
-          </dd>
-          <dt>Battle report</dt>
-          <dd>
-            <div className="stack">
-              {/* The clickable link is worth keeping for a reader, but for an
-                  operator it is the third copy of the same URL on this page:
-                  the lede above carries the same link, and the field below
-                  carries the same text. Only the reader's copy survives. */}
-              {!canEdit && (
-                <span>
-                  {operation.battleReportUrl ? (
-                    <a href={operation.battleReportUrl} target="_blank" rel="noreferrer">
-                      {operation.battleReportUrl}
-                    </a>
-                  ) : (
-                    <span className="dim">Not set</span>
-                  )}
-                </span>
-              )}
-              {canEdit && (
-                <form
-                  action={setBattleReportUrlAction.bind(null, operation.id)}
-                  className="inline-form"
-                >
+                </div>
+              </form>
+              <form
+                action={setBattleReportUrlAction.bind(null, operation.id)}
+                className="form-stack__field"
+              >
+                <label htmlFor="detail-battle-report">Battle report URL</label>
+                <div className="inline-form">
                   <input
+                    id="detail-battle-report"
                     className="field field--grow"
                     type="url"
                     name="battleReportUrl"
                     defaultValue={operation.battleReportUrl ?? ""}
-                    aria-label="Battle report URL"
                   />
                   <Submit className="btn btn--micro" aria-label="save battle report URL">
                     save
                   </Submit>
-                </form>
-              )}
-            </div>
-          </dd>
-          <dt>Corp share</dt>
-          <dd className="mono">
-            {/* `.stack` puts the amount line and the editor form on separate
-                rows — sharing one line ran the field and button straight into
-                "12,345 ISK (10% + remainder)" the moment the field grew wide
-                enough to matter. */}
-            <div className="stack">
-              <span>
-                {fmtIsk(corpAmount)} ISK{" "}
-                <span className="dim">({operation.corpSharePct}% + remainder)</span>
-              </span>
-              {/* The percentage used to be write-once: an operator who accepted
-                  the create form's default committed the whole roster to 0%
-                  with no way back at all — there is no route to delete a payout
-                  operation, only a loot pool within one, so nothing could undo
-                  the mistake. It sits inside the fact it corrects rather than
-                  in a separate edit panel, so the current value and the way to
-                  change it are the same glance. */}
-              {canEdit && (
-                <form
-                  action={setCorpShareAction.bind(null, operation.id)}
-                  className="inline-form"
-                >
-                  {/* No visible <label>: it only restated the <dt> "Corp
-                      share" a few characters to its left. Same shape as the
-                      unit price and shares inputs below — aria-label carries
-                      the name, the <dt> carries the visible one. */}
-                  <input
-                    className="field"
-                    name="corpSharePct"
-                    type="number"
-                    inputMode="decimal"
-                    min="0"
-                    max="100"
-                    step="0.01"
-                    required
-                    defaultValue={operation.corpSharePct}
-                    aria-label="Corp share %"
-                  />
-                  {/* Every "save" on this page needs its object spelled out: the
-                      word alone appears once here and once per participant row,
-                      and a screen-reader or speech-input operator reaching one out
-                      of visual context cannot tell them apart. Starts with the
-                      visible label, so it stays a WCAG 2.5.3 match. */}
-                  <Submit className="btn btn--micro" aria-label="save corp share">
-                    save
-                  </Submit>
-                </form>
-              )}
-            </div>
-          </dd>
-          <dt>Total loot</dt>
-          <dd className="mono">{fmtIsk(totalValue)} ISK</dd>
-          {/* Unlike the facts above, this row itself is conditional rather
-              than always-rendered-with-a-placeholder: an operator who cannot
-              edit and whose operation has no notes gets no empty "Notes"
-              label pointing at nothing. Once editable, the row always
-              renders — the textarea IS the affordance for adding a first
-              note, so hiding it until one exists would hide the only way to
-              write one. */}
-          {(operation.notes || canEdit) && (
-            <>
-              <dt>Notes</dt>
-              <dd>
-                <div className="stack">
-                  {!canEdit && operation.notes && <span>{operation.notes}</span>}
-                  {canEdit && (
-                    <form
-                      action={setNotesAction.bind(null, operation.id)}
-                      className="inline-form"
-                    >
-                      <textarea
-                        className="field field--grow"
-                        name="notes"
-                        rows={3}
-                        maxLength={500}
-                        defaultValue={operation.notes ?? ""}
-                        aria-label="Operation notes"
-                      />
-                      <Submit
-                        className="btn btn--micro"
-                        aria-label="save operation notes"
-                      >
-                        save
-                      </Submit>
-                    </form>
-                  )}
                 </div>
-              </dd>
-            </>
-          )}
-        </dl>
-
-        {locked && (
-          <Notice tone="warn">
-            <span>
-              <strong>This operation is frozen.</strong> A payment has been recorded, so
-              the loot pools, the roster, shares and the corp share are fixed permanently.
-              Reverting a payment does not reopen editing — it corrects who has been paid,
-              and nothing else. If the wrong person was marked paid, revert them and pay
-              the right one; both work while frozen.
-            </span>
-          </Notice>
+              </form>
+              <form
+                action={setNotesAction.bind(null, operation.id)}
+                className="form-stack__field"
+              >
+                <label htmlFor="detail-notes">Operation notes</label>
+                <textarea
+                  id="detail-notes"
+                  className="field"
+                  name="notes"
+                  rows={3}
+                  maxLength={500}
+                  defaultValue={operation.notes ?? ""}
+                />
+                <Submit className="btn btn--micro" aria-label="save operation notes">
+                  save
+                </Submit>
+              </form>
+            </div>
+          </Disclosure>
         )}
 
-        {/* The Finalize/Unlock control row used to sit here, ahead of the
-            pools and roster it acts on. It now sits below the participants
-            table instead — see the comment there — so the button that
-            freezes every number on the page follows the numbers themselves
-            rather than heading them by ~600 rendered lines. */}
+        {/* The Finalize/Unlock control row sits below the participants table,
+            after the numbers it acts on rather than heading them — see the
+            comment there. */}
 
         <RuleHead
           as="h2"
@@ -478,6 +459,61 @@ export default async function PayoutOperationPage({
         >
           Loot pools
         </RuleHead>
+        {canEdit && (
+          // Used to sit below this table, collapsed once there was something
+          // to bury (`defaultOpen={pools.length === 0}`) — backwards for the
+          // primary workflow, which is "paste loot, then look at what it
+          // produced": a fresh operation's first action is this paste, so it
+          // now sits ahead of the table it fills, still open by default while
+          // there is nothing yet to look at.
+          <Disclosure
+            summary="Add loot"
+            ariaLabel="Add loot — paste for triff to appraise, or a flat-valued exception"
+            defaultOpen={pools.length === 0}
+          >
+            <div className="form-stack">
+              {/* The paste is the one true submit of this panel — see
+                  AppraiseForm's own `.btn--primary`. The flat pool used to
+                  share this open panel as a second, equally-weighted submit;
+                  it is now its own nested, never-open disclosure below, kept
+                  as a deliberate exception for when triff can't reach a
+                  number rather than a co-equal path an operator has to choose
+                  between on every visit. */}
+              <AppraiseForm operationId={operation.id} />
+
+              <Disclosure
+                summary="Or enter a flat value"
+                ariaLabel="Or enter a flat value — a manual total for when triff can't price something"
+              >
+                <form
+                  action={addFlatPoolAction.bind(null, operation.id)}
+                  className="form-stack"
+                >
+                  <label className="form-stack__field">
+                    Total value (ISK)
+                    <input
+                      className="field"
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      name="totalValue"
+                      required
+                    />
+                  </label>
+                  <label className="form-stack__field">
+                    Note (required — why this number)
+                    <input className="field" name="notes" required />
+                  </label>
+                  <label className="form-stack__field">
+                    What was in it (optional)
+                    <textarea className="field" name="rawPaste" rows={3} />
+                  </label>
+                  <Submit className="btn">Add flat pool</Submit>
+                </form>
+              </Disclosure>
+            </div>
+          </Disclosure>
+        )}
         <Scroller label="Loot pools">
           <table className="log">
             <thead>
@@ -553,90 +589,57 @@ export default async function PayoutOperationPage({
         {/* Below the Scroller rather than inside a pool row's cell: a warning
             nested in a horizontally-scrolling cell is unreachable at 320px
             (the same reason the account page's remediation prose sits outside
-            its Scroller, and the item disclosure just below is too). `Pool N`
-            ties each warning back to the numbered row above — `notes` is
-            optional on an appraised pool and unique on none. */}
-        {pools.map((pool, index) => {
-          // An unresolved item priced at 0.00 is the one thing on this page an
-          // operator MUST see before finalizing: it means the total is
-          // quietly low and everyone is about to be underpaid. Naming the
-          // items is the whole safeguard — a count alone doesn't tell you
-          // whether it's a junk module or the faction battleship.
-          const unresolved = pool.items.filter((i) => i.priceSource === "unresolved");
-          // A resolved item can still show "0.00" as its unit price: the line
-          // total is rounded once (see appraiseLoot), so a sub-cent per-unit
-          // price stores as a 2dp display value that reads as free while the
-          // line genuinely contributed to the pool. This is derived from the
-          // persisted row, not a separate flag.
-          const subCentPriced = pool.items.filter(
-            (i) =>
-              i.priceSource === "triff" &&
-              iskToCents(i.unitPrice) === 0n &&
-              iskToCents(i.totalValue) !== 0n,
-          );
-          if (unresolved.length === 0 && subCentPriced.length === 0) return null;
-          return (
-            <div key={pool.id}>
-              {unresolved.length > 0 && (
-                <Notice tone="warn">
-                  <span>
-                    <strong>
-                      Pool {index + 1}: {unresolved.length} item
-                      {unresolved.length === 1 ? "" : "s"} priced at 0.00
-                    </strong>{" "}
-                    — not found, or no market data for the chosen pricing. The pool total
-                    is short by whatever they are worth.
-                    <br />
-                    <span className="dim">
-                      {unresolved.map((i) => `${i.name} ×${i.qty}`).join(", ")}
-                    </span>
-                  </span>
-                </Notice>
-              )}
-              {subCentPriced.length > 0 && (
-                <Notice tone="warn">
-                  <span>
-                    <strong>
-                      Pool {index + 1}: {subCentPriced.length} item
-                      {subCentPriced.length === 1 ? "" : "s"} priced under 0.01 ISK each
-                    </strong>{" "}
-                    — the unit price rounds to 0.00 for display only; the line total is
-                    real and already counted in the pool.
-                    <br />
-                    <span className="dim">
-                      {subCentPriced
-                        .map((i) => `${i.name} ×${i.qty} (${fmtIsk(i.totalValue)} ISK)`)
-                        .join(", ")}
-                    </span>
-                  </span>
-                </Notice>
-              )}
-            </div>
-          );
-        })}
+            its Scroller, and the item disclosure just below is too).
 
-        {/* Unresolved items only — deliberately NOT the sub-cent ones. The two
-            warnings above separate "genuinely unpriced, so the total is short"
-            from "rounds to 0.00 for display but the line total is real and
-            already counted". Only the first is something an operator would
-            reopen an operation to fix; offering the route back for the second
-            would tell them to correct a number that is already right.
+            This used to be two Notices repeated once per affected pool — one
+            for genuinely unresolved items, one for a resolved item whose
+            unit price rounds to 0.00 for display while the line total is
+            real. The second one is gone entirely: its own copy said "the
+            line total is real and already counted in the pool", which is an
+            alarm block stating that nothing is wrong, and the item table
+            below already carries both the unit price and the line total for
+            exactly this reason. Only the first — genuinely unpriced, so the
+            total is short — survives, now collapsed into one page-level
+            notice naming every affected pool rather than one block per
+            pool. */}
+        {poolsWithUnresolvedItems.length > 0 && (
+          <Notice tone="warn">
+            <span>
+              <strong>
+                {totalUnresolvedItems} item{totalUnresolvedItems === 1 ? "" : "s"} priced
+                at 0.00 across {poolsWithUnresolvedItems.length} pool
+                {poolsWithUnresolvedItems.length === 1 ? "" : "s"}
+              </strong>{" "}
+              — not found, or no market data for the chosen pricing. The pool total is
+              short by whatever they are worth.
+              <br />
+              <span className="dim">
+                {poolsWithUnresolvedItems
+                  .map(
+                    ({ index, unresolved }) =>
+                      `Pool ${index + 1}: ${unresolved
+                        .map((i) => `${i.name} ×${i.qty}`)
+                        .join(", ")}`,
+                  )
+                  .join("; ")}
+              </span>
+            </span>
+          </Notice>
+        )}
 
-            The predicate is re-derived here rather than lifted out of the map
-            above: that map emits one warning block per pool, this is a single
-            page-level flag, and folding both into one loop would tangle two
-            shapes of output. */}
-        {pools.some((pool) => pool.items.some((i) => i.priceSource === "unresolved")) &&
+        {/* This notice is something an operator would reopen an operation to
+            fix; the item table below is where they'd do it. */}
+        {poolsWithUnresolvedItems.length > 0 &&
           !canEdit &&
           operation.status === "finalized" &&
           !locked && (
-            // The warnings above are visible to everyone, but only an operator
-            // in draft can act on them — reprice closes the moment the
+            // The warning above is visible to everyone, but only an operator
+            // in draft can act on it — reprice closes the moment the
             // operation is finalized. Without this, the only route back
             // (Unlock) is the quietest control on the page and says nothing
-            // about what it's for. `locked` is excluded: the frozen notice
-            // above already covers that case, and Unlock no longer exists once
-            // a payment is recorded.
+            // about what it's for. `locked` is excluded: the frozen Status
+            // token in the facts grid already states that case, and Unlock no
+            // longer exists once a payment is recorded.
             <Notice tone="info">
               {canUnlock ? (
                 <>
@@ -654,10 +657,10 @@ export default async function PayoutOperationPage({
             </Notice>
           )}
 
-        {/* The two warnings above keep their place ahead of this table. They are
+        {/* The notices above keep their place ahead of this table. They are
             the fast path for "what needs attention" and are readable without
             opening anything; this table is the *fix* — the place an operator can
-            see every line they pasted and reprice one. Removing either warning in
+            see every line they pasted and reprice one. Removing either notice in
             favour of the table would trade a glance for an expand-and-scan. */}
         {pools.map(
           (pool, index) =>
@@ -744,54 +747,6 @@ export default async function PayoutOperationPage({
             ),
         )}
 
-        {canEdit && (
-          // Collapsed once there is something to bury: a fresh operation has
-          // no pools yet, so there is no clutter to hide and the forms open
-          // by default — see e2e/payouts.spec.ts's fresh-operation tests,
-          // every one of which fills these fields before adding a first pool.
-          <Disclosure
-            summary="Add loot"
-            ariaLabel="Add loot — a flat-valued pool, or a paste for triff to appraise"
-            defaultOpen={pools.length === 0}
-          >
-            <div className="form-stack">
-              {/* Appraise first, flat pool second: pasting a killmail/loot log
-                  for triff to price is the common path, and a flat manual
-                  number is the fallback for when triff cannot reach it — the
-                  order on the page should read the same way an operator
-                  actually reaches for these. */}
-              <AppraiseForm operationId={operation.id} />
-
-              <form
-                action={addFlatPoolAction.bind(null, operation.id)}
-                className="form-stack"
-              >
-                <RuleHead as="h3">Add a flat-valued pool</RuleHead>
-                <label className="form-stack__field">
-                  Total value (ISK)
-                  <input
-                    className="field"
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    name="totalValue"
-                    required
-                  />
-                </label>
-                <label className="form-stack__field">
-                  Note (required — why this number)
-                  <input className="field" name="notes" required />
-                </label>
-                <label className="form-stack__field">
-                  What was in it (optional)
-                  <textarea className="field" name="rawPaste" rows={3} />
-                </label>
-                <Submit className="btn">Add flat pool</Submit>
-              </form>
-            </div>
-          </Disclosure>
-        )}
-
         {/* "Roster" names the list; "participant" names a single row in it —
             the Scroller label and column headers below follow that rule, so
             it doesn't drift back to "Participants" naming the list too. */}
@@ -810,41 +765,13 @@ export default async function PayoutOperationPage({
         >
           Roster
         </RuleHead>
-        {duplicateUnresolvedNames.length > 0 && (
-          <Notice tone="warn">
-            <span>
-              <strong>
-                {duplicateUnresolvedNames.length} unresolved name
-                {duplicateUnresolvedNames.length === 1 ? "" : "s"} appear
-                {duplicateUnresolvedNames.length === 1 ? "s" : ""} more than once
-              </strong>{" "}
-              — each is drawing a full share as a separate person. If they are the same
-              pilot, remove one before finalizing.
-              <br />
-              <span className="dim">{duplicateUnresolvedNames.join(", ")}</span>
-            </span>
-          </Notice>
-        )}
-        {crossStateClashes.length > 0 && (
-          <Notice tone="warn">
-            <span>
-              <strong>
-                {crossStateClashes.length} name{crossStateClashes.length === 1 ? "" : "s"}{" "}
-                on this roster {crossStateClashes.length === 1 ? "is" : "are"} both linked
-                and unlinked
-              </strong>{" "}
-              — one row is tied to an account, another under the same name is not, and
-              each is drawing a full share. They may be the same pilot whose link landed
-              after the roster was written, or two different people who share a name.
-              Check before finalizing.
-              <br />
-              <span className="dim">{crossStateClashes.join(", ")}</span>
-            </span>
-          </Notice>
-        )}
         {canEdit && (
           // Same rule as the loot disclosure above: collapsed only once there
-          // is a roster already worth burying.
+          // is a roster already worth burying, and the paste sits above the
+          // table it fills rather than below it — this used to be the other
+          // way around (open only when empty), which put the input for the
+          // common case ("paste people") beneath the very table it was
+          // about to populate.
           <Disclosure
             summary="Edit roster"
             ariaLabel="Edit roster — replace the roster from a paste, or add one participant"
@@ -860,7 +787,7 @@ export default async function PayoutOperationPage({
                   Paste (names separated by /)
                   <textarea className="field" name="paste" rows={8} required />
                 </label>
-                <Submit className="btn">Set roster</Submit>
+                <Submit className="btn btn--primary">Set roster</Submit>
               </form>
 
               {/* A plain `<datalist>`, not a type-ahead: the browser does the
@@ -896,6 +823,44 @@ export default async function PayoutOperationPage({
               </form>
             </div>
           </Disclosure>
+        )}
+        {duplicateUnresolvedNames.length > 0 && (
+          <Notice tone="warn">
+            <span>
+              <strong>
+                {duplicateUnresolvedNames.length} unresolved name
+                {duplicateUnresolvedNames.length === 1 ? "" : "s"} appear
+                {duplicateUnresolvedNames.length === 1 ? "s" : ""} more than once
+              </strong>{" "}
+              — each is drawing a full share as a separate person. If they are the same
+              pilot, remove one before finalizing.
+              <br />
+              <span className="dim">{duplicateUnresolvedNames.join(", ")}</span>
+            </span>
+          </Notice>
+        )}
+        {/* `tone="info"`, not `warn`: roster-warnings.ts documents this as the
+            ordinary case — a roster is pasted (unlinked) before the account
+            it names gets its ESI link, and the two rows sit side by side
+            until someone notices. Genuinely actionable (each row still draws
+            a full share), so it stays a notice; not an alarm, because nothing
+            here is usually wrong. */}
+        {crossStateClashes.length > 0 && (
+          <Notice tone="info">
+            <span>
+              <strong>
+                {crossStateClashes.length} name{crossStateClashes.length === 1 ? "" : "s"}{" "}
+                on this roster {crossStateClashes.length === 1 ? "is" : "are"} both linked
+                and unlinked
+              </strong>{" "}
+              — one row is tied to an account, another under the same name is not, and
+              each is drawing a full share. They may be the same pilot whose link landed
+              after the roster was written, or two different people who share a name.
+              Check before finalizing.
+              <br />
+              <span className="dim">{crossStateClashes.join(", ")}</span>
+            </span>
+          </Notice>
         )}
 
         {/* `tall` + the dense/sticky-head/sticky-col kit, same as the two admin
@@ -1132,6 +1097,24 @@ export default async function PayoutOperationPage({
             shape). */}
         {access.isOperator && (
           <ConfirmArmScope>
+            {/* Frozen used to be a permanent `warn` Notice stating this same
+                fact, seen by every visitor including a member with nothing to
+                act on — the facts grid's Status token now covers that. This
+                is the part of the old notice actually worth an operator's
+                attention: once a payment exists, Finalize is gone, Unlock is
+                gone, and the only remaining lever is per-payment revert. Kept
+                as a `.dim` sentence beside the controls it explains, gated on
+                `access.isOperator` (this block already is), rather than a
+                second alarm about a state the Status token already named. */}
+            {locked && (
+              <p className="dim">
+                A payment has been recorded, so the loot pools, the roster, shares and the
+                corp share are fixed permanently. Reverting a payment does not reopen
+                editing — it corrects who has been paid, and nothing else. If the wrong
+                person was marked paid, revert them and pay the right one; both work while
+                frozen.
+              </p>
+            )}
             <div className="btn-row btn-row--tight btn-row--controls">
               {operation.status === "draft" && (
                 <form action={finalizeAction.bind(null, operation.id)}>
@@ -1180,25 +1163,33 @@ export default async function PayoutOperationPage({
           <>
             <RuleHead as="h2">Delete operation</RuleHead>
             <ConfirmArmScope>
-              <form
-                action={deleteOperationAction.bind(null, operation.id)}
-                data-navigates
-              >
-                <ConfirmSubmit
-                  className="btn btn--quiet btn--danger-quiet"
-                  armedClassName="btn btn--danger"
-                  label="Delete"
-                  // The heading directly above already says "Delete operation",
-                  // so spelling it again on the button two lines down is a
-                  // stutter, not a clarification. `restName` is how the Discord
-                  // unlink solves the same split: the visible word shortens, the
-                  // spoken name stays whole, and WCAG 2.5.3 holds because the
-                  // name still contains the label.
-                  restName="Delete operation"
-                  confirmName="confirm delete operation"
-                  describedBy="delete-operation-cost"
-                />
-              </form>
+              <div className="btn-row">
+                <form
+                  action={deleteOperationAction.bind(null, operation.id)}
+                  data-navigates
+                >
+                  {/* Both grades are the 36px standalone size (DESIGN.md
+                      reserves 28px for the admin tables' in-row controls
+                      only) — this is a page-level control, not a table cell,
+                      so `btn--quiet` at 28px used to grow to 36px the moment
+                      it armed, which moves the button out from under a
+                      pointer that is aiming right at it. */}
+                  <ConfirmSubmit
+                    className="btn btn--danger-quiet"
+                    armedClassName="btn btn--danger"
+                    label="Delete"
+                    // The heading directly above already says "Delete operation",
+                    // so spelling it again on the button two lines down is a
+                    // stutter, not a clarification. `restName` is how the Discord
+                    // unlink solves the same split: the visible word shortens, the
+                    // spoken name stays whole, and WCAG 2.5.3 holds because the
+                    // name still contains the label.
+                    restName="Delete operation"
+                    confirmName="confirm delete operation"
+                    describedBy="delete-operation-cost"
+                  />
+                </form>
+              </div>
               {/* Carried by aria-describedby rather than folded into the
                   button's own name, same call account/page.tsx's Discord
                   unlink makes: a name is spoken ahead of every press and has
@@ -1206,13 +1197,21 @@ export default async function PayoutOperationPage({
                   order. States the real counts about to be destroyed, not a
                   generic warning — an admin deciding whether to press this
                   needs to know whether it is one empty draft or a twelve-name
-                  roster with loot recorded against it. */}
-              <p id="delete-operation-cost" className="dim">
+                  roster with loot recorded against it.
+
+                  `ConfirmCost`, not a plain `<p>`: it reveals only once the
+                  button is armed, same as account/page.tsx's Discord unlink
+                  cost sentence. That component's own docblock warns the
+                  reveal must not widen anything the armed button sits inside
+                  — here it is a block below a `btn-row`, not a table `<td>`,
+                  so the reveal cannot push the button out from under the
+                  pointer that just armed it. */}
+              <ConfirmCost id="delete-operation-cost" className="dim">
                 Permanently deletes this operation: {participants.length} roster row
                 {participants.length === 1 ? "" : "s"} and {fmtIsk(totalValue)} ISK of
                 recorded loot. Blocked only if a participant is currently marked paid;
                 revert every payment first if so.
-              </p>
+              </ConfirmCost>
             </ConfirmArmScope>
           </>
         )}

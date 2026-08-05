@@ -147,4 +147,21 @@ describe("loadConfig", () => {
       expect(cfg.brand.motto).toBe("Two lines\nof motto");
     });
   });
+
+  describe("payout corp share", () => {
+    it("defaults to 10 percent when unset", () => {
+      expect(loadConfig(validEnv).payoutCorpSharePct).toBe("10");
+    });
+
+    // Stays a string end to end: it is written to a `numeric(5, 2)` column, and
+    // a float round-trip is how "12.50" acquires a tail of nines.
+    it("keeps a configured value verbatim", () => {
+      const cfg = loadConfig({ ...validEnv, PAYOUT_CORP_SHARE_PCT: "12.50" });
+      expect(cfg.payoutCorpSharePct).toBe("12.50");
+    });
+
+    it.each(["abc", "10.123", "-5", "101", ""])("rejects %j", (value) => {
+      expect(() => loadConfig({ ...validEnv, PAYOUT_CORP_SHARE_PCT: value })).toThrow();
+    });
+  });
 });

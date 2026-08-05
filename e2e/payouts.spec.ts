@@ -172,6 +172,9 @@ test("create, add a flat pool, paste a roster, finalize, mark paid", async ({
   // A flat pool needs no external pricing service, which is what makes this
   // the deterministic path for e2e — the appraised path depends on triff.tools
   // being reachable and is exercised by msw-backed integration tests instead.
+  // It is the exception outside the main "paste loot" flow, so its own fields
+  // sit behind their own collapsed panel — open that first.
+  await openFlatPoolPanel(page);
   await page.getByLabel("Total value (ISK)").fill("1000000");
   await page.getByLabel("Note (required — why this number)").fill("sold privately");
   await page.getByRole("button", { name: "Add flat pool" }).click();
@@ -263,6 +266,7 @@ test("pasting two alts of one account collapses them into one participant row", 
   await page.getByLabel("Date").fill("2026-08-01");
   await page.getByRole("button", { name: "Create operation" }).click();
 
+  await openFlatPoolPanel(page);
   await page.getByLabel("Total value (ISK)").fill("200");
   await page.getByLabel("Note (required — why this number)").fill("flat test value");
   await page.getByRole("button", { name: "Add flat pool" }).click();
@@ -351,12 +355,17 @@ test("an unresolved loot item is named on the page, not silently priced at zero"
 /**
  * appraiseLoot rounds once at the line total, so a line with a genuine
  * sub-cent per-unit price stores unitPrice "0.00" while totalValue is real and
- * already counted in the pool. This is a different condition from an
- * unresolved item (no price found at all) and must render a different notice,
- * or an operator reading "0.00" has no way to tell "free" from "rounds to
- * free but the line total is real".
+ * already counted in the pool. This used to also fire its own "priced under
+ * 0.01 ISK each" Notice — removed entirely, because that notice's own copy
+ * ("the line total is real and already counted") states that nothing is
+ * wrong, which is not something worth an alarm block for. The unit price and
+ * line total columns in the item table carry the same information without
+ * announcing it as a fault, so this test now reads the table row instead of a
+ * Notice: the row must show both a 0.00 unit price and a real 5.00 line total
+ * on the same line, distinct from an unresolved item (no price at all, still
+ * a page-level warning — see the test above).
  */
-test("a resolved sub-cent unit price is marked as real value, distinct from unresolved", async ({
+test("a resolved sub-cent unit price shows a real line total beside a 0.00 unit price", async ({
   page,
   context,
 }) => {
@@ -399,8 +408,10 @@ test("a resolved sub-cent unit price is marked as real value, distinct from unre
   });
 
   await page.goto(`/payouts/${op.id}`);
-  await expect(page.getByText("1 item priced under 0.01 ISK each")).toBeVisible();
-  await expect(page.getByText("Tritanium ×1000 (5.00 ISK)")).toBeVisible();
+  await page.locator("summary", { hasText: "Pool 1 items (1)" }).click();
+  const itemRow = page.getByRole("row").filter({ hasText: "Tritanium" });
+  await expect(itemRow.getByRole("cell").nth(2)).toHaveText("0.00");
+  await expect(itemRow.getByRole("cell").nth(3)).toHaveText("5.00 ISK");
   // The unresolved-item notice is a different warning and must not fire here —
   // this line has a real price source, not "unresolved".
   await expect(page.getByText("priced at 0.00", { exact: false })).toHaveCount(0);
@@ -540,19 +551,24 @@ test("setting shares, excluding, and removing a participant each recompute exact
   });
   await context.addCookies([await sessionCookieFor(db, operator.id)]);
 
-  await page.goto("/payouts/new");
-  await page.getByLabel("Name").fill("Split adjustments");
-  await page.getByLabel("Date").fill("2026-08-01");
-  await page.getByRole("button", { name: "Create operation" }).click();
+  // Corp share has no UI editor anymore (it is set once per deployment) — seed
+  // it directly at 0% so the even-split math below stays exact, the same
+  // pattern the other tests in this file use to fix a percentage without
+  // going through the page.
+  const [op] = await db
+    .insert(payoutOperation)
+    .values({
+      name: "Split adjustments",
+      occurredAt: new Date("2026-08-01"),
+      corpSharePct: "0",
+      createdBy: operator.id,
+    })
+    .returning();
+  const opId = op.id;
+  await page.goto(`/payouts/${opId}`);
   await expect(page.getByRole("heading", { name: "Split adjustments" })).toBeVisible();
-  const opId = page.url().split("/").pop()!;
 
-  // The create form no longer collects corp share (it defaults to 10%) — set
-  // it to 0 here through the detail page's own editor so the even-split math
-  // below stays exact.
-  await page.getByLabel("Corp share %").fill("0");
-  await page.getByRole("button", { name: "save corp share" }).click();
-
+  await openFlatPoolPanel(page);
   await page.getByLabel("Total value (ISK)").fill("300");
   await page.getByLabel("Note (required — why this number)").fill("even split test");
   await page.getByRole("button", { name: "Add flat pool" }).click();
@@ -620,6 +636,16 @@ async function bypassClientGuard(input: Locator, value: string): Promise<void> {
     field.type = "text";
     field.value = v;
   }, value);
+}
+
+/**
+ * The flat pool is a rare exception, not the main loot path (triff paste is),
+ * so its fields sit inside their own `Disclosure`, nested under "Add loot" and
+ * never open by default — opening it is the one extra step every flat-pool
+ * test needs before `Total value (ISK)` is reachable at all.
+ */
+async function openFlatPoolPanel(page: Page): Promise<void> {
+  await page.locator("summary", { hasText: "Or enter a flat value" }).click();
 }
 
 /*
@@ -750,75 +776,6 @@ test("a rejected create form comes back filled in", async ({ page, context }) =>
 });
 
 /*
- * corpSharePct used to be write-once: an operator who accepted the create
- * form's default committed the whole roster to 0% with no way back short of
- * deleting the operation. This is the correction path, and the recalculation
- * that has to follow it — changing the percentage moves every participant's
- * amount, so a version that only wrote the column would look right on this
- * page and pay out wrong.
- */
-test("corp share can be corrected after creation, and the split follows", async ({
-  page,
-  context,
-}) => {
-  const operator = await seedMember(db, {
-    name: "FC Corpshare",
-    tier: "member",
-    status: "active",
-  });
-  await context.addCookies([await sessionCookieFor(db, operator.id)]);
-  await page.goto("/payouts/new");
-  await page.getByLabel("Name").fill("Corp share fix");
-  await page.getByLabel("Date").fill("2026-08-01");
-  await page.getByRole("button", { name: "Create operation" }).click();
-  await expect(page).toHaveURL(/\/payouts\/[0-9a-f-]+$/);
-  const opId = page.url().split("/").pop()!;
-
-  // The create form defaults corp share to 10% — drop it to 0% through the
-  // detail page's own editor so the baseline below is the even split this
-  // test's math depends on, before the correction to 20% under test.
-  await page.getByLabel("Corp share %").fill("0");
-  await page.getByRole("button", { name: "save corp share" }).click();
-
-  await page.getByLabel("Total value (ISK)").fill("1000");
-  await page.getByLabel("Note (required — why this number)").fill("flat");
-  await page.getByRole("button", { name: "Add flat pool" }).click();
-  await page
-    .getByLabel("Paste (names separated by /)")
-    .fill("Alice Pilot / Brain Tartare");
-  await page.getByRole("button", { name: "Set roster" }).click();
-  await expect(page.getByText("500.00 ISK").first()).toBeVisible();
-
-  await page.getByLabel("Corp share %").fill("20");
-  await page.getByRole("button", { name: "save corp share" }).click();
-
-  await expect(page.getByText("20.00% + remainder")).toBeVisible();
-  // 20% of 1000 off the top, then an even split of the 800 that remains.
-  await expect(page.getByText("200.00 ISK").first()).toBeVisible();
-  await expect(page.getByText("400.00 ISK").first()).toBeVisible();
-  await assertReconciles(page, opId);
-
-  const changed = await db
-    .select()
-    .from(auditLog)
-    .where(
-      and(eq(auditLog.action, "payout.corp_share_changed"), eq(auditLog.target, opId)),
-    );
-  // Two rows: dropping the create form's 10% default to 0% above, then this
-  // correction to 20% — both are edits through the same action, audited alike.
-  expect(changed).toHaveLength(2);
-  expect(changed[1].details).toMatchObject({ corpSharePct: "20" });
-
-  // Out-of-range comes back as a message on the page, not error.tsx, and the
-  // stored value is untouched.
-  await bypassClientGuard(page.getByLabel("Corp share %"), "150");
-  await page.getByRole("button", { name: "save corp share" }).click();
-  await expect(page.locator("p.notice--bad")).toContainText("cannot exceed 100%");
-  await expect(page.getByText("Something broke")).toHaveCount(0);
-  await expect(page.getByText("20.00% + remainder")).toBeVisible();
-});
-
-/*
  * The shares control is the one an operator touches most, so it gets the
  * end-to-end version of the check: text and zero both land back on the page
  * with a specific message rather than on error.tsx. Text is the important one
@@ -838,6 +795,7 @@ test("bad shares land on the page, not the error boundary", async ({ page, conte
   await page.getByRole("button", { name: "Create operation" }).click();
   await expect(page).toHaveURL(/\/payouts\/[0-9a-f-]+$/);
 
+  await openFlatPoolPanel(page);
   await page.getByLabel("Total value (ISK)").fill("100");
   await page.getByLabel("Note (required — why this number)").fill("flat");
   await page.getByRole("button", { name: "Add flat pool" }).click();
@@ -959,10 +917,11 @@ test("override an item price, finalize, pay, revert, and pay again", async ({
   // Status badge's own exact text, same as line ~199 above.
   await expect(rowFor("Brain Tartare").getByText("paid", { exact: true })).toBeVisible();
 
-  // The freeze is permanent, and the page has to say so where the operator is
-  // about to reach for revert — an operator who reverts expecting to fix the
-  // roster has been misled.
-  await expect(page.getByText("This operation is frozen")).toBeVisible();
+  // The freeze is permanent. It is a Status token in the facts grid now, not
+  // an alarm Notice — but the editing-rules prose an operator needs where they
+  // are about to reach for revert still has to say so, or a revert here reads
+  // as "fix the roster" instead of "correct who was paid".
+  await expect(page.getByText("frozen", { exact: true })).toBeVisible();
   await expect(
     page.getByText("Reverting a payment does not reopen editing"),
   ).toBeVisible();
@@ -1272,6 +1231,7 @@ test("an admin deletes an operation, and the audit row outlives it", async ({
   await expect(page.getByRole("heading", { name: "Mistaken op" })).toBeVisible();
   const opId = page.url().split("/").pop()!;
 
+  await openFlatPoolPanel(page);
   await page.getByLabel("Total value (ISK)").fill("1000000");
   await page.getByLabel("Note (required — why this number)").fill("sold privately");
   await page.getByRole("button", { name: "Add flat pool" }).click();
@@ -1351,6 +1311,7 @@ test("deleting an operation with a paid participant is refused on the page", asy
   await expect(page.getByRole("heading", { name: "Already paid op" })).toBeVisible();
   const opId = page.url().split("/").pop()!;
 
+  await openFlatPoolPanel(page);
   await page.getByLabel("Total value (ISK)").fill("1000000");
   await page.getByLabel("Note (required — why this number)").fill("sold privately");
   await page.getByRole("button", { name: "Add flat pool" }).click();
