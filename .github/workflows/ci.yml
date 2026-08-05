@@ -65,8 +65,8 @@ jobs:
       - name: Build image
         run: docker build .
 
-  test:
-    name: Tests (unit, then e2e)
+  unit:
+    name: Unit tests
     runs-on: ubuntu-latest
 
     services:
@@ -80,9 +80,46 @@ jobs:
           # equivalent for CI, which never needs the non-test `authgd` database.
           POSTGRES_DB: authgd_test
         # Host 5433 matches docker-compose.dev.yml, so the TEST_DATABASE_URL
-        # default baked into tests/helpers/db.ts and e2e/env.ts is correct with
-        # no env override. e2e/env.ts keeps this default specifically for CI;
-        # locally it derives a per-worktree database instead.
+        # default baked into tests/helpers/db.ts is correct with no env
+        # override. This job and `e2e` each get their own service container on
+        # this port, which is what lets them share the default and still never
+        # touch the same rows — the reason they were once a single job.
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U authgd -d authgd_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+
+      # No migrate step and no Playwright browser: tests/helpers/db.ts migrates
+      # in its own setupTestDb(), and nothing under tests/ drives a browser.
+      # The `e2e` job needs both; this one needs neither.
+      - name: Unit tests
+        run: npm test
+
+  e2e:
+    name: E2E tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: authgd
+          POSTGRES_PASSWORD: authgd
+          POSTGRES_DB: authgd_test
+        # See the `unit` job: same port, separate container. e2e/env.ts keeps
+        # this default specifically for CI; locally it derives a per-worktree
+        # database instead.
         ports:
           - 5433:5432
         options: >-
@@ -116,18 +153,30 @@ jobs:
       - name: Install Playwright browser
         run: npx playwright install --with-deps chromium
 
-      # tests/helpers/db.ts migrates on its own, but e2e/helpers.ts only
-      # TRUNCATEs and assumes the schema exists. Migrating up front removes the
-      # implicit "e2e only works because unit tests ran first" ordering trap.
+      # playwright.config.ts serves this build with `next start` under CI
+      # instead of `next dev`, so route compilation is paid once here rather
+      # than lazily on the first request to each route — which, under
+      # `workers: 1`, meant paying it serially in front of the tests.
+      #
+      # Built here rather than pulled from the `Next build` job: `needs:` would
+      # serialize this job behind that one, and `output: "standalone"` makes
+      # .next an artifact that embeds a traced node_modules. Both cost more
+      # than the build itself.
+      #
+      # No env block, for the same reason that job has none: getConfig()
+      # validates lazily per request and every route is dynamic.
+      - name: Build
+        run: npm run build
+
+      # e2e/helpers.ts only TRUNCATEs and assumes the schema exists. Locally
+      # e2e/provision.ts migrates as part of standing up the per-worktree
+      # container, but that is gated on `!IS_CI` — so under CI this step is the
+      # only thing that creates the schema.
       - name: Apply migrations to test database
         run: npm run db:migrate
         env:
           DATABASE_URL: postgres://authgd:authgd@localhost:5433/authgd_test
 
-      # Unit and e2e share one database (docs/ops.md; playwright.config.ts sets
-      # workers: 1). Same job, sequential steps — they can never overlap.
-      - name: Unit tests
-        run: npm test
       - name: E2E tests
         run: npm run test:e2e
 

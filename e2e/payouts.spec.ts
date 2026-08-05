@@ -17,6 +17,39 @@ const { db, pool } = testDb();
 test.afterAll(() => pool.end());
 test.beforeEach(() => resetDb(db));
 
+/**
+ * Regression guard: the operator's Finalize/Unlock controls used to sit in a
+ * <p> wrapping a <form>, which is invalid HTML (commit da8c7d0).
+ *
+ * This replaced a `page.on("console")` listener watching for React's
+ * "cannot be a descendant" warning. That warning only exists in React's
+ * development build, so once CI began serving a production build the console
+ * form of the check became vacuously true — passing whether or not the bug
+ * had come back.
+ *
+ * It takes two assertions rather than one because neither alone is sufficient,
+ * and the reason is the HTML parser: a `<form>` start tag implicitly closes an
+ * open `<p>` ("in body" insertion mode). So server-rendered `<p><form>` is
+ * parsed into *siblings*, and a DOM query for `p form` finds nothing — with
+ * the bug fully present.
+ *
+ *   - The raw-HTML check reads what the server actually emitted, before the
+ *     parser flattens it. This is the one that catches a hard navigation.
+ *   - The DOM check catches the client-rendered case, where React builds the
+ *     subtree through DOM APIs and the invalid nesting really does persist.
+ *     That is the shape the original bug took — it surfaced as a hydration
+ *     warning, i.e. server and client disagreeing on exactly this.
+ *
+ * Call it in each state that renders the controls; the DOM only shows one.
+ */
+async function expectNoFormInParagraph(page: Page, url: string): Promise<void> {
+  const html = await (await page.request.get(url)).text();
+  // A `<p ...>` with a `<form` after it and no intervening `</p>` — the markup
+  // the parser is about to rewrite, and the only place it is still visible.
+  expect(html).not.toMatch(/<p\b[^>]*>(?:(?!<\/p>)[\s\S])*?<form\b/);
+  await expect(page.locator("p form")).toHaveCount(0);
+}
+
 test("the payouts list pages with an Older link", async ({ page, context }) => {
   const reader = await seedMember(db, { name: "List Reader", tier: "member" });
   await context.addCookies([await sessionCookieFor(db, reader.id)]);
@@ -111,16 +144,6 @@ test("create, add a flat pool, paste a roster, finalize, mark paid", async ({
   page,
   context,
 }) => {
-  // Regression guard: the operator's Finalize/Unlock controls used to sit in a
-  // <p> wrapping a <form>, which is invalid HTML and React logs it as a
-  // console error on every render regardless of hard vs. soft navigation.
-  // Attached before the first navigation so it catches the very first paint
-  // of the operation page (the create redirect).
-  const consoleErrors: string[] = [];
-  page.on("console", (msg) => {
-    if (msg.type() === "error") consoleErrors.push(msg.text());
-  });
-
   const operator = await seedMember(db, {
     name: "FC Prime",
     tier: "member",
@@ -135,6 +158,9 @@ test("create, add a flat pool, paste a roster, finalize, mark paid", async ({
   await page.getByRole("button", { name: "Create operation" }).click();
   await expect(page.getByRole("heading", { name: "Thursday roam" })).toBeVisible();
   const opId = page.url().split("/").pop()!;
+  const opUrl = `/payouts/${opId}`;
+  // Pre-finalize: the Finalize control is the one rendered here.
+  await expectNoFormInParagraph(page, opUrl);
 
   // Every state change writes an audit row, and the row targets the operation
   // uuid — never a participant or pool id — so an auditor can find the whole
@@ -178,6 +204,8 @@ test("create, add a flat pool, paste a roster, finalize, mark paid", async ({
   await page.getByRole("button", { name: /^confirm finalize/ }).click();
   await expect(page.getByRole("button", { name: "Unlock" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Finalize" })).toHaveCount(0);
+  // Post-finalize: Unlock has replaced Finalize, so the nesting is re-checked.
+  await expectNoFormInParagraph(page, opUrl);
   // Finalizing freezes the numbers: the edit affordances go away until unlock.
   // This is the UI half of assertEditable's status check.
   await expect(page.getByLabel("Paste (names separated by /)")).toHaveCount(0);
@@ -214,10 +242,6 @@ test("create, add a flat pool, paste a roster, finalize, mark paid", async ({
     .where(and(eq(auditLog.action, "payout.paid"), eq(auditLog.target, opId)));
   expect(paid).toHaveLength(1);
   expect(paid[0].details).toMatchObject({ participantId: brainTartare.id });
-
-  // No DOM-nesting console error anywhere in this run — the operator controls
-  // (Finalize, then Unlock) rendered on every one of this test's page loads.
-  expect(consoleErrors.filter((e) => e.includes("cannot be a descendant"))).toEqual([]);
 });
 
 test("pasting two alts of one account collapses them into one participant row", async ({

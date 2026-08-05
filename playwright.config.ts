@@ -3,6 +3,7 @@ import {
   APP_PORT,
   BASE_URL,
   CONTAINER_NAME,
+  IS_CI,
   MANAGED_ENV_KEY,
   SHOULD_PROVISION,
   TEST_DATABASE_URL,
@@ -75,7 +76,28 @@ export default defineConfig({
   workers: 1, // shared test database — never parallelize
   use: { baseURL: BASE_URL },
   webServer: {
-    command: `npx next dev -p ${APP_PORT}`,
+    // CI serves a production build; locally it stays `next dev`.
+    //
+    // `next dev` compiles each route on its first request. With `workers: 1`
+    // that compilation is serialized in front of the tests rather than
+    // amortized across them, and it dominated the CI e2e step. A build pays it
+    // once, up front — locally the suite went from 6.3m to 1.7m.
+    //
+    // The build is a separate CI step, not `next build && next start` here, so
+    // it does not have to finish inside the `timeout` below — that budget is
+    // for booting a server, and a build racing it would fail as a timeout with
+    // no build output in the report.
+    //
+    // Locally the trade runs the other way: a build before every run would
+    // wreck the edit-run loop, and the reuse guard below only pays off against
+    // a long-lived server. See e2e/server-guard.ts.
+    //
+    // `next start` prints a warning under `output: "standalone"` suggesting
+    // `node .next/standalone/server.js`. It is advice about what to *ship*, not
+    // an error: `next start` reads the same .next/ and serves it correctly.
+    // The standalone server would need .next/static and public/ copied in by
+    // hand first, which buys nothing for a throwaway CI server.
+    command: IS_CI ? `npx next start -p ${APP_PORT}` : `npx next dev -p ${APP_PORT}`,
     url: `${BASE_URL}/login`,
     env,
     // Not a flat boolean: reuse is granted only when the process already on
