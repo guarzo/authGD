@@ -126,10 +126,13 @@ export function formatDuration(
  * because both matter to collapsing: identical counts on a `failed` and an
  * `ok` run are still two different facts, and `id` gives the page a stable
  * React key per group without re-deriving one from a range of timestamps.
+ * `errorSummary` is optional because the column is: `RunLike` predates it and
+ * some job rows (`purge.ts`) never set it at all.
  */
 export type CollapsibleRun = RunLike & {
   id: number;
   status: SyncRunStatus | null;
+  errorSummary?: string | null;
 };
 
 /**
@@ -147,6 +150,7 @@ export type CollapsedRun<T extends CollapsibleRun = CollapsibleRun> =
       count: number;
       status: SyncRunStatus | null;
       counts: Record<string, number> | null;
+      errorSummary: string | null;
       /** Earliest `startedAt` in the group, or null if none is recorded. */
       from: Date | null;
       /** Latest `finishedAt` in the group. Never null: every run inside a
@@ -172,18 +176,37 @@ function sameCounts(
 }
 
 /**
+ * `undefined` (the field was never selected) and `null` (selected, and the
+ * job recorded no error text) both mean "nothing to show" here, unlike
+ * `counts` above where absent and empty are different facts — there is no
+ * "recorded an empty error string on purpose" case to distinguish it from.
+ */
+function normalizeErrorSummary(v: string | null | undefined): string | null {
+  return v ?? null;
+}
+
+/**
  * Whether two runs recorded the same outcome and may collapse together. A run
  * still in flight (`finishedAt === null`) never matches anything, itself
  * included: it has no final counts to compare, and a still-running run must
  * never be folded into a finished one's row — the one case this module exists
  * to get right, since a stuck run reads very differently from a healthy one.
+ *
+ * `errorSummary` matters even when status and counts agree: `contacts.ts`,
+ * `wanderer.ts` and `discord-roles.ts` all build it from per-target error
+ * text (`errors.slice(0, 5).join("; ")`) that `counts` never reflects — two
+ * `partial` runs can both show `failed: 1` while a different character failed
+ * for a different reason each time. Collapsing those would silently hide the
+ * second run's diagnostics behind the first's, in exactly the view an admin
+ * opened to read them. Refusing to merge is the safe direction.
  */
 function sameOutcome(a: CollapsibleRun, b: CollapsibleRun): boolean {
   return (
     a.finishedAt !== null &&
     b.finishedAt !== null &&
     a.status === b.status &&
-    sameCounts(a.counts, b.counts)
+    sameCounts(a.counts, b.counts) &&
+    normalizeErrorSummary(a.errorSummary) === normalizeErrorSummary(b.errorSummary)
   );
 }
 
@@ -206,6 +229,7 @@ function toGroup<T extends CollapsibleRun>(runs: T[]): CollapsedRun<T> {
     count: runs.length,
     status: runs[0].status,
     counts: runs[0].counts,
+    errorSummary: normalizeErrorSummary(runs[0].errorSummary),
     from: earliest(runs.map((r) => r.startedAt)),
     to: latest(runs.map((r) => r.finishedAt)),
   };
@@ -213,15 +237,15 @@ function toGroup<T extends CollapsibleRun>(runs: T[]): CollapsedRun<T> {
 
 /**
  * Collapses CONSECUTIVE runs sharing an identical outcome (same status, same
- * counts, both finished) into one group entry. Order is not assumed beyond
- * "consecutive" — `getSyncStatus` hands these back newest-first, but nothing
- * here reads that direction into the result, `from`/`to` are computed as the
- * min/max over whatever the group contains.
+ * counts, same error text, both finished) into one group entry. Order is not
+ * assumed beyond "consecutive" — `getSyncStatus` hands these back
+ * newest-first, but nothing here reads that direction into the result,
+ * `from`/`to` are computed as the min/max over whatever the group contains.
  *
- * A run differing in status or counts breaks the run and starts a new one. A
- * single run that matches nothing around it comes back as `{ kind: "run" }`,
- * not a one-element group, so the page never has to special-case a group of
- * one.
+ * A run differing in status, counts, or error text breaks the run and starts
+ * a new one. A single run that matches nothing around it comes back as
+ * `{ kind: "run" }`, not a one-element group, so the page never has to
+ * special-case a group of one.
  */
 export function collapseRuns<T extends CollapsibleRun>(runs: T[]): CollapsedRun<T>[] {
   const out: CollapsedRun<T>[] = [];

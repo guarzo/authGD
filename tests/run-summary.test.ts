@@ -102,6 +102,7 @@ describe("collapseRuns", () => {
     opts: {
       status?: "ok" | "partial" | "failed" | null;
       counts?: Record<string, number> | null;
+      errorSummary?: string | null;
       startedAt?: Date | null;
       finishedAt?: Date | null;
     } = {},
@@ -109,10 +110,11 @@ describe("collapseRuns", () => {
     const {
       status = "ok",
       counts = { checked: 19 },
+      errorSummary = null,
       startedAt = t(id * 1000),
       finishedAt = t(id * 1000 + 500),
     } = opts;
-    return { id, status, counts, startedAt, finishedAt };
+    return { id, status, counts, errorSummary, startedAt, finishedAt };
   }
 
   it("returns a single run as its own entry, not a one-element group", () => {
@@ -130,6 +132,7 @@ describe("collapseRuns", () => {
         count: 3,
         status: "ok",
         counts: { checked: 19 },
+        errorSummary: null,
         from: run(1).startedAt,
         to: run(3).finishedAt,
       },
@@ -152,6 +155,7 @@ describe("collapseRuns", () => {
         count: 2,
         status: "ok",
         counts: { checked: 19 },
+        errorSummary: null,
         from: runs[2].startedAt,
         to: runs[1].finishedAt,
       },
@@ -183,6 +187,7 @@ describe("collapseRuns", () => {
         count: 2,
         status: "ok",
         counts: { checked: 19 },
+        errorSummary: null,
         from: run(1).startedAt,
         to: run(2).finishedAt,
       },
@@ -207,6 +212,7 @@ describe("collapseRuns", () => {
         count: 2,
         status: "ok",
         counts: null,
+        errorSummary: null,
         from: run(1).startedAt,
         to: run(2).finishedAt,
       },
@@ -215,6 +221,50 @@ describe("collapseRuns", () => {
     expect(collapseRuns([run(2, { counts: null }), run(1, { counts: {} })])).toEqual([
       { kind: "run", run: run(2, { counts: null }) },
       { kind: "run", run: run(1, { counts: {} }) },
+    ]);
+  });
+
+  it("does not collapse runs whose error text differs, even with matching status and counts", () => {
+    // contacts.ts/wanderer.ts/discord-roles.ts build errorSummary from
+    // per-target error lines that `counts` never reflects: two `partial` runs
+    // can both show `failed: 1` while a different target failed for a
+    // different reason each time. Merging would silently hide the second
+    // run's diagnostics behind the first's.
+    const runs = [
+      run(2, {
+        status: "partial",
+        counts: { failed: 1 },
+        errorSummary: "acc-2: timeout",
+      }),
+      run(1, {
+        status: "partial",
+        counts: { failed: 1 },
+        errorSummary: "acc-9: revoked scope",
+      }),
+    ];
+    expect(collapseRuns(runs)).toEqual([
+      { kind: "run", run: runs[0] },
+      { kind: "run", run: runs[1] },
+    ]);
+  });
+
+  it("treats a null and an undefined errorSummary as the same fact", () => {
+    const withNull = run(2, { errorSummary: null });
+    // Drop the field entirely to exercise `undefined`, distinct from `null`.
+    const { errorSummary: _drop, ...withoutField } = run(1);
+    const withUndefined = withoutField as CollapsibleRun;
+    const groups = collapseRuns([withNull, withUndefined]);
+    expect(groups).toEqual([
+      {
+        kind: "group",
+        runs: [withNull, withUndefined],
+        count: 2,
+        status: "ok",
+        counts: { checked: 19 },
+        errorSummary: null,
+        from: withUndefined.startedAt,
+        to: withNull.finishedAt,
+      },
     ]);
   });
 
