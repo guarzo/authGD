@@ -469,24 +469,36 @@ test("an unparseable heartbeat value renders as a failed check, not as no heartb
   await db.execute(sql`
     update pgboss.version set maintained_on = 'infinity' where version = 999999
   `);
-  await page.goto("/admin/sync");
-  await expect(page.locator(".notice--bad .worker")).toHaveText(
-    "worker · heartbeat check failed — unknown whether the worker is running",
-  );
-  // `resetDb` (the per-test `beforeEach` above) does not touch `pgboss`, so
-  // an unrestored 'infinity' would leak into every test that runs after this
-  // one in the file, not just the next — and several of them (e.g. "an
-  // overdue job...", right after this one) never call `setHeartbeat`
-  // themselves and rely on inheriting a STALE, not-fresh heartbeat from the
-  // immediately preceding test. Restore exactly that inherited state (what
-  // "the worker line reports liveness" above leaves behind: 240 minutes
-  // stale) rather than a fresh one, which would silently change
-  // `worker.fresh` for every test after this one in the file and was caught
-  // failing "an overdue job..." during review — a same-file example of why
-  // this file's own comments are this careful about what each test leaves
-  // behind.
-  await setHeartbeat(ago(240 * MIN));
+  // `finally`, not a trailing statement: a failing `goto` or assertion would
+  // otherwise exit before the restore and leak 'infinity' into every later
+  // test in the file — turning one real failure into a cascade of unrelated
+  // ones and hiding which test actually broke.
+  try {
+    await page.goto("/admin/sync");
+    await expect(page.locator(".notice--bad .worker")).toHaveText(
+      "worker · heartbeat check failed — unknown whether the worker is running",
+    );
+  } finally {
+    await restoreInheritedStaleHeartbeat();
+  }
 });
+
+/**
+ * `resetDb` (the per-test `beforeEach`) does not touch `pgboss`, so an
+ * unrestored heartbeat leaks into every test that runs after it in this file,
+ * not just the next one — and several of them (e.g. "an overdue job...")
+ * never call `setHeartbeat` themselves and rely on inheriting a STALE,
+ * not-fresh heartbeat from the immediately preceding test.
+ *
+ * So this restores exactly that inherited state — what "the worker line
+ * reports liveness" above leaves behind, 240 minutes stale — rather than a
+ * fresh one, which would silently flip `worker.fresh` for everything after it.
+ * Caught failing "an overdue job..." during review, which is a same-file
+ * example of why this file is this careful about what each test leaves behind.
+ */
+async function restoreInheritedStaleHeartbeat() {
+  await setHeartbeat(ago(240 * MIN));
+}
 
 /**
  * A dead worker puts every row overdue at once. Opening on overdue would

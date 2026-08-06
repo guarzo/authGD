@@ -345,6 +345,61 @@ test("a successful flat pool add clears the form", async ({ page, context }) => 
   await expect(page.getByLabel("What was in it (optional)")).toHaveValue("");
 });
 
+/**
+ * The other half of the same conversion, and the more important one: moving
+ * `flat-pool-form.tsx`'s fields from `defaultValue` to controlled `useState`
+ * fixed the duplicate-bank hazard above, but the whole risk in doing that was
+ * trading it for a lost-input regression on rejection — a mistyped total that
+ * also cost the operator their note, the exact loss `FlatPoolEditState`
+ * exists to prevent (see `actions.ts`'s docblock). No `bypassClientGuard`
+ * needed here: `<input type="number">` accepts scientific notation like
+ * "1e5" client-side, and `total_invalid`'s own copy calls that out by name —
+ * a real rejection reachable by typing normally, not a hand-built request.
+ */
+test("a rejected flat pool submission keeps what was typed in all three fields", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "FC Prime",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+
+  const [op] = await db
+    .insert(payoutOperation)
+    .values({
+      name: "Rejected flat pool",
+      occurredAt: new Date("2026-08-01"),
+      corpSharePct: "0",
+      createdBy: operator.id,
+    })
+    .returning();
+
+  await page.goto(`/payouts/${op.id}`);
+  await openFlatPoolPanel(page);
+  await page.getByLabel("Total value (ISK)").fill("1e5");
+  await page.getByLabel("Note (required — why this number)").fill("sold privately");
+  await page.getByLabel("What was in it (optional)").fill("a stack of PLEX");
+  await page.getByRole("button", { name: "Add flat pool" }).click();
+
+  await expect(page.locator("p.notice--bad")).toContainText("no shorthand like 1e5");
+  await expect(page.getByText("Something broke")).toHaveCount(0);
+  // Nothing was banked — the rejection added no pool row.
+  await expect(page.getByRole("row").filter({ hasText: "flat (manual)" })).toHaveCount(0);
+
+  // All three fields still hold exactly what was typed — this is the fix the
+  // conversion to controlled state must not have traded away.
+  await expect(page.getByLabel("Total value (ISK)")).toHaveValue("1e5");
+  await expect(page.getByLabel("Note (required — why this number)")).toHaveValue(
+    "sold privately",
+  );
+  await expect(page.getByLabel("What was in it (optional)")).toHaveValue(
+    "a stack of PLEX",
+  );
+});
+
 test("pasting two alts of one account collapses them into one participant row", async ({
   page,
   context,
