@@ -41,6 +41,59 @@ Postgres, so the check is the gate, not a formality.
 `TOKEN_ENCRYPTION_KEY`: `openssl rand -base64 32`. Rotating it invalidates
 every stored EVE refresh token (members re-auth); treat it as unrotatable.
 
+### Index migrations block writes while they build
+
+`release_command = "npm run db:migrate"` gates every deploy, and
+`src/db/migrate.ts` runs Drizzle's migrator, which wraps each migration in a
+transaction. A plain `CREATE INDEX` therefore takes a `SHARE` lock for the
+build's duration: **writes block, reads do not**, and the deploy waits.
+
+`CREATE INDEX CONCURRENTLY` would avoid that lock but cannot run inside a
+transaction block (SQLSTATE 25001), so it cannot be expressed through the
+current runner at all. **That is a deliberate accepted limitation, not an
+oversight** — see the sizing note below before proposing a change.
+
+Measured on Postgres 16.11, production-shaped `audit_log`:
+
+| `audit_log` rows | plain `CREATE INDEX` on `action` | index size |
+|---|---|---|
+| 40k (current scale) | **33 ms** | 304 kB |
+| 500k | 367 ms | 3.4 MB |
+| 1M | **816 ms** | 6.8 MB |
+| 2M | 1.58 s | 14 MB |
+
+At current size a build blocks writes for tens of milliseconds during a step
+that already stops the world. Writers that could contend are the worker's audit
+writes and the web process's own — `src/app/admin/*/actions.ts` call `logAudit`
+directly, and the login and character-link paths reach it through
+`src/services/`, all of which keep serving while the release command runs. At
+33 ms that is well inside the noise of a deploy.
+
+**Trigger condition — revisit when `audit_log` passes ~1M rows** (measured
+build 816 ms, and 1.58 s at 2M), or when an index is proposed on a table larger
+than that. Check before adding one:
+
+```bash
+fly pg connect -a <pg-app> -c "SELECT count(*) FROM audit_log;"
+```
+
+Below the trigger, add indexes normally: edit `src/db/schema.ts`, run
+`npm run db:generate`, deploy. Above it, the honest fix is a migration runner
+that can apply flagged statements outside a transaction — **not** the
+`COMMIT;`-in-the-migration-file hack, which makes migration files carry runner
+semantics and requires hand-editing a generated migration, which this project
+forbids. The third option, applying such migrations out-of-band before the
+deploy that needs them, is cheaper and is the right choice for a one-off.
+
+Whichever route: a failed `CONCURRENTLY` build leaves an **INVALID** index
+behind that still costs writes but serves no reads, and needs a manual
+`DROP INDEX` / `REINDEX`. In a release command nobody is watching, that is the
+failure mode to design for. Find them with:
+
+```sql
+SELECT indexrelid::regclass FROM pg_index WHERE NOT indisvalid;
+```
+
 ## Monitoring
 
 Two public endpoints, deliberately separate:

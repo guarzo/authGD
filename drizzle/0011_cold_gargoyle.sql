@@ -1,0 +1,1 @@
+CREATE INDEX "audit_log_action_pattern_idx" ON "audit_log" USING btree ("action" text_pattern_ops);

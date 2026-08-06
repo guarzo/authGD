@@ -17,6 +17,14 @@ rather than rediscovering it as a new finding.
 > marked inline below. **Still open:** section 2 (nav membership, needs a
 > product decision), section 3 (sweep backlog items 6, 10, 20 and the cosmetics),
 > and the remaining section 4 rows.
+>
+> **Update, later on 2026-08-06** (branch `worktree-audit-action-index`): both
+> index-related rows in section 4b are now settled, by measurement rather than
+> by argument. The action filter got its `text_pattern_ops` index; the
+> migration-runner question was answered **no, not yet**, with a trigger
+> condition recorded in `docs/ops.md`. Section 4c records what the measurement
+> checked. Section 4b's third row (`health.ts`'s unread `"error"` message)
+> remains open.
 
 Two sources feed this list: the sweep's own backlog (`SYNTHESIS.md`), and the
 `my:polish-core` pass run over the resulting diff, which reviewed the sweep's
@@ -113,16 +121,18 @@ bugs, type design, and over-engineering to `report` rather than auto-fix.
 | `CONTACT_SYNC_RESULTS`' partition comment enumerates seven of nine, omitting `sync_failed` | `core/contact-result.ts:53-56` | May be deliberate, but neither this comment nor `services/accounts.ts:139-144` says so |
 | pg-boss's `maintained_on` is a gated single-row update, so the "three missed ticks" margin is nearer 1.5 | `core/health.ts:28` | The liveness conclusion holds; only the margin arithmetic is off |
 
-## 4b. Found while closing the above (2026-08-06) — open, deliberately out of scope
+## 4b. Found while closing the above (2026-08-06) — two settled, one still open
 
 Three things the follow-up pass surfaced and chose not to fix, so the branch
-would not keep growing. None is urgent; all are recorded so the next sweep
-recognises them.
+would not keep growing. Both index-related rows were taken up and settled later
+the same day on `worktree-audit-action-index` — one by adding the index, one by
+deciding against the machinery and recording the trigger. The `health.ts` row
+is still open.
 
 | Finding | Where | Why deferred |
 |---|---|---|
-| `/admin/audit`'s action filter has no index that serves it | `services/audit.ts`'s `queryAuditLog` | It matches `action` with a LIKE prefix, and under this deployment's `en_US.utf8` collation a plain btree cannot answer `LIKE 'x%'` — EXPLAIN puts it in `Filter`, not `Index Cond`. `audit_log_action_target_id_idx` does **not** cover it, despite looking like it should; the index's own comment now says so. A `text_pattern_ops` index would fix it and is a separate migration and a separate decision |
-| `audit_log` index migrations block writes while they build | `drizzle/`, `fly.toml` | `0010`'s `CREATE INDEX` takes a `SHARE` lock (writes block, reads don't) for the build's duration, and `fly.toml` runs migrations as a deploy-gating release command. `CONCURRENTLY` is not available without work: it cannot run inside a transaction, Drizzle's migrator wraps every migration in one, and a failed concurrent build leaves an INVALID index needing manual cleanup — in a release step nobody watches. Fine at current size (low tens of thousands of rows, sub-second). If `audit_log` grows enough for the build to matter, the honest fix is a custom migration runner, not the `COMMIT;`-in-the-file hack. Raised by CodeRabbit on #163 and answered there |
+| ~~`/admin/audit`'s action filter has no index that serves it~~ **CLOSED 2026-08-06** | `services/audit.ts`'s `queryAuditLog` | Added `audit_log_action_pattern_idx` on `action text_pattern_ops`. Measured first, and the measurement moved the argument: the *slow seq scan this row assumed* is not what most filters do. At the page's real query shape — `ORDER BY id DESC LIMIT 100`, since `/admin/audit` passes no limit and `queryAuditLog` falls back to `AUDIT_PAGE_SIZE` — any prefix with recent matches is answered by a backward scan of `audit_log_pkey` in **under 0.2 ms** and never touches the new index. The cost is entirely in the tail — a prefix with few or **no** recent rows falls back to a full seq scan: **2.3 ms at 40k rows, 26 ms at 500k, 52 ms at 1M, 80 ms at 2M**, growing linearly, and `audit_log` is never purged (`src/jobs/purge.ts` covers sessions, OAuth transactions and outbox only). With the index those same queries are a flat **0.08–0.09 ms**. The case that decided it: the filter is a **free-text box**, so a typo (`teir.`, `discrod.`) is a zero-match prefix, and zero-match is the *worst* case — a full scan for a page that returns nothing. See section 4c for what was verified and what was rejected |
+| ~~`audit_log` index migrations block writes while they build~~ **ANSWERED 2026-08-06 — no runner, deliberately** | `drizzle/`, `fly.toml` | The prior reasoning holds and now has numbers behind it. A plain `CREATE INDEX` on `audit_log.action` takes a `SHARE` lock for **33 ms at current scale (~40k rows)**; the deploy already stops the world for longer than that. Writers that could contend are the worker's audit writes *and* the web process's own (`src/app/admin/*/actions.ts` call `logAudit` directly, and the login and link paths reach it through `src/services/`), but at 33 ms the window is negligible either way. Building a runner that can apply statements outside a transaction would buy tens of milliseconds and cost a new failure mode — a failed `CONCURRENTLY` build leaves an INVALID index in a release step nobody watches. **Not worth it yet.** Trigger condition recorded in `docs/ops.md`: revisit at **~1M rows** (measured build 816 ms, 1.58 s at 2M), or when an index is proposed on a table already larger than that. Note this is self-limiting in one direction — adding the index *now*, while the build is 33 ms, is what keeps the runner unnecessary; deferring it lands the build in the regime that would have needed the machinery. Raised by CodeRabbit on #163, answered there, and withdrawn by the reviewer |
 | The `"error"` variant's `message` has no reader | `services/health.ts` | Logged by `console.error` already. Harmless today, but it is a raw Postgres string (`"permission denied for schema pgboss"`) sitting in a server-component return value — if anyone later renders it to answer "why did the check fail", an unfiltered DB error reaches the page |
 
 (An earlier draft of this table also listed `workerHeartbeat` tagging an
@@ -133,12 +143,51 @@ the evidence exists and simply isn't parseable, which is the check failing
 rather than an absence of evidence. Covered by an e2e test using
 `timestamptz`'s `'infinity'`.)
 
+## 4c. What the index measurement checked (2026-08-06)
+
+Recorded because two of these would have silently defeated the index, and the
+next person to touch `queryAuditLog` needs to know they were tested rather than
+assumed. Postgres 16.11, `en_US.utf8`, `audit_log` seeded to a production-shaped
+action distribution, queried at the page's real shape (`ORDER BY id DESC LIMIT
+100`). Every figure here and in the 4b rows comes from that one sweep.
+
+- **The escaped-underscore path works.** `queryAuditLog` escapes `%`, `_` and
+  `\` before building the pattern, and half the action names contain `_` (25 of
+  the 49 action literals in `src/` — `discord.role_changed`,
+  `payout.pool_added`). Postgres still extracts a prefix from
+  `LIKE 'payout.pool\_addex%'` — `Index Cond: ((action ~>=~
+  'payout.pool_addex') AND (action ~<~ 'payout.pool_addey'))`. The escaping does
+  not cost the index.
+- **Bind parameters do not defeat it.** A prefix `LIKE` against a *parameter*
+  cannot be turned into an index range under a generic plan, which would have
+  made this index useless through Drizzle. Verified with a named `PREPARE`
+  executed seven times — past the five-execution custom-plan threshold, every
+  execution still planned `Index Cond`, because the generic plan costs more and
+  Postgres keeps re-planning custom.
+- **A composite was measured and rejected.** `(action text_pattern_ops, id DESC)`
+  gave no measurable gain over the single column and could not help the
+  scattered-rare case either. It costs **82 MB vs 14 MB** at 2M rows (and 2.24 s
+  to build against 1.58 s): `id` is distinct per row, which defeats the btree
+  deduplication that makes the single-column index small (a handful of distinct
+  `action` values collapse to **304 kB at 40k rows**).
+- **The new index does not disturb the fast plans.** Common prefixes still
+  choose the backward `audit_log_pkey` scan with it present — 0.152 ms with the
+  index at 500k against 0.155 ms without — so no query got slower.
+- **`audit_log_action_target_id_idx` is still needed** and was not replaced. It
+  serves `logAuditIfChanged`'s equality lookup on `(action, target)`; the new
+  index serves prefix ranges. Folding them into one would mean dropping and
+  recreating an index from an applied migration to change its operator class —
+  more risk than the 304 kB it would save.
+
 ## 5. Also known
 
 ~~The `audit_log` index on `(action, target, id desc)`~~ **CLOSED 2026-08-06.**
 Added via `npm run db:generate` (never hand-written) as
-`drizzle/0009_useful_frightful_four.sql`; no already-applied migration was
-touched. `logAuditIfChanged`'s docblock was updated too, since it described the
+`drizzle/0010_even_jetstream.sql`; no already-applied migration was
+touched. (An earlier draft of this line said `0009_useful_frightful_four.sql`,
+copying the name CodeRabbit's review used. That file does not exist — #162 took
+`0009`, so this migration was renumbered to `0010` before merge.)
+`logAuditIfChanged`'s docblock was updated too, since it described the
 index as missing and that claim is now false. This also closes CodeRabbit's
 independent report of the same item on PR #128 (`src/services/audit.ts:73`) —
 one item, two reviewers, one migration.
