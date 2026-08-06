@@ -190,8 +190,12 @@ you what it holds.
   everywhere. Surfaces that want a narrower reading width cap their **contents**
   (`.page--narrow > :where(*)`), never the column — capping the column moved the whole
   page 144px sideways on a nav click.
-- **No cards.** Structure is expressed with hairline rules and section headers. The
-  one exception is the login panel, which is a genuine object on an empty field.
+- **No cards.** Structure is expressed with hairline rules and section headers. Two
+  exceptions, both genuine objects on an empty field rather than containers for
+  their own sake: the login panel, and `/payouts/new`'s form panel. Each is a short
+  form with nothing else on the page to sit on, which without a ground reads as a
+  settings row rather than the start of a mission. A third would mean this rule has
+  stopped being true.
 - **Section header** is the signature component: a mono uppercase label, then a
   hairline rule running to the container edge. It reads as a field on a printed form
   and costs one element.
