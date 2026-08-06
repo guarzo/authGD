@@ -1726,6 +1726,51 @@ test("the second payment advances again, on one click", async ({ page, context }
   );
 });
 
+test("the first payment says that it freezes the operation permanently", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "Freeze FC",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+  const opId = await seedFinalizedRoster(db, operator.id, ["Ada Freeze", "Bo Freeze"]);
+  await page.goto(`/payouts/${opId}`);
+
+  // The description is on the control before it is pressed, both at rest and
+  // once armed — it has to be available ahead of the press it warns about.
+  const rest = page.getByRole("button", { name: "mark paid Ada Freeze" });
+  await expect(rest).toHaveAccessibleDescription(/permanently/);
+  await rest.click();
+  await expect(
+    page.getByRole("button", { name: "confirm mark paid Ada Freeze" }),
+  ).toHaveAccessibleDescription(/permanently/);
+
+  // It is a description, never part of the name: the name has to stay short
+  // enough to be spoken ahead of every press and has to keep matching the
+  // visible label (WCAG 2.5.3).
+  await expect(
+    page.getByRole("button", { name: "confirm mark paid Ada Freeze" }),
+  ).toHaveAccessibleName("confirm mark paid Ada Freeze");
+
+  // And it is hidden from the visual layout, at rest and armed alike — unlike
+  // ConfirmCost, which reveals itself on arm. Measured rather than asserted
+  // with toBeHidden(): `.visually-hidden` is a 1px clip, not display:none, so
+  // Playwright counts it visible by design (see the same measurement at
+  // account.spec.ts:439-443).
+  const costWidth = (await page.locator("#mark-paid-cost").boundingBox())?.width ?? 0;
+  expect(costWidth).toBeLessThanOrEqual(1);
+
+  await page.getByRole("button", { name: "confirm mark paid Ada Freeze" }).click();
+
+  // Once the operation is frozen, later payments are plain one-click buttons
+  // and carry no description: there is no cost left to state.
+  const later = page.getByRole("button", { name: "mark paid Bo Freeze" });
+  await expect(later).toHaveAccessibleDescription("");
+});
+
 test("paying the last row focuses the roster heading and says all are paid", async ({
   page,
   context,

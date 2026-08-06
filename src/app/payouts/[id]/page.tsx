@@ -894,6 +894,7 @@ export default async function PayoutOperationPage({
                                         participantId={p.id}
                                         displayName={p.displayName}
                                         arm={firstPayment}
+                                        describedBy="mark-paid-cost"
                                       />
                                     )}
                                     {p.paymentState === "paid" && access.isOperator && (
@@ -953,6 +954,19 @@ export default async function PayoutOperationPage({
                     </tbody>
                   </table>
                 </Scroller>
+                {/* Always hidden, never a `ConfirmCost`: that component reveals
+                  itself on arm (`confirm-submit.tsx:113`), and a sentence below a
+                  twelve-row table is too far from the button it describes to help
+                  the sighted reader it would be revealed for. Same call the admin
+                  accounts table already made (#111, `confirm-submit.tsx:93-96`).
+                  Rendered once and shared by every first-payment button, which
+                  `ConfirmSubmit` supports (`confirm-submit.tsx:83-87`). */}
+                {firstPayment && access.isOperator && (
+                  <span id="mark-paid-cost" className="visually-hidden">
+                    Recording the first payment freezes this operation permanently: the
+                    pools, roster and shares can no longer be reopened with Unlock.
+                  </span>
+                )}
               </PayFlow>
 
               {duplicateUnresolvedNames.length > 0 && (
