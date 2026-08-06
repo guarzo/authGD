@@ -129,6 +129,62 @@ function isDoneCode(value: string | undefined): value is AdminAccountsDoneCode {
 }
 
 /**
+ * The half of the tier confirmation that says what the press actually did.
+ *
+ * `setTierManual` (services/admin-accounts.ts) writes `tierLocked: true` on
+ * EVERY manual set, including a set to the tier the account already holds —
+ * the tier buttons stay live unless the account is already locked at that tier
+ * (`page.tsx`: `disabled={r.tierLocked && r.tier === t}`), and the
+ * already-current one carries `aria-pressed="true"`, which globals.css paints
+ * with the raised ground and leading `▪` the filter chips above use to mean
+ * "you are already here, this does nothing". Pressing it is not a no-op: it
+ * takes the account out of the membership job's reach permanently. Nothing in
+ * the group label, the button, or the old sentence ("… set to …") said so, so
+ * the admin who pressed what looked like the selected chip found out only when
+ * a member who had left the alliance kept their tier, their map ACL entry and
+ * their Discord roles indefinitely — the exact outcome derole-don't-boot
+ * exists to prevent.
+ *
+ * The clause names the undo by the word written on the control that performs
+ * it (`auto`, rendered only while `r.tierLocked`), rather than describing the
+ * lock in the abstract: the admin reading this has that button in front of
+ * them for the first time, because the press that produced this sentence is
+ * what made it appear.
+ *
+ * It is this short for a layout reason, not a stylistic one, and lengthening
+ * it is not free, though the ceiling is higher than a first measurement of it
+ * suggested and the correction is worth having here. For a tier press the
+ * sentence lands in `ConfirmGroup`'s `Notice`
+ * (`_components/confirm-group.tsx`), a grid item in the `.drawer__group`
+ * holding the tier buttons, which is itself an item of `.drawer__controls` — a
+ * wrapping flex row shared with Cryo, Note and History. A group is as wide as
+ * its widest item, so a long enough notice sets that width and pushes the
+ * siblings along the row.
+ *
+ * This wording is not long enough, and neither is anything close to it. The
+ * tier group's `.btn-group` is `inline-flex` with no `flex-wrap`
+ * (globals.css), so its min-content equals its max-content and it is the
+ * group's floor at 282.9px on the seeded drawer. Isolated in Chromium by
+ * pressing a tier on an account that was *already* locked — so the press
+ * changes the notice and nothing else in the group — the notice arrives at
+ * 176px and the group, the flex row and the region's `scrollWidth` are
+ * byte-identical before and after. An earlier pass attributed a 79px sibling
+ * shift to this notice; that shift was the `auto` button appearing, which the
+ * same press mounts (`page.tsx`, under `r.tierLocked`), and which is the
+ * thing that actually widens the group.
+ *
+ * So the real ceiling is the point where the notice exceeds that 282.9px
+ * floor. A fuller draft of this sentence ("Automatic tier changes are off
+ * until you press auto.") measured 531px and did push Note and History onto a
+ * second line at 1024px — the controls the admin is most likely to reach for
+ * next, moving out from under the pointer as a *result* of the press. That
+ * remains the reason not to write a paragraph here. It is a wider gate than
+ * "four words", and a notice materially past the button row's width is what
+ * trips it.
+ */
+const PINNED = "Press auto to unpin.";
+
+/**
  * The one-line outcome of the press that landed here, or `""` for no
  * confirmation to show. Mounted unconditionally into `ConfirmNotice` by the
  * page.
@@ -162,9 +218,20 @@ export function accountsConfirmation(
   if (!isDoneCode(done)) return "";
   switch (done) {
     case "tier":
-      if (name && tier) return `${name} set to ${tier}.`;
-      return tier ? `Set to ${tier}.` : "Tier updated.";
+      if (name && tier) return `${name} pinned to ${tier}. ${PINNED}`;
+      return tier ? `Pinned to ${tier}. ${PINNED}` : `Tier pinned. ${PINNED}`;
     case "approve":
+      // Deliberately carries no `PINNED` clause, unlike `tier` above. An
+      // approval does NOT run through `setTierManual`: `approveAccount`
+      // (services/admin-accounts.ts) sets `tierLocked: tier === "associate"`,
+      // so one of the two approve buttons pins and the other does not — and
+      // this function cannot tell them apart, because `tier` arrives as the
+      // already-localized label (`tierLabel()`, deployment-configurable) and
+      // not the enum. Saying "pinned" here would be wrong on every alumni
+      // approval; saying nothing is at least not wrong, and the `auto` button
+      // appearing on the approved row is the same tell it is after a manual
+      // set. Naming the pin here needs a fourth argument carrying the lock
+      // state from the action, which is more than a copy change.
       if (name && tier) return `${name} approved as ${tier}.`;
       return tier ? `Approved as ${tier}.` : "Account approved.";
     case "auto":
