@@ -37,11 +37,15 @@ reviews:
   # the reviewer never fetches, not merely one it declines to comment on.
   path_filters:
     # Local planning artifacts — specs, plans, handovers, and design sweeps
-    # written while working on a change. `docs/superpowers/` is gitignored and
-    # `docs/design-sweep/` no longer exists in the tree, so neither should
-    # reach a diff today; the filters are here so that a future commit which
-    # does carry them still does not spend review budget on a working record
-    # of one deployment.
+    # written while working on a change. `docs/superpowers/` is gitignored
+    # (.gitignore:21) so it cannot reach a diff at all; `docs/design-sweep/`
+    # IS tracked — 23 files as of #165, which amended one of them and got
+    # "Review skipped due to path filters" for the whole PR. That filter is
+    # therefore load-bearing, not a dormant guard against a future commit:
+    # every design-sweep edit is invisible to review by design, on the
+    # grounds that a working record of one deployment's sweep is not worth
+    # review budget. A design-sweep PR that also touches code is reviewed
+    # normally — only the record itself is filtered out of the diff.
     - "!docs/superpowers/**"
     - "!docs/design-sweep/**"
 
