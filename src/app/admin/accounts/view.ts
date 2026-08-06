@@ -152,19 +152,35 @@ function isDoneCode(value: string | undefined): value is AdminAccountsDoneCode {
  * what made it appear.
  *
  * It is this short for a layout reason, not a stylistic one, and lengthening
- * it is not free. For a tier press the sentence lands in `ConfirmGroup`'s
- * `Notice` (`_components/confirm-group.tsx`), which renders as a grid item in
- * the `.drawer__group` holding the tier buttons — `justify-items: start`, so
- * the notice sizes to its own max-content and that becomes the group's width
- * inside `.drawer__controls`, a wrapping flex row shared with Cryo, Note and
- * History. Measured in Chromium on the seeded drawer: this wording renders a
- * 330px notice and shifts the three sibling groups 79px right at 1024px and
- * up, with no re-wrap. A fuller version of the same sentence ("Automatic tier
- * changes are off until you press auto.") measured 531px and pushed Note and
- * History onto a second line at 1024px — the controls the admin is most
- * likely to reach for next, moving out from under the pointer as a *result*
- * of the press. Anything materially longer than this needs a width cap on the
- * notice inside `.drawer__group` first.
+ * it is not free, though the ceiling is higher than a first measurement of it
+ * suggested and the correction is worth having here. For a tier press the
+ * sentence lands in `ConfirmGroup`'s `Notice`
+ * (`_components/confirm-group.tsx`), a grid item in the `.drawer__group`
+ * holding the tier buttons, which is itself an item of `.drawer__controls` — a
+ * wrapping flex row shared with Cryo, Note and History. A group is as wide as
+ * its widest item, so a long enough notice sets that width and pushes the
+ * siblings along the row.
+ *
+ * This wording is not long enough, and neither is anything close to it. The
+ * tier group's `.btn-group` is `inline-flex` with no `flex-wrap`
+ * (globals.css), so its min-content equals its max-content and it is the
+ * group's floor at 282.9px on the seeded drawer. Isolated in Chromium by
+ * pressing a tier on an account that was *already* locked — so the press
+ * changes the notice and nothing else in the group — the notice arrives at
+ * 176px and the group, the flex row and the region's `scrollWidth` are
+ * byte-identical before and after. An earlier pass attributed a 79px sibling
+ * shift to this notice; that shift was the `auto` button appearing, which the
+ * same press mounts (`page.tsx`, under `r.tierLocked`), and which is the
+ * thing that actually widens the group.
+ *
+ * So the real ceiling is the point where the notice exceeds that 282.9px
+ * floor. A fuller draft of this sentence ("Automatic tier changes are off
+ * until you press auto.") measured 531px and did push Note and History onto a
+ * second line at 1024px — the controls the admin is most likely to reach for
+ * next, moving out from under the pointer as a *result* of the press. That
+ * remains the reason not to write a paragraph here. It is a wider gate than
+ * "four words", and a notice materially past the button row's width is what
+ * trips it.
  */
 const PINNED = "Press auto to unpin.";
 
