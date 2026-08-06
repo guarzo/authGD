@@ -690,6 +690,13 @@ test("a targeted character with a synced result also collapses to ok", async ({
   const row = page.locator("table tbody tr").first();
   await expect(row.locator("[data-state='ok']")).toBeVisible();
   await expect(row.locator(".status-line")).toHaveCount(0);
+  // Distinguishes this from the alumni tests above: an untargeted regression
+  // would still show a bare "ok" chip, but its aria-label would read
+  // "standings — not managed" instead of running the synced result through
+  // `contactStateToken`.
+  expect(await row.locator("[data-state='ok']").getAttribute("aria-label")).toMatch(
+    /standings ok/,
+  );
 });
 
 // Density must not be bought from screen-reader users: the collapsed chip's
