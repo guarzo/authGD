@@ -76,3 +76,27 @@ test("a character with no location reading renders no location line", async ({
   await expect(page.getByText("Unread Pilot")).toBeVisible();
   await expect(page.locator(".char__location")).toHaveCount(0);
 });
+
+test("the members drawer shows the location line, and the collapsed row does not", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
+  const zed = await seedMember(db, { name: "Zed", tier: "member" });
+  await placeCrew(zed.id);
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.goto("/admin/accounts");
+
+  const zedRow = page.locator(".log--dense > tbody > tr:not(.drawer-row)", {
+    hasText: "Zed",
+  });
+  // Explicitly out of scope in the design: no location rollup on the collapsed
+  // row. The drawer's children are not mounted until first open, so this holds
+  // for the whole page before any click.
+  await expect(page.locator(".char__location")).toHaveCount(0);
+
+  await zedRow.locator(".row-toggle").click();
+  const crew = zedRow.locator("xpath=following-sibling::tr[1]").locator(".drawer__crew");
+  await expect(crew.locator(".char__location")).toHaveText("J123456 — Home Astrahus");
+  await expect(crew).toContainText("Locations as of");
+});

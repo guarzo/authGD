@@ -11,6 +11,7 @@ import {
   type AdminListSort,
 } from "@/services/account-view";
 import { Notice, RuleHead, Scroller, Status } from "@/app/_components/ui";
+import { CharacterLocation } from "@/app/_components/character-location";
 import { ConfirmNotice } from "@/app/_components/confirm-notice";
 import { Tier } from "@/app/_components/tier";
 import { tierLabel } from "@/app/_components/labels";
@@ -1009,6 +1010,16 @@ function AccountRow({
             Map observed {mapObservedAt.toISOString().slice(0, 16)}Z
           </span>
         )}
+        {/* One label for the manifest, like `Map observed` above — but derived
+            differently: `mapObservedAt` reduces newest-wins because the ACL
+            observation is a single job run, while `locationAsOf` is the OLDEST
+            reading because location has a per-character clock. See
+            buildManifestLocations in services/account-view.ts. */}
+        {r.locationAsOf && (
+          <span className="dim mono">
+            Locations as of {r.locationAsOf.toISOString().slice(0, 16)}Z
+          </span>
+        )}
         <Scroller label={`${identity} crew`}>
           <table className="log log--crew">
             <thead>
@@ -1023,10 +1034,13 @@ function AccountRow({
               {r.characters.map((c) => (
                 <tr key={c.id}>
                   <td>
-                    <span className="char">
-                      {c.name}{" "}
-                      {c.isMain && <strong className="char__main">(main)</strong>}
-                    </span>
+                    <div className="stack">
+                      <span className="char">
+                        {c.name}{" "}
+                        {c.isMain && <strong className="char__main">(main)</strong>}
+                      </span>
+                      <CharacterLocation location={c.location} stale={c.locationStale} />
+                    </div>
                   </td>
                   <td>
                     <div className="stack">
