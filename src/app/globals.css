@@ -443,13 +443,16 @@ a:hover {
    the one control that ends the session was the smallest target in the bar on
    all ten pages that render a header.
 
-   Scoped override rather than dropping `.btn--micro` from the markup, for the
-   same reason `.inline-edit--standalone .btn--quiet` is written this way: the
-   micro grade also carries `font-size: var(--t-label)`, which is what actually
-   matches the nav's face, and removing the class to fix the box would change
-   the type. Two classes to `.btn--quiet`'s one, so it wins on specificity
-   wherever it sits. Font size, weight, case and colour are untouched — this
-   moves the hit area only. */
+   Scoped override rather than dropping `.btn--micro` from the markup, because
+   dropping it would not have worked: sign out is `.btn--quiet .btn--micro`,
+   and `.btn--quiet` sets `min-height: 1.75rem` on its own account, so removing
+   the micro class leaves the box exactly where it was. `.inline-edit--standalone
+   .btn--quiet` exists for this same reason. (The type is not the constraint —
+   `.btn` and `.btn--micro` set the identical `font-size: var(--t-label)`; what
+   `--micro` alone carries is the shorter padding and `--track-value` tracking.)
+   Two classes to `.btn--quiet`'s one, so it wins on specificity wherever it
+   sits. Font size, weight, case and colour are untouched — this moves the hit
+   area only. */
 .shell__signout .btn {
   min-height: 2.25rem;
   padding: var(--s-2) var(--s-3);
