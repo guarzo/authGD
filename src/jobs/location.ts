@@ -91,10 +91,15 @@ export async function runLocationJob(deps: {
       }
       try {
         const loc = await esi.getLocation(ch.characterId, token.accessToken);
-        // Optional scope. Its absence costs this character the online/offline
-        // treatment and nothing else — it must NOT skip the character.
+        // Optional scope: absence OR failure costs this character only the
+        // online/offline detail, never the write, and never a needs_reauth
+        // verdict — a 403 here says nothing about the REQUIRED scope's
+        // health (spec: missing/failed optional scope degrades this field
+        // only, never the row or the token status). `.catch(() => null)`
+        // keeps a bad optional read from ever reaching the outer catch,
+        // which exists to handle the REQUIRED read's failures.
         const online = ch.scopes.includes(LOCATION_SCOPES_OPTIONAL[1])
-          ? await esi.getOnline(ch.characterId, token.accessToken)
+          ? await esi.getOnline(ch.characterId, token.accessToken).catch(() => null)
           : null;
 
         // Every null below is counted but never escalates the job status: a
@@ -115,11 +120,17 @@ export async function runLocationJob(deps: {
           if (station === null) counts.namesUnresolved++;
         }
         if (loc.structureId !== null && ch.scopes.includes(LOCATION_SCOPES_OPTIONAL[0])) {
+          // resolveUniverseName is documented to never throw — it degrades
+          // to a stale cached name or null on any failure. The `.catch` here
+          // is belt-and-suspenders: it makes the same optional-scope
+          // degradation rule hold at this call site even if that contract
+          // ever changes, rather than depending on an invariant owned by a
+          // different module.
           const structure = await resolveUniverseName(db, esi, {
             id: loc.structureId,
             kind: "structure",
             accessToken: token.accessToken,
-          });
+          }).catch(() => null);
           if (structure === null) counts.namesUnresolved++;
         }
 

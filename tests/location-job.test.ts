@@ -137,6 +137,39 @@ describe("runLocationJob", () => {
     expect(r.locationCheckedAt).not.toBeNull();
   });
 
+  it("degrades a failed optional read exactly like a missing optional scope", async () => {
+    // Deliberate, user-approved deviation from the reference implementation
+    // in the plan: a THROWING optional read (here, getOnline 403s) must be
+    // treated identically to the scope simply being absent — the row still
+    // writes, the corresponding detail is null, and nothing escalates to
+    // needs_reauth or aborts the write. Only a failure on the REQUIRED read
+    // (esi.getLocation) may do that; see the transient-failure test above.
+    const acc = await seedAccount(ctx.db, { tier: "member" });
+    await seedCharacter(ctx.db, cfg, {
+      id: 1,
+      accountId: acc.id,
+      main: true,
+      scopes: ALL_SCOPES,
+    });
+    const esi: LocationEsi = {
+      ...fakeLocationEsi({ location: { 1: inSpace(31000042) } }).esi,
+      getOnline: async () => {
+        throw new EsiError("missing scope", 403, "needs_reauth");
+      },
+    };
+    const result = await runLocationJob({ db: ctx.db, cfg, esi, fetchImpl: okToken });
+    expect(result.status).toBe("ok");
+    expect(result.counts?.updated).toBe(1);
+    expect(result.counts?.failed).toBe(0);
+    const r = await row(1);
+    expect(r.locationSystemId).toBe(31000042);
+    expect(r.locationOnline).toBeNull();
+    expect(r.locationCheckedAt).not.toBeNull();
+    // The optional scope's failure must NOT reach the needs_reauth CAS —
+    // that branch is reserved for a failure on the REQUIRED read.
+    expect(r.tokenStatus).toBe("valid");
+  });
+
   it("records dry-run as a skip so the run still reports ok", async () => {
     // The test that keeps the admin sync page from lighting up amber in a
     // dry-run deployment, where EVERY character refuses the token refresh.
