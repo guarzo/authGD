@@ -14,8 +14,6 @@ import {
 } from "@/app/_components/confirm-submit";
 import { requirePayoutReader } from "../access";
 import {
-  addFlatPoolAction,
-  addParticipantAction,
   deleteOperationAction,
   deletePoolAction,
   finalizeAction,
@@ -35,9 +33,12 @@ import {
 } from "../actions";
 import { DROPPED_REASONS, decodeDropped } from "../dropped";
 import { OPERATION_ERRORS, lookupErrorMessage } from "../errors";
+import { AddParticipantForm } from "./add-participant-form";
 import { AppraiseForm } from "./appraise-form";
 import { ClearStaleQuery } from "./clear-stale-query";
 import { CopyAmountButton } from "./copy-amount-button";
+import { FlatPoolForm } from "./flat-pool-form";
+import { InlineEditField } from "./inline-edit-field";
 import { PaymentHistory } from "./payment-history";
 import { deriveRosterWarnings } from "./roster-warnings";
 import type { PricingMode } from "@/core/pricing";
@@ -112,10 +113,6 @@ const PRICING_LABELS: Record<PricingMode, string> = {
  *  lives in `../errors` — with the type that stops those actions emitting one
  *  the map has no entry for. Its `share_format` / `share_range` wording is
  *  deliberately not the create form's; `../errors` says why. */
-
-/** The `<datalist>` the add-participant field points at. One per page, so a
- *  constant rather than a `useId` (this is a server component). */
-const CHARACTER_LIST_ID = "known-character-names";
 
 /** Below this many rows, `.scroller--tall`'s cap (globals.css, tuned against
  *  /admin/accounts' ~50-row table) does more harm than good: it clips a row
@@ -248,7 +245,7 @@ export default async function PayoutOperationPage({
             later successful edit elsewhere on this page cannot re-render this
             same, by-then-stale notice — see the component's own docblock. */}
         <ClearStaleQuery />
-        {errorMessage && <Notice tone="bad">{errorMessage}</Notice>}
+        <Notice tone="bad">{errorMessage}</Notice>
 
         {/* "items", not "lines": parseLootPaste sums by item name before it
             decides what to drop, so one entry is one item quoted from the line
@@ -372,62 +369,50 @@ export default async function PayoutOperationPage({
             ariaLabel="Edit details — operation name, date, battle report link, and notes"
           >
             <div className="form-stack">
-              <form
-                action={setNameAction.bind(null, operation.id)}
-                className="form-stack__field"
-              >
+              <div className="form-stack__field">
                 <label htmlFor="detail-name">Operation name</label>
-                <div className="inline-form">
-                  <input
-                    id="detail-name"
-                    className="field field--grow"
-                    name="name"
-                    required
-                    defaultValue={operation.name}
-                  />
-                  <Submit className="btn btn--micro" aria-label="save operation name">
-                    save
-                  </Submit>
-                </div>
-              </form>
-              <form
-                action={setOccurredAtAction.bind(null, operation.id)}
-                className="form-stack__field"
-              >
+                <InlineEditField
+                  action={setNameAction.bind(null, operation.id)}
+                  name="name"
+                  serverValue={operation.name}
+                  inputProps={{
+                    id: "detail-name",
+                    className: "field field--grow",
+                    required: true,
+                  }}
+                  submitAriaLabel="save operation name"
+                />
+              </div>
+              <div className="form-stack__field">
                 <label htmlFor="detail-date">Operation date</label>
-                <div className="inline-form">
-                  <input
-                    id="detail-date"
-                    className="field mono"
-                    type="date"
-                    name="occurredAt"
-                    max={today}
-                    required
-                    defaultValue={fmtDate(operation.occurredAt)}
-                  />
-                  <Submit className="btn btn--micro" aria-label="save operation date">
-                    save
-                  </Submit>
-                </div>
-              </form>
-              <form
-                action={setBattleReportUrlAction.bind(null, operation.id)}
-                className="form-stack__field"
-              >
+                <InlineEditField
+                  action={setOccurredAtAction.bind(null, operation.id)}
+                  name="occurredAt"
+                  serverValue={fmtDate(operation.occurredAt)}
+                  inputProps={{
+                    id: "detail-date",
+                    className: "field mono",
+                    type: "date",
+                    max: today,
+                    required: true,
+                  }}
+                  submitAriaLabel="save operation date"
+                />
+              </div>
+              <div className="form-stack__field">
                 <label htmlFor="detail-battle-report">Battle report URL</label>
-                <div className="inline-form">
-                  <input
-                    id="detail-battle-report"
-                    className="field field--grow"
-                    type="url"
-                    name="battleReportUrl"
-                    defaultValue={operation.battleReportUrl ?? ""}
-                  />
-                  <Submit className="btn btn--micro" aria-label="save battle report URL">
-                    save
-                  </Submit>
-                </div>
-              </form>
+                <InlineEditField
+                  action={setBattleReportUrlAction.bind(null, operation.id)}
+                  name="battleReportUrl"
+                  serverValue={operation.battleReportUrl ?? ""}
+                  inputProps={{
+                    id: "detail-battle-report",
+                    className: "field field--grow",
+                    type: "url",
+                  }}
+                  submitAriaLabel="save battle report URL"
+                />
+              </div>
               <form
                 action={setNotesAction.bind(null, operation.id)}
                 className="form-stack__field"
@@ -485,31 +470,7 @@ export default async function PayoutOperationPage({
                 summary="Or enter a flat value"
                 ariaLabel="Or enter a flat value — a manual total for when triff can't price something"
               >
-                <form
-                  action={addFlatPoolAction.bind(null, operation.id)}
-                  className="form-stack"
-                >
-                  <label className="form-stack__field">
-                    Total value (ISK)
-                    <input
-                      className="field"
-                      type="number"
-                      step="0.01"
-                      min="0"
-                      name="totalValue"
-                      required
-                    />
-                  </label>
-                  <label className="form-stack__field">
-                    Note (required — why this number)
-                    <input className="field" name="notes" required />
-                  </label>
-                  <label className="form-stack__field">
-                    What was in it (optional)
-                    <textarea className="field" name="rawPaste" rows={3} />
-                  </label>
-                  <Submit className="btn">Add flat pool</Submit>
-                </form>
+                <FlatPoolForm operationId={operation.id} />
               </Disclosure>
             </div>
           </Disclosure>
@@ -706,36 +667,29 @@ export default async function PayoutOperationPage({
                           </td>
                           <td>
                             {canEdit && (
-                              <form
+                              // Named after the row it acts on, like the
+                              // shares input below: "save" alone tells a
+                              // speech-input or screen-reader operator which
+                              // verb, never which of 200 items.
+                              <InlineEditField
                                 action={setItemPriceAction.bind(
                                   null,
                                   operation.id,
                                   item.id,
                                 )}
-                                className="inline-form"
-                              >
-                                {/* Named after the row it acts on, like the
-                                    shares input below: "save" alone tells a
-                                    speech-input or screen-reader operator
-                                    which verb, never which of 200 items. */}
-                                <input
-                                  className="field field--money"
-                                  name="unitPrice"
-                                  type="number"
-                                  inputMode="decimal"
-                                  min="0"
-                                  step="0.01"
-                                  required
-                                  defaultValue={item.unitPrice}
-                                  aria-label={`Unit price for ${item.name}`}
-                                />
-                                <Submit
-                                  className="btn btn--micro"
-                                  aria-label={`save unit price for ${item.name}`}
-                                >
-                                  save
-                                </Submit>
-                              </form>
+                                name="unitPrice"
+                                serverValue={item.unitPrice}
+                                inputProps={{
+                                  className: "field field--money",
+                                  type: "number",
+                                  inputMode: "decimal",
+                                  min: "0",
+                                  step: "0.01",
+                                  required: true,
+                                  "aria-label": `Unit price for ${item.name}`,
+                                }}
+                                submitAriaLabel={`save unit price for ${item.name}`}
+                              />
                             )}
                           </td>
                         </tr>
@@ -791,36 +745,19 @@ export default async function PayoutOperationPage({
               </form>
 
               {/* A plain `<datalist>`, not a type-ahead: the browser does the
-                  filtering, so there is no endpoint, no client component, no new
-                  authorization surface, and it works with JavaScript off. The
-                  list is omitted entirely past `CHARACTER_NAME_CAP`, and the
-                  field then behaves as ordinary free text — `addParticipant`
-                  resolves the typed name server-side either way, so a missing
-                  suggestion costs a suggestion, not the feature. */}
-              <form
-                action={addParticipantAction.bind(null, operation.id)}
-                className="form-stack"
-              >
-                <RuleHead as="h3">Add one participant</RuleHead>
-                <label className="form-stack__field">
-                  Character name
-                  <input
-                    className="field"
-                    name="name"
-                    list={characterNames ? CHARACTER_LIST_ID : undefined}
-                    autoComplete="off"
-                    required
-                  />
-                </label>
-                {characterNames && (
-                  <datalist id={CHARACTER_LIST_ID}>
-                    {characterNames.map((n) => (
-                      <option key={n} value={n} />
-                    ))}
-                  </datalist>
-                )}
-                <Submit className="btn">Add participant</Submit>
-              </form>
+                  filtering, so there is no endpoint and no new authorization
+                  surface. It lives inside `AddParticipantForm` now — that
+                  component's own docblock says why the round-trip fix below
+                  needed a client component where this datalist alone did not.
+                  The list is omitted entirely past `CHARACTER_NAME_CAP`, and
+                  the field then behaves as ordinary free text —
+                  `addParticipant` resolves the typed name server-side either
+                  way, so a missing suggestion costs a suggestion, not the
+                  feature. */}
+              <AddParticipantForm
+                operationId={operation.id}
+                characterNames={characterNames}
+              />
             </div>
           </Disclosure>
         )}
@@ -902,32 +839,25 @@ export default async function PayoutOperationPage({
                     </td>
                     <td className="num">
                       {canEdit ? (
-                        <form
+                        <InlineEditField
                           action={setParticipantSharesAction.bind(
                             null,
                             operation.id,
                             p.id,
                           )}
-                          className="inline-form"
-                        >
-                          <input
-                            className="field field--micro"
-                            name="shares"
-                            type="number"
-                            inputMode="decimal"
-                            min="0.01"
-                            step="0.01"
-                            required
-                            defaultValue={p.shares}
-                            aria-label={`Shares for ${p.displayName}`}
-                          />
-                          <Submit
-                            className="btn btn--micro"
-                            aria-label={`save ${p.displayName} shares`}
-                          >
-                            save
-                          </Submit>
-                        </form>
+                          name="shares"
+                          serverValue={p.shares}
+                          inputProps={{
+                            className: "field field--micro",
+                            type: "number",
+                            inputMode: "decimal",
+                            min: "0.01",
+                            step: "0.01",
+                            required: true,
+                            "aria-label": `Shares for ${p.displayName}`,
+                          }}
+                          submitAriaLabel={`save ${p.displayName} shares`}
+                        />
                       ) : (
                         <span className="mono">{p.shares}</span>
                       )}

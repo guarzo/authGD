@@ -160,9 +160,24 @@ export async function createOperationAction(formData: FormData): Promise<void> {
  *  hook's initial state: `state === null` never renders a notice, whether
  *  that means "hasn't submitted yet" or "still pending", and `ok: true` on a
  *  success lets a client leaf tell that apart from either of those without
- *  reading anything from the query string. */
+ *  reading anything from the query string.
+ *
+ *  `ok: true` also carries `dropped`: the same base64url payload
+ *  `encodeDropped` used to hand straight to a `redirect()` target, non-null
+ *  only when the paste dropped at least one line. This action used to redirect
+ *  there itself on that path, which is exactly the defect this sweep already
+ *  fixed twice elsewhere (`admin/accounts/actions.ts`,
+ *  `admin/sync/actions.ts`): a server `redirect()` back to the SAME page is
+ *  still a route transition, and every `Disclosure` on this page holds its
+ *  open/closed state in a plain `useState` with nowhere else to live, so the
+ *  transition silently closed whatever pool or roster panel the operator had
+ *  open elsewhere the moment a paste happened to drop one line. Returning the
+ *  payload as state instead keeps `AppraiseForm` mounted; it pushes the param
+ *  into the URL itself via `router.replace` once this resolves — see that
+ *  component's own docblock for the mechanics, and `clear-stale-query.tsx`'s
+ *  for why `replace` and not `redirect` is the safe one. */
 export type AppraiseActionState =
-  { ok: true } | { ok: false; code: "appraisal_failed" } | null;
+  { ok: true; dropped: string | null } | { ok: false; code: "appraisal_failed" } | null;
 
 export async function addAppraisedPoolAction(
   operationId: string,
@@ -185,9 +200,12 @@ export async function addAppraisedPoolAction(
   const esi = createEsiClient({ userAgent: `authgd/0.1.0 (${cfg.esiContact})` });
   const triff = createTriffClient();
 
-  // Carried out of the try so the redirect below runs after it: `redirect()`
-  // throws a control-flow signal, and calling it inside the try would be
-  // caught by the `catch` and rethrown as an unhandled error.
+  // Declared outside the try only for scope — nothing below throws a
+  // control-flow signal on this path anymore. It used to be carried out so a
+  // `redirect()` after the try/catch would not be caught and rethrown by the
+  // `catch` below; that redirect is gone (see `AppraiseActionState`'s own
+  // comment for why), and the value now travels home as returned state
+  // instead.
   let droppedParam: string | null = null;
   try {
     const appraisal = await appraiseLoot(
@@ -223,31 +241,80 @@ export async function addAppraisedPoolAction(
     throw err;
   }
   revalidateOperation(operationId);
-  if (droppedParam) redirect(`/payouts/${operationId}?dropped=${droppedParam}`);
-  return { ok: true };
+  return { ok: true, dropped: droppedParam };
 }
+
+/**
+ * The state shape shared by every inline single-value editor on this page
+ * whose rejection has to leave the operator's own typed value on screen
+ * rather than whatever is still in the database.
+ *
+ * This is the fix for the design sweep's "a rejected edit discards what was
+ * typed" defect: `operationFailed`'s `?error=` redirect can only carry a fixed
+ * code, never the value that produced it, so the redirect re-rendered the
+ * page from server state and the typed value was simply gone — on a money
+ * screen, at the exact moment the operator most needed to see what they'd
+ * entered to fix it. `useActionState` returns state instead of navigating,
+ * the same trick `addAppraisedPoolAction` / `AppraiseForm` already established
+ * for the loot paste (see that action's own comment); this is that trick's
+ * single-field, per-row twin, reused by every action below whose form has
+ * exactly one text/number input to preserve.
+ *
+ * `value` is only ever the REJECTED input — an `ok: true` state carries none,
+ * on purpose. The client component that renders this (`InlineEditField`)
+ * falls back to the current server value once `ok` is true, so a successful
+ * save is never left showing a value that merely resembles what was
+ * committed; it shows what the reload actually says.
+ */
+export type StringFieldEditState =
+  { ok: true } | { ok: false; code: OperationErrorCode; value: string } | null;
+
+/**
+ * `addFlatPoolAction`'s own three-field twin of `StringFieldEditState` — a
+ * flat pool has no single field to echo back, and totalValue/notes/rawPaste
+ * all have to survive a rejection together or an operator who mistypes the
+ * total loses the note explaining where the number came from too.
+ */
+export type FlatPoolEditState =
+  | { ok: true }
+  | {
+      ok: false;
+      code: OperationErrorCode;
+      totalValue: string;
+      notes: string;
+      rawPaste: string;
+    }
+  | null;
 
 export async function addFlatPoolAction(
   operationId: string,
+  _prevState: FlatPoolEditState,
   formData: FormData,
-): Promise<void> {
+): Promise<FlatPoolEditState> {
   const actor = await requireOperatorAccount();
   const totalValue = field(formData, "totalValue").trim();
   const notes = field(formData, "notes").trim();
-  if (!notes) operationFailed(operationId, "note_required");
-  const rawPaste = field(formData, "rawPaste").trim() || null;
+  const rawPaste = field(formData, "rawPaste").trim();
+  if (!notes) {
+    return { ok: false, code: "note_required", totalValue, notes, rawPaste };
+  }
   // <input type="number"> accepts scientific notation like "1e5" client-side;
   // iskToCents' regex rejects it, but let this action fail with the same
   // readable message the other numeric fields above use, rather than relying
   // solely on addFlatPool's deeper (also correct) check.
   if (!/^-?\d+(\.\d{1,2})?$/.test(totalValue)) {
-    operationFailed(operationId, "total_invalid");
+    return { ok: false, code: "total_invalid", totalValue, notes, rawPaste };
   }
 
   await getDb().transaction((dbtx) =>
-    addFlatPool(dbtx, actor, operationId, { rawPaste, totalValue, notes }),
+    addFlatPool(dbtx, actor, operationId, {
+      rawPaste: rawPaste || null,
+      totalValue,
+      notes,
+    }),
   );
   revalidateOperation(operationId);
+  return { ok: true };
 }
 
 export async function deletePoolAction(
@@ -262,8 +329,9 @@ export async function deletePoolAction(
 export async function setItemPriceAction(
   operationId: string,
   itemId: string,
+  _prevState: StringFieldEditState,
   formData: FormData,
-): Promise<void> {
+): Promise<StringFieldEditState> {
   const actor = await requireOperatorAccount();
   const unitPrice = field(formData, "unitPrice").trim();
   // Two decimals is what numeric(20,2) holds. A third is refused rather than
@@ -272,10 +340,11 @@ export async function setItemPriceAction(
   // escape hatch for genuinely sub-cent heaps is the flat-total pool, which
   // takes a pool value directly and skips per-item pricing.
   if (!/^\d+(\.\d{1,2})?$/.test(unitPrice)) {
-    operationFailed(operationId, "price_invalid");
+    return { ok: false, code: "price_invalid", value: unitPrice };
   }
   await getDb().transaction((dbtx) => setItemPrice(dbtx, actor, itemId, unitPrice));
   revalidateOperation(operationId);
+  return { ok: true };
 }
 
 export async function setRosterAction(
@@ -292,66 +361,70 @@ export async function setRosterAction(
   revalidateOperation(operationId);
 }
 
-/** Both rejections here are things the operator typed, so both redirect rather
- *  than throw — the conversion #74 applied to every other input rejection in
- *  this file. A throw would land on error.tsx, which renders `error.digest` and
- *  never `error.message`, telling them a blank name box was a fault on our end.
- *
- *  `operationFailed` returns `never` and must not be called from inside a `try`
- *  — `redirect` signals by throwing NEXT_REDIRECT, and an enclosing catch would
- *  swallow it. The call below sits in the `catch`, not the `try`. */
+/** Both rejections here are things the operator typed, so both return state
+ *  rather than throwing — the conversion #74 applied to every other input
+ *  rejection in this file. A throw would land on error.tsx, which renders
+ *  `error.digest` and never `error.message`, telling them a blank name box
+ *  was a fault on our end. `operationFailed`'s `?error=` redirect used to be
+ *  the mechanism; it discarded the typed name on rejection (this sweep's
+ *  defect 3), so this now follows `setItemPriceAction`'s `StringFieldEditState`
+ *  pattern instead — the try/catch shape below is otherwise unchanged. */
 export async function addParticipantAction(
   operationId: string,
+  _prevState: StringFieldEditState,
   formData: FormData,
-): Promise<void> {
+): Promise<StringFieldEditState> {
   const actor = await requireOperatorAccount();
   const name = field(formData, "name").trim();
-  if (!name) operationFailed(operationId, "participant_name_required");
+  if (!name) return { ok: false, code: "participant_name_required", value: name };
   try {
     await getDb().transaction((dbtx) => addParticipant(dbtx, actor, operationId, name));
   } catch (err) {
     if (err instanceof PayoutDuplicateParticipantError) {
-      operationFailed(operationId, "participant_duplicate");
+      return { ok: false, code: "participant_duplicate", value: name };
     }
     throw err;
   }
   revalidateOperation(operationId);
+  return { ok: true };
 }
 
 export async function setParticipantSharesAction(
   operationId: string,
   participantId: string,
+  _prevState: StringFieldEditState,
   formData: FormData,
-): Promise<void> {
+): Promise<StringFieldEditState> {
   const actor = await requireOperatorAccount();
   const shares = field(formData, "shares").trim();
-  if (!shares) operationFailed(operationId, "shares_required");
+  if (!shares) return { ok: false, code: "shares_required", value: shares };
   // Format first, positivity second, and in that order deliberately: iskToCents
   // *throws* on anything its regex rejects (core/payout-split.ts), so calling it
-  // on "abc" would escape to error.tsx past the redirect below — and text in a
-  // numeric field is the likeliest bad input this control gets. Mirrors the
-  // regex-then-parse order addFlatPoolAction already uses for totalValue.
+  // on "abc" would escape past the checks below — and text in a numeric field
+  // is the likeliest bad input this control gets. Mirrors the regex-then-parse
+  // order addFlatPoolAction already uses for totalValue.
   if (!/^-?\d+(\.\d{1,2})?$/.test(shares)) {
-    operationFailed(operationId, "shares_invalid");
+    return { ok: false, code: "shares_invalid", value: shares };
   }
   // Mirrors payout_participant_shares_ck (shares > 0) with a readable message
   // before the raw string reaches the numeric(6,2) column.
   if (iskToCents(shares) <= 0n) {
-    operationFailed(operationId, "shares_positive");
+    return { ok: false, code: "shares_positive", value: shares };
   }
   // The numeric(6, 2) column's own range, mirrored here for the same reason the
   // three checks above mirror the format and payout_participant_shares_ck: an
-  // unbounded "10000" reaches Postgres as a raw numeric overflow and lands the
-  // operator on error.tsx. assertSharesInRange in the service enforces this for
-  // every caller; this copy is the one that can give the operator a page with
-  // their roster still on it. Same constant, so the two cannot drift.
+  // unbounded "10000" reaches Postgres as a raw numeric overflow. assertSharesInRange
+  // in the service enforces this for every caller; this copy is the one that can
+  // give the operator a page with their roster still on it. Same constant, so the
+  // two cannot drift.
   if (iskToCents(shares) > MAX_SHARES_HUNDREDTHS) {
-    operationFailed(operationId, "shares_range");
+    return { ok: false, code: "shares_range", value: shares };
   }
   await getDb().transaction((dbtx) =>
     setParticipantShares(dbtx, actor, participantId, shares),
   );
   revalidateOperation(operationId);
+  return { ok: true };
 }
 
 /** Four inline editors for fields the create form no longer collects up
@@ -367,34 +440,42 @@ export async function setParticipantSharesAction(
  *  comment. */
 export async function setNameAction(
   operationId: string,
+  _prevState: StringFieldEditState,
   formData: FormData,
-): Promise<void> {
+): Promise<StringFieldEditState> {
   const actor = await requireOperatorAccount();
   const name = field(formData, "name").trim();
-  if (!name) operationFailed(operationId, "name_required");
+  if (!name) return { ok: false, code: "name_required", value: name };
   await getDb().transaction((dbtx) => setOperationName(dbtx, actor, operationId, name));
   revalidateOperation(operationId);
+  return { ok: true };
 }
 
 export async function setOccurredAtAction(
   operationId: string,
+  _prevState: StringFieldEditState,
   formData: FormData,
-): Promise<void> {
+): Promise<StringFieldEditState> {
   const actor = await requireOperatorAccount();
-  const occurredAt = new Date(field(formData, "occurredAt"));
-  if (Number.isNaN(occurredAt.getTime())) operationFailed(operationId, "date_invalid");
+  const raw = field(formData, "occurredAt");
+  const occurredAt = new Date(raw);
+  if (Number.isNaN(occurredAt.getTime())) {
+    return { ok: false, code: "date_invalid", value: raw };
+  }
   await getDb().transaction((dbtx) =>
     setOccurredAt(dbtx, actor, operationId, occurredAt),
   );
   revalidateOperation(operationId);
+  return { ok: true };
 }
 
 export async function setBattleReportUrlAction(
   operationId: string,
+  _prevState: StringFieldEditState,
   formData: FormData,
-): Promise<void> {
+): Promise<StringFieldEditState> {
   const actor = await requireOperatorAccount();
-  const raw = field(formData, "battleReportUrl").trim() || null;
+  const raw = field(formData, "battleReportUrl").trim();
   // Same http(s)-only check `createOperationAction` runs, and for the same
   // reason: this is rendered as a plain `<a href>` on this very page, so a
   // `javascript:` or other scheme must never reach the database.
@@ -403,14 +484,17 @@ export async function setBattleReportUrlAction(
     try {
       scheme = new URL(raw).protocol;
     } catch {
-      operationFailed(operationId, "url_invalid");
+      return { ok: false, code: "url_invalid", value: raw };
     }
     if (scheme !== "http:" && scheme !== "https:") {
-      operationFailed(operationId, "url_scheme");
+      return { ok: false, code: "url_scheme", value: raw };
     }
   }
-  await getDb().transaction((dbtx) => setBattleReportUrl(dbtx, actor, operationId, raw));
+  await getDb().transaction((dbtx) =>
+    setBattleReportUrl(dbtx, actor, operationId, raw || null),
+  );
   revalidateOperation(operationId);
+  return { ok: true };
 }
 
 export async function setNotesAction(

@@ -418,6 +418,69 @@ test("a resolved sub-cent unit price shows a real line total beside a 0.00 unit 
 });
 
 /**
+ * Regression guard for a defect that survived the design sweep's own audit of
+ * `addAppraisedPoolAction`: a SUCCESSFUL paste that drops at least one line
+ * used to `redirect()` to this same page with `?dropped=<payload>`, and a
+ * `redirect()` back to the page already on screen is still a route
+ * transition. Every `Disclosure` on this page holds its open/closed state in
+ * a plain `useState` (`disclosure.tsx`) with nowhere else to live, so that
+ * transition silently closed whatever else the operator had open — exactly
+ * the class of bug the sweep already fixed twice elsewhere
+ * (`admin/accounts/actions.ts`, `admin/sync/actions.ts`), just missed here
+ * because the sweep's own audit of this action only exercised the rejection
+ * path (the "bad shares"-style tests below), never the success-with-drops one.
+ *
+ * "42" alone is `QTY_ONLY` (`core/loot-paste.ts`) — a bare number with no item
+ * name is dropped as "quantity-only" rather than parsed as an item. Every line
+ * here drops, so `appraiseLoot` never resolves a type id and never calls
+ * triff (`esi.resolveIds` / `triff.quote` are both no-ops on an empty list) —
+ * which is what lets this go through the real form, unlike the two tests
+ * above that seed an appraised pool directly because the priced path depends
+ * on triff.tools.
+ *
+ * "Edit details" is the control this pins the regression against, not "Add
+ * loot" or "Edit roster": both of those default OPEN while there are no pools
+ * / no roster yet, so a remount would reopen them anyway and the assertion
+ * would pass whether or not the bug were present. "Edit details" has no
+ * `defaultOpen`, so it only reads expanded here if it was never remounted.
+ */
+test("a dropped-lines paste does not collapse an unrelated disclosure the operator left open", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "FC Prime",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+
+  await page.goto("/payouts/new");
+  await page.getByLabel("Name").fill("Dropped-line regression");
+  await page.getByLabel("Date").fill("2026-08-01");
+  await page.getByRole("button", { name: "Create operation" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Dropped-line regression" }),
+  ).toBeVisible();
+
+  const editDetailsToggle = page.locator("summary", { hasText: "Edit details" });
+  await editDetailsToggle.click();
+  await expect(editDetailsToggle).toHaveAttribute("aria-expanded", "true");
+
+  // "Add loot" is already open (defaultOpen while pools.length === 0) — no
+  // click needed, and clicking its own summary here would only close it.
+  await page.getByLabel("Loot paste").fill("42");
+  await page.getByRole("button", { name: "Appraise" }).click();
+
+  await expect(page.getByText("1 item ignored")).toBeVisible();
+  await expect(page.getByText("42 (just a number, with no item name)")).toBeVisible();
+
+  // The regression: this used to fail here, because the redirect above
+  // remounted every Disclosure on the page and reset this one to closed.
+  await expect(editDetailsToggle).toHaveAttribute("aria-expanded", "true");
+});
+
+/**
  * Two payout_participant rows sharing an unresolved display name is
  * unreachable through the UI in this PR — parseRosterPaste dedupes
  * case-insensitively and setRoster fully replaces the roster on every submit,
@@ -678,6 +741,13 @@ for (const [code, phrase] of [
   });
 }
 
+// The detail page's own `?error=` codes no longer have a live producer — every
+// action that used to redirect through `operationFailed` with one of these now
+// returns `useActionState` state instead (see actions.ts's `StringFieldEditState`
+// / `FlatPoolEditState`), which is the fix for "a rejected edit discards what
+// was typed". The codes and their copy stay in `OPERATION_ERRORS` as backstops
+// for a direct `?error=` visit or a hand-built request — this loop is what
+// still proves each renders its message rather than nothing.
 for (const [code, phrase] of [
   ["appraisal_failed", "did not answer"],
   ["pricing_mode", "four pricing modes"],
@@ -780,7 +850,7 @@ test("a rejected create form comes back filled in", async ({ page, context }) =>
  * end-to-end version of the check: text and zero both land back on the page
  * with a specific message rather than on error.tsx. Text is the important one
  * — iskToCents *throws* on it, so a naive positivity guard would escape past
- * the redirect it was meant to trigger.
+ * the check it was meant to trigger.
  */
 test("bad shares land on the page, not the error boundary", async ({ page, context }) => {
   const operator = await seedMember(db, {
@@ -807,13 +877,24 @@ test("bad shares land on the page, not the error boundary", async ({ page, conte
   await page.getByRole("button", { name: "save Alice Pilot shares" }).click();
   await expect(page.locator("p.notice--bad")).toContainText("plain number like 1");
   await expect(page.getByText("Something broke")).toHaveCount(0);
+  // The typed value survived the rejection — not the stored 1.00 the roster
+  // paste defaulted to. Losing it here is the exact defect this guards: an
+  // operator who can no longer see what they typed has to retype it blind,
+  // and retyping under time pressure is where a *different* wrong number
+  // gets entered.
+  await expect(page.getByLabel("Shares for Alice Pilot")).toHaveValue("abc");
+  // The rejection also refocuses the field, so a keyboard/screen-reader
+  // operator lands back exactly where the correction goes rather than on
+  // the Submit button they just pressed.
+  await expect(page.getByLabel("Shares for Alice Pilot")).toBeFocused();
 
   await bypassClientGuard(page.getByLabel("Shares for Alice Pilot"), "0");
   await page.getByRole("button", { name: "save Alice Pilot shares" }).click();
   await expect(page.locator("p.notice--bad")).toContainText("greater than zero");
   await expect(page.getByText("Something broke")).toHaveCount(0);
-  // The stored value survived both rejections.
-  await expect(page.getByLabel("Shares for Alice Pilot")).toHaveValue("1.00");
+  // Same guard, a second time: a different rejection on the same field still
+  // preserves what was just typed rather than snapping back to 1.00.
+  await expect(page.getByLabel("Shares for Alice Pilot")).toHaveValue("0");
 });
 
 /**
@@ -982,7 +1063,8 @@ test("override an item price, finalize, pay, revert, and pay again", async ({
  * The unit-price control is the other money input on the page, alongside
  * shares (see "bad shares land on the page, not the error boundary" above) —
  * a malformed value must land back on the page with a specific message
- * rather than on error.tsx, and the stored price must survive the rejection.
+ * rather than on error.tsx, and the operator's own typed value (not the
+ * stored price) must survive the rejection.
  */
 test("bad unit price lands on the page, not the error boundary", async ({
   page,
@@ -1037,10 +1119,15 @@ test("bad unit price lands on the page, not the error boundary", async ({
   await page.getByRole("button", { name: "save unit price for Tritanium" }).click();
   await expect(page.locator("p.notice--bad")).toContainText("plain number like 12.34");
   await expect(page.getByText("Something broke")).toHaveCount(0);
-  // The stored value survived the rejection.
+  // The typed value survived the rejection — the field still shows the
+  // rejected "1,234.00", not the stored 10.00. See "bad shares land on the
+  // page" above for the reasoning this pins for the money screen generally.
   await expect(page.getByLabel("Unit price for Tritanium", { exact: true })).toHaveValue(
-    "10.00",
+    "1,234.00",
   );
+  await expect(
+    page.getByLabel("Unit price for Tritanium", { exact: true }),
+  ).toBeFocused();
 });
 
 /**
@@ -1119,12 +1206,14 @@ test("adding the same name twice is refused on the page, not on the error bounda
 
   await page.getByLabel("Character name").fill("Twice Pilot");
   await page.getByRole("button", { name: "Add participant" }).click();
-  // p.notice--bad, never getByRole("alert"): this is a soft navigation, so
-  // Next's route announcer carries role="alert" too.
   await expect(page.locator("p.notice--bad")).toContainText("already on this roster");
   await expect(page.getByText("Something broke")).toHaveCount(0);
   // And the roster is unchanged — the rejection added nothing.
   await expect(page.getByRole("row").filter({ hasText: "Twice Pilot" })).toHaveCount(1);
+  // The typed name survived the rejection too — same fix as the shares and
+  // unit-price fields above, applied to this add-form's one field.
+  await expect(page.getByLabel("Character name")).toHaveValue("Twice Pilot");
+  await expect(page.getByLabel("Character name")).toBeFocused();
 });
 
 /**
