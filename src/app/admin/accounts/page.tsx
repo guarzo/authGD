@@ -62,11 +62,20 @@ const TIER_FILTERS = ["pending", ...TIERS] as const;
 // control groups sit in the same `.btn-group` position and an admin scans
 // straight from one to the other: hand-listing this set let the approve pair
 // drift into alumni-before-associate while the filter chips and the set-tier
-// row both ran member-associate-alumni. `member` is excluded because
-// `approveAccount` (services/admin-accounts.ts:121-146) only accepts the other
-// two — the type would reject it, which is the check that keeps this derivation
-// honest if TIERS ever grows.
-const APPROVE_TIERS = TIERS.filter((t): t is "associate" | "alumni" => t !== "member");
+// row both ran member-associate-alumni.
+//
+// The predicate excludes `member` by `Exclude` rather than by naming the two
+// survivors, and the difference matters the day TIERS grows. A hand-written
+// `t is "associate" | "alumni"` is a legal predicate for a wider union, so a
+// fourth tier would land in this array at runtime while the type narrowed it
+// away — and the `approveAction.bind` below would typecheck against the stale
+// pair and fail only when someone pressed the button. Derived, the new tier
+// widens the element type instead, and the bind stops compiling against
+// `approveAccount` (services/admin-accounts.ts:121-146), which accepts only
+// what it accepts. That failure is the check this derivation relies on.
+const APPROVE_TIERS = TIERS.filter(
+  (t): t is Exclude<(typeof TIERS)[number], "member"> => t !== "member",
+);
 
 // Every code this page renders lives in src/lib/error-redirects.ts, beside the
 // builder actions.ts and admin-guard.ts go through. All of them are races
