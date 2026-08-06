@@ -1,7 +1,41 @@
 import type { Metadata } from "next";
+import { Fragment } from "react";
 import { Notice } from "@/app/_components/ui";
 import { getConfig } from "@/config";
 import { LOGIN_ERRORS, loginErrorTone, lookupErrorMessage } from "@/lib/error-redirects";
+
+/**
+ * What each ESI scope actually buys, in the reader's terms, for the one
+ * moment this page exists to support: deciding whether to grant it. Grounded
+ * in the real call sites rather than paraphrased from the identifier —
+ * `esi-characters.write_contacts.v1` reads as "manage contacts" until you
+ * check `src/jobs/contacts.ts` and see it also *deletes* them, which is the
+ * kind of gap that makes a raw identifier the more honest choice than a
+ * softened one.
+ *
+ * Keyed by the identifier so a fork's own `EVE_SSO_SCOPES` addition falls
+ * through cleanly: `describeScope` returns `undefined` for anything not
+ * listed here, and the caller renders the identifier alone rather than a
+ * placeholder sentence this map cannot back.
+ */
+function describeScope(scope: string, contactLabel: string): string | undefined {
+  switch (scope) {
+    // src/jobs/contacts.ts:14 — CONTACT_SCOPES[0]. getAllContacts() only.
+    case "esi-characters.read_contacts.v1":
+      return "Reads the contacts already on your characters, to check what's there before changing anything.";
+    // src/jobs/contacts.ts:15 — CONTACT_SCOPES[1]. The writes themselves are
+    // esi.addContacts / editContacts / deleteContacts in that same job, driven
+    // by `diffContacts`' return value, gated to the configured label only.
+    case "esi-characters.write_contacts.v1":
+      return `Adds, updates, and removes contacts under the "${contactLabel}" label on your characters, to keep them matching your standing.`;
+    // src/lib/esi/client.ts:18,324 — OPEN_WINDOW_SCOPE, used from
+    // payouts/actions.ts:674 to open a character's info window in the client.
+    case "esi-ui.open_window.v1":
+      return "Lets authGD open a character's info window in your EVE client from the payouts page.";
+    default:
+      return undefined;
+  }
+}
 
 // `await searchParams` below already forces dynamic rendering, so the
 // getConfig() call cannot run at build time today. Declared anyway, matching
@@ -90,17 +124,26 @@ export default async function LoginPage({
               under it reads as "authGD requests no scopes" instead of "this
               deployment is misconfigured". */}
           {scopes.length > 0 && (
-            <dl className="launch__scopes">
-              <dt>Scopes requested</dt>
-              {/* One dd per scope. A <dl> permits several dd under one dt, and
-                  joining these into a single space-delimited string put four
-                  identifiers in a ~30ch box with `overflow-wrap: anywhere` —
-                  at the consent moment, with nothing to distinguish a scope
-                  boundary from a line break. */}
-              {scopes.map((scope) => (
-                <dd key={scope}>{scope}</dd>
-              ))}
-            </dl>
+            <>
+              <p className="launch__scopes-head">Scopes requested</p>
+              {/* dt is the raw identifier, dd is the one sentence it buys —
+                  see describeScope above and the CSS comment on
+                  .launch__scopes for why this runs the opposite way from a
+                  plain "list of identifiers under one heading". A <Fragment>
+                  per scope keeps each dt/dd pair a real boundary: still one
+                  row per scope, never a joined string. */}
+              <dl className="launch__scopes">
+                {scopes.map((scope) => {
+                  const description = describeScope(scope, label);
+                  return (
+                    <Fragment key={scope}>
+                      <dt>{scope}</dt>
+                      {description && <dd>{description}</dd>}
+                    </Fragment>
+                  );
+                })}
+              </dl>
+            </>
           )}
         </div>
         <a className="launch__action" href="/auth/eve/login">
