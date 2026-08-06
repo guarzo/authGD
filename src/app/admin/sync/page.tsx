@@ -185,11 +185,21 @@ export default async function AdminSyncPage({
         <p className="page__lede">
           The jobs that keep tiers, roles and standings in step with the game. The buttons
           enqueue work;{" "}
+          {/* Three not-fresh cases, and only one of them supports the claim
+              that the worker is stopped. A STALE heartbeat is positive
+              evidence: pg-boss wrote one and then stopped writing. "never" is
+              not — pg-boss's maintenance loop writes on its own cadence, so a
+              worker that started moments ago is processing work while this
+              table is still empty, and telling an admin it is "not running"
+              would be a claim the page cannot support. "error" says even less.
+              Each says what is actually known. */}
           {worker.fresh
             ? "the worker picks it up within a few seconds."
             : heartbeat.status === "error"
               ? "whether the worker picks it up is unknown right now — its heartbeat could not be checked — see the line below."
-              : "the worker is not running right now, so queued work waits until it is — see the line below."}
+              : heartbeat.status === "never"
+                ? "no worker heartbeat has been recorded yet, so whether queued work is picked up promptly is unknown — see the line below."
+                : "the worker is not running right now, so queued work waits until it is — see the line below."}
         </p>
       </div>
 
