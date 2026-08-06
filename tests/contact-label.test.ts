@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   describeLabelDifference,
   encodeLabelCandidates,
+  foldEqualLabels,
   matchContactLabel,
   parseLabelCandidates,
 } from "@/core/contact-label";
@@ -22,41 +23,74 @@ describe("matchContactLabel", () => {
     );
   });
 
-  it("reports a case-only difference as a near miss", () => {
+  it("takes the exact match even when fold-equal siblings would be ambiguous", () => {
+    expect(
+      matchContactLabel(
+        [label(1, "AUTHGD"), label(2, "authgd"), label(3, "AuthGD")],
+        "AuthGD",
+      ),
+    ).toEqual({ kind: "exact", labelId: 3 });
+  });
+
+  it("accepts a case-only difference as a loose match", () => {
     expect(matchContactLabel([label(7, "AUTHGD")], "AuthGD")).toEqual({
-      kind: "near_miss",
-      candidates: ["AUTHGD"],
+      kind: "loose",
+      labelId: 7,
+      labelName: "AUTHGD",
     });
   });
 
-  it("reports leading and trailing whitespace as a near miss", () => {
+  it("accepts leading and trailing whitespace as a loose match", () => {
     expect(matchContactLabel([label(7, "AuthGD ")], "AuthGD")).toEqual({
-      kind: "near_miss",
-      candidates: ["AuthGD "],
+      kind: "loose",
+      labelId: 7,
+      labelName: "AuthGD ",
     });
     expect(matchContactLabel([label(7, " AuthGD")], "AuthGD")).toEqual({
-      kind: "near_miss",
-      candidates: [" AuthGD"],
+      kind: "loose",
+      labelId: 7,
+      labelName: " AuthGD",
     });
   });
 
-  it("reports combined case and whitespace differences as a near miss", () => {
+  it("accepts a combined case and whitespace difference as a loose match", () => {
     expect(matchContactLabel([label(7, " authgd ")], "AuthGD")).toEqual({
-      kind: "near_miss",
-      candidates: [" authgd "],
+      kind: "loose",
+      labelId: 7,
+      labelName: " authgd ",
     });
   });
 
-  it("returns every fold-equal candidate, sorted, rather than picking one", () => {
+  // diffContacts deletes under the id this returns, so a loose match must carry
+  // the member's OWN label id verbatim — there is no id for the configured name.
+  it("carries the member's own label id on a loose match", () => {
+    expect(matchContactLabel([label(4, "Blues"), label(9, "authgd")], "AuthGD")).toEqual({
+      kind: "loose",
+      labelId: 9,
+      labelName: "authgd",
+    });
+  });
+
+  it("refuses to choose between two fold-equal candidates", () => {
     expect(matchContactLabel([label(1, "authgd"), label(2, "AUTHGD")], "AuthGD")).toEqual(
-      { kind: "near_miss", candidates: ["AUTHGD", "authgd"] },
+      {
+        kind: "ambiguous",
+        candidates: ["AUTHGD", "authgd"],
+      },
     );
   });
 
   it("tolerates whitespace in the configured value", () => {
     expect(matchContactLabel([label(7, "AUTHGD")], " AuthGD ")).toEqual({
-      kind: "near_miss",
-      candidates: ["AUTHGD"],
+      kind: "loose",
+      labelId: 7,
+      labelName: "AUTHGD",
+    });
+  });
+
+  it("still refuses a label that differs by an internal whitespace run", () => {
+    expect(matchContactLabel([label(7, "Auth  GD")], "Auth GD")).toEqual({
+      kind: "absent",
     });
   });
 
@@ -126,5 +160,29 @@ describe("describeLabelDifference", () => {
 
   it("falls back to other for a candidate that is already exactly equal", () => {
     expect(describeLabelDifference("AuthGD", "AuthGD")).toBe("other");
+  });
+});
+
+describe("foldEqualLabels", () => {
+  it("is true for case and surrounding whitespace differences", () => {
+    expect(foldEqualLabels("AUTHGD", "AuthGD")).toBe(true);
+    expect(foldEqualLabels("AuthGD ", "AuthGD")).toBe(true);
+    expect(foldEqualLabels(" authgd ", "AuthGD")).toBe(true);
+  });
+
+  // Why this helper exists at all rather than reusing describeLabelDifference:
+  // that function deliberately collapses internal runs and calls this pair
+  // "spacing", while the matcher only trims and reports it absent. Anything
+  // deciding "will the next sync accept this?" must agree with the matcher.
+  it("is false for an internal whitespace run, agreeing with matchContactLabel", () => {
+    expect(foldEqualLabels("Auth  GD", "Auth GD")).toBe(false);
+    expect(describeLabelDifference("Auth  GD", "Auth GD")).toBe("spacing");
+    expect(matchContactLabel([label(7, "Auth  GD")], "Auth GD")).toEqual({
+      kind: "absent",
+    });
+  });
+
+  it("is false for names that differ by more than case and spacing", () => {
+    expect(foldEqualLabels("Blues", "AuthGD")).toBe(false);
   });
 });

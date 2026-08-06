@@ -133,8 +133,11 @@ export interface AccountView {
      * crossed the database boundary. See src/core/contact-result.ts.
      */
     contactSyncResult: string | null;
-    /** Context for `contactSyncResult` — the label name(s) actually found when
-     *  the result is `label_mismatch`, else null. */
+    /** Context for `contactSyncResult` — the JSON-encoded fold-equal candidate
+     *  names when the result is `label_mismatch`, the bare name of the loosely
+     *  matched label when it is `ok` and the member's label differed only in
+     *  case or surrounding whitespace, else null. Nothing renders the `ok`
+     *  case; it is recorded for operators (src/db/schema.ts). */
     contactSyncDetail: string | null;
     onMapAcl: boolean;
   }>;
@@ -152,6 +155,21 @@ export async function getAccountView(
     .select()
     .from(character)
     .where(eq(character.accountId, accountId));
+  // Deterministic manifest order: main first, then the rest by name
+  // (case-insensitive), tie-broken by id so two same-named alts can't swap
+  // between loads. Done in memory rather than via `orderBy` because "main
+  // first" depends on `acc.mainCharacterId`, which isn't known until the
+  // account row above is read — a SQL CASE on it would just re-derive here
+  // what's already in scope, for a per-account character list too small for
+  // the extra round of query-builder plumbing to pay for itself.
+  chars.sort((a, b) => {
+    const aMain = acc.mainCharacterId === a.id ? 0 : 1;
+    const bMain = acc.mainCharacterId === b.id ? 0 : 1;
+    if (aMain !== bMain) return aMain - bMain;
+    const nameCmp = a.name.toLowerCase().localeCompare(b.name.toLowerCase());
+    if (nameCmp !== 0) return nameCmp;
+    return a.id - b.id;
+  });
   const ids = chars.map((c) => c.id);
   const [links, syncStates, aclObs, pushes] = await Promise.all([
     dbx.select().from(discordLink).where(eq(discordLink.accountId, accountId)),

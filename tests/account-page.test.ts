@@ -35,6 +35,53 @@ describe("ContactRemedy (label_mismatch render)", () => {
     expect(html).not.toContain("Labels named");
   });
 
+  it("reassures a stale single-candidate row instead of demanding a rename", () => {
+    const html = encoded("AUTHGD");
+    expect(html).toContain("Your label is named");
+    expect(html).toContain("&quot;AUTHGD&quot;");
+    expect(html).toContain("only in capitalization");
+    expect(html).toContain("authGD accepts it as-is");
+    expect(html).not.toContain("Rename it in game");
+    expect(html).not.toContain("It must be exactly");
+  });
+
+  // `label` is the live STANDINGS_LABEL, `detail` came from the stored row
+  // (src/app/account/page.tsx). An operator who recapitalized the config after
+  // the row was written leaves a candidate the next sync will NOT accept, so
+  // this branch must promise nothing about it.
+  it("tells the member to rename when the stored candidate no longer folds equal", () => {
+    const html = encoded("Blues");
+    expect(html).toContain("&quot;Blues&quot;");
+    expect(html).toContain("authGD is now looking for");
+    expect(html).toContain("Rename it in game");
+    expect(html).not.toContain("accepts it as-is");
+  });
+
+  it("says nothing to do when the config moved onto the stored candidate", () => {
+    const html = encoded("AuthGD");
+    expect(html).toContain("already matches");
+    expect(html).not.toContain("Rename it in game");
+  });
+
+  // The regression this whole gate exists for. describeLabelDifference
+  // collapses internal whitespace runs and calls this pair "spacing", but
+  // matchContactLabel only trims, so the next sync records missing_label.
+  // Gating the reassurance on that helper would promise acceptance here.
+  // Rendered directly rather than through `render`, which pins label to
+  // "AuthGD".
+  it("does not promise acceptance when the candidate differs by an internal run", () => {
+    const html = renderToStaticMarkup(
+      createElement(ContactRemedy, {
+        result: "label_mismatch",
+        detail: JSON.stringify(["Auth  GD"]),
+        label: "Auth GD",
+      }),
+    );
+    expect(html).toContain("authGD is now looking for");
+    expect(html).toContain("Rename it in game");
+    expect(html).not.toContain("accepts it as-is");
+  });
+
   // Speech output normalizes whitespace and doesn't announce case, so the
   // quoted literals alone read as identical strings. The sentence must name
   // the axis of difference in words so it stands on its own.
@@ -43,7 +90,6 @@ describe("ContactRemedy (label_mismatch render)", () => {
     expect(html).toContain("differs from");
     expect(html).toContain("only in capitalization");
     expect(html).not.toContain("only in spacing");
-    expect(html).toContain("The next sync picks it up.");
   });
 
   it("states the difference in words for a spacing-only near miss", () => {
@@ -57,15 +103,15 @@ describe("ContactRemedy (label_mismatch render)", () => {
     expect(html).toContain("in both capitalization and spacing");
   });
 
-  it("quotes each of two candidates separately, not as one joined name", () => {
+  it("asks a two-candidate member to remove one, not to rename to an exact name", () => {
     const html = encoded("AUTHGD", "authgd ");
-    // Each candidate appears in its own quote marks...
     expect(html).toContain("&quot;AUTHGD&quot;");
     expect(html).toContain("&quot;authgd &quot;");
-    // ...and the joined blob never appears as a single quoted string.
     expect(html).not.toContain("&quot;AUTHGD, authgd &quot;");
     expect(html).toContain("Labels named");
     expect(html).toContain("both differ only in capitalization or spacing");
+    expect(html).toContain("cannot tell which one you mean");
+    expect(html).not.toContain("It must be exactly");
   });
 
   it("quotes three or more candidates separately and uses plural copy", () => {
@@ -105,7 +151,7 @@ describe("ContactRemedy (label_mismatch render)", () => {
 
   it("falls back to the no-detail copy when detail is null", () => {
     const html = render(null);
-    expect(html).toContain("A label differing only in capitalization or spacing exists");
+    expect(html).toContain("More than one of your labels differs only in capitalization");
     expect(html).not.toContain("Labels named");
     expect(html).toContain("The next sync picks it up.");
   });

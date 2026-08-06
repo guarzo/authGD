@@ -407,27 +407,42 @@ current member (`src/core/contacts-diff.ts`). Point it at a label created
 for authGD; never at one people also curate by hand, or their contacts are
 deleted on the first run.
 
-Four properties worth knowing before changing it:
+Five properties worth knowing before changing it:
 
 - **ESI cannot create labels.** Create it in the client first. Until it exists
   the job records `missing_label` and skips every write — safe, but inert.
-- **The match is exact and case-sensitive** (`src/core/contact-label.ts`), so
-  `authgd` ≠ `AuthGD`. A typo skips rather than deletes. A near-miss typo (case
-  or whitespace only) records `label_mismatch` and names both the offending
-  label(s) and the required name; an unrelated typo records `missing_label`
-  with no label to point at.
-- **A case-only change strands every existing member at once.** The label id is
-  re-resolved from the name each run, so recapitalizing `STANDINGS_LABEL`
-  instantly stops matching every label that was correct under the old value.
-  This happened on 2026-08-03: eight of ten characters dropped to
-  `missing_label` in one run (the same situation records `label_mismatch`
-  today). Members must rename their label in game before their sync resumes —
-  announce the change before making it, and expect to field reports from
-  anyone who does not notice the difference on screen.
-- **Nothing about the label is persisted** — the id is resolved from the name
-  each run. Changing the value needs no migration, but contacts left under the
-  old label become unmanaged: the app stops touching them rather than cleaning
-  up.
+- **The match ignores capitalization and surrounding whitespace**
+  (`src/core/contact-label.ts`), so `authgd`, `AuthGD` and `AuthGD ` all match a
+  configured `authgd`. An exact match still wins outright when one exists. What
+  is *not* ignored is anything else, including internal whitespace runs:
+  `Auth  GD` against `Auth GD` records `missing_label`.
+- **Two labels that differ only in case or spacing are refused, not guessed
+  between.** A member holding both `authgd` and `AuthGD` with no exact match
+  records `label_mismatch`, names both, and gets no writes at all — there is no
+  single label the delete authority could be bound to. They fix it by deleting
+  or renaming one.
+- **A case-only change to `STANDINGS_LABEL` no longer strands members who hold
+  one matching label.** Before loose matching this was the sharpest edge here:
+  on 2026-08-03 a recapitalization dropped eight of ten characters to a
+  non-syncing state in one run. Now the old and new spellings both match, and
+  those members need do nothing. One case survives, and it is worth knowing
+  before you announce nothing: a member holding *two* labels that differ only in
+  case or spacing syncs today only because one of them matches the configured
+  value exactly. Recapitalize to a spelling neither label uses and neither
+  matches, so they fall into the ambiguous refusal above and must delete one
+  label before their sync resumes. (Recapitalizing *onto* one of the two labels
+  they already hold is fine — that one becomes the exact match.) The other
+  trade is that authGD's reach widened — see the warning above about
+  hand-curated labels, which now also covers a label whose name differs from
+  `STANDINGS_LABEL` only in case. Such a label was previously ignored and is now
+  taken over and pruned on the first run.
+- **Nothing about the label is persisted for matching** — the id is resolved
+  from the name each run, so changing the value needs no migration. What *is*
+  recorded is a label's name, in `contact_sync_state.last_detail`: the ambiguous
+  candidates on `label_mismatch`, and the loosely matched name on a successful
+  run, so you can tell which label authGD took over on a given character. Both
+  are overwritten by that character's next run. Contacts left under an old label
+  become unmanaged: the app stops touching them rather than cleaning up.
 
 ## Bootstrap admin — recovery caveat
 

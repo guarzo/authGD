@@ -134,17 +134,18 @@ export async function runContactsJob(deps: {
         // user-remediation state — record it and skip ALL writes (spec job 2).
         const labels = await esi.getContactLabels(target.characterId, token.accessToken);
         const match = matchContactLabel(labels, cfg.standings.label);
-        if (match.kind !== "exact") {
+        if (match.kind === "ambiguous" || match.kind === "absent") {
           counts.skipped++;
-          // A near miss is reported, never accepted: diffContacts DELETES every
-          // contact under the matched label that leaves the desired set, so that
-          // authority stays bound to the exact configured name.
+          // Only ambiguity is refused now. diffContacts DELETES every contact
+          // under the matched label that leaves the desired set, and with two
+          // fold-equal labels there is no single label that authority can be
+          // bound to, so the safe move is still to write nothing.
           await recordResult(
             db,
             target.characterId,
-            match.kind === "near_miss" ? "label_mismatch" : "missing_label",
+            match.kind === "ambiguous" ? "label_mismatch" : "missing_label",
             false,
-            match.kind === "near_miss" ? encodeLabelCandidates(match.candidates) : null,
+            match.kind === "ambiguous" ? encodeLabelCandidates(match.candidates) : null,
           );
           continue;
         }
@@ -210,7 +211,16 @@ export async function runContactsJob(deps: {
         // eslint-disable-next-line @typescript-eslint/only-throw-error -- deliberate rethrow of a caught unknown captured across two try/catch blocks; the rule's allowRethrowing option only covers `throw` directly inside a catch.
         if (stepErr) throw stepErr;
 
-        await recordResult(db, target.characterId, "ok", true);
+        // Record WHICH label authGD took over. On an exact match that is the
+        // configured value by construction, but a loose match varies per
+        // character — and this is the one sync job with no audit writes.
+        await recordResult(
+          db,
+          target.characterId,
+          "ok",
+          true,
+          match.kind === "loose" ? match.labelName : null,
+        );
       } catch (err) {
         const needsReauth = err instanceof EsiError && err.kind === "needs_reauth";
         const transient = err instanceof EsiError ? err.kind === "transient" : true;

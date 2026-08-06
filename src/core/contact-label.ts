@@ -1,6 +1,7 @@
 export type LabelMatch =
   | { kind: "exact"; labelId: number }
-  | { kind: "near_miss"; candidates: string[] }
+  | { kind: "loose"; labelId: number; labelName: string }
+  | { kind: "ambiguous"; candidates: string[] }
   | { kind: "absent" };
 
 /**
@@ -8,7 +9,7 @@ export type LabelMatch =
  * wrong while looking right: the EVE client renders "AuthGD " and "AuthGD"
  * identically, and a case-only change to STANDINGS_LABEL once stranded every
  * member at `missing_label` with no way to see why. Folding both away is what
- * lets the job say which of the two strings is wrong.
+ * lets the job accept such a label instead of refusing it.
  *
  * `toLowerCase`, not `toLocaleLowerCase`: the latter is locale-dependent
  * (Turkish dotted-I) and the worker's locale is not pinned.
@@ -17,10 +18,14 @@ const fold = (s: string): string => s.trim().toLowerCase();
 
 /**
  * An exact match ALWAYS wins, even when fold-equal siblings exist — the app
- * owns the exact label and must never be talked out of it by a near miss.
- * Absent an exact match, every fold-equal name is returned: two labels
- * differing only in case is a real state, and reporting it honestly is better
- * than picking one and writing contacts under a label nobody configured.
+ * owns the exact label and must never be talked out of it by a loose match.
+ * Absent an exact match, a single fold-equal label is accepted: case and
+ * surrounding whitespace are the two ways a member's label can be wrong while
+ * looking right, and refusing to sync over them once stranded every member at
+ * `missing_label` with no way to see why. Two or more fold-equal candidates
+ * stays a refusal: two labels differing only in case is a real state, and
+ * reporting it honestly is better than picking one and writing contacts under
+ * a label nobody configured.
  */
 export function matchContactLabel(
   labels: Array<{ labelId: number; labelName: string }>,
@@ -28,21 +33,37 @@ export function matchContactLabel(
 ): LabelMatch {
   const exact = labels.find((l) => l.labelName === required);
   if (exact) return { kind: "exact", labelId: exact.labelId };
-
   const wanted = fold(required);
-  const candidates = labels
-    .filter((l) => fold(l.labelName) === wanted)
-    .map((l) => l.labelName)
-    // Plain ordinal sort, intentionally: same rationale as `toLowerCase` above
-    // — a locale-aware sort would make the reported order depend on the
-    // worker's locale, which is not pinned.
-    .sort();
-
-  return candidates.length > 0 ? { kind: "near_miss", candidates } : { kind: "absent" };
+  const matches = labels.filter((l) => fold(l.labelName) === wanted);
+  if (matches.length === 0) return { kind: "absent" };
+  // Exactly one fold-equal label is authority enough: it is the only label the
+  // member could have meant, so the sync runs under THAT label's id.
+  if (matches.length === 1) {
+    const [only] = matches;
+    return { kind: "loose", labelId: only.labelId, labelName: only.labelName };
+  }
+  // Two or more, and nothing distinguishes them, so this stays a refusal.
+  // Plain ordinal `sort`, not `localeCompare`: the worker's locale is not
+  // pinned, and this ordering only has to be stable and reproducible.
+  return { kind: "ambiguous", candidates: matches.map((l) => l.labelName).sort() };
 }
 
 /**
- * Near-miss candidates are persisted to `contact_sync_state.last_detail` as a
+ * Answers "would the matcher accept this name for that one?" — nothing else.
+ * It exists because `describeLabelDifference` below is deliberately WIDER than
+ * the matcher: that function collapses internal whitespace runs, so it calls
+ * `"Auth  GD"` against `"Auth GD"` a `"spacing"` difference, while `fold` only
+ * trims and `matchContactLabel` reports that pair `absent`. Any caller
+ * deciding whether the next sync will accept a label must ask this, not the
+ * difference describer — `describeLabelDifference` picks WORDING, once
+ * acceptance is already established.
+ */
+export function foldEqualLabels(a: string, b: string): boolean {
+  return fold(a) === fold(b);
+}
+
+/**
+ * Ambiguous candidates are persisted to `contact_sync_state.last_detail` as a
  * JSON array, not as a delimited string. Every candidate is a fold-equal
  * variant of STANDINGS_LABEL, so if that label contains the delimiter, EVERY
  * candidate does — a `", "` join then round-trips into a list of substrings
@@ -76,16 +97,21 @@ export function parseLabelCandidates(detail: string | null): string[] {
 export type LabelDifference = "case" | "spacing" | "case-and-spacing" | "other";
 
 /**
- * Names WHY a single near-miss candidate isn't the configured label, in words
- * a screen reader can carry on its own. `matchContactLabel` already proved
- * `actual` is fold-equal to `expected` — `fold` lowercases and trims, but does
- * NOT collapse internal runs, so a real candidate can only differ by case
- * and/or SURROUNDING whitespace. This function's own `collapse` is
- * deliberately wider than that: it also folds internal runs, so the contract
- * holds for any two strings rather than only the narrower set the job can
- * produce, and `"other"` covers anything that isn't a pure case and/or
- * whitespace difference. In practice `"spacing"` therefore always means
- * leading/trailing whitespace, and `"other"` is unreachable from job data.
+ * Names WHY a single stored candidate isn't the configured label, in words a
+ * screen reader can carry on its own. It picks WORDING only — acceptance is
+ * `foldEqualLabels`'s question, and callers must settle that first.
+ *
+ * Do not read a precondition into this: `contact-state.tsx` renders a stored
+ * candidate against the CURRENT configured label, which an operator may have
+ * changed since the row was written, so `actual` need not be fold-equal to
+ * `expected` and `"other"` is genuinely reachable. This function's own
+ * `collapse` is deliberately wider than the matcher's `fold` — it also folds
+ * internal runs, so the contract holds for any two strings rather than only
+ * the narrower set the job can produce, and `"other"` covers anything that
+ * isn't a pure case and/or whitespace difference. That width is exactly why
+ * it must not be used to decide acceptance: it calls `"Auth  GD"` against
+ * `"Auth GD"` a `"spacing"` difference, while the matcher reports that pair
+ * `absent`.
  *
  * Two independent probes, each fixing ONE axis and leaving the other intact:
  *
@@ -99,7 +125,7 @@ export type LabelDifference = "case" | "spacing" | "case-and-spacing" | "other";
  *
  * Reading both together: exactly one true means that axis alone explains the
  * difference; both false means both axes are wrong; both true means the raw
- * strings were already identical (not a real near miss).
+ * strings were already identical (not a difference at all).
  */
 export function describeLabelDifference(
   actual: string,
@@ -114,8 +140,8 @@ export function describeLabelDifference(
   if (!equalIgnoringCase && equalIgnoringSpacing) return "spacing";
   if (!equalIgnoringCase && !equalIgnoringSpacing) return "case-and-spacing";
   // Both probes true: the raw strings were already identical.
-  // `matchContactLabel` would have reported this as an exact match, not a
-  // near miss, so this branch should be unreachable in production. Kept as a
+  // `matchContactLabel` would have reported this as an exact match, not an
+  // ambiguous refusal, so this branch is unreachable from job data. Kept as a
   // defined, tested outcome rather than an assertion failure, since this
   // function's contract is total over any two strings, not just the ones the
   // job actually hands it.
