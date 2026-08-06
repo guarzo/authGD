@@ -157,6 +157,11 @@ export default async function PayoutOperationPage({
   // Mirrors `assertEditable` exactly, so an operator discovers the freeze by the
   // controls being absent rather than by a failed submit.
   const canEdit = access.isOperator && operation.status === "draft" && !locked;
+  // Whether the split can still change *at all*, independent of who is looking.
+  // `canEdit` folds in the viewer's role, which is right for showing controls and
+  // wrong for writing copy: a member reading a draft operation cannot remove a
+  // duplicate themselves, but telling them the roster is settled would be a lie.
+  const amendable = operation.status === "draft" && !locked;
   // Mirrors `unlockOperation`'s creator-or-admin check.
   const canUnlock =
     access.isOperator && (operation.createdBy === access.accountId || access.isAdmin);
@@ -370,7 +375,7 @@ export default async function PayoutOperationPage({
                       <>
                         {operation.corpSharePct}%{" "}
                         <span className="dim">
-                          ({fmtIsk(corpAmount)} ISK + remainder)
+                          ({fmtIsk(corpAmount)} ISK, remainder included)
                         </span>
                       </>
                     }
@@ -383,7 +388,9 @@ export default async function PayoutOperationPage({
                 ) : (
                   <>
                     {operation.corpSharePct}%{" "}
-                    <span className="dim">({fmtIsk(corpAmount)} ISK + remainder)</span>
+                    <span className="dim">
+                      ({fmtIsk(corpAmount)} ISK, remainder included)
+                    </span>
                   </>
                 )}
               </dd>
@@ -943,8 +950,10 @@ export default async function PayoutOperationPage({
                       {duplicateUnresolvedNames.length === 1 ? "" : "s"} appear
                       {duplicateUnresolvedNames.length === 1 ? "s" : ""} more than once
                     </strong>{" "}
-                    — each is drawing a full share as a separate person. If they are the
-                    same pilot, remove one before finalizing.
+                    — each is drawing a full share as a separate person.{" "}
+                    {amendable
+                      ? "If they are the same pilot, remove one before finalizing."
+                      : "If they are the same pilot, this split counted them twice and can no longer be edited."}
                     <br />
                     <span className="dim">{duplicateUnresolvedNames.join(", ")}</span>
                   </span>
@@ -962,7 +971,10 @@ export default async function PayoutOperationPage({
                     — one row is tied to an account, another under the same name is not,
                     and each is drawing a full share. They may be the same pilot whose
                     link landed after the roster was written, or two different people who
-                    share a name. Check before finalizing.
+                    share a name.{" "}
+                    {amendable
+                      ? "Check before finalizing."
+                      : "Worth checking against what was actually paid — the split itself can no longer be edited."}
                     <br />
                     <span className="dim">{crossStateClashes.join(", ")}</span>
                   </span>
