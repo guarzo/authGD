@@ -24,11 +24,22 @@ and `DESIGN.md` / `PRODUCT.md`.
   `bypassClientGuard` strips `max` by name. Every other client guard on this flow has a
   server twin (`name` → `name_required`, date parse → `date_invalid`, shares → four
   checks, price → `price_invalid`). `max` is the one that does not.
-- **Fix:** Add `date_future` to `NEW_OPERATION_ERRORS` ("An operation cannot be dated in
-  the future. EVE time is UTC, so today is <date>.") and the matching check in
+- **Fix:** Add a `date_future` code to `NEW_OPERATION_ERRORS` and the matching check in
   `createOperationAction` after the NaN test; add the same code and check to
   `setOccurredAtAction` / `OPERATION_ERRORS`, since the detail-page editor has the same
-  gap. Keep `max` as the fast path.
+  gap. The map entries are static strings that `lookupErrorMessage` reads verbatim, so
+  the date cannot live in them — an entry reading "…today is `<date>`" ships that
+  placeholder to the operator literally. Keep the map to the static half ("An operation
+  cannot be dated in the future. EVE time is UTC.") and let the surface that renders the
+  rejection append the day, from the same server-computed UTC date it already uses for
+  `max` — the client's own clock is the wrong source here, since the whole point of the
+  message is which day the *server* thinks it is.
+- **And the `max` guard itself goes stale.** `today` is computed once, when the page
+  renders, so a form left open across UTC midnight carries yesterday's `max` and the
+  browser now blocks a submit dated today — the valid case. Either recompute it at
+  validation time, or drop the native `max` and let the server check be the only guard.
+  Either way the server-side `date_future` rejection is what has to hold, rendered as a
+  persistent field error rather than a bubble that vanishes on the next keystroke.
 
 Two sub-cases the same fix covers, both currently unaddressed:
 

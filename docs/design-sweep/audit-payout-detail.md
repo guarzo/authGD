@@ -28,11 +28,11 @@
   sitting in" (`appraise-form.tsx:9-20`). The `?error=` redirect is the right
   channel for a failure that arrives on page load, and the wrong one for a
   rejection of a control that is 2,000px down a page full of open panels. Convert
-  the four field-level editors that reject on format — `setItemPriceAction`,
-  `setParticipantSharesAction`, `addFlatPoolAction`'s `total_invalid`, and
-  `addParticipantAction` — to return state through `useActionState` from a small
-  client leaf, the way `AppraiseForm` and `NoteForm` already do, and render the
-  message beside the field that produced it. `openInfoAction`'s five failure codes
+  the field-level editors that reject on format — `setNameAction`,
+  `setItemPriceAction`, `setParticipantSharesAction`, `addFlatPoolAction`'s
+  `total_invalid`, and `addParticipantAction` — to return state through
+  `useActionState` from a small client leaf, the way `AppraiseForm` and `NoteForm`
+  already do, and render the message beside the field that produced it. `openInfoAction`'s five failure codes
   are the harder case (they can't be predicted client-side); at minimum they should
   not navigate, since the action persists nothing by its own docblock's argument.
   Keep the redirect only for failures that genuinely have no form still on screen.
@@ -132,13 +132,16 @@
   text." The primitive grew an empty-slot mode specifically so call sites could
   mount unconditionally, and this page — the one with six of them — uses `&&` at
   all six.
-- **Fix:** Mount all six unconditionally and pass the empty value:
+- **Fix:** Mount them unconditionally and pass the empty value:
   `<Notice tone="warn">{poolsWithUnresolvedItems.length > 0 ? <>…</> : ""}</Notice>`.
-  The `errorMessage` one at line 251 is the exception worth arguing — it arrives by
-  navigation, so the document is new either way — but the four derived warnings
-  (unresolved items, the two roster clashes, and the `dropped` report after the
-  `?dropped=` remount) all appear as a result of an action the operator just took
-  on a page that did not reload, and those are the ones the region exists for.
+  Five of the six need it. The `errorMessage` one at line 251 is the single
+  exception worth arguing — it arrives by navigation, so the document is new
+  either way — but the other five all appear as a result of an action the
+  operator just took on a page that did not reload, and those are the ones the
+  region exists for: the unresolved-items warning, the two roster clashes
+  (duplicate unresolved names, and names that are both linked and unlinked), the
+  `dropped` report after the `?dropped=` remount, and the info notice saying
+  repricing is closed while the operation is finalized.
 
 ### 6. The pool-items table is the one table on the page that runs to hundreds of rows, and it is the one that gets no sticky header
 
@@ -210,10 +213,16 @@
   specifically so "a client leaf can tell that apart from either of those"
   (actions.ts:160-163), and nothing consumes it.
 - **Fix:** Consume the `ok: true` the action already returns: render a
-  `role="status"` confirmation naming what was added ("pool 3 added, 4.82b ISK"),
-  and clear the textarea on success — the paste is persisted as `rawPaste` on the
-  pool by then, so nothing is lost by dropping it from the form, and an empty box
-  is the strongest available signal that the submit landed.
+  `role="status"` confirmation saying the paste was appraised and added as a new
+  pool, and clear the textarea on success — the paste is persisted as `rawPaste`
+  on the pool by then, so nothing is lost by dropping it from the form, and an
+  empty box is the strongest available signal that the submit landed. Naming the
+  numbers ("pool 3 added, 4.82b ISK") would read better still, but
+  `AppraiseActionState` is `{ ok: true; dropped }` and carries neither the pool
+  index nor the total; either widen it to carry both, or keep the message to
+  what the existing result can actually back. Do not write the numbers from
+  anything the client already had — the whole point is to report what the server
+  did.
 
 ### 10. The notices name the affected items in the faintest, smallest type on the page
 

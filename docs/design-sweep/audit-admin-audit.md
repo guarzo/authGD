@@ -80,7 +80,7 @@ figures below are computed from the OKLCH tokens, not eyeballed.
 - **Where:** `src/app/globals.css:3253-3301`, `src/app/_components/format-ago.ts:14-15`
 - **Cost:** Three years from now the oldest pages of a log that by design deletes nothing render "1095d ago" in a `white-space: nowrap` cell that is 72px of content box, and the overflow paints out of the pinned column onto the row beneath it — the exact failure the pin exists to prevent.
 - **Principle:** none.
-- **Fix:** The docblock computes the bound as "`365d ago` caps at 8ch"; the string is 9 characters, and `elapsedShort` has no cap on the day count at all. Either bound the formatter (`>= 999d` → `999d+`) or add `overflow: hidden; text-overflow: ellipsis` to `.log--audit td:first-child` so an over-long value truncates inside the pin instead of escaping it. The second is one declaration and makes the whole class of future overflow safe.
+- **Fix:** The docblock computes the bound as "`365d ago` caps at 8ch", which is right for three-digit days — `365d ago` is 8 characters — but `elapsedShort` has no cap on the day count at all, so a four-digit day (`1095d ago`) is 9 and nothing stops the next digit after that. Either bound the formatter (`>= 999d` → `999d+`) or add `overflow: hidden; text-overflow: ellipsis` to `.log--audit td:first-child` so an over-long value truncates inside the pin instead of escaping it. The second is one declaration and makes the whole class of future overflow safe.
 
 ## What is good and must survive
 

@@ -68,9 +68,12 @@ Aug-4 ended at "§10. Recommended next commands." Nothing ran. The user's own
 account of that sweep was that they "ran the recommended commands" — manually,
 one at a time, after the fact.
 
-Aug-5 ran a 14-step chain from a single gate. Four blocking items (1–4) are
-closed. 1127 unit tests and 204 e2e tests pass, up from 201 — the three new ones
-cover `/login`, which had no spec at all before this.
+Aug-5 ran the 13-step chain in SYNTHESIS.md's "Proposed command chain" from a
+single gate. Four blocking items (1–4) are closed. On the branch's final state —
+which includes the review fixes made after the chain finished, so these are not
+the numbers any single step ended on — 1134 unit tests and 218 Playwright test
+cases pass, up from 201 e2e cases. Four of the new ones cover `/login`, which
+had no spec at all before this.
 
 Two things the chain taught that no amount of reviewing would have:
 
@@ -96,7 +99,7 @@ spec after every step, not just at the end.
 
 ## Where Aug-5 was not better
 
-Three of the 24 items did not survive contact with the code. The backlog should
+Four of the 24 items did not survive contact with the code. The backlog should
 not be read as 24-for-24.
 
 - **Item 18, second half.** "The queued marker misattributes its own age" is

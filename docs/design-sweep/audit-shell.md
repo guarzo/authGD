@@ -165,14 +165,17 @@ findings rather than padded into them. Six findings, worst-first.
   ```css
   .log th a {
     display: inline-block;
-    padding-block: 0.22rem;
-    margin-block: -0.22rem;
+    padding-block: 0.35rem;
+    margin-block: -0.35rem;
   }
   ```
 
-  That is 24.09px of target at zero net layout cost. Making the anchor fill the
-  cell would be better still but is unsafe under `.log--audit`'s
-  `table-layout: fixed` with `nowrap` cells.
+  The anchor's own line box is ~17px, so 0.35rem (5.6px) of padding each side
+  lands at ~28.2px — the floor, rather than the ~24px a smaller value gives.
+  The equal negative margin is what keeps the net layout change at zero, so the
+  header height and the `scroll-margin-top: 3rem` figure both stay valid.
+  Making the anchor fill the cell would be better still but is unsafe under
+  `.log--audit`'s `table-layout: fixed` with `nowrap` cells.
 
 ### 6. The reduced-motion comment states a mechanism the stylesheet does not implement
 

@@ -8,10 +8,15 @@
 
 /** The four outcomes `/account`'s server actions redirect back with. A code
  *  outside this set (hand-typed, or from a build that has since dropped one)
- *  renders no confirmation at all — see `accountConfirmation`'s default. */
-export type AccountDoneCode = "main" | "unlink" | "wake" | "discord";
+ *  renders no confirmation at all — see `accountConfirmation`'s default.
+ *
+ *  Tuple first, type derived from it: the guard below and the exhaustive
+ *  switch have to agree about the same four strings, and a separately-written
+ *  union is one edit away from disagreeing. Same shape in
+ *  `admin/accounts/view.ts`. */
+const DONE_CODES = ["main", "unlink", "wake", "discord"] as const;
 
-const DONE_CODES: readonly AccountDoneCode[] = ["main", "unlink", "wake", "discord"];
+export type AccountDoneCode = (typeof DONE_CODES)[number];
 
 function isDoneCode(value: string | undefined): value is AccountDoneCode {
   return value !== undefined && (DONE_CODES as readonly string[]).includes(value);

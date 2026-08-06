@@ -21,10 +21,12 @@ test("each requested scope shows a plain-English description, not just the ident
   await expect(rows.nth(0)).toHaveText("esi-characters.read_contacts.v1");
   await expect(rows.nth(1)).toHaveText("esi-characters.write_contacts.v1");
 
-  // Every configured scope resolves to a description in this deployment: the
-  // regression this guards is a scope silently falling through describeScope's
-  // default case (a raw identifier with nothing under it) rather than a
-  // deliberate omission.
+  // Every configured scope resolves to a real description in this deployment.
+  // The count no longer proves that on its own — `describeScope`'s default now
+  // returns a fallback sentence, so a scope falling through still renders a
+  // `<dd>` (a `<dt>` without one is invalid in a `<dl>`, and AT would read the
+  // undescribed scope as meaning whatever the next definition says). The two
+  // text assertions below are what catches a fall-through now.
   const descriptions = page.locator(".launch__scopes dd");
   await expect(descriptions).toHaveCount(2);
   await expect(descriptions.nth(0)).toContainText("Reads the contacts");

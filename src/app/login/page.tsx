@@ -14,11 +14,17 @@ import { LOGIN_ERRORS, loginErrorTone, lookupErrorMessage } from "@/lib/error-re
  * softened one.
  *
  * Keyed by the identifier so a fork's own `EVE_SSO_SCOPES` addition falls
- * through cleanly: `describeScope` returns `undefined` for anything not
- * listed here, and the caller renders the identifier alone rather than a
- * placeholder sentence this map cannot back.
+ * through cleanly. The fallback says only what is true — that this map does
+ * not describe the scope — rather than inventing a sentence it cannot back.
+ * It is a real sentence rather than `undefined` because the caller renders a
+ * `<dl>`: a `<dt>` with no `<dd>` is invalid there, and worse than invalid on
+ * a consent screen, since AT groups a term with the next definition it finds
+ * and would read an undescribed scope as meaning whatever the scope BELOW it
+ * means. On the one page whose job is to say what is being granted, an
+ * unknown scope wearing its neighbour's description is the failure worth
+ * spending a line of copy to avoid.
  */
-function describeScope(scope: string, contactLabel: string): string | undefined {
+function describeScope(scope: string, contactLabel: string): string {
   switch (scope) {
     // src/jobs/contacts.ts:14 — CONTACT_SCOPES[0]. getAllContacts() only.
     case "esi-characters.read_contacts.v1":
@@ -33,7 +39,7 @@ function describeScope(scope: string, contactLabel: string): string | undefined 
     case "esi-ui.open_window.v1":
       return "Lets authGD open a character's info window in your EVE client from the payouts page.";
     default:
-      return undefined;
+      return "This deployment requests this scope, but authGD has no description for it — ask whoever runs it what it is for before granting.";
   }
 }
 
@@ -133,15 +139,12 @@ export default async function LoginPage({
                   per scope keeps each dt/dd pair a real boundary: still one
                   row per scope, never a joined string. */}
               <dl className="launch__scopes">
-                {scopes.map((scope) => {
-                  const description = describeScope(scope, label);
-                  return (
-                    <Fragment key={scope}>
-                      <dt>{scope}</dt>
-                      {description && <dd>{description}</dd>}
-                    </Fragment>
-                  );
-                })}
+                {scopes.map((scope) => (
+                  <Fragment key={scope}>
+                    <dt>{scope}</dt>
+                    <dd>{describeScope(scope, label)}</dd>
+                  </Fragment>
+                ))}
               </dl>
             </>
           )}

@@ -91,30 +91,26 @@ export function matchesAccountSearch(
   return row.characters.some((c) => c.name.toLowerCase().includes(q));
 }
 
+// `ActionOutcome` — the result `confirm-group.tsx`'s `ConfirmingForm` threads
+// through `useActionState` for the four drawer-scoped actions below — moved to
+// `@/app/_components/confirm-group` once `/admin/sync` needed the identical
+// shape for its own job-drawer action; imported from there by `actions.ts`.
+
 /** The nine outcomes `/admin/accounts`'s mutating actions confirm with (all
  *  but `saveNoteAction`, whose own confirmation lives in `NoteForm`) — the
  *  four cell-level actions off the `?done=` query string, the four drawer
  *  actions through `useActionState`, per this file's head docblock. A code
  *  outside this set (hand-typed, or from a build that has since dropped
  *  one) renders no confirmation at all — see `accountsConfirmation`'s
- *  default, same posture as `/account`'s `accountConfirmation`. */
-export type AdminAccountsDoneCode =
-  | "tier"
-  | "approve"
-  | "auto"
-  | "freeze"
-  | "wake"
-  | "grant"
-  | "revoke"
-  | "discord"
-  | "sync";
-
-// `ActionOutcome` — the result `confirm-group.tsx`'s `ConfirmingForm` threads
-// through `useActionState` for the four drawer-scoped actions below — moved to
-// `@/app/_components/confirm-group` once `/admin/sync` needed the identical
-// shape for its own job-drawer action; imported from there by `actions.ts`.
-
-const DONE_CODES: readonly AdminAccountsDoneCode[] = [
+ *  default, same posture as `/account`'s `accountConfirmation`.
+ *
+ *  The list is the tuple, and the type is derived from it, rather than the
+ *  two being written out separately: the runtime guard and the exhaustive
+ *  switch have to agree about the same nine strings, and two hand-kept
+ *  copies agree only until someone adds a tenth to one of them. Adding it to
+ *  the tuple alone is enough — the switch stops compiling until it handles
+ *  the new case. Same shape in `/account`'s `view.ts`. */
+const DONE_CODES = [
   "tier",
   "approve",
   "auto",
@@ -124,7 +120,9 @@ const DONE_CODES: readonly AdminAccountsDoneCode[] = [
   "revoke",
   "discord",
   "sync",
-];
+] as const;
+
+export type AdminAccountsDoneCode = (typeof DONE_CODES)[number];
 
 function isDoneCode(value: string | undefined): value is AdminAccountsDoneCode {
   return value !== undefined && (DONE_CODES as readonly string[]).includes(value);

@@ -100,10 +100,14 @@ product's own nouns. Do not propose generic replacements.
   — capping the column moved the whole page 144px sideways on a nav click.
 - Body prose caps at 68ch.
 
-**Known open defect, already logged.** `.st` (the Status token) declares no
-`font-weight` and renders at 400 where the label register calls for 600.
-DESIGN.md names this "a defect, not a variant". You may cite it; you do not need
-to discover it.
+**Corrected after dispatch — do not reuse.** This brief told all eighteen
+reviewers that `.st` (the Status token) declares no `font-weight` and renders at
+400, as a known open defect they could cite without discovering. That is wrong,
+and was wrong when they were dispatched: `.st` declares `font-weight: 600`, and
+`DESIGN.md` was the stale half. Five reviewers pushed back; thirteen took it as
+given. The paragraph is kept here rather than deleted because SYNTHESIS.md's
+"Correction to the brief" and COMPARISON.md both refer to what this document
+said — but anyone reusing this preamble for another sweep must drop it.
 
 **Out of scope for this sweep.** Screenshots and starting a dev server. The
 source answers the questions, and a dev server rewrites `tsconfig.json` here.
