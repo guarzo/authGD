@@ -1577,6 +1577,32 @@ h3.rule-head__label {
   white-space: nowrap;
 }
 
+/* The account manifest puts name and location on one line; the admin drawer
+   keeps them stacked. Scoped to this wrapper rather than changed on
+   `.char__location` itself, which both tables share. */
+.char-line {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
+  min-width: 0;
+}
+
+.char-line > .char__location {
+  display: inline;
+  min-width: 0;
+}
+
+/* The separator hangs off the location, not the name, so it cannot outlive the
+   thing it separates: `CharacterLocation` returns null for `kind: "none"`
+   (character-location.tsx:24), and a separator rendered beside the name would
+   leave a stray dot on every character that never granted the location scope.
+   Same reason `.st` draws its glyph in CSS (globals.css:1644). */
+.char-line > .char__location::before {
+  content: "·";
+  margin-right: var(--s-2);
+  opacity: 0.6;
+}
+
 /* One labelled entry in the account manifest's merged STATUS cell. Three tokens
    stacked with nothing naming them read as "ok / ok / on" now that the TOKEN,
    CONTACTS and MAP headers that named them are gone — and two of those three

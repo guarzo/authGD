@@ -134,3 +134,22 @@ export async function clearOfPin(page: Page, scroller: string, control: string) 
     { scroller, control },
   );
 }
+
+/**
+ * The rendered height of each matched element, in CSS pixels.
+ *
+ * A DOM count of zero status lines does not prove a one-line row: name and
+ * location can still wrap onto two lines while zero status lines render,
+ * which is exactly what a one-line name+location layout risks. Height is the
+ * property that catches wrapping regardless of which descendants happen to
+ * be present, so measure the rendered box rather than counting elements.
+ */
+export async function rowHeights(page: Page, rows: string) {
+  return page.evaluate(
+    (rows) =>
+      Array.from(document.querySelectorAll(rows)).map(
+        (r) => r.getBoundingClientRect().height,
+      ),
+    rows,
+  );
+}

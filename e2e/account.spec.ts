@@ -8,7 +8,9 @@ import {
   payoutOperation,
   payoutParticipant,
   syncRun,
+  universeName,
 } from "../src/db/schema";
+import { rowHeights } from "./geometry";
 import { resetDb, seedMember, sessionCookieFor, testDb } from "./helpers";
 
 const { db, pool } = testDb();
@@ -36,6 +38,28 @@ async function markTokensHealthy(accountId: string) {
   await db
     .update(character)
     .set({ tokenStatus: "valid", scopes: ALL_SCOPES })
+    .where(eq(character.accountId, accountId));
+}
+
+/** Puts every character on an account somewhere named, so the name cell's
+ *  location line actually renders (mirrors location.spec.ts's placeCrew). */
+async function placeCrew(accountId: string, systemId: number, structureName: string) {
+  const structureId = systemId + 1_000_000_000;
+  await db
+    .insert(universeName)
+    .values([
+      { id: systemId, kind: "system", name: `J${systemId}` },
+      { id: structureId, kind: "structure", name: structureName },
+    ])
+    .onConflictDoNothing();
+  await db
+    .update(character)
+    .set({
+      locationSystemId: systemId,
+      locationStructureId: structureId,
+      locationOnline: true,
+      locationCheckedAt: new Date(),
+    })
     .where(eq(character.accountId, accountId));
 }
 
@@ -735,4 +759,61 @@ test("a stalled chip's accessible name also carries the standings fact", async (
   expect(label).toMatch(/standings/i);
   expect(label).toMatch(/sync disabled/i);
   expect(label).toMatch(/map/i);
+});
+
+// The name column sets the manifest's width and now carries the location
+// line beside the name rather than under it — the design's riskiest step.
+// A DOM count of zero `.status-line`s (the assertion style above) proves
+// nothing about wrapping, so these measure the rendered row height instead.
+//
+// 320px is this project's narrowest supported viewport (see the 320x720/900
+// calls throughout admin.spec.ts and audit.spec.ts).
+const NARROWEST = 320;
+
+// Measured against the running app, not guessed: a healthy character with no
+// location line (so provably one text line) rendered at 56.5px, and the same
+// row before this task's CSS change (name and location stacked, provably two
+// lines) rendered at 74.3-74.8px. 65 sits between the two with margin either
+// side for font-metric and padding differences across platforms.
+const SINGLE_LINE_MAX = 65;
+
+test("ten healthy characters render one text line each", async ({ page, context }) => {
+  const acc = await seedMember(db, {
+    name: "Main Pilot",
+    tier: "alumni",
+    alts: [
+      "Alt Pilot One",
+      "Alt Pilot Two",
+      "Alt Pilot Three",
+      "Alt Pilot Four",
+      "Alt Pilot Five",
+      "Alt Pilot Six",
+      "Alt Pilot Seven",
+      "Alt Pilot Eight",
+      "Alt Pilot Nine",
+    ],
+  });
+  await markTokensHealthy(acc.id);
+  await placeCrew(acc.id, 30000142, "Home Astrahus");
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.goto("/account");
+  const heights = await rowHeights(page, "table tbody tr");
+  expect(heights).toHaveLength(10);
+  for (const h of heights) expect(h).toBeLessThan(SINGLE_LINE_MAX);
+});
+
+test("a long structure name still renders one line at the narrowest viewport", async ({
+  page,
+  context,
+}) => {
+  const acc = await seedMember(db, { name: "Vanity Pilot", tier: "alumni" });
+  await markTokensHealthy(acc.id);
+  // No " - " in this name, so `shortenDock` (src/core/location.ts) returns it
+  // unshortened: the realistic long case Task 3's shortening does not help.
+  await placeCrew(acc.id, 30000144, "Someone's Extremely Long Vanity Keepstar Name");
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.setViewportSize({ width: NARROWEST, height: 900 });
+  await page.goto("/account");
+  const [h] = await rowHeights(page, "table tbody tr");
+  expect(h).toBeLessThan(SINGLE_LINE_MAX);
 });

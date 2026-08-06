@@ -548,7 +548,7 @@ export default async function AccountPage({
                         />
                       </td>
                       <td>
-                        <div className="stack">
+                        <div className="char-line">
                           <span className="char">
                             {c.name}{" "}
                             {c.isMain && <strong className="char__main">(main)</strong>}
