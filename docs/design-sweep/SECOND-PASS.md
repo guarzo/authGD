@@ -113,19 +113,22 @@ bugs, type design, and over-engineering to `report` rather than auto-fix.
 | `CONTACT_SYNC_RESULTS`' partition comment enumerates seven of nine, omitting `sync_failed` | `core/contact-result.ts:53-56` | May be deliberate, but neither this comment nor `services/accounts.ts:139-144` says so |
 | pg-boss's `maintained_on` is a gated single-row update, so the "three missed ticks" margin is nearer 1.5 | `core/health.ts:28` | The liveness conclusion holds; only the margin arithmetic is off |
 
-## 4b. Found while closing the above (2026-08-06) — two open, one since decided
+## 4b. Found while closing the above (2026-08-06) — one open, one decided, one closed
 
 Three things the follow-up pass surfaced and chose not to fix, so the branch
 would not keep growing. None is urgent; all are recorded so the next sweep
-recognises them. The index-build row has since been **decided** rather than
-merely deferred — the answer was "no runner", and the reasoning and the
-conditions that would reverse it now live in `docs/ops.md`.
+recognises them. Two have since resolved, in different ways: the index-build
+row was **decided** rather than merely deferred — the answer was "no runner",
+and the reasoning and the conditions that would reverse it now live in
+`docs/ops.md` — and the heartbeat-`message` row was **closed without a code
+change**, the concern it records having turned out to be already written into
+the type's own docblock. The audit-filter index is the one still open.
 
 | Finding | Where | Why deferred |
 |---|---|---|
 | `/admin/audit`'s action filter has no index that serves it | `services/audit.ts`'s `queryAuditLog` | It matches `action` with a LIKE prefix, and under this deployment's `en_US.utf8` collation a plain btree cannot answer `LIKE 'x%'` — EXPLAIN puts it in `Filter`, not `Index Cond`. `audit_log_action_target_id_idx` does **not** cover it, despite looking like it should; the index's own comment now says so. A `text_pattern_ops` index would fix it and is a separate migration and a separate decision |
 | ~~`audit_log` index migrations block writes while they build~~ **DECIDED 2026-08-06 — no runner, trigger recorded** | `drizzle/`, `fly.toml`, now `docs/ops.md` | Decision: keep the transactional build; do **not** add a non-transactional runner. The mechanics as stated were right but understated in one respect — drizzle's migrator wraps the **entire pending batch** in a single transaction, not one per migration (`pg-core/dialect.cjs`: `session.transaction` sits outside the `for await` loop), and `__drizzle_migrations` is read as a high-water mark, not a set. That makes a custom runner *more* dangerous than the row assumed: decoupling the DDL from the bookkeeping insert lets a mid-batch failure commit statements the high-water mark still sits behind, so the retry re-runs them and wedges the deploy — and a failed `CONCURRENTLY` build is precisely the case that triggers it. Against that, the avoided cost is a sub-second `SHARE` lock during one index build, on the only table whose size makes the lock worth discussing at all. Recorded with the revisit triggers (~5M rows, a >5s timed build, multi-tenant, or a third such index) and a watched out-of-band procedure in `docs/ops.md` → *Migrations run in one transaction — deliberately*. Raised by CodeRabbit on #163, answered there, and **withdrawn by the reviewer** |
-| The `"error"` variant's `message` has no reader | `services/health.ts` | Logged by `console.error` already. Harmless today, but it is a raw Postgres string (`"permission denied for schema pgboss"`) sitting in a server-component return value — if anyone later renders it to answer "why did the check fail", an unfiltered DB error reaches the page |
+| ~~The `"error"` variant's `message` has no reader~~ **CLOSED 2026-08-06 — no code change** | `services/health.ts` | Re-read at e9ff584: the risk this row describes is *already* written into `WorkerHeartbeat`'s own docblock (`services/health.ts:46-51`), which names the field's only reader today (`console.error` and a log aggregator), says in as many words that it is not vetted for a browser, and assigns the "is an unfiltered DB error string safe to show" decision to whichever future caller renders it. That is the whole of what this row was asking for, so restating it here would be duplication, not work. Not rendered on `/admin/sync` (nothing there reads `.message`, verified by grep): the page is admin-gated, so severity is low, but a raw driver string can carry query text and parameter values, and this project already logs `.message`-only in the OAuth callbacks for exactly that reason. Not dropped either: `message` is the only structured carrier of *why*, `console.error` is a lossy one-way channel, and a non-browser caller (a health JSON endpoint, a future alert) is the plausible reader. Kept, documented, decision delegated |
 
 (An earlier draft of this table also listed `workerHeartbeat` tagging an
 Invalid Date as `"ok"`. That was closed in the same pass, not deferred: an
