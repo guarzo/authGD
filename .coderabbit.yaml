@@ -144,6 +144,20 @@ reviews:
     enabled: true
     auto_incremental_review: true
     drafts: false
+    # Without this, automatic review covers only PRs targeting the default
+    # branch — the key defaults to empty, and empty means `main` alone. The
+    # design-sweep-loop skill opens each round as a PR based on the previous
+    # round's branch, so every PR in such a stack but the first was silently
+    # out of scope: CodeRabbit posts "Review skipped: reviews are disabled for
+    # this base branch" and `gh pr checks` still reports the check as `pass`,
+    # which reads identically to a review that ran and found nothing.
+    #
+    # Scoped to the sweep's own namespace rather than `.*`, which would also
+    # switch on review for the ad-hoc `worktree-*` branches that occasionally
+    # serve as a base. Note this governs automatic review only — an explicit
+    # `@coderabbitai full review` comment is reviewed whatever the base.
+    base_branches:
+      - "design-sweep/.*"
     # Dependabot PRs are auto-merged by .github/workflows/dependabot-auto-merge.yml
     # once CI passes; a review comment on them is never read.
     ignore_usernames:

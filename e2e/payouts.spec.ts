@@ -50,6 +50,60 @@ async function expectNoFormInParagraph(page: Page, url: string): Promise<void> {
   await expect(page.locator("p form")).toHaveCount(0);
 }
 
+/**
+ * Seeds a finalized operation with a flat pool and the given roster, straight
+ * through the database. The UI path for this (create → pool → paste → finalize →
+ * mark paid) is already covered by "create, add a flat pool, paste a roster,
+ * finalize, mark paid"; re-driving it in every pay-flow test would test the
+ * setup rather than the flow. Returns the operation id.
+ *
+ * Column names follow `src/db/schema.ts:233-323`, which is the authority here.
+ * The operation and pool shapes also appear in the existing direct-insert block
+ * at `e2e/payouts.spec.ts:305-323` (`occurredAt` is a Date, `corpSharePct` a
+ * numeric string, the creator is `createdBy`); that block seeds no participants,
+ * so `shares`, `excluded` and `amount` come from the schema alone —
+ * `amount` is `numeric(20, 2)`, i.e. a string, not cents.
+ *
+ * `excluded` names are seeded excluded, which is how the pay flow's
+ * skip-the-excluded-row behaviour gets a fixture. They get amount 0 and are
+ * left out of the split, matching what the service would have produced.
+ */
+async function seedFinalizedRoster(
+  database: typeof db,
+  createdBy: string,
+  names: string[],
+  excluded: string[] = [],
+): Promise<string> {
+  const owed = names.filter((n) => !excluded.includes(n));
+  const each = (1_000_000 / owed.length).toFixed(2);
+  const [op] = await database
+    .insert(payoutOperation)
+    .values({
+      name: "Payout run",
+      occurredAt: new Date("2026-08-01"),
+      corpSharePct: "0",
+      createdBy,
+      status: "finalized",
+    })
+    .returning();
+  await database.insert(lootPool).values({
+    operationId: op.id,
+    valuationSource: "flat",
+    totalValue: "1000000.00",
+    notes: "seeded",
+  });
+  await database.insert(payoutParticipant).values(
+    names.map((displayName) => ({
+      operationId: op.id,
+      displayName,
+      shares: "1",
+      excluded: excluded.includes(displayName),
+      amount: excluded.includes(displayName) ? "0.00" : each,
+    })),
+  );
+  return op.id;
+}
+
 test("the payouts list pages with an Older link", async ({ page, context }) => {
   const reader = await seedMember(db, { name: "List Reader", tier: "member" });
   await context.addCookies([await sessionCookieFor(db, reader.id)]);
@@ -2001,5 +2055,250 @@ test("exactly one gold primary control renders in each draft state", async ({
   await expect(page.locator(".btn--primary")).toHaveCount(1);
   await expect(page.getByRole("button", { name: "Finalize" })).toHaveClass(
     /btn--primary/,
+  );
+});
+
+test("the roster heading and each owed row's copy button are addressable", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "Anchor FC",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+
+  const opId = await seedFinalizedRoster(db, operator.id, ["Ada Anchor", "Bo Anchor"]);
+  await page.goto(`/payouts/${opId}`);
+
+  // The heading is focusable programmatically but never lands in the tab
+  // order: it is a destination for the all-paid announcement, not a stop on
+  // the way to the controls.
+  const heading = page.locator("#roster-heading");
+  await expect(heading).toHaveAttribute("tabindex", "-1");
+  await expect(heading).toHaveText("Split / Roster");
+
+  // One addressable copy button per owed row, id keyed by participant uuid.
+  const ids = await page
+    .locator('[id^="pay-copy-"]')
+    .evaluateAll((els) => els.map((el) => el.id));
+  expect(ids).toHaveLength(2);
+  for (const id of ids) {
+    await expect(page.locator(`#${id}`)).toHaveAccessibleName(/^copy amount for /);
+  }
+});
+
+test("paying a row moves focus to the next unpaid row and announces who is next", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "Relay FC",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+  // Alphabetical, because the roster renders asc(displayName): Ada, Bo, Cy.
+  const opId = await seedFinalizedRoster(db, operator.id, [
+    "Ada Relay",
+    "Bo Relay",
+    "Cy Relay",
+  ]);
+  await page.goto(`/payouts/${opId}`);
+
+  // The first payment arms — it is the one that freezes the operation.
+  await page.getByRole("button", { name: "mark paid Ada Relay" }).click();
+  await page.getByRole("button", { name: "confirm mark paid Ada Relay" }).click();
+
+  // Focus lands on the next unpaid row's copy button, so the operator's next
+  // action needs no re-scan of the table.
+  await expect(
+    page.getByRole("button", { name: "copy amount for Bo Relay" }),
+  ).toBeFocused();
+  // ...and the same fact is available to someone who cannot see the focus ring,
+  // including the amount: three equal shares of 1,000,000.00 ISK is
+  // 333,333.33 ISK apiece (`fmtIsk`), so a wrong or unformatted amount here
+  // would fail this assertion even though it never touches the focus ring.
+  await expect(page.locator("#pay-flow-status")).toContainText(
+    "Paid Ada Relay. 1 of 3 paid. Next: Bo Relay, 333,333.33 ISK.",
+  );
+});
+
+test("the second payment advances again, on one click", async ({ page, context }) => {
+  const operator = await seedMember(db, {
+    name: "Second FC",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+  const opId = await seedFinalizedRoster(db, operator.id, [
+    "Ada Second",
+    "Bo Second",
+    "Cy Second",
+  ]);
+  await page.goto(`/payouts/${opId}`);
+
+  await page.getByRole("button", { name: "mark paid Ada Second" }).click();
+  await page.getByRole("button", { name: "confirm mark paid Ada Second" }).click();
+  await expect(
+    page.getByRole("button", { name: "copy amount for Bo Second" }),
+  ).toBeFocused();
+
+  // No arming this time: the door the first payment shut is already shut, so
+  // every later payment is a single click. This is the existing rule (see
+  // "override an item price, finalize, pay, revert, and pay again"), asserted
+  // here because the advance must not have re-introduced a confirm step.
+  await page.getByRole("button", { name: "mark paid Bo Second" }).click();
+  await expect(
+    page.getByRole("button", { name: "copy amount for Cy Second" }),
+  ).toBeFocused();
+  await expect(page.locator("#pay-flow-status")).toContainText(
+    "Paid Bo Second. 2 of 3 paid. Next: Cy Second,",
+  );
+});
+
+test("the first payment says that it freezes the operation permanently", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "Freeze FC",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+  const opId = await seedFinalizedRoster(db, operator.id, ["Ada Freeze", "Bo Freeze"]);
+  await page.goto(`/payouts/${opId}`);
+
+  // The description is on the control before it is pressed, both at rest and
+  // once armed — it has to be available ahead of the press it warns about.
+  const rest = page.getByRole("button", { name: "mark paid Ada Freeze" });
+  await expect(rest).toHaveAccessibleDescription(/permanently/);
+  await rest.click();
+  await expect(
+    page.getByRole("button", { name: "confirm mark paid Ada Freeze" }),
+  ).toHaveAccessibleDescription(/permanently/);
+
+  // It is a description, never part of the name: the name has to stay short
+  // enough to be spoken ahead of every press and has to keep matching the
+  // visible label (WCAG 2.5.3).
+  await expect(
+    page.getByRole("button", { name: "confirm mark paid Ada Freeze" }),
+  ).toHaveAccessibleName("confirm mark paid Ada Freeze");
+
+  // And it is hidden from the visual layout, at rest and armed alike — unlike
+  // ConfirmCost, which reveals itself on arm. Measured rather than asserted
+  // with toBeHidden(): `.visually-hidden` is a 1px clip, not display:none, so
+  // Playwright counts it visible by design (see the same measurement at
+  // account.spec.ts:439-443).
+  const costWidth = (await page.locator("#mark-paid-cost").boundingBox())?.width ?? 0;
+  expect(costWidth).toBeLessThanOrEqual(1);
+
+  await page.getByRole("button", { name: "confirm mark paid Ada Freeze" }).click();
+
+  // Once the operation is frozen, later payments are plain one-click buttons
+  // and carry no description: there is no cost left to state.
+  const later = page.getByRole("button", { name: "mark paid Bo Freeze" });
+  await expect(later).toHaveAccessibleDescription("");
+});
+
+test("paying the last row focuses the roster heading and says all are paid", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "Last FC",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+  const opId = await seedFinalizedRoster(db, operator.id, ["Ada Last", "Bo Last"]);
+  await page.goto(`/payouts/${opId}`);
+
+  await page.getByRole("button", { name: "mark paid Ada Last" }).click();
+  await page.getByRole("button", { name: "confirm mark paid Ada Last" }).click();
+
+  // Unlike the "next row" tests above, there's no next row's copy button to
+  // assert focus on here, so wait for Ada's own row to settle to "paid"
+  // before clicking Bo's row. Without this, Bo's "mark paid" button is still
+  // mid-transition (its arm state flips from armed to unarmed once Ada's
+  // payment lands, which swaps the underlying control), and a click that
+  // lands during that swap can be lost.
+  await expect(
+    page.getByRole("row", { name: /Ada Last/ }).getByText("paid", { exact: true }),
+  ).toBeVisible();
+
+  await page.getByRole("button", { name: "mark paid Bo Last" }).click();
+
+  // There is no next row, so focus goes somewhere meaningful rather than to
+  // <body> — the section heading, which is where the n/m progress lives.
+  await expect(page.locator("#roster-heading")).toBeFocused();
+  await expect(page.locator("#pay-flow-status")).toContainText(
+    "Paid Bo Last. All 2 paid.",
+  );
+});
+
+test("an excluded participant is never a focus target", async ({ page, context }) => {
+  const operator = await seedMember(db, {
+    name: "Skip FC",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+  const opId = await seedFinalizedRoster(
+    db,
+    operator.id,
+    ["Ada Skip", "Bo Skip", "Cy Skip"],
+    ["Bo Skip"],
+  );
+  await page.goto(`/payouts/${opId}`);
+
+  await page.getByRole("button", { name: "mark paid Ada Skip" }).click();
+  await page.getByRole("button", { name: "confirm mark paid Ada Skip" }).click();
+
+  // Bo is excluded, so the flow steps straight over to Cy, and the counts are
+  // out of 2 — the excluded row is not owed anything and is not part of the
+  // denominator.
+  await expect(
+    page.getByRole("button", { name: "copy amount for Cy Skip" }),
+  ).toBeFocused();
+  await expect(page.locator("#pay-flow-status")).toContainText(
+    "Paid Ada Skip. 1 of 2 paid. Next: Cy Skip,",
+  );
+  // And the excluded row still has no way to be paid at all.
+  await expect(page.getByRole("button", { name: /mark paid Bo Skip/ })).toHaveCount(0);
+});
+
+test("reverting a payment keeps focus on that row and announces the new count", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "Undo FC",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+  const opId = await seedFinalizedRoster(db, operator.id, ["Ada Undo", "Bo Undo"]);
+  await page.goto(`/payouts/${opId}`);
+
+  await page.getByRole("button", { name: "mark paid Ada Undo" }).click();
+  await page.getByRole("button", { name: "confirm mark paid Ada Undo" }).click();
+  await expect(
+    page.getByRole("button", { name: "copy amount for Bo Undo" }),
+  ).toBeFocused();
+
+  // Revert arms: it rewrites recorded financial state.
+  await page.getByRole("button", { name: "revert payment for Ada Undo" }).click();
+  await page.getByRole("button", { name: "confirm revert payment for Ada Undo" }).click();
+
+  // Focus stays with Ada — the row the operator is dealing with — rather than
+  // jumping to whoever is next. Reverting is a correction, not progress.
+  await expect(
+    page.getByRole("button", { name: "copy amount for Ada Undo" }),
+  ).toBeFocused();
+  await expect(page.locator("#pay-flow-status")).toContainText(
+    "Reverted Ada Undo. 0 of 2 paid.",
   );
 });

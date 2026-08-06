@@ -196,14 +196,23 @@ export function RuleHead({
   children,
   aside,
   as: As = "span",
+  id,
 }: {
   children: ReactNode;
   aside?: ReactNode;
   as?: "span" | "h2" | "h3";
+  /** Set only when something needs to move focus here. Carrying an `id`
+   *  implies `tabIndex={-1}`: a heading is a legitimate place to *land* after
+   *  an action that removed the control you were on, but it must never become
+   *  a stop in the tab order on the way to the controls. The two always travel
+   *  together, so the call site cannot get one without the other. */
+  id?: string;
 }) {
   return (
     <div className="rule-head">
-      <As className="rule-head__label">{children}</As>
+      <As className="rule-head__label" id={id} tabIndex={id ? -1 : undefined}>
+        {children}
+      </As>
       {aside && <span className="rule-head__aside">{aside}</span>}
     </div>
   );
