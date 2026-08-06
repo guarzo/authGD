@@ -1169,6 +1169,24 @@ h3.rule-head__label {
      collapsing — but the vh line keeps the behaviour on engines without it. */
   max-height: 80vh;
   max-height: 80svh;
+  /* Capping the height is what makes a vertical scrollbar possible here, and
+     on a classic-scrollbar platform that bar is taken out of clientWidth the
+     moment it appears — ~15px, mid-render, on a table already sized to very
+     near the full region width. The accounts table then tipped into
+     *horizontal* scroll as a side effect of a drawer opening, which reads as
+     the table having grown when nothing about it changed.
+
+     Reserved here rather than on `.scroller`, which is shared with the audit,
+     sync, account and payouts regions: only a height-capped region can gain
+     the vertical bar this reserves for, so putting it on the bare class would
+     spend a gutter of width on regions that can never use it. Narrowest fix
+     the evidence supports.
+
+     Costs nothing on macOS and iOS, where overlay scrollbars consume no width
+     and `stable` reserves none — which is also why this bug never reproduced
+     there, and why measuring the gutter (rather than assuming 15px) was the
+     step that settled it. */
+  scrollbar-gutter: stable;
 }
 
 /* The accounts table only. `.scroller--tall` is shared with /admin/audit,
@@ -1539,6 +1557,49 @@ h3.rule-head__label {
   font-weight: 600;
   letter-spacing: var(--track-value);
   color: var(--ink-dim);
+}
+
+/* The location line under a character's name in either manifest. Declared here,
+   directly after `.char__main` and BEFORE `.dim` below, on purpose: the
+   component adds `.dim` alongside this class for an offline or stale reading,
+   both are single-class selectors, so source order is the whole tiebreak — move
+   this rule below `.dim` and a stale location silently stops looking stale. */
+.char__location {
+  display: block;
+  font-size: var(--t-caption);
+  color: var(--ink-dim);
+  /* A structure name is member-supplied and can be long. The name column sets
+     the manifest's width, so let this line clip rather than push the STATUS and
+     ACTIONS columns off a 320px viewport. */
+  max-width: 22rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* One labelled entry in the account manifest's merged STATUS cell. Three tokens
+   stacked with nothing naming them read as "ok / ok / on" now that the TOKEN,
+   CONTACTS and MAP headers that named them are gone — and two of those three
+   are literally the word "ok". The label is visible, not visually-hidden: a
+   sighted reader cannot tell the token's "ok" from the standings' "ok" either,
+   so hiding it would fix the problem for exactly the readers who did not have
+   it. */
+.status-line {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
+}
+
+.status-line__label {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: var(--t-label);
+  letter-spacing: var(--track-value);
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  /* The three labels are a column of their own inside the cell, so the tokens
+     line up rather than stepping in and out with the label's width. */
+  min-width: 5.5rem;
+  flex-shrink: 0;
 }
 
 .dim {

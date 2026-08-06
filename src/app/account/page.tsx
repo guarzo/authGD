@@ -15,6 +15,7 @@ import { brandProps } from "@/app/_components/brand-server";
 import { RelativeTime } from "@/app/_components/relative-time";
 import { formatAgo } from "@/app/_components/format-ago";
 import { utcHhmm } from "@/app/_components/utc-time";
+import { CharacterLocation } from "@/app/_components/character-location";
 import { Submit } from "@/app/_components/submit";
 import {
   ConfirmArmScope,
@@ -33,14 +34,16 @@ import { AccountPayouts } from "./account-payouts";
 import { ConfirmNotice } from "@/app/_components/confirm-notice";
 import { accountConfirmation } from "./view";
 
-/** Columns in the crew manifest table: portrait, name, token, contacts, map,
- *  actions. Kept alongside the empty-state row's `colSpan` so the two can't
- *  drift apart the way a bare `6` scattered at both sites could. */
-const MANIFEST_COLUMN_COUNT = 6;
+/** Columns in the crew manifest table: portrait, name, status, actions. Kept
+ *  alongside the empty-state row's `colSpan` so the two can't drift apart the
+ *  way a bare `4` scattered at both sites could. Token, contacts and map merged
+ *  into one STATUS column: at ten or more characters six columns crowded the
+ *  name and the location line off a narrow viewport. */
+const MANIFEST_COLUMN_COUNT = 4;
 
 /** The id a contacts cell's `aria-describedby` points at when — and only
  *  when — `ContactRemedy` has something to say about that character. Unlike
- *  the CONTACTS column's caption below, which is always in the accessible
+ *  the manifest table's `<caption>` below, which is always in the accessible
  *  tree regardless of whether its sighted copy is shown, this element is not
  *  rendered at all for a character with no remedy. The reference and the
  *  element are gated on the same `hasContactRemedy` predicate, so the id can
@@ -428,15 +431,30 @@ export default async function AccountPage({
           </dd>
         </dl>
 
-        <RuleHead as="h2">Crew manifest</RuleHead>
+        <RuleHead
+          as="h2"
+          aside={
+            view.locationAsOf && (
+              <span className="dim mono">
+                locations{" "}
+                <RelativeTime
+                  iso={view.locationAsOf.toISOString()}
+                  initial={formatAgo(view.locationAsOf.toISOString(), now)}
+                />
+              </span>
+            )
+          }
+        >
+          Crew manifest
+        </RuleHead>
 
         {/* Purely visual now: the accessible copy moved to the table's own
-            `<caption>` below, which reaches a member landing on any cell in
-            the CONTACTS column, not just the header a `<th>`'s
-            aria-describedby could reach. Omitted entirely rather than
-            visually-hidden when no row needs it — the caption alone carries
-            the standing fact for a screen-reader user — and `aria-hidden`
-            keeps a sighted user's screen reader from hearing it said twice. */}
+            `<caption>` below, which reaches a member landing on any cell,
+            not just the header a `<th>`'s aria-describedby could reach.
+            Omitted entirely rather than visually-hidden when no row needs it —
+            the caption alone carries the standing fact for a screen-reader
+            user — and `aria-hidden` keeps a sighted user's screen reader from
+            hearing it said twice. */}
         {showContactsNote && (
           <p className="table-note" aria-hidden="true">
             authGD owns the <code>{cfg.standings.label}</code> contact label on your
@@ -449,14 +467,17 @@ export default async function AccountPage({
           <table className="log">
             {/* Always present, unlike the visual copy above: a `<caption>` is
                 announced for the table as a whole, so this is the one place a
-                standing fact about the CONTACTS column reaches a member no
-                matter which cell they navigate to. Visually hidden — the
-                sighted copy above (when shown) says the same thing where the
-                eye already is. */}
+                standing fact about the managed contact label reaches a member
+                no matter which cell they navigate to. It also says where that
+                state now lives, since the CONTACTS and MAP columns it used to
+                name were merged into STATUS. Visually hidden — the sighted copy
+                above (when shown) says the same thing where the eye already
+                is. */}
             <caption className="visually-hidden">
               authGD owns the <code>{cfg.standings.label}</code> contact label on your
               characters: contacts under that label are managed automatically and may be
-              added, changed, or removed.
+              added, changed, or removed. Each character&rsquo;s standings sit in its
+              STATUS cell, beside its token and map state.
             </caption>
             <thead>
               <tr>
@@ -464,9 +485,7 @@ export default async function AccountPage({
                   <span className="visually-hidden">Portrait</span>
                 </th>
                 <th scope="col">Name</th>
-                <th scope="col">Token</th>
-                <th scope="col">Contacts</th>
-                <th scope="col">Map</th>
+                <th scope="col">Status</th>
                 <th scope="col">
                   <span className="visually-hidden">Actions</span>
                 </th>
@@ -495,25 +514,16 @@ export default async function AccountPage({
                       />
                     </td>
                     <td>
-                      <span className="char">
-                        {c.name}{" "}
-                        {c.isMain && <strong className="char__main">(main)</strong>}
-                      </span>
-                    </td>
-                    <td>
-                      {c.tokenStatus === "valid" && !c.needsReauthForScopes ? (
-                        <Status tone="ok">ok</Status>
-                      ) : (
-                        // A control, not a value: `.st` carries no underline of
-                        // its own (it's display:inline-flex), so an anchor
-                        // wrapping one rendered with no affordance at all —
-                        // identical to an inert token one column over. This is
-                        // the same "make main"/"unlink" grade the row's other
-                        // controls use, per globals.css's value/control split.
-                        <a className="btn btn--quiet btn--micro" href="/auth/eve/link">
-                          re-authorize
-                        </a>
-                      )}
+                      <div className="stack">
+                        <span className="char">
+                          {c.name}{" "}
+                          {c.isMain && <strong className="char__main">(main)</strong>}
+                        </span>
+                        <CharacterLocation
+                          location={c.location}
+                          stale={c.locationStale}
+                        />
+                      </div>
                     </td>
                     <td
                       aria-describedby={
@@ -523,18 +533,43 @@ export default async function AccountPage({
                       }
                     >
                       <div className="stack">
-                        <ContactState
-                          result={c.contactSyncResult}
-                          target={c.contactsTarget}
-                        />
+                        <span className="status-line">
+                          <span className="status-line__label">token</span>
+                          {c.tokenStatus === "valid" && !c.needsReauthForScopes ? (
+                            <Status tone="ok">ok</Status>
+                          ) : (
+                            // A control, not a value: `.st` carries no underline
+                            // of its own (it's display:inline-flex), so an anchor
+                            // wrapping one rendered with no affordance at all —
+                            // identical to an inert token beside it. This is the
+                            // same "make main"/"unlink" grade the row's other
+                            // controls use, per globals.css's value/control
+                            // split. Merging TOKEN into STATUS does not demote it
+                            // to a chip.
+                            <a
+                              className="btn btn--quiet btn--micro"
+                              href="/auth/eve/link"
+                            >
+                              re-authorize
+                            </a>
+                          )}
+                        </span>
+                        <span className="status-line">
+                          <span className="status-line__label">standings</span>
+                          <ContactState
+                            result={c.contactSyncResult}
+                            target={c.contactsTarget}
+                          />
+                        </span>
+                        <span className="status-line">
+                          <span className="status-line__label">map</span>
+                          {c.onMapAcl ? (
+                            <Status tone="ok">on</Status>
+                          ) : (
+                            <Status tone="off">off</Status>
+                          )}
+                        </span>
                       </div>
-                    </td>
-                    <td>
-                      {c.onMapAcl ? (
-                        <Status tone="ok">on</Status>
-                      ) : (
-                        <Status tone="off">off</Status>
-                      )}
                     </td>
                     <td>
                       <div className="btn-row btn-row--tight btn-row--end">
@@ -606,12 +641,12 @@ export default async function AccountPage({
                   result={c.contactSyncResult}
                   detail={c.contactSyncDetail}
                   label={cfg.standings.label}
-                  // Only when the TOKEN cell isn't already showing a
-                  // re-authorize control for this row: two links to one href
-                  // in one row is noise. This covers the stale-snapshot case
-                  // where the token has since refreshed to valid but the last
-                  // contacts run still reports a token fault — there the cell
-                  // reads "ok" and this is the only place the control can live.
+                  // Only when the STATUS cell isn't already showing a
+                  // re-authorize control for this row: two links to one href in
+                  // one row is noise. This covers the stale-snapshot case where
+                  // the token has since refreshed to valid but the last contacts
+                  // run still reports a token fault — there the cell reads "ok"
+                  // and this is the only place the control can live.
                   showReauth={c.tokenStatus === "valid" && !c.needsReauthForScopes}
                 />
               </p>
@@ -665,7 +700,7 @@ export default async function AccountPage({
                 per-character truth lives in the manifest above. */}
             <p className="table-note">
               When each job last completed corp-wide, and when it runs next. For your own
-              characters, read the CONTACTS and MAP columns above.
+              characters, read the STATUS column in the crew manifest above.
             </p>
             <dl className="facts">
               <dt>Standings</dt>

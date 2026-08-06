@@ -1,5 +1,6 @@
 import { and, count, desc, eq, inArray, isNotNull, or } from "drizzle-orm";
 import type { Config } from "@/config";
+import { formatLocation, locationFreshness, type LocationDisplay } from "@/core/location";
 import { nextRunAt } from "@/core/schedules";
 import type { Dbx } from "@/db";
 import {
@@ -11,6 +12,7 @@ import {
   wandererAclObservation,
 } from "@/db/schema";
 import { isContactsTarget } from "@/services/desired";
+import { lookupCachedNames } from "@/services/universe-names";
 
 /**
  * The three things authGD pushes on a member's behalf, and the job that pushes
@@ -95,6 +97,86 @@ export async function getPushStatus(
   return Object.fromEntries(results) as Record<PushKind, PushStatus>;
 }
 
+/** The five location columns every manifest builder reads off a character row. */
+type LocationColumns = {
+  id: number;
+  locationSystemId: number | null;
+  locationStationId: number | null;
+  locationStructureId: number | null;
+  locationOnline: boolean | null;
+  locationCheckedAt: Date | null;
+};
+
+/** What a manifest builder attaches to each character row. */
+type LocationCell = { location: LocationDisplay; locationStale: boolean };
+
+const NO_LOCATION: LocationCell = { location: { kind: "none" }, locationStale: false };
+
+/**
+ * Every system, station and structure id a set of characters is sitting at, in
+ * one array, so `lookupCachedNames` is called ONCE per view. Resolving names
+ * per character would be one query per row — twelve for a large account's
+ * manifest, and one per character in the corp for the admin list — to decorate
+ * a line whose ids are already in hand.
+ */
+function locationIds(chars: LocationColumns[]): number[] {
+  const ids: number[] = [];
+  for (const c of chars) {
+    if (c.locationSystemId !== null) ids.push(c.locationSystemId);
+    if (c.locationStationId !== null) ids.push(c.locationStationId);
+    if (c.locationStructureId !== null) ids.push(c.locationStructureId);
+  }
+  return ids;
+}
+
+/**
+ * Formats one manifest's worth of locations and derives its single "as of".
+ *
+ * `asOf` is the OLDEST reading among the characters that actually render a
+ * line, which is deliberately unlike `mapObservedAt`
+ * (src/app/admin/accounts/page.tsx:540), where the same shape reduces
+ * newest-wins. That is safe there and not here: the ACL observation is a single
+ * job run, so every character on it shares one timestamp and the reduction is a
+ * no-op. Location has a per-character clock — a failed read deliberately does
+ * not advance that character's `locationCheckedAt` (src/jobs/location.ts) — so
+ * newest-wins would print a freshness that a visible row does not have.
+ * Understating freshness is the safe direction; overstating it is not.
+ */
+function buildManifestLocations(
+  chars: LocationColumns[],
+  names: Map<number, string>,
+): { asOf: Date | null; cellFor: (id: number) => LocationCell } {
+  const displays = chars.map((c) => {
+    const dockedId = c.locationStationId ?? c.locationStructureId;
+    return {
+      id: c.id,
+      checkedAt: c.locationCheckedAt,
+      location: formatLocation(
+        {
+          systemId: c.locationSystemId,
+          stationId: c.locationStationId,
+          structureId: c.locationStructureId,
+          online: c.locationOnline,
+          checkedAt: c.locationCheckedAt,
+        },
+        {
+          system:
+            c.locationSystemId === null ? null : (names.get(c.locationSystemId) ?? null),
+          docked: dockedId === null ? null : (names.get(dockedId) ?? null),
+        },
+      ),
+    };
+  });
+  const { asOf, staleIds } = locationFreshness(
+    displays.filter((d) => d.location.kind === "line"),
+  );
+  const stale = new Set(staleIds);
+  const byId = new Map<number, LocationCell>(
+    displays.map((d) => [d.id, { location: d.location, locationStale: stale.has(d.id) }]),
+  );
+  return { asOf, cellFor: (id) => byId.get(id) ?? NO_LOCATION };
+}
+
 export interface AccountView {
   tier: "pending" | "member" | "associate" | "alumni";
   status: "active" | "cryo";
@@ -140,8 +222,19 @@ export interface AccountView {
      *  case; it is recorded for operators (src/db/schema.ts). */
     contactSyncDetail: string | null;
     onMapAcl: boolean;
+    /** Formatted location line, or `{ kind: "none" }` when this character has
+     *  never been read — a missing scope, a dead token, or a job that has not
+     *  reached them yet all land here, and the row simply carries no line. */
+    location: LocationDisplay;
+    /** This character's reading lags the manifest's newest by more than one
+     *  cadence interval, so the single "as of" label understates it. */
+    locationStale: boolean;
   }>;
   pushes: Record<PushKind, PushStatus>;
+  /** Oldest `locationCheckedAt` among characters that render a line; null when
+   *  none do. See buildManifestLocations for why this is the oldest and not the
+   *  newest. */
+  locationAsOf: Date | null;
 }
 
 export async function getAccountView(
@@ -171,7 +264,7 @@ export async function getAccountView(
     return a.id - b.id;
   });
   const ids = chars.map((c) => c.id);
-  const [links, syncStates, aclObs, pushes] = await Promise.all([
+  const [links, syncStates, aclObs, pushes, names] = await Promise.all([
     dbx.select().from(discordLink).where(eq(discordLink.accountId, accountId)),
     ids.length
       ? dbx
@@ -186,10 +279,16 @@ export async function getAccountView(
           .where(inArray(wandererAclObservation.characterId, ids))
       : Promise.resolve([]),
     getPushStatus(dbx),
+    // Guarded like its neighbours: an account with no characters has no ids to
+    // resolve and must not issue an `IN ()`.
+    ids.length
+      ? lookupCachedNames(dbx, locationIds(chars))
+      : Promise.resolve(new Map<number, string>()),
   ]);
   const syncByChar = new Map(syncStates.map((s) => [s.characterId, s]));
   const aclSet = new Set(aclObs.map((o) => o.characterId));
   const required = new Set(cfg.eveSso.scopes);
+  const locations = buildManifestLocations(chars, names);
 
   return {
     tier: acc.tier,
@@ -212,8 +311,10 @@ export async function getAccountView(
       contactSyncResult: syncByChar.get(c.id)?.lastResult ?? null,
       contactSyncDetail: syncByChar.get(c.id)?.lastDetail ?? null,
       onMapAcl: aclSet.has(c.id),
+      ...locations.cellFor(c.id),
     })),
     pushes,
+    locationAsOf: locations.asOf,
   };
 }
 
@@ -229,6 +330,8 @@ export interface AdminCharacterRow {
   contactSyncResult: string | null;
   contactSyncDetail: string | null;
   mapObservedAt: Date | null;
+  location: LocationDisplay;
+  locationStale: boolean;
 }
 
 export interface AdminAccountRow {
@@ -248,6 +351,8 @@ export interface AdminAccountRow {
   characters: AdminCharacterRow[];
   tokenSummary: { total: number; healthy: number; needsReauth: number; dead: number };
   mapCount: number;
+  /** Oldest reading across this account's crew — see buildManifestLocations. */
+  locationAsOf: Date | null;
 }
 
 export type AdminListSort = "name" | "tier" | "status" | "tierChangedAt";
@@ -294,9 +399,14 @@ export async function getAdminAccountsList(
       a.mainCharacterId === null ? null : (nameById.get(a.mainCharacterId) ?? null),
     ]),
   );
+  // ONE cache read for the entire list. This page renders every account, so a
+  // per-account lookup would be one query per row, and a per-character lookup
+  // one per character in the corp.
+  const names = await lookupCachedNames(dbx, locationIds(chars));
 
   let rows: AdminAccountRow[] = accounts.map((acc) => {
     const accChars = charsByAccount.get(acc.id) ?? [];
+    const locations = buildManifestLocations(accChars, names);
     const characters: AdminCharacterRow[] = accChars.map((c) => ({
       id: c.id,
       name: c.name,
@@ -307,6 +417,7 @@ export async function getAdminAccountsList(
       contactSyncResult: syncByChar.get(c.id)?.lastResult ?? null,
       contactSyncDetail: syncByChar.get(c.id)?.lastDetail ?? null,
       mapObservedAt: obsByChar.get(c.id)?.observedAt ?? null,
+      ...locations.cellFor(c.id),
     }));
     const dead = characters.filter(
       (c) => c.tokenStatus === "invalid" || c.tokenStatus === "missing",
@@ -348,6 +459,7 @@ export async function getAdminAccountsList(
         dead,
       },
       mapCount: characters.filter((c) => c.mapObservedAt !== null).length,
+      locationAsOf: locations.asOf,
     };
   });
 

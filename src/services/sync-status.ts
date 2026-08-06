@@ -13,6 +13,7 @@ const KNOWN_ORDER = [
   "discord-roles",
   "token-health",
   "purge",
+  "location",
 ];
 
 export type SyncStatusGroup = {

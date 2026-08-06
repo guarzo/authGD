@@ -250,7 +250,15 @@ const PARTS: Record<string, readonly Part[]> = {
   "token.invalidated": [scalar("reason")],
   "token.verify_failed": [scalar("error")],
   "token.subject_mismatch": [labelled("subject", "subjectCharacterId")],
-  "token.needs_reauth": [list("missingScopes", "missing", "scopes")],
+  // Two writers, two payload shapes. token-health computes a shortfall against
+  // config and sends `missingScopes`; the location job sends the single scope
+  // whose read ESI refused. Each renders nothing for the other's keys, so the
+  // line stays honest either way instead of reporting a hidden `+2 more`.
+  "token.needs_reauth": [
+    list("missingScopes", "missing", "scopes"),
+    labelled("refused", "scope"),
+    labelled("detected by", "detectedBy"),
+  ],
   "tier.unlocked": [tierLabelled("was", "tier")],
   "status.note_changed": [noteChange("had", "has")],
   "character.owner_mismatch": [labelled("detected by", "detectedBy")],

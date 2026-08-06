@@ -69,6 +69,24 @@ export const character = pgTable(
     refreshTokenEnc: text("refresh_token_enc"),
     scopes: jsonb("scopes").$type<string[]>().notNull().default([]),
     tokenStatus: tokenStatusEnum("token_status").notNull().default("missing"),
+    // Current location, overwritten in place by the location job every fifteen
+    // minutes. All five are nullable, and null means "never read": a character
+    // who has not granted `esi-location.read_location.v1` keeps them forever.
+    //
+    // Fork operators: this is location data about your members that the schema
+    // did not hold before — which system each of them is sitting in, and what
+    // they are docked in. It is deliberately current-value-only: there is no
+    // history table, no audit row on change, and nothing to purge, so a leak
+    // or a compromised admin session exposes one snapshot rather than a
+    // movement trail. `locationCheckedAt` is never advanced by a failed read,
+    // which is what lets the UI state how stale a row is instead of silently
+    // blanking it. Dropping these columns degrades both pages to a character
+    // name with no second line, and nothing else.
+    locationSystemId: bigint("location_system_id", { mode: "number" }),
+    locationStationId: bigint("location_station_id", { mode: "number" }),
+    locationStructureId: bigint("location_structure_id", { mode: "number" }),
+    locationOnline: boolean("location_online"),
+    locationCheckedAt: timestamp("location_checked_at", { withTimezone: true }),
   },
   // target for the composite main-character FK on account
   (t) => [unique("character_id_account_uq").on(t.id, t.accountId)],
@@ -199,6 +217,32 @@ export const wandererAclObservation = pgTable("wanderer_acl_observation", {
   characterId: bigint("character_id", { mode: "number" }).primaryKey(),
   role: text("role").notNull(),
   observedAt: timestamp("observed_at", { withTimezone: true }).notNull(),
+});
+
+export const universeNameKindEnum = pgEnum("universe_name_kind", [
+  "system",
+  "station",
+  "structure",
+]);
+
+/**
+ * Name cache for the ids the `character` location columns hold. Fork
+ * operators: no personal data lands here — systems, NPC stations and player
+ * structures are places, not people — but the `structure` rows do record which
+ * citadels your members have docking access to, which is corp-sensitive even
+ * though it names nobody. Safe to truncate at any time; it refills on the next
+ * job run at the cost of some ESI calls.
+ *
+ * EVE id ranges do not collide across the three kinds, so `id` alone is a safe
+ * primary key and `kind` exists to drive the refresh policy instead: systems
+ * and stations are effectively immutable and fetched once, structures are
+ * re-fetched after seven days because they can be renamed or destroyed.
+ */
+export const universeName = pgTable("universe_name", {
+  id: bigint("id", { mode: "number" }).primaryKey(),
+  kind: universeNameKindEnum("kind").notNull(),
+  name: text("name").notNull(),
+  fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
 export const auditLog = pgTable(

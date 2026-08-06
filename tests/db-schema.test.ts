@@ -1,8 +1,11 @@
 import { eq, sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { account, character, discordLink } from "@/db/schema";
+import { account, character, discordLink, universeName } from "@/db/schema";
 import { setupTestDb } from "./helpers/db";
+import { testConfig } from "./helpers/config";
+import { seedAccount, seedCharacter } from "./helpers/seed";
 
+const cfg = testConfig();
 let ctx: Awaited<ReturnType<typeof setupTestDb>>;
 beforeAll(async () => {
   ctx = await setupTestDb();
@@ -86,5 +89,63 @@ describe("schema", () => {
           WHERE table_name = 'account' AND column_name = 'tier'`,
     );
     expect(String(res.rows[0]?.column_default)).toContain("alumni");
+  });
+});
+
+describe("location columns", () => {
+  it("defaults every location column to null on a fresh character", async () => {
+    const acc = await seedAccount(ctx.db);
+    const ch = await seedCharacter(ctx.db, cfg, { id: 90000201, accountId: acc.id });
+    expect(ch.locationSystemId).toBeNull();
+    expect(ch.locationStationId).toBeNull();
+    expect(ch.locationStructureId).toBeNull();
+    expect(ch.locationOnline).toBeNull();
+    expect(ch.locationCheckedAt).toBeNull();
+  });
+
+  it("round-trips a written location", async () => {
+    const acc = await seedAccount(ctx.db);
+    await seedCharacter(ctx.db, cfg, { id: 90000202, accountId: acc.id });
+    const checkedAt = new Date("2026-08-06T12:00:00Z");
+    await ctx.db
+      .update(character)
+      .set({
+        locationSystemId: 31000123,
+        locationStructureId: 1035466617946,
+        locationOnline: true,
+        locationCheckedAt: checkedAt,
+      })
+      .where(eq(character.id, 90000202));
+    const [row] = await ctx.db.select().from(character).where(eq(character.id, 90000202));
+    expect(row.locationSystemId).toBe(31000123);
+    expect(row.locationStationId).toBeNull();
+    expect(row.locationStructureId).toBe(1035466617946);
+    expect(row.locationOnline).toBe(true);
+    expect(row.locationCheckedAt).toEqual(checkedAt);
+  });
+});
+
+describe("universe_name", () => {
+  it("stores one row per id across all three kinds, stamped with fetchedAt", async () => {
+    await ctx.db.insert(universeName).values([
+      { id: 31000123, kind: "system", name: "J123456" },
+      { id: 60003760, kind: "station", name: "Jita IV - Moon 4" },
+      { id: 1035466617946, kind: "structure", name: "Home Astrahus" },
+    ]);
+    const rows = await ctx.db.select().from(universeName).orderBy(universeName.id);
+    expect(rows.map((r) => r.kind)).toEqual(["system", "station", "structure"]);
+    expect(rows[2].name).toBe("Home Astrahus");
+    expect(rows[0].fetchedAt).toBeInstanceOf(Date);
+  });
+
+  it("rejects a duplicate id", async () => {
+    await ctx.db
+      .insert(universeName)
+      .values({ id: 31000999, kind: "system", name: "J999999" });
+    await expect(
+      ctx.db
+        .insert(universeName)
+        .values({ id: 31000999, kind: "system", name: "J999999" }),
+    ).rejects.toThrow();
   });
 });

@@ -1,6 +1,6 @@
 {
-  "id": "d97be47d-8aba-4bef-a3e6-eb27add282e2",
-  "prevId": "692bef5a-b3e6-4e3e-b5d3-596fa7316b8c",
+  "id": "ac192b6e-3ba6-4e80-a8c8-cdc1bd436aa1",
+  "prevId": "d97be47d-8aba-4bef-a3e6-eb27add282e2",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -147,6 +147,33 @@
               "expression": "at",
               "isExpression": false,
               "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "audit_log_action_target_id_idx": {
+          "name": "audit_log_action_target_id_idx",
+          "columns": [
+            {
+              "expression": "action",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "target",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": false,
               "nulls": "last"
             }
           ],

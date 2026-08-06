@@ -68,8 +68,15 @@
     {
       "idx": 9,
       "version": "7",
-      "when": 1786039766559,
-      "tag": "0009_useful_frightful_four",
+      "when": 1786027040661,
+      "tag": "0009_bright_mauler",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1786046498461,
+      "tag": "0010_even_jetstream",
       "breakpoints": true
     }
   ]

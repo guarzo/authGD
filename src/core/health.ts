@@ -1,11 +1,12 @@
 /**
- * The most frequent job (membership) runs every 30 minutes
- * (src/worker/queues.ts). 90 minutes is three missed ticks: long enough that a
- * slow run or a single retry never pages, short enough that a dead worker is
- * caught within about 90 minutes plus the monitor's own poll interval.
- * Comparison is <=, so a run landing exactly on the threshold reads as fresh.
- * Deliberately a constant and not an environment variable — a second knob would
- * drift from the schedules in queues.ts.
+ * The most frequent job (location) runs every 15 minutes
+ * (`JOB_CRON` in src/core/schedules.ts). 90 minutes is six missed ticks: long
+ * enough that a slow run or a single retry never pages, short enough that a
+ * dead worker is caught within about 90 minutes plus the monitor's own poll
+ * interval. Comparison is <=, so a run landing exactly on the threshold reads
+ * as fresh. 90 is a hand-picked constant, not derived from the tick interval —
+ * changing the busiest schedule does not change it. Deliberately a constant and
+ * not an environment variable — a second knob would drift from the schedules.
  */
 export const STALE_AFTER_MS = 90 * 60 * 1000;
 

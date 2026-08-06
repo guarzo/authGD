@@ -34,10 +34,24 @@ function describeScope(scope: string, contactLabel: string): string {
     // by `diffContacts`' return value, gated to the configured label only.
     case "esi-characters.write_contacts.v1":
       return `Adds, updates, and removes contacts under the "${contactLabel}" label on your characters, to keep them matching your standing.`;
-    // src/lib/esi/client.ts:18,324 — OPEN_WINDOW_SCOPE, used from
-    // payouts/actions.ts:674 to open a character's info window in the client.
+    // src/lib/esi/client.ts:18,332 — OPEN_WINDOW_SCOPE, used from
+    // payouts/actions.ts:861 to open a character's info window in the client.
     case "esi-ui.open_window.v1":
       return "Lets authGD open a character's info window in your EVE client from the payouts page.";
+    // src/jobs/location.ts — LOCATION_SCOPE_REQUIRED, the only scope
+    // `canReadLocation` gates on; `runLocationJob` reads esi.getLocation with
+    // it. No line number: that file is added later in this same plan.
+    case "esi-location.read_location.v1":
+      return "Reads which solar system your character is in, and the station or structure it is docked in, so authGD can show that on your own account page and to admins.";
+    // src/jobs/location.ts — LOCATION_SCOPES_OPTIONAL[0]. esi.getStructureName,
+    // resolved with the docked character's own token. Missing or refused, the
+    // line still renders — just without a name on the structure.
+    case "esi-universe.read_structures.v1":
+      return "Looks up the name of the structure your character is docked in, so the location names a place instead of a number. Without it a docked character reads only as docked.";
+    // src/jobs/location.ts — LOCATION_SCOPES_OPTIONAL[1]. esi.getOnline, used
+    // only to choose between a current reading and a "last seen" one.
+    case "esi-location.read_online.v1":
+      return "Checks whether your character is logged in right now, so a location left behind by a character who has since logged off is shown as where they were last seen rather than as where they are.";
     default:
       return "This deployment requests this scope, but authGD has no description for it — ask whoever runs it what it is for before granting.";
   }

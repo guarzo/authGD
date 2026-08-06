@@ -50,6 +50,21 @@ const universeIdsSchema = z.object({
     .array(z.object({ id: z.number().int(), name: z.string() }))
     .optional(),
 });
+/**
+ * `structure_id` is an int64 in ESI. Real structure ids sit around 1e12, well
+ * inside Number.MAX_SAFE_INTEGER (~9e15), so a plain `z.number().int()` is
+ * safe and matches how every other id in this file is parsed.
+ *
+ * `station_id` and `structure_id` are mutually exclusive AND both optional: a
+ * character in space has neither.
+ */
+const locationSchema = z.object({
+  solar_system_id: z.number().int(),
+  station_id: z.number().int().optional(),
+  structure_id: z.number().int().optional(),
+});
+const onlineSchema = z.object({ online: z.boolean() });
+const namedSchema = z.object({ name: z.string() });
 
 export type Affiliation = {
   characterId: number;
@@ -61,6 +76,11 @@ export type EsiContact = {
   contactType: string;
   standing: number;
   labelIds: number[];
+};
+export type CharacterLocation = {
+  systemId: number;
+  stationId: number | null;
+  structureId: number | null;
 };
 
 export interface EsiClientOptions {
@@ -327,12 +347,72 @@ export function createEsiClient(opts: EsiClientOptions = {}) {
     });
   }
 
+  /**
+   * A read, so it is NOT dry-run gated — `dryRun` above suppresses outbound
+   * writes only. Absent station/structure ids map to null, which the formatter
+   * renders as "in space".
+   */
+  async function getLocation(
+    characterId: number,
+    accessToken: string,
+  ): Promise<CharacterLocation> {
+    const path = `/characters/${characterId}/location/`;
+    const res = await request(path, { accessToken });
+    const parsed = safeParse(locationSchema, await res.json(), "GET", path, res.status);
+    return {
+      systemId: parsed.solar_system_id,
+      stationId: parsed.station_id ?? null,
+      structureId: parsed.structure_id ?? null,
+    };
+  }
+
+  async function getOnline(characterId: number, accessToken: string): Promise<boolean> {
+    const path = `/characters/${characterId}/online/`;
+    const res = await request(path, { accessToken });
+    return safeParse(onlineSchema, await res.json(), "GET", path, res.status).online;
+  }
+
+  /** Unauthenticated: solar-system names are public and effectively immutable. */
+  async function getSystemName(systemId: number): Promise<string> {
+    const path = `/universe/systems/${systemId}/`;
+    const res = await request(path);
+    return safeParse(namedSchema, await res.json(), "GET", path, res.status).name;
+  }
+
+  /** Unauthenticated: NPC station names are public and effectively immutable. */
+  async function getStationName(stationId: number): Promise<string> {
+    const path = `/universe/stations/${stationId}/`;
+    const res = await request(path);
+    return safeParse(namedSchema, await res.json(), "GET", path, res.status).name;
+  }
+
+  /**
+   * Authenticated, and needs `esi-universe.read_structures.v1` on top of the
+   * token. A character without that scope, or without docking access there,
+   * gets 403 — which `classifyEsiError` classifies and `request` throws as an
+   * EsiError. The caller catches it and renders "Docked", unnamed; nothing is
+   * swallowed here.
+   */
+  async function getStructureName(
+    structureId: number,
+    accessToken: string,
+  ): Promise<string> {
+    const path = `/universe/structures/${structureId}/`;
+    const res = await request(path, { accessToken });
+    return safeParse(namedSchema, await res.json(), "GET", path, res.status).name;
+  }
+
   return {
     postAffiliation,
     resolveIds,
     openInformationWindow,
     getContactLabels,
     getAllContacts,
+    getLocation,
+    getOnline,
+    getSystemName,
+    getStationName,
+    getStructureName,
     addContacts: (
       characterId: number,
       accessToken: string,

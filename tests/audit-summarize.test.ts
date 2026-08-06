@@ -290,6 +290,17 @@ describe("summarizeDetails, declared fields and role rendering", () => {
     ).toBe("missing 4 scopes");
   });
 
+  it("renders the location job's single refused scope, not a shortfall list", () => {
+    // Second writer, different payload shape, same action. Neither writer's
+    // keys may show up as an unexplained `+N more` on the other's rows.
+    expect(
+      summarizeDetails("token.needs_reauth", {
+        scope: "esi-location.read_location.v1",
+        detectedBy: "location",
+      }),
+    ).toBe("refused esi-location.read_location.v1, detected by location");
+  });
+
   it("renders nothing for a malformed scope list and never marks it hidden", () => {
     // One legacy or hand-inserted row must not become a dead cell. Parity with
     // the roles() guard; the payload stays one disclosure click away.

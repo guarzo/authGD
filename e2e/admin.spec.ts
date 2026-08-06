@@ -1043,7 +1043,14 @@ for (const width of [320, 390, 768]) {
     );
     // There has to be something to scroll past, or the assertion is vacuous.
     expect(pinned.maxScrollLeft).toBeGreaterThan(0);
-    expect(pinned.scrolledLeft).toBe(pinned.maxScrollLeft);
+    // `.scroller--tall` reserves a vertical-scrollbar gutter unconditionally
+    // (globals.css, `scrollbar-gutter: stable`); `gutterWidth` measures it
+    // directly (see geometry.ts), so the rightmost scrollLeft only has to
+    // clear the naive figure less that measured reservation, not an assumed
+    // one.
+    expect(pinned.scrolledLeft).toBeGreaterThanOrEqual(
+      pinned.maxScrollLeft - pinned.gutterWidth,
+    );
     // Fully on screen, not merely intersecting by a sliver.
     expect(pinned.overlapX).toBeCloseTo(pinned.cellWidth, 0);
     expect(pinned.overlapY).toBeGreaterThan(0);

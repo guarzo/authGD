@@ -964,7 +964,14 @@ for (const width of [320, 390]) {
       "right",
     );
     expect(pinned.maxScrollLeft).toBeGreaterThan(0);
-    expect(pinned.scrolledLeft).toBe(pinned.maxScrollLeft);
+    // `.scroller--tall` reserves a vertical-scrollbar gutter unconditionally
+    // (globals.css, `scrollbar-gutter: stable`); `gutterWidth` measures it
+    // directly (see geometry.ts), so the rightmost scrollLeft only has to
+    // clear the naive figure less that measured reservation, not an assumed
+    // one.
+    expect(pinned.scrolledLeft).toBeGreaterThanOrEqual(
+      pinned.maxScrollLeft - pinned.gutterWidth,
+    );
     expect(pinned.overlapX).toBeCloseTo(pinned.cellWidth, 0);
 
     // The corner cell rides with the column it heads, or the pinned stamps end
