@@ -1,6 +1,23 @@
 import type { Page } from "@playwright/test";
 
 /**
+ * How far short of `pinGeometry`'s `maxScrollLeft` a `.scroller--tall`
+ * region's true rightmost `scrollLeft` can land now that `scrollbar-gutter:
+ * stable` (globals.css, `.scroller--tall`) reserves room for a vertical
+ * scrollbar unconditionally. That reservation isn't reachable by horizontal
+ * scrolling, but in this project's test environment it is still counted
+ * toward `scrollWidth` — so `scrollWidth - clientWidth` overshoots the actual
+ * maximum by about the gutter's own width, even though `scrollLeft` itself
+ * clamps correctly to the real extreme. Confirmed by direct probe (a
+ * throwaway instrumented copy of `pinGeometry` showed `scrollWidth` and
+ * `clientWidth` unchanged for the entire call; only the clamped `scrollLeft`
+ * differs), not assumed from a flaky margin. The value is this environment's
+ * measured gap, not a spec guarantee — a real scrollbar's width varies by
+ * platform, so callers should treat it as a tolerance, not an exact offset.
+ */
+export const TALL_SCROLLER_GUTTER_SLOP = 10;
+
+/**
  * Rect-vs-rect measurement of a table cell against its scroll region, taken
  * after driving the region to an extreme.
  *

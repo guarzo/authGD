@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { auditLog, discordLink, payoutOperation, syncRun } from "../src/db/schema";
 import { AUDIT_PAGE_SIZE } from "../src/services/audit";
-import { pinGeometry } from "./geometry";
+import { pinGeometry, TALL_SCROLLER_GUTTER_SLOP } from "./geometry";
 import { resetDb, seedMember, sessionCookieFor, testDb } from "./helpers";
 
 const { db, pool } = testDb();
@@ -964,7 +964,12 @@ for (const width of [320, 390]) {
       "right",
     );
     expect(pinned.maxScrollLeft).toBeGreaterThan(0);
-    expect(pinned.scrolledLeft).toBe(pinned.maxScrollLeft);
+    // `.scroller--tall` reserves a vertical-scrollbar gutter unconditionally
+    // (globals.css, `scrollbar-gutter: stable`); see TALL_SCROLLER_GUTTER_SLOP
+    // for why the true rightmost scrollLeft lands short of the naive figure.
+    expect(pinned.scrolledLeft).toBeGreaterThanOrEqual(
+      pinned.maxScrollLeft - TALL_SCROLLER_GUTTER_SLOP,
+    );
     expect(pinned.overlapX).toBeCloseTo(pinned.cellWidth, 0);
 
     // The corner cell rides with the column it heads, or the pinned stamps end

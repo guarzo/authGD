@@ -1134,6 +1134,24 @@ h3.rule-head__label {
      collapsing — but the vh line keeps the behaviour on engines without it. */
   max-height: 80vh;
   max-height: 80svh;
+  /* Capping the height is what makes a vertical scrollbar possible here, and
+     on a classic-scrollbar platform that bar is taken out of clientWidth the
+     moment it appears — ~15px, mid-render, on a table already sized to very
+     near the full region width. The accounts table then tipped into
+     *horizontal* scroll as a side effect of a drawer opening, which reads as
+     the table having grown when nothing about it changed.
+
+     Reserved here rather than on `.scroller`, which is shared with the audit,
+     sync, account and payouts regions: only a height-capped region can gain
+     the vertical bar this reserves for, so putting it on the bare class would
+     spend a gutter of width on regions that can never use it. Narrowest fix
+     the evidence supports.
+
+     Costs nothing on macOS and iOS, where overlay scrollbars consume no width
+     and `stable` reserves none — which is also why this bug never reproduced
+     there, and why measuring the gutter (rather than assuming 15px) was the
+     step that settled it. */
+  scrollbar-gutter: stable;
 }
 
 /* The accounts table only. `.scroller--tall` is shared with /admin/audit,
