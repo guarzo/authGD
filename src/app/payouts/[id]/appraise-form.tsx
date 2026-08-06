@@ -131,12 +131,20 @@ export function AppraiseForm({
   const form = (
     <form action={formAction} className="form-stack">
       <RuleHead as="h3">Appraise a loot paste</RuleHead>
-      {/* Only rendered once a submit has actually failed — `state === null`
-          covers both "hasn't submitted yet" and "still pending", and neither
-          of those is a rejection worth announcing. */}
-      {state && !state.ok && (
-        <Notice tone="bad">{lookupErrorMessage(OPERATION_ERRORS, state.code)}</Notice>
-      )}
+      {/* Mounted unconditionally, with the condition moved into the children:
+          the text still appears only once a submit has actually failed —
+          `state === null` covers both "hasn't submitted yet" and "still
+          pending", and neither of those is a rejection worth announcing — but
+          the live region now exists before the message does. `useActionState`
+          keeps this component mounted across the rejection, so the `&&` form
+          inserted a fresh `role="alert"` node with its text already inside it
+          into an otherwise stable tree: exactly the shape `Notice`'s docblock
+          (ui.tsx:255-270) calls out as the one that defeats the region it just
+          asked for. Empty children render the reserved `.notice-slot`, which is
+          out of flow and draws nothing, so the form's spacing is unchanged. */}
+      <Notice tone="bad">
+        {state && !state.ok ? lookupErrorMessage(OPERATION_ERRORS, state.code) : null}
+      </Notice>
       <label className="form-stack__field">
         {/* Same hint as the composer's Loot field
             (`../new/new-operation-form.tsx`), which takes the same paste
