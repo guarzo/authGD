@@ -1377,9 +1377,29 @@ h3.rule-head__label {
    other link on the page rather than inventing a second affordance.
 
    Must stay ABOVE `.dim`: equal specificity, so `.dim` wins the resting
-   colour only by being later in the file. */
+   colour only by being later in the file.
+
+   The box: every one of these links is a filter control — pressing an actor,
+   action or target narrows the log to it — and each is the whole content of
+   its `<td>`, not a link inside a sentence, so WCAG 2.5.8's inline-target
+   exception does not cover it any more than it covered `.json > summary`
+   below. Left as bare text at `--t-data` the target is the line itself, around
+   19px, under both the 24px AA floor and the 28px in-row size DESIGN.md
+   commits to. Same remedy `.json > summary` already took, for the same reason:
+   rows here sit edge to edge with no gap, so a mistap does not land on
+   nothing — it lands on the neighbouring row and silently applies the wrong
+   filter, on the one page whose whole job is identifying precisely who did
+   what.
+
+   `align-items: center` is safe here where it was not for `.log summary`: a
+   `.cell-link` sits inside a truncated `.ellipsis-cell` and is single-line by
+   construction, so there is no wrapped second line for a centred box to drift
+   away from. */
 .cell-link {
   color: inherit;
+  display: flex;
+  align-items: center;
+  min-height: 1.75rem;
 }
 
 /* Raw JSON payloads in the audit and sync tables. The collapsed line is capped
@@ -2601,6 +2621,19 @@ h3.rule-head__label {
   /* flex-start, not center: a long character name wraps to two lines and a
      vertically centred marker then floats away from the first line. */
   align-items: flex-start;
+  /* Same 28px floor, and the same argument, as `.json > summary` below: these
+     are controls sitting in a table cell rather than links in a sentence, so
+     WCAG 2.5.8's inline exception does not reach them, and the bare line box
+     measures under the 24px AA minimum. `.json > summary` was fixed on its own
+     when it was the only one anybody had measured; `PaymentHistory`'s
+     "payments (N)" toggle (payouts/[id]/payment-history.tsx) is styled by THIS
+     rule and was left behind.
+
+     Padding rather than `align-items: center` to reach the height, because the
+     wrapped-name case above still has to hold: centring here would undo the
+     line directly overhead. */
+  min-height: 1.75rem;
+  padding: 0.2rem 0;
   gap: var(--s-2);
 }
 
