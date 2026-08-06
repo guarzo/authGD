@@ -138,7 +138,13 @@ export function AppraiseForm({
         <Notice tone="bad">{lookupErrorMessage(OPERATION_ERRORS, state.code)}</Notice>
       )}
       <label className="form-stack__field">
-        Loot paste
+        {/* Same hint as the composer's Loot field
+            (`../new/new-operation-form.tsx`), which takes the same paste
+            through the same parser: an operator who learns the format on one
+            form should not have to rediscover it on the other. Not marked
+            optional here — this field is `required`. Same substring-collision
+            constraint on the wording as the composer's copy of this label. */}
+        Loot paste (one line per item, quantity before or after)
         <textarea
           className="field"
           name="rawPaste"
