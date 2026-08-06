@@ -322,7 +322,10 @@ export default async function PayoutOperationPage({
             later successful edit elsewhere on this page cannot re-render this
             same, by-then-stale notice — see the component's own docblock. */}
         <ClearStaleQuery />
-        {errorMessage && <Notice tone="bad">{errorMessage}</Notice>}
+        {/* Mounted unconditionally rather than `&&`-gated — every edit on this
+            page redirects back to it, so the region must pre-exist the message
+            for the change to be announced. See `Notice`'s docblock. */}
+        <Notice tone="bad">{errorMessage}</Notice>
 
         {droppedReport && (
           <Notice tone="warn">

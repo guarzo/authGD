@@ -151,19 +151,27 @@ export default async function AdminAccountsPage({
         </p>
       </div>
 
-      {errorMessage && <Notice tone="bad">{errorMessage}</Notice>}
+      {/* Mounted unconditionally, not `&&`-gated: every mutation on this page
+          ends in a server-action redirect that re-renders without a document
+          load, so an `&&` would insert the region and its text in the same
+          commit — the shape `Notice`'s own docblock calls out as the one that
+          defeats the live region it just asked for. Empty children render the
+          reserved `.notice-slot`, which is out of flow and draws nothing. */}
+      <Notice tone="bad">{errorMessage}</Notice>
 
-      {params.queued === "account" && (
-        <Notice>Sync queued. The worker picks it up within a few seconds.</Notice>
-      )}
+      <Notice>
+        {params.queued === "account"
+          ? "Sync queued. The worker picks it up within a few seconds."
+          : null}
+      </Notice>
 
-      {pendingCount > 0 && (
-        <Notice>
+      <Notice>
+        {pendingCount > 0 ? (
           <a href="/admin/accounts?tier=pending">
             {pendingCount} account{pendingCount === 1 ? "" : "s"} awaiting approval
           </a>
-        </Notice>
-      )}
+        ) : null}
+      </Notice>
 
       {/* Not a RuleHead. The two groups below already carry their own visible
           labels ("Tier", "Status") and their own `role="group"` names, so a
