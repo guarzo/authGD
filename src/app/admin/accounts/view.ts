@@ -124,7 +124,21 @@ const DONE_CODES = [
 
 export type AdminAccountsDoneCode = (typeof DONE_CODES)[number];
 
-function isDoneCode(value: string | undefined): value is AdminAccountsDoneCode {
+/**
+ * Exported so `page.tsx` can narrow `params.done` — a raw query-string value,
+ * typed `string | undefined` by Next.js with no way for it to know about this
+ * module's tuple — before calling `accountsConfirmation`, which now takes
+ * `AdminAccountsDoneCode` and nothing looser. That boundary is the only place
+ * an unrecognised code can legitimately arrive (a hand-edited URL, or a build
+ * that has since dropped one), so it is the only place this guard rejects a
+ * value the types could not have caught first.
+ *
+ * That is not the same as saying the call inside `accountsConfirmation` is
+ * merely defensive — it is load-bearing there for an unrelated reason, and
+ * the comment at that call site says which. Both callers need it; they need
+ * it for different things.
+ */
+export function isDoneCode(value: string | undefined): value is AdminAccountsDoneCode {
   return value !== undefined && (DONE_CODES as readonly string[]).includes(value);
 }
 
@@ -210,11 +224,33 @@ const PINNED = "Press auto to unpin.";
  * back to the bare verb rather than a sentence with a hole in it, same
  * fallback shape as `accountConfirmation`'s `"main"` case.
  */
+// `done` is `AdminAccountsDoneCode | undefined`, not `string | undefined` —
+// every call site in `actions.ts` passes a literal (`"tier"`, `"approve"`,
+// …), so a typo there is now a compile error caught at the call site, not a
+// silent `""` at runtime found only by reading the page and noticing the
+// confirmation never appeared. An overload pair was tried here first and
+// reverted: TypeScript resolves overloads by trying the first match in
+// order, so a narrow signature stacked above a permissive `string | undefined`
+// one is inert — `"teir"` simply falls through to the second overload and
+// compiles clean. There is exactly one real boundary where an unrecognised
+// string can legitimately arrive: `page.tsx`'s `params.done`, straight off
+// the query string. That boundary now narrows with the exported `isDoneCode`
+// before calling this function at all, rather than this function accepting
+// the raw string itself.
 export function accountsConfirmation(
-  done: string | undefined,
+  done: AdminAccountsDoneCode | undefined,
   name: string | undefined,
   tier: string | undefined,
 ): string {
+  // Still load-bearing, not merely defensive: the switch below has no
+  // `default` and every case returns, so this is what strips `undefined` —
+  // delete it and the function stops compiling under `strict` (an implicit
+  // `undefined` return). What it no longer guards against is a typo'd
+  // literal at a call site, since `done` is `AdminAccountsDoneCode |
+  // undefined` now, not `string | undefined` — every real caller is typed to
+  // hand it a recognised code or `undefined`. It still earns its keep for a
+  // second reason: a future code added to `actions.ts` before `DONE_CODES`
+  // learns about it would otherwise reach the switch below untyped.
   if (!isDoneCode(done)) return "";
   switch (done) {
     case "tier":
