@@ -124,12 +124,10 @@ export function ConfirmArmScope({ children }: { children: ReactNode }) {
  */
 export function ConfirmCost({
   id,
-  className,
   children,
   alwaysHidden = false,
 }: {
   id: string;
-  className?: string;
   children: ReactNode;
   /** Skip the reveal and stay `.visually-hidden` permanently. Default false:
    *  most call sites (the account page's Discord row, and the roster-replace
@@ -148,15 +146,15 @@ export function ConfirmCost({
   }
   const revealed = !alwaysHidden && ctx.armedDescribedBy === id;
 
+  // No `className` passthrough. All four call sites passed exactly `"dim"` and
+  // nothing else, which made it a required argument dressed as an optional one:
+  // the component owned when the sentence is visible but not what it looked
+  // like when it got there, so forgetting the prop rendered the cost as primary
+  // copy. `.confirm-cost` carries `.dim`'s two declarations itself now. A caller
+  // that genuinely needs different treatment should get a named prop with a
+  // reason, not an open class slot.
   return (
-    <span
-      id={id}
-      className={
-        revealed
-          ? `confirm-cost ${className ?? ""}`
-          : `confirm-cost ${className ?? ""} visually-hidden`
-      }
-    >
+    <span id={id} className={revealed ? "confirm-cost" : "confirm-cost visually-hidden"}>
       {children}
     </span>
   );
@@ -208,9 +206,50 @@ export function ConfirmCost({
  * omit it and keep the same class in both states — its rest colour and grade
  * are not supposed to change at all.
  *
- * Width is reserved up front for the wider of the two labels, in `ch` since
- * this is the monospace face throughout: the swap must not change the
- * button's own width and reflow the row it sits in.
+ * Width is reserved for the wider of the two labels so the swap never
+ * changes the button's own size and reflows the row it sits in — the same
+ * failure #112 found from a different cause (a reveal inside a `td`) and
+ * this component exists partly to avoid. An earlier version reserved it by
+ * counting characters (`Math.max(label.length, confirmLabel.length)` in
+ * `ch`, plus a flat fudge factor for `letter-spacing`) and that measurement
+ * doesn't hold: `ch` is the "0" glyph's advance width alone, and
+ * `letter-spacing` is extra space the browser inserts *between* every pair of
+ * characters, so it scales with the label's length while a flat buffer
+ * cannot — it overshoots a six-letter label like "unlink" and undershoots a
+ * fifteen-letter one like "Replace roster" from the same constant. Rather
+ * than modelling padding, border and per-character spacing in JS to match
+ * whatever the stylesheet currently does (and silently drifting the moment
+ * either side changes), the wider label is rendered as real CSS generated
+ * content — `.confirm-submit__label::before` below — so the browser lays it
+ * out with the button's actual font, weight, case transform and
+ * letter-spacing and sizes the label span to fit it. `content: attr(...)` is
+ * not a DOM node: it cannot appear in `element.textContent`, so it is invisible
+ * to Playwright's text-matching engine (`getByText`, `toHaveText`) whether it
+ * is painted or not. That is what rules out the obvious alternative — a second
+ * real `<span>` holding the wider label and hidden with CSS — rather than
+ * anything `visibility: hidden` does: `toHaveText` *does* read hidden real
+ * elements (`e2e/admin.spec.ts:569-571` documents that), so a ghost span would
+ * concatenate into the exact button text several call sites already assert
+ * (`freeze`, "Testers", …). Generated content cannot, at any visibility.
+ * `visibility: hidden` (not
+ * `.visually-hidden`'s `position: absolute`) keeps the generated box in flow
+ * so it still counts toward that sizing, while removing it from paint,
+ * hit-testing and — per the ARIA accessible-name spec, which explicitly
+ * excludes `visibility: hidden` generated content from the "subtree" text
+ * alternative — from what a screen reader would compute as the button's name
+ * if `restName` were ever omitted. `aria-label` already overrides that name
+ * on every call site that sets it, so this is a second, independent reason
+ * the ghost label is never announced, not the only one.
+ *
+ * Picking *which* label to render as the ghost still leans on `.length`, not
+ * on measuring both: given a true monospace face (IBM Plex Mono, `layout.tsx`)
+ * every character has the same advance and letter-spacing gap, so the longer
+ * string is always the wider one, and comparing lengths to choose it is a
+ * safe shortcut — unlike using the length to *compute* a width, which is what
+ * broke before. `pendingLabel` is a `ReactNode`, not a string, so it can't
+ * feed `attr()` and isn't part of this reservation; none of the twelve call
+ * sites in `src/app/` pass it today, so nothing regresses, but a future
+ * caller that does would want its own fix here.
  *
  * `confirm` defaults to true but can be set false to make this render as a
  * plain one-click submit instead — no arm step, no live region text, ever.
@@ -261,7 +300,7 @@ export function ConfirmSubmit({
    *  Reach for this ONLY when the grade flips at a fixed JSX position while the
    *  control stays mounted — which today is `MarkPaidForm` and nothing else.
    *  Where the grade is statically known, use `Submit`: it is the same button
-   *  without this one's reserved `minWidth` or its (empty) live region, and a
+   *  without this one's reserved label width or its (empty) live region, and a
    *  reader who sees `ConfirmSubmit` has every right to expect an arm step. */
   confirm?: boolean;
 }) {
@@ -300,17 +339,16 @@ export function ConfirmSubmit({
   // caller that can flip back, or that shares a `ConfirmCost`, needs an
   // explicit disarm here.
   const armed = confirm && ctx?.armedId === id;
-  // +4 for the letter-spacing the monospace label carries across every
-  // character, which `ch` alone (sized off the "0" glyph) undercounts; a
-  // smaller buffer measured short by several px in practice.
-  const widthCh = Math.max(label.length, confirmLabel.length) + 4;
+  // See the block comment above: the longer string, in a true monospace
+  // face, is always the wider one, so `.length` is a safe way to choose
+  // which label the ghost renders — it is not used to compute a width.
+  const ghostLabel = label.length >= confirmLabel.length ? label : confirmLabel;
 
   return (
     <>
       <button
         type="submit"
         className={armed ? (armedClassName ?? className) : className}
-        style={{ minWidth: `${widthCh}ch` }}
         aria-busy={pending}
         aria-label={armed ? confirmName : restName}
         aria-describedby={describedBy}
@@ -359,7 +397,11 @@ export function ConfirmSubmit({
           }
         }}
       >
-        {pending && pendingLabel ? pendingLabel : armed ? confirmLabel : label}
+        <span className="confirm-submit__label" data-ghost-label={ghostLabel}>
+          <span className="confirm-submit__text">
+            {pending && pendingLabel ? pendingLabel : armed ? confirmLabel : label}
+          </span>
+        </span>
       </button>
       <span className="visually-hidden" role="status">
         {armed ? confirmName : ""}

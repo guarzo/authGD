@@ -1031,7 +1031,7 @@ export default async function PayoutOperationPage({
                       confirmName="confirm replace roster"
                       describedBy="replace-roster-cost"
                     />
-                    <ConfirmCost id="replace-roster-cost" className="dim">
+                    <ConfirmCost id="replace-roster-cost">
                       Replaces all {participants.length} participant
                       {participants.length === 1 ? "" : "s"}.{" "}
                       {editedParticipantCount > 0
@@ -1122,7 +1122,7 @@ export default async function PayoutOperationPage({
                   />
                 </form>
               </div>
-              <ConfirmCost id="delete-operation-cost" className="dim">
+              <ConfirmCost id="delete-operation-cost">
                 Permanently deletes this operation: {participants.length} roster row
                 {participants.length === 1 ? "" : "s"} and {fmtIsk(totalValue)} ISK of
                 recorded loot. Blocked only if a participant is currently marked paid;

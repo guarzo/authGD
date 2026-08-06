@@ -399,3 +399,40 @@ test("the active nav link reaches the 36px standalone hit-target without the und
   // catching a regression that removes the gap entirely.
   expect(geometry.underlineTop - geometry.textBottom).toBeGreaterThan(2);
 });
+
+/**
+ * The sibling half of the test above, and the reason it needs its own: that
+ * sweep raised `.shell__nav a` to the 36px grade and left the one control in
+ * the bar that is not a link — sign out — at `.btn--quiet .btn--micro`'s 28px.
+ * DESIGN.md rations 28px to `.btn--micro` in admin table rows and nowhere
+ * else, so the smallest target in the header, on all ten pages that render
+ * one, was the button that ends the session.
+ *
+ * Height and type are asserted together because the fix could trivially have
+ * bought the box by dropping `.btn--micro`, which also carries
+ * `font-size: var(--t-label)` — the thing that makes sign out read as one of
+ * the nav's own labels rather than as a button parked among them.
+ * `.shell__signout .btn` overrides the box only, so both must hold: 36px tall,
+ * and still the same computed font size as the links beside it.
+ */
+test("sign out reaches the 36px standalone hit-target without leaving the nav's type register", async ({
+  page,
+  context,
+}) => {
+  const acc = await seedMember(db, { name: "Pilot Prime", tier: "member" });
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.goto("/account");
+
+  const signout = page.getByRole("button", { name: "sign out" });
+  await expect(signout).toBeVisible();
+
+  const box = (await signout.boundingBox())!;
+  expect(Math.round(box.height)).toBe(36);
+
+  const link = page.getByRole("link", { name: "Your account" });
+  const [signoutFont, linkFont] = await Promise.all([
+    signout.evaluate((el) => getComputedStyle(el).fontSize),
+    link.evaluate((el) => getComputedStyle(el).fontSize),
+  ]);
+  expect(signoutFont).toBe(linkFont);
+});

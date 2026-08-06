@@ -435,6 +435,29 @@ a:hover {
   border-left: 1px solid var(--rule);
 }
 
+/* The size grade the docblock above already claims. `.btn--quiet .btn--micro`
+   gives sign out the *colour* grade the nav wants and, with it, the 28px
+   in-row height — but DESIGN.md rations 28px to `.btn--micro` in admin table
+   rows and nowhere else, and this is a header. Every link beside it is
+   `min-height: 2.25rem` with this exact padding (`.shell__nav a`), so at 28px
+   the one control that ends the session was the smallest target in the bar on
+   all ten pages that render a header.
+
+   Scoped override rather than dropping `.btn--micro` from the markup, because
+   dropping it would not have worked: sign out is `.btn--quiet .btn--micro`,
+   and `.btn--quiet` sets `min-height: 1.75rem` on its own account, so removing
+   the micro class leaves the box exactly where it was. `.inline-edit--standalone
+   .btn--quiet` exists for this same reason. (The type is not the constraint —
+   `.btn` and `.btn--micro` set the identical `font-size: var(--t-label)`; what
+   `--micro` alone carries is the shorter padding and `--track-value` tracking.)
+   Two classes to `.btn--quiet`'s one, so it wins on specificity wherever it
+   sits. Font size, weight, case and colour are untouched — this moves the hit
+   area only. */
+.shell__signout .btn {
+  min-height: 2.25rem;
+  padding: var(--s-2) var(--s-3);
+}
+
 /* A count, not an alert: the admin register label beside it is already quiet,
    and a filled pill here would outweigh the nav it sits in.
 
@@ -663,6 +686,18 @@ h3.rule-head__label {
   align-items: center;
   gap: var(--s-3);
   flex-wrap: wrap;
+}
+
+/* The cost sentence's own register, rather than a `.dim` every call site had
+   to remember. All four callers passed `className="dim"` and nothing else, so
+   the class was not configuration — it was a required argument the type system
+   could not enforce, and a fifth caller that forgot it would have rendered the
+   cost at full body size and full ink, reading as primary copy at the exact
+   moment the reveal puts it in front of someone. Same two declarations `.dim`
+   carries, moved onto the component's own class. */
+.confirm-cost {
+  color: var(--ink-faint);
+  font-size: var(--t-caption);
 }
 
 /* The revealed confirm cost takes its own line, always. Without this it is just
@@ -1545,22 +1580,54 @@ h3.rule-head__label {
 .st::before {
   content: "";
   width: 0.5em;
-  height: 0.5em;
-  border-radius: 50%;
   background: currentColor;
   flex-shrink: 0;
+  /* Neutral's own mark, drawn thin rather than filled: a bar, not a dot. This
+     is the one shape a caller never asks for explicitly (tone="neutral" adds
+     no modifier class, so it's what every unrecognised or default Status
+     renders), and it has to read as visibly quieter than every signal tone
+     below — payouts/page.tsx puts a neutral "N/N paid" next to an ok one with
+     identical wording, so the dot is the only thing telling a draft mid-
+     payment apart from a finished one. Width stays 0.5em in every rule below;
+     only height and radius change, so the column's advance never moves. */
+  height: 0.15em;
+  border-radius: 1px;
 }
 
 .st--ok {
   color: var(--signal-ok);
 }
 
+.st--ok::before {
+  height: 0.5em;
+  border-radius: 50%;
+}
+
 .st--warn {
   color: var(--signal-warn);
 }
 
+.st--warn::before {
+  /* Triangle, not a dot: the shape convention "caution" already carries
+     outside this app, so it doesn't have to be learned from this table
+     alone. Clipped rather than a border-radius change so a colour-only
+     reading of an amber circle can never be mistaken for the ok tone's
+     green one. */
+  height: 0.5em;
+  border-radius: 0;
+  clip-path: polygon(50% 0%, 0% 100%, 100% 100%);
+}
+
 .st--bad {
   color: var(--signal-bad);
+}
+
+.st--bad::before {
+  /* Square: the one filled shape left with straight edges, so bad reads as
+     distinct from ok's circle and warn's triangle without adding a fourth
+     clip-path. */
+  height: 0.5em;
+  border-radius: 0;
 }
 
 .st--off {
@@ -1568,6 +1635,8 @@ h3.rule-head__label {
 }
 
 .st--off::before {
+  height: 0.5em;
+  border-radius: 50%;
   background: transparent;
   border: 1px solid currentColor;
 }
@@ -1778,6 +1847,36 @@ h3.rule-head__label {
     opacity: 1;
     transform: scale(1);
   }
+}
+
+/* `ConfirmSubmit`'s label, wrapping the rest/confirm text swap so it never
+   resizes the button (confirm-submit.tsx has the full account of why a
+   `ch`-counted `min-width` doesn't hold). `::before` renders the wider of the
+   two labels as generated content, invisible but in flow, so the browser
+   measures it with the button's own font, weight, case transform and
+   letter-spacing instead of JS approximating those. Both it and the real text
+   share `1 / 1`, so this element's own size is the max of the two — never
+   smaller than whichever is currently showing. The visible text needs its own
+   explicit placement: as an anonymous grid item it would be auto-placed into
+   row 2, below the ghost rather than on top of it, which reserves the width
+   correctly and doubles the button's height. This lives on an inner span
+   rather than the button itself so the button keeps its ordinary `.btn` flex
+   row (label + the `aria-busy` pulse dot below), which a grid here would
+   disrupt. */
+.confirm-submit__label {
+  display: inline-grid;
+  place-items: center;
+}
+
+.confirm-submit__label::before {
+  content: attr(data-ghost-label);
+  grid-area: 1 / 1;
+  visibility: hidden;
+  white-space: nowrap;
+}
+
+.confirm-submit__text {
+  grid-area: 1 / 1;
 }
 
 .btn--primary {
