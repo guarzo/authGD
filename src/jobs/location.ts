@@ -121,17 +121,11 @@ export async function runLocationJob(deps: {
           if (station === null) counts.namesUnresolved++;
         }
         if (loc.structureId !== null && ch.scopes.includes(LOCATION_SCOPES_OPTIONAL[0])) {
-          // resolveUniverseName is documented to never throw — it degrades
-          // to a stale cached name or null on any failure. The `.catch` here
-          // is belt-and-suspenders: it makes the same optional-scope
-          // degradation rule hold at this call site even if that contract
-          // ever changes, rather than depending on an invariant owned by a
-          // different module.
           const structure = await resolveUniverseName(db, esi, {
             id: loc.structureId,
             kind: "structure",
             accessToken: token.accessToken,
-          }).catch(() => null);
+          });
           if (structure === null) counts.namesUnresolved++;
         }
 

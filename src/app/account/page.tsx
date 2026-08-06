@@ -43,7 +43,7 @@ const MANIFEST_COLUMN_COUNT = 4;
 
 /** The id a contacts cell's `aria-describedby` points at when — and only
  *  when — `ContactRemedy` has something to say about that character. Unlike
- *  the CONTACTS column's caption below, which is always in the accessible
+ *  the manifest table's `<caption>` below, which is always in the accessible
  *  tree regardless of whether its sighted copy is shown, this element is not
  *  rendered at all for a character with no remedy. The reference and the
  *  element are gated on the same `hasContactRemedy` predicate, so the id can

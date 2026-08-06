@@ -34,8 +34,8 @@ function describeScope(scope: string, contactLabel: string): string {
     // by `diffContacts`' return value, gated to the configured label only.
     case "esi-characters.write_contacts.v1":
       return `Adds, updates, and removes contacts under the "${contactLabel}" label on your characters, to keep them matching your standing.`;
-    // src/lib/esi/client.ts:18,324 — OPEN_WINDOW_SCOPE, used from
-    // payouts/actions.ts:674 to open a character's info window in the client.
+    // src/lib/esi/client.ts:18,332 — OPEN_WINDOW_SCOPE, used from
+    // payouts/actions.ts:861 to open a character's info window in the client.
     case "esi-ui.open_window.v1":
       return "Lets authGD open a character's info window in your EVE client from the payouts page.";
     // src/jobs/location.ts — LOCATION_SCOPE_REQUIRED, the only scope

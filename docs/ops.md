@@ -91,8 +91,9 @@ Notes:
   (`src/jobs/discord-roles.ts`) — every other failure appears only in
   `/admin/sync`. Folding job outcomes into this endpoint would let one permanent
   config error hold the check red forever and train you to ignore it.
-- A brand-new deploy reads 503 on `/api/health/sync` until the first `membership`
-  tick, up to 30 minutes. This is intended: "never ran" is a real failure.
+- A brand-new deploy reads 503 on `/api/health/sync` until the first job tick of
+  any kind. The shortest gap is `location` at every 15 minutes, so up to 15
+  minutes. This is intended: "never ran" is a real failure.
 - Detection is not instant. A dead worker surfaces up to 90 minutes after its
   last run, plus your monitor's poll interval.
 

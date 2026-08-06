@@ -233,14 +233,17 @@ test("the strip's three groups are three named lists, not one flat one with the 
   const onDemand = page.getByRole("list", { name: "On-demand" });
   await expect(onDemand.getByRole("listitem")).toHaveCount(1);
 
-  // housekeeping: token-health, purge.
+  // housekeeping: token-health, purge, location.
   const housekeeping = page.getByRole("list", { name: "Housekeeping" });
-  await expect(housekeeping.getByRole("listitem")).toHaveCount(2);
+  await expect(housekeeping.getByRole("listitem")).toHaveCount(3);
 
   // Every job is reachable from inside its own group's list, not just from
   // the page as a whole.
   await expect(sweep.locator(".strip__job", { hasText: "membership" })).toHaveCount(1);
   await expect(housekeeping.locator(".strip__job", { hasText: "purge" })).toHaveCount(1);
+  await expect(housekeeping.locator(".strip__job", { hasText: "location" })).toHaveCount(
+    1,
+  );
 
   // The visible label itself renders as ordinary text — not aria-hidden —
   // since it is what names the list an assistive technology user reaches.
