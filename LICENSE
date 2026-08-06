@@ -19,26 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-## Artwork
-
-The MIT license above applies to the source code in this repository. It does
-NOT cover the artwork distributed alongside it — including the files in
-`docs/assets/` and `public/` — which was created by **Faoble**.
-
-Faoble permits that artwork to be used and redistributed, including as part of
-a fork or self-hosted deployment of this project, provided **Faoble is
-credited**. All other rights remain with the artist; no other use is granted.
-
-## EVE Online
-
-EVE Online and all related logos and images are trademarks or registered
-trademarks of CCP hf. All rights reserved.
-
-authGD is a third-party tool and is not affiliated with, endorsed by, or
-sponsored by CCP hf. CCP hf. has granted permission to authGD to use EVE
-Online materials. CCP is in no way responsible for the content on, or
-functioning of, this tool, nor can it be liable for any damage arising from
-its use.
