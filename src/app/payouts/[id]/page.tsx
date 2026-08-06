@@ -42,6 +42,8 @@ import { FlatPoolForm } from "./flat-pool-form";
 import { InlineEdit } from "./inline-edit";
 import { LifecycleAnnouncer, LifecycleSubmit } from "./lifecycle-submit";
 import { NotesForm } from "./notes-form";
+import { MarkPaidForm, PayFlow, RevertForm, type PayRow } from "./pay-flow";
+import { ROSTER_HEADING_ID, copyAmountId } from "./pay-flow-ids";
 import { PaymentHistory } from "./payment-history";
 import { deriveRosterWarnings } from "./roster-warnings";
 import type { PricingMode } from "@/core/pricing";
@@ -181,6 +183,17 @@ export default async function PayoutOperationPage({
 
   const owedParticipants = participants.filter((p) => p.paymentState !== "excluded");
   const paidParticipants = owedParticipants.filter((p) => p.paymentState === "paid");
+
+  // What the pay flow needs, and nothing more: excluded rows are already out of
+  // `owedParticipants`, so they cannot become a focus target by construction.
+  // `fmtIsk` runs here rather than in the client component so money formatting
+  // has one implementation.
+  const payRows: PayRow[] = owedParticipants.map((p) => ({
+    id: p.id,
+    displayName: p.displayName,
+    amountLabel: `${fmtIsk(p.amount)} ISK`,
+    state: p.paymentState === "paid" ? "paid" : "unpaid",
+  }));
 
   // Only the *first* payment is worth an arm step — see the original comment
   // this carries forward: `locked` (hasPayments) is permanent, so every later
@@ -673,6 +686,7 @@ export default async function PayoutOperationPage({
           {/* --- Split / Roster ------------------------------------------ */}
           <RuleHead
             as="h2"
+            id={ROSTER_HEADING_ID}
             aside={
               owedParticipants.length > 0 && (
                 <span className="dim mono">
@@ -734,68 +748,72 @@ export default async function PayoutOperationPage({
           )}
           {participants.length > 0 && (
             <>
-              <Scroller label="Roster" tall={participants.length > ROSTER_TALL_THRESHOLD}>
-                <table className="log log--dense log--sticky-head log--sticky-col log--roster">
-                  <thead>
-                    <tr>
-                      <th scope="col">Name</th>
-                      <th scope="col" className="num">
-                        Shares
-                      </th>
-                      <th scope="col" className="num">
-                        Amount
-                      </th>
-                      <th scope="col">State</th>
-                      <th scope="col">
-                        <span className="visually-hidden">Actions</span>
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {participants.map((p) => (
-                      <tr key={p.id}>
-                        <td>
-                          {/* Mono marker, not colour alone (WCAG 1.4.1): the
+              <PayFlow rows={payRows} headingId={ROSTER_HEADING_ID}>
+                <Scroller
+                  label="Roster"
+                  tall={participants.length > ROSTER_TALL_THRESHOLD}
+                >
+                  <table className="log log--dense log--sticky-head log--sticky-col log--roster">
+                    <thead>
+                      <tr>
+                        <th scope="col">Name</th>
+                        <th scope="col" className="num">
+                          Shares
+                        </th>
+                        <th scope="col" className="num">
+                          Amount
+                        </th>
+                        <th scope="col">State</th>
+                        <th scope="col">
+                          <span className="visually-hidden">Actions</span>
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {participants.map((p) => (
+                        <tr key={p.id}>
+                          <td>
+                            {/* Mono marker, not colour alone (WCAG 1.4.1): the
                               reader's own row is the one row on the whole
                               roster they came here specifically to find. */}
-                          {p.accountId === access.accountId && (
-                            <span className="mono dim" aria-hidden="true">
-                              {"» "}
-                            </span>
-                          )}
-                          {p.accountId === access.accountId && (
-                            <span className="visually-hidden">(you) </span>
-                          )}
-                          {p.displayName}
-                          {p.sourceCharacters.length > 1 && (
-                            <span className="dim">
-                              {" "}
-                              ({p.sourceCharacters.join(", ")})
-                            </span>
-                          )}
-                        </td>
-                        <td className="num">
-                          {canEdit ? (
-                            <InlineEdit
-                              action={setParticipantSharesAction.bind(
-                                null,
-                                operation.id,
-                                p.id,
-                              )}
-                              fieldName="shares"
-                              value={p.shares}
-                              label={`shares for ${p.displayName}`}
-                              type="number"
-                              step="0.01"
-                              min="0.01"
-                              fieldClassName="field field--micro"
-                              standalone={false}
-                            />
-                          ) : (
-                            <span className="mono">{p.shares}</span>
-                          )}
-                        </td>
-                        {/* The figure alone. `copy amount` used to stack under
+                            {p.accountId === access.accountId && (
+                              <span className="mono dim" aria-hidden="true">
+                                {"» "}
+                              </span>
+                            )}
+                            {p.accountId === access.accountId && (
+                              <span className="visually-hidden">(you) </span>
+                            )}
+                            {p.displayName}
+                            {p.sourceCharacters.length > 1 && (
+                              <span className="dim">
+                                {" "}
+                                ({p.sourceCharacters.join(", ")})
+                              </span>
+                            )}
+                          </td>
+                          <td className="num">
+                            {canEdit ? (
+                              <InlineEdit
+                                action={setParticipantSharesAction.bind(
+                                  null,
+                                  operation.id,
+                                  p.id,
+                                )}
+                                fieldName="shares"
+                                value={p.shares}
+                                label={`shares for ${p.displayName}`}
+                                type="number"
+                                step="0.01"
+                                min="0.01"
+                                fieldClassName="field field--micro"
+                                standalone={false}
+                              />
+                            ) : (
+                              <span className="mono">{p.shares}</span>
+                            )}
+                          </td>
+                          {/* The figure alone. `copy amount` used to stack under
                             it inside this cell, which put a left-aligned
                             control (`.stack` sets `justify-items: start`) in a
                             right-aligned numeric column and cost the column the
@@ -805,135 +823,134 @@ export default async function PayoutOperationPage({
                             `.copy-result`'s width reservation was already
                             written for "a right-aligned row of buttons", which
                             is where it now actually is. */}
-                        <td className="mono nowrap num">{fmtIsk(p.amount)} ISK</td>
-                        <td>
-                          <div className="stack">
-                            {p.paymentState === "excluded" && (
-                              <Status tone="off">excluded</Status>
-                            )}
-                            {p.paymentState === "unpaid" && <Status>unpaid</Status>}
-                            {p.paymentState === "paid" && <Status tone="ok">paid</Status>}
-                            <PaymentHistory
-                              payments={p.payments}
-                              participantName={p.displayName}
-                            />
-                          </div>
-                        </td>
-                        <td>
-                          <div className="btn-row btn-row--tight btn-row--end">
-                            {operation.status === "finalized" &&
-                              p.paymentState !== "excluded" && (
-                                <>
-                                  <CopyAmountButton
-                                    amount={p.amount}
-                                    participantName={p.displayName}
-                                  />
-                                  {access.canOpenInfo &&
-                                    p.recipientCharacterId !== null && (
-                                      <form
-                                        action={openInfoAction.bind(
+                          <td className="mono nowrap num">{fmtIsk(p.amount)} ISK</td>
+                          <td>
+                            <div className="stack">
+                              {p.paymentState === "excluded" && (
+                                <Status tone="off">excluded</Status>
+                              )}
+                              {p.paymentState === "unpaid" && <Status>unpaid</Status>}
+                              {p.paymentState === "paid" && (
+                                <Status tone="ok">paid</Status>
+                              )}
+                              <PaymentHistory
+                                payments={p.payments}
+                                participantName={p.displayName}
+                              />
+                            </div>
+                          </td>
+                          <td>
+                            <div className="btn-row btn-row--tight btn-row--end">
+                              {operation.status === "finalized" &&
+                                p.paymentState !== "excluded" && (
+                                  <>
+                                    <CopyAmountButton
+                                      id={copyAmountId(p.id)}
+                                      amount={p.amount}
+                                      participantName={p.displayName}
+                                    />
+                                    {access.canOpenInfo &&
+                                      p.recipientCharacterId !== null && (
+                                        <form
+                                          action={openInfoAction.bind(
+                                            null,
+                                            operation.id,
+                                            p.id,
+                                          )}
+                                        >
+                                          <Submit
+                                            className="btn btn--quiet btn--micro"
+                                            pendingLabel="opening…"
+                                            aria-label={`open info for ${p.displayName}`}
+                                          >
+                                            open info
+                                          </Submit>
+                                        </form>
+                                      )}
+                                    {p.paymentState !== "paid" && access.isOperator && (
+                                      <MarkPaidForm
+                                        action={markPaidAction.bind(
                                           null,
                                           operation.id,
                                           p.id,
                                         )}
-                                      >
-                                        <Submit
-                                          className="btn btn--quiet btn--micro"
-                                          pendingLabel="opening…"
-                                          aria-label={`open info for ${p.displayName}`}
-                                        >
-                                          open info
-                                        </Submit>
-                                      </form>
-                                    )}
-                                  {p.paymentState !== "paid" && access.isOperator && (
-                                    <form
-                                      action={markPaidAction.bind(
-                                        null,
-                                        operation.id,
-                                        p.id,
-                                      )}
-                                    >
-                                      {firstPayment ? (
-                                        <ConfirmSubmit
-                                          className="btn btn--micro"
-                                          label="mark paid"
-                                          restName={`mark paid ${p.displayName}`}
-                                          confirmName={`confirm mark paid ${p.displayName}`}
-                                        />
-                                      ) : (
-                                        <Submit
-                                          className="btn btn--micro"
-                                          aria-label={`mark paid ${p.displayName}`}
-                                        >
-                                          mark paid
-                                        </Submit>
-                                      )}
-                                    </form>
-                                  )}
-                                  {p.paymentState === "paid" && access.isOperator && (
-                                    <form
-                                      action={revertPaymentAction.bind(
-                                        null,
-                                        operation.id,
-                                        p.id,
-                                      )}
-                                    >
-                                      <ConfirmSubmit
-                                        className="btn btn--quiet btn--micro btn--danger-quiet"
-                                        armedClassName="btn btn--micro btn--danger"
-                                        label="revert"
-                                        restName={`revert payment for ${p.displayName}`}
-                                        confirmName={`confirm revert payment for ${p.displayName}`}
+                                        participantId={p.id}
+                                        displayName={p.displayName}
+                                        arm={firstPayment}
+                                        describedBy="mark-paid-cost"
                                       />
-                                    </form>
-                                  )}
+                                    )}
+                                    {p.paymentState === "paid" && access.isOperator && (
+                                      <RevertForm
+                                        action={revertPaymentAction.bind(
+                                          null,
+                                          operation.id,
+                                          p.id,
+                                        )}
+                                        participantId={p.id}
+                                        displayName={p.displayName}
+                                      />
+                                    )}
+                                  </>
+                                )}
+                              {canEdit && (
+                                <>
+                                  <form
+                                    action={setParticipantExcludedAction.bind(
+                                      null,
+                                      operation.id,
+                                      p.id,
+                                      !p.excluded,
+                                    )}
+                                  >
+                                    <Submit
+                                      className="btn btn--quiet btn--micro"
+                                      aria-label={
+                                        p.excluded
+                                          ? `include ${p.displayName}`
+                                          : `exclude ${p.displayName}`
+                                      }
+                                    >
+                                      {p.excluded ? "include" : "exclude"}
+                                    </Submit>
+                                  </form>
+                                  <form
+                                    action={removeParticipantAction.bind(
+                                      null,
+                                      operation.id,
+                                      p.id,
+                                    )}
+                                  >
+                                    <ConfirmSubmit
+                                      className="btn btn--quiet btn--micro btn--danger-quiet"
+                                      label="remove"
+                                      restName={`remove ${p.displayName}`}
+                                      confirmName={`confirm remove ${p.displayName}`}
+                                    />
+                                  </form>
                                 </>
                               )}
-                            {canEdit && (
-                              <>
-                                <form
-                                  action={setParticipantExcludedAction.bind(
-                                    null,
-                                    operation.id,
-                                    p.id,
-                                    !p.excluded,
-                                  )}
-                                >
-                                  <Submit
-                                    className="btn btn--quiet btn--micro"
-                                    aria-label={
-                                      p.excluded
-                                        ? `include ${p.displayName}`
-                                        : `exclude ${p.displayName}`
-                                    }
-                                  >
-                                    {p.excluded ? "include" : "exclude"}
-                                  </Submit>
-                                </form>
-                                <form
-                                  action={removeParticipantAction.bind(
-                                    null,
-                                    operation.id,
-                                    p.id,
-                                  )}
-                                >
-                                  <ConfirmSubmit
-                                    className="btn btn--quiet btn--micro btn--danger-quiet"
-                                    label="remove"
-                                    restName={`remove ${p.displayName}`}
-                                    confirmName={`confirm remove ${p.displayName}`}
-                                  />
-                                </form>
-                              </>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </Scroller>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </Scroller>
+                {/* Always hidden, never a `ConfirmCost`: that component reveals
+                  itself on arm (`confirm-submit.tsx:113`), and a sentence below a
+                  twelve-row table is too far from the button it describes to help
+                  the sighted reader it would be revealed for. Same call the admin
+                  accounts table already made (#111, `confirm-submit.tsx:93-96`).
+                  Rendered once and shared by every first-payment button, which
+                  `ConfirmSubmit` supports (`confirm-submit.tsx:83-87`). */}
+                {firstPayment && access.isOperator && (
+                  <span id="mark-paid-cost" className="visually-hidden">
+                    Recording the first payment freezes this operation permanently: the
+                    pools, roster and shares can no longer be reopened with Unlock.
+                  </span>
+                )}
+              </PayFlow>
 
               {duplicateUnresolvedNames.length > 0 && (
                 <Notice tone="warn">
