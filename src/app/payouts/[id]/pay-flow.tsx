@@ -134,10 +134,31 @@ export function PayFlow({
       document.getElementById(copyAmountId(row.id))?.focus();
       return;
     }
-    const next = rows.find((r) => r.state === "unpaid");
+    // Resume from where the operator just was, not from the top of the roster.
+    // `rows.find` alone returns the *first* unpaid row in the operation, which
+    // is only the right answer while the operator works strictly top to bottom.
+    // The moment one pilot is skipped — offline, disputed, paid out of band —
+    // every subsequent payment drags focus and the scroll region back up to
+    // that same skipped row, once per remaining row.
+    //
+    // Wrapping to the top only once nothing is left below: the skipped rows are
+    // still owed and the operator still has to reach them, so falling off the
+    // end has to come back rather than jump to the heading. `rows.slice(0, from)`
+    // stops short of the settled row itself, so a wrap can never land on the
+    // row just paid. `from` cannot be -1 — the `!row` guard above already
+    // returned if the settled row left the roster.
+    const from = rows.findIndex((r) => r.id === pending.id);
+    const ahead = rows.slice(from + 1).find((r) => r.state === "unpaid");
+    const behind = ahead
+      ? undefined
+      : rows.slice(0, from).find((r) => r.state === "unpaid");
+    const next = ahead ?? behind;
     if (next) {
       announce(
         `Paid ${row.displayName}. ${paid} of ${rows.length} paid. ` +
+          // A jump *upward* is the same disorientation this fix is about, so
+          // the one case that still moves backwards says so out loud.
+          `${behind ? "Back to the first unpaid. " : ""}` +
           `Next: ${next.displayName}, ${next.amountLabel}.`,
       );
       document.getElementById(copyAmountId(next.id))?.focus();

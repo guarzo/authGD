@@ -2363,3 +2363,72 @@ test("reverting a payment keeps focus on that row and announces the new count", 
     "Reverted Ada Undo. 0 of 2 paid.",
   );
 });
+
+test("skipping a row advances past it, not back to it", async ({ page, context }) => {
+  const operator = await seedMember(db, {
+    name: "Fwd FC",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+  const opId = await seedFinalizedRoster(db, operator.id, [
+    "Ada Fwd",
+    "Bo Fwd",
+    "Cy Fwd",
+  ]);
+  await page.goto(`/payouts/${opId}`);
+
+  // Ada is skipped — offline, disputed, paid out of band. The operator starts
+  // at Bo. This is the case the old code got wrong: it resumed from the first
+  // unpaid row in the operation, which is Ada, dragging focus and the scroll
+  // region back up to the skipped row after every remaining payment.
+  await page.getByRole("button", { name: "mark paid Bo Fwd" }).click();
+  await page.getByRole("button", { name: "confirm mark paid Bo Fwd" }).click();
+
+  await expect(
+    page.getByRole("button", { name: "copy amount for Cy Fwd" }),
+  ).toBeFocused();
+  await expect(page.locator("#pay-flow-status")).toContainText(
+    "Paid Bo Fwd. 1 of 3 paid. Next: Cy Fwd,",
+  );
+  // Still forward-only: no wrap has happened yet, so nothing announces one.
+  await expect(page.locator("#pay-flow-status")).not.toContainText("Back to the first");
+});
+
+test("running off the end wraps back to the skipped row and says so", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "Wrap FC",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+  const opId = await seedFinalizedRoster(db, operator.id, [
+    "Ada Wrap",
+    "Bo Wrap",
+    "Cy Wrap",
+  ]);
+  await page.goto(`/payouts/${opId}`);
+
+  await page.getByRole("button", { name: "mark paid Bo Wrap" }).click();
+  await page.getByRole("button", { name: "confirm mark paid Bo Wrap" }).click();
+  await expect(
+    page.getByRole("button", { name: "copy amount for Cy Wrap" }),
+  ).toBeFocused();
+
+  // Cy is the last row, and Ada above is still owed. Falling off the end has to
+  // come back for her rather than jumping to the heading — she is still unpaid
+  // and the operator still has to reach her.
+  await page.getByRole("button", { name: "mark paid Cy Wrap" }).click();
+
+  await expect(
+    page.getByRole("button", { name: "copy amount for Ada Wrap" }),
+  ).toBeFocused();
+  // The one move that still goes upward announces itself: a silent jump back up
+  // the roster is the same disorientation the forward fix exists to remove.
+  await expect(page.locator("#pay-flow-status")).toContainText(
+    "Paid Cy Wrap. 2 of 3 paid. Back to the first unpaid. Next: Ada Wrap,",
+  );
+});
