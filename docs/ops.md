@@ -95,9 +95,31 @@ Notes:
   tick, up to 30 minutes. This is intended: "never ran" is a real failure.
 - Detection is not instant. A dead worker surfaces up to 90 minutes after its
   last run, plus your monitor's poll interval.
-- The 90-minute threshold is a constant in `src/core/health.ts`, compared with
-  `<=`. If you change a schedule in `src/worker/queues.ts` to something slower
-  than 90 minutes for the most frequent job, change it there too.
+
+### Job schedules
+
+All UTC; pg-boss is given no timezone. The one definition is `JOB_CRON` in
+`src/core/schedules.ts`, which `src/worker/queues.ts` registers and `/admin/sync`
+renders — this table is a copy for readers, not a source.
+
+| Job | Cron | Group |
+|---|---|---|
+| `membership` | `*/30 * * * *` | sweep |
+| `contacts` | `5 * * * *` | sweep |
+| `wanderer` | `10 * * * *` | sweep |
+| `discord-roles` | `15 * * * *` | sweep |
+| `location` | `2,17,32,47 * * * *` | housekeeping |
+| `membership-recheck` | `0 4 * * 0` | on-demand |
+| `token-health` | `0 3 * * *` | housekeeping |
+| `purge` | `30 3 * * *` | housekeeping |
+
+`location` is offset off the :00/:05/:10/:15 minutes on purpose: there is no
+access-token cache, so it quadruples per-character SSO refreshes and would
+otherwise race the contacts job for the same rows.
+
+The 90-minute freshness threshold used by `/api/health/sync` is a constant in
+`src/core/health.ts`, compared with `<=`. If the most frequent job here ever
+goes slower than 90 minutes, change it there too.
 
 ## Sizing and redundancy — decisions, not defaults
 

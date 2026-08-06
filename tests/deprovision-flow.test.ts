@@ -70,6 +70,13 @@ it("main leaves alliance → alumni → contacts removed, ACL removed, role chan
     deleteContacts: async (_c, _at, ids) => {
       contactWrites.deletes.push(ids);
     },
+    // Location reads: this flow never enqueues the location job, so these exist
+    // only to satisfy the widened JobDeps["esi"].
+    getLocation: async () => ({ systemId: 31000042, stationId: null, structureId: null }),
+    getOnline: async () => true,
+    getSystemName: async (id: number) => `System ${id}`,
+    getStationName: async (id: number) => `Station ${id}`,
+    getStructureName: async (id: number) => `Structure ${id}`,
   };
 
   // Wanderer: the ACL still lists the leaver's chars.

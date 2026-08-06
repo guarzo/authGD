@@ -44,6 +44,7 @@ describe("worker queues", () => {
     expect(byName.get(QUEUES.discordRoles)?.cron).toBe("15 * * * *");
     expect(byName.get(QUEUES.tokenHealth)?.cron).toBe("0 3 * * *");
     expect(byName.get(QUEUES.purge)?.cron).toBe("30 3 * * *");
+    expect(byName.get(QUEUES.location)?.cron).toBe("2,17,32,47 * * * *");
     // Scheduled ticks coalesce with dispatcher-emitted global sends only if
     // both name the same key. This asserts the registered schedule against
     // `globalSingletonKey` for EVERY queue rather than spot-checking two:
