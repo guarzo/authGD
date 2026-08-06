@@ -80,12 +80,37 @@ applied subset as the loops go, and write `discord.role_changed` for it from the
 catch as well as the success path. Note that this changes what the dedupe sees,
 so re-check the `logAuditIfChanged` interaction rather than assuming it holds.
 
-## 2. The nav's membership changes between sections
+## 2. The nav's membership changes between sections — **RESOLVED 2026-08-06**
 
 **Source:** sweep backlog item 21. **Deferred because:** it needs a product
 decision about which destinations belong in the nav at which membership tier,
 which is the user's call and not derivable from the code. Decided 2026-08-05 by
 the user: "leave it, defer to a second pass."
+
+**The product decision, made 2026-08-06.** The nav is keyed to the viewer, not
+the section: it offers every destination the viewer is *provably authorized* to
+reach — `Your account` always, `Payouts` iff `canReadPayouts`, and
+`Members`/`Audit log`/`Sync` iff `isAdmin` — in one fixed order, broadest access
+first. The three surfaces that cannot read the session (`error.tsx` and both
+`not-found.tsx` boundaries) run the same rule on weaker evidence: the strongest
+membership the path alone proves. Each of those three therefore renders exactly
+the set it rendered before; what changed is that they are now the rule under a
+weaker premise rather than three hand-maintained exceptions to it.
+
+The decisive fact, and the reason a plain "show everything and let the target
+gate it" rule was rejected: `isAdmin` and `tier` are orthogonal columns, and the
+default tier is `alumni`. An admin is not necessarily a payouts reader, so an
+unconditional `Payouts` in the admin bar would eject a real and ordinary
+account — which is the thing `not-found.tsx`'s docblock already forbids.
+
+The ten hand-copied definitions across eight components collapsed to one item
+table in `src/app/_components/nav-items.ts`. `error.tsx`'s standing request that
+a future editor keep its `ADMIN_ITEMS` in step with `admin-nav.tsx`'s `ITEMS` by
+hand is gone: each label string now exists once, so the WCAG 3.2.4 divergence it
+was guarding against is structurally impossible rather than merely watched for.
+
+Recorded in `DESIGN.md` ("Nav membership is keyed to the viewer"), `PRODUCT.md`
+(Users), and `docs/settled-design-decisions.md`.
 
 ## 3. Remaining sweep backlog items
 

@@ -175,6 +175,16 @@ test("the boundary keeps an admin inside the admin section", async ({
     await expect(nav.getByRole("link", { name: "Members" })).toBeVisible();
     await expect(nav.getByRole("link", { name: "Audit log" })).toBeVisible();
     await expect(nav.getByRole("link", { name: "Sync" })).toBeVisible();
+    // And NOT Payouts — even though this particular admin can read them, being
+    // seeded tier `member`. `isAdmin` and `tier` are orthogonal columns, so
+    // standing on a route behind the admin guard proves the admin bit and
+    // nothing whatever about tier. A boundary that inferred one from the other
+    // would hand an alumni admin — the default tier — a link that redirects
+    // them straight back out. The real `/admin/*` header does offer Payouts to
+    // this same account, off a tier read the layout performs; that gap between
+    // the two is the whole of what "the same rule on weaker evidence" costs,
+    // and it is deliberately paid in the safe direction (`nav-items.ts`).
+    await expect(nav.getByRole("link", { name: "Payouts", exact: true })).toHaveCount(0);
     await expect(page.locator(".shell__register")).toHaveText("Admin");
     await expect(page.locator("a.shell__mark")).toHaveAttribute(
       "href",

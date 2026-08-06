@@ -47,6 +47,17 @@ test("a typed-in bad URL renders the app's own 404, not the framework's", async 
   await expect(page.locator("main#main")).toBeVisible();
   await expect(page.getByRole("link", { name: "Your account" })).toHaveCount(2);
 
+  // The bar's exact membership, not just that one link is in it. This boundary
+  // cleared no guard — an unrouted URL matched no page, so no layout ran and
+  // nothing about this viewer is proven — and `nav-items.ts` renders that as
+  // `navFor({canReadPayouts: false, isAdmin: false})`. Pinning the whole list
+  // is what would catch a future change that taught this file to guess from
+  // the URL: the seed above is tier `alumni`, so a guessed `Payouts` here
+  // would be a link that redirects them straight back out.
+  await expect(page.locator(".shell__nav").getByRole("link")).toHaveText([
+    "Your account",
+  ]);
+
   // Ground and type are the app's, not the injected `body{background:#fff}`.
   // Compared against `<body>`'s own computed value rather than a literal, so
   // this tracks `--void` if the token is ever retuned; the assertion is that
@@ -106,6 +117,17 @@ test("clicking a since-deleted operation announces the 404 and lands focus in it
   // second file: the exit points back at the list the member was reading.
   await expect(page.getByRole("heading", { name: "No such operation" })).toBeVisible();
   await expect(page.getByRole("link", { name: "All operations" })).toBeVisible();
+
+  // Exactly two items, and the pair is the point. This boundary is reachable
+  // only through `page.tsx`, which calls `requirePayoutReader()` before it
+  // calls `notFound()` — so unlike the root 404 above, the payouts bit here is
+  // proven rather than absent, and `Payouts` is offered. `isAdmin` is the bit
+  // a payouts-scoped guard never checks, so the three admin destinations stay
+  // out even for a viewer who would get them on a live page.
+  await expect(page.locator(".shell__nav").getByRole("link")).toHaveText([
+    "Your account",
+    "Payouts",
+  ]);
 
   // The tab agrees with the page. `page.tsx` exports `generateMetadata`, which
   // resolves the same lookup the page did, finds nothing, and titles the tab

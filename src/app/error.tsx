@@ -4,6 +4,7 @@ import { useEffect, useState, useTransition } from "react";
 import { usePathname } from "next/navigation";
 import { FocusHeading } from "@/app/_components/focus-heading";
 import { utcHhmm } from "@/app/_components/utc-time";
+import { MEMBERS_ITEM, PAYOUTS_ITEM, navFromPath } from "@/app/_components/nav-items";
 import { Notice, RuleHead, SiteHeader, type NavItem } from "@/app/_components/ui";
 import { useBrand } from "@/app/_components/brand-context";
 
@@ -34,27 +35,6 @@ import { useBrand } from "@/app/_components/brand-context";
  * produce. Leave it absent.
  */
 
-// Matched to `admin-nav.tsx`'s own list, "Members" included — the same route
-// must not acquire a second name just because the page under it threw
-// (WCAG 3.2.4). If that list changes, this one has to follow.
-const ADMIN_ITEMS: NavItem[] = [
-  { href: "/admin/accounts", label: "Members" },
-  { href: "/admin/audit", label: "Audit log" },
-  { href: "/admin/sync", label: "Sync" },
-  { href: "/account", label: "Your account" },
-];
-
-// `payouts/page.tsx` builds this same pair and appends `Members` when
-// `access.isAdmin` — which is exactly the bit a client boundary cannot read.
-// The subset is the safe half: a payouts reader who is also an admin loses one
-// shortcut, rather than a plain reader being shown a link that bounces.
-const PAYOUT_ITEMS: NavItem[] = [
-  { href: "/account", label: "Your account" },
-  { href: "/payouts", label: "Payouts" },
-];
-
-const MEMBER_ITEMS: NavItem[] = [{ href: "/account", label: "Your account" }];
-
 /**
  * Which register the boundary is framing, derived from the URL because the URL
  * is the only session-free signal a client component has.
@@ -76,6 +56,17 @@ const MEMBER_ITEMS: NavItem[] = [{ href: "/account", label: "Your account" }];
  * That file also cannot read the session and shows a minimal nav anyway —
  * because it has no path evidence at all. An unrouted URL proves nothing about
  * who is holding it. This one is standing on a guarded route.
+ *
+ * The `items` themselves come from `nav-items.ts`'s `navFromPath`, which
+ * derives the same `{canReadPayouts, isAdmin}` reach this comment argues for
+ * from the path alone — see that module for why each branch proves what it
+ * claims. This function keeps its own `admin` and `back`, neither of which
+ * `navFromPath` knows about: `admin` also drives the mark's destination and
+ * the `ADMIN` register marker (see `SiteHeader`), and `back` is a single
+ * escape link, not a member of the bar. One consequence of routing `items`
+ * through the shared rule: the admin branch's list now opens with "Your
+ * account" rather than closing with it, because order is fixed everywhere
+ * (see `nav-items.ts`) rather than chosen per surface.
  */
 function sectionFor(pathname: string): {
   items: NavItem[];
@@ -84,20 +75,21 @@ function sectionFor(pathname: string): {
 } {
   if (pathname.startsWith("/admin")) {
     return {
-      items: ADMIN_ITEMS,
+      items: navFromPath(pathname),
       admin: true,
-      back: { href: "/admin/accounts", label: "Members" },
+      // The same item, not a retyped copy of its label — see `MEMBERS_ITEM`.
+      back: MEMBERS_ITEM,
     };
   }
   if (pathname.startsWith("/payouts")) {
     return {
-      items: PAYOUT_ITEMS,
+      items: navFromPath(pathname),
       admin: false,
-      back: { href: "/payouts", label: "Payouts" },
+      back: PAYOUTS_ITEM,
     };
   }
   return {
-    items: MEMBER_ITEMS,
+    items: navFromPath(pathname),
     admin: false,
     // Lower-cased where the nav item is capitalised: this label lands
     // mid-sentence inside "Back to …", and the other two are proper names of

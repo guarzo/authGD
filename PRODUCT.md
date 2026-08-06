@@ -28,6 +28,14 @@ very different sessions:
 
 Neither group wants to learn this tool. It sits between them and playing.
 
+The two roles overlap rather than partition: an admin is usually also a member, and
+one visit can switch between the two sessions several times. So the header offers each
+viewer every destination they are authorized for, in one fixed order, on every page —
+an admin reading the audit log reaches the payouts list in one click, not by going out
+through "Your account" first. It never offers a destination the viewer would be
+bounced out of. Admin rights and membership tier are separate things, so being an
+admin does not by itself put `Payouts` in the bar.
+
 ## Product Purpose
 
 Replace an Alliance Auth install with something the corp actually uses: EVE SSO login,
