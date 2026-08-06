@@ -38,9 +38,9 @@ export function evaluateFreshness(
 export const HEARTBEAT_INTERVAL_MS = 120 * 1000;
 
 /**
- * Three missed maintenance ticks — the same "three missed ticks" margin
- * `STALE_AFTER_MS` gives the 30-minute membership cadence, sized instead to
- * pg-boss's own 120s one. Long enough that ordinary query latency or a single
+ * Three missed maintenance ticks — the same kind of missed-tick margin
+ * `STALE_AFTER_MS` gives the job cadence, sized instead to pg-boss's own 120s
+ * one. Long enough that ordinary query latency or a single
  * slow maintenance pass never flaps it; short enough that a dead worker is
  * caught within about 6 minutes instead of the ~90 `STALE_AFTER_MS` alone
  * allowed for the admin sync page's worker-liveness line.

@@ -49,7 +49,8 @@ export function cronFor(jobType: string): string | null {
  *   (membership, contacts, wanderer, discord-roles).
  * - `on-demand` — reachable from a dedicated control other than the fan-out
  *   (membership-recheck, via "Recheck invalid affiliations").
- * - `housekeeping` — not reachable from any page control (token-health, purge).
+ * - `housekeeping` — not reachable from any page control (token-health, purge,
+ *   location).
  *
  * `Record<JobType, JobGroup>` rather than a partial map: adding a `JOB_CRON`
  * key without deciding its group is a compile error here, the same argument
