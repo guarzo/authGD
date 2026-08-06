@@ -564,7 +564,15 @@ export default async function AccountPage({
                         aria-label={
                           state === "attention"
                             ? undefined
-                            : `token ok, standings ${standingsSummary(c)}, map ${
+                            : // The literal "token ok" is safe only because this
+                              // branch (state !== "attention") is unreachable with
+                              // a non-valid token: `classifyCharacter` returns
+                              // "attention" for any token that isn't valid
+                              // (account-health.ts), so the collapsed "ok" chip
+                              // below and this label can only ever agree. A future
+                              // change loosening that classification would need to
+                              // update this string too — nothing else guards it.
+                              `token ok, standings ${standingsSummary(c)}, map ${
                                 c.onMapAcl ? "on" : "off"
                               }`
                         }

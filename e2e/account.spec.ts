@@ -783,7 +783,7 @@ const NARROWEST = 320;
 // riskiest step, since the name column sets the manifest's width and a
 // structure name is member-supplied and can be long. That one-line layout is
 // NOT what ships: see the CSS comment above `.char-line` (globals.css:1580)
-// and task-4-report.md for the full account. In short, a flex row sums the
+// for the full account. In short, a flex row sums the
 // name's width and the location's own (up to `.char__location`'s 22rem)
 // instead of the stacked layout's `max(name, location)`, and at 320px that
 // cost 203-267px of additional forced horizontal scroll against a 286px-wide
@@ -801,7 +801,7 @@ const NARROWEST = 320;
 // these measure rendered row height instead — and derive the one-line
 // reference from an in-page sibling row rather than a hardcoded constant, so
 // the baseline can't go stale the way a number copied from a deleted scratch
-// spec would (see task-4-report.md's fix-round notes).
+// spec would.
 
 test("characters with a location render two text lines, not one, and the location text is present", async ({
   page,
@@ -900,14 +900,15 @@ test("a long structure name renders two lines, not a horizontal blowout, at the 
   expect(located - reference).toBeLessThan(30);
 });
 
-// This is the design's actual gate (task-4-report.md's fix-round notes): the
+// This is the design's actual gate: the
 // vertical one above cannot fail by construction — `.char` is nowrap
 // (globals.css:1551) and `.char__location` is nowrap + ellipsis + a 22rem cap
 // (globals.css:1567-1578), so no string at any viewport wraps to a third
 // line. The real, measured cost of a long name is horizontal, and this test
 // is what forced the plan's documented fallback: reverting `.char-line` to
 // the stacked layout it now is. If a future change reintroduces the flex row
-// from task-4-report.md's superseded attempt, this trips before the
+// (see the CSS comment above `.char-line`, globals.css:1580, for the
+// superseded attempt's numbers), this trips before the
 // horizontal cost ships again.
 test("a long structure name does not blow out the forced horizontal scroll at 320px", async ({
   page,
@@ -951,7 +952,8 @@ test("a long structure name does not blow out the forced horizontal scroll at 32
   expect(pinned.maxScrollLeft).toBeGreaterThan(0);
   // Measured: the stacked (fallback) layout puts this stress-test name's
   // forced scroll at ~146px; the flex-row attempt this test replaced
-  // measured 413px for the identical seed — see task-4-report.md. 250 sits
+  // measured 413px for the identical seed (see the CSS comment above
+  // `.char-line`, globals.css:1580). 250 sits
   // comfortably above the former and well below the latter, so this trips if
   // the flex row (or something costing the same) comes back.
   expect(pinned.maxScrollLeft).toBeLessThan(250);

@@ -77,6 +77,80 @@ test("a character with no location reading renders no location line", async ({
   await expect(page.locator(".char__location")).toHaveCount(0);
 });
 
+// Task 3 moved "last seen " out of the visible text and into a
+// `.visually-hidden` span (character-location.tsx:29), gated on `offline`
+// alone — a deliberate trade where a screen reader gets more words than a
+// sighted user sees. Nothing exercised the offline branch before this test:
+// every other seed in this file hardcodes `locationOnline: true`, so
+// deleting the span failed zero tests.
+test("an offline character's location gets hidden 'last seen' text; a merely stale one does not", async ({
+  page,
+  context,
+}) => {
+  const acc = await seedMember(db, {
+    name: "Offline Pilot",
+    tier: "member",
+    alts: ["Stale Pilot"],
+  });
+  const crew = await db.select().from(character).where(eq(character.accountId, acc.id));
+  const offlineId = crew.find((c) => c.name === "Offline Pilot")!.id;
+  const staleId = crew.find((c) => c.name === "Stale Pilot")!.id;
+
+  await db
+    .insert(universeName)
+    .values([
+      { id: SYSTEM_ID, kind: "system", name: "J123456" },
+      { id: STRUCTURE_ID, kind: "structure", name: "Home Astrahus" },
+    ])
+    .onConflictDoNothing();
+
+  const now = new Date();
+  // Offline, checked just now: the case the hidden span exists for.
+  await db
+    .update(character)
+    .set({
+      locationSystemId: SYSTEM_ID,
+      locationStructureId: STRUCTURE_ID,
+      locationOnline: false,
+      locationCheckedAt: now,
+    })
+    .where(eq(character.id, offlineId));
+  // Online, but checked long enough ago (> LOCATION_CADENCE_MS = 15 minutes,
+  // src/core/location.ts:6) relative to the offline character's reading that
+  // `locationFreshness` marks it stale too — a different fact from
+  // "offline" that happens to share the `.dim` visual treatment
+  // (character-location.tsx:13-17). This character must NOT get the hidden
+  // "last seen" text: it is genuinely where the line says it is right now.
+  await db
+    .update(character)
+    .set({
+      locationSystemId: SYSTEM_ID,
+      locationStructureId: STRUCTURE_ID,
+      locationOnline: true,
+      locationCheckedAt: new Date(now.getTime() - 20 * 60 * 1000),
+    })
+    .where(eq(character.id, staleId));
+
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.goto("/account");
+
+  const rows = manifest(page).locator("tbody tr");
+  const offlineLocation = rows
+    .filter({ hasText: "Offline Pilot" })
+    .locator(".char__location");
+  const staleLocation = rows
+    .filter({ hasText: "Stale Pilot" })
+    .locator(".char__location");
+
+  // Asserted on the hidden span itself, not the cell's aggregate text, so a
+  // deletion of the span (rather than of its content) is what this catches.
+  await expect(offlineLocation.locator(".visually-hidden")).toHaveText("last seen ");
+  await expect(offlineLocation).toHaveClass(/\bdim\b/);
+
+  await expect(staleLocation.locator(".visually-hidden")).toHaveCount(0);
+  await expect(staleLocation).toHaveClass(/\bdim\b/);
+});
+
 test("the members drawer shows the location line, and the collapsed row does not", async ({
   page,
   context,
