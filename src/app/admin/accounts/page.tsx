@@ -60,6 +60,25 @@ const TIERS = ["member", "associate", "alumni"] as const;
 // What an admin may filter by — a superset, since pending accounts exist and
 // have to be findable. Drives the ?tier= whitelist and the filter chips only.
 const TIER_FILTERS = ["pending", ...TIERS] as const;
+// What an approval may grant, in the order the rest of the page renders tiers.
+// Derived from TIERS rather than written out, because the drawer's two tier
+// control groups sit in the same `.btn-group` position and an admin scans
+// straight from one to the other: hand-listing this set let the approve pair
+// drift into alumni-before-associate while the filter chips and the set-tier
+// row both ran member-associate-alumni.
+//
+// The predicate excludes `member` by `Exclude` rather than by naming the two
+// survivors, and the difference matters the day TIERS grows. A hand-written
+// `t is "associate" | "alumni"` is a legal predicate for a wider union, so a
+// fourth tier would land in this array at runtime while the type narrowed it
+// away — and the `approveAction.bind` below would typecheck against the stale
+// pair and fail only when someone pressed the button. Derived, the new tier
+// widens the element type instead, and the bind stops compiling against
+// `approveAccount` (services/admin-accounts.ts:121-146), which accepts only
+// what it accepts. That failure is the check this derivation relies on.
+const APPROVE_TIERS = TIERS.filter(
+  (t): t is Exclude<(typeof TIERS)[number], "member"> => t !== "member",
+);
 
 // Every code this page renders lives in src/lib/error-redirects.ts, beside the
 // builder actions.ts and admin-guard.ts go through. All of them are races
@@ -820,42 +839,27 @@ function AccountRow({
                       as one contiguous run, or a speech-control user saying what
                       is written on the button matches nothing (WCAG 2.5.3). Same
                       convention as the Actions cell above. */}
-                  <ConfirmingForm
-                    action={approveAction.bind(
-                      null,
-                      r.accountId,
-                      "alumni",
-                      listSearch,
-                      identity,
-                    )}
-                    className="inline-form"
-                  >
-                    <Submit
-                      className="btn btn--micro"
-                      pendingLabel="approving…"
-                      aria-label={`Approve as ${tierLabel("alumni")} for ${identity}`}
+                  {APPROVE_TIERS.map((t) => (
+                    <ConfirmingForm
+                      key={t}
+                      action={approveAction.bind(
+                        null,
+                        r.accountId,
+                        t,
+                        listSearch,
+                        identity,
+                      )}
+                      className="inline-form"
                     >
-                      Approve as {tierLabel("alumni")}
-                    </Submit>
-                  </ConfirmingForm>
-                  <ConfirmingForm
-                    action={approveAction.bind(
-                      null,
-                      r.accountId,
-                      "associate",
-                      listSearch,
-                      identity,
-                    )}
-                    className="inline-form"
-                  >
-                    <Submit
-                      className="btn btn--micro"
-                      pendingLabel="approving…"
-                      aria-label={`Approve as ${tierLabel("associate")} for ${identity}`}
-                    >
-                      Approve as {tierLabel("associate")}
-                    </Submit>
-                  </ConfirmingForm>
+                      <Submit
+                        className="btn btn--micro"
+                        pendingLabel="approving…"
+                        aria-label={`Approve as ${tierLabel(t)} for ${identity}`}
+                      >
+                        Approve as {tierLabel(t)}
+                      </Submit>
+                    </ConfirmingForm>
+                  ))}
                 </>
               ) : (
                 TIERS.map((t) => (
