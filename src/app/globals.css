@@ -71,6 +71,16 @@
   --t-h2: 1.375rem;
   --t-body: 0.9375rem;
   --t-data: 0.875rem;
+  /* Two steps a type-scale audit found already load-bearing under raw
+     declarations: --t-caption at .dim/.table-note/.footnote (a de-emphasised
+     prose line, one step under --t-data) and --t-detail at
+     .json/.detail/.filter-form__hint/.strip__cadence/.strip__window (a
+     smaller mono-or-prose line for secondary values). Both were reused across
+     three-plus unrelated components before being named, which is what makes
+     them steps rather than one-offs -- a size touched once with a reason is
+     commented in place instead, not folded in here. */
+  --t-caption: 0.8125rem;
+  --t-detail: 0.75rem;
   --t-label: 0.6875rem;
 
   /* Tracking for the label register. The system had four values in use and the
@@ -171,6 +181,12 @@ p {
 
 code {
   font-family: var(--font-mono), ui-monospace, monospace;
+  /* `em`, not a scale token, on purpose: this is inline code sitting inside
+     running prose of whatever size that prose happens to be (a body
+     paragraph, a `.dim` caption, a table cell), and mono at 1:1 with its
+     surrounding proportional type reads oversized next to it. 0.9em is an
+     optical correction that has to track its parent, which a fixed --t-*
+     step cannot do. */
   font-size: 0.9em;
 }
 
@@ -264,7 +280,16 @@ a:hover {
    this list too. `.worker` was in the register only because its copy happens
    to render in lowercase words that the register's own `text-transform:
    uppercase` was silently forcing to caps — moving it out lets "worker · last
-   run 18m ago" read in the sentence case it is actually written in. */
+   run 18m ago" read in the sentence case it is actually written in.
+
+   `.launch__scopes dt` left this list and `.launch__scopes-head` took its
+   place: the `<dt>` used to hold the literal words "Scopes requested" (one
+   fixed label per list, which is what this register is for), and now holds a
+   per-row scope identifier instead — content, not a field name, and content
+   a technical reader needs to actually recognise rather than read in forced
+   caps. "Scopes requested" itself moved to its own `<p>` above the list,
+   which is the register's new member. See `.launch__scopes` below for the
+   inverted structure. */
 .rule-head__label,
 .log th,
 .strip__name,
@@ -274,7 +299,7 @@ a:hover {
 .facts dt,
 .filters__label,
 .filter-form__label,
-.launch__scopes dt,
+.launch__scopes-head,
 .shell__register,
 .shell__nav a {
   font-family: var(--font-mono), ui-monospace, monospace;
@@ -349,7 +374,7 @@ a:hover {
 }
 
 .shell__wordmark b {
-  font-size: 0.9375rem;
+  font-size: var(--t-body);
   font-weight: 700;
   letter-spacing: 0.02em;
 }
@@ -390,12 +415,20 @@ a:hover {
   gap: calc(var(--s-1) / 2);
 }
 
-/* Sign out renders at the same size, case and colour as the four nav
+/* Sign out renders in the same face, size, weight and case as the four nav
    destinations beside it — it's `.btn--quiet`, the nav's own quiet grade, not
-   a louder one — so a hairline is the only thing that says "this ends the
-   session" rather than "this is a fifth page". Margin, not `.shell__nav`'s own
-   `gap`, so the rule sits closer to the button it separates than to the link
-   before it: a centered gap would read as belonging to neither. */
+   a louder one — so a hairline is the only *structural* thing that says "this
+   ends the session" rather than "this is a fifth page".
+
+   Not the same colour, though, and the difference is deliberate rather than
+   drift: the nav links take `--ink-dim`, `.btn--quiet` takes `--ink-faint`.
+   A destructive control should not be the equal of the destinations around it
+   at rest, so it sits one grade quieter and comes up to `--ink` on hover and
+   focus. The hairline is what has to carry the distinction, because colour
+   alone at this delta does not, and a colourblind or low-vision reader gets
+   nothing from it. Margin, not `.shell__nav`'s own `gap`, so the rule sits
+   closer to the button it separates than to the link before it: a centered gap
+   would read as belonging to neither. */
 .shell__signout {
   margin-left: var(--s-3);
   padding-left: var(--s-3);
@@ -403,15 +436,28 @@ a:hover {
 }
 
 /* A count, not an alert: the admin register label beside it is already quiet,
-   and a filled pill here would outweigh the nav it sits in. */
+   and a filled pill here would outweigh the nav it sits in.
+
+   Mono, though, and not prose. This is state — the number of accounts waiting
+   on someone — and "prose is proportional, state is monospaced" is the whole
+   typographic idea. Declaring nothing meant inheriting body's 15px Archivo 400,
+   so the count was the one proportional glyph in a bar of mono labels, and
+   fainter than the word it modifies. It now matches its own label's register
+   and takes --ink-dim so the number is not quieter than the noun. */
 .shell__badge {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: var(--t-label);
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
   letter-spacing: var(--track-control);
-  color: var(--ink-faint);
+  color: var(--ink-dim);
 }
 
 .shell__nav a {
   position: relative;
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.25rem;
   letter-spacing: var(--track-label);
   text-decoration: none;
   color: var(--ink-dim);
@@ -619,6 +665,19 @@ h3.rule-head__label {
   flex-wrap: wrap;
 }
 
+/* The revealed confirm cost takes its own line, always. Without this it is just
+   another flex item: at widths where the sentence still fits beside the button
+   (roughly 641-851px on the Discord row) it grows the line box, and
+   `align-items: center` re-centres the button vertically — out from under a
+   stationary mouse pointer. That fires `pointerLeave`, which disarms the
+   control the member armed a moment ago, and the disarm looks like the app
+   ignoring the click. This is the #112 mechanism; the row is not exempt from it.
+   `flex-basis: 100%` costs nothing at rest, because at rest the span is
+   `.visually-hidden` and out of flow. */
+.facts__lead > .confirm-cost {
+  flex-basis: 100%;
+}
+
 .facts dt {
   letter-spacing: var(--track-label);
   color: var(--ink-faint);
@@ -626,6 +685,15 @@ h3.rule-head__label {
 
 .facts dd {
   margin: 0;
+}
+
+/* A stored note is free text and may carry line breaks the operator typed on
+   purpose; the default `normal` collapses every one of them, so a multi-line
+   note reads as a single run-on sentence. Read-only rendering only: this and
+   the editable `<textarea>` are the two mutually exclusive branches of the
+   same `<dd>`, and a textarea preserves breaks on its own. */
+.notes-text {
+  white-space: pre-wrap;
 }
 
 /* The lifecycle control that closes or reopens the thing the facts grid above
@@ -793,9 +861,22 @@ h3.rule-head__label {
   border-bottom: 1px solid var(--rule-strong);
 }
 
+/* The link, not the cell, is the target. A bare inline anchor here is a 17px
+   line box floating in a 41px header cell, so most of the cell is a dead click
+   on the one control the .log__sortable glyph exists to advertise. SC 2.5.8 is
+   met either way through the spacing exception; the objection is DESIGN.md's
+   own floor, which says 28px is the smallest target this system has.
+
+   Padding out with an equal negative margin grows the target and not the row,
+   so the header height and .log--sticky-head's 3rem scroll-margin both stay
+   valid. Filling the cell would be better still, but is unsafe under
+   .log--audit's fixed table-layout with nowrap cells. */
 .log th a {
   color: inherit;
   text-decoration: none;
+  display: inline-block;
+  padding-block: 0.22rem;
+  margin-block: -0.22rem;
 }
 
 .log th a:hover {
@@ -1100,6 +1181,32 @@ h3.rule-head__label {
   max-height: 80svh;
 }
 
+/* WCAG 1.4.4: the calc above holds only while svh and rem stay in the
+   proportion they were measured in. Browser zoom breaks that — zoom shrinks
+   the viewport in CSS px (the svh term) but leaves anything in rem exactly
+   where it was, so past 200% on an ordinary screen `100svh - 29rem` goes
+   deeply negative and every zoom level past that floors to the same 18rem.
+   That is not "the narrow-viewport case" the floor was built for (the
+   comment above measured that against *width*, not zoom): it is 29rem's own
+   premise failing, because the chrome the calc subtracts no longer fits
+   above the fold at all, at any max-height we could choose. The page has to
+   scroll in that regime regardless of what this rule says, so nothing is
+   bought by holding the internal region to a fixed 18rem instead of letting
+   it track the viewport that's actually there — a shrinking svh should still
+   shrink the region, not hand it the same constant every time.
+   `@media (max-height: ...)` reads the real viewport, which *does* shrink
+   under zoom (unlike a literal rem offset), so it is the one place in this
+   calc immune to the svh/rem mismatch. 29rem again, matching the chrome
+   figure the base rule subtracts: below that, the chrome itself has stopped
+   fitting, which is the same "give the constraint back" call the drawer-open
+   override below already makes for a different reason. */
+@media (max-height: 29rem) {
+  .scroller--tall:has(.log--dense) {
+    max-height: 80vh;
+    max-height: 80svh;
+  }
+}
+
 /* Opening a row drawer gives the chrome subtraction back. The `- 29rem` term
    above buys one thing: the region ends inside the viewport, so the page
    itself never scrolls and the only scrollbar on screen is the region's. That
@@ -1178,12 +1285,22 @@ h3.rule-head__label {
    global figure is necessarily wrong for one of them, and wrong in the
    direction that re-obscures the target. Over-estimating is the safe error on
    this axis too, which is why the accounts table takes a round 10rem it cannot
-   compute. */
-.log--audit.log--sticky-col thead th:not(:first-child) :is(a, button) {
+   compute.
+
+   Body cells are in scope, not just header links. The reachable path is
+   Shift+Tab from a row's Actions buttons back to an earlier column's control:
+   that is sequential focus navigation leftward, so it aligns nearest-edge and
+   parks the control under the pin. The drawer row is excluded here for the same
+   reason it is excluded from the pin itself. */
+.log--audit.log--sticky-col
+  :is(thead th, tbody tr:not(.drawer-row) > td):not(:first-child)
+  :is(a, button, summary) {
   scroll-margin-left: 12.25rem;
 }
 
-.log--dense.log--sticky-col thead th:not(:first-child) :is(a, button) {
+.log--dense.log--sticky-col
+  :is(thead th, tbody tr:not(.drawer-row) > td):not(:first-child)
+  :is(a, button, summary) {
   scroll-margin-left: 10rem;
 }
 
@@ -1273,7 +1390,7 @@ h3.rule-head__label {
    the +/- marker from the shared disclosure styling. */
 .json {
   font-family: var(--font-mono), ui-monospace, monospace;
-  font-size: 0.75rem;
+  font-size: var(--t-detail);
 }
 
 /* Declared on the span rather than the summary: the shared `.log summary` rule
@@ -1355,16 +1472,18 @@ h3.rule-head__label {
 
 .dim {
   color: var(--ink-faint);
-  font-size: 0.8125rem;
+  font-size: var(--t-caption);
 }
 
 /* Colour only. `.dim` also drops a step of size, which is right for a
    standalone metadata line and wrong for a span inside a data cell that has to
    keep the mono column's advance width.
 
-   Unreferenced on purpose: the markup that needs it is .tsx, which this pass
-   does not own. The audit found several data cells reaching for `.dim` and
-   getting a size change with it; this is the class they should take instead. */
+   Now referenced: the audit log's actor, target, action prefix and empty-target
+   cells, the accounts table's "no main" marker, and the sync table's zero
+   figures all take this instead. `.dim` keeps the prose sites it was right for.
+   The sharpest case this closed was the action column, where `payout.` rendered
+   a step smaller than `create` inside a single anchor. */
 .dim-ink {
   color: var(--ink-faint);
 }
@@ -1374,7 +1493,7 @@ h3.rule-head__label {
    leaves a tall gap under the table. The colgroup governs the width. */
 .detail {
   font-family: var(--font-mono), ui-monospace, monospace;
-  font-size: 0.75rem;
+  font-size: var(--t-detail);
   color: var(--ink-faint);
   overflow-wrap: anywhere;
 }
@@ -1606,8 +1725,11 @@ h3.rule-head__label {
    caller passed. The pulsing dot reuses the .st/.tier value-marker language
    (a dot in currentColor) rather than inventing a new device; it animates
    opacity and scale only, never a layout property, and the reduced-motion
-   block above (:165) already zeroes both animation-duration and
-   animation-iteration-count globally, so it needs no separate override here. */
+   block above (:222) already collapses animation-duration to 0.01ms and
+   caps animation-iteration-count at 1 globally, so the pulse runs once,
+   instantly, and stops — it needs no separate override here. See
+   `.link-pending` for why that "runs to completion" detail is load-bearing
+   rather than the same thing as switching the animation off. */
 .btn[aria-busy="true"] {
   color: var(--ink-faint);
   border-color: var(--rule-strong);
@@ -1827,7 +1949,7 @@ h3.rule-head__label {
 .btn--micro {
   min-height: 1.75rem;
   padding: 0.2rem var(--s-2);
-  font-size: 0.6875rem;
+  font-size: var(--t-label);
   letter-spacing: var(--track-value);
 }
 
@@ -1838,7 +1960,7 @@ h3.rule-head__label {
 .copy-result {
   display: inline-block;
   min-width: 5rem;
-  font-size: 0.6875rem;
+  font-size: var(--t-label);
   letter-spacing: 0.08em;
 }
 
@@ -2111,7 +2233,7 @@ h3.rule-head__label {
    vanish once a value is typed and, worse, reads as an applied filter to a
    scanning admin while the field is empty. */
 .filter-form__hint {
-  font-size: 0.75rem;
+  font-size: var(--t-detail);
   color: var(--ink-faint);
 }
 
@@ -2157,9 +2279,19 @@ h3.rule-head__label {
    and the glyph is a `::after` on a zero-width box.
 
    Fully opaque at rest and animated only downward, so the global
-   `prefers-reduced-motion` collapse — which freezes it on the first frame —
-   leaves a visible mark rather than an invisible one. That is the whole reason
-   the keyframe runs 1 -> 0.35 -> 1 instead of starting dim. */
+   `prefers-reduced-motion` collapse leaves a visible mark rather than an
+   invisible one. That is the whole reason the keyframe runs 1 -> 0.35 -> 1
+   instead of starting dim.
+
+   The collapse does not freeze the animation on its first frame — that would
+   be `animation-play-state: paused`, which this stylesheet never sets. It sets
+   `animation-duration: 0.01ms` with `animation-iteration-count: 1`, so the
+   keyframes run to *completion* essentially instantly and then, with no
+   `animation-fill-mode`, the element reverts to its un-animated style. Both
+   the 100% keyframe and the rest style are opacity 1, so the mark is visible
+   either way — but an author reasoning from "frozen on the first frame" would
+   conclude a keyframe starting at 0.35 is equally safe, and it is not: what
+   has to be opaque here is the resting style, not the first frame. */
 .link-pending {
   display: inline-block;
   width: 0;
@@ -2372,28 +2504,50 @@ h3.rule-head__label {
   color: var(--ink-dim);
 }
 
-.launch__scopes {
+/* The label register's one member for this block: the fixed heading that used
+   to be the <dl>'s own <dt>, repeated once per scope and announced by a
+   screen reader as a "definition of Scopes requested" four times over — the
+   wrong relationship, since the heading names the whole list and not any one
+   row. It is a <p> now, outside the <dl>, and the register gives it the same
+   type as every other fixed field name in the system. */
+.launch__scopes-head {
   margin-top: var(--s-4);
 }
 
-.launch__scopes dt {
-  letter-spacing: var(--track-label);
-  color: var(--ink-faint);
+.launch__scopes {
+  margin-top: var(--s-2);
 }
 
-/* One dd per scope, so the list has real boundaries. Joined with a space and
-   wrapped with `overflow-wrap: anywhere`, four identifiers in a ~30ch box gave
-   the reader no way to tell a scope boundary from a line break — at the consent
-   moment, which is the one moment the list exists for. `anywhere` stays: a
-   single esi-*.v1 identifier can still outrun the box on its own, and now that
-   each one owns a line, a mid-identifier break can no longer be mistaken for
-   the start of the next scope. */
-.launch__scopes dd {
-  margin-top: var(--s-1);
+/* Inverted from the original structure: dt is now the raw scope identifier
+   (what a technical reader checks against EVE_SSO_SCOPES), dd is the sentence
+   it buys (what everyone else needs to decide). The old order — one dt
+   heading, one dd per identifier — put the identifiers at the same visual
+   weight as the heading and left what they actually grant unstated.
+   `overflow-wrap: anywhere` stays on the identifier: a single esi-*.v1 token
+   can still outrun the panel on a narrow viewport, and each row's own dt/dd
+   pair is still a real boundary — nothing here goes back to a joined string. */
+.launch__scopes dt {
+  margin-top: var(--s-2);
   font-family: var(--font-mono), ui-monospace, monospace;
-  font-size: var(--t-data);
+  font-size: var(--t-detail);
   color: var(--ink-faint);
   overflow-wrap: anywhere;
+}
+
+.launch__scopes dt:first-child {
+  margin-top: 0;
+}
+
+/* The load-bearing content of this list, not its metadata: --ink-dim, the
+   same grade as `.launch__disclosure-note` above it, so the sentence a member
+   actually needs is not quieter than the identifier it explains. A scope the
+   description map does not recognise (a fork's own EVE_SSO_SCOPES addition)
+   renders no dd at all rather than a placeholder — the identifier is still
+   shown, honestly, as the one thing known about it. */
+.launch__scopes dd {
+  margin-top: var(--s-1);
+  font-size: var(--t-caption);
+  color: var(--ink-dim);
 }
 
 /* inline-block, not block. As a block this was a ~414px strip around a 270px
@@ -2420,6 +2574,11 @@ h3.rule-head__label {
   border-color: var(--gold);
 }
 
+/* BRAND_FOOTER -- a deployment's own fine-print line under the login panel
+   (licence note, a corp tag, whatever a fork wants there). Below --t-label on
+   purpose: it is the quietest line on the page by design, and the one place a
+   step smaller than the label register's floor is the right call, not a size
+   the scale should carry generally. */
 .launch__foot {
   margin-top: var(--s-6);
   padding-top: var(--s-4);
@@ -2824,7 +2983,7 @@ h3.rule-head__label {
 }
 
 .strip__cadence {
-  font-size: 0.75rem;
+  font-size: var(--t-detail);
   color: var(--ink-faint);
   white-space: nowrap;
 }
@@ -2844,7 +3003,7 @@ h3.rule-head__label {
 .strip__window {
   margin: var(--s-2) 0 0;
   font-family: var(--font-mono), ui-monospace, monospace;
-  font-size: 0.75rem;
+  font-size: var(--t-detail);
 }
 
 /* The per-row re-run lever. Sits under the history rather than over it, so it
@@ -3016,6 +3175,23 @@ h3.rule-head__label {
   flex-wrap: wrap;
 }
 
+/* The rejection message for an in-place editor. Phrasing content rather than
+   the shared `.notice` block, because `InlineEdit`'s form is mounted inside an
+   `<h1>`, a `<dd>` and a `<td>` depending on the call site and a `<p>` is
+   invalid in the first of those. `flex-basis: 100%` puts it on its own line
+   below the field/save/cancel row instead of squeezing them, and it draws
+   nothing when empty so the always-mounted `role="alert"` wrapper costs no
+   space until it has something to say. */
+.inline-form__err {
+  flex-basis: 100%;
+  color: var(--signal-bad);
+  font-size: var(--t-data);
+}
+
+.inline-form__err:empty {
+  display: none;
+}
+
 /* The account page's Discord identity: display name then dimmed @handle, one
    unit. Its own flex row rather than two more children of `.facts__lead`,
    because the two names are one thing and the button beside them is another —
@@ -3080,7 +3256,7 @@ h3.rule-head__label {
 .table-note {
   max-width: var(--measure);
   margin-bottom: var(--s-4);
-  font-size: 0.8125rem;
+  font-size: var(--t-caption);
   color: var(--ink-faint);
 }
 
@@ -3105,7 +3281,7 @@ h3.rule-head__label {
   margin-top: var(--s-7);
   padding-top: var(--s-4);
   border-top: 1px solid var(--rule);
-  font-size: 0.8125rem;
+  font-size: var(--t-caption);
   color: var(--ink-faint);
 }
 
@@ -3292,7 +3468,9 @@ h3.rule-head__label {
      figure left behind by a column that shrank is exactly the rot this
      breakpoint would otherwise start. Over-estimating still clamps harmlessly
      at scrollLeft 0, but the number should say what the column is. */
-  .log--audit.log--sticky-col thead th:not(:first-child) :is(a, button) {
+  .log--audit.log--sticky-col
+    :is(thead th, tbody tr:not(.drawer-row) > td):not(:first-child)
+    :is(a, button, summary) {
     scroll-margin-left: 8rem;
   }
 
@@ -3481,7 +3659,9 @@ h3.rule-head__label {
   }
 
   /* Same reason as the 66rem stop: the pin is 5rem here. */
-  .log--audit.log--sticky-col thead th:not(:first-child) :is(a, button) {
+  .log--audit.log--sticky-col
+    :is(thead th, tbody tr:not(.drawer-row) > td):not(:first-child)
+    :is(a, button, summary) {
     scroll-margin-left: 5rem;
   }
 

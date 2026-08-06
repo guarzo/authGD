@@ -190,19 +190,32 @@ export function queuedStamp(at: string | undefined): string | null {
 }
 
 /**
- * The one-line outcome of the press that got us here. Per-job re-runs redirect
- * with the job type itself, and that value is checked against the schedules
- * table before it is echoed: a hand-typed `?queued=` is untrusted input, and
- * this is copy, not a lookup that fails safe on its own.
+ * The one-line outcome of the press that got us here.
  *
- * `at` is what makes a *second* press of the same button say something. The
- * page mounts one permanent `role="status"` region and the redirect target for
- * a given job is otherwise constant, so pressing `Re-run wanderer` twice
- * produced a byte-identical string, React wrote nothing to the text node, and
- * the live region — which announces on mutation — stayed silent about an
- * enqueue that really happened. The instant differs per press, so the text
- * does. It also retires the stale-notice hazard the Refresh anchor was
- * carrying alone: a notice still on screen an hour later now says when.
+ * Two calling shapes reach this, and they don't hand it the same arguments.
+ * `syncAllAction` and `recheckInvalidAction` still redirect
+ * (`/admin/sync?queued=...&at=...`), and `queued` there is untrusted input —
+ * a hand-typed value is checked against the schedules table before it is
+ * echoed, since this is copy, not a lookup that fails safe on its own. Their
+ * `at` is what makes a *second* press of the same button say something: this
+ * text is rendered through `ConfirmNotice` (`@/app/_components/confirm-notice`),
+ * which moves focus to it on every `at` change rather than relying on a live
+ * region to announce a text mutation, and the redirect target for a given
+ * action is otherwise constant, so pressing "Sync now" twice would produce a
+ * byte-identical string and, without `at` in the dependency list, only the
+ * FIRST press would move focus. It also retires the stale-notice hazard the
+ * Refresh anchor was carrying alone: a notice still on screen an hour later
+ * now says when.
+ *
+ * `syncJobAction`'s per-job re-run does NOT redirect — its control sits inside
+ * that job's own `Disclosure`, and a redirect would reset the drawer (see
+ * `actions.ts`'s own docblock on it). It calls this function directly with a
+ * job type it already validated and no `at` at all: `undefined` degrades
+ * `queuedStamp` to null, dropping the "at HH:MM:SS" clause, and the repeat-press
+ * problem `at` exists to solve doesn't arise there in the first place —
+ * `_components/confirm-group.tsx`'s `ConfirmGroup` re-focuses on a monotonic
+ * counter, not on this string, so a second press of "Re-run wanderer"
+ * producing the identical sentence still moves focus again.
  *
  * "reload this page", not "use Refresh": Refresh is the last control below
  * seven job rows and however many open drawers, while this text renders at the
@@ -217,26 +230,30 @@ export function queuedNotice(
   // Required, not defaulted: a default here would let a forgetful caller
   // silently borrow whatever string the default implies, which is exactly
   // how this used to assert a "few seconds" pickup regardless of whether the
-  // worker had run in 90 minutes or 4 hours. The caller already computes this
-  // for the worker line above the strip (`workerAge` in page.tsx), so passing
-  // it is one extra argument, not a lookup.
+  // worker had checked in 90 minutes or 4 hours ago. The caller already
+  // computes this for the worker line above the strip (`workerAge` in
+  // page.tsx), so passing it is one extra argument, not a lookup.
   workerAge: string | null,
 ): string {
   const stamp = queuedStamp(at);
   const when = stamp === null ? "" : ` at ${stamp}`;
   // State the age, not a verdict about it. The old boolean read as a checked
   // fact ("the worker is not running right now") when the check behind it
-  // (`evaluateFreshness`, 90 minutes of slack) could not actually support
-  // that within ten minutes of a worker dying, and a `null` newest run — a
-  // fresh deploy, or a purge that emptied sync_run — collapsed into the same
-  // "not running" claim from the absence of any evidence either way. The age
-  // itself is the whole differentiator: a worker that ran 30s ago and one
-  // that ran 89 minutes ago both get this sentence, honestly dated, so fresh
-  // and stale need no separate strings and no second threshold constant.
+  // could not actually support that: `workerAge` used to come from the
+  // newest `sync_run` row, and a live worker between two due jobs and a dead
+  // one look identical to that signal for up to 90 minutes. `workerAge` is
+  // now pg-boss's own maintenance heartbeat (`workerHeartbeat`,
+  // @/services/health) — unconditional on job activity — so the ~10-minute
+  // gap this comment used to warn about no longer exists, but the reasoning
+  // for stating an age rather than a verdict still holds: a `null` age (no
+  // heartbeat recorded at all — a fresh deploy, or a database no worker has
+  // ever started against) collapses into the same "not running" claim from
+  // the absence of any evidence either way, and fresh/stale still don't need
+  // separate strings or a second threshold constant here.
   const worker =
     workerAge === null
-      ? "No runs have been recorded yet, so there is nothing to date the worker by"
-      : `The worker last ran ${workerAge} ago`;
+      ? "No heartbeat has been recorded yet, so there is nothing to date the worker by"
+      : `The worker last checked in ${workerAge} ago`;
   if (queued === "all") {
     // The four job keys the fan-out actually enqueues, spelled the way the
     // strip above spells them, so the nouns are findable in the column the

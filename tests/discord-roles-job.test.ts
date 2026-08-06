@@ -231,6 +231,116 @@ describe("runDiscordRolesJob", () => {
       { discordUserId: "u9" },
     );
     expect(result.status).toBe("failed");
+    // The strip failed silently before this fix: an unlinked member kept
+    // roles they no longer qualified for with no trace of why.
+    const [row] = await ctx.db.select().from(auditLog);
+    expect(row).toMatchObject({
+      actor: "system",
+      action: "discord.role_strip_failed",
+      target: "u9",
+    });
+    expect(row.details).toMatchObject({
+      roleId: "10", // first of ["10", "12"] — the strip stopped there
+      error: expect.stringContaining("403"),
+    });
+  });
+
+  it("a permanent role-write failure in the main sweep writes one diagnosable audit row", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "member", discordUserId: "u1" });
+    await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
+    const d = fakeDiscord({ u1: ["999"] }); // needs role 10 added
+    const client: DiscordClient = {
+      ...d.client,
+      addMemberRole: async () => {
+        throw new DiscordApiError("discord PUT roles failed (403)", {
+          status: 403,
+          transient: false,
+        });
+      },
+    };
+    const result = await runDiscordRolesJob({ db: ctx.db, cfg, discord: client });
+    expect(result.status).toBe("partial");
+    expect(result.counts).toMatchObject({ failed: 1 });
+    const rows = await ctx.db.select().from(auditLog);
+    const failureRows = rows.filter((r) => r.action === "discord.role_sync_failed");
+    expect(failureRows).toHaveLength(1);
+    expect(failureRows[0]).toMatchObject({ target: "u1" });
+    expect(failureRows[0].details).toMatchObject({
+      op: "add",
+      roleId: "10",
+      tier: "member",
+      error: expect.stringContaining("403"),
+    });
+  });
+
+  it("does not write a second row for the exact same recurring failure", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "member", discordUserId: "u1" });
+    await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
+    const d = fakeDiscord({ u1: ["999"] });
+    const client: DiscordClient = {
+      ...d.client,
+      addMemberRole: async () => {
+        throw new DiscordApiError("discord PUT roles failed (403)", {
+          status: 403,
+          transient: false,
+        });
+      },
+    };
+    // Two ticks in a row, same unresolved cause each time.
+    await runDiscordRolesJob({ db: ctx.db, cfg, discord: client });
+    await runDiscordRolesJob({ db: ctx.db, cfg, discord: client });
+    const rows = await ctx.db.select().from(auditLog);
+    expect(rows.filter((r) => r.action === "discord.role_sync_failed")).toHaveLength(1);
+  });
+
+  it("writes again once the failure changes (a different role, or a different error)", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "member", discordUserId: "u1" });
+    await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
+    const d = fakeDiscord({ u1: ["999"] });
+    const failing: DiscordClient = {
+      ...d.client,
+      addMemberRole: async () => {
+        throw new DiscordApiError("discord PUT roles failed (403)", {
+          status: 403,
+          transient: false,
+        });
+      },
+    };
+    await runDiscordRolesJob({ db: ctx.db, cfg, discord: failing });
+    const laterFailing: DiscordClient = {
+      ...d.client,
+      addMemberRole: async () => {
+        throw new DiscordApiError("discord PUT roles failed (500)", {
+          status: 500,
+          transient: false,
+        });
+      },
+    };
+    await runDiscordRolesJob({ db: ctx.db, cfg, discord: laterFailing });
+    const rows = await ctx.db.select().from(auditLog);
+    expect(rows.filter((r) => r.action === "discord.role_sync_failed")).toHaveLength(2);
+  });
+
+  it("does not audit a transient failure (pg-boss retry already covers it)", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "member", discordUserId: "u1" });
+    await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
+    const d = fakeDiscord({ u1: ["999"] });
+    const client: DiscordClient = {
+      ...d.client,
+      addMemberRole: async () => {
+        throw new DiscordApiError("discord PUT roles failed (503)", {
+          status: 503,
+          transient: true,
+        });
+      },
+    };
+    // A transient failure earns a retry (thrown, not returned — same as the
+    // config-fetch case above), so this rejects rather than resolving.
+    await expect(
+      runDiscordRolesJob({ db: ctx.db, cfg, discord: client }),
+    ).rejects.toThrow(/503/);
+    const rows = await ctx.db.select().from(auditLog);
+    expect(rows.some((r) => r.action === "discord.role_sync_failed")).toBe(false);
   });
 
   it("re-syncs the account when a re-link lands DURING the strip", async () => {

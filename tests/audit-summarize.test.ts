@@ -51,6 +51,28 @@ describe("summarizeDetails", () => {
     );
   });
 
+  it("renders a reclaim's origin account by name when it resolves", () => {
+    expect(
+      summarizeDetails(
+        "character.reclaimed",
+        { fromAccount: "7f3a2b1c-0000-4000-8000-000000000001" },
+        new Map(),
+        {},
+        new Map([["fromAccount", "Old Owner"]]),
+      ),
+    ).toBe("from Old Owner");
+  });
+
+  it("falls back to a shortened uuid when a reclaim's origin account doesn't resolve", () => {
+    // No accountNames map at all -- the default parameter, exercised the way a
+    // caller that hasn't been updated for this field still would be.
+    expect(
+      summarizeDetails("character.reclaimed", {
+        fromAccount: "7f3a2b1c-0000-4000-8000-000000000001",
+      }),
+    ).toBe("from 7f3a2b…");
+  });
+
   it("renders a merge with a shortened source account and its character", () => {
     expect(
       summarizeDetails("account.merged", {

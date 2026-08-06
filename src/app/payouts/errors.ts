@@ -8,7 +8,8 @@
  * rather than a redirect that renders an unchanged form and no explanation.
  *
  * TWO maps, not one, and codes are deliberately NOT globally unique.
- * `name_required` and `date_invalid` appear in both with different copy: the
+ * `name_required`, `date_invalid`, `url_invalid` and `url_scheme` appear in
+ * both with different copy: the
  * detail page's "The old value is unchanged." is true there (a stored value is
  * at stake) and false on the create form (the operation does not exist yet).
  * A single map would force one message that is wrong on one of the two pages,
@@ -20,8 +21,9 @@
 /** Every code `createOperationAction` can reject with, rendered by
  *  `/payouts/new`.
  *
- *  The composer collects name, date, an optional loot paste and an optional
- *  roster paste in one screen. Every rejection here is returned as
+ *  The composer collects name, date, an optional battle report link, an
+ *  optional loot paste and an optional roster paste in one screen. Every
+ *  rejection here is returned as
  *  `useActionState` state rather than a `?error=` redirect — a redirect can
  *  only carry a fixed code in the query string, and a loot paste running
  *  hundreds of lines cannot survive that round trip. See
@@ -35,6 +37,10 @@ export const NEW_OPERATION_ERRORS = {
     "Date must be a real calendar date. Everything else you typed is still here.",
   appraisal_failed:
     "Could not price that loot paste right now (triff.tools did not answer). Nothing was created — adjust the paste and try again, or leave it blank and price loot later.",
+  url_invalid:
+    "That battle report is not a URL. Everything else you typed is still here.",
+  url_scheme:
+    "Battle report links must start with http:// or https://. Everything else you typed is still here.",
 } as const;
 
 /** Every code an action on `/payouts/[id]` can redirect with.
@@ -78,7 +84,7 @@ export const OPERATION_ERRORS = {
   note_required:
     "A flat pool needs a note saying where the number came from. It is the only record of why this total is what it is.",
   total_invalid:
-    "Total must be a plain number like 12345.67 — no commas, and no shorthand like 1e5.",
+    "Total must be a plain number like 12345.67 — no commas, no negatives, and no shorthand like 1e5.",
   price_invalid:
     "Price must be a plain number like 12.34 — no commas, and at most two decimals. The item price was left as it was.",
   shares_required: "Shares cannot be blank. The roster value was left as it was.",
@@ -127,6 +133,15 @@ export const OPERATION_ERRORS = {
     "This deployment is in dry-run mode, so nothing is sent to EVE. The amounts and the payment controls are real; only the in-game window is suppressed.",
   delete_has_paid:
     "This operation has a currently-paid participant and cannot be deleted. Revert every payment first, then try again.",
+  // The one lifecycle error in this map rather than on error.tsx. See
+  // `setNotesAction` (actions.ts) for why it earns the exception: the rule is
+  // "input rejections come back as `useActionState` validation state, lifecycle
+  // errors go to error.tsx", and the reason lifecycle errors go there is that
+  // none of them has typed text to hand back. An open textarea does. Written
+  // generically, not about notes, so the other always-open editable fields can
+  // adopt it as they hit the same race.
+  locked:
+    "This operation was finalized or paid while you had it open, so it can no longer be edited. What you typed was not saved.",
 } as const;
 
 export type NewOperationErrorCode = keyof typeof NEW_OPERATION_ERRORS;

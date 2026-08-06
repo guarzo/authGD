@@ -165,9 +165,12 @@ export function SiteHeader({
               than invented: it has to sit among the nav's own text links
               without out-shouting them or the page's one primary action. The
               `shell__signout` hairline is what actually tells it apart from
-              those links — same size, same case, same colour as the four
-              destinations beside it, so nothing but a rule said "this one
-              ends the session instead of loading a page." */}
+              those links — same face, size, weight and case as the four
+              destinations beside it, so nothing but a rule says "this one ends
+              the session instead of loading a page." Colour is the one thing
+              that differs (`--ink-faint` here against the links'
+              `--ink-dim`), which is too small a delta to carry the
+              distinction on its own — see `.shell__signout` in globals.css. */}
           <form
             action="/auth/signout"
             method="post"

@@ -14,8 +14,6 @@ import {
 } from "@/app/_components/confirm-submit";
 import { requirePayoutReader } from "../access";
 import {
-  addFlatPoolAction,
-  addParticipantAction,
   deleteOperationAction,
   deletePoolAction,
   finalizeAction,
@@ -36,10 +34,14 @@ import {
 } from "../actions";
 import { DROPPED_REASONS, decodeDropped } from "../dropped";
 import { OPERATION_ERRORS, lookupErrorMessage } from "../errors";
+import { AddParticipantForm } from "./add-participant-form";
 import { AppraiseForm } from "./appraise-form";
 import { ClearStaleQuery } from "./clear-stale-query";
 import { CopyAmountButton } from "./copy-amount-button";
+import { FlatPoolForm } from "./flat-pool-form";
 import { InlineEdit } from "./inline-edit";
+import { LifecycleAnnouncer, LifecycleSubmit } from "./lifecycle-submit";
+import { NotesForm } from "./notes-form";
 import { MarkPaidForm, PayFlow, RevertForm, type PayRow } from "./pay-flow";
 import { copyAmountId } from "./pay-flow-ids";
 import { PaymentHistory } from "./payment-history";
@@ -99,10 +101,6 @@ const PRICING_LABELS: Record<PricingMode, string> = {
   buy_p05: "Buy (5th percentile)",
 };
 
-/** The `<datalist>` the add-participant field points at. One per page, so a
- *  constant rather than a `useId` (this is a server component). */
-const CHARACTER_LIST_ID = "known-character-names";
-
 /** Below this many rows, `.scroller--tall`'s cap does more harm than good — see
  *  `.scroller--tall:has(.log--roster)` in globals.css, which gives this table
  *  its own chrome-relative cap rather than inheriting /admin/accounts'. */
@@ -128,28 +126,7 @@ function FlatPoolDisclosure({ operationId }: { operationId: string }) {
       summary="Or enter a flat value"
       ariaLabel="Or enter a flat value — a manual total for when triff can't price something"
     >
-      <form action={addFlatPoolAction.bind(null, operationId)} className="form-stack">
-        <label className="form-stack__field">
-          Total value (ISK)
-          <input
-            className="field"
-            type="number"
-            step="0.01"
-            min="0"
-            name="totalValue"
-            required
-          />
-        </label>
-        <label className="form-stack__field">
-          Note (required — why this number)
-          <input className="field" name="notes" required />
-        </label>
-        <label className="form-stack__field">
-          What was in it (optional)
-          <textarea className="field" name="rawPaste" rows={3} />
-        </label>
-        <Submit className="btn">Add flat pool</Submit>
-      </form>
+      <FlatPoolForm operationId={operationId} />
     </Disclosure>
   );
 }
@@ -268,8 +245,15 @@ export default async function PayoutOperationPage({
       <SiteHeader items={nav} current="/payouts" section {...brandProps()} />
       <main id="main" tabIndex={-1} className="page">
         <div className="page__head">
+          {/* `id` + `tabIndex={-1}` exist for `LifecycleSubmit`
+              (`lifecycle-submit.tsx`): Finalize and Unlock each remove their
+              own button from the DOM on success, so focus has nowhere of its
+              own to return to, and this heading is the one element on the
+              page guaranteed to survive every combination of
+              canFinalize/canRelease/locked. Same idiom `<main id="main"
+              tabIndex={-1}>` above already uses for the same reason. */}
           {canEdit ? (
-            <h1>
+            <h1 id="operation-name" tabIndex={-1}>
               <InlineEdit
                 action={setNameAction.bind(null, operation.id)}
                 fieldName="name"
@@ -278,7 +262,9 @@ export default async function PayoutOperationPage({
               />
             </h1>
           ) : (
-            <h1>{operation.name}</h1>
+            <h1 id="operation-name" tabIndex={-1}>
+              {operation.name}
+            </h1>
           )}
           <p className="page__lede">
             {/* Computed state, not prose: "prose is proportional, state is
@@ -324,7 +310,10 @@ export default async function PayoutOperationPage({
             later successful edit elsewhere on this page cannot re-render this
             same, by-then-stale notice — see the component's own docblock. */}
         <ClearStaleQuery />
-        {errorMessage && <Notice tone="bad">{errorMessage}</Notice>}
+        {/* Mounted unconditionally rather than `&&`-gated — every edit on this
+            page redirects back to it, so the region must pre-exist the message
+            for the change to be announced. See `Notice`'s docblock. */}
+        <Notice tone="bad">{errorMessage}</Notice>
 
         {droppedReport && (
           <Notice tone="warn">
@@ -422,59 +411,73 @@ export default async function PayoutOperationPage({
               a <dt>/<dd> pair is invalid HTML the parser silently reshuffles —
               the same class of bug as the <p><form> nesting fixed in da8c7d0,
               which `expectNoFormInParagraph` in e2e/payouts.spec.ts guards. */}
-          {showLifecycle && (
-            <div className="lifecycle">
-              {locked && (
-                <p className="dim">
-                  A payment has been recorded, so the loot pools, the roster, shares and
-                  the corp share are fixed permanently. Reverting a payment does not
-                  reopen editing — it corrects who has been paid, and nothing else. If the
-                  wrong person was marked paid, revert them and pay the right one; both
-                  work while frozen.
-                </p>
-              )}
-              <div className="btn-row btn-row--tight">
-                {canFinalize && (
-                  <form action={finalizeAction.bind(null, operation.id)}>
-                    <ConfirmSubmit
+          {/* The announcer sits OUTSIDE the `showLifecycle` gate, not inside
+              it. An operator who is neither the creator nor an admin can
+              finalize (canFinalize wants only operator + draft) but cannot
+              unlock (canRelease wants canUnlock), so for them the successful
+              finalize turns all three disjuncts of `showLifecycle` false at
+              once and takes the whole block away. An announcer nested in
+              there would be unmounted by the very response it was waiting to
+              describe, and "Operation finalized." would be spoken to nothing.
+              Out here it survives the block it describes. */}
+          <LifecycleAnnouncer>
+            {showLifecycle && (
+              <div className="lifecycle">
+                {locked && (
+                  <p className="dim">
+                    A payment has been recorded, so the loot pools, roster, shares and
+                    corp share are fixed permanently. Reverting a payment does not reopen
+                    editing: it only corrects who was paid, so revert the wrong one and
+                    pay the right person while still frozen.
+                  </p>
+                )}
+                <div className="btn-row btn-row--tight">
+                  {canFinalize && (
+                    <LifecycleSubmit
+                      action={finalizeAction.bind(null, operation.id)}
                       className={primaryStage === "finalize" ? "btn btn--primary" : "btn"}
                       label="Finalize"
                       confirmName="confirm finalize"
-                      describedBy="finalize-cost"
+                      costId="finalize-cost"
+                      announcement="Operation finalized."
+                      cost={
+                        <>
+                          Closes the pools, roster and shares to editing. Reversible with
+                          Unlock until the first payment is recorded, and permanent after
+                          that.
+                        </>
+                      }
                     />
-                    <ConfirmCost id="finalize-cost" className="dim">
-                      Closes the pools, roster and shares to editing. Reversible with
-                      Unlock until the first payment is recorded, and permanent after
-                      that.
-                    </ConfirmCost>
-                  </form>
-                )}
-                {/* Plain grade, and armed like its neighbours. Quiet made it
-                  indistinguishable from the label register it sat beside — the
-                  comment on `primaryStage` above already says Unlock is meant
-                  to be plain, and the markup had drifted from it. It reopens
-                  finalized financial state, which is the same weight as the
-                  Finalize it undoes, so it arms rather than firing on one
-                  press. The standing explanation that used to sit permanently
-                  below it is now the cost sentence, which is what this
-                  component exists to hold. */}
-                {canRelease && (
-                  <form action={unlockAction.bind(null, operation.id)}>
-                    <ConfirmSubmit
+                  )}
+                  {/* Plain grade, and armed like its neighbours. Quiet made it
+                    indistinguishable from the label register it sat beside — the
+                    comment on `primaryStage` above already says Unlock is meant
+                    to be plain, and the markup had drifted from it. It reopens
+                    finalized financial state, which is the same weight as the
+                    Finalize it undoes, so it arms rather than firing on one
+                    press. The standing explanation that used to sit permanently
+                    below it is now the cost sentence, which is what this
+                    component exists to hold. */}
+                  {canRelease && (
+                    <LifecycleSubmit
+                      action={unlockAction.bind(null, operation.id)}
                       className="btn"
                       label="Unlock"
                       confirmName="confirm unlock"
-                      describedBy="unlock-cost"
+                      costId="unlock-cost"
+                      announcement="Operation unlocked."
+                      cost={
+                        <>
+                          Reopens the pools, roster and shares to editing, until finalized
+                          again or until the first payment is recorded.
+                        </>
+                      }
                     />
-                    <ConfirmCost id="unlock-cost" className="dim">
-                      Reopens the pools, roster and shares to editing, until finalized
-                      again or until the first payment is recorded.
-                    </ConfirmCost>
-                  </form>
-                )}
+                  )}
+                </div>
               </div>
-            </div>
-          )}
+            )}
+          </LifecycleAnnouncer>
 
           {/* --- Loot ---------------------------------------------------- */}
           <RuleHead
@@ -483,15 +486,6 @@ export default async function PayoutOperationPage({
           >
             Loot
           </RuleHead>
-          {canEdit && pools.length === 0 && (
-            <>
-              <AppraiseForm
-                operationId={operation.id}
-                primary={primaryStage === "appraise"}
-              />
-              <FlatPoolDisclosure operationId={operation.id} />
-            </>
-          )}
           {pools.length > 0 && (
             <>
               <Scroller label="Loot pools">
@@ -664,21 +658,29 @@ export default async function PayoutOperationPage({
                     </div>
                   ),
               )}
-
-              {canEdit && (
-                <Disclosure
-                  as="details"
-                  className="disc"
-                  summary="Add another paste"
-                  ariaLabel="Add another paste — appraise more loot, or enter a flat value"
-                >
-                  <div className="form-stack">
-                    <AppraiseForm operationId={operation.id} primary={false} />
-                    <FlatPoolDisclosure operationId={operation.id} />
-                  </div>
-                </Disclosure>
-              )}
             </>
+          )}
+
+          {/* One slot, both states — the paste form is bare while there is no
+              loot and tucked into "Add another paste" once there is, but it is
+              the SAME element in the same position either way, so React keeps
+              the component mounted across that switch. That matters beyond
+              tidiness: `AppraiseForm` carries a dropped-lines payload home in
+              `useActionState` and pushes it into `?dropped=` from an effect
+              (see its docblock). Rendering it under `pools.length === 0` and
+              again under `pools.length > 0` unmounts it on the very commit that
+              the first paste succeeds, so that effect never runs and the
+              "N items ignored" notice for the first paste is silently lost —
+              the common case, since most operations start empty. The collapsed
+              presentation is a prop, not a second call site. */}
+          {canEdit && (
+            <AppraiseForm
+              operationId={operation.id}
+              primary={primaryStage === "appraise"}
+              collapsed={pools.length > 0}
+            >
+              <FlatPoolDisclosure operationId={operation.id} />
+            </AppraiseForm>
           )}
 
           {/* --- Split / Roster ------------------------------------------ */}
@@ -738,29 +740,10 @@ export default async function PayoutOperationPage({
                 The only way to add someone without discarding existing share edits.
                 Pasting a roster replaces the whole thing.
               </p>
-              <form
-                action={addParticipantAction.bind(null, operation.id)}
-                className="form-stack"
-              >
-                <label className="form-stack__field">
-                  Character name
-                  <input
-                    className="field"
-                    name="name"
-                    list={characterNames ? CHARACTER_LIST_ID : undefined}
-                    autoComplete="off"
-                    required
-                  />
-                </label>
-                {characterNames && (
-                  <datalist id={CHARACTER_LIST_ID}>
-                    {characterNames.map((n) => (
-                      <option key={n} value={n} />
-                    ))}
-                  </datalist>
-                )}
-                <Submit className="btn">Add participant</Submit>
-              </form>
+              <AddParticipantForm
+                operationId={operation.id}
+                characterNames={characterNames}
+              />
             </Disclosure>
           )}
           {participants.length > 0 && (
@@ -1073,7 +1056,11 @@ export default async function PayoutOperationPage({
                         {operation.battleReportUrl}
                       </a>
                     ) : (
-                      <span className="dim">Not set</span>
+                      // Distinct from the read-only "Not set" below on purpose:
+                      // this sits beside a live "edit" trigger, so the empty
+                      // state should read as an invitation the operator can act
+                      // on, not as a null value they can only note.
+                      <span className="dim">No link yet</span>
                     )
                   }
                   label="battle report URL"
@@ -1092,18 +1079,14 @@ export default async function PayoutOperationPage({
             <dt>Notes</dt>
             <dd>
               {canEdit ? (
-                <InlineEdit
+                <NotesForm
                   action={setNotesAction.bind(null, operation.id)}
-                  fieldName="notes"
-                  value={operation.notes ?? ""}
-                  displayValue={operation.notes || <span className="dim">None</span>}
-                  label="operation notes"
-                  as="textarea"
-                  required={false}
-                  rows={3}
+                  initialValue={operation.notes ?? ""}
                 />
+              ) : operation.notes ? (
+                <span className="notes-text">{operation.notes}</span>
               ) : (
-                operation.notes || <span className="dim">None</span>
+                <span className="dim">None</span>
               )}
             </dd>
           </dl>

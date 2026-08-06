@@ -4,9 +4,14 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getDb } from "@/db";
 import { isJobType } from "@/core/schedules";
+import { HEARTBEAT_STALE_AFTER_MS, evaluateFreshness } from "@/core/health";
 import { requireAdminAction } from "@/lib/admin-guard";
 import { logAudit } from "@/services/audit";
 import { enqueueSync } from "@/services/outbox";
+import { workerHeartbeat } from "@/services/health";
+import { elapsedShort } from "@/app/_components/format-ago";
+import { type ActionOutcome } from "@/app/_components/confirm-group";
+import { queuedNotice } from "./view";
 
 export async function syncAllAction(): Promise<void> {
   const { accountId: actor } = await requireAdminAction();
@@ -16,11 +21,14 @@ export async function syncAllAction(): Promise<void> {
   });
   revalidatePath("/admin/sync");
   // The worker hasn't run by the time this re-renders, so the enqueue itself
-  // is invisible; redirect carries a query flag the page turns into a notice.
-  // `at` is the enqueue instant, and it is what makes the *second* press of
-  // the same button announce: the notice lives in a permanently-mounted
-  // `role="status"` region, and a region only announces a mutation, so a
-  // byte-identical string is silence. See `queuedNotice`.
+  // is invisible; redirect carries a query flag the page turns into a notice
+  // via `ConfirmNotice` (`@/app/_components/confirm-notice`), which also
+  // moves focus there so the confirmation is reachable from a button that
+  // sits below seven job rows and however many drawers are open. `at` is the
+  // enqueue instant, and it is what makes the *second* press of the same
+  // button confirm again: the redirect target is otherwise constant, and
+  // without a changing `at` in its effect dependency only the first press
+  // would move focus. See `queuedNotice`.
   redirect(`/admin/sync?queued=all&at=${Date.now()}`);
 }
 
@@ -32,8 +40,34 @@ export async function syncAllAction(): Promise<void> {
  * `target` carries the job type rather than "all". The audit page filters
  * actions by prefix, so `sync.requested` still matches everything it did
  * before, and the column that was always the literal "all" now says which job.
+ *
+ * Unlike its two siblings above, this does NOT redirect. Its `<form>`
+ * (page.tsx) sits inside that job's own `Disclosure`, whose open/closed state
+ * is a plain `useState` (`_components/disclosure.tsx`) with nowhere else to
+ * live — a redirect back to this same route, even carrying nothing but
+ * `?queued=&at=`, replaces the whole route tree and resets it, closing the
+ * drawer the admin opened to press this button on the very first press. An
+ * e2e run of the original all-redirect version of this fix caught it, the
+ * same way an earlier one caught the identical failure on `/admin/accounts`'s
+ * row drawer (see `_components/confirm-group.tsx`). `syncAllAction` and
+ * `recheckInvalidAction` keep the redirect shape: their controls sit in
+ * `btn-row--controls`, below the strip entirely, so a redirect back to this
+ * page costs nothing stateful.
+ *
+ * Returns its confirmation through `useActionState` instead, for
+ * `confirm-group.tsx`'s `ConfirmingForm`/`ConfirmGroup` (page.tsx wraps this
+ * job's form in both) to focus — no query string, no navigation. The
+ * sentence itself still comes from `queuedNotice` (`./view`), called with no
+ * `at`: that argument only exists to make a repeat press of the *same*
+ * redirect target announce again (`queuedNotice`'s own doc), and
+ * `ConfirmGroup`'s counter-based effect already re-fires on every press
+ * regardless of whether the text repeats, so there is nothing for `at` to buy
+ * here that the drawer-scoped plumbing doesn't already give for free.
  */
-export async function syncJobAction(formData: FormData): Promise<void> {
+export async function syncJobAction(
+  _prevState: ActionOutcome,
+  formData: FormData,
+): Promise<ActionOutcome> {
   const { accountId: actor } = await requireAdminAction();
   const jobType = formData.get("jobType");
   // A server action takes whatever the wire sends, and `jobType` becomes a
@@ -46,12 +80,21 @@ export async function syncJobAction(formData: FormData): Promise<void> {
     throw new Error("invalid_job_type");
   }
 
-  await getDb().transaction(async (tx) => {
+  const db = getDb();
+  await db.transaction(async (tx) => {
     await logAudit(tx, { actor, action: "sync.requested", target: jobType });
     await enqueueSync(tx, { kind: "job", jobType });
   });
   revalidatePath("/admin/sync");
-  redirect(`/admin/sync?queued=${encodeURIComponent(jobType)}&at=${Date.now()}`);
+
+  // Same worker-liveness signal page.tsx's own render computes for the
+  // worker line above the strip — read fresh here rather than threaded
+  // through, since this action returns straight into the drawer with no
+  // round trip through the page's own server-component render.
+  const heartbeatAt = await workerHeartbeat(db);
+  const worker = evaluateFreshness(heartbeatAt, new Date(), HEARTBEAT_STALE_AFTER_MS);
+  const workerAge = worker.ageSec === null ? null : elapsedShort(worker.ageSec * 1000);
+  return { text: queuedNotice(jobType, undefined, workerAge) };
 }
 
 export async function recheckInvalidAction(): Promise<void> {

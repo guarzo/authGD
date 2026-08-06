@@ -61,14 +61,15 @@ export function ConfirmArmScope({ children }: { children: ReactNode }) {
 
 /**
  * What a destructive action costs, shown to sighted users only once that
- * action is armed.
+ * action is armed — unless the call site opts out with `alwaysHidden`, which
+ * keeps it `.visually-hidden` permanently instead (see that prop).
  *
  * The cost sentence used to render unconditionally beside the control. That put
  * a permanent explanation of an action almost nobody takes on a page whose job
  * is to let a member confirm state and leave — PRODUCT.md's "state before
  * action", where the member should be able to read the page and go without
  * clicking anything. Arming is the moment the sentence becomes load-bearing, so
- * that is when it appears.
+ * that is when it appears, for the call sites that reveal at all.
  *
  * It is hidden with `.visually-hidden`, never unmounted, for two reasons. The
  * element is the target of the button's `aria-describedby`, and the whole value
@@ -76,7 +77,9 @@ export function ConfirmArmScope({ children }: { children: ReactNode }) {
  * the sentence sits AFTER the button in reading order, so a description that
  * only came into existence on the first press would not be there to be spoken
  * ahead of it. `.visually-hidden` is `position: absolute`, so at rest it is also
- * out of flow and adds no gap to the flex row it sits in.
+ * out of flow and adds no gap to the flex row it sits in. That is true whether
+ * or not the call site ever reveals it, which is what makes `alwaysHidden` a
+ * change in one boolean rather than a different component.
  *
  * Reveals for its own control only, matched on `describedBy` rather than on
  * "something in this scope is armed". The scope-wide reading is correct in a
@@ -91,29 +94,69 @@ export function ConfirmArmScope({ children }: { children: ReactNode }) {
  * reverting the attempt. Revealing inside a `td` widens the cell, the widening
  * moves the armed button out from under a stationary mouse, `pointerLeave`
  * below fires, and the control disarms itself — the reveal undoes the arm. The
- * admin accounts table therefore keeps its cost sentence `.visually-hidden`
- * always (#111) rather than using this component. The account page's Discord
- * row can reveal because it is a `dd` in a `.facts` grid that already reserves
- * a wrapping line, so nothing moves. Before reaching for this in a new dense
- * layout, check what the reveal reflows.
+ * admin accounts table therefore keeps its own cost sentence hand-rolled and
+ * `.visually-hidden` always (#111) rather than using this component at all.
+ *
+ * The payout page's Finalize and Unlock controls pass `alwaysHidden` for a
+ * different reason, and it is worth not confusing the two: not reflow, but
+ * that a sentence appearing under Finalize the moment it arms reads as an
+ * error message rather than as a cost. Those two controls are mutually
+ * exclusive anyway (`canFinalize` wants a draft, `canRelease` wants a
+ * finalized operation), so there is no neighbour to shove; the row simply
+ * grows rightward from a fixed left edge and the armed button does not move.
+ * The reveal here is a copy decision, not a layout one.
+ *
+ * The account page's Discord row still reveals, because a `dd` in a `.facts`
+ * grid is a place a sentence belongs — but only because `.facts__lead >
+ * .confirm-cost` gives the revealed cost `flex-basis: 100%`, which puts it on
+ * its own line and leaves the button where it was. That was not true when this
+ * comment first called the row safe. The row is a flex line with
+ * `align-items: center` and `flex-wrap: wrap`, and between roughly 641px and
+ * 851px the revealed sentence fit *beside* the button, grew the line box, and
+ * re-centred the button vertically — out from under a stationary pointer,
+ * firing `pointerLeave` and disarming the control the member had just armed.
+ * The `flex-basis: 100%` is what makes this paragraph true; do not remove it on
+ * the grounds that the row "already wraps".
+ *
+ * Before reaching for the default reveal in a new dense layout, check all
+ * three: what it reflows, at every width rather than the two you have open,
+ * and whether prose appearing mid-press reads as explanation or as alarm.
  */
 export function ConfirmCost({
   id,
   className,
   children,
+  alwaysHidden = false,
 }: {
   id: string;
   className?: string;
   children: ReactNode;
+  /** Skip the reveal and stay `.visually-hidden` permanently. Default false:
+   *  most call sites (the account page's Discord row, and the roster-replace
+   *  and delete-operation controls in `payouts/[id]/page.tsx`) sit in a layout
+   *  the reveal doesn't disturb, and for those the reveal is the point — a
+   *  sighted operator reads the cost only once it is load-bearing. Set true
+   *  where the sentence would reflow its neighbours, or where it would read as
+   *  an error rather than a cost; the lifecycle controls in
+   *  `payouts/[id]/lifecycle-submit.tsx` are the second case and currently the
+   *  only caller. */
+  alwaysHidden?: boolean;
 }) {
   const ctx = useContext(ArmContext);
   if (!ctx) {
     throw new Error("ConfirmCost must be rendered inside a ConfirmArmScope");
   }
-  const revealed = ctx.armedDescribedBy === id;
+  const revealed = !alwaysHidden && ctx.armedDescribedBy === id;
 
   return (
-    <span id={id} className={revealed ? className : `${className ?? ""} visually-hidden`}>
+    <span
+      id={id}
+      className={
+        revealed
+          ? `confirm-cost ${className ?? ""}`
+          : `confirm-cost ${className ?? ""} visually-hidden`
+      }
+    >
       {children}
     </span>
   );

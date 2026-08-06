@@ -86,7 +86,7 @@ function ActorCell({
   if (r.actorKind === "system") {
     return (
       <a
-        className="mono dim cell-link"
+        className="mono dim-ink cell-link"
         href={filterHref(params, "actor", "system")}
         title={r.actor}
       >
@@ -148,7 +148,7 @@ function TargetCell({
   if (r.targetKind === "literal") {
     return (
       <a
-        className="mono dim ellipsis-cell cell-link"
+        className="mono dim-ink ellipsis-cell cell-link"
         href={filterHref(params, "target", r.target)}
         title={r.target}
       >
@@ -523,9 +523,13 @@ export default async function AdminAuditPage({
           says the rows below are a UNION of two people's histories, which is
           the one thing that can make this page answer the question wrongly
           while looking right. */}
-      {ambiguityNotes.length > 0 && (
-        <Notice tone="warn">{ambiguityNotes.join(" · ")}</Notice>
-      )}
+      {/* Mounted unconditionally rather than `&&`-gated: this note appears and
+          disappears as the filter changes, which is exactly the transition a
+          live region exists to announce, and an `&&` would rebuild the region
+          holding its text instead. See `Notice`'s docblock. */}
+      <Notice tone="warn">
+        {ambiguityNotes.length > 0 ? ambiguityNotes.join(" · ") : null}
+      </Notice>
       {/* Also above the table. The bottom pager is roughly 300 tab stops past
           the top of a full page, so on a keyboard the only way to reach the
           next page was to traverse every link in every row. */}
@@ -625,7 +629,7 @@ export default async function AdminAuditPage({
                         r.action
                       ) : (
                         <>
-                          <span className="dim">{r.action.slice(0, dot + 1)}</span>
+                          <span className="dim-ink">{r.action.slice(0, dot + 1)}</span>
                           {r.action.slice(dot + 1)}
                         </>
                       )}
@@ -643,10 +647,11 @@ export default async function AdminAuditPage({
                           r.details,
                           roleNames,
                           tierLabels,
+                          new Map(Object.entries(r.detailAccountNames)),
                         )}
                       />
                     ) : (
-                      <span className="dim">&mdash;</span>
+                      <span className="dim-ink">&mdash;</span>
                     )}
                   </td>
                 </tr>

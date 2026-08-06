@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { STALE_AFTER_MS, evaluateFreshness } from "@/core/health";
+import {
+  HEARTBEAT_INTERVAL_MS,
+  HEARTBEAT_STALE_AFTER_MS,
+  STALE_AFTER_MS,
+  evaluateFreshness,
+} from "@/core/health";
 
 const now = new Date("2026-08-03T12:00:00Z");
 
@@ -39,5 +44,20 @@ describe("evaluateFreshness", () => {
   it("honours an explicit threshold override", () => {
     const at = new Date(now.getTime() - 60_000);
     expect(evaluateFreshness(at, now, 30_000).fresh).toBe(false);
+  });
+});
+
+// The whole point of this constant: a dead worker must read as such long
+// before STALE_AFTER_MS's 90 minutes elapse. Pins the exact multiple so a
+// future edit to either constant has to touch this assertion on purpose.
+describe("HEARTBEAT_STALE_AFTER_MS", () => {
+  it("is three heartbeat intervals, and far tighter than STALE_AFTER_MS", () => {
+    expect(HEARTBEAT_STALE_AFTER_MS).toBe(3 * HEARTBEAT_INTERVAL_MS);
+    expect(HEARTBEAT_STALE_AFTER_MS).toBeLessThan(STALE_AFTER_MS);
+  });
+
+  it("used as evaluateFreshness's threshold, catches a dead worker within minutes", () => {
+    const at = new Date(now.getTime() - HEARTBEAT_STALE_AFTER_MS - 1);
+    expect(evaluateFreshness(at, now, HEARTBEAT_STALE_AFTER_MS).fresh).toBe(false);
   });
 });

@@ -11,8 +11,11 @@ import {
   type AdminListSort,
 } from "@/services/account-view";
 import { Notice, RuleHead, Scroller, Status } from "@/app/_components/ui";
+import { ConfirmNotice } from "@/app/_components/confirm-notice";
 import { Tier } from "@/app/_components/tier";
 import { tierLabel } from "@/app/_components/labels";
+import { accountsConfirmation, matchesAccountSearch } from "./view";
+import { ConfirmGroup, ConfirmingForm } from "@/app/_components/confirm-group";
 // Shared with the member's own character table rather than reimplemented here:
 // the near-miss label copy and the "not managed" wording are the same question
 // asked about the same character, and two copies drift.
@@ -83,20 +86,46 @@ function fmt(d: Date | null): string {
   return d ? d.toISOString().slice(0, 10) : "—";
 }
 
+/** Collapses a possibly-repeated query param to one value, last wins —
+ *  matching `/admin/audit`'s `one`, for the same reason: a duplicate arises by
+ *  appending `&q=x` to a URL that already has one, so the appended value is
+ *  the intent. */
+function one(v: string | string[] | undefined): string | undefined {
+  return Array.isArray(v) ? v[v.length - 1] : v;
+}
+
 export default async function AdminAccountsPage({
   searchParams,
 }: {
+  // Next passes `string | string[]` for any param. A repeated one
+  // (`?q=Azzy&q=Zed`) reaching `.trim()` on an array takes the whole roster
+  // down with a 500 — the same defect `/admin/audit` already fixed, and the
+  // same fix: declare the real type and collapse it before anything reads it.
   searchParams: Promise<{
-    tier?: string;
-    status?: string;
-    sort?: string;
-    dir?: string;
-    error?: string;
-    queued?: string;
+    tier?: string | string[];
+    status?: string | string[];
+    sort?: string | string[];
+    dir?: string | string[];
+    error?: string | string[];
+    done?: string | string[];
+    name?: string | string[];
+    at?: string | string[];
+    q?: string | string[];
   }>;
 }) {
   await requireAdminPage();
-  const params = await searchParams;
+  const raw = await searchParams;
+  const params = {
+    tier: one(raw.tier),
+    status: one(raw.status),
+    sort: one(raw.sort),
+    dir: one(raw.dir),
+    error: one(raw.error),
+    done: one(raw.done),
+    name: one(raw.name),
+    at: one(raw.at),
+    q: one(raw.q),
+  };
   const sort = (
     SORTS.some((s) => s.key === params.sort) ? params.sort : "name"
   ) as AdminListSort;
@@ -106,14 +135,24 @@ export default async function AdminAccountsPage({
     : undefined;
   const status =
     params.status === "cryo" || params.status === "active" ? params.status : undefined;
-  const filtered = Boolean(tier || status);
+  // Trimmed the same way audit's actor/target filters are: a trailing space
+  // off a pasted name falls through to "no match" otherwise, and a
+  // whitespace-only value collapses to "unfiltered" rather than hiding the
+  // whole roster on a stray space.
+  const q = params.q?.trim() || undefined;
+  const filtered = Boolean(tier || status || q);
   const cfg = getConfig();
-  const rows = await getAdminAccountsList(getDb(), cfg, {
+  const allRows = await getAdminAccountsList(getDb(), cfg, {
     tier,
     status,
     sort,
     dir,
   });
+  // The search runs in-memory, over rows the service already assembled in
+  // full for tier/status filtering (services/account-view.ts) — one more
+  // predicate over the same array, not a second query shape. See
+  // `matchesAccountSearch` (view.ts) for what it matches and why.
+  const rows = q ? allRows.filter((r) => matchesAccountSearch(r, q)) : allRows;
   // Independent of every active filter. `rows` is narrowed by tier AND status
   // (above), so counting it would hide the queue from an admin who is looking
   // at ?status=cryo — precisely when a standing reminder is most useful. A
@@ -122,10 +161,18 @@ export default async function AdminAccountsPage({
   // for every account just to get thrown away for a length.
   const pendingCount = await countPendingCached();
   const errorMessage = lookupErrorMessage(ADMIN_ACCOUNTS_ERRORS, params.error);
+  // Only the four cell-level actions (unlinkDiscordAction, promoteAdminAction,
+  // demoteAdminAction, syncAccountAction — actions.ts) reach this: they're the
+  // ones that redirect through `doneUrl`, and none of their `done` codes
+  // ("discord", "grant", "revoke", "sync") read the third argument, so this
+  // never carries a tier label. The other four mutating actions build their
+  // own confirmation directly (see view.ts's docblock) and never touch
+  // `?done=` at all.
+  const confirmation = accountsConfirmation(params.done, params.name, undefined);
 
   const listParams = (over: Record<string, string | undefined> = {}) => {
     const p = new URLSearchParams();
-    for (const [k, v] of Object.entries({ tier, status, sort, dir, ...over })) {
+    for (const [k, v] of Object.entries({ tier, status, sort, dir, q, ...over })) {
       if (v) p.set(k, v);
     }
     return p;
@@ -133,13 +180,14 @@ export default async function AdminAccountsPage({
   const qs = (over: Record<string, string | undefined>) =>
     `/admin/accounts?${listParams(over).toString()}`;
   // The admin's current view — tier, status, sort, dir — as a bare query
-  // string. Bound into every mutation below so that an error redirect can
-  // rebuild the list the admin was actually scanning instead of dropping them
-  // on the unfiltered default. syncAccountAction has taken a full href on this
-  // principle since it was written; the rest take the search string and let
-  // adminAccountsErrorUrl own the path.
+  // string. Bound into every mutation below so that a redirect — success or
+  // error — can rebuild the list the admin was actually scanning instead of
+  // dropping them on the unfiltered default. `syncAccountAction` used to take
+  // a full pre-built href on this same principle; it now takes the bare
+  // string like every sibling, since `doneUrl` (actions.ts) owns the path for
+  // every success redirect the way `adminAccountsErrorUrl` owns it for every
+  // failure.
   const listSearch = listParams().toString();
-  const syncQueuedHref = qs({ queued: "account" });
 
   return (
     <main id="main" tabIndex={-1} className="page">
@@ -151,19 +199,50 @@ export default async function AdminAccountsPage({
         </p>
       </div>
 
-      {errorMessage && <Notice tone="bad">{errorMessage}</Notice>}
+      {/* Mounted unconditionally, not `&&`-gated: every mutation on this page
+          ends in a server-action redirect that re-renders without a document
+          load, so an `&&` would insert the region and its text in the same
+          commit — the shape `Notice`'s own docblock calls out as the one that
+          defeats the live region it just asked for. Empty children render the
+          reserved `.notice-slot`, which is out of flow and draws nothing. */}
+      <Notice tone="bad">{errorMessage}</Notice>
 
-      {params.queued === "account" && (
-        <Notice>Sync queued. The worker picks it up within a few seconds.</Notice>
-      )}
+      {/* #131's third slot on this page was `{params.queued === "account" &&
+          …}`, converted there to an unconditional `Notice`. It is gone rather
+          than merged: `?queued=account` was `syncAccountAction`'s own scheme
+          and this branch supersedes it with the `?done=&name=&at=` triple every
+          cell-level action now shares (see `doneUrl` in actions.ts, which drops
+          `queued` deliberately). Its text lives on in `accountsConfirmation`'s
+          `sync` case, rendered by the ConfirmNotice below — which is already
+          mounted unconditionally and carries `live={false}` on purpose, since
+          focus rather than the live region does the announcing there.
 
-      {pendingCount > 0 && (
-        <Notice>
+          `ConfirmNotice`, not a bare `{cond && <Notice>}`: the four cell-level
+          row actions — unlink Discord, grant/revoke admin, sync now — each
+          round-trip through a server action that redirects back here, and
+          each changes the very control that was pressed out from under
+          itself (a Discord unlink turns its button into a bare "none"
+          status; grant/revoke and freeze/wake-adjacent admin controls swap
+          branches; a sync request has nothing left to confirm the press with
+          otherwise). Left as a bare conditional, an admin's focus fell to
+          `<body>` after every single press — the same defect `/account` and
+          `/admin/sync` each fixed with this component. The other four
+          mutating actions (tier, approve, auto, freeze/wake) live inside the
+          row's drawer and use `ConfirmGroup`/`ConfirmingForm`
+          (`confirm-group.tsx`) instead — a redirect back to this page would
+          reset the drawer's own open/closed state, which this page-level
+          notice cannot avoid since it only exists after the navigation that
+          causes the problem. See `view.ts`'s and `confirm-group.tsx`'s
+          docblocks for the full reasoning. */}
+      <ConfirmNotice text={confirmation} at={params.at} />
+
+      <Notice>
+        {pendingCount > 0 ? (
           <a href="/admin/accounts?tier=pending">
             {pendingCount} account{pendingCount === 1 ? "" : "s"} awaiting approval
           </a>
-        </Notice>
-      )}
+        ) : null}
+      </Notice>
 
       {/* Not a RuleHead. The two groups below already carry their own visible
           labels ("Tier", "Status") and their own `role="group"` names, so a
@@ -172,9 +251,68 @@ export default async function AdminAccountsPage({
           page does not have (the table region below it starts ~445px down).
           The heading itself still has to exist, so screen-reader heading
           navigation can reach the filters as a landmark-sized unit; it just
-          has nothing left to say on screen. */}
+          has nothing left to say on screen. The search box added below is a
+          filter too (it narrows the same `rows`), so it shares this landmark
+          rather than earning a second heading. */}
       <h2 className="visually-hidden">Filter</h2>
       <div className="filters">
+        {/* The one thing this page had no answer for: "find this one member"
+            on a roster with no in-page search, only scroll and browser
+            find-in-page — which misses a name sitting inside a collapsed
+            drawer. A GET form, like /admin/audit's filter row, not a
+            client-side filter: `rows` is already the full, server-sorted
+            list by the time this renders, and a client filter would either
+            duplicate `matchesAccountSearch` in the browser or ship the whole
+            roster as a data island to filter over — for a page that is
+            `force-dynamic` and already re-fetches on every navigation
+            anyway. Submitting it is a navigation, same as clicking a tier
+            chip; unlike the four drawer-scoped actions below, no drawer is
+            open yet when an admin is searching for a row to open, so the
+            "a redirect resets Disclosure's state" trap those actions work
+            around does not apply here.
+
+            Tier, status, and sort survive the search as hidden fields — an
+            admin narrowing to `?status=cryo` and then searching a name
+            expects both to hold, not the search to reset every other choice
+            they already made. `q` itself needs no hidden field: the visible
+            input already carries it. */}
+        <form
+          method="get"
+          className="filters__group"
+          role="search"
+          aria-label="Find a member"
+        >
+          {/* Not "Find" — that is the submit button's name three lines down,
+              and a screen-reader user tabbing this form heard "Find" twice
+              with nothing to tell the box from the button. Naming the field
+              for what goes IN it also says more than the verb did: the hint
+              below expands it, but the label alone now answers "type what?". */}
+          <label className="filters__label" htmlFor="accounts-search">
+            Name or handle
+          </label>
+          {tier && <input type="hidden" name="tier" value={tier} />}
+          {status && <input type="hidden" name="status" value={status} />}
+          {sort !== "name" && <input type="hidden" name="sort" value={sort} />}
+          {dir !== "asc" && <input type="hidden" name="dir" value={dir} />}
+          <input
+            id="accounts-search"
+            className="field"
+            type="search"
+            name="q"
+            defaultValue={params.q ?? ""}
+            aria-describedby="accounts-search-hint"
+          />
+          <span className="visually-hidden" id="accounts-search-hint">
+            Matches a main, an alt, or a linked Discord handle.
+          </span>
+          <Submit className="btn btn--micro">Find</Submit>
+          {q && (
+            <a className="btn btn--micro btn--quiet" href={qs({ q: undefined })}>
+              clear
+            </a>
+          )}
+        </form>
+        <span className="filters__sep" aria-hidden="true" />
         <div className="filters__group" role="group" aria-label="Filter by tier">
           <span className="filters__label">Tier</span>
           <a
@@ -283,13 +421,7 @@ export default async function AdminAccountsPage({
           <tbody>
             <ConfirmArmScope>
               {rows.map((r) => (
-                <AccountRow
-                  key={r.accountId}
-                  r={r}
-                  cfg={cfg}
-                  syncQueuedHref={syncQueuedHref}
-                  listSearch={listSearch}
-                />
+                <AccountRow key={r.accountId} r={r} cfg={cfg} listSearch={listSearch} />
               ))}
               {rows.length === 0 && (
                 <tr>
@@ -377,12 +509,10 @@ function TokenState({ c }: { c: AdminCharacterRow }) {
 function AccountRow({
   r,
   cfg,
-  syncQueuedHref,
   listSearch,
 }: {
   r: AdminAccountRow;
   cfg: Config;
-  syncQueuedHref: string;
   listSearch: string;
 }) {
   const tokens = r.tokenSummary;
@@ -450,7 +580,7 @@ function AccountRow({
               {/* Marked in text, not by styling: the row is named by a
                   character that is not its main, and that distinction has
                   to be perceivable without seeing the dimming. */}
-              {firstName && <span className="mono dim"> ·no main</span>}
+              {firstName && <span className="mono dim-ink"> ·no main</span>}
             </>
           )}
           {r.characters.length > 1 && ` (+${r.characters.length - 1})`}
@@ -531,7 +661,14 @@ function AccountRow({
                   {r.discordUsername && (
                     <span className="dim mono">@{r.discordUsername}</span>
                   )}
-                  <form action={unlinkDiscordAction.bind(null, r.accountId, listSearch)}>
+                  <form
+                    action={unlinkDiscordAction.bind(
+                      null,
+                      r.accountId,
+                      listSearch,
+                      identity,
+                    )}
+                  >
                     <ConfirmSubmit
                       className="btn btn--micro"
                       armedClassName="btn btn--micro btn--danger"
@@ -614,7 +751,9 @@ function AccountRow({
           <td>
             <div className="btn-row btn-row--tight">
               {r.isAdmin ? (
-                <form action={demoteAdminAction.bind(null, r.accountId, listSearch)}>
+                <form
+                  action={demoteAdminAction.bind(null, r.accountId, listSearch, identity)}
+                >
                   <ConfirmSubmit
                     className="btn btn--micro btn--danger"
                     label="revoke"
@@ -623,7 +762,14 @@ function AccountRow({
                   />
                 </form>
               ) : (
-                <form action={promoteAdminAction.bind(null, r.accountId, listSearch)}>
+                <form
+                  action={promoteAdminAction.bind(
+                    null,
+                    r.accountId,
+                    listSearch,
+                    identity,
+                  )}
+                >
                   <Submit
                     className="btn btn--micro"
                     pendingLabel="granting…"
@@ -633,7 +779,9 @@ function AccountRow({
                   </Submit>
                 </form>
               )}
-              <form action={syncAccountAction.bind(null, r.accountId, syncQueuedHref)}>
+              <form
+                action={syncAccountAction.bind(null, r.accountId, listSearch, identity)}
+              >
                 <Submit
                   className="btn btn--micro nowrap"
                   pendingLabel="queueing…"
@@ -653,84 +801,119 @@ function AccountRow({
       <div className="drawer__controls">
         <section className="drawer__group">
           <span className="drawer__label">Set tier</span>
-          <div className="btn-group">
-            {r.tier === "pending" ? (
-              <>
-                {/* The row goes AFTER the visible label, not into the middle of
-                    it: "Approve as Alumni" has to survive in the accessible name
-                    as one contiguous run, or a speech-control user saying what
-                    is written on the button matches nothing (WCAG 2.5.3). Same
-                    convention as the Actions cell above. */}
-                <form
-                  action={approveAction.bind(null, r.accountId, "alumni", listSearch)}
-                  className="inline-form"
-                >
-                  <Submit
-                    className="btn btn--micro"
-                    pendingLabel="approving…"
-                    aria-label={`Approve as ${tierLabel("alumni")} for ${identity}`}
+          {/* `ConfirmGroup` (confirm-group.tsx), not a plain `<form>` per
+              button: this action lives in the drawer, and a redirect here
+              would reset the drawer's own open/closed state (an e2e run of
+              the earlier, redirect-based version of this fix caught it —
+              the drawer closed on the very first tier change). One shared
+              confirmation slot per group, not one per button: only one of
+              these mutually-exclusive tier presses can ever land at a time,
+              and a `Notice` inside each button's own `.inline-form` would
+              also grow that button's box, widening this `<td>`'s `1%`-width
+              column for every row in the table. */}
+          <ConfirmGroup>
+            <div className="btn-group">
+              {r.tier === "pending" ? (
+                <>
+                  {/* The row goes AFTER the visible label, not into the middle of
+                      it: "Approve as Alumni" has to survive in the accessible name
+                      as one contiguous run, or a speech-control user saying what
+                      is written on the button matches nothing (WCAG 2.5.3). Same
+                      convention as the Actions cell above. */}
+                  <ConfirmingForm
+                    action={approveAction.bind(
+                      null,
+                      r.accountId,
+                      "alumni",
+                      listSearch,
+                      identity,
+                    )}
+                    className="inline-form"
                   >
-                    Approve as {tierLabel("alumni")}
-                  </Submit>
-                </form>
-                <form
-                  action={approveAction.bind(null, r.accountId, "associate", listSearch)}
-                  className="inline-form"
-                >
-                  <Submit
-                    className="btn btn--micro"
-                    pendingLabel="approving…"
-                    aria-label={`Approve as ${tierLabel("associate")} for ${identity}`}
+                    <Submit
+                      className="btn btn--micro"
+                      pendingLabel="approving…"
+                      aria-label={`Approve as ${tierLabel("alumni")} for ${identity}`}
+                    >
+                      Approve as {tierLabel("alumni")}
+                    </Submit>
+                  </ConfirmingForm>
+                  <ConfirmingForm
+                    action={approveAction.bind(
+                      null,
+                      r.accountId,
+                      "associate",
+                      listSearch,
+                      identity,
+                    )}
+                    className="inline-form"
                   >
-                    Approve as {tierLabel("associate")}
-                  </Submit>
-                </form>
-              </>
-            ) : (
-              TIERS.map((t) => (
-                <form
-                  key={t}
-                  action={setTierAction.bind(null, r.accountId, t, listSearch)}
-                  className="inline-form"
-                >
-                  {/* No `pendingLabel` here, unlike every other control in this
-                      drawer: the label is the tier itself, and swapping it for
-                      "setting…" would erase which of the three was pressed at
-                      exactly the moment the admin is checking. `disabled` plus
-                      `aria-busy` still report the in-flight state.
+                    <Submit
+                      className="btn btn--micro"
+                      pendingLabel="approving…"
+                      aria-label={`Approve as ${tierLabel("associate")} for ${identity}`}
+                    >
+                      Approve as {tierLabel("associate")}
+                    </Submit>
+                  </ConfirmingForm>
+                </>
+              ) : (
+                TIERS.map((t) => (
+                  <ConfirmingForm
+                    key={t}
+                    action={setTierAction.bind(
+                      null,
+                      r.accountId,
+                      t,
+                      listSearch,
+                      identity,
+                    )}
+                    className="inline-form"
+                  >
+                    {/* No `pendingLabel` here, unlike every other control in this
+                        drawer: the label is the tier itself, and swapping it for
+                        "setting…" would erase which of the three was pressed at
+                        exactly the moment the admin is checking. `disabled` plus
+                        `aria-busy` still report the in-flight state.
 
-                      Same principle as the note field for the accessible name: a
-                      speech-input or screen-reader user reaches this control with
-                      only the tier word to go on, and this is the control
-                      derole-don't-boot turns on. The visible text stays the bare
-                      tier word, so the accessible name keeps it verbatim (WCAG
-                      2.5.3) and adds the row in front of it. */}
+                        Same principle as the note field for the accessible name: a
+                        speech-input or screen-reader user reaches this control with
+                        only the tier word to go on, and this is the control
+                        derole-don't-boot turns on. The visible text stays the bare
+                        tier word, so the accessible name keeps it verbatim (WCAG
+                        2.5.3) and adds the row in front of it. */}
+                    <Submit
+                      className="btn btn--micro"
+                      disabled={r.tierLocked && r.tier === t}
+                      aria-pressed={r.tier === t}
+                      aria-label={`Set ${identity} to ${tierLabel(t)}`}
+                    >
+                      {tierLabel(t)}
+                    </Submit>
+                  </ConfirmingForm>
+                ))
+              )}
+              {r.tierLocked && (
+                <ConfirmingForm
+                  action={returnToAutoAction.bind(
+                    null,
+                    r.accountId,
+                    listSearch,
+                    identity,
+                  )}
+                  className="inline-form"
+                >
                   <Submit
                     className="btn btn--micro"
-                    disabled={r.tierLocked && r.tier === t}
-                    aria-pressed={r.tier === t}
-                    aria-label={`Set ${identity} to ${tierLabel(t)}`}
+                    pendingLabel="resetting…"
+                    aria-label={`return ${identity} to auto tier`}
                   >
-                    {tierLabel(t)}
+                    auto
                   </Submit>
-                </form>
-              ))
-            )}
-            {r.tierLocked && (
-              <form
-                action={returnToAutoAction.bind(null, r.accountId, listSearch)}
-                className="inline-form"
-              >
-                <Submit
-                  className="btn btn--micro"
-                  pendingLabel="resetting…"
-                  aria-label={`return ${identity} to auto tier`}
-                >
-                  auto
-                </Submit>
-              </form>
-            )}
-          </div>
+                </ConfirmingForm>
+              )}
+            </div>
+          </ConfirmGroup>
           {r.tierChangedByName && (
             <span className="dim mono">set by {r.tierChangedByName}</span>
           )}
@@ -738,32 +921,38 @@ function AccountRow({
 
         <section className="drawer__group">
           <span className="drawer__label">Cryo</span>
-          <form
-            action={setStatusAction.bind(
-              null,
-              r.accountId,
-              r.status === "cryo" ? "active" : "cryo",
-              listSearch,
-            )}
-          >
-            {r.status === "cryo" ? (
-              <Submit
-                className="btn btn--micro"
-                pendingLabel="waking…"
-                aria-label={`wake ${identity}`}
-              >
-                wake
-              </Submit>
-            ) : (
-              <ConfirmSubmit
-                className="btn btn--micro"
-                armedClassName="btn btn--micro btn--danger"
-                label="freeze"
-                restName={`freeze ${identity}`}
-                confirmName={`confirm freeze ${identity}`}
-              />
-            )}
-          </form>
+          {/* Same reasoning as the tier group above: this action lives in the
+              drawer too, so it uses `ConfirmingForm`/`ConfirmGroup` rather
+              than a redirect, to leave the drawer's own open state alone. */}
+          <ConfirmGroup>
+            <ConfirmingForm
+              action={setStatusAction.bind(
+                null,
+                r.accountId,
+                r.status === "cryo" ? "active" : "cryo",
+                listSearch,
+                identity,
+              )}
+            >
+              {r.status === "cryo" ? (
+                <Submit
+                  className="btn btn--micro"
+                  pendingLabel="waking…"
+                  aria-label={`wake ${identity}`}
+                >
+                  wake
+                </Submit>
+              ) : (
+                <ConfirmSubmit
+                  className="btn btn--micro"
+                  armedClassName="btn btn--micro btn--danger"
+                  label="freeze"
+                  restName={`freeze ${identity}`}
+                  confirmName={`confirm freeze ${identity}`}
+                />
+              )}
+            </ConfirmingForm>
+          </ConfirmGroup>
           {r.status === "cryo" && (
             <span className="dim mono nowrap">since {fmt(r.statusChangedAt)}</span>
           )}

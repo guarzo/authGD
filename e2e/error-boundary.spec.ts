@@ -155,10 +155,13 @@ test("the boundary keeps an admin inside the admin section", async ({
   // back on an unknown `sort`, `/admin/audit` guards `before` with
   // `Number.isFinite` — so there is no URL that makes one of them throw, which
   // is the app being right rather than a gap. Same technique as the payouts
-  // tests above: `/admin/sync` reads exactly one table, `sync_run`, and reads
-  // it *after* `requireAdminPage()`, so renaming it away leaves the admin guard
-  // passing and takes down only the page body. Renamed back in `finally` so the
-  // truncate in `beforeEach` still finds the table.
+  // tests above: `/admin/sync` also reads `pgboss.version` for its worker
+  // heartbeat, but that read is deliberately fail-open (`workerHeartbeat`,
+  // @/services/health — a missing relation degrades to null rather than
+  // throwing), so `sync_run` is still the one table whose absence takes the
+  // page down. It is read *after* `requireAdminPage()`, so renaming it away
+  // leaves the admin guard passing and takes down only the page body. Renamed
+  // back in `finally` so the truncate in `beforeEach` still finds the table.
   await db.execute(sql`ALTER TABLE sync_run RENAME TO sync_run_probe`);
   try {
     await page.goto("/admin/sync");
