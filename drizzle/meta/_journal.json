@@ -64,6 +64,13 @@
       "when": 1785949709652,
       "tag": "0008_mature_pandemic",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1786027040661,
+      "tag": "0009_bright_mauler",
+      "breakpoints": true
     }
   ]
 }
