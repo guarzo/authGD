@@ -228,7 +228,11 @@ export default async function AccountPage({
             ))}
         </div>
 
-        {message && <Notice tone="bad">{message}</Notice>}
+        {/* Mounted unconditionally rather than `&&`-gated: unlink, set-main and
+            unlink-Discord all revalidate this route in place, so the region has
+            to already exist for AT to hear a change land in it. See `Notice`'s
+            docblock. */}
+        <Notice tone="bad">{message}</Notice>
 
         {/* Only the characters the contacts job actually targets can be waiting
             on a first run. Testing every character instead meant an associate
