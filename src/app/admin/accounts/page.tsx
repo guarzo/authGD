@@ -815,11 +815,20 @@ function AccountRow({
                       arming a *constructive* action must not paint it as
                       destructive, so the grade stays put and only the word
                       changes — the one place this control deliberately
-                      differs from the `revoke` it mirrors. */}
+                      differs from the `revoke` it mirrors.
+
+                      No `pendingLabel`, unlike the plain `Submit`s around it.
+                      `ConfirmSubmit` reserves its width from
+                      `max(label, confirmLabel)` (`confirm-submit.tsx:291`) and
+                      cannot see a pending string (the reason is recorded at
+                      `confirm-submit.tsx:242-250`), so "granting…" (9)
+                      against a 7-character reservation would widen the button
+                      mid-flight. `aria-busy` still carries the in-flight
+                      state, which is what every other `ConfirmSubmit` on this
+                      page relies on. */}
                   <ConfirmSubmit
                     className="btn btn--micro"
                     label="grant"
-                    pendingLabel="granting…"
                     restName={`grant admin to ${identity}`}
                     confirmName={`confirm grant admin to ${identity}`}
                   />
