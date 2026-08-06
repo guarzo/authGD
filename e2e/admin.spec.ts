@@ -2019,6 +2019,70 @@ test("revoke arms on the first click, confirms on the second, and Escape disarms
   await expect.poll(zedIsAdmin).toBe(false);
 });
 
+/**
+ * The other half of the same law, which the arming pass left out.
+ *
+ * `revoke` has confirmed since that pass; `grant` fired on one click. The
+ * asymmetry read as "arm the destructive one", but the reason recorded at
+ * `docs/settled-design-decisions.md:32` is about the table, not the verb —
+ * it is "too easy to hit a destructive action by accident scanning a dense
+ * table" — and `grant` is the half a mis-press cannot take back. The account
+ * it lands on can change every tier and revoke every other admin, including
+ * the one who slipped.
+ *
+ * The POST counter is the assertion that matters: "no revoke button yet"
+ * would also pass in the window before an in-flight grant re-rendered.
+ */
+test("grant arms on the first click, confirms on the second, and Escape disarms", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
+  const zed = await seedMember(db, { name: "Zed", tier: "member", isAdmin: false });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.goto("/admin/accounts");
+
+  const zedRow = rowFor(page, "Zed");
+  const grant = zedRow.getByRole("button", {
+    name: "grant admin to Zed",
+    exact: true,
+  });
+  const restBox = await grant.boundingBox();
+
+  async function zedIsAdmin() {
+    const [row] = await db.select().from(account).where(eq(account.id, zed.id));
+    return row?.isAdmin ?? false;
+  }
+
+  let posts = 0;
+  page.on("request", (r) => {
+    if (r.method() === "POST") posts += 1;
+  });
+
+  await grant.click();
+  const confirm = zedRow.getByRole("button", { name: /^confirm grant/ });
+  await expect(confirm).toBeVisible();
+  expect(posts).toBe(0);
+
+  // Arming a constructive action must not repaint it as a destructive one:
+  // `revoke` swaps to `.btn--danger` when armed and this deliberately does
+  // not, so only the word changes. Width is what the ghost label holds still.
+  const armedBox = await confirm.boundingBox();
+  expect(armedBox?.width).toBe(restBox?.width);
+  await expect(confirm).not.toHaveClass(/btn--danger/);
+
+  await confirm.press("Escape");
+  await expect(grant).toBeVisible();
+  await expect(zedRow.getByRole("button", { name: /^confirm grant/ })).toHaveCount(0);
+  expect(posts).toBe(0);
+  expect(await zedIsAdmin()).toBe(false);
+
+  await grant.click();
+  await zedRow.getByRole("button", { name: /^confirm grant/ }).click();
+  await expect(zedRow.getByRole("button", { name: /^revoke/ })).toBeVisible();
+  await expect.poll(zedIsAdmin).toBe(true);
+});
+
 test("freeze arms on the first click, confirms on the second, and Escape disarms", async ({
   page,
   context,

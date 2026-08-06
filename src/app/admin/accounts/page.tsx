@@ -794,13 +794,44 @@ function AccountRow({
                     identity,
                   )}
                 >
-                  <Submit
+                  {/* Armed, like its own opposite beside it. `revoke` has
+                      confirmed since the arming pass, on the reasoning
+                      recorded at `docs/settled-design-decisions.md:32` — it is
+                      "too easy to hit a destructive action by accident
+                      scanning a dense table". That argument is about the
+                      density of the table, not about the direction of the
+                      verb, and it applies here at least as hard: `grant` is
+                      the half that cannot be undone by the person who
+                      mis-pressed it. A stray click one row off hands an
+                      arbitrary member the power to change every tier and
+                      revoke every other admin, including the admin who
+                      slipped. `revoke` is recoverable — press `grant` again.
+
+                      Name and visible label are unchanged (`grant`, "grant
+                      admin to X"), so speech input still reaches the rest
+                      state by what is written on it (WCAG 2.5.3); the armed
+                      state gets its own name the way every other
+                      `ConfirmSubmit` on this page does. No `armedClassName`:
+                      arming a *constructive* action must not paint it as
+                      destructive, so the grade stays put and only the word
+                      changes — the one place this control deliberately
+                      differs from the `revoke` it mirrors.
+
+                      No `pendingLabel`, unlike the plain `Submit`s around it.
+                      `ConfirmSubmit` reserves its width from
+                      `max(label, confirmLabel)` (`confirm-submit.tsx:291`) and
+                      cannot see a pending string (the reason is recorded at
+                      `confirm-submit.tsx:242-250`), so "granting…" (9)
+                      against a 7-character reservation would widen the button
+                      mid-flight. `aria-busy` still carries the in-flight
+                      state, which is what every other `ConfirmSubmit` on this
+                      page relies on. */}
+                  <ConfirmSubmit
                     className="btn btn--micro"
-                    pendingLabel="granting…"
-                    aria-label={`grant admin to ${identity}`}
-                  >
-                    grant
-                  </Submit>
+                    label="grant"
+                    restName={`grant admin to ${identity}`}
+                    confirmName={`confirm grant admin to ${identity}`}
+                  />
                 </form>
               )}
               <form
