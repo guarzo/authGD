@@ -74,7 +74,13 @@ build 816 ms, and 1.58 s at 2M), or when an index is proposed on a table larger
 than that. Check before adding one:
 
 ```bash
-fly pg connect -a <pg-app> -c "SELECT count(*) FROM audit_log;"
+fly postgres connect -a <pg-app> -d <database>
+```
+
+Then at the prompt:
+
+```sql
+SELECT count(*) FROM audit_log;
 ```
 
 Below the trigger, add indexes normally: edit `src/db/schema.ts`, run
@@ -86,9 +92,13 @@ forbids. The third option, applying such migrations out-of-band before the
 deploy that needs them, is cheaper and is the right choice for a one-off.
 
 Whichever route: a failed `CONCURRENTLY` build leaves an **INVALID** index
-behind that still costs writes but serves no reads, and needs a manual
-`DROP INDEX` / `REINDEX`. In a release command nobody is watching, that is the
-failure mode to design for. Find them with:
+behind that still costs writes but serves no reads. Recover with
+`DROP INDEX CONCURRENTLY`, then retry `CREATE INDEX CONCURRENTLY`; or rebuild in
+place with `REINDEX INDEX CONCURRENTLY`. Each of those must run outside a
+transaction block, and none of them takes the `ACCESS EXCLUSIVE` lock a plain
+`DROP INDEX` would — which is the whole point of being here. In a release
+command nobody is watching, that is the failure mode to design for. Find them
+with:
 
 ```sql
 SELECT indexrelid::regclass FROM pg_index WHERE NOT indisvalid;
