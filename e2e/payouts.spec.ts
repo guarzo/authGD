@@ -1792,3 +1792,36 @@ test("an excluded participant is never a focus target", async ({ page, context }
   // And the excluded row still has no way to be paid at all.
   await expect(page.getByRole("button", { name: /mark paid Bo Skip/ })).toHaveCount(0);
 });
+
+test("reverting a payment keeps focus on that row and announces the new count", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "Undo FC",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+  const opId = await seedFinalizedRoster(db, operator.id, ["Ada Undo", "Bo Undo"]);
+  await page.goto(`/payouts/${opId}`);
+
+  await page.getByRole("button", { name: "mark paid Ada Undo" }).click();
+  await page.getByRole("button", { name: "confirm mark paid Ada Undo" }).click();
+  await expect(
+    page.getByRole("button", { name: "copy amount for Bo Undo" }),
+  ).toBeFocused();
+
+  // Revert arms: it rewrites recorded financial state.
+  await page.getByRole("button", { name: "revert payment for Ada Undo" }).click();
+  await page.getByRole("button", { name: "confirm revert payment for Ada Undo" }).click();
+
+  // Focus stays with Ada — the row the operator is dealing with — rather than
+  // jumping to whoever is next. Reverting is a correction, not progress.
+  await expect(
+    page.getByRole("button", { name: "copy amount for Ada Undo" }),
+  ).toBeFocused();
+  await expect(page.locator("#pay-flow-status")).toContainText(
+    "Reverted Ada Undo. 0 of 2 paid.",
+  );
+});

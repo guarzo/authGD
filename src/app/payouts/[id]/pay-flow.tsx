@@ -211,3 +211,28 @@ export function MarkPaidForm({
     </form>
   );
 }
+
+/** The per-row `revert` control. Same wrapper, same reasoning: revert unmounts
+ *  itself too, because it renders only while the row is paid. */
+export function RevertForm({
+  action,
+  participantId,
+  displayName,
+}: {
+  action: () => Promise<void>;
+  participantId: string;
+  displayName: string;
+}) {
+  const { dispatch } = usePayFlow();
+  return (
+    <form action={action} onSubmit={() => dispatch(participantId, "revert")}>
+      <ConfirmSubmit
+        className="btn btn--quiet btn--micro btn--danger-quiet"
+        armedClassName="btn btn--micro btn--danger"
+        label="revert"
+        restName={`revert payment for ${displayName}`}
+        confirmName={`confirm revert payment for ${displayName}`}
+      />
+    </form>
+  );
+}

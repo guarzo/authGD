@@ -40,7 +40,7 @@ import { AppraiseForm } from "./appraise-form";
 import { ClearStaleQuery } from "./clear-stale-query";
 import { CopyAmountButton } from "./copy-amount-button";
 import { InlineEdit } from "./inline-edit";
-import { MarkPaidForm, PayFlow, type PayRow } from "./pay-flow";
+import { MarkPaidForm, PayFlow, RevertForm, type PayRow } from "./pay-flow";
 import { copyAmountId } from "./pay-flow-ids";
 import { PaymentHistory } from "./payment-history";
 import { deriveRosterWarnings } from "./roster-warnings";
@@ -897,21 +897,15 @@ export default async function PayoutOperationPage({
                                       />
                                     )}
                                     {p.paymentState === "paid" && access.isOperator && (
-                                      <form
+                                      <RevertForm
                                         action={revertPaymentAction.bind(
                                           null,
                                           operation.id,
                                           p.id,
                                         )}
-                                      >
-                                        <ConfirmSubmit
-                                          className="btn btn--quiet btn--micro btn--danger-quiet"
-                                          armedClassName="btn btn--micro btn--danger"
-                                          label="revert"
-                                          restName={`revert payment for ${p.displayName}`}
-                                          confirmName={`confirm revert payment for ${p.displayName}`}
-                                        />
-                                      </form>
+                                        participantId={p.id}
+                                        displayName={p.displayName}
+                                      />
                                     )}
                                   </>
                                 )}
