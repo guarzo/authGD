@@ -188,7 +188,8 @@ UUIDs and look identical; the map key returns 401 against `/api/acls/*`.
 **7. Standings.** `STANDINGS_VALUE` is the standing to set (+5 for members) and
 `STANDINGS_LABEL` is the in-game contact label the app **owns**. It deletes
 contacts under that label that no longer belong, so give it a label nothing else
-uses.
+uses. Matching ignores capitalization and surrounding whitespace,
+so a label named `AuthGD` is claimed by a configured `authgd` too.
 
 Finally, `SYNC_MODE` is required and has no default. `dry-run` logs what each job
 *would* do and touches nothing external; `live` actually writes to EVE, Discord,

@@ -263,27 +263,31 @@ describe("runContactsJob", () => {
     expect(rows[0].tokenStatus).toBe("needs_reauth");
   });
 
-  it("records label_mismatch with the found name and writes nothing", async () => {
+  it("syncs under the member's own label when only the capitalization differs", async () => {
     const acc = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
+    await seedCharacter(ctx.db, cfg, { id: 2, accountId: acc.id });
+    // Deliberately NOT LABEL_ID: the writes must carry the id of the label this
+    // character actually has, since the configured name resolves to no id here.
     const { esi, calls } = fakeEsi({
-      labels: { 1: [{ labelId: LABEL_ID, labelName: "AUTHGD" }] },
+      labels: { 1: [{ labelId: 91, labelName: "AUTHGD" }] },
     });
     await runContactsJob({ db: ctx.db, cfg, esi, fetchImpl: okToken });
 
+    expect(calls.adds).toContainEqual({ characterId: 1, ids: [2], labelIds: [91] });
     const row = await lastResult(1);
-    expect(row?.lastResult).toBe("label_mismatch");
-    expect(row?.lastDetail).toBe(JSON.stringify(["AUTHGD"]));
-    expect(row?.lastSyncedAt).toBeNull();
-    expect(calls.adds).toEqual([]);
-    expect(calls.edits).toEqual([]);
-    expect(calls.deletes).toEqual([]);
+    expect(row?.lastResult).toBe("ok");
+    expect(row?.lastSyncedAt).not.toBeNull();
+    // Which label authGD took over varies per character now, and this job
+    // writes no audit entries, so the name is recorded here for operators.
+    expect(row?.lastDetail).toBe("AUTHGD");
   });
 
-  it("reports every fold-equal candidate rather than picking one", async () => {
+  it("refuses and writes nothing when two labels are fold-equal", async () => {
     const acc = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
-    const { esi } = fakeEsi({
+    await seedCharacter(ctx.db, cfg, { id: 2, accountId: acc.id });
+    const { esi, calls } = fakeEsi({
       labels: {
         1: [
           { labelId: 1, labelName: "AUTHGD" },
@@ -291,8 +295,39 @@ describe("runContactsJob", () => {
         ],
       },
     });
-    await runContactsJob({ db: ctx.db, cfg, esi, fetchImpl: okToken });
+    const result = await runContactsJob({ db: ctx.db, cfg, esi, fetchImpl: okToken });
+    expect(result.status).toBe("ok"); // a recorded skip, not a failure
+
+    const row = await lastResult(1);
+    expect(row?.lastResult).toBe("label_mismatch");
+    expect(row?.lastDetail).toBe(JSON.stringify(["AUTHGD", "authgd "]));
+    expect(row?.lastSyncedAt).toBeNull();
+    expect(calls.adds.filter((c) => c.characterId === 1)).toEqual([]);
+    expect(calls.edits.filter((c) => c.characterId === 1)).toEqual([]);
+    expect(calls.deletes.filter((c) => c.characterId === 1)).toEqual([]);
+  });
+
+  it("clears a stale detail once the member deletes the duplicate label", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "member" });
+    await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
+
+    const bad = fakeEsi({
+      labels: {
+        1: [
+          { labelId: 1, labelName: "AUTHGD" },
+          { labelId: 2, labelName: "authgd " },
+        ],
+      },
+    });
+    await runContactsJob({ db: ctx.db, cfg, esi: bad.esi, fetchImpl: okToken });
     expect((await lastResult(1))?.lastDetail).toBe(JSON.stringify(["AUTHGD", "authgd "]));
+
+    const good = fakeEsi({ labels: { 1: [{ labelId: LABEL_ID, labelName: "authgd" }] } });
+    await runContactsJob({ db: ctx.db, cfg, esi: good.esi, fetchImpl: okToken });
+
+    const row = await lastResult(1);
+    expect(row?.lastResult).toBe("ok");
+    expect(row?.lastDetail).toBeNull();
   });
 
   it("still records missing_label when no label is even close", async () => {
@@ -303,22 +338,6 @@ describe("runContactsJob", () => {
 
     const row = await lastResult(1);
     expect(row?.lastResult).toBe("missing_label");
-    expect(row?.lastDetail).toBeNull();
-  });
-
-  it("clears a stale detail once the member fixes the label", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "member" });
-    await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
-
-    const bad = fakeEsi({ labels: { 1: [{ labelId: LABEL_ID, labelName: "AUTHGD" }] } });
-    await runContactsJob({ db: ctx.db, cfg, esi: bad.esi, fetchImpl: okToken });
-    expect((await lastResult(1))?.lastDetail).toBe(JSON.stringify(["AUTHGD"]));
-
-    const good = fakeEsi({ labels: { 1: [{ labelId: LABEL_ID, labelName: "authgd" }] } });
-    await runContactsJob({ db: ctx.db, cfg, esi: good.esi, fetchImpl: okToken });
-
-    const row = await lastResult(1);
-    expect(row?.lastResult).toBe("ok");
     expect(row?.lastDetail).toBeNull();
   });
 });

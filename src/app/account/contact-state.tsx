@@ -1,5 +1,9 @@
 import { Status } from "@/app/_components/ui";
-import { describeLabelDifference, parseLabelCandidates } from "@/core/contact-label";
+import {
+  describeLabelDifference,
+  foldEqualLabels,
+  parseLabelCandidates,
+} from "@/core/contact-label";
 
 /**
  * Split in two so the account page can put the status token in the CONTACTS
@@ -106,24 +110,37 @@ export function ContactRemedy({
     );
   }
   if (result === "label_mismatch") {
-    // The job stores near-miss candidates as a JSON array
+    // The job stores the ambiguous candidates as a JSON array
     // (src/core/contact-label.ts). Rendering each one as its own quoted literal
     // — rather than the serialized value as a single name — keeps the copy from
     // naming a label the member does not have.
     const candidates = parseLabelCandidates(detail);
-    // Speech output normalizes whitespace and does not announce case, so a
-    // single-candidate sentence that only differed by quoting two
-    // near-identical strings was heard as the same sentence twice. Naming the
-    // actual axis of difference in words (case / spacing / both) makes the
-    // sentence stand on its own before either literal is read.
-    // "other" is unreachable in practice (matchContactLabel only reports a
-    // fold-equal near miss) but keeps today's unqualified wording rather than
-    // asserting a difference this function can't name.
+    // A single candidate can only be a row written before loose matching
+    // shipped: the job now syncs that case and records "ok". The row is still
+    // readable until the next run rewrites it, so the copy reassures rather
+    // than instructs.
+    //
+    // Except when the config moved underneath it. `label` is the LIVE
+    // STANDINGS_LABEL while `detail` came from the stored row
+    // (src/app/account/page.tsx:605-607), so an operator who recapitalized the
+    // config in between leaves a stored candidate that is no longer fold-equal
+    // — the next sync records missing_label, and reassurance would be a lie.
+    //
+    // The gate is foldEqualLabels, deliberately NOT describeLabelDifference:
+    // that helper collapses internal whitespace runs, so it would call
+    // "Auth  GD" vs "Auth GD" a spacing difference and reassure a member the
+    // matcher is about to reject. It picks the wording below, where
+    // fold-equality is already established and "other" is unreachable.
     const difference =
       candidates.length === 1 ? describeLabelDifference(candidates[0], label) : null;
     return (
       <span className="dim">
-        {candidates.length === 1 && difference !== "other" ? (
+        {candidates.length === 1 && candidates[0] === label ? (
+          <>
+            Your label already matches <code className="literal">{`"${label}"`}</code>{" "}
+            exactly. Nothing to do — the next sync clears this.
+          </>
+        ) : candidates.length === 1 && foldEqualLabels(candidates[0], label) ? (
           <>
             Your label is named <code className="literal">{`"${candidates[0]}"`}</code>,
             which differs from <code className="literal">{`"${label}"`}</code>{" "}
@@ -132,14 +149,13 @@ export function ContactRemedy({
               : difference === "spacing"
                 ? "only in spacing"
                 : "in both capitalization and spacing"}
-            . Rename it in game to match exactly. The next sync picks it up.
+            . authGD accepts it as-is — no rename needed. The next sync clears this.
           </>
         ) : candidates.length === 1 ? (
           <>
-            Your label is named <code className="literal">{`"${candidates[0]}"`}</code>.
-            It must be exactly <code className="literal">{`"${label}"`}</code> —
-            capitalization and spaces both count. Rename it in game. The next sync picks
-            it up.
+            Your label is named <code className="literal">{`"${candidates[0]}"`}</code>,
+            but authGD is now looking for <code className="literal">{`"${label}"`}</code>.
+            Rename it in game to match. The next sync picks it up.
           </>
         ) : candidates.length > 1 ? (
           <>
@@ -155,14 +171,16 @@ export function ContactRemedy({
               </span>
             ))}{" "}
             {candidates.length === 2 ? "both" : "all"} differ only in capitalization or
-            spacing. It must be exactly <code className="literal">{`"${label}"`}</code> —
-            rename one in game. The next sync picks it up.
+            spacing from <code className="literal">{`"${label}"`}</code>, so authGD cannot
+            tell which one you mean. Delete or rename one in game until a single matching
+            label is left. The next sync picks it up.
           </>
         ) : (
           <>
-            A label differing only in capitalization or spacing exists. It must be exactly{" "}
-            <code className="literal">{`"${label}"`}</code> — rename it in game. The next
-            sync picks it up.
+            More than one of your labels differs only in capitalization or spacing from{" "}
+            <code className="literal">{`"${label}"`}</code>, so authGD cannot tell which
+            one you mean. Delete or rename one in game until a single matching label is
+            left. The next sync picks it up.
           </>
         )}
       </span>
