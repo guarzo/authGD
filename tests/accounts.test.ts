@@ -5,6 +5,7 @@ import {
   account,
   auditLog,
   character,
+  contactSyncState,
   discordLink,
   outbox,
   payoutOperation,
@@ -563,6 +564,16 @@ describe("setMainCharacter", () => {
     expect(await ctx.db.select().from(outbox)).toHaveLength(1);
   });
 
+  // account/actions.ts's setMainAction redirects with this name in the query
+  // string to confirm "Main character set to <name>" — it must come back on
+  // success rather than forcing a second query for a row already locked and
+  // read inside this same call.
+  it("returns the character's name on success", async () => {
+    const a = await login(ch());
+    await link(a.accountId, ch({ characterId: 90000003, characterName: "Alt" }));
+    expect(await setMain(a.accountId, 90000003)).toEqual({ ok: true, name: "Alt" });
+  });
+
   it("rejects characters not on the account", async () => {
     const a = await login(ch());
     expect(await setMain(a.accountId, 99999999)).toEqual({
@@ -584,6 +595,60 @@ describe("re-auth side effects", () => {
     expect(await ctx.db.select().from(outbox)).toHaveLength(1);
     const audits = await ctx.db.select().from(auditLog);
     expect(audits.some((x) => x.action === "character.reauthed")).toBe(true);
+  });
+
+  it("clears a stale token-fault verdict when the new token has full scopes", async () => {
+    await login(ch());
+    await ctx.db
+      .insert(contactSyncState)
+      .values({ characterId: 90000001, lastResult: "token_invalid" });
+
+    await login(ch({ refreshToken: "rt-2" })); // full scopes → tokenStatus "valid"
+
+    const [state] = await ctx.db
+      .select()
+      .from(contactSyncState)
+      .where(eq(contactSyncState.characterId, 90000001));
+    expect(state.lastResult).toBeNull();
+    expect(state.lastDetail).toBeNull();
+  });
+
+  it("does not clear a label_mismatch verdict, which is unrelated to the token", async () => {
+    await login(ch());
+    await ctx.db.insert(contactSyncState).values({
+      characterId: 90000001,
+      lastResult: "label_mismatch",
+      lastDetail: "standings (typo)",
+    });
+
+    await login(ch({ refreshToken: "rt-2" })); // full scopes → tokenStatus "valid"
+
+    const [state] = await ctx.db
+      .select()
+      .from(contactSyncState)
+      .where(eq(contactSyncState.characterId, 90000001));
+    expect(state.lastResult).toBe("label_mismatch");
+    expect(state.lastDetail).toBe("standings (typo)");
+  });
+
+  it("leaves the verdict alone when the re-auth itself is still missing a scope", async () => {
+    await login(ch());
+    await ctx.db
+      .insert(contactSyncState)
+      .values({ characterId: 90000001, lastResult: "token_invalid" });
+
+    // missing write scope → tokenFields() computes tokenStatus "needs_reauth"
+    await login(
+      ch({ refreshToken: "rt-2", scopes: ["esi-characters.read_contacts.v1"] }),
+    );
+
+    const [chr] = await ctx.db.select().from(character);
+    expect(chr.tokenStatus).toBe("needs_reauth");
+    const [state] = await ctx.db
+      .select()
+      .from(contactSyncState)
+      .where(eq(contactSyncState.characterId, 90000001));
+    expect(state.lastResult).toBe("token_invalid");
   });
 });
 

@@ -104,11 +104,23 @@ export function ConfirmArmScope({ children }: { children: ReactNode }) {
  * exclusive anyway (`canFinalize` wants a draft, `canRelease` wants a
  * finalized operation), so there is no neighbour to shove; the row simply
  * grows rightward from a fixed left edge and the armed button does not move.
- * The reveal here is a copy decision, not a layout one. The account page's
- * Discord row still reveals because a `dd` in a `.facts` grid is a place a
- * sentence belongs. Before reaching for the default reveal in a new dense
- * layout, check both: what it reflows, and whether prose appearing mid-press
- * reads as explanation or as alarm.
+ * The reveal here is a copy decision, not a layout one.
+ *
+ * The account page's Discord row still reveals, because a `dd` in a `.facts`
+ * grid is a place a sentence belongs — but only because `.facts__lead >
+ * .confirm-cost` gives the revealed cost `flex-basis: 100%`, which puts it on
+ * its own line and leaves the button where it was. That was not true when this
+ * comment first called the row safe. The row is a flex line with
+ * `align-items: center` and `flex-wrap: wrap`, and between roughly 641px and
+ * 851px the revealed sentence fit *beside* the button, grew the line box, and
+ * re-centred the button vertically — out from under a stationary pointer,
+ * firing `pointerLeave` and disarming the control the member had just armed.
+ * The `flex-basis: 100%` is what makes this paragraph true; do not remove it on
+ * the grounds that the row "already wraps".
+ *
+ * Before reaching for the default reveal in a new dense layout, check all
+ * three: what it reflows, at every width rather than the two you have open,
+ * and whether prose appearing mid-press reads as explanation or as alarm.
  */
 export function ConfirmCost({
   id,
@@ -137,7 +149,14 @@ export function ConfirmCost({
   const revealed = !alwaysHidden && ctx.armedDescribedBy === id;
 
   return (
-    <span id={id} className={revealed ? className : `${className ?? ""} visually-hidden`}>
+    <span
+      id={id}
+      className={
+        revealed
+          ? `confirm-cost ${className ?? ""}`
+          : `confirm-cost ${className ?? ""} visually-hidden`
+      }
+    >
       {children}
     </span>
   );

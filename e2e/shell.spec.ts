@@ -348,3 +348,54 @@ test("sign-out with no session cookie still lands on login rather than erroring"
   expect(res.ok()).toBe(true);
   expect(new URL(res.url()).pathname).toBe("/login");
 });
+
+/**
+ * A type-scale sweep found `.shell__nav a` rendering 33.05px tall against
+ * DESIGN.md's documented "two sizes, no others" (36px standalone / 28px
+ * in-row). The obvious fixes -- shrinking `padding-block`, or an explicit
+ * `height` -- both move the link's box relative to the `[aria-current]::after`
+ * underline, which is inset `bottom: var(--s-1)` against the padding box: pull
+ * the box up from underneath a fixed inset and the hairline walks toward the
+ * label. The fix taken instead reuses `.btn`'s own idiom
+ * (`display: inline-flex; align-items: center; min-height: 2.25rem`) rather
+ * than hand-picking a padding value: the link becomes a flex container that
+ * centres its own text within a 36px floor, so the text moves toward the
+ * *middle* of the box and gains clearance from the underline instead of
+ * losing it. This pins the geometry so a future padding/height edit that
+ * reintroduces the collision fails here instead of shipping.
+ */
+test("the active nav link reaches the 36px standalone hit-target without the underline touching the label", async ({
+  page,
+  context,
+}) => {
+  const acc = await seedMember(db, { name: "Pilot Prime", tier: "member" });
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.goto("/account");
+
+  const link = page.getByRole("link", { name: "Your account" });
+  await expect(link).toBeVisible();
+
+  const box = (await link.boundingBox())!;
+  // 36px, not 33.05 and not 28: the standalone control height DESIGN.md
+  // already names, applied here rather than left as an undocumented third
+  // size.
+  expect(Math.round(box.height)).toBe(36);
+
+  const geometry = await link.evaluate((el) => {
+    const range = document.createRange();
+    range.selectNodeContents(el.firstChild!);
+    const text = range.getBoundingClientRect();
+    const after = getComputedStyle(el, "::after");
+    const rect = el.getBoundingClientRect();
+    const underlineTop =
+      rect.bottom - parseFloat(after.bottom) - parseFloat(after.height);
+    return { textBottom: text.bottom, underlineTop };
+  });
+
+  // A real gap, not just "no overlap": the sweep's own measurement (a screenshot
+  // plus this same computation) found ~6.5px of clearance after the fix, up
+  // from ~5px before it. Floored well under that so sub-pixel font-rendering
+  // differences across platforms/CI don't make this flaky, while still
+  // catching a regression that removes the gap entirely.
+  expect(geometry.underlineTop - geometry.textBottom).toBeGreaterThan(2);
+});

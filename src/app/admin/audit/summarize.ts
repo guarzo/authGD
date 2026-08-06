@@ -26,6 +26,7 @@ type Render = (
   d: Record<string, unknown>,
   roleNames: ReadonlyMap<string, string>,
   labels: Record<string, string>,
+  accountNames: ReadonlyMap<string, string>,
 ) => string;
 
 /**
@@ -131,6 +132,24 @@ function shortRef(word: string, key: string): Part {
   );
 }
 
+/** An account uuid inside a payload that, unlike `account.merged`'s
+ * `sourceAccountId`, usually still resolves: the account it names is not the
+ * one the write deleted (`services/audit.ts`'s `DETAIL_ACCOUNT_KEYS` says
+ * which key, per action). `accountNames` is keyed by that same key, not by
+ * the uuid itself -- see `resolveAuditIdentities`'s `detailAccountNames`. A
+ * miss (the account was itself deleted some other way since, or the id
+ * shape changed) still degrades to the shortened uuid rather than a blank
+ * line, the same fallback `shortRef` uses for its permanently-unresolvable
+ * case. */
+function accountRef(word: string, key: string): Part {
+  return part([key], (d, _roleNames, _labels, accountNames) => {
+    const raw = d[key];
+    if (typeof raw !== "string") return "";
+    const name = accountNames.get(key);
+    return `${word} ${name ?? shortId(raw)}`;
+  });
+}
+
 /** Keys the line deliberately does not show. Declaring them is the whole
  * point: `summarizeDetails` counts undeclared keys as `+N more`, so a payload
  * id that identifies a sub-object rather than describing the change would
@@ -226,7 +245,7 @@ const PARTS: Record<string, readonly Part[]> = {
   "admin.bootstrap_granted": [labelled("character", "characterId")],
   "account.created": [labelled("main", "mainCharacterId")],
   "account.main_changed": [labelled("main →", "mainCharacterId")],
-  "character.reclaimed": [labelled("from", "fromAccount")],
+  "character.reclaimed": [accountRef("from", "fromAccount")],
   "character.unlinked": [scalar("name"), flag("wasMain", "was main")],
   "token.invalidated": [scalar("reason")],
   "token.verify_failed": [scalar("error")],
@@ -258,15 +277,18 @@ const FALLBACK_KEYS = 3;
  * appear over time and the DB does not enforce a shape.
  *
  * `roleNames` maps a Discord role id to its display name. `labels` maps a raw
- * tier value to this deployment's configured label. Both passed in rather than
- * imported so this module stays a pure function of its arguments and needs no
- * env to test.
+ * tier value to this deployment's configured label. `accountNames` maps a
+ * `details` field name (not a uuid) to the account it resolved to -- see
+ * `resolveAuditIdentities`'s `detailAccountNames` and `accountRef` above.
+ * All three passed in rather than imported so this module stays a pure
+ * function of its arguments and needs no env to test.
  */
 export function summarizeDetails(
   action: string,
   details: unknown,
   roleNames: ReadonlyMap<string, string> = new Map(),
   labels: Record<string, string> = {},
+  accountNames: ReadonlyMap<string, string> = new Map(),
 ): string {
   const d = (details && typeof details === "object" ? details : {}) as Record<
     string,
@@ -275,7 +297,9 @@ export function summarizeDetails(
   try {
     const parts = PARTS[action];
     if (parts) {
-      const rendered = parts.map((p) => p(d, roleNames, labels)).filter(Boolean);
+      const rendered = parts
+        .map((p) => p(d, roleNames, labels, accountNames))
+        .filter(Boolean);
       const declared = new Set(parts.flatMap((p) => p.keys));
       const hidden = Object.keys(d).filter((k) => !declared.has(k)).length;
       const line = rendered.join(", ");
