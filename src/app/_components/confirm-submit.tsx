@@ -93,9 +93,19 @@ export function ConfirmArmScope({ children }: { children: ReactNode }) {
  * below fires, and the control disarms itself — the reveal undoes the arm. The
  * admin accounts table therefore keeps its cost sentence `.visually-hidden`
  * always (#111) rather than using this component. The account page's Discord
- * row can reveal because it is a `dd` in a `.facts` grid that already reserves
- * a wrapping line, so nothing moves. Before reaching for this in a new dense
- * layout, check what the reveal reflows.
+ * row can reveal because `.facts__lead` gives the revealed cost `flex-basis:
+ * 100%`, which puts it on its own line and leaves the button where it was.
+ *
+ * That was not true when this comment first claimed it. The row is a flex line
+ * with `align-items: center` and `flex-wrap: wrap`, and between roughly 641px
+ * and 851px the revealed sentence fit *beside* the button, grew the line box,
+ * and re-centred the button vertically — out from under a stationary pointer,
+ * firing `pointerLeave` and disarming the control the member had just armed.
+ * The `flex-basis: 100%` is what makes the sentence in this docblock true; do
+ * not remove it on the grounds that the row "already wraps".
+ *
+ * Before reaching for this in a new dense layout, check what the reveal
+ * reflows — and check it at every width, not just the two you have open.
  */
 export function ConfirmCost({
   id,
@@ -113,7 +123,14 @@ export function ConfirmCost({
   const revealed = ctx.armedDescribedBy === id;
 
   return (
-    <span id={id} className={revealed ? className : `${className ?? ""} visually-hidden`}>
+    <span
+      id={id}
+      className={
+        revealed
+          ? `confirm-cost ${className ?? ""}`
+          : `confirm-cost ${className ?? ""} visually-hidden`
+      }
+    >
       {children}
     </span>
   );
