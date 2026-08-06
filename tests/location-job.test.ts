@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { character, syncRun } from "@/db/schema";
+import { auditLog, character, syncRun } from "@/db/schema";
 import {
   LOCATION_SCOPE_REQUIRED,
   canReadLocation,
@@ -312,6 +312,7 @@ describe("runLocationJob", () => {
       accountId: acc.id,
       main: true,
       scopes: ALL_SCOPES,
+      tokenStatus: "valid",
     });
     const esi: LocationEsi = {
       ...fakeLocationEsi().esi,
@@ -327,6 +328,39 @@ describe("runLocationJob", () => {
     expect(result.counts?.failed).toBe(1);
     const r = await row(1);
     expect(r.tokenStatus).toBe("needs_reauth");
+    // The status change is durable, so it leaves a durable record naming the
+    // scope whose read was refused.
+    const audits = await ctx.db.select().from(auditLog);
+    expect(audits).toHaveLength(1);
+    expect(audits[0]).toMatchObject({
+      actor: "system",
+      action: "token.needs_reauth",
+      target: "1",
+      details: { scope: LOCATION_SCOPE_REQUIRED, detectedBy: "location" },
+    });
+  });
+
+  it("does not re-audit a character that was ALREADY needs_reauth", async () => {
+    // The transition guard. This job ticks every ~15 minutes, so without it one
+    // permanently broken character writes ~96 identical audit rows a day.
+    const acc = await seedAccount(ctx.db, { tier: "member" });
+    await seedCharacter(ctx.db, cfg, {
+      id: 1,
+      accountId: acc.id,
+      main: true,
+      scopes: ALL_SCOPES,
+      tokenStatus: "needs_reauth",
+    });
+    const esi: LocationEsi = {
+      ...fakeLocationEsi().esi,
+      getLocation: async () => {
+        throw new EsiError("missing scope", 403, "needs_reauth");
+      },
+    };
+    const result = await runLocationJob({ db: ctx.db, cfg, esi, fetchImpl: okToken });
+    expect(result.counts?.failed).toBe(1); // still counted, just not re-audited
+    expect((await row(1)).tokenStatus).toBe("needs_reauth");
+    expect(await ctx.db.select().from(auditLog)).toEqual([]);
   });
 
   it("skips the needs_reauth write when the refresh-token blob rotated underneath it", async () => {
@@ -354,14 +388,21 @@ describe("runLocationJob", () => {
         throw new EsiError("missing scope", 403, "needs_reauth");
       },
     };
-    const result = await runLocationJob({ db: ctx.db, cfg, esi, fetchImpl: okToken });
-    expect(result.status).toBe("partial");
-    expect(result.counts?.failed).toBe(1);
+    await expect(
+      runLocationJob({ db: ctx.db, cfg, esi, fetchImpl: okToken }),
+    ).rejects.toBeInstanceOf(JobRetryError);
+    const [run] = await ctx.db.select().from(syncRun);
+    expect(run.status).toBe("partial");
+    // A zero-row CAS is transient, not failed: nothing was decided, so the
+    // next run gets to decide against whatever state actually landed.
+    expect(run.counts).toMatchObject({ failed: 0 });
     const r = await row(1);
     // The CAS predicate missed (refreshTokenEnc no longer matches what our
     // refresh wrote), so tokenStatus must be left exactly as it was.
     expect(r.tokenStatus).toBe("valid");
     expect(r.refreshTokenEnc).toBe("rotated-by-someone-else");
+    // ...and no audit row, because no row was written to audit.
+    expect(await ctx.db.select().from(auditLog)).toEqual([]);
   });
 
   it("covers every tier but never an affiliation_invalid character", async () => {

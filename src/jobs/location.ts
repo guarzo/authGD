@@ -3,6 +3,7 @@ import type { Config } from "@/config";
 import type { Db } from "@/db";
 import { character } from "@/db/schema";
 import { EsiError, type EsiClient } from "@/lib/esi/client";
+import { logAudit } from "@/services/audit";
 import { getLocatableCharacters, type MemberCharacter } from "@/services/desired";
 import { runJob, type JobResult } from "@/services/sync-run";
 import { getFreshAccessToken } from "@/services/tokens";
@@ -153,11 +154,15 @@ export async function runLocationJob(deps: {
         // the missing write.
         const needsReauth = err instanceof EsiError && err.kind === "needs_reauth";
         const transient = err instanceof EsiError ? err.kind === "transient" : true;
+        // Recorded before the branching so the CAS-miss path, which bails out
+        // early, still contributes its message to the run's error summary.
+        errors.push(
+          `${ch.characterId}: ${err instanceof Error ? err.message : String(err)}`,
+        );
         if (needsReauth) {
-          counts.failed++;
           // CAS on the blob our refresh just stored: if the row rotated or was
           // reclaimed since, this stale decision must not touch it.
-          await db
+          const statusRows = await db
             .update(character)
             .set({ tokenStatus: "needs_reauth" })
             .where(
@@ -165,15 +170,36 @@ export async function runLocationJob(deps: {
                 eq(character.id, ch.characterId),
                 eq(character.refreshTokenEnc, token.tokenEnc),
               ),
-            );
+            )
+            .returning({ id: character.id });
+          if (statusRows.length === 0) {
+            // The row moved on without us, so nothing was written and there is
+            // nothing to audit. Transient, not failed: the next run decides
+            // against whatever state actually landed.
+            transientFailures++;
+            continue;
+          }
+          counts.failed++;
+          // Only on the TRANSITION into needs_reauth. This job ticks every ~15
+          // minutes, so auditing every tick would write ~96 identical rows a
+          // day for one permanently broken character.
+          if (ch.tokenStatus !== "needs_reauth") {
+            await logAudit(db, {
+              actor: "system",
+              action: "token.needs_reauth",
+              target: String(ch.characterId),
+              // Not token-health's `missingScopes`: nothing was computed
+              // against config here. The stored `scopes` column still claims
+              // this grant and ESI refused the read anyway, so the scope that
+              // 403'd is the fact worth recording.
+              details: { scope: LOCATION_SCOPE_REQUIRED, detectedBy: "location" },
+            });
+          }
         } else if (transient) {
           transientFailures++;
         } else {
           counts.failed++;
         }
-        errors.push(
-          `${ch.characterId}: ${err instanceof Error ? err.message : String(err)}`,
-        );
       }
     }
 
