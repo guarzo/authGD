@@ -1,4 +1,4 @@
-import { Status } from "@/app/_components/ui";
+import { Status, type Tone } from "@/app/_components/ui";
 import {
   describeLabelDifference,
   foldEqualLabels,
@@ -38,6 +38,41 @@ export function hasContactRemedy(result: string | null, target: boolean): boolea
   return target && result !== null && result !== "ok";
 }
 
+/**
+ * The tone and words for one contact result, without the element around them.
+ * Extracted so the account manifest's collapsed chip can render a stalled
+ * state as a single `Status` — `ContactState` already returns one, and nesting
+ * two `.st` elements renders two `::before` glyphs with competing tones.
+ * `ContactState` stays the only caller that also handles the untargeted and
+ * not-yet-run cases, which have no token of their own.
+ */
+export function contactStateToken(result: string): { tone: Tone; text: string } {
+  if (result === "ok") return { tone: "ok", text: "ok" };
+  // Plain English, not the job's own vocabulary. `missing_label` and
+  // `label_mismatch` are src/jobs/contacts.ts result codes; rendering them
+  // verbatim put two compound nouns in a scanned column and left the token
+  // unable to stand without the remedy prose below the table. The codes are
+  // unchanged — only what a member reads is.
+  if (result === "missing_label") return { tone: "warn", text: "label needed" };
+  if (result === "label_mismatch") return { tone: "warn", text: "label wrong" };
+  // Member-fixable by re-linking the character: a dead token, a missing scope,
+  // or ESI revoking the token mid-sync all land the same place a re-auth does.
+  if (result === "token_invalid") return { tone: "bad", text: "token invalid" };
+  if (result === "missing_scope") return { tone: "warn", text: "scope missing" };
+  if (result === "needs_reauth") return { tone: "warn", text: "re-auth needed" };
+  // Transient: the job retries these on its own. Amber rather than
+  // --signal-bad, so a passing failure doesn't read with the same alarm as a
+  // state that actually needs the member to act.
+  if (result === "token_refresh_failed") {
+    return { tone: "warn", text: "token refresh failed" };
+  }
+  if (result === "sync_failed") return { tone: "warn", text: "sync failed" };
+  // An operator guard (SYNC_MODE is not live), not a fault of this character
+  // or this member — reads neutral, the same as "not yet run".
+  if (result === "dry_run") return { tone: "off", text: "sync disabled" };
+  return { tone: "bad", text: result.replace(/_/g, " ") };
+}
+
 export function ContactState({
   result,
   target,
@@ -53,30 +88,8 @@ export function ContactState({
     return <span className="dim">— not managed</span>;
   }
   if (result === null) return <Status tone="off">not yet run</Status>;
-  if (result === "ok") return <Status tone="ok">ok</Status>;
-  // Plain English, not the job's own vocabulary. `missing_label` and
-  // `label_mismatch` are src/jobs/contacts.ts result codes; rendering them
-  // verbatim put two compound nouns in a scanned column and left the token
-  // unable to stand without the remedy prose below the table. The codes are
-  // unchanged — only what a member reads is.
-  if (result === "missing_label") return <Status tone="warn">label needed</Status>;
-  if (result === "label_mismatch") return <Status tone="warn">label wrong</Status>;
-  // Member-fixable by re-linking the character: a dead token, a missing scope,
-  // or ESI revoking the token mid-sync all land the same place a re-auth does.
-  if (result === "token_invalid") return <Status tone="bad">token invalid</Status>;
-  if (result === "missing_scope") return <Status tone="warn">scope missing</Status>;
-  if (result === "needs_reauth") return <Status tone="warn">re-auth needed</Status>;
-  // Transient: the job retries these on its own. Amber rather than
-  // --signal-bad, so a passing failure doesn't read with the same alarm as a
-  // state that actually needs the member to act.
-  if (result === "token_refresh_failed") {
-    return <Status tone="warn">token refresh failed</Status>;
-  }
-  if (result === "sync_failed") return <Status tone="warn">sync failed</Status>;
-  // An operator guard (SYNC_MODE is not live), not a fault of this character
-  // or this member — reads neutral, the same as "not yet run".
-  if (result === "dry_run") return <Status tone="off">sync disabled</Status>;
-  return <Status tone="bad">{result.replace(/_/g, " ")}</Status>;
+  const { tone, text } = contactStateToken(result);
+  return <Status tone={tone}>{text}</Status>;
 }
 
 export function ContactRemedy({

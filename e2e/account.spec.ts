@@ -3,6 +3,7 @@ import { eq, sql } from "drizzle-orm";
 import {
   account,
   character,
+  contactSyncState,
   discordLink,
   payoutOperation,
   payoutParticipant,
@@ -13,6 +14,30 @@ import { resetDb, seedMember, sessionCookieFor, testDb } from "./helpers";
 const { db, pool } = testDb();
 test.afterAll(() => pool.end());
 test.beforeEach(() => resetDb(db));
+
+// The scopes playwright.config.ts grants EVE_SSO_SCOPES, mirrored here rather
+// than imported: a character's `scopes` column is what account-view.ts diffs
+// against that config to decide `needsReauthForScopes`, so a manifest row only
+// reads as a healthy token when it holds every one of these.
+const ALL_SCOPES = [
+  "esi-characters.read_contacts.v1",
+  "esi-characters.write_contacts.v1",
+  "esi-ui.open_window.v1",
+  "esi-location.read_location.v1",
+  "esi-universe.read_structures.v1",
+  "esi-location.read_online.v1",
+];
+
+/** Marks every character on this account token-valid with a full scope grant,
+ *  the manifest row precondition every "collapses to ok" test below needs —
+ *  `seedMember` leaves `tokenStatus` at its "missing" default, which alone
+ *  reads as needing attention. */
+async function markTokensHealthy(accountId: string) {
+  await db
+    .update(character)
+    .set({ tokenStatus: "valid", scopes: ALL_SCOPES })
+    .where(eq(character.accountId, accountId));
+}
 
 // Every code the callbacks can redirect to /login with, checked by name: a code
 // with no entry in the ERRORS map renders nothing at all, which is the one
@@ -570,4 +595,88 @@ test("a demoted member sees their payout row with no link to the operation", asy
   await expect(row.getByRole("link")).toHaveCount(0);
   // And the nav offers no way in either — same tier gate, one control up.
   await expect(page.getByRole("link", { name: "Payouts" })).toHaveCount(0);
+});
+
+test("a healthy character collapses to a single ok chip", async ({ page, context }) => {
+  // Alumni: untargeted, so the only way this row could still expand is a bad
+  // token — ruled out by markTokensHealthy below.
+  const acc = await seedMember(db, { name: "Healthy Pilot", tier: "alumni" });
+  await markTokensHealthy(acc.id);
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.goto("/account");
+  const row = page.locator("table tbody tr").first();
+  await expect(row.locator("[data-state='ok']")).toBeVisible();
+  await expect(row.locator(".status-line")).toHaveCount(0);
+});
+
+test("a member-fixable result expands only its own row", async ({ page, context }) => {
+  const acc = await seedMember(db, {
+    name: "Main Pilot",
+    tier: "member",
+    alts: ["Alt Pilot"],
+  });
+  await markTokensHealthy(acc.id);
+  const [alt] = await db.select().from(character).where(eq(character.name, "Alt Pilot"));
+  await db.insert(contactSyncState).values({
+    characterId: alt.id,
+    lastResult: "missing_label",
+  });
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.goto("/account");
+  const rows = page.locator("table tbody tr");
+  // Three, not two: the `attention` arm keeps all three of today's existing
+  // status lines (token / standings / map) verbatim. Expanding is the change,
+  // not what an expanded row contains.
+  await expect(
+    rows.filter({ hasText: "label needed" }).locator(".status-line"),
+  ).toHaveCount(3);
+  // The neighbour must not have been dragged open with it.
+  await expect(
+    rows.filter({ hasNotText: "label needed" }).locator(".status-line"),
+  ).toHaveCount(0);
+});
+
+// The case an earlier draft of the spec got wrong in both directions, so it is
+// asserted on both axes: not expanded, and not claiming ok.
+test("dry_run stays one line and never reads ok", async ({ page, context }) => {
+  const acc = await seedMember(db, { name: "Dry Run Pilot", tier: "member" });
+  await markTokensHealthy(acc.id);
+  await db.insert(contactSyncState).values({
+    characterId: acc.mainCharacterId!,
+    lastResult: "dry_run",
+  });
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.goto("/account");
+  const row = page.locator("table tbody tr").first();
+  await expect(row.locator(".status-line")).toHaveCount(0);
+  await expect(row.locator("[data-state='stalled']")).toContainText("sync disabled");
+  await expect(row.locator("[data-state='ok']")).toHaveCount(0);
+});
+
+// The rule most likely to be "helpfully" broken by a later change.
+test("map off alone does not expand a row", async ({ page, context }) => {
+  // Alumni and no wanderer_acl_observation row at all: legitimately off the
+  // map, and there is nothing this member could do about it from this page.
+  const acc = await seedMember(db, { name: "Grounded Pilot", tier: "alumni" });
+  await markTokensHealthy(acc.id);
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.goto("/account");
+  const row = page.locator("table tbody tr").first();
+  await expect(row.locator(".status-line")).toHaveCount(0);
+  await expect(row.locator("[data-state='ok']")).toBeVisible();
+});
+
+// Density must not be bought from screen-reader users: the collapsed chip's
+// accessible name still carries all three facts.
+test("the collapsed chip names token, standings and map", async ({ page, context }) => {
+  const acc = await seedMember(db, { name: "Nameable Pilot", tier: "alumni" });
+  await markTokensHealthy(acc.id);
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.goto("/account");
+  const chip = page.locator("table tbody tr").first().locator("[data-state='ok']");
+  const label = await chip.getAttribute("aria-label");
+  expect(label).toMatch(/token/i);
+  expect(label).toMatch(/standings/i);
+  expect(label).toMatch(/map/i);
+  expect(label).toMatch(/off/i);
 });
