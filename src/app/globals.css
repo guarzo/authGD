@@ -1814,6 +1814,36 @@ h3.rule-head__label {
   }
 }
 
+/* `ConfirmSubmit`'s label, wrapping the rest/confirm text swap so it never
+   resizes the button (confirm-submit.tsx has the full account of why a
+   `ch`-counted `min-width` doesn't hold). `::before` renders the wider of the
+   two labels as generated content, invisible but in flow, so the browser
+   measures it with the button's own font, weight, case transform and
+   letter-spacing instead of JS approximating those. Both it and the real text
+   share `1 / 1`, so this element's own size is the max of the two — never
+   smaller than whichever is currently showing. The visible text needs its own
+   explicit placement: as an anonymous grid item it would be auto-placed into
+   row 2, below the ghost rather than on top of it, which reserves the width
+   correctly and doubles the button's height. This lives on an inner span
+   rather than the button itself so the button keeps its ordinary `.btn` flex
+   row (label + the `aria-busy` pulse dot below), which a grid here would
+   disrupt. */
+.confirm-submit__label {
+  display: inline-grid;
+  place-items: center;
+}
+
+.confirm-submit__label::before {
+  content: attr(data-ghost-label);
+  grid-area: 1 / 1;
+  visibility: hidden;
+  white-space: nowrap;
+}
+
+.confirm-submit__text {
+  grid-area: 1 / 1;
+}
+
 .btn--primary {
   background: var(--gold);
   border-color: var(--gold);
