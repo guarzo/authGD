@@ -482,6 +482,57 @@ test("tier controls: manual set locks; return-to-auto unlocks", async ({
   await expect(zedRow.locator(".tier__lock")).not.toBeVisible();
 });
 
+/**
+ * The lock is the whole point of the press, and until this the confirmation
+ * did not mention it.
+ *
+ * `setTierManual` writes `tierLocked: true` on every manual set, and the tier
+ * buttons are only `disabled` when the account is *already* locked at that
+ * tier — so on an ordinary auto-tiered account the button carrying
+ * `aria-pressed="true"` is fully live, painted with the raised ground and
+ * leading `▪` that the filter chips above use to mean "you are already here,
+ * this does nothing". Pressing it is the case measured below: the tier does
+ * not move, nothing in the row changes except a lock mark, and the sentence
+ * has to carry the news on its own.
+ *
+ * The account's *current* tier is pressed deliberately. Setting Zed to a
+ * different tier would change the tier token in the row and give the admin a
+ * second, visible signal that something happened; pressing the one that is
+ * already selected is the failure the copy exists for.
+ */
+test("pressing the already-selected tier says it pinned the account", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedWorld();
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.goto("/admin/accounts");
+  const zedRow = rowFor(page, "Zed");
+  const zedDrawer = drawerOf(zedRow);
+  await toggleOf(zedRow).click();
+
+  // Zed is a member, so "Testers" (TIER_LABEL_MEMBER, playwright.config.ts) is
+  // the tier already showing — and its button is live, not disabled.
+  const already = zedDrawer.getByRole("button", { name: "Set Zed to Testers" });
+  await expect(already).toHaveAttribute("aria-pressed", "true");
+  await expect(already).toBeEnabled();
+  await already.click();
+
+  const confirmation = zedDrawer.locator(".notice");
+  await expect(confirmation).toBeVisible();
+  await expect(confirmation).toContainText("Zed pinned to Testers");
+  // ...and it names the control that undoes it — which the same press has just
+  // brought into the drawer for the first time.
+  await expect(confirmation).toContainText("auto");
+  await expect(
+    zedDrawer.getByRole("button", { name: "return Zed to auto tier", exact: true }),
+  ).toBeVisible();
+  // The pin is real, not just claimed: the lock mark is on the row and the
+  // button that was live a moment ago is now the disabled one.
+  await expect(zedRow.locator(".tier__lock")).toBeVisible();
+  await expect(already).toBeDisabled();
+});
+
 // The drawer holds every control for the row, so a server action that collapsed
 // it would make each edit cost a re-open. Its open state is React state in
 // Disclosure rather than the DOM's own `open` attribute, precisely so this
@@ -2207,4 +2258,48 @@ test("the filter row's Find and clear match the tier chips they sit beside", asy
   expect(Math.round(chipBox!.height)).toBe(36);
   expect(Math.round(findBox!.height)).toBe(Math.round(chipBox!.height));
   expect(Math.round(clearBox!.height)).toBe(Math.round(chipBox!.height));
+});
+
+/**
+ * The one standing call to action on this page — the link that routes an admin
+ * to the queue waiting for them — was a bare `<a>` dropped into `Notice`'s flex
+ * row: no padding, no min-height, no `.btn` grade, and no `.notice a` rule
+ * anywhere in globals.css to supply one. Its hit target was the `--t-data`
+ * line box, measured at 21.7px tall: under WCAG 2.5.8 (AA)'s 24px floor, and
+ * neither of the two hit-target grades DESIGN.md:277-278 permits "and no
+ * others". The admin who misses it on a trackpad or a touch screen goes back
+ * to hand-filtering `?tier=pending`.
+ *
+ * Measured against the tier chip rather than against a bare 36, for the same
+ * reason the filter-row test above does: the standalone grade is a property of
+ * this stylesheet, and asserting the two together says "this is the same size
+ * as the controls beside it" — the actual claim — instead of pinning a number
+ * that moves if the grade ever does. The literal 36 is kept as well, since a
+ * regression that shrank *both* would otherwise pass.
+ *
+ * The link's own text is asserted elsewhere ("an admin reaches the queue from
+ * the count link and approves"), so this is only about the box.
+ */
+test("the pending-queue link is a standalone-grade target, not a bare line of text", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
+  await seedMember(db, { name: "Waiting Pilot", tier: "pending" });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.goto("/admin/accounts");
+
+  const queueLink = page.getByRole("link", { name: /awaiting approval/i });
+  const chip = page
+    .getByRole("group", { name: "Filter by tier" })
+    .getByRole("link", { name: "Queued" });
+  await expect(queueLink).toBeVisible();
+
+  const [linkBox, chipBox] = await Promise.all([
+    queueLink.boundingBox(),
+    chip.boundingBox(),
+  ]);
+
+  expect(Math.round(chipBox!.height)).toBe(36);
+  expect(Math.round(linkBox!.height)).toBe(Math.round(chipBox!.height));
 });

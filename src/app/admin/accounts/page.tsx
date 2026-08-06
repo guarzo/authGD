@@ -279,7 +279,24 @@ export default async function AdminAccountsPage({
 
       <Notice>
         {pendingCount > 0 ? (
-          <a href="/admin/accounts?tier=pending">
+          /* `.btn`, not a bare anchor. This is the page's only standing call
+             to action — the one control that routes an admin to the work
+             waiting for them — and as a bare `<a>` inside `.notice`'s flex row
+             its hit target was the `--t-data` line box, 21.7px tall (measured):
+             under WCAG 2.5.8's 24px floor and under both of the two hit-target
+             grades DESIGN.md:277-278 allows, "and no others". An admin on a
+             trackpad or a touch screen who misses it falls back to
+             hand-filtering `?tier=pending`.
+
+             A plain `.btn` rather than the `.filters .btn--quiet` buy-back the
+             filter row needs: `.btn` is already at the 36px standalone grade
+             with no override at all, and it is the exact class the tier and
+             status chips beside it carry — this link goes to the same list
+             those chips filter, so it reads as one of them rather than as a
+             third thing. Keeping the grade on the element rather than in a
+             `.notice a` rule also keeps it from reaching the other eleven
+             `Notice` call sites, none of which renders a control today. */
+          <a className="btn" href="/admin/accounts?tier=pending">
             {pendingCount} account{pendingCount === 1 ? "" : "s"} awaiting approval
           </a>
         ) : null}

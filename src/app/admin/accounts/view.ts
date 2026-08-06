@@ -129,6 +129,46 @@ function isDoneCode(value: string | undefined): value is AdminAccountsDoneCode {
 }
 
 /**
+ * The half of the tier confirmation that says what the press actually did.
+ *
+ * `setTierManual` (services/admin-accounts.ts) writes `tierLocked: true` on
+ * EVERY manual set, including a set to the tier the account already holds —
+ * the tier buttons stay live unless the account is already locked at that tier
+ * (`page.tsx`: `disabled={r.tierLocked && r.tier === t}`), and the
+ * already-current one carries `aria-pressed="true"`, which globals.css paints
+ * with the raised ground and leading `▪` the filter chips above use to mean
+ * "you are already here, this does nothing". Pressing it is not a no-op: it
+ * takes the account out of the membership job's reach permanently. Nothing in
+ * the group label, the button, or the old sentence ("… set to …") said so, so
+ * the admin who pressed what looked like the selected chip found out only when
+ * a member who had left the alliance kept their tier, their map ACL entry and
+ * their Discord roles indefinitely — the exact outcome derole-don't-boot
+ * exists to prevent.
+ *
+ * The clause names the undo by the word written on the control that performs
+ * it (`auto`, rendered only while `r.tierLocked`), rather than describing the
+ * lock in the abstract: the admin reading this has that button in front of
+ * them for the first time, because the press that produced this sentence is
+ * what made it appear.
+ *
+ * It is this short for a layout reason, not a stylistic one, and lengthening
+ * it is not free. For a tier press the sentence lands in `ConfirmGroup`'s
+ * `Notice` (`_components/confirm-group.tsx`), which renders as a grid item in
+ * the `.drawer__group` holding the tier buttons — `justify-items: start`, so
+ * the notice sizes to its own max-content and that becomes the group's width
+ * inside `.drawer__controls`, a wrapping flex row shared with Cryo, Note and
+ * History. Measured in Chromium on the seeded drawer: this wording renders a
+ * 330px notice and shifts the three sibling groups 79px right at 1024px and
+ * up, with no re-wrap. A fuller version of the same sentence ("Automatic tier
+ * changes are off until you press auto.") measured 531px and pushed Note and
+ * History onto a second line at 1024px — the controls the admin is most
+ * likely to reach for next, moving out from under the pointer as a *result*
+ * of the press. Anything materially longer than this needs a width cap on the
+ * notice inside `.drawer__group` first.
+ */
+const PINNED = "Press auto to unpin.";
+
+/**
  * The one-line outcome of the press that landed here, or `""` for no
  * confirmation to show. Mounted unconditionally into `ConfirmNotice` by the
  * page.
@@ -162,9 +202,20 @@ export function accountsConfirmation(
   if (!isDoneCode(done)) return "";
   switch (done) {
     case "tier":
-      if (name && tier) return `${name} set to ${tier}.`;
-      return tier ? `Set to ${tier}.` : "Tier updated.";
+      if (name && tier) return `${name} pinned to ${tier}. ${PINNED}`;
+      return tier ? `Pinned to ${tier}. ${PINNED}` : `Tier pinned. ${PINNED}`;
     case "approve":
+      // Deliberately carries no `PINNED` clause, unlike `tier` above. An
+      // approval does NOT run through `setTierManual`: `approveAccount`
+      // (services/admin-accounts.ts) sets `tierLocked: tier === "associate"`,
+      // so one of the two approve buttons pins and the other does not — and
+      // this function cannot tell them apart, because `tier` arrives as the
+      // already-localized label (`tierLabel()`, deployment-configurable) and
+      // not the enum. Saying "pinned" here would be wrong on every alumni
+      // approval; saying nothing is at least not wrong, and the `auto` button
+      // appearing on the approved row is the same tell it is after a manual
+      // set. Naming the pin here needs a fourth argument carrying the lock
+      // state from the action, which is more than a copy change.
       if (name && tier) return `${name} approved as ${tier}.`;
       return tier ? `Approved as ${tier}.` : "Account approved.";
     case "auto":

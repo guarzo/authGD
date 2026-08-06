@@ -14,16 +14,42 @@ import { accountsConfirmation, matchesAccountSearch } from "@/app/admin/accounts
 describe("accountsConfirmation", () => {
   it("names the account and the tier for a manual tier change", () => {
     expect(accountsConfirmation("tier", "Aiden Sol", "Alumni")).toBe(
-      "Aiden Sol set to Alumni.",
+      "Aiden Sol pinned to Alumni. Press auto to unpin.",
     );
   });
 
+  // The reason the sentence says "pinned" rather than "set": setTierManual
+  // writes `tierLocked: true` on every manual set, including a set to the tier
+  // the account already shows — and that button is live, painted
+  // `aria-pressed`, and looks exactly like the filter chips above it that mean
+  // "you are already here, this does nothing". An admin who presses it takes
+  // the account out of the membership job's reach for good. Every shape of the
+  // sentence has to say so, including the two degraded ones, which is what
+  // makes this worth asserting as a rule over all three rather than three
+  // separate literals: the pin is the fact, not a decoration on the full form.
+  it("names the pin, and the control that undoes it, in every shape", () => {
+    for (const text of [
+      accountsConfirmation("tier", "Aiden Sol", "Alumni"),
+      accountsConfirmation("tier", undefined, "Alumni"),
+      accountsConfirmation("tier", undefined, undefined),
+    ]) {
+      expect(text).toMatch(/pinned/i);
+      // `auto` is the word written on the button that clears the lock, which
+      // only renders once the lock exists — i.e. as a result of this press.
+      expect(text).toContain("auto");
+    }
+  });
+
   it("falls back to just the tier when the name didn't survive the redirect", () => {
-    expect(accountsConfirmation("tier", undefined, "Alumni")).toBe("Set to Alumni.");
+    expect(accountsConfirmation("tier", undefined, "Alumni")).toBe(
+      "Pinned to Alumni. Press auto to unpin.",
+    );
   });
 
   it("falls back to a bare verb when neither name nor tier survived", () => {
-    expect(accountsConfirmation("tier", undefined, undefined)).toBe("Tier updated.");
+    expect(accountsConfirmation("tier", undefined, undefined)).toBe(
+      "Tier pinned. Press auto to unpin.",
+    );
   });
 
   it("names the account and the tier for an approval", () => {
