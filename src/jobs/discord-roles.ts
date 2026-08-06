@@ -194,12 +194,24 @@ export async function runDiscordRolesJob(
           // console.error above, with both ids, is what's left to diagnose
           // it — `role_strip_failed` alone, with no matching `role_changed`,
           // is otherwise silently misread as "nothing came off".
-          await logAuditIfChanged(db, {
-            actor: "system",
-            action: "discord.role_strip_failed",
-            target: opts.discordUserId,
-            details: { roleId: inFlightRoleId ?? null, error: err.message },
-          });
+          // Guarded for the same reason the compensating write above is, and
+          // the paragraph above is only true because of it: unguarded, a DB
+          // fault on THIS insert throws out of the catch, so the branch does
+          // not return `{status:"failed"}` with `err` as the cause at all —
+          // it propagates the database error instead, and the Discord failure
+          // that actually happened is never reported.
+          try {
+            await logAuditIfChanged(db, {
+              actor: "system",
+              action: "discord.role_strip_failed",
+              target: opts.discordUserId,
+              details: { roleId: inFlightRoleId ?? null, error: err.message },
+            });
+          } catch (auditErr) {
+            console.error(
+              `discord.role_strip_failed audit write failed for ${opts.discordUserId}: ${auditErr instanceof Error ? auditErr.message : String(auditErr)}`,
+            );
+          }
           return { status: "failed", errorSummary: msg };
         }
         throw err;
@@ -360,35 +372,19 @@ export async function runDiscordRolesJob(
                 },
               });
             } catch (auditErr) {
-              // Guarded, matching the strip path — this diverges from an
-              // earlier version of this comment that argued the OPPOSITE for
-              // exactly the opposite reason, and both halves of that argument
-              // were wrong. It claimed leaving this unguarded protected
-              // against the job "reporting success having lost every audit
-              // row": it cannot report success from here — `counts.failed`/
-              // `transientFailures` and `errors.push` above already ran for
-              // THIS row, so the terminal branch below returns "partial",
-              // never "ok", whether this write lands or not. So the real
-              // comparison is narrower than "recover vs. lose the row" (a
-              // retry recovers nothing either way — same reasoning as the
-              // strip path's guard). It's "abort the rest of `rows` vs.
-              // finish it": an unguarded throw here escapes this row's catch
-              // entirely and aborts the `for` loop, so every member not yet
-              // reached this tick gets no role sync attempted at all — not
-              // even tried, not just failed — while `sync_run.errorSummary`
-              // ends up holding this DB fault's message instead of the
-              // accumulated per-member Discord errors already in `errors`.
-              // Guarding costs this one row's audit trail and lets every
-              // other member in `rows` still get processed. That cost is
-              // permanent, not deferred — the same non-recoverability as
-              // everywhere else in this file: the roles have already changed,
-              // so the next tick's `diffRoles` comes back empty for this
-              // member and never writes the row that was lost. What the next
-              // tick does restore is the STATE (the member's roles are
-              // correct either way), not the RECORD. Worth taking anyway,
-              // because the alternative spends the rest of the tick's sweep
-              // to save nothing. Logged, not silent, for the same reason the
-              // strip path's guard is.
+              // This row already counted as failed above, so the choice here
+              // is not "report success vs. failure" — it is "abort the rest
+              // of `rows` vs. finish it". An unguarded throw escapes this
+              // row's catch and aborts the `for` loop, so every member not
+              // yet reached gets no role sync attempted at all, and
+              // `errorSummary` carries this DB fault instead of the
+              // accumulated per-member Discord errors.
+              //
+              // The cost is one row's audit trail, permanently: the roles
+              // have already changed, so the next tick's `diffRoles` comes
+              // back empty and never writes the lost row. The next tick
+              // restores the STATE, not the RECORD. Worth it — the
+              // alternative spends the rest of the sweep to save nothing.
               console.error(
                 `discord.role_changed audit write failed for ${row.discordUserId} (added ${applied.added.join(", ")}, removed ${applied.removed.join(", ")}): ${auditErr instanceof Error ? auditErr.message : String(auditErr)}`,
               );
@@ -405,17 +401,29 @@ export async function runDiscordRolesJob(
         // failure (getGuildMember, a malformed body), never a suppressed
         // write pretending to be one.
         if (permanent) {
-          await logAuditIfChanged(db, {
-            actor: "system",
-            action: "discord.role_sync_failed",
-            target: row.discordUserId,
-            details: {
-              op: inFlight?.op ?? null,
-              roleId: inFlight?.roleId ?? null,
-              tier: row.tier,
-              error: err instanceof Error ? err.message : String(err),
-            },
-          });
+          // Guarded like the compensating write above, and for the same
+          // reason that one is: this sits in the per-row catch inside the
+          // `for` loop, so an unguarded DB fault here escapes the loop and
+          // abandons every member not yet reached — exactly the outcome the
+          // guard above exists to prevent, arriving one statement later.
+          // Guarding both is what actually makes that guarantee hold.
+          try {
+            await logAuditIfChanged(db, {
+              actor: "system",
+              action: "discord.role_sync_failed",
+              target: row.discordUserId,
+              details: {
+                op: inFlight?.op ?? null,
+                roleId: inFlight?.roleId ?? null,
+                tier: row.tier,
+                error: err instanceof Error ? err.message : String(err),
+              },
+            });
+          } catch (auditErr) {
+            console.error(
+              `discord.role_sync_failed audit write failed for ${row.discordUserId}: ${auditErr instanceof Error ? auditErr.message : String(auditErr)}`,
+            );
+          }
         }
       }
     }
