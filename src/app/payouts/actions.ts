@@ -429,7 +429,12 @@ export async function addFlatPoolAction(
   // iskToCents' regex rejects it, but let this action fail with the same
   // readable message the other numeric fields above use, rather than relying
   // solely on addFlatPool's deeper (also correct) check.
-  if (!/^-?\d+(\.\d{1,2})?$/.test(totalValue)) {
+  //
+  // No leading minus, matching setItemPriceAction below. addFlatPool rejects a
+  // negative total too, but by throwing -- which reaches the error boundary and
+  // takes the operator's note and paste with it, the exact loss this state
+  // shape exists to prevent. Rejecting here keeps all three fields.
+  if (!/^\d+(\.\d{1,2})?$/.test(totalValue)) {
     return { ok: false, code: "total_invalid", totalValue, notes, rawPaste };
   }
 

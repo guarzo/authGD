@@ -179,7 +179,7 @@ test("a name search finds the member, works from the keyboard, and reports the c
   await expect(page.getByRole("heading", { name: "3 members" })).toBeVisible();
 
   // Keyboard only: no pointer click on the input or the button below.
-  const search = page.getByRole("searchbox", { name: "Find" });
+  const search = page.getByRole("searchbox", { name: "Name or handle" });
   await search.focus();
   await search.fill("zed");
   await page.keyboard.press("Enter");
@@ -261,7 +261,7 @@ test("a search preserves an active status filter across the submission", async (
   await page.goto("/admin/accounts?status=cryo");
   await expect(page.locator(ROWS)).toHaveCount(2);
 
-  const search = page.getByRole("searchbox", { name: "Find" });
+  const search = page.getByRole("searchbox", { name: "Name or handle" });
   await search.fill("zed");
   await page.keyboard.press("Enter");
 
@@ -1576,9 +1576,12 @@ test("the accounts scroller does not floor to the same height at every zoom leve
   const visibleHeightAt = async (height: number) => {
     await page.setViewportSize({ width: 640, height });
     await page.goto("/admin/accounts");
-    await page.waitForSelector(".scroller tbody tr");
+    // `.scroller--tall`, not `.scroller`: the page mounts a second, untall
+    // Scroller for the drawer's crew table, and the bare class would silently
+    // start measuring that one the day the two swap document order.
+    await page.waitForSelector(".scroller--tall tbody tr");
     return page.evaluate(
-      () => (document.querySelector(".scroller") as HTMLElement).clientHeight,
+      () => (document.querySelector(".scroller--tall") as HTMLElement).clientHeight,
     );
   };
 

@@ -84,7 +84,7 @@ export const OPERATION_ERRORS = {
   note_required:
     "A flat pool needs a note saying where the number came from. It is the only record of why this total is what it is.",
   total_invalid:
-    "Total must be a plain number like 12345.67 — no commas, and no shorthand like 1e5.",
+    "Total must be a plain number like 12345.67 — no commas, no negatives, and no shorthand like 1e5.",
   price_invalid:
     "Price must be a plain number like 12.34 — no commas, and at most two decimals. The item price was left as it was.",
   shares_required: "Shares cannot be blank. The roster value was left as it was.",

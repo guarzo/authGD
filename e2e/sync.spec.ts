@@ -15,7 +15,19 @@ import { JOB_CRON } from "../src/core/schedules";
 import { resetDb, seedMember, sessionCookieFor, testDb } from "./helpers";
 
 const { db, pool } = testDb();
-test.afterAll(() => pool.end());
+// The fake version row `setHeartbeat` writes outlives every test in this file:
+// `resetDb` truncates this app's tables and pgboss is not one of them. Left
+// behind, a version pg-boss will never ship (999999) sits in the table it reads
+// on `boss.start()` to decide whether its schema is already current — so a
+// later run that DOES start a real worker against this database can skip its
+// own setup. Cheap to remove, expensive to debug.
+test.afterAll(async () => {
+  await db.execute(sql`delete from pgboss.version where version = 999999`).catch(() => {
+    // No pgboss schema means no test in this run called setHeartbeat. Nothing
+    // to clean, and failing here would mask whatever the run actually found.
+  });
+  await pool.end();
+});
 test.beforeEach(() => resetDb(db));
 
 const MIN = 60_000;

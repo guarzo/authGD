@@ -243,8 +243,13 @@ export default async function AdminAccountsPage({
           role="search"
           aria-label="Find a member"
         >
+          {/* Not "Find" — that is the submit button's name three lines down,
+              and a screen-reader user tabbing this form heard "Find" twice
+              with nothing to tell the box from the button. Naming the field
+              for what goes IN it also says more than the verb did: the hint
+              below expands it, but the label alone now answers "type what?". */}
           <label className="filters__label" htmlFor="accounts-search">
-            Find
+            Name or handle
           </label>
           {tier && <input type="hidden" name="tier" value={tier} />}
           {status && <input type="hidden" name="status" value={status} />}

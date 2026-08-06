@@ -81,6 +81,25 @@ describe("workerHeartbeat", () => {
         monitored_on timestamptz
       )
     `);
+    // Snapshot before the tests below delete every row and insert a version
+    // pg-boss will never ship. `truncateAll` does not touch the pgboss schema,
+    // so without a restore those edits outlive this file: the real version row
+    // is what pg-boss reads on `boss.start()` to decide whether its schema is
+    // current, and `tests/worker-queues.test.ts` boots a real one. A copy table
+    // rather than a row-by-row save so it stays correct if pg-boss adds a
+    // column.
+    await ctx.db.execute(sql`drop table if exists pgboss.version_test_backup`);
+    await ctx.db.execute(
+      sql`create table pgboss.version_test_backup as select * from pgboss.version`,
+    );
+  });
+
+  afterAll(async () => {
+    await ctx.db.execute(sql`delete from pgboss.version`);
+    await ctx.db.execute(
+      sql`insert into pgboss.version select * from pgboss.version_test_backup`,
+    );
+    await ctx.db.execute(sql`drop table pgboss.version_test_backup`);
   });
 
   it("returns null when the table has no rows at all", async () => {
