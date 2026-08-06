@@ -4,9 +4,29 @@ import { expect, test } from "@playwright/test";
  * The consent-moment scope list on /login.
  *
  * No database fixture: this page renders entirely from `getConfig()`, and the
- * dev-server env `playwright.config.ts` sets `EVE_SSO_SCOPES` to the two
- * contact scopes (see there) — no session, no seed, needed to see it.
+ * dev-server env `playwright.config.ts` sets `EVE_SSO_SCOPES` to the full
+ * deployed set (see there) — no session, no seed, needed to see it.
  */
+
+/** In `EVE_SSO_SCOPES` order — the page renders `cfg.eveSso.scopes` as given. */
+const SCOPES = [
+  "esi-characters.read_contacts.v1",
+  "esi-characters.write_contacts.v1",
+  "esi-ui.open_window.v1",
+  "esi-location.read_location.v1",
+  "esi-universe.read_structures.v1",
+  "esi-location.read_online.v1",
+];
+
+/** One distinctive fragment of each scope's own sentence, in the same order. */
+const DESCRIPTIONS = [
+  "Reads the contacts",
+  "Adds, updates, and removes contacts",
+  "open a character's info window",
+  "which solar system",
+  "name of the structure",
+  "logged in right now",
+];
 
 test("each requested scope shows a plain-English description, not just the identifier", async ({
   page,
@@ -17,20 +37,23 @@ test("each requested scope shows a plain-English description, not just the ident
   await expect(heading).toHaveText("Scopes requested");
 
   const rows = page.locator(".launch__scopes dt");
-  await expect(rows).toHaveCount(2);
-  await expect(rows.nth(0)).toHaveText("esi-characters.read_contacts.v1");
-  await expect(rows.nth(1)).toHaveText("esi-characters.write_contacts.v1");
+  await expect(rows).toHaveCount(SCOPES.length);
+  for (const [i, scope] of SCOPES.entries()) {
+    await expect(rows.nth(i)).toHaveText(scope);
+  }
 
   // Every configured scope resolves to a real description in this deployment.
   // The count no longer proves that on its own — `describeScope`'s default now
   // returns a fallback sentence, so a scope falling through still renders a
   // `<dd>` (a `<dt>` without one is invalid in a `<dl>`, and AT would read the
-  // undescribed scope as meaning whatever the next definition says). The two
-  // text assertions below are what catches a fall-through now.
+  // undescribed scope as meaning whatever the next definition says). The text
+  // assertions below are what catches a fall-through now, and pairing each
+  // fragment with its own index is what catches two scopes swapping places.
   const descriptions = page.locator(".launch__scopes dd");
-  await expect(descriptions).toHaveCount(2);
-  await expect(descriptions.nth(0)).toContainText("Reads the contacts");
-  await expect(descriptions.nth(1)).toContainText("Adds, updates, and removes contacts");
+  await expect(descriptions).toHaveCount(DESCRIPTIONS.length);
+  for (const [i, fragment] of DESCRIPTIONS.entries()) {
+    await expect(descriptions.nth(i)).toContainText(fragment);
+  }
 });
 
 test("the description outranks the identifier in the reading order that matters: colour", async ({
