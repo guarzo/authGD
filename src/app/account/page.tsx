@@ -315,8 +315,9 @@ export default async function AccountPage({
               despite the "lead" in its name. */}
           <dd className="facts__lead">
             {view.discordLinked ? (
-              // Its own arm scope, not the manifest's: ConfirmSubmit throws outside
-              // one (confirm-submit.tsx:115), and a scope of one is right here —
+              // Its own arm scope, not the manifest's: an arming ConfirmSubmit
+              // throws outside one (confirm-submit.tsx:281), and a scope of one
+              // is right here —
               // arming this must not disarm a character row three sections down.
               <ConfirmArmScope>
                 {/* No `linked` token beside the button. The unlinked branch

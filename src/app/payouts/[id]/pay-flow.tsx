@@ -10,7 +10,6 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { Submit } from "@/app/_components/submit";
 import { ConfirmSubmit } from "@/app/_components/confirm-submit";
 import { copyAmountId } from "./pay-flow-ids";
 
@@ -63,7 +62,7 @@ function usePayFlow(): { dispatch: (id: string, kind: "pay" | "revert") => void 
  *
  * It carries an `id` because it is not the only `role="status"` on this page —
  * every copy button renders one (`copy-amount-button.tsx:88`) and so does every
- * `ConfirmSubmit` (`confirm-submit.tsx:261`), so on a twelve-row roster there
+ * `ConfirmSubmit` (`confirm-submit.tsx:364`), so on a twelve-row roster there
  * are two dozen. The id is what lets a test address this one specifically; it
  * is not read by anything at runtime.
  */
@@ -170,12 +169,29 @@ export function PayFlow({
  * name — this wrapper exists only to tell `PayFlow` a payment was requested.
  *
  * The dispatch hangs off the form's `onSubmit`, NEVER the button's `onClick`.
- * `ConfirmSubmit`'s first click arms and calls `preventDefault()` so it never
- * reaches the server (`confirm-submit.tsx:220-226`), and the operator can still
- * back out by blurring, pressing Escape, or moving the pointer away
- * (`confirm-submit.tsx:234-257`). Dispatching on click would arm the watch for
+ * An armed `ConfirmSubmit`'s first click arms and calls `preventDefault()` so
+ * it never reaches the server (`confirm-submit.tsx:324-330`), and the operator
+ * can still back out by blurring, pressing Escape, or moving the pointer away
+ * (`confirm-submit.tsx:337-360`). Dispatching on click would arm the watch for
  * a payment that was never requested. `onSubmit` fires only on the press that
  * actually submits, which is correct for both the armed and plain grades.
+ *
+ * `ConfirmSubmit` renders unconditionally here, with `confirm={arm}` choosing
+ * the grade — it used to be a ternary between `ConfirmSubmit` and the plain
+ * `Submit` component in this same slot, which is one component type standing
+ * in for another at a fixed JSX position. React reconciles by type-at-position,
+ * so the render where `arm` flips from true to false (the moment the
+ * operation's first payment lands and every other still-unpaid row loses its
+ * arm step) unmounted every one of those `ConfirmSubmit`s and mounted a fresh
+ * `Submit` in the same spot — replacing the `<button>` DOM node rather than
+ * updating it. A press that began on the old node during that swap reached
+ * neither button and produced no click at all (#146). One component type in
+ * the slot makes the transition an ordinary re-render instead.
+ *
+ * `describedBy` is passed only while arming: once `arm` is false there is no
+ * cost sentence left to point at (`page.tsx:954` stops rendering
+ * `#mark-paid-cost` in the same render this flips), and a stale
+ * `aria-describedby` would point at nothing.
  */
 export function MarkPaidForm({
   action,
@@ -188,26 +204,21 @@ export function MarkPaidForm({
   participantId: string;
   displayName: string;
   /** True only for the FIRST payment on the operation, which is the one that
-   *  freezes it permanently. Mirrors `firstPayment` in `page.tsx:201`. */
+   *  freezes it permanently. Mirrors `firstPayment` in `page.tsx:206`. */
   arm: boolean;
   describedBy?: string;
 }) {
   const { dispatch } = usePayFlow();
   return (
     <form action={action} onSubmit={() => dispatch(participantId, "pay")}>
-      {arm ? (
-        <ConfirmSubmit
-          className="btn btn--micro"
-          label="mark paid"
-          restName={`mark paid ${displayName}`}
-          confirmName={`confirm mark paid ${displayName}`}
-          describedBy={describedBy}
-        />
-      ) : (
-        <Submit className="btn btn--micro" aria-label={`mark paid ${displayName}`}>
-          mark paid
-        </Submit>
-      )}
+      <ConfirmSubmit
+        className="btn btn--micro"
+        label="mark paid"
+        restName={`mark paid ${displayName}`}
+        confirmName={`confirm mark paid ${displayName}`}
+        describedBy={arm ? describedBy : undefined}
+        confirm={arm}
+      />
     </form>
   );
 }
