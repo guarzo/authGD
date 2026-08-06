@@ -40,6 +40,8 @@ import { ClearStaleQuery } from "./clear-stale-query";
 import { CopyAmountButton } from "./copy-amount-button";
 import { FlatPoolForm } from "./flat-pool-form";
 import { InlineEdit } from "./inline-edit";
+import { LifecycleAnnouncer, LifecycleSubmit } from "./lifecycle-submit";
+import { NotesForm } from "./notes-form";
 import { PaymentHistory } from "./payment-history";
 import { deriveRosterWarnings } from "./roster-warnings";
 import type { PricingMode } from "@/core/pricing";
@@ -230,8 +232,15 @@ export default async function PayoutOperationPage({
       <SiteHeader items={nav} current="/payouts" section {...brandProps()} />
       <main id="main" tabIndex={-1} className="page">
         <div className="page__head">
+          {/* `id` + `tabIndex={-1}` exist for `LifecycleSubmit`
+              (`lifecycle-submit.tsx`): Finalize and Unlock each remove their
+              own button from the DOM on success, so focus has nowhere of its
+              own to return to, and this heading is the one element on the
+              page guaranteed to survive every combination of
+              canFinalize/canRelease/locked. Same idiom `<main id="main"
+              tabIndex={-1}>` above already uses for the same reason. */}
           {canEdit ? (
-            <h1>
+            <h1 id="operation-name" tabIndex={-1}>
               <InlineEdit
                 action={setNameAction.bind(null, operation.id)}
                 fieldName="name"
@@ -240,7 +249,9 @@ export default async function PayoutOperationPage({
               />
             </h1>
           ) : (
-            <h1>{operation.name}</h1>
+            <h1 id="operation-name" tabIndex={-1}>
+              {operation.name}
+            </h1>
           )}
           <p className="page__lede">
             {/* Computed state, not prose: "prose is proportional, state is
@@ -384,59 +395,73 @@ export default async function PayoutOperationPage({
               a <dt>/<dd> pair is invalid HTML the parser silently reshuffles —
               the same class of bug as the <p><form> nesting fixed in da8c7d0,
               which `expectNoFormInParagraph` in e2e/payouts.spec.ts guards. */}
-          {showLifecycle && (
-            <div className="lifecycle">
-              {locked && (
-                <p className="dim">
-                  A payment has been recorded, so the loot pools, the roster, shares and
-                  the corp share are fixed permanently. Reverting a payment does not
-                  reopen editing — it corrects who has been paid, and nothing else. If the
-                  wrong person was marked paid, revert them and pay the right one; both
-                  work while frozen.
-                </p>
-              )}
-              <div className="btn-row btn-row--tight">
-                {canFinalize && (
-                  <form action={finalizeAction.bind(null, operation.id)}>
-                    <ConfirmSubmit
+          {/* The announcer sits OUTSIDE the `showLifecycle` gate, not inside
+              it. An operator who is neither the creator nor an admin can
+              finalize (canFinalize wants only operator + draft) but cannot
+              unlock (canRelease wants canUnlock), so for them the successful
+              finalize turns all three disjuncts of `showLifecycle` false at
+              once and takes the whole block away. An announcer nested in
+              there would be unmounted by the very response it was waiting to
+              describe, and "Operation finalized." would be spoken to nothing.
+              Out here it survives the block it describes. */}
+          <LifecycleAnnouncer>
+            {showLifecycle && (
+              <div className="lifecycle">
+                {locked && (
+                  <p className="dim">
+                    A payment has been recorded, so the loot pools, roster, shares and
+                    corp share are fixed permanently. Reverting a payment does not reopen
+                    editing: it only corrects who was paid, so revert the wrong one and
+                    pay the right person while still frozen.
+                  </p>
+                )}
+                <div className="btn-row btn-row--tight">
+                  {canFinalize && (
+                    <LifecycleSubmit
+                      action={finalizeAction.bind(null, operation.id)}
                       className={primaryStage === "finalize" ? "btn btn--primary" : "btn"}
                       label="Finalize"
                       confirmName="confirm finalize"
-                      describedBy="finalize-cost"
+                      costId="finalize-cost"
+                      announcement="Operation finalized."
+                      cost={
+                        <>
+                          Closes the pools, roster and shares to editing. Reversible with
+                          Unlock until the first payment is recorded, and permanent after
+                          that.
+                        </>
+                      }
                     />
-                    <ConfirmCost id="finalize-cost" className="dim">
-                      Closes the pools, roster and shares to editing. Reversible with
-                      Unlock until the first payment is recorded, and permanent after
-                      that.
-                    </ConfirmCost>
-                  </form>
-                )}
-                {/* Plain grade, and armed like its neighbours. Quiet made it
-                  indistinguishable from the label register it sat beside — the
-                  comment on `primaryStage` above already says Unlock is meant
-                  to be plain, and the markup had drifted from it. It reopens
-                  finalized financial state, which is the same weight as the
-                  Finalize it undoes, so it arms rather than firing on one
-                  press. The standing explanation that used to sit permanently
-                  below it is now the cost sentence, which is what this
-                  component exists to hold. */}
-                {canRelease && (
-                  <form action={unlockAction.bind(null, operation.id)}>
-                    <ConfirmSubmit
+                  )}
+                  {/* Plain grade, and armed like its neighbours. Quiet made it
+                    indistinguishable from the label register it sat beside — the
+                    comment on `primaryStage` above already says Unlock is meant
+                    to be plain, and the markup had drifted from it. It reopens
+                    finalized financial state, which is the same weight as the
+                    Finalize it undoes, so it arms rather than firing on one
+                    press. The standing explanation that used to sit permanently
+                    below it is now the cost sentence, which is what this
+                    component exists to hold. */}
+                  {canRelease && (
+                    <LifecycleSubmit
+                      action={unlockAction.bind(null, operation.id)}
                       className="btn"
                       label="Unlock"
                       confirmName="confirm unlock"
-                      describedBy="unlock-cost"
+                      costId="unlock-cost"
+                      announcement="Operation unlocked."
+                      cost={
+                        <>
+                          Reopens the pools, roster and shares to editing, until finalized
+                          again or until the first payment is recorded.
+                        </>
+                      }
                     />
-                    <ConfirmCost id="unlock-cost" className="dim">
-                      Reopens the pools, roster and shares to editing, until finalized
-                      again or until the first payment is recorded.
-                    </ConfirmCost>
-                  </form>
-                )}
+                  )}
+                </div>
               </div>
-            </div>
-          )}
+            )}
+          </LifecycleAnnouncer>
 
           {/* --- Loot ---------------------------------------------------- */}
           <RuleHead
@@ -1011,7 +1036,11 @@ export default async function PayoutOperationPage({
                         {operation.battleReportUrl}
                       </a>
                     ) : (
-                      <span className="dim">Not set</span>
+                      // Distinct from the read-only "Not set" below on purpose:
+                      // this sits beside a live "edit" trigger, so the empty
+                      // state should read as an invitation the operator can act
+                      // on, not as a null value they can only note.
+                      <span className="dim">No link yet</span>
                     )
                   }
                   label="battle report URL"
@@ -1030,18 +1059,14 @@ export default async function PayoutOperationPage({
             <dt>Notes</dt>
             <dd>
               {canEdit ? (
-                <InlineEdit
+                <NotesForm
                   action={setNotesAction.bind(null, operation.id)}
-                  fieldName="notes"
-                  value={operation.notes ?? ""}
-                  displayValue={operation.notes || <span className="dim">None</span>}
-                  label="operation notes"
-                  as="textarea"
-                  required={false}
-                  rows={3}
+                  initialValue={operation.notes ?? ""}
                 />
+              ) : operation.notes ? (
+                <span className="notes-text">{operation.notes}</span>
               ) : (
-                operation.notes || <span className="dim">None</span>
+                <span className="dim">None</span>
               )}
             </dd>
           </dl>

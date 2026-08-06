@@ -39,10 +39,8 @@ export default async function NewPayoutPage() {
           <p className="page__stamp">Flight log</p>
           <h1>New operation</h1>
           <p className="page__lede">
-            One row per fight. Name, date, and — if you have them ready — the loot paste
-            and the roster, all in one submit. Both pastes are optional and can be added
-            later from the operation once it exists. Creating one pays nobody: it opens a
-            draft, and an admin can delete it later if it turns out to be a mistake.
+            One row per fight. Creating an operation pays nobody: it opens a draft you can
+            fill in now or later.
           </p>
         </div>
 

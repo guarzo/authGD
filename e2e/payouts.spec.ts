@@ -791,6 +791,299 @@ test("an invalid date is refused with a specific message", async ({ page, contex
   await expect(page.getByText("Something broke")).toHaveCount(0);
 });
 
+test("a battle report link is stored, and a bad scheme is refused without losing the rest of the form", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "FC Codes",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+
+  // The rejected-scheme half first, on its own operation: `createOperationAction`
+  // runs this check before any network call, alongside name/date, so a bad
+  // scheme never triggers an appraisal only to be thrown away (actions.ts).
+  await page.goto("/payouts/new");
+  await page.getByLabel("Name").fill("Roam with a link");
+  await page.getByLabel("Date").fill("2026-08-01");
+  await page
+    .getByLabel("Roster paste (optional: one per line, or separated by /)")
+    .fill("Brain Tartare");
+  // type="url" only checks URL syntax, not scheme, so `javascript:` alone
+  // would pass the browser's own constraint validation — bypassClientGuard
+  // isn't needed to reach the server check here, but the roster paste above
+  // proves the rejection doesn't cost the rest of the form either way.
+  await page.getByLabel("Battle report (optional)").fill("javascript:alert(1)");
+  await page.getByRole("button", { name: "Create operation" }).click();
+  await expect(page.locator("p.notice--bad")).toContainText("http:// or https://");
+  await expect(page.getByText("Something broke")).toHaveCount(0);
+  // Everything else the operator typed is still there, per that message.
+  await expect(page.getByLabel("Name")).toHaveValue("Roam with a link");
+  await expect(
+    page.getByLabel("Roster paste (optional: one per line, or separated by /)"),
+  ).toHaveValue("Brain Tartare");
+
+  const rejected = await db
+    .select()
+    .from(payoutOperation)
+    .where(eq(payoutOperation.name, "Roam with a link"));
+  expect(rejected).toHaveLength(0);
+
+  // Now the accepted half: an http(s) link round-trips onto the operation it
+  // created and renders as a link on its own page.
+  await page
+    .getByLabel("Battle report (optional)")
+    .fill("https://zkillboard.com/related/1/");
+  await page.getByRole("button", { name: "Create operation" }).click();
+  await expect(page.getByRole("heading", { name: "Roam with a link" })).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "https://zkillboard.com/related/1/" }),
+  ).toHaveAttribute("href", "https://zkillboard.com/related/1/");
+
+  const [created] = await db
+    .select()
+    .from(payoutOperation)
+    .where(eq(payoutOperation.name, "Roam with a link"));
+  expect(created.battleReportUrl).toBe("https://zkillboard.com/related/1/");
+});
+
+/*
+ * The other half of the same rule, on the other entry point. Both the create
+ * form and this inline edit go through `battleReportUrlProblem`
+ * (src/app/payouts/actions.ts), and both have to refuse a non-http(s) scheme,
+ * because the stored value renders as a plain `<a href>` right here. Both now
+ * refuse the same way too — `setBattleReportUrlAction` returns a code rather
+ * than redirecting, so the rejected text stays in the field the operator is
+ * still standing in, which is why the assertion below is on `InlineEdit`'s own
+ * `span.inline-form__err` and not on a page-level notice.
+ */
+test("the inline battle report edit refuses a javascript: scheme too", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "FC Inline",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+
+  await page.goto("/payouts/new");
+  await page.getByLabel("Name").fill("Inline link roam");
+  await page.getByLabel("Date").fill("2026-08-01");
+  await page.getByRole("button", { name: "Create operation" }).click();
+  await expect(page.getByRole("heading", { name: "Inline link roam" })).toBeVisible();
+
+  await page.getByRole("button", { name: "edit battle report URL" }).click();
+  const field = page.getByRole("textbox", { name: "battle report URL" });
+  // `type="url"` refuses a bare `javascript:alert(1)` in the browser, so
+  // reaching the server check at all means going around the client guard —
+  // which is the only path that matters here, since a real attempt would.
+  await bypassClientGuard(field, "javascript:alert(1)");
+  await page.getByRole("button", { name: "save battle report URL" }).click();
+
+  await expect(page.locator("span.inline-form__err")).toContainText(
+    "http:// or https://",
+  );
+  // The rejected text is still in the field, which is the point of returning
+  // state instead of redirecting.
+  await expect(field).toHaveValue("javascript:alert(1)");
+  const [op] = await db
+    .select()
+    .from(payoutOperation)
+    .where(eq(payoutOperation.name, "Inline link roam"));
+  expect(op.battleReportUrl).toBeNull();
+});
+
+/*
+ * Finalize deletes its own button: `canFinalize` flips on the server and the
+ * re-render drops the control that fired. Focus had nowhere to go and fell to
+ * `<body>`, which drops a keyboard operator back to the top of the document
+ * with nothing said. `LifecycleSubmit` hands it to the page's H1 instead
+ * (`src/app/payouts/[id]/lifecycle-submit.tsx`), and this is the assertion that
+ * the handoff actually commits — it runs in an effect of a component the same
+ * response unmounts, which is exactly the shape that silently never fires.
+ */
+test("finalizing hands focus to the operation heading", async ({ page, context }) => {
+  const operator = await seedMember(db, {
+    name: "FC Focus",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+
+  await page.goto("/payouts/new");
+  await page.getByLabel("Name").fill("Focus roam");
+  await page.getByLabel("Date").fill("2026-08-01");
+  await page.getByRole("button", { name: "Create operation" }).click();
+  await expect(page.getByRole("heading", { name: "Focus roam" })).toBeVisible();
+
+  await openFlatPoolPanel(page);
+  await page.getByLabel("Total value (ISK)").fill("1000000");
+  await page.getByLabel("Note (required — why this number)").fill("sold privately");
+  await page.getByRole("button", { name: "Add flat pool" }).click();
+  await page.getByLabel("Paste (names separated by /)").fill("Brain Tartare");
+  await page.getByRole("button", { name: "Set roster" }).click();
+
+  await page.getByRole("button", { name: "Finalize" }).click();
+  await page.getByRole("button", { name: /^confirm finalize/ }).click();
+  await expect(page.getByRole("button", { name: "Unlock" })).toBeVisible();
+
+  await expect(page.locator("#operation-name")).toBeFocused();
+});
+
+/*
+ * The announcement survives the case that deletes the whole lifecycle block,
+ * not just the button. Any operator can finalize any draft (`canFinalize`
+ * wants operator + draft), but only the creator or an admin can unlock it
+ * (`canRelease` wants `canUnlock`). So for an operator who is neither, a
+ * successful finalize turns every disjunct of `showLifecycle` false at once
+ * and the block goes away. While the announcer lived inside that block it was
+ * unmounted by the very response it existed to describe, and this operator —
+ * uniquely — heard nothing at all.
+ */
+test("finalizing announces to an operator who cannot unlock", async ({
+  page,
+  context,
+}) => {
+  const creator = await seedMember(db, {
+    name: "FC Creator",
+    tier: "member",
+    status: "active",
+  });
+  const other = await seedMember(db, {
+    name: "FC Bystander",
+    tier: "member",
+    status: "active",
+  });
+
+  await context.addCookies([await sessionCookieFor(db, creator.id)]);
+  await page.goto("/payouts/new");
+  await page.getByLabel("Name").fill("Someone else's roam");
+  await page.getByLabel("Date").fill("2026-08-01");
+  await page.getByRole("button", { name: "Create operation" }).click();
+  await expect(page.getByRole("heading", { name: "Someone else's roam" })).toBeVisible();
+  const url = page.url();
+
+  // Hand the page to the second operator: same draft, no creator claim on it.
+  await context.clearCookies();
+  await context.addCookies([await sessionCookieFor(db, other.id)]);
+  await page.goto(url);
+
+  await page.getByRole("button", { name: "Finalize" }).click();
+  await page.getByRole("button", { name: /^confirm finalize/ }).click();
+
+  // The announcement is `.visually-hidden`, so attached rather than visible,
+  // and it clears itself after 2s — assert before that window closes.
+  await expect(page.getByText("Operation finalized.")).toBeAttached();
+  // The premise of the test: this operator really has lost every lifecycle
+  // control, which is what used to take the live region with it.
+  await expect(page.getByRole("button", { name: "Unlock" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Finalize" })).toHaveCount(0);
+});
+
+/*
+ * Notes are a standing field, not a value behind an edit toggle: the textarea
+ * is always open and Save writes it. The second save is the half that matters —
+ * the form never unmounts, so an uncontrolled textarea would snap back to its
+ * mount-time value the instant the first action settled.
+ */
+test("notes save from an always-open textarea, twice running", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "FC Notes",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+
+  await page.goto("/payouts/new");
+  await page.getByLabel("Name").fill("Noted roam");
+  await page.getByLabel("Date").fill("2026-08-01");
+  await page.getByRole("button", { name: "Create operation" }).click();
+  await expect(page.getByRole("heading", { name: "Noted roam" })).toBeVisible();
+
+  // No "edit" trigger to reach for, and no "None" placeholder: the field is
+  // the affordance.
+  const notes = page.getByRole("textbox", { name: "operation notes" });
+  await expect(notes).toHaveValue("");
+
+  const stored = () =>
+    db
+      .select()
+      .from(payoutOperation)
+      .where(eq(payoutOperation.name, "Noted roam"))
+      .then(([row]) => row.notes);
+
+  await notes.fill("Third fleet, two losses.");
+  await page.getByRole("button", { name: "Save notes" }).click();
+  // Polled against the row rather than the field: the textarea is controlled,
+  // so it shows what was typed whether or not the save ever landed.
+  await expect.poll(stored).toBe("Third fleet, two losses.");
+
+  // The second save is the half that matters. The form never unmounts, so an
+  // uncontrolled textarea would have snapped back to its mount-time value the
+  // instant the first action settled, and this would write "" or the old text.
+  await notes.fill("Third fleet, two losses. Salvage split later.");
+  await page.getByRole("button", { name: "Save notes" }).click();
+  await expect.poll(stored).toBe("Third fleet, two losses. Salvage split later.");
+  await expect(notes).toHaveValue("Third fleet, two losses. Salvage split later.");
+});
+
+/*
+ * The notes textarea is the one editable field that sits open on the page for
+ * as long as the operation is editable, so it is the one an operator can be
+ * mid-paragraph in when the operation freezes underneath them — a second tab,
+ * or another operator finalizing first. `canEdit` narrows that window and
+ * cannot close it. Uncaught, `assertEditable`'s throw lands on error.tsx,
+ * which apologizes for a server fault we did not have and never says why the
+ * text vanished. This asserts the operator is told what actually happened.
+ */
+test("notes saved onto a freshly finalized operation say so, not 'something broke'", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "FC Raced",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+
+  await page.goto("/payouts/new");
+  await page.getByLabel("Name").fill("Raced roam");
+  await page.getByLabel("Date").fill("2026-08-01");
+  await page.getByRole("button", { name: "Create operation" }).click();
+  await expect(page.getByRole("heading", { name: "Raced roam" })).toBeVisible();
+
+  const notes = page.getByRole("textbox", { name: "operation notes" });
+  await notes.fill("Half-written note that is about to be lost.");
+
+  // The freeze arrives from outside this page, which is the whole premise:
+  // the operator's tab still shows an editable operation. Writing the status
+  // directly is what another operator's finalize looks like from here.
+  await db
+    .update(payoutOperation)
+    .set({ status: "finalized" })
+    .where(eq(payoutOperation.name, "Raced roam"));
+
+  await page.getByRole("button", { name: "Save notes" }).click();
+
+  await expect(page.locator("p.notice--bad")).toContainText("no longer be edited");
+  // Not the error boundary: the operator is not told we broke.
+  await expect(page.getByText("Something broke")).toHaveCount(0);
+  // And the note really did not land — the copy says so, so it had better.
+  const [op] = await db
+    .select()
+    .from(payoutOperation)
+    .where(eq(payoutOperation.name, "Raced roam"));
+  expect(op.notes).toBeNull();
+});
+
 // The detail page's own `?error=` codes no longer have a live producer — every
 // action that used to redirect through `operationFailed` with one of these now
 // returns `useActionState` state instead (see actions.ts's `StringFieldEditState`

@@ -687,6 +687,15 @@ h3.rule-head__label {
   margin: 0;
 }
 
+/* A stored note is free text and may carry line breaks the operator typed on
+   purpose; the default `normal` collapses every one of them, so a multi-line
+   note reads as a single run-on sentence. Read-only rendering only: this and
+   the editable `<textarea>` are the two mutually exclusive branches of the
+   same `<dd>`, and a textarea preserves breaks on its own. */
+.notes-text {
+  white-space: pre-wrap;
+}
+
 /* The lifecycle control that closes or reopens the thing the facts grid above
    describes. It sits inside the Operation section rather than at the foot of
    the page, so it needs a gap that reads as "still this section, new kind of

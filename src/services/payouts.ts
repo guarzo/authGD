@@ -174,6 +174,7 @@ export async function createOperationWithContents(
   input: {
     name: string;
     occurredAt: Date;
+    battleReportUrl?: string | null;
     corpSharePct?: string;
     appraisal?: {
       rawPaste: string;
@@ -188,6 +189,7 @@ export async function createOperationWithContents(
   const { id } = await createOperation(dbtx, actor, {
     name: input.name,
     occurredAt: input.occurredAt,
+    battleReportUrl: input.battleReportUrl,
     corpSharePct: input.corpSharePct,
   });
   if (input.appraisal) {

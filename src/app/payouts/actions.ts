@@ -16,6 +16,7 @@ import {
   MAX_SHARES_HUNDREDTHS,
   PayoutDuplicateParticipantError,
   PayoutHasPaidError,
+  PayoutLockedError,
   addParticipant,
   createOperationWithContents,
   deleteOperation,
@@ -109,6 +110,41 @@ function operationFailed(operationId: string, code: OperationErrorCode): never {
   redirect(`/payouts/${operationId}?error=${code}`);
 }
 
+/**
+ * The one definition of what a battle report link is allowed to be: an
+ * absolute http(s) URL, or nothing.
+ *
+ * The rule matters because the value is rendered as a plain `<a href>` on the
+ * operation's own page, so a `javascript:` (or `data:`, or any other) scheme
+ * reaching the database is stored XSS. `URL.protocol` is lowercase-normalized
+ * by the URL spec, so an allowlist compare on it is not case-bypassable, and
+ * anything `new URL` cannot parse at all — a bare `zkillboard.com`, say — is
+ * not a link this can store either.
+ *
+ * Extracted rather than written twice. Both entry points need it — the create
+ * form and the inline edit on the operation page — and both now RETURN the code
+ * rather than redirecting, so the value the operator typed survives the
+ * rejection (the loot paste beside the field in the composer's case, the field's
+ * own text in the editor's). This returns the code and lets each caller shape it
+ * into its own state type. When the two checks were written out separately, the
+ * comment in each claiming to match the other went stale inside one change.
+ *
+ * Returns null when there is nothing to object to, including for a null or
+ * empty value — the field is optional at both call sites.
+ */
+function battleReportUrlProblem(
+  value: string | null,
+): "url_invalid" | "url_scheme" | null {
+  if (!value) return null;
+  let scheme: string;
+  try {
+    scheme = new URL(value).protocol;
+  } catch {
+    return "url_invalid";
+  }
+  return scheme === "http:" || scheme === "https:" ? null : "url_scheme";
+}
+
 /** The composer's own rejection state. `null` is `useActionState`'s initial
  *  value, matching `AppraiseActionState`'s own convention: `state === null`
  *  never renders a notice, whether that means "hasn't submitted yet" or
@@ -125,15 +161,17 @@ function operationFailed(operationId: string, code: OperationErrorCode): never {
 export type CreateOperationState = { ok: false; code: NewOperationErrorCode } | null;
 
 /**
- * Collects name, date, an optional loot paste and an optional roster paste in
+ * Collects name, date, an optional battle report link, an optional loot paste
+ * and an optional roster paste in
  * one submit, landing on a fully-populated operation — see
  * `createOperationWithContents` (src/services/payouts.ts) for what "fully
  * populated" does inside the one transaction this opens.
  *
  * Order matters and is deliberate:
  *
- *   1. validate name/date — the two required fields, checked before any
- *      network call so a typo never triggers an appraisal.
+ *   1. validate name/date/battle-report-scheme — the required fields plus the
+ *      one optional field with a security-relevant shape, all checked before
+ *      any network call so a typo or a bad scheme never triggers an appraisal.
  *   2. appraise the loot paste (network: triff/ESI), OUTSIDE any transaction,
  *      the same rule `addAppraisedPoolAction` already follows and for the
  *      same reason — a slow upstream must never hold a row lock.
@@ -166,6 +204,12 @@ export async function createOperationAction(
   if (!name) return { ok: false, code: "name_required" };
   const occurredAt = new Date(field(formData, "occurredAt"));
   if (Number.isNaN(occurredAt.getTime())) return { ok: false, code: "date_invalid" };
+
+  // Checked before any network call, alongside name and date, so a bad scheme
+  // never triggers an appraisal only to be thrown away.
+  const battleReportUrl = field(formData, "battleReportUrl").trim() || null;
+  const urlProblem = battleReportUrlProblem(battleReportUrl);
+  if (urlProblem) return { ok: false, code: urlProblem };
 
   const lootPaste = field(formData, "lootPaste").trim();
   const rosterPaste = field(formData, "rosterPaste").trim();
@@ -226,6 +270,7 @@ export async function createOperationAction(
     return createOperationWithContents(dbtx, actor, {
       name,
       occurredAt,
+      battleReportUrl,
       // A deployment-wide default, not a per-operation one — same source
       // the old create action read it from.
       corpSharePct: getConfig().payoutCorpSharePct,
@@ -509,16 +554,20 @@ export async function setParticipantSharesAction(
   return { ok: true };
 }
 
-/** Four inline editors for fields the create form no longer collects up
- *  front (name/date) plus the two that were always freeform (report link,
- *  notes) — one action per field, mirroring `setOperationName` /
- *  `setOccurredAt` / `setBattleReportUrl` / `setNotes`'s own one-function-
- *  per-field split in the service layer. Each returns `StringFieldEditState`
- *  on its own input rejection rather than redirecting through
- *  `operationFailed`: that redirect could carry a code but never the value
- *  that produced it, which is the defect that type exists to fix (see its
- *  docblock). Every service call is gated by `assertEditable` underneath —
- *  reachable only while `canEdit` is true on the page. */
+/** Four editors for fields the create form no longer collects up front
+ *  (name/date) plus the two that were always freeform (report link, notes) —
+ *  one action per field, mirroring `setOperationName` / `setOccurredAt` /
+ *  `setBattleReportUrl` / `setNotes`'s own one-function-per-field split in the
+ *  service layer. The first three are `InlineEdit` editors and return
+ *  `StringFieldEditState` on their own input rejection rather than redirecting
+ *  through `operationFailed`: that redirect could carry a code but never the
+ *  value that produced it, which is the defect that type exists to fix (see its
+ *  docblock). `setNotesAction` is the odd one out and stays `Promise<void>` —
+ *  #129 moved notes out of `InlineEdit` into a standing textarea
+ *  (`[id]/notes-form.tsx`) that owns its own state, and there is no such thing
+ *  as a malformed note for it to echo back. Every service call is gated by
+ *  `assertEditable` underneath — reachable only while `canEdit` is true on the
+ *  page. */
 export async function setNameAction(
   operationId: string,
   _prevState: StringFieldEditState,
@@ -556,38 +605,54 @@ export async function setBattleReportUrlAction(
   formData: FormData,
 ): Promise<StringFieldEditState> {
   const actor = await requireOperatorAccount();
-  const raw = field(formData, "battleReportUrl").trim();
-  // Same http(s)-only check `createOperationAction` runs, and for the same
-  // reason: this is rendered as a plain `<a href>` on this very page, so a
-  // `javascript:` or other scheme must never reach the database.
-  if (raw) {
-    let scheme: string;
-    try {
-      scheme = new URL(raw).protocol;
-    } catch {
-      return { ok: false, code: "url_invalid", value: raw };
-    }
-    if (scheme !== "http:" && scheme !== "https:") {
-      return { ok: false, code: "url_scheme", value: raw };
-    }
-  }
-  await getDb().transaction((dbtx) =>
-    setBattleReportUrl(dbtx, actor, operationId, raw || null),
-  );
+  const raw = field(formData, "battleReportUrl").trim() || null;
+  const problem = battleReportUrlProblem(raw);
+  if (problem) return { ok: false, code: problem, value: raw ?? "" };
+  await getDb().transaction((dbtx) => setBattleReportUrl(dbtx, actor, operationId, raw));
   revalidateOperation(operationId);
   return { ok: true };
 }
 
+/**
+ * Saves the operation's notes from the always-open textarea on the detail
+ * page (`[id]/notes-form.tsx`).
+ *
+ * The `PayoutLockedError` catch is a deliberate exception to this file's own
+ * rule that lifecycle errors belong on error.tsx (see `revertPaymentAction`).
+ * That rule holds because no lifecycle error there has anything the operator
+ * typed at stake. This one does: the notes textarea sits open on the page for
+ * as long as the operation is editable, so an operator can be a paragraph into
+ * it when a second tab, or another operator, finalizes underneath them.
+ * `canEdit` narrows that window and cannot close it. Uncaught,
+ * `assertEditable`'s throw lands on error.tsx, which apologizes for a server
+ * fault we did not have and tells them nothing about why their text is gone.
+ * Redirecting says what actually happened.
+ *
+ * The text is lost either way — that is what the freeze means, and pretending
+ * otherwise would mean holding an edit against an operation that is closed to
+ * edits. What changes is that the operator learns the operation is now
+ * finalized instead of being told we broke.
+ *
+ * A redirect at all makes this the last `operationFailed` caller among the
+ * field editors: the input rejections all return `StringFieldEditState` now, so
+ * the only thing left that navigates from this group is a freeze, which is not
+ * something the operator can retype their way out of. `operationFailed`
+ * redirects and `redirect()` works by throwing, so it must stay in the catch
+ * rather than the try.
+ */
 export async function setNotesAction(
   operationId: string,
-  _prevState: StringFieldEditState,
   formData: FormData,
-): Promise<StringFieldEditState> {
+): Promise<void> {
   const actor = await requireOperatorAccount();
   const notes = field(formData, "notes").trim() || null;
-  await getDb().transaction((dbtx) => setNotes(dbtx, actor, operationId, notes));
+  try {
+    await getDb().transaction((dbtx) => setNotes(dbtx, actor, operationId, notes));
+  } catch (err) {
+    if (err instanceof PayoutLockedError) operationFailed(operationId, "locked");
+    throw err;
+  }
   revalidateOperation(operationId);
-  return { ok: true };
 }
 
 /** The corp share is set once per deployment (a config default), not once per
@@ -795,8 +860,9 @@ export async function openInfoAction(
  * (PayoutForbiddenError) or lifecycle state (PayoutLockedError,
  * PayoutNotFoundError) — none of them is something the operator typed, and none
  * of them has a field to hand back. That is exactly the line the ?error=
- * conversion drew across this file: input rejections redirect, and everything
- * else belongs on error.tsx. This action has no input to reject.
+ * conversion drew across this file: input rejections are answered where the
+ * operator is standing (as `?error=` once, as returned state now), and
+ * everything else belongs on error.tsx. This action has no input to reject.
  */
 export async function revertPaymentAction(
   operationId: string,

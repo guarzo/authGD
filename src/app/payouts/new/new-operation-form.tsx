@@ -7,9 +7,10 @@ import { createOperationAction, type CreateOperationState } from "../actions";
 import { NEW_OPERATION_ERRORS, lookupErrorMessage } from "../errors";
 
 /**
- * One screen, one submit: name, date, an optional loot paste and an optional
- * roster paste, all landing on a fully-populated operation in a single round
- * trip (`createOperationAction` → `createOperationWithContents`).
+ * One screen, one submit: name, date, an optional battle report link, an
+ * optional loot paste and an optional roster paste, all landing on a
+ * fully-populated operation in a single round trip (`createOperationAction` →
+ * `createOperationWithContents`).
  *
  * A client component built on `useActionState`, following `AppraiseForm`'s
  * own precedent (`../[id]/appraise-form.tsx`) for the same reason that form
@@ -27,7 +28,10 @@ import { NEW_OPERATION_ERRORS, lookupErrorMessage } from "../errors";
  * it. An uncontrolled `defaultValue` textarea would lose a hundred-line paste
  * on the very rejection this component exists to survive, which is exactly
  * backwards. A controlled value survives that reset because React re-applies
- * it on the next render, the same one that shows the rejection notice.
+ * it on the next render, the same one that shows the rejection notice. The
+ * battle report field follows the same rule though it never holds more than a
+ * URL, for consistency: nothing on this form is left uncontrolled to save a
+ * `useState` call.
  *
  * `data-navigates` on the form opts it out of `ClearStaleQuery`
  * (`../[id]/clear-stale-query.tsx`); that component doesn't run on this page
@@ -42,6 +46,7 @@ export function NewOperationForm({ today }: { today: string }) {
   );
   const [name, setName] = useState("");
   const [occurredAt, setOccurredAt] = useState(today);
+  const [battleReportUrl, setBattleReportUrl] = useState("");
   const [lootPaste, setLootPaste] = useState("");
   const [rosterPaste, setRosterPaste] = useState("");
 
@@ -83,6 +88,16 @@ export function NewOperationForm({ today }: { today: string }) {
           required
         />
       </label>
+      <label className="form-stack__field">
+        Battle report (optional)
+        <input
+          className="field"
+          type="url"
+          name="battleReportUrl"
+          value={battleReportUrl}
+          onChange={(e) => setBattleReportUrl(e.target.value)}
+        />
+      </label>
 
       <RuleHead as="h2">Loot</RuleHead>
       <label className="form-stack__field">
@@ -98,7 +113,7 @@ export function NewOperationForm({ today }: { today: string }) {
 
       <RuleHead as="h2">Roster</RuleHead>
       <label className="form-stack__field">
-        Roster paste (optional — one per line, or separated by /)
+        Roster paste (optional: one per line, or separated by /)
         <textarea
           className="field"
           name="rosterPaste"
