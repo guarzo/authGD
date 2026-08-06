@@ -60,7 +60,7 @@ test("resolved names, distinguishable system actor, one-line details, filtered c
   // treatment used for other machine-generated values on this page.
   const systemRow = rows.filter({ hasText: "system" });
   await expect(systemRow).toHaveCount(1);
-  const systemActor = systemRow.locator("td").nth(1).locator(".mono.dim");
+  const systemActor = systemRow.locator("td").nth(1).locator(".mono.dim-ink");
   await expect(systemActor).toHaveText("system");
 
   // Details render a one-line human summary collapsed, with the full JSON
@@ -85,6 +85,43 @@ test("resolved names, distinguishable system actor, one-line details, filtered c
   // The example hint must not leak into the field's accessible name: it sits
   // outside the <label> and is wired up with aria-describedby instead.
   await expect(page.getByLabel("Action prefix", { exact: true })).toBeVisible();
+});
+
+/**
+ * `character.reclaimed`'s `fromAccount` used to render as a raw, unshortened
+ * uuid (`labelled()`) -- pure recitation, since unlike `account.merged`'s
+ * `sourceAccountId` the account it names is not deleted by the write that
+ * logs it, and stays resolvable (`services/audit.ts`'s `DETAIL_ACCOUNT_KEYS`).
+ * A screen reader has no reason to spell out a uuid character by character
+ * when the name it resolves to is sitting in the same database row.
+ */
+test("a reclaim's origin account resolves to a name instead of a raw uuid", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
+  const oldOwner = await seedMember(db, { name: "Old Owner", tier: "alumni" });
+  const newOwner = await seedMember(db, { name: "New Owner", tier: "member" });
+
+  await db.insert(auditLog).values({
+    actor: "system",
+    action: "character.reclaimed",
+    target: String(newOwner.mainCharacterId),
+    details: { fromAccount: oldOwner.id },
+  });
+
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.goto("/admin/audit");
+
+  const row = page.locator("tbody tr").filter({ hasText: "reclaimed" });
+  await expect(row).toHaveCount(1);
+  const details = row.locator("details.json");
+  await expect(details.locator(".json__peek")).toHaveText("from Old Owner");
+  // The full JSON (behind the disclosure) still carries the raw uuid --
+  // that's the escape hatch, not the regression. What must not happen is the
+  // collapsed one-line summary reciting it, which `.json__peek` above already
+  // rules out.
+  await expect(details.locator(".json__full")).toBeHidden();
 });
 
 /**
@@ -850,14 +887,17 @@ test("linking the system actor does not un-dim it", async ({ page, context }) =>
 
   // `system` is a link (a clickable filter) but must keep the dim
   // machine-output treatment. `.cell-link` only sets `color: inherit`, so
-  // `.dim` must still win the resting colour by coming later in globals.css.
+  // `.dim-ink` must still win the resting colour by coming later in globals.css.
   const systemLink = page.getByRole("link", { name: "system" }).first();
   await expect(systemLink).toBeVisible();
 
   const linkColor = await systemLink.evaluate((el) => getComputedStyle(el).color);
-  // The action-namespace prefix in the same table is a plain `.dim` span.
+  // The action-namespace prefix in the same table is a `.dim-ink` span — colour
+  // only, no size step, because it sits inside a mono cell whose advance width
+  // has to hold. It shares `--ink-faint` with `.dim`, so it is still the right
+  // thing to compare the link's resting colour against.
   const dimSpanColor = await page
-    .locator("tbody tr td:nth-child(3) .dim")
+    .locator("tbody tr td:nth-child(3) .dim-ink")
     .first()
     .evaluate((el) => getComputedStyle(el).color);
 
