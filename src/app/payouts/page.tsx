@@ -7,6 +7,7 @@ import {
   encodePayoutCursor,
   listPayoutOperations,
 } from "@/services/payout-view";
+import { navFor } from "@/app/_components/nav-items";
 import { RuleHead, Scroller, SiteHeader, Status } from "@/app/_components/ui";
 import { brandProps } from "@/app/_components/brand-server";
 import { fmtIsk } from "@/app/_components/format-isk";
@@ -45,11 +46,9 @@ export default async function PayoutsPage({
     before: cursor,
   });
 
-  const nav = [
-    { href: "/account", label: "Your account" },
-    { href: "/payouts", label: "Payouts" },
-    ...(access.isAdmin ? [{ href: "/admin/accounts", label: "Members" }] : []),
-  ];
+  // `canReadPayouts: true` is proven by `requirePayoutReader()` above having
+  // returned non-null rather than redirecting.
+  const nav = navFor({ canReadPayouts: true, isAdmin: access.isAdmin });
 
   // `ops.length` is a PAGE count, not a total. It is called a total only when
   // this page provably IS the whole list — nothing paged into it, nothing left

@@ -10,6 +10,7 @@ import { canReadPayouts } from "@/services/payouts";
 import { listAccountPayouts } from "@/services/payout-view";
 import { getSessionAccount } from "@/services/session";
 import { classifyCharacter, computeAccountHealth } from "@/core/account-health";
+import { navFor } from "@/app/_components/nav-items";
 import { Notice, RuleHead, Scroller, SiteHeader, Status } from "@/app/_components/ui";
 import { brandProps } from "@/app/_components/brand-server";
 import { RelativeTime } from "@/app/_components/relative-time";
@@ -157,16 +158,7 @@ export default async function AccountPage({
   const confirmation = accountConfirmation(done, name);
   const now = Date.now();
 
-  const nav = [
-    // These two sit side by side for an admin, so they must not share a word.
-    // The roster is "Members", not "Accounts", for exactly that reason — see
-    // admin-nav.tsx. "Your account" keeps the possessive because this page is
-    // genuinely the reader's own, and nothing else in either bar competes
-    // with it now.
-    { href: "/account", label: "Your account" },
-    ...(showPayoutsLink ? [{ href: "/payouts", label: "Payouts" }] : []),
-    ...(view.isAdmin ? [{ href: "/admin/accounts", label: "Members" }] : []),
-  ];
+  const nav = navFor({ canReadPayouts: showPayoutsLink, isAdmin: view.isAdmin });
 
   // Shown once above the manifest rather than repeated in every affected cell:
   // two identical four-line paragraphs in a table column is noise, and the note
