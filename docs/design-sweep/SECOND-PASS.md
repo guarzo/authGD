@@ -113,16 +113,18 @@ bugs, type design, and over-engineering to `report` rather than auto-fix.
 | `CONTACT_SYNC_RESULTS`' partition comment enumerates seven of nine, omitting `sync_failed` | `core/contact-result.ts:53-56` | May be deliberate, but neither this comment nor `services/accounts.ts:139-144` says so |
 | pg-boss's `maintained_on` is a gated single-row update, so the "three missed ticks" margin is nearer 1.5 | `core/health.ts:28` | The liveness conclusion holds; only the margin arithmetic is off |
 
-## 4b. Found while closing the above (2026-08-06) — open, deliberately out of scope
+## 4b. Found while closing the above (2026-08-06) — two open, one since decided
 
 Three things the follow-up pass surfaced and chose not to fix, so the branch
 would not keep growing. None is urgent; all are recorded so the next sweep
-recognises them.
+recognises them. The index-build row has since been **decided** rather than
+merely deferred — the answer was "no runner", and the reasoning and the
+conditions that would reverse it now live in `docs/ops.md`.
 
 | Finding | Where | Why deferred |
 |---|---|---|
 | `/admin/audit`'s action filter has no index that serves it | `services/audit.ts`'s `queryAuditLog` | It matches `action` with a LIKE prefix, and under this deployment's `en_US.utf8` collation a plain btree cannot answer `LIKE 'x%'` — EXPLAIN puts it in `Filter`, not `Index Cond`. `audit_log_action_target_id_idx` does **not** cover it, despite looking like it should; the index's own comment now says so. A `text_pattern_ops` index would fix it and is a separate migration and a separate decision |
-| `audit_log` index migrations block writes while they build | `drizzle/`, `fly.toml` | `0010`'s `CREATE INDEX` takes a `SHARE` lock (writes block, reads don't) for the build's duration, and `fly.toml` runs migrations as a deploy-gating release command. `CONCURRENTLY` is not available without work: it cannot run inside a transaction, Drizzle's migrator wraps every migration in one, and a failed concurrent build leaves an INVALID index needing manual cleanup — in a release step nobody watches. Fine at current size (low tens of thousands of rows, sub-second). If `audit_log` grows enough for the build to matter, the honest fix is a custom migration runner, not the `COMMIT;`-in-the-file hack. Raised by CodeRabbit on #163 and answered there |
+| ~~`audit_log` index migrations block writes while they build~~ **DECIDED 2026-08-06 — no runner, trigger recorded** | `drizzle/`, `fly.toml`, now `docs/ops.md` | Decision: keep the transactional build; do **not** add a non-transactional runner. The mechanics as stated were right but understated in one respect — drizzle's migrator wraps the **entire pending batch** in a single transaction, not one per migration (`pg-core/dialect.cjs`: `session.transaction` sits outside the `for await` loop), and `__drizzle_migrations` is read as a high-water mark, not a set. That makes a custom runner *more* dangerous than the row assumed: decoupling the DDL from the bookkeeping insert lets a mid-batch failure commit statements the high-water mark still sits behind, so the retry re-runs them and wedges the deploy — and a failed `CONCURRENTLY` build is precisely the case that triggers it. Against that, the avoided cost is a sub-second `SHARE` lock during one index build, on the only table whose size makes the lock worth discussing at all. Recorded with the revisit triggers (~5M rows, a >5s timed build, multi-tenant, or a third such index) and a watched out-of-band procedure in `docs/ops.md` → *Migrations run in one transaction — deliberately*. Raised by CodeRabbit on #163, answered there, and **withdrawn by the reviewer** |
 | The `"error"` variant's `message` has no reader | `services/health.ts` | Logged by `console.error` already. Harmless today, but it is a raw Postgres string (`"permission denied for schema pgboss"`) sitting in a server-component return value — if anyone later renders it to answer "why did the check fail", an unfiltered DB error reaches the page |
 
 (An earlier draft of this table also listed `workerHeartbeat` tagging an
