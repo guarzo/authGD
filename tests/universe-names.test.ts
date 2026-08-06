@@ -128,6 +128,34 @@ describe("resolveUniverseName", () => {
     ).resolves.toBeNull();
   });
 
+  it("falls through to ESI when the initial cache read itself throws", async () => {
+    // A stub dbx whose `select` chain rejects, simulating a dropped connection
+    // or timeout on the read — as opposed to every other test here, which
+    // fails ESI, not the database. `insert` (and everything else) is left
+    // pointing at the real test db so the fetch-and-cache path still works.
+    const brokenReadDbx = new Proxy(ctx.db, {
+      get(target, prop, receiver) {
+        if (prop === "select") {
+          return () => ({
+            from: () => ({
+              where: () => Promise.reject(new Error("connection reset")),
+            }),
+          });
+        }
+        const value: unknown = Reflect.get(target, prop, receiver);
+        return value;
+      },
+    });
+    const { esi, calls } = fakeNames();
+    const name = await resolveUniverseName(brokenReadDbx, esi, {
+      id: 31000005,
+      kind: "structure",
+      accessToken: AT,
+    });
+    expect(name).toBe("Structure 31000005");
+    expect(calls.structure).toBe(1);
+  });
+
   it("prefers a STALE cached name over null when the refetch fails", async () => {
     // The whole point: a renamed citadel we can no longer read would otherwise
     // read "Docked" forever, because the failing call is the only way out.

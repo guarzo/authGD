@@ -43,10 +43,19 @@ export async function resolveUniverseName(
   esi: NameResolver,
   input: { id: number; kind: UniverseNameKind; accessToken: string },
 ): Promise<string | null> {
-  const [cached] = await dbx
-    .select()
-    .from(universeName)
-    .where(eq(universeName.id, input.id));
+  let cached: typeof universeName.$inferSelect | undefined;
+  try {
+    [cached] = await dbx.select().from(universeName).where(eq(universeName.id, input.id));
+  } catch {
+    // A failed read degrades to "no cached candidate" rather than rejecting —
+    // this function must never throw, so we fall through to the ESI path
+    // exactly as if the row were simply absent.
+    cached = undefined;
+  }
+  // isCacheFresh is checked against input.kind, not cached.kind: id alone is
+  // the primary key, and EVE id ranges never collide across kinds (see the
+  // universeName table comment in src/db/schema.ts), so a row found by this
+  // id is guaranteed to already be of this kind.
   if (cached && isCacheFresh(input.kind, cached.fetchedAt)) return cached.name;
   try {
     const name = await fetchName(esi, input);
