@@ -166,12 +166,10 @@ the label is doing rather than left as a number at the call site:
 
 `.btn`, `.tier` and `.st` carry the register's family, size and case but are
 deliberately **not** in the shared list: they are components with their own states, and
-their type belongs next to their behaviour. All three declare their own explicit
-`600`; they take a tracking token and nothing else. (This paragraph used to say `.st`
-left weight to inherit and rendered at 400. That was never true of the stylesheet —
-`globals.css` has declared `600` on `.st` for as long as the rule has existed. It was
-the document that was wrong, which is the more dangerous direction: five separate
-reviewers were told to expect a weight inconsistency that wasn't there.)
+their type belongs next to their behaviour. They take a tracking token and nothing
+else. (`.st` used to leave weight to inherit, rendering at 400 while `.btn` and `.tier`
+declared 600 — a real inconsistency, not a variant. It now declares its own explicit
+`600` alongside the other two.)
 
 The register is for **labels** — a fixed word naming a field. Small mono text that is
 itself a value, or a value with a prose word attached ("next 14:32", "checked 20:25:25
