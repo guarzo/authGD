@@ -170,11 +170,13 @@ export const contactSyncState = pgTable("contact_sync_state", {
   lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }),
   lastResult: text("last_result").$type<ContactSyncResult>(),
   /**
-   * Free-text context for `lastResult` — currently the label name(s) actually
-   * found on the character when `last_result = 'label_mismatch'`. Nullable and
-   * ALWAYS written (null when inapplicable): `recordResult` does a partial
-   * upsert, so a column left out of the set keeps its old value, and a member
-   * who fixed their label would keep a stale name in the UI forever.
+   * Free-text context for `lastResult`. Two shapes: the JSON-encoded list of
+   * fold-equal candidate names when `last_result = 'label_mismatch'`, and the
+   * bare name of the label authGD matched loosely when `last_result = 'ok'`
+   * and the member's label differed only in case or surrounding whitespace.
+   * Nullable and ALWAYS written (null when inapplicable): `recordResult` does a
+   * partial upsert, so a column left out of the set keeps its old value, and a
+   * member who fixed their label would keep a stale name in the UI forever.
    */
   lastDetail: text("last_detail"),
 });

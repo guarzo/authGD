@@ -1,6 +1,7 @@
 export type LabelMatch =
   | { kind: "exact"; labelId: number }
-  | { kind: "near_miss"; candidates: string[] }
+  | { kind: "loose"; labelId: number; labelName: string }
+  | { kind: "ambiguous"; candidates: string[] }
   | { kind: "absent" };
 
 /**
@@ -17,10 +18,14 @@ const fold = (s: string): string => s.trim().toLowerCase();
 
 /**
  * An exact match ALWAYS wins, even when fold-equal siblings exist — the app
- * owns the exact label and must never be talked out of it by a near miss.
- * Absent an exact match, every fold-equal name is returned: two labels
- * differing only in case is a real state, and reporting it honestly is better
- * than picking one and writing contacts under a label nobody configured.
+ * owns the exact label and must never be talked out of it by a loose match.
+ * Absent an exact match, a single fold-equal label is accepted: case and
+ * surrounding whitespace are the two ways a member's label can be wrong while
+ * looking right, and refusing to sync over them once stranded every member at
+ * `missing_label` with no way to see why. Two or more fold-equal candidates
+ * stays a refusal: two labels differing only in case is a real state, and
+ * reporting it honestly is better than picking one and writing contacts under
+ * a label nobody configured.
  */
 export function matchContactLabel(
   labels: Array<{ labelId: number; labelName: string }>,
@@ -28,17 +33,33 @@ export function matchContactLabel(
 ): LabelMatch {
   const exact = labels.find((l) => l.labelName === required);
   if (exact) return { kind: "exact", labelId: exact.labelId };
-
   const wanted = fold(required);
-  const candidates = labels
-    .filter((l) => fold(l.labelName) === wanted)
-    .map((l) => l.labelName)
-    // Plain ordinal sort, intentionally: same rationale as `toLowerCase` above
-    // — a locale-aware sort would make the reported order depend on the
-    // worker's locale, which is not pinned.
-    .sort();
+  const matches = labels.filter((l) => fold(l.labelName) === wanted);
+  if (matches.length === 0) return { kind: "absent" };
+  // Exactly one fold-equal label is authority enough: it is the only label the
+  // member could have meant, so the sync runs under THAT label's id.
+  if (matches.length === 1) {
+    const [only] = matches;
+    return { kind: "loose", labelId: only.labelId, labelName: only.labelName };
+  }
+  // Two or more, and nothing distinguishes them, so this stays a refusal.
+  // Plain ordinal `sort`, not `localeCompare`: the worker's locale is not
+  // pinned, and this ordering only has to be stable and reproducible.
+  return { kind: "ambiguous", candidates: matches.map((l) => l.labelName).sort() };
+}
 
-  return candidates.length > 0 ? { kind: "near_miss", candidates } : { kind: "absent" };
+/**
+ * Answers "would the matcher accept this name for that one?" — nothing else.
+ * It exists because `describeLabelDifference` below is deliberately WIDER than
+ * the matcher: that function collapses internal whitespace runs, so it calls
+ * `"Auth  GD"` against `"Auth GD"` a `"spacing"` difference, while `fold` only
+ * trims and `matchContactLabel` reports that pair `absent`. Any caller
+ * deciding whether the next sync will accept a label must ask this, not the
+ * difference describer — `describeLabelDifference` picks WORDING, once
+ * acceptance is already established.
+ */
+export function foldEqualLabels(a: string, b: string): boolean {
+  return fold(a) === fold(b);
 }
 
 /**
