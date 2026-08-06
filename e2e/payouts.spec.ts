@@ -2432,3 +2432,46 @@ test("running off the end wraps back to the skipped row and says so", async ({
     "Paid Cy Wrap. 2 of 3 paid. Back to the first unpaid. Next: Ada Wrap,",
   );
 });
+
+/**
+ * The notes Save control's hit target, which nothing else on this page pins.
+ *
+ * It sits under the notes textarea in the operation's own panel, not in a
+ * table row, so DESIGN.md's 28px in-row ration does not cover it and it
+ * carries the 36px standalone grade. CodeRabbit flagged exactly this gap on
+ * #149 — that PR raised this control and shipped spec coverage only for the
+ * separate `/admin/accounts` note form.
+ *
+ * Measured against `Finalize` rather than asserted as a bare `toBe(36)`: the
+ * comparison is what makes the number mean "the same grade the page's own
+ * standalone controls use" instead of restating a constant. The two cannot be
+ * `Save notes` and `mark paid` — the notes form renders only while the
+ * operation is a draft (`page.tsx:161`) and `mark paid` only once it is
+ * finalized, so no page state shows both grades at once.
+ */
+test("the notes Save control sits at the page's standalone hit-target grade", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "Grade FC",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+
+  await page.goto("/payouts/new");
+  await page.getByLabel("Name").fill("Graded roam");
+  await page.getByLabel("Date").fill("2026-08-01");
+  await page.getByRole("button", { name: "Create operation" }).click();
+  await expect(page.getByRole("heading", { name: "Graded roam" })).toBeVisible();
+
+  const save = page.getByRole("button", { name: "Save notes" });
+  const finalize = page.getByRole("button", { name: "Finalize" });
+  const [saveBox, finalizeBox] = await Promise.all([
+    save.boundingBox(),
+    finalize.boundingBox(),
+  ]);
+  expect(Math.round(finalizeBox!.height)).toBe(36);
+  expect(Math.round(saveBox!.height)).toBe(Math.round(finalizeBox!.height));
+});
