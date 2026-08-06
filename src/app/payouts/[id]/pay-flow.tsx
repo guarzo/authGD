@@ -5,6 +5,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -147,8 +148,15 @@ export function PayFlow({
     }
   }, [rows, pending, headingId, announce]);
 
+  // `children` arrives as a prop, so React bails out of re-rendering the table
+  // when only `message` or `pending` moved — but a fresh context value defeats
+  // that bailout for consumers specifically, and every row's control is one.
+  // Memoized on `dispatch`, which itself changes only when `rows` does, which
+  // is exactly when the rows should re-render anyway.
+  const value = useMemo(() => ({ dispatch }), [dispatch]);
+
   return (
-    <PayFlowContext.Provider value={{ dispatch }}>
+    <PayFlowContext.Provider value={value}>
       {children}
       <span id="pay-flow-status" role="status" className="visually-hidden">
         {message}

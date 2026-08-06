@@ -43,7 +43,7 @@ import { InlineEdit } from "./inline-edit";
 import { LifecycleAnnouncer, LifecycleSubmit } from "./lifecycle-submit";
 import { NotesForm } from "./notes-form";
 import { MarkPaidForm, PayFlow, RevertForm, type PayRow } from "./pay-flow";
-import { copyAmountId } from "./pay-flow-ids";
+import { ROSTER_HEADING_ID, copyAmountId } from "./pay-flow-ids";
 import { PaymentHistory } from "./payment-history";
 import { deriveRosterWarnings } from "./roster-warnings";
 import type { PricingMode } from "@/core/pricing";
@@ -686,7 +686,7 @@ export default async function PayoutOperationPage({
           {/* --- Split / Roster ------------------------------------------ */}
           <RuleHead
             as="h2"
-            id="roster-heading"
+            id={ROSTER_HEADING_ID}
             aside={
               owedParticipants.length > 0 && (
                 <span className="dim mono">
@@ -748,7 +748,7 @@ export default async function PayoutOperationPage({
           )}
           {participants.length > 0 && (
             <>
-              <PayFlow rows={payRows} headingId="roster-heading">
+              <PayFlow rows={payRows} headingId={ROSTER_HEADING_ID}>
                 <Scroller
                   label="Roster"
                   tall={participants.length > ROSTER_TALL_THRESHOLD}
