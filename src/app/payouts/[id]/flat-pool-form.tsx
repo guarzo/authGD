@@ -14,8 +14,8 @@ import { OPERATION_ERRORS, lookupErrorMessage } from "../errors";
  * so retyping the note (which was fine) was the cost of a mistyped number
  * (which wasn't). `useActionState` returns the three submitted strings
  * alongside the rejection code instead of navigating, the same trick this
- * page's other single-field editors use via `InlineEditField` — this is the
- * multi-field version, because a flat pool has no one value to echo back.
+ * page's in-place editors use via `InlineEdit` — this is the multi-field
+ * version, because a flat pool has no one value to echo back.
  *
  * Only the rejected values are ever read back (`state.totalValue`, etc.); the
  * success branch passes `""`, so nothing this component computes can ever

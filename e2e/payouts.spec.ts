@@ -408,9 +408,14 @@ test("a resolved sub-cent unit price shows a real line total beside a 0.00 unit 
   });
 
   await page.goto(`/payouts/${op.id}`);
-  await page.locator("summary", { hasText: "Pool 1 items (1)" }).click();
+  // The item table is at the top level now, not behind a disclosure — see the
+  // "override an item price" test below for the regression that used to hide
+  // it behind "Pool 1 items (1)".
   const itemRow = page.getByRole("row").filter({ hasText: "Tritanium" });
-  await expect(itemRow.getByRole("cell").nth(2)).toHaveText("0.00");
+  // The unit-price cell is an InlineEdit now: its view mode is the value plus
+  // an "edit" trigger sharing the same `<td>`, so the cell's full text is
+  // "0.00 edit" rather than the bare number.
+  await expect(itemRow.getByRole("cell").nth(2)).toHaveText(/^0\.00/);
   await expect(itemRow.getByRole("cell").nth(3)).toHaveText("5.00 ISK");
   // The unresolved-item notice is a different warning and must not fire here —
   // this line has a real price source, not "unresolved".
@@ -438,11 +443,14 @@ test("a resolved sub-cent unit price shows a real line total beside a 0.00 unit 
  * above that seed an appraised pool directly because the priced path depends
  * on triff.tools.
  *
- * "Edit details" is the control this pins the regression against, not "Add
- * loot" or "Edit roster": both of those default OPEN while there are no pools
- * / no roster yet, so a remount would reopen them anyway and the assertion
- * would pass whether or not the bug were present. "Edit details" has no
- * `defaultOpen`, so it only reads expanded here if it was never remounted.
+ * "Replace roster from a paste" is the control this pins the regression
+ * against, not "Add loot" or "Add one participant": both of those default
+ * OPEN while there are no pools / no roster yet, so a remount would reopen
+ * them anyway and the assertion would pass whether or not the bug were
+ * present. "Replace roster from a paste" has no `defaultOpen`, and it lives in
+ * the roster section rather than the loot section, so appraising a paste does
+ * not restructure the subtree it sits in — it only reads expanded here if it
+ * was never remounted.
  */
 test("a dropped-lines paste does not collapse an unrelated disclosure the operator left open", async ({
   page,
@@ -463,9 +471,17 @@ test("a dropped-lines paste does not collapse an unrelated disclosure the operat
     page.getByRole("heading", { name: "Dropped-line regression" }),
   ).toBeVisible();
 
-  const editDetailsToggle = page.locator("summary", { hasText: "Edit details" });
-  await editDetailsToggle.click();
-  await expect(editDetailsToggle).toHaveAttribute("aria-expanded", "true");
+  // A roster of one, so the "Replace roster from a paste" disclosure below
+  // exists at all — it only renders once there is a roster to replace.
+  await page.getByLabel("Character name").fill("FC Prime");
+  await page.getByRole("button", { name: "Add participant" }).click();
+  await expect(page.getByRole("cell", { name: "FC Prime" }).first()).toBeVisible();
+
+  const replaceRosterToggle = page.locator("summary", {
+    hasText: "Replace roster from a paste",
+  });
+  await replaceRosterToggle.click();
+  await expect(replaceRosterToggle).toHaveAttribute("aria-expanded", "true");
 
   // "Add loot" is already open (defaultOpen while pools.length === 0) — no
   // click needed, and clicking its own summary here would only close it.
@@ -477,7 +493,7 @@ test("a dropped-lines paste does not collapse an unrelated disclosure the operat
 
   // The regression: this used to fail here, because the redirect above
   // remounted every Disclosure on the page and reset this one to closed.
-  await expect(editDetailsToggle).toHaveAttribute("aria-expanded", "true");
+  await expect(replaceRosterToggle).toHaveAttribute("aria-expanded", "true");
 });
 
 /**
@@ -566,9 +582,10 @@ test("adding a linked pilot under a name already on the roster unresolved warns 
   });
 
   await page.goto(`/payouts/${op.id}`);
-  // The roster is already populated here, so the edit disclosure starts closed —
-  // unlike every other test on this page, which builds an operation up from empty.
-  await page.locator("summary", { hasText: "Edit roster" }).click();
+  // The roster table is always visible once it's non-empty; adding a single
+  // participant without discarding existing share edits stays its own small
+  // disclosure, closed by default.
+  await page.locator("summary", { hasText: "Add one participant" }).click();
   await page.getByLabel("Character name").fill("Echo Pilot");
   await page.getByRole("button", { name: "Add participant" }).click();
 
@@ -614,10 +631,10 @@ test("setting shares, excluding, and removing a participant each recompute exact
   });
   await context.addCookies([await sessionCookieFor(db, operator.id)]);
 
-  // Corp share has no UI editor anymore (it is set once per deployment) — seed
-  // it directly at 0% so the even-split math below stays exact, the same
-  // pattern the other tests in this file use to fix a percentage without
-  // going through the page.
+  // Corp share does have an inline editor now (see the composer test for it),
+  // but seeding it directly at 0% keeps the even-split math below exact
+  // without an extra round trip — the same pattern the other tests in this
+  // file use to fix a percentage without going through the page.
   const [op] = await db
     .insert(payoutOperation)
     .values({
@@ -651,8 +668,13 @@ test("setting shares, excluding, and removing a participant each recompute exact
 
   // setParticipantSharesAction: Carol takes 2 shares -> 4 total shares over
   // the same 300 pool -> 75.00 / 75.00 / 150.00.
-  await page.getByLabel("Shares for Carol Pilot").fill("2");
-  await rowFor("Carol Pilot").getByRole("button", { name: "save" }).click();
+  await rowFor("Carol Pilot")
+    .getByRole("button", { name: "edit shares for Carol Pilot" })
+    .click();
+  await page.getByLabel(/^shares for carol pilot$/i).fill("2");
+  await rowFor("Carol Pilot")
+    .getByRole("button", { name: "save shares for Carol Pilot" })
+    .click();
   await expect(rowFor("Alice Pilot")).toContainText("75.00 ISK");
   await expect(rowFor("Bob Pilot")).toContainText("75.00 ISK");
   await expect(rowFor("Carol Pilot")).toContainText("150.00 ISK");
@@ -703,9 +725,11 @@ async function bypassClientGuard(input: Locator, value: string): Promise<void> {
 
 /**
  * The flat pool is a rare exception, not the main loot path (triff paste is),
- * so its fields sit inside their own `Disclosure`, nested under "Add loot" and
+ * so its fields sit inside their own `Disclosure` ("Or enter a flat value"),
  * never open by default — opening it is the one extra step every flat-pool
- * test needs before `Total value (ISK)` is reachable at all.
+ * test needs before `Total value (ISK)` is reachable at all. It sits directly
+ * under Loot before any pool exists, and nested under "Add another paste"
+ * once one does — the summary text is the same in both places.
  */
 async function openFlatPoolPanel(page: Page): Promise<void> {
   await page.locator("summary", { hasText: "Or enter a flat value" }).click();
@@ -724,22 +748,48 @@ async function openFlatPoolPanel(page: Page): Promise<void> {
  * action is a soft navigation, so Next's route announcer is populated and also
  * carries role="alert".
  */
-for (const [code, phrase] of [
-  ["name_required", "needs a name"],
-  ["date_invalid", "real calendar date"],
-] as const) {
-  test(`/payouts/new explains ?error=${code}`, async ({ page, context }) => {
-    const operator = await seedMember(db, {
-      name: "FC Codes",
-      tier: "member",
-      status: "active",
-    });
-    await context.addCookies([await sessionCookieFor(db, operator.id)]);
-    await page.goto(`/payouts/new?error=${code}`);
-    await expect(page.locator("p.notice--bad")).toContainText(phrase);
-    await expect(page.getByText("Something broke")).toHaveCount(0);
+/*
+ * `/payouts/new` no longer takes a `?error=` query string at all —
+ * `createOperationAction` returns `{ ok: false, code }` through
+ * `useActionState` instead of redirecting (see `new-operation-form.tsx`), so
+ * these two codes are exercised the same way every other rejection on this
+ * page is: a real submit with the bad value, read back off the live notice.
+ */
+test("an empty name is refused with a specific message", async ({ page, context }) => {
+  const operator = await seedMember(db, {
+    name: "FC Codes",
+    tier: "member",
+    status: "active",
   });
-}
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+  await page.goto("/payouts/new");
+  await page.getByLabel("Date").fill("2026-08-01");
+  // The Name field is `required`, so the browser's own validation blocks a
+  // truly empty submit before it ever reaches the server — reaching this
+  // rejection at all means going around the client guard, same as the date
+  // and shares/price tests above.
+  await page.getByLabel("Name").evaluate((el) => el.removeAttribute("required"));
+  await page.getByRole("button", { name: "Create operation" }).click();
+  await expect(page.locator("p.notice--bad")).toContainText("needs a name");
+  await expect(page.getByText("Something broke")).toHaveCount(0);
+});
+
+test("an invalid date is refused with a specific message", async ({ page, context }) => {
+  const operator = await seedMember(db, {
+    name: "FC Codes",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+  await page.goto("/payouts/new");
+  await page.getByLabel("Name").fill("Bad date roam");
+  // type="date" stops free text in the browser, so reaching the server check
+  // at all means going around the client guard.
+  await bypassClientGuard(page.getByLabel("Date"), "not-a-date");
+  await page.getByRole("button", { name: "Create operation" }).click();
+  await expect(page.locator("p.notice--bad")).toContainText("real calendar date");
+  await expect(page.getByText("Something broke")).toHaveCount(0);
+});
 
 // The detail page's own `?error=` codes no longer have a live producer — every
 // action that used to redirect through `operationFailed` with one of these now
@@ -809,11 +859,13 @@ test("payout pages ignore an unrecognised error code", async ({ page, context })
 });
 
 /*
- * The round trip the redirect exists for: a rejected create form comes back
- * with the other field still filled in. Retyping the name because the date
- * was bad (or vice versa) is the actual cost of the old throw, and the only
- * way to catch a regression in it is to submit a bad value and read the good
- * one back off the form.
+ * The round trip `useActionState` exists for: a rejected create form comes
+ * back with the other field still filled in, with no navigation at all — the
+ * whole point of returning `{ ok: false, code }` from `createOperationAction`
+ * instead of redirecting is that the component never unmounts. Retyping the
+ * name because the date was bad (or vice versa) is the actual cost a redirect
+ * would reintroduce, and the only way to catch a regression is to submit a
+ * bad value and read the good one back off the still-mounted form.
  */
 test("a rejected create form comes back filled in", async ({ page, context }) => {
   const operator = await seedMember(db, {
@@ -829,12 +881,14 @@ test("a rejected create form comes back filled in", async ({ page, context }) =>
   await bypassClientGuard(page.getByLabel("Date"), "not-a-date");
   await page.getByRole("button", { name: "Create operation" }).click();
 
-  await expect(page).toHaveURL(/\/payouts\/new\?/);
+  // No navigation at all — this stays exactly `/payouts/new`, never
+  // `?error=...` or anything else.
+  await expect(page).toHaveURL(/\/payouts\/new$/);
   await expect(page.locator("p.notice--bad")).toContainText("real calendar date");
   await expect(page.getByText("Something broke")).toHaveCount(0);
   // The rejected value never survives here: a genuinely invalid date cannot
-  // be displayed by a `type="date"` input regardless of what the query string
-  // carries, so the round trip this test actually pins is Name's.
+  // be displayed by a `type="date"` input regardless of what the component
+  // state carries, so the round trip this test actually pins is Name's.
   await expect(page.getByLabel("Name")).toHaveValue("Hard-won roam");
 
   // And the corrected submit goes through, so the echoed name is real form
@@ -873,28 +927,37 @@ test("bad shares land on the page, not the error boundary", async ({ page, conte
   await page.getByRole("button", { name: "Set roster" }).click();
 
   // type=number, so the browser refuses to submit text at all.
-  await bypassClientGuard(page.getByLabel("Shares for Alice Pilot"), "abc");
-  await page.getByRole("button", { name: "save Alice Pilot shares" }).click();
-  await expect(page.locator("p.notice--bad")).toContainText("plain number like 1");
+  await page.getByRole("button", { name: "edit shares for Alice Pilot" }).click();
+  await bypassClientGuard(page.getByLabel(/^shares for alice pilot$/i), "abc");
+  await page.getByRole("button", { name: "save shares for Alice Pilot" }).click();
+  // The message renders inside the open editor now, not as the page-level
+  // `?error=` notice — `setParticipantSharesAction` returns state instead of
+  // redirecting, which is the whole mechanism that keeps the typed value.
+  await expect(page.locator("span.inline-form__err")).toContainText(
+    "plain number like 1",
+  );
   await expect(page.getByText("Something broke")).toHaveCount(0);
   // The typed value survived the rejection — not the stored 1.00 the roster
   // paste defaulted to. Losing it here is the exact defect this guards: an
   // operator who can no longer see what they typed has to retype it blind,
   // and retyping under time pressure is where a *different* wrong number
   // gets entered.
-  await expect(page.getByLabel("Shares for Alice Pilot")).toHaveValue("abc");
+  await expect(page.getByLabel(/^shares for alice pilot$/i)).toHaveValue("abc");
   // The rejection also refocuses the field, so a keyboard/screen-reader
   // operator lands back exactly where the correction goes rather than on
   // the Submit button they just pressed.
-  await expect(page.getByLabel("Shares for Alice Pilot")).toBeFocused();
+  await expect(page.getByLabel(/^shares for alice pilot$/i)).toBeFocused();
 
-  await bypassClientGuard(page.getByLabel("Shares for Alice Pilot"), "0");
-  await page.getByRole("button", { name: "save Alice Pilot shares" }).click();
-  await expect(page.locator("p.notice--bad")).toContainText("greater than zero");
+  // No reopen: the editor stayed open through the rejection, which is what
+  // "the value is still there" means. Drive a second, different bad value
+  // straight into the same field.
+  await bypassClientGuard(page.getByLabel(/^shares for alice pilot$/i), "0");
+  await page.getByRole("button", { name: "save shares for Alice Pilot" }).click();
+  await expect(page.locator("span.inline-form__err")).toContainText("greater than zero");
   await expect(page.getByText("Something broke")).toHaveCount(0);
   // Same guard, a second time: a different rejection on the same field still
   // preserves what was just typed rather than snapping back to 1.00.
-  await expect(page.getByLabel("Shares for Alice Pilot")).toHaveValue("0");
+  await expect(page.getByLabel(/^shares for alice pilot$/i)).toHaveValue("0");
 });
 
 /**
@@ -947,31 +1010,21 @@ test("override an item price, finalize, pay, revert, and pay again", async ({
   });
 
   await page.goto(`/payouts/${op.id}`);
-  // The item table is behind the disclosure, so a 200-line paste cannot bury
-  // the roster — nothing inside it is reachable until it is opened.
+  // The item table is at the top level now, always visible — no disclosure to
+  // open. The price itself is an InlineEdit (inline-edit.tsx): it renders as
+  // plain text plus an "edit" trigger until activated, so the labelled input
+  // itself doesn't exist in the DOM until that trigger is clicked.
   // exact: true — the save button beside this field is named "save unit
   // price for Tritanium", which is this label's text with a prefix, and
   // getByLabel's default substring match would count both.
-  //
-  // not.toBeVisible(), not toHaveCount(0): Disclosure is built on native
-  // <details> precisely so a browser can still find text in a collapsed
-  // section (see disclosure.tsx), so the field stays in the DOM while
-  // closed — only its visibility (and reachability) changes.
-  await expect(
-    page.getByLabel("Unit price for Tritanium", { exact: true }),
-  ).not.toBeVisible();
-  await page.locator("summary", { hasText: "Pool 1 items (1)" }).click();
+  await expect(page.getByLabel(/^unit price for tritanium$/i)).toHaveCount(0);
+  await page.getByRole("button", { name: "edit unit price for Tritanium" }).click();
 
-  await page.getByLabel("Unit price for Tritanium", { exact: true }).fill("25.00");
+  await page.getByLabel(/^unit price for tritanium$/i).fill("25.00");
   await page.getByRole("button", { name: "save unit price for Tritanium" }).click();
 
   // 25.00 x 10, exactly — the line total, the pool total and the operation
   // total all re-derive from the override.
-  //
-  // No second click here: Disclosure's open state is React state that
-  // survives the server action's revalidatePath re-render (see
-  // e2e/admin.spec.ts's row-drawer tests), so the pool section is still open
-  // from the click above — a second click here would close it again.
   const itemRow = page.getByRole("row").filter({ hasText: "Tritanium" });
   await expect(itemRow).toContainText("250.00 ISK");
   await expect(itemRow).toContainText("manual");
@@ -1107,27 +1160,22 @@ test("bad unit price lands on the page, not the error boundary", async ({
   });
 
   await page.goto(`/payouts/${op.id}`);
-  await page.locator("summary", { hasText: "Pool 1 items (1)" }).click();
+  await page.getByRole("button", { name: "edit unit price for Tritanium" }).click();
 
   // type=number, so the browser refuses to submit text or a comma-grouped
   // value at all — bypassClientGuard drives it the way a scripted client
   // (or EVE's own comma-grouped paste) would.
-  await bypassClientGuard(
-    page.getByLabel("Unit price for Tritanium", { exact: true }),
-    "1,234.00",
-  );
+  await bypassClientGuard(page.getByLabel(/^unit price for tritanium$/i), "1,234.00");
   await page.getByRole("button", { name: "save unit price for Tritanium" }).click();
-  await expect(page.locator("p.notice--bad")).toContainText("plain number like 12.34");
+  await expect(page.locator("span.inline-form__err")).toContainText(
+    "plain number like 12.34",
+  );
   await expect(page.getByText("Something broke")).toHaveCount(0);
   // The typed value survived the rejection — the field still shows the
   // rejected "1,234.00", not the stored 10.00. See "bad shares land on the
   // page" above for the reasoning this pins for the money screen generally.
-  await expect(page.getByLabel("Unit price for Tritanium", { exact: true })).toHaveValue(
-    "1,234.00",
-  );
-  await expect(
-    page.getByLabel("Unit price for Tritanium", { exact: true }),
-  ).toBeFocused();
+  await expect(page.getByLabel(/^unit price for tritanium$/i)).toHaveValue("1,234.00");
+  await expect(page.getByLabel(/^unit price for tritanium$/i)).toBeFocused();
 });
 
 /**
@@ -1430,4 +1478,200 @@ test("deleting an operation with a paid participant is refused on the page", asy
     .from(auditLog)
     .where(and(eq(auditLog.action, "payout.deleted"), eq(auditLog.target, opId)));
   expect(deleted).toHaveLength(0);
+});
+
+/*
+ * The composer's whole reason for existing: name, date and a roster paste in
+ * one submit, landing on a fully-populated operation with no separate
+ * "Set roster" step after. Loot is left out here — a loot paste calls
+ * triff.tools for real (see `openFlatPoolPanel`'s own comment), and this
+ * suite must not depend on that being reachable; the roster-only path is
+ * still enough to prove one submit does the whole job.
+ */
+test("the composer creates a populated operation in one submit", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "FC Composer",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+
+  await page.goto("/payouts/new");
+  await page.getByLabel("Name").fill("One-shot roam");
+  await page.getByLabel("Date").fill("2026-08-01");
+  await page.getByLabel("Roster paste").fill("Brain Tartare / Gustav Oswaldo");
+  await page.getByRole("button", { name: "Create operation" }).click();
+
+  await expect(page).toHaveURL(/\/payouts\/[0-9a-f-]+$/);
+  await expect(page.getByRole("heading", { name: "One-shot roam" })).toBeVisible();
+  // Both names landed straight on the roster table — no second step.
+  await expect(page.getByRole("row").filter({ hasText: "Brain Tartare" })).toBeVisible();
+  await expect(page.getByRole("row").filter({ hasText: "Gustav Oswaldo" })).toBeVisible();
+});
+
+/*
+ * The round trip the composer exists to protect: a paste that can run
+ * hundreds of lines must not be lost to a rejected submit. `createOperationAction`
+ * returns `{ ok: false, code }` through `useActionState` for this rejection
+ * rather than redirecting through `?error=`, precisely so the component never
+ * unmounts and the textarea is still holding what was typed.
+ */
+test("a rejected composer submit keeps the loot paste", async ({ page, context }) => {
+  const operator = await seedMember(db, {
+    name: "FC Composer Reject",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+
+  await page.goto("/payouts/new");
+  await page.getByLabel("Name").fill("Big paste roam");
+  const paste = Array.from({ length: 60 }, (_, i) => `Tritanium\t${i + 1}`).join("\n");
+  await page.getByLabel("Loot paste").fill(paste);
+  // type="date" stops free text client-side, so reaching the server check at
+  // all means going around the client guard, same as the plain create test.
+  await bypassClientGuard(page.getByLabel("Date"), "not-a-date");
+  await page.getByRole("button", { name: "Create operation" }).click();
+
+  await expect(page.locator("p.notice--bad")).toContainText("real calendar date");
+  await expect(page.getByLabel("Loot paste")).toHaveValue(paste);
+});
+
+/*
+ * The proof that a save through InlineEdit is a client update and not a page
+ * reload: a second field is left open and uncommitted while the first one
+ * saves, and it has to survive untouched — the same technique
+ * e2e/admin.spec.ts uses for a drawer surviving a server action's
+ * `revalidatePath` (a hard navigation would remount the whole page and close
+ * every open edit box along with it, not just the one that saved).
+ */
+test("an inline share edit saves without a page navigation", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "FC Inline",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+
+  await page.goto("/payouts/new");
+  await page.getByLabel("Name").fill("Inline edit roam");
+  await page.getByLabel("Date").fill("2026-08-01");
+  await page.getByLabel("Roster paste").fill("Alice Pilot / Bob Pilot");
+  await page.getByRole("button", { name: "Create operation" }).click();
+  await expect(page.getByRole("heading", { name: "Inline edit roam" })).toBeVisible();
+
+  const rowFor = (name: string) => page.getByRole("row").filter({ hasText: name });
+  await rowFor("Bob Pilot")
+    .getByRole("button", { name: "edit shares for Bob Pilot" })
+    .click();
+  await page.getByLabel(/^shares for bob pilot$/i).fill("3");
+
+  await rowFor("Alice Pilot")
+    .getByRole("button", { name: "edit shares for Alice Pilot" })
+    .click();
+  await page.getByLabel(/^shares for alice pilot$/i).fill("2");
+  await rowFor("Alice Pilot")
+    .getByRole("button", { name: "save shares for Alice Pilot" })
+    .click();
+
+  // Alice's edit closed on save...
+  await expect(
+    rowFor("Alice Pilot").getByRole("button", { name: "edit shares for Alice Pilot" }),
+  ).toBeVisible();
+  // ...and Bob's, left open with an unsaved "3", is still open and still
+  // holding it.
+  await expect(page.getByLabel(/^shares for bob pilot$/i)).toHaveValue("3");
+});
+
+/*
+ * `setRosterAction` deletes and reinserts the whole roster (services/payouts.ts:435-467),
+ * which is why the *replace* path is armed while the *first* roster paste (an
+ * empty roster, nothing to lose) is a plain one-click submit.
+ */
+test("replacing the roster from a paste requires confirmation", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "FC Replace",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+
+  await page.goto("/payouts/new");
+  await page.getByLabel("Name").fill("Replace roster test");
+  await page.getByLabel("Date").fill("2026-08-01");
+  await page.getByLabel("Roster paste").fill("Alice Pilot");
+  await page.getByRole("button", { name: "Create operation" }).click();
+  await expect(page.getByRole("heading", { name: "Replace roster test" })).toBeVisible();
+
+  await page.locator("summary", { hasText: "Replace roster from a paste" }).click();
+  await page.getByLabel("Paste (names separated by /)").fill("Zoe Pilot");
+  // First click only arms the control — nothing has changed yet.
+  await page.getByRole("button", { name: "Replace roster" }).click();
+  await expect(page.getByRole("row").filter({ hasText: "Alice Pilot" })).toBeVisible();
+  await expect(page.getByRole("row").filter({ hasText: "Zoe Pilot" })).toHaveCount(0);
+
+  await page.getByRole("button", { name: /^confirm replace roster/ }).click();
+  await expect(page.getByRole("row").filter({ hasText: "Zoe Pilot" })).toBeVisible();
+  await expect(page.getByRole("row").filter({ hasText: "Alice Pilot" })).toHaveCount(0);
+});
+
+/*
+ * One gold `.btn--primary` at a time, and which control it is tracks how far
+ * along the operation is (see `[id]/page.tsx`'s `primaryStage`): Appraise
+ * with no loot yet, Set roster once loot exists but no roster does, Finalize
+ * once both do.
+ */
+test("exactly one gold primary control renders in each draft state", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "FC Primary",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+
+  await page.goto("/payouts/new");
+  await page.getByLabel("Name").fill("Primary control check");
+  await page.getByLabel("Date").fill("2026-08-01");
+  await page.getByRole("button", { name: "Create operation" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Primary control check" }),
+  ).toBeVisible();
+
+  // Stage 1: no loot yet — Appraise is the one gold control.
+  await expect(page.locator(".btn--primary")).toHaveCount(1);
+  await expect(page.getByRole("button", { name: "Appraise" })).toHaveClass(
+    /btn--primary/,
+  );
+
+  await openFlatPoolPanel(page);
+  await page.getByLabel("Total value (ISK)").fill("100");
+  await page.getByLabel("Note (required — why this number)").fill("flat test");
+  await page.getByRole("button", { name: "Add flat pool" }).click();
+
+  // Stage 2: loot exists, no roster yet — Set roster is the one gold control.
+  await expect(page.locator(".btn--primary")).toHaveCount(1);
+  await expect(page.getByRole("button", { name: "Set roster" })).toHaveClass(
+    /btn--primary/,
+  );
+
+  await page.getByLabel("Roster paste").fill("Alice Pilot");
+  await page.getByRole("button", { name: "Set roster" }).click();
+
+  // Stage 3: both present — Finalize is the one gold control.
+  await expect(page.locator(".btn--primary")).toHaveCount(1);
+  await expect(page.getByRole("button", { name: "Finalize" })).toHaveClass(
+    /btn--primary/,
+  );
 });

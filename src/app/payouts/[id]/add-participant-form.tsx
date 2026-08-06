@@ -1,7 +1,7 @@
 "use client";
 
 import { useActionState, useEffect, useRef } from "react";
-import { Notice, RuleHead } from "@/app/_components/ui";
+import { Notice } from "@/app/_components/ui";
 import { Submit } from "@/app/_components/submit";
 import { addParticipantAction } from "../actions";
 import type { StringFieldEditState } from "../actions";
@@ -19,9 +19,10 @@ const CHARACTER_LIST_ID = "known-character-names";
  * typed name along with everything else on the page render. `useActionState`
  * returns the rejected name as state instead, so this form stays mounted and
  * the name the operator typed is still sitting in the field when the
- * rejection notice appears next to it — the same fix `InlineEditField`
- * applies to this page's other single-field forms, kept as its own component
- * here only because of the `<datalist>` this one alone renders.
+ * rejection notice appears next to it — the same fix `InlineEdit` applies to
+ * this page's in-place editors, kept as its own component here only because
+ * of the `<datalist>` this one alone renders. The heading lives on the
+ * enclosing `Disclosure`'s summary in `page.tsx`, not here.
  */
 export function AddParticipantForm({
   operationId,
@@ -54,7 +55,6 @@ export function AddParticipantForm({
 
   return (
     <form action={formAction} className="form-stack">
-      <RuleHead as="h3">Add one participant</RuleHead>
       <label className="form-stack__field">
         Character name
         <input

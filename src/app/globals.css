@@ -649,6 +649,13 @@ h3.rule-head__label {
   align-items: baseline;
 }
 
+/* Still a fixed column, for the reason above — just a wider one, for the grids
+   whose longest label does not clear 6rem. Not `max-content`: that would make
+   every value's left edge depend on the longest label currently rendered. */
+.facts--wide {
+  grid-template-columns: 8rem 1fr;
+}
+
 /* The row carrying the page's headline fact. Lays its badge and any qualifier
    (cryo) on one line rather than relying on a text space between them. */
 .facts__lead {
@@ -678,6 +685,25 @@ h3.rule-head__label {
 
 .facts dd {
   margin: 0;
+}
+
+/* The lifecycle control that closes or reopens the thing the facts grid above
+   describes. It sits inside the Operation section rather than at the foot of
+   the page, so it needs a gap that reads as "still this section, new kind of
+   thing" — --s-5 against the grid's own --s-5 row gap would read as one more
+   row, so it takes the next step up. The paragraph is capped at --measure for
+   the same reason every other block of prose here is: it is read, not scanned,
+   and a full-page-width line at this size loses the return sweep. */
+.lifecycle {
+  margin-top: var(--s-6);
+  display: grid;
+  gap: var(--s-4);
+  justify-items: start;
+}
+
+.lifecycle > p {
+  margin: 0;
+  max-width: var(--measure);
 }
 
 /* --- Tables ------------------------------------------------------------- */
@@ -1129,6 +1155,21 @@ h3.rule-head__label {
 .scroller--tall:has(.log--dense) {
   max-height: min(80vh, max(18rem, 100vh - 29rem));
   max-height: min(80svh, max(18rem, 100svh - 29rem));
+}
+
+/* The payouts roster table borrows `.log--dense`'s look (tight rows, sticky
+   head/col) for the same reason /admin/accounts does, but not its chrome: the
+   -29rem subtraction two rules up was measured against THAT page's head,
+   standing notice, filter row and count rule, none of which this page carries
+   — a roster sitting under a name/date head and a Loot section has an
+   entirely different amount of chrome above it, unmeasured here. Rather than
+   guess a second constant, `.log--roster` opts this table out of the
+   accounts-specific cap and back to the plain 80vh/80svh ceiling every other
+   `.scroller--tall` gets; same specificity as the rule above, so source order
+   (this one is later) decides it. */
+.scroller--tall:has(.log--roster) {
+  max-height: 80vh;
+  max-height: 80svh;
 }
 
 /* WCAG 1.4.4: the calc above holds only while svh and rem stay in the
@@ -1745,6 +1786,21 @@ h3.rule-head__label {
   color: var(--ink);
 }
 
+/* `InlineEdit` (payouts/[id]/inline-edit.tsx) reuses `.btn--quiet .btn--micro`
+   for its trigger/save/cancel controls everywhere, because the in-row uses
+   (per-item unit price, per-participant shares) are exactly the 28px grade
+   `.btn--quiet` already commits to. Its page-level uses — operation name,
+   date, corp share, notes, battle report — are standalone controls under
+   DESIGN.md's OWN two-size rule, not in-row ones, so they need the 36px floor
+   back without losing the quiet colouring `.btn--quiet` still earns them.
+   Higher specificity than the bare `.btn--quiet`/`.btn--micro` pair (two
+   classes vs. one), so it wins on cascade order regardless of where either
+   rule sits. */
+.inline-edit--standalone .btn--quiet {
+  min-height: 2.25rem;
+  padding: var(--s-2) var(--s-3);
+}
+
 .btn--danger {
   color: var(--signal-bad);
   border-color: color-mix(in oklab, var(--signal-bad) 45%, var(--rule-strong));
@@ -2019,6 +2075,35 @@ h3.rule-head__label {
   max-width: var(--measure);
 }
 
+/* Fields share one edge; the submit does not. A `.btn` is sized from its label
+   by DESIGN.md's button spec, so inheriting the field stretch above turned
+   "Create operation" into a full-measure gold bar — the largest and loudest
+   object on /payouts/new, and a shape no other button in the app has. The
+   stretch was written for `<input>`/`<textarea>`/`<select>`, whose intrinsic
+   widths disagree with each other; a button's does not have that problem. */
+.form-stack > .btn {
+  justify-self: start;
+}
+
+/* A section header opening a form separates it from nothing. `.rule-head`'s
+   48px top margin is written for headers that follow a previous section's
+   content, and it stacks on top of whatever the form already sits inside: on
+   /payouts/new that is `.form-panel`'s own 48px of top padding, so the panel
+   opened with 96px of empty ground above the word OPERATION.
+
+   Two branches because the two forms that open with a header disagree about
+   what comes first in the DOM. `appraise-form.tsx` puts its `RuleHead` first
+   outright, so `:first-child` catches it. `new-operation-form.tsx` puts the
+   reserved `Notice` ahead of the header — that slot is out of flow, so the
+   header is still the first thing anyone sees, but `:first-child` cannot know
+   that and would miss it. Only the always-mounted reserved slot needs the
+   second branch; a `Notice` rendered behind `&&` (as appraise-form's is)
+   isn't in the DOM to be skipped over in the first place. */
+.form-stack > .rule-head:first-child,
+.form-stack > .notice-slot + .rule-head {
+  margin-top: 0;
+}
+
 /* One field: its label, its control, and optionally a hint below (the
    corp-share and appraise-location hints, both outside their `<label>` so they
    don't get folded into its accessible name). Tighter gap than the form's, so
@@ -2259,6 +2344,17 @@ h3.rule-head__label {
    must therefore draw nothing at all when empty. */
 .notice-slot {
   margin: 0;
+  /* An empty live region is a reservation, not content: it exists only so AT
+     has a region to announce *into* when the message arrives. Left in flow it
+     is zero-height but still a grid item, so `.form-stack`'s row gap applies on
+     both sides of nothing — on /payouts/new that put roughly 64px of dead space
+     between the panel's top padding and the first heading, with no element
+     anyone could see to explain it. Out of flow it stops counting for track
+     sizing while staying in the accessibility tree, which is the same trade
+     `.visually-hidden` already makes for `ConfirmCost`. It re-enters flow the
+     instant it has text, because a `Notice` with children renders `.notice`
+     rather than this class at all. */
+  position: absolute;
 }
 
 /* --- Worker liveness ---------------------------------------------------- */
@@ -2533,10 +2629,80 @@ h3.rule-head__label {
   align-items: center;
 }
 
+/* Page-level disclosures that sit directly in document flow rather than
+   nested inside a `.log` table — the payouts detail page's "Or enter a flat
+   value", "Add another paste", "Replace roster from a paste" and "Add one
+   participant". `.log summary` above never matched these: the selector needs
+   a `.log`-classed ANCESTOR, and these summaries sit in a plain `.form-stack`,
+   so they rendered with the bare UA triangle and no hover state. Same look,
+   generic selector — a class rather than a bare `summary` rule so it stays
+   opt-in and cannot repaint some future disclosure that wants the browser
+   default.
+
+   `--ink-dim` at the inherited weight, rather than the `--ink`/600 this
+   started at. Section identity in this system is carried by the label
+   register (`.rule-head__label` and friends near the top of this file):
+   0.6875rem mono, uppercase, tracked, `--ink-faint`. That register is quiet
+   on purpose — the hairline rule does the dividing and the label only names
+   the section — which works only while nothing inside a section shouts louder
+   than the section's own name. At `--ink`/600 these summaries were larger,
+   brighter and in the more prominent face than the header above them, so the
+   draft payout page read as a list of paste actions ("Add another paste",
+   "Add one participant", "Replace roster from a paste") rather than as an
+   operation with a LOOT, SPLIT, ROSTER and DETAILS section. A child
+   out-ranking its own parent.
+
+   Dropped one step rather than folded into the label register: uppercase
+   0.6875rem would mangle sentence-case copy the length of "Replace roster
+   from a paste", and these are secondary controls, not headers. One step
+   below body `--ink` and one step above the `.dim` helper text they sit
+   beside puts them where they belong. `--ink-dim` is DESIGN.md's named
+   secondary-text token and measures 9.6:1 on `--void`, 8.7:1 on `--hull`
+   (the `.form-panel` ground), so nothing here is a contrast question.
+
+   The affordance does not depend on the colour: the `+`/`-` marker below is
+   present at rest, so this stays a WCAG 1.4.1 pass without the hover. */
+.disc > summary {
+  cursor: pointer;
+  color: var(--ink-dim);
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-height: 1.75rem;
+}
+
+.disc > summary::-webkit-details-marker {
+  display: none;
+}
+
+.disc > summary::before {
+  content: "+";
+  font-family: var(--font-mono), ui-monospace, monospace;
+  color: var(--ink-faint);
+  width: 1ch;
+}
+
+.disc[open] > summary::before {
+  content: "\2212";
+}
+
+.disc > summary:hover {
+  color: var(--gold);
+}
+
 /* The accounts row toggle: a plain `<button>` rather than `<summary>`, since
    the drawer it opens is a sibling `<tr>` now, not a child of a `<details>`
-   nested in this cell (see disclosure.tsx, as="row"). It rebuilds the same look —
-   the +/- marker, the hover colour — a `<summary>` gets for free. */
+   nested in this cell (see disclosure.tsx, as="row"). It rebuilds the +/-
+   marker and the hover colour a `<summary>` gets for free.
+
+   It deliberately does NOT follow `.disc > summary` down to `--ink-dim` at
+   the inherited weight. The two look alike but say different things: the text
+   inside this button is the account name — the row's identity, and the first
+   column of a data table — while a `.disc` summary is the label of a
+   secondary control. Dimming this one would dim the accounts table's name
+   column relative to every column beside it, and there is no section header
+   here for it to out-rank. `--ink`/600 is the row's identity, not decoration. */
 .row-toggle {
   display: flex;
   /* flex-start, not center: it keeps the +/- marker on line one of a name that
@@ -3000,6 +3166,23 @@ h3.rule-head__label {
   flex-wrap: wrap;
 }
 
+/* The rejection message for an in-place editor. Phrasing content rather than
+   the shared `.notice` block, because `InlineEdit`'s form is mounted inside an
+   `<h1>`, a `<dd>` and a `<td>` depending on the call site and a `<p>` is
+   invalid in the first of those. `flex-basis: 100%` puts it on its own line
+   below the field/save/cancel row instead of squeezing them, and it draws
+   nothing when empty so the always-mounted `role="alert"` wrapper costs no
+   space until it has something to say. */
+.inline-form__err {
+  flex-basis: 100%;
+  color: var(--signal-bad);
+  font-size: var(--t-data);
+}
+
+.inline-form__err:empty {
+  display: none;
+}
+
 /* The account page's Discord identity: display name then dimmed @handle, one
    unit. Its own flex row rather than two more children of `.facts__lead`,
    because the two names are one thing and the button beside them is another —
@@ -3030,6 +3213,24 @@ h3.rule-head__label {
    beside it to be confused with. The rule's whole history was trying to hold
    two things apart that read as one object (--s-1 to --s-3), which was the
    clue that there should only have been one. */
+
+/* A pool's item manifest under its own "Pool N" label. `.stack` was the
+   obvious wrapper and the wrong one: its `justify-items: start` exists to stop
+   a status token blowing out to the full width of a table cell, and applied
+   here it stopped the `.scroller` stretching too — so the item table sized to
+   the intrinsic width of its own content and stopped a few hundred pixels short
+   of the pool table directly above it. A stair-step with nothing structural
+   behind it, and the widest single thing wrong with the finalized page. Same
+   gap, grid's default stretch. */
+.pool-items {
+  display: grid;
+  gap: var(--s-2);
+}
+
+/* Consecutive pools are separate manifests, not more rows of one table. */
+.pool-items + .pool-items {
+  margin-top: var(--s-5);
+}
 
 .stack {
   display: grid;
@@ -3334,6 +3535,15 @@ h3.rule-head__label {
   }
 
   .launch__panel {
+    padding: var(--s-6) var(--s-4) var(--s-5);
+  }
+
+  /* `.form-panel` (payouts/new) never got this narrow-viewport override, so at
+     320px `.page--narrow`'s own narrow padding (`var(--s-4)` a side) plus this
+     panel's still-wide `var(--s-6)` a side left fields only ~224px to work
+     with — measured, not estimated: 320 - 2*16 - 2*32 = 224. Same fix as
+     `.launch__panel` above, same reasoning: give the fields the width back. */
+  .form-panel {
     padding: var(--s-6) var(--s-4) var(--s-5);
   }
 

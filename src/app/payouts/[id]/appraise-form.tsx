@@ -1,8 +1,9 @@
 "use client";
 
-import { useActionState, useEffect } from "react";
+import { useActionState, useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { Notice, RuleHead } from "@/app/_components/ui";
+import { Disclosure } from "@/app/_components/disclosure";
 import { Submit } from "@/app/_components/submit";
 import { addAppraisedPoolAction, type AppraiseActionState } from "../actions";
 import { OPERATION_ERRORS, lookupErrorMessage } from "../errors";
@@ -15,8 +16,27 @@ import { OPERATION_ERRORS, lookupErrorMessage } from "../errors";
  * lines (see `errors.ts`'s docblock and `addAppraisedPoolAction`'s own).
  *
  * `useActionState` returns state instead of navigating on that failure, so
- * this component never unmounts — the loot paste the operator typed is still
- * exactly what it was, because nothing ever replaced the DOM it is sitting in.
+ * this component never unmounts. Staying mounted is necessary but NOT
+ * sufficient: React 19 resets an uncontrolled field after a `<form action>`
+ * submit settles, so an uncontrolled textarea here lost the paste on rejection
+ * even though the DOM around it never moved. This claim used to be written as
+ * if not-unmounting were the whole story; it wasn't. The value is controlled
+ * below, which is what actually makes the paste survive a rejection — the
+ * state is re-applied on the very render that shows the failure notice. The
+ * composer at `new/new-operation-form.tsx` carries the same fix for the same
+ * reason, proven by an e2e round trip.
+ *
+ * That composer test is this component's coverage too, by proxy, and
+ * deliberately so. There is no way to reject THIS form without the network:
+ * `appraiseLoot` only fails via `TriffError`/`EsiError`, the clients are built
+ * inside `addAppraisedPoolAction` rather than injected, and `TRIFF_QUOTE_URL`
+ * is a constant — so a direct test would mean making an external client
+ * injectable purely for test reach. What can actually regress here is React's
+ * post-submit reset behaviour, and `e2e/payouts.spec.ts`'s "a rejected
+ * composer submit keeps the loot paste" asserts exactly that against the
+ * identical mechanism. If React changes, that test goes red and this file is
+ * wrong in the same way. Keep the two in step: a controlled value here is not
+ * a style choice, and reverting it to `defaultValue` will not fail any test.
  *
  * A SUCCESS that dropped lines used to navigate too — `addAppraisedPoolAction`
  * redirected straight to `?dropped=<payload>`, because the dropped-lines
@@ -49,13 +69,38 @@ import { OPERATION_ERRORS, lookupErrorMessage } from "../errors";
  * `region_invalid` error codes stay in `errors.ts` as backstops even though
  * nothing in this form can produce them anymore — see that file's docblock.
  */
-export function AppraiseForm({ operationId }: { operationId: string }) {
+export function AppraiseForm({
+  operationId,
+  primary = true,
+  collapsed = false,
+  children,
+}: {
+  operationId: string;
+  /** Defaults to true — the common case is an empty operation, where this
+   *  paste is the only thing worth doing. Once loot already exists, the
+   *  ledger's single gold control moves on ("Set roster", then "Finalize" —
+   *  see `[id]/page.tsx`'s one-primary-per-state comment), and this form
+   *  renders again from "Add another paste" at the plain grade instead, so
+   *  the page never shows two gold buttons at once. */
+  primary?: boolean;
+  /** Wraps this form (and `children`) in the "Add another paste" disclosure
+   *  instead of rendering it bare. A prop rather than a second call site in
+   *  `page.tsx`, because two call sites under opposite conditions unmount this
+   *  component on the commit where the first paste lands — taking the
+   *  dropped-lines effect below with it. See that page's comment on the slot. */
+  collapsed?: boolean;
+  /** The flat-value escape hatch, which belongs beside this form in both
+   *  states. Passed in rather than imported so the collapsed wrapper can hold
+   *  both without `page.tsx` needing a second copy of either. */
+  children?: React.ReactNode;
+}) {
   const [state, formAction] = useActionState<AppraiseActionState, FormData>(
     addAppraisedPoolAction.bind(null, operationId),
     null,
   );
   const router = useRouter();
   const pathname = usePathname();
+  const [paste, setPaste] = useState("");
 
   // See the docblock above: pushes a dropped-lines payload into the URL with
   // a query-only `replace` rather than letting the action redirect there
@@ -69,7 +114,21 @@ export function AppraiseForm({ operationId }: { operationId: string }) {
     }
   }, [state, pathname, router]);
 
-  return (
+  // Controlled means React's post-submit reset no longer empties the field, so
+  // the success case has to do it explicitly: the paste has been priced and
+  // banked into a pool by this point, and leaving it sitting in the box reads
+  // as "that didn't take". Keyed off `state` rather than `state.ok` because a
+  // fresh object arrives per submit, so a second successful paste clears too.
+  //
+  // Kept separate from the `dropped` effect above rather than folded into it:
+  // that one fires only for the drop case and this one for every success, and
+  // merging them would tie a URL write to a field reset that has no need of
+  // one. They share a dependency, not a purpose.
+  useEffect(() => {
+    if (state?.ok) setPaste("");
+  }, [state]);
+
+  const form = (
     <form action={formAction} className="form-stack">
       <RuleHead as="h3">Appraise a loot paste</RuleHead>
       {/* Only rendered once a submit has actually failed — `state === null`
@@ -80,11 +139,41 @@ export function AppraiseForm({ operationId }: { operationId: string }) {
       )}
       <label className="form-stack__field">
         Loot paste
-        <textarea className="field" name="rawPaste" rows={10} required />
+        <textarea
+          className="field"
+          name="rawPaste"
+          rows={10}
+          required
+          value={paste}
+          onChange={(e) => setPaste(e.target.value)}
+        />
       </label>
-      <Submit className="btn btn--primary" pendingLabel="Pricing…">
+      <Submit className={primary ? "btn btn--primary" : "btn"} pendingLabel="Pricing…">
         Appraise
       </Submit>
     </form>
+  );
+
+  if (!collapsed) {
+    return (
+      <>
+        {form}
+        {children}
+      </>
+    );
+  }
+
+  return (
+    <Disclosure
+      as="details"
+      className="disc"
+      summary="Add another paste"
+      ariaLabel="Add another paste — appraise more loot, or enter a flat value"
+    >
+      <div className="form-stack">
+        {form}
+        {children}
+      </div>
+    </Disclosure>
   );
 }

@@ -106,6 +106,14 @@ export function SiteHeader({
       </a>
       <div className="shell__bar">
         <a className="shell__mark" href={admin ? "/admin/accounts" : "/account"}>
+          {/* eslint-disable-next-line @next/next/no-img-element -- BRAND_MARK_URL
+              is documented as accepting an external URL (README, "Brand"), and
+              next/image would need every such host allowlisted in
+              next.config.ts's remotePatterns at build time — which a deploy-time
+              env var cannot be. Nothing else next/image offers applies: the mark
+              is a fixed 34px at a known intrinsic size, so there is no layout
+              shift to prevent and no art direction to do. Matches the seal on
+              the login page, suppressed for the same reason. */}
           <img src={brandMarkUrl ?? "/brand/mark.webp"} alt="" width={34} height={34} />
           <span className="shell__wordmark">
             <b>{brandName ?? "authGD"}</b>
