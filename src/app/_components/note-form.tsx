@@ -52,8 +52,20 @@ export function NoteForm({
         aria-label={`Note for ${identity}`}
         onChange={() => setDirty(true)}
       />
+      {/* Full 36px, not the 28px `.btn--micro` grade. `.note-form` is a
+          centre-aligned flex pair, and the `.field` beside it *measures* 40px —
+          its `min-height: 2.25rem` (globals.css:2108) is only a floor, and the
+          mono `--t-data` line box plus `var(--s-2)` padding clears it. So the
+          micro grade left a 28px button floating in the middle of a 40px input
+          inside one form. 36px does not reach parity and is not meant to:
+          DESIGN.md allows two sizes and no others, so the standalone grade is
+          the ceiling here, and it takes the gap from 12px to 4px.
+          The sole caller renders this in a `.drawer__group`
+          (`admin/accounts/page.tsx:972`), not a table row, so the in-row ration
+          does not reach it. No buy-back needed: this control carries no
+          `.btn--quiet`, so dropping `--micro` is the whole fix. */}
       <Submit
-        className="btn btn--micro"
+        className="btn"
         pendingLabel="saving…"
         aria-label={`save note for ${identity}`}
       >
