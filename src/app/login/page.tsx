@@ -35,6 +35,12 @@ export default async function LoginPage({
   return (
     <main className="launch">
       <div className="launch__panel">
+        {/* Empty alt, like the same mark in `SiteHeader` (ui.tsx:117) and every
+            other decorative image in the app: the `<h1>` directly below already
+            carries `brand.name`, so `"<name> emblem"` made a screen reader read
+            the brand twice before reaching anything actionable — on the one
+            page an unauthenticated visitor can get to. The emblem adds nothing
+            the heading does not already say, which is what `alt=""` is for. */}
         {/* eslint-disable-next-line @next/next/no-img-element -- what next/image
             would add here is a re-encode at its default quality 75, and
             PRODUCT.md principle 5 asks for this artwork at "full quality" or not
@@ -48,7 +54,7 @@ export default async function LoginPage({
         <img
           className="launch__seal"
           src={brand.sealUrl}
-          alt={`${brand.name} emblem`}
+          alt=""
           width={180}
           height={180}
         />
