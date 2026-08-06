@@ -446,6 +446,46 @@ test("the worker line reports liveness, and a dead worker says so", async ({
 });
 
 /**
+ * `workerHeartbeat` (@/services/health) reads `maintained_on` as pg's own raw
+ * text output, not a driver-parsed `Date` — see that function's own comment.
+ * Postgres accepts `timestamptz`'s special value `'infinity'`, which is a
+ * real, reachable string on that raw-text path and which `new Date(...)`
+ * does not understand (`Invalid Date`, not a throw). This is the "error"
+ * branch, not "never": pg-boss's own maintenance loop DID write something,
+ * so the honest claim is "the check failed to make sense of it", not "no
+ * heartbeat has ever been recorded" — the exact regression `workerLine`'s
+ * exhaustive switch (page.tsx) exists to make a compile error if a future
+ * variant reintroduces it by accident.
+ */
+test("an unparseable heartbeat value renders as a failed check, not as no heartbeat recorded", async ({
+  page,
+  context,
+}) => {
+  await asAdmin(context);
+  await setHeartbeat(ago(2 * MIN)); // creates/tracks pgboss.version for cleanup
+  await db.execute(sql`
+    update pgboss.version set maintained_on = 'infinity' where version = 999999
+  `);
+  await page.goto("/admin/sync");
+  await expect(page.locator(".notice--bad .worker")).toHaveText(
+    "worker · heartbeat check failed — unknown whether the worker is running",
+  );
+  // `resetDb` (the per-test `beforeEach` above) does not touch `pgboss`, so
+  // an unrestored 'infinity' would leak into every test that runs after this
+  // one in the file, not just the next — and several of them (e.g. "an
+  // overdue job...", right after this one) never call `setHeartbeat`
+  // themselves and rely on inheriting a STALE, not-fresh heartbeat from the
+  // immediately preceding test. Restore exactly that inherited state (what
+  // "the worker line reports liveness" above leaves behind: 240 minutes
+  // stale) rather than a fresh one, which would silently change
+  // `worker.fresh` for every test after this one in the file and was caught
+  // failing "an overdue job..." during review — a same-file example of why
+  // this file's own comments are this careful about what each test leaves
+  // behind.
+  await setHeartbeat(ago(240 * MIN));
+});
+
+/**
  * A dead worker puts every row overdue at once. Opening on overdue would
  * expand all seven drawers together and destroy exactly the "this one job
  * needs you" signal auto-open exists to create — so overdue is a visible

@@ -234,6 +234,13 @@ export function queuedNotice(
   // computes this for the worker line above the strip (`workerAge` in
   // page.tsx), so passing it is one extra argument, not a lookup.
   workerAge: string | null,
+  // Also required, also not defaulted, and for the same reason: collapsing
+  // "the read failed" into "no heartbeat recorded" is a positive claim about
+  // the database's history made when the code only knows a query didn't
+  // answer. See `WorkerHeartbeat` (@/services/health) for the three states
+  // this narrows from — `heartbeatErrored` is true only for `"error"`, never
+  // for `"never"`, which still reads as "no heartbeat recorded".
+  heartbeatErrored: boolean,
 ): string {
   const stamp = queuedStamp(at);
   const when = stamp === null ? "" : ` at ${stamp}`;
@@ -250,8 +257,14 @@ export function queuedNotice(
   // ever started against) collapses into the same "not running" claim from
   // the absence of any evidence either way, and fresh/stale still don't need
   // separate strings or a second threshold constant here.
-  const worker =
-    workerAge === null
+  //
+  // `heartbeatErrored` is checked first: a failed READ is a different claim
+  // again, one the "no heartbeat recorded yet" sentence doesn't cover either
+  // — that sentence says something about the database's history, and a
+  // permissions or connectivity fault says nothing about history at all.
+  const worker = heartbeatErrored
+    ? "The worker's heartbeat could not be checked just now, so its status is unknown"
+    : workerAge === null
       ? "No heartbeat has been recorded yet, so there is nothing to date the worker by"
       : `The worker last checked in ${workerAge} ago`;
   if (queued === "all") {

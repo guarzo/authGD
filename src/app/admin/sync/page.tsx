@@ -107,10 +107,7 @@ export default async function AdminSyncPage({
   await requireAdminPage();
   const { queued, at } = await searchParams;
   const db = getDb();
-  const [groups, heartbeatAt] = await Promise.all([
-    getSyncStatus(db),
-    workerHeartbeat(db),
-  ]);
+  const [groups, heartbeat] = await Promise.all([getSyncStatus(db), workerHeartbeat(db)]);
   // One instant for the whole render: the worker line, every row's health and
   // the "checked at" stamp all have to agree, and reading the clock per row
   // would let them disagree by however long the page takes to build.
@@ -123,15 +120,48 @@ export default async function AdminSyncPage({
   // involved at all. See `HEARTBEAT_STALE_AFTER_MS` (@/core/health) for the
   // threshold this replaces, and `workerHeartbeat` (@/services/health) for
   // where the timestamp comes from.
-  const worker = evaluateFreshness(heartbeatAt, renderedAt, HEARTBEAT_STALE_AFTER_MS);
+  //
+  // `heartbeat.status === "error"` (the read itself failed) is evaluated with
+  // no timestamp, same as "never" — `evaluateFreshness` only distinguishes
+  // fresh/stale, not why the evidence is missing. `workerLine` below is what
+  // tells those two states apart for the admin reading the page.
+  const worker = evaluateFreshness(
+    heartbeat.status === "ok" ? heartbeat.at : null,
+    renderedAt,
+    HEARTBEAT_STALE_AFTER_MS,
+  );
   const workerAge = worker.ageSec === null ? null : elapsedShort(worker.ageSec * 1000);
-  const workerLine =
-    workerAge === null
-      ? "worker · no heartbeat recorded"
-      : worker.fresh
-        ? `worker · alive, checked in ${workerAge} ago`
-        : `worker · no heartbeat in ${workerAge}`;
-  const notice = queuedNotice(queued, at, workerAge);
+  // A switch on the tag with a `never` default rather than a ternary chain,
+  // matching `admin/accounts/actions.ts` and `worker/dispatcher.ts`. The
+  // ternary this replaces keyed off `workerAge === null`, which both "never"
+  // and a future fourth variant satisfy — so adding one would have compiled
+  // silently and fallen through to "worker · no heartbeat recorded", the exact
+  // sentence the "error" branch exists to stop showing about a live worker.
+  // The regression would have come back word for word. Here it is a build
+  // failure instead.
+  const workerLine = ((): string => {
+    switch (heartbeat.status) {
+      case "error":
+        return "worker · heartbeat check failed — unknown whether the worker is running";
+      case "never":
+        return "worker · no heartbeat recorded";
+      case "ok":
+        // `workerAge` is non-null on this branch by construction —
+        // `evaluateFreshness` only returns a null `ageSec` for a null instant,
+        // and "ok" carries a real one — but it is typed `string | null`, so
+        // the fallback keeps a `null` from ever reaching the template.
+        return workerAge === null
+          ? "worker · no heartbeat recorded"
+          : worker.fresh
+            ? `worker · alive, checked in ${workerAge} ago`
+            : `worker · no heartbeat in ${workerAge}`;
+      default: {
+        const unhandled: never = heartbeat;
+        return unhandled;
+      }
+    }
+  })();
+  const notice = queuedNotice(queued, at, workerAge, heartbeat.status === "error");
   // How far back this page can see the worker doing anything at all. Only this
   // lets a never-run row escalate: see `evidenceSince` and `rowHealth`.
   const seenSince = evidenceSince(worker.fresh, groups);
@@ -157,7 +187,9 @@ export default async function AdminSyncPage({
           enqueue work;{" "}
           {worker.fresh
             ? "the worker picks it up within a few seconds."
-            : "the worker is not running right now, so queued work waits until it is — see the line below."}
+            : heartbeat.status === "error"
+              ? "whether the worker picks it up is unknown right now — its heartbeat could not be checked — see the line below."
+              : "the worker is not running right now, so queued work waits until it is — see the line below."}
         </p>
       </div>
 

@@ -162,13 +162,16 @@ describe("queuedNotice", () => {
   // reason about the null branch (`queuedMarkerText` below covers that case).
   const AGE = "5m";
 
+  // Every call below passes `false` for the new `heartbeatErrored` param —
+  // none of these cases are about that state; `says the heartbeat check
+  // itself failed...` below is the one that is.
   it("names the job for a per-row re-run", () => {
-    expect(queuedNotice("wanderer", undefined, AGE)).toMatch(/^wanderer queued\./);
+    expect(queuedNotice("wanderer", undefined, AGE, false)).toMatch(/^wanderer queued\./);
   });
 
   it("has copy for the two fan-out buttons", () => {
-    expect(queuedNotice("all", undefined, AGE)).toMatch(/every account/);
-    expect(queuedNotice("recheck", undefined, AGE)).toMatch(
+    expect(queuedNotice("all", undefined, AGE, false)).toMatch(/every account/);
+    expect(queuedNotice("recheck", undefined, AGE, false)).toMatch(
       /^Affiliation recheck queued\./,
     );
   });
@@ -180,7 +183,7 @@ describe("queuedNotice", () => {
    * to diff four nouns against seven rows to learn what was excluded.
    */
   it("names the fan-out's jobs the way the strip names them", () => {
-    const all = queuedNotice("all", undefined, AGE);
+    const all = queuedNotice("all", undefined, AGE, false);
     for (const job of ["membership", "contacts", "wanderer", "discord-roles"]) {
       expect(all, job).toContain(job);
     }
@@ -194,8 +197,8 @@ describe("queuedNotice", () => {
    * which really did happen — was silent.
    */
   it("differs between two presses of the same button", () => {
-    const first = queuedNotice("wanderer", "1785240432000", AGE);
-    const second = queuedNotice("wanderer", "1785240471000", AGE);
+    const first = queuedNotice("wanderer", "1785240432000", AGE, false);
+    const second = queuedNotice("wanderer", "1785240471000", AGE, false);
     expect(first).not.toBe(second);
     expect(first).toContain("12:07:12.000 UTC");
     expect(second).toContain("12:07:51.000 UTC");
@@ -209,41 +212,41 @@ describe("queuedNotice", () => {
    * this case silent, which is the case the stamp exists for.
    */
   it("differs between two presses inside the same second", () => {
-    expect(queuedNotice("wanderer", "1785240432120", AGE)).not.toBe(
-      queuedNotice("wanderer", "1785240432880", AGE),
+    expect(queuedNotice("wanderer", "1785240432120", AGE, false)).not.toBe(
+      queuedNotice("wanderer", "1785240432880", AGE, false),
     );
   });
 
   it("drops the instant rather than echoing a hand-typed one", () => {
     // Same posture as `queued` itself: untrusted input reaching copy.
     for (const bad of [undefined, "", "now", "-1", "1e9", "99999999999999999999"]) {
-      expect(queuedNotice("wanderer", bad, AGE), String(bad)).toBe(
-        queuedNotice("wanderer", undefined, AGE),
+      expect(queuedNotice("wanderer", bad, AGE, false), String(bad)).toBe(
+        queuedNotice("wanderer", undefined, AGE, false),
       );
     }
   });
 
   it("points at the browser reload, not at a control off the bottom of the page", () => {
     for (const q of ["all", "recheck", ...Object.keys(JOB_CRON)]) {
-      expect(queuedNotice(q, undefined, AGE), q).toMatch(/reload this page/);
-      expect(queuedNotice(q, undefined, AGE), q).not.toMatch(/use Refresh/);
+      expect(queuedNotice(q, undefined, AGE, false), q).toMatch(/reload this page/);
+      expect(queuedNotice(q, undefined, AGE, false), q).not.toMatch(/use Refresh/);
     }
   });
 
   it("says nothing about a hand-typed query flag", () => {
     // `?queued=` is untrusted input reaching copy, not a lookup that fails safe
     // on its own.
-    expect(queuedNotice(undefined, undefined, AGE)).toBe("");
-    expect(queuedNotice("", undefined, AGE)).toBe("");
-    expect(queuedNotice("<script>alert(1)</script>", undefined, AGE)).toBe("");
-    expect(queuedNotice("ops-dead-letter", undefined, AGE)).toBe("");
-    expect(queuedNotice("toString", undefined, AGE)).toBe("");
+    expect(queuedNotice(undefined, undefined, AGE, false)).toBe("");
+    expect(queuedNotice("", undefined, AGE, false)).toBe("");
+    expect(queuedNotice("<script>alert(1)</script>", undefined, AGE, false)).toBe("");
+    expect(queuedNotice("ops-dead-letter", undefined, AGE, false)).toBe("");
+    expect(queuedNotice("toString", undefined, AGE, false)).toBe("");
   });
 
   it("promises enqueue, never execution, for every accepted value", () => {
     for (const q of ["all", "recheck", ...Object.keys(JOB_CRON)]) {
-      expect(queuedNotice(q, undefined, AGE), q).toMatch(/queued/);
-      expect(queuedNotice(q, undefined, AGE), q).toMatch(/worker last checked in/);
+      expect(queuedNotice(q, undefined, AGE, false), q).toMatch(/queued/);
+      expect(queuedNotice(q, undefined, AGE, false), q).toMatch(/worker last checked in/);
     }
   });
 
@@ -254,10 +257,10 @@ describe("queuedNotice", () => {
    * the same shape of sentence, honestly aged.
    */
   it("states the worker's age rather than a freshness verdict", () => {
-    expect(queuedNotice("wanderer", undefined, "5m")).toMatch(
+    expect(queuedNotice("wanderer", undefined, "5m", false)).toMatch(
       /The worker last checked in 5m ago/,
     );
-    expect(queuedNotice("wanderer", undefined, "89m")).toMatch(
+    expect(queuedNotice("wanderer", undefined, "89m", false)).toMatch(
       /The worker last checked in 89m ago/,
     );
   });
@@ -269,8 +272,22 @@ describe("queuedNotice", () => {
    * would be a claim from the absence of evidence, not from a check.
    */
   it("says no heartbeat is recorded yet rather than asserting the worker is down", () => {
-    const notice = queuedNotice("wanderer", undefined, null);
+    const notice = queuedNotice("wanderer", undefined, null, false);
     expect(notice).toMatch(/no heartbeat has been recorded yet/i);
+    expect(notice).not.toMatch(/not running/);
+  });
+
+  /**
+   * `heartbeatErrored` is a fourth state, distinct from both "fresh" and "no
+   * heartbeat recorded yet": a failed READ says nothing about the worker's
+   * history at all, so neither existing sentence is honest here — and it
+   * takes priority over `workerAge` (which is always null when the read
+   * itself failed, same shape as "never", but a different claim).
+   */
+  it("says the heartbeat check itself failed rather than asserting no heartbeat is recorded", () => {
+    const notice = queuedNotice("wanderer", undefined, null, true);
+    expect(notice).toMatch(/could not be checked/i);
+    expect(notice).not.toMatch(/no heartbeat has been recorded yet/i);
     expect(notice).not.toMatch(/not running/);
   });
 });
