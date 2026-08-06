@@ -2487,11 +2487,34 @@ h3.rule-head__label {
    so they rendered with the bare UA triangle and no hover state. Same look,
    generic selector — a class rather than a bare `summary` rule so it stays
    opt-in and cannot repaint some future disclosure that wants the browser
-   default. */
+   default.
+
+   `--ink-dim` at the inherited weight, rather than the `--ink`/600 this
+   started at. Section identity in this system is carried by the label
+   register (`.rule-head__label` and friends near the top of this file):
+   0.6875rem mono, uppercase, tracked, `--ink-faint`. That register is quiet
+   on purpose — the hairline rule does the dividing and the label only names
+   the section — which works only while nothing inside a section shouts louder
+   than the section's own name. At `--ink`/600 these summaries were larger,
+   brighter and in the more prominent face than the header above them, so the
+   draft payout page read as a list of paste actions ("Add another paste",
+   "Add one participant", "Replace roster from a paste") rather than as an
+   operation with a LOOT, SPLIT, ROSTER and DETAILS section. A child
+   out-ranking its own parent.
+
+   Dropped one step rather than folded into the label register: uppercase
+   0.6875rem would mangle sentence-case copy the length of "Replace roster
+   from a paste", and these are secondary controls, not headers. One step
+   below body `--ink` and one step above the `.dim` helper text they sit
+   beside puts them where they belong. `--ink-dim` is DESIGN.md's named
+   secondary-text token and measures 9.6:1 on `--void`, 8.7:1 on `--hull`
+   (the `.form-panel` ground), so nothing here is a contrast question.
+
+   The affordance does not depend on the colour: the `+`/`-` marker below is
+   present at rest, so this stays a WCAG 1.4.1 pass without the hover. */
 .disc > summary {
   cursor: pointer;
-  color: var(--ink);
-  font-weight: 600;
+  color: var(--ink-dim);
   list-style: none;
   display: flex;
   align-items: center;
@@ -2520,8 +2543,16 @@ h3.rule-head__label {
 
 /* The accounts row toggle: a plain `<button>` rather than `<summary>`, since
    the drawer it opens is a sibling `<tr>` now, not a child of a `<details>`
-   nested in this cell (see disclosure.tsx, as="row"). It rebuilds the same look —
-   the +/- marker, the hover colour — a `<summary>` gets for free. */
+   nested in this cell (see disclosure.tsx, as="row"). It rebuilds the +/-
+   marker and the hover colour a `<summary>` gets for free.
+
+   It deliberately does NOT follow `.disc > summary` down to `--ink-dim` at
+   the inherited weight. The two look alike but say different things: the text
+   inside this button is the account name — the row's identity, and the first
+   column of a data table — while a `.disc` summary is the label of a
+   secondary control. Dimming this one would dim the accounts table's name
+   column relative to every column beside it, and there is no section header
+   here for it to out-rank. `--ink`/600 is the row's identity, not decoration. */
 .row-toggle {
   display: flex;
   /* flex-start, not center: it keeps the +/- marker on line one of a name that
