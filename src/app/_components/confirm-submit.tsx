@@ -164,10 +164,12 @@ export function ConfirmCost({
 
 /**
  * A destructive row action that arms on the first click and only submits the
- * form on the second, rather than firing immediately — too easy to hit by
- * accident scanning a dense table — or interrupting with `window.confirm()`,
- * a banned first reflex here: the whole point of an inline confirm is that it
- * never rips the member out of the page.
+ * form on the second — unless the caller passes `confirm={false}`, which is the
+ * same button without the arm step (see the note on that prop at the end of
+ * this block) — rather than firing immediately: too easy to hit by accident
+ * scanning a dense table. And never `window.confirm()`, a banned first reflex
+ * here: the whole point of an inline confirm is that it never rips the member
+ * out of the page.
  *
  * The armed state has to reach assistive tech, not just sighted users, and
  * neither the visible label swap nor the `aria-label` swap does that on its
@@ -209,6 +211,20 @@ export function ConfirmCost({
  * Width is reserved up front for the wider of the two labels, in `ch` since
  * this is the monospace face throughout: the swap must not change the
  * button's own width and reflow the row it sits in.
+ *
+ * `confirm` defaults to true but can be set false to make this render as a
+ * plain one-click submit instead — no arm step, no live region text, ever.
+ * That exists for callers like `MarkPaidForm` (#146) that need to pick
+ * between an armed and a plain control *at the same JSX position* depending
+ * on caller-supplied state (whether this is the operation's first payment).
+ * A ternary between `ConfirmSubmit` and the separate `Submit` component looks
+ * equivalent but isn't: React reconciles by component type at a position, so
+ * the render where the condition flips unmounts one component and mounts the
+ * other, replacing the underlying `<button>` DOM node rather than patching
+ * it. A press that begins on the old node during that swap produces no click
+ * on the new one — the exact bug #146 reported. Keeping one component type in
+ * that slot, toggled by a prop, makes the transition an ordinary re-render:
+ * React patches the existing node's props instead of tearing it down.
  */
 export function ConfirmSubmit({
   className,
@@ -219,6 +235,7 @@ export function ConfirmSubmit({
   confirmName,
   pendingLabel,
   describedBy,
+  confirm = true,
 }: {
   className: string;
   /** Classes to use only while armed; defaults to `className` when the rest
@@ -237,15 +254,52 @@ export function ConfirmSubmit({
    *  `restName`/`confirmName`, which have to remain short enough to be spoken
    *  ahead of every press and have to keep matching the visible label. */
   describedBy?: string;
+  /** False renders this as a plain submit: the first click fires immediately,
+   *  never arms, never calls `ctx.arm`, and the live region beside it stays
+   *  mounted but permanently empty.
+   *
+   *  Reach for this ONLY when the grade flips at a fixed JSX position while the
+   *  control stays mounted — which today is `MarkPaidForm` and nothing else.
+   *  Where the grade is statically known, use `Submit`: it is the same button
+   *  without this one's reserved `minWidth` or its (empty) live region, and a
+   *  reader who sees `ConfirmSubmit` has every right to expect an arm step. */
+  confirm?: boolean;
 }) {
+  // Read unconditionally — hooks can't be conditional — but only *require* the
+  // scope when this control can actually arm. A `confirm={false}` control has
+  // to work anywhere a plain `Submit` would, including outside any
+  // `ConfirmArmScope`.
   const ctx = useContext(ArmContext);
-  if (!ctx) {
-    throw new Error("ConfirmSubmit must be rendered inside a ConfirmArmScope");
-  }
   const id = useId();
-  const armed = ctx.armedId === id;
   const { pending } = useFormStatus();
   const guard = useSubmitGuard(pending);
+  // Thrown BELOW the hooks, not above them. `confirm` can change between
+  // renders, so a throw placed before `useId` would run a different number of
+  // hooks than the previous render did, and React's "rendered fewer hooks than
+  // expected" would bury the one message that says what to actually fix.
+  if (confirm && !ctx) {
+    throw new Error("ConfirmSubmit must be rendered inside a ConfirmArmScope");
+  }
+  // Every `ctx?.` below is safe rather than defensive: the throw above means
+  // `confirm` implies `ctx`, and each call site is gated on either `confirm` or
+  // `armed` (which requires it). TypeScript can't carry that narrowing into the
+  // handler closures, so it is spelled with `?.` rather than a `!`. If the
+  // throw is ever loosened, those stop being unreachable and start being silent
+  // no-ops — a control that swallows its first click and never arms, which is
+  // #146's symptom made permanent. Loosen the throw and you must restructure
+  // these, not just delete it.
+  //
+  // A control that is armed when `confirm` flips false goes un-armed here
+  // without anyone calling `disarm()`, so the scope's `armedId` keeps pointing
+  // at it until the next `arm()` overwrites it. Left that way deliberately: the
+  // only caller that flips `confirm` is `MarkPaidForm`, and it flips once per
+  // operation, permanently (`page.tsx:206`, `locked` never goes back). The
+  // residue can only mislead a `ConfirmCost` sharing this control's
+  // `describedBy`, and the one id involved (`mark-paid-cost`) belongs to a
+  // plain span that unmounts in the same render. A future `confirm={false}`
+  // caller that can flip back, or that shares a `ConfirmCost`, needs an
+  // explicit disarm here.
+  const armed = confirm && ctx?.armedId === id;
   // +4 for the letter-spacing the monospace label carries across every
   // character, which `ch` alone (sized off the "0" glyph) undercounts; a
   // smaller buffer measured short by several px in practice.
@@ -261,25 +315,31 @@ export function ConfirmSubmit({
         aria-label={armed ? confirmName : restName}
         aria-describedby={describedBy}
         onClick={(e) => {
+          if (!confirm) {
+            // Plain grade: an ordinary submit, guarded against a double-press
+            // exactly the way `Submit` guards its own (`submit.tsx:63`).
+            guard(e);
+            return;
+          }
           if (!armed) {
             // The first click arms rather than fires: never let it reach the
             // server.
             e.preventDefault();
-            ctx.arm(id, describedBy);
+            ctx?.arm(id, describedBy);
             return;
           }
           // The second click proceeds as an ordinary submit, unless one is
           // already in flight. Disarming is just tidy-up for the (rare) case
           // the action doesn't navigate or revalidate this control away.
           if (!guard(e)) return;
-          ctx.disarm();
+          ctx?.disarm();
         }}
         onBlur={() => {
           // Tabbing or clicking away is as clear a "not that one" as Escape, and
           // it means an armed control never outlives the member's attention on
           // it. Guarded on `armed` so a blur from a different row's button can't
           // disarm whatever the scope handed the arm to next.
-          if (armed) ctx.disarm();
+          if (armed) ctx?.disarm();
         }}
         onPointerLeave={(e) => {
           // The case blur misses: arming with the mouse leaves focus on the
@@ -288,14 +348,14 @@ export function ConfirmSubmit({
           // destroyed on lift, so `pointerleave` fires immediately after the tap
           // that armed it and no control would ever stay armed long enough to
           // confirm.
-          if (armed && e.pointerType === "mouse") ctx.disarm();
+          if (armed && e.pointerType === "mouse") ctx?.disarm();
         }}
         onKeyDown={(e) => {
           // A member who armed the wrong row must not have to reload to get out
           // of it.
           if (armed && e.key === "Escape") {
             e.preventDefault();
-            ctx.disarm();
+            ctx?.disarm();
           }
         }}
       >

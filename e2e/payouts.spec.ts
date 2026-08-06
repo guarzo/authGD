@@ -2201,6 +2201,62 @@ test("the first payment says that it freezes the operation permanently", async (
   // and carry no description: there is no cost left to state.
   const later = page.getByRole("button", { name: "mark paid Bo Freeze" });
   await expect(later).toHaveAccessibleDescription("");
+  // And the attribute is gone, not merely pointing at nothing. `#mark-paid-cost`
+  // unmounts in the same render the button loses its arm step, so a
+  // `describedBy` left on would be a dangling IDREF — which computes to an empty
+  // accessible description and would slip past the assertion above while audit
+  // tooling and some AT report a broken reference.
+  await expect(later).not.toHaveAttribute("aria-describedby");
+});
+
+test("a second row's mark paid button survives the first payment's arm-to-plain transition", async ({
+  page,
+  context,
+}) => {
+  // Regression guard for #146: `arm ? <ConfirmSubmit /> : <Submit />` used to
+  // put two different component types in the same JSX slot. React reconciles
+  // by type at a position, so the render where `firstPayment` flips false
+  // unmounted every still-unpaid row's `ConfirmSubmit` and mounted a fresh
+  // `Submit` in its place — the `<button>` DOM node was replaced, not updated,
+  // and a press that began on the old node during that swap produced no click
+  // on the new one.
+  //
+  // The probe below is a DOM-identity check rather than a race: React only
+  // patches the props it manages, so an attribute set from outside the
+  // framework survives an update and is destroyed by a remount. Tagging Bo's
+  // button before Ada's payment lands and asserting the tag is still there
+  // afterward proves the node itself was never replaced — which is the whole
+  // bug, asserted directly instead of raced for.
+  const operator = await seedMember(db, {
+    name: "Remount FC",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+  const opId = await seedFinalizedRoster(db, operator.id, ["Ada Remount", "Bo Remount"]);
+  await page.goto(`/payouts/${opId}`);
+
+  const bo = page.getByRole("button", { name: "mark paid Bo Remount" });
+  await bo.evaluate((el) => el.setAttribute("data-remount-probe", "1"));
+  // Bo starts out on the armed grade — the cost description is the one thing
+  // that tells the two grades apart from the outside, since at rest they share
+  // a label, a class, a width and an accessible name.
+  await expect(bo).toHaveAccessibleDescription(/permanently/);
+
+  await page.getByRole("button", { name: "mark paid Ada Remount" }).click();
+  await page.getByRole("button", { name: "confirm mark paid Ada Remount" }).click();
+  await expect(
+    page.getByRole("row", { name: /Ada Remount/ }).getByText("paid", { exact: true }),
+  ).toBeVisible();
+
+  // The transition really happened — without this the test would still pass if
+  // `confirm={arm}` regressed to a constant, since nothing would remount and
+  // the probe would survive for the wrong reason. An operator on a permanently
+  // armed row is back to "I pressed mark paid and nothing happened", which is
+  // indistinguishable from the dropped click this test exists to catch.
+  await expect(bo).toHaveAccessibleDescription("");
+  // And the node itself was never replaced.
+  await expect(bo).toHaveAttribute("data-remount-probe", "1");
 });
 
 test("paying the last row focuses the roster heading and says all are paid", async ({
@@ -2220,11 +2276,16 @@ test("paying the last row focuses the roster heading and says all are paid", asy
   await page.getByRole("button", { name: "confirm mark paid Ada Last" }).click();
 
   // Unlike the "next row" tests above, there's no next row's copy button to
-  // assert focus on here, so wait for Ada's own row to settle to "paid"
-  // before clicking Bo's row. Without this, Bo's "mark paid" button is still
-  // mid-transition (its arm state flips from armed to unarmed once Ada's
-  // payment lands, which swaps the underlying control), and a click that
-  // lands during that swap can be lost.
+  // assert focus on here, so wait for Ada's own row to settle to "paid" before
+  // clicking Bo's row. Do not delete this: the single click below only PAYS Bo
+  // once `locked` has come back from the server and dropped Bo's arm step. Land
+  // it earlier and Bo is still on the armed grade, so the click arms instead of
+  // submitting and every assertion after it fails.
+  //
+  // #146 removed the other half of what this used to guard — Bo's control no
+  // longer swaps component type across that flip, so a click landing mid-render
+  // is no longer silently dropped (see the regression test above) — but the
+  // grade transition itself is server state and still has to be waited for.
   await expect(
     page.getByRole("row", { name: /Ada Last/ }).getByText("paid", { exact: true }),
   ).toBeVisible();
