@@ -7,6 +7,7 @@ import {
   contactSyncState,
   discordLink,
   syncRun,
+  universeName,
   wandererAclObservation,
 } from "@/db/schema";
 import {
@@ -49,7 +50,7 @@ beforeAll(async () => {
 beforeEach(() =>
   ctx.db.execute(sql`
     TRUNCATE account, "character", discord_link, contact_sync_state,
-      wanderer_acl_observation, sync_run RESTART IDENTITY CASCADE
+      wanderer_acl_observation, sync_run, universe_name RESTART IDENTITY CASCADE
   `),
 );
 afterAll(() => ctx.cleanup());
@@ -422,6 +423,120 @@ describe("getAdminAccountsList", () => {
     });
     const [row] = await getAdminAccountsList(ctx.db, cfg);
     expect(row.tokenSummary).toEqual({ total: 4, healthy: 1, needsReauth: 2, dead: 1 });
+  });
+});
+
+describe("getAccountView location", () => {
+  const AT = new Date("2026-08-06T12:00:00.000Z");
+
+  async function seedTwo() {
+    const acc = await seedAccount(ctx.db, { tier: "member" });
+    await seedCharacter(ctx.db, cfg, {
+      id: 2001,
+      accountId: acc.id,
+      name: "Docked",
+      main: true,
+    });
+    await seedCharacter(ctx.db, cfg, { id: 2002, accountId: acc.id, name: "Blind" });
+    return acc;
+  }
+
+  it("renders a docked character's full line and nothing for one never read", async () => {
+    const acc = await seedTwo();
+    await ctx.db.insert(universeName).values([
+      { id: 31000123, kind: "system", name: "J123456" },
+      { id: 1035466617946, kind: "structure", name: "Home Astrahus" },
+    ]);
+    await ctx.db
+      .update(character)
+      .set({
+        locationSystemId: 31000123,
+        locationStructureId: 1035466617946,
+        locationOnline: true,
+        locationCheckedAt: AT,
+      })
+      .where(eq(character.id, 2001));
+
+    const view = await getAccountView(ctx.db, cfg, acc.id);
+    const docked = view.characters.find((c) => c.id === 2001)!;
+    expect(docked.location).toEqual({
+      kind: "line",
+      text: "J123456 — Home Astrahus",
+      offline: false,
+    });
+    expect(docked.locationStale).toBe(false);
+
+    // Never read: no line at all, and — the part worth pinning — a character
+    // with a null `locationCheckedAt` must not drag the manifest label to null.
+    const blind = view.characters.find((c) => c.id === 2002)!;
+    expect(blind.location).toEqual({ kind: "none" });
+    expect(blind.locationStale).toBe(false);
+    expect(view.locationAsOf).toEqual(AT);
+  });
+
+  it("reports the OLDEST reading as the manifest's as-of", async () => {
+    const acc = await seedTwo();
+    await ctx.db.insert(universeName).values([
+      { id: 31000123, kind: "system", name: "J123456" },
+      { id: 31000124, kind: "system", name: "J654321" },
+    ]);
+    const older = new Date(AT.getTime() - 5 * 60 * 1000);
+    await ctx.db
+      .update(character)
+      .set({ locationSystemId: 31000123, locationCheckedAt: AT })
+      .where(eq(character.id, 2001));
+    await ctx.db
+      .update(character)
+      .set({ locationSystemId: 31000124, locationCheckedAt: older })
+      .where(eq(character.id, 2002));
+
+    const view = await getAccountView(ctx.db, cfg, acc.id);
+    // Not `AT`: a newest-wins label would advertise five minutes of freshness
+    // that the second visible row does not have.
+    expect(view.locationAsOf).toEqual(older);
+    expect(view.characters.every((c) => !c.locationStale)).toBe(true);
+  });
+
+  it("marks a character lagging by more than one cadence interval as stale", async () => {
+    const acc = await seedTwo();
+    await ctx.db.insert(universeName).values([
+      { id: 31000123, kind: "system", name: "J123456" },
+      { id: 31000124, kind: "system", name: "J654321" },
+    ]);
+    const lagging = new Date(AT.getTime() - 3 * 60 * 60 * 1000);
+    await ctx.db
+      .update(character)
+      .set({ locationSystemId: 31000123, locationCheckedAt: AT })
+      .where(eq(character.id, 2001));
+    await ctx.db
+      .update(character)
+      .set({ locationSystemId: 31000124, locationCheckedAt: lagging })
+      .where(eq(character.id, 2002));
+
+    const view = await getAccountView(ctx.db, cfg, acc.id);
+    expect(view.locationAsOf).toEqual(lagging);
+    expect(view.characters.find((c) => c.id === 2001)!.locationStale).toBe(false);
+    expect(view.characters.find((c) => c.id === 2002)!.locationStale).toBe(true);
+  });
+
+  it("attaches locations and an as-of to the admin account row", async () => {
+    await seedTwo();
+    await ctx.db
+      .insert(universeName)
+      .values([{ id: 31000123, kind: "system", name: "J123456" }]);
+    await ctx.db
+      .update(character)
+      .set({ locationSystemId: 31000123, locationCheckedAt: AT })
+      .where(eq(character.id, 2001));
+
+    const [row] = await getAdminAccountsList(ctx.db, cfg);
+    expect(row.locationAsOf).toEqual(AT);
+    expect(row.characters.find((c) => c.id === 2001)!.location).toEqual({
+      kind: "line",
+      text: "J123456 — in space",
+      offline: false,
+    });
+    expect(row.characters.find((c) => c.id === 2002)!.location).toEqual({ kind: "none" });
   });
 });
 

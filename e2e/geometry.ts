@@ -11,6 +11,15 @@ import type { Page } from "@playwright/test";
  *
  * `maxScrollLeft` / `maxScrollTop` come back with the measurement so a caller
  * can prove there was something to scroll past before claiming the pin held.
+ *
+ * `gutterWidth` is `offsetWidth - clientWidth` on the scroll region itself,
+ * measured in the same call. A region with `scrollbar-gutter: stable`
+ * (globals.css, `.scroller--tall`) reserves that much width unconditionally —
+ * `clientWidth` shrinks by it, `scrollWidth` does not — so the true rightmost
+ * `scrollLeft` a caller can drive the region to sits up to `gutterWidth` short
+ * of the naive `scrollWidth - clientWidth` figure. Measuring it here rather
+ * than hardcoding a number keeps the comparison correct on any platform,
+ * whatever that platform's own scrollbar happens to cost.
  */
 export async function pinGeometry(
   page: Page,
@@ -38,6 +47,7 @@ export async function pinGeometry(
         scrolledTop: sc.scrollTop,
         maxScrollLeft: sc.scrollWidth - sc.clientWidth,
         maxScrollTop: sc.scrollHeight - sc.clientHeight,
+        gutterWidth: sc.offsetWidth - sc.clientWidth,
       };
     },
     { scroller, cell, scroll },

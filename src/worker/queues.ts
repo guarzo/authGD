@@ -9,6 +9,7 @@ export const QUEUES = {
   discordRoles: "discord-roles",
   tokenHealth: "token-health",
   purge: "purge",
+  location: "location",
   deadLetter: "ops-dead-letter",
 } as const;
 
@@ -43,6 +44,7 @@ const JOB_QUEUES = [
   QUEUES.discordRoles,
   QUEUES.tokenHealth,
   QUEUES.purge,
+  QUEUES.location,
 ] as const;
 
 export async function createQueues(boss: PgBoss): Promise<void> {

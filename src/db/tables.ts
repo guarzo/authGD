@@ -22,6 +22,7 @@ export const MANAGED_TABLES = [
   "sync_run",
   "wanderer_acl_observation",
   "audit_log",
+  "universe_name",
   "payout_operation",
   "loot_pool",
   "loot_item",

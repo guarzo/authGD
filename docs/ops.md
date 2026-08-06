@@ -18,7 +18,7 @@ fly secrets set \
   ALLIANCE_ID=... \
   BOOTSTRAP_ADMIN_CHARACTER_IDS=... \
   EVE_SSO_CLIENT_ID=... EVE_SSO_CLIENT_SECRET=... \
-  EVE_SSO_SCOPES="esi-characters.read_contacts.v1 esi-characters.write_contacts.v1 esi-ui.open_window.v1" \
+  EVE_SSO_SCOPES="esi-characters.read_contacts.v1 esi-characters.write_contacts.v1 esi-ui.open_window.v1 esi-location.read_location.v1 esi-universe.read_structures.v1 esi-location.read_online.v1" \
   DISCORD_CLIENT_ID=... DISCORD_CLIENT_SECRET=... DISCORD_BOT_TOKEN=... \
   DISCORD_GUILD_ID=... DISCORD_ROLE_ID_MEMBER=... DISCORD_ROLE_ID_ASSOCIATE=... \
   DISCORD_ROLE_ID_ALUMNI=... DISCORD_OPS_WEBHOOK_URL=... \
@@ -91,13 +91,36 @@ Notes:
   (`src/jobs/discord-roles.ts`) — every other failure appears only in
   `/admin/sync`. Folding job outcomes into this endpoint would let one permanent
   config error hold the check red forever and train you to ignore it.
-- A brand-new deploy reads 503 on `/api/health/sync` until the first `membership`
-  tick, up to 30 minutes. This is intended: "never ran" is a real failure.
+- A brand-new deploy reads 503 on `/api/health/sync` until the first job tick of
+  any kind. The shortest gap is `location` at every 15 minutes, so up to 15
+  minutes. This is intended: "never ran" is a real failure.
 - Detection is not instant. A dead worker surfaces up to 90 minutes after its
   last run, plus your monitor's poll interval.
-- The 90-minute threshold is a constant in `src/core/health.ts`, compared with
-  `<=`. If you change a schedule in `src/worker/queues.ts` to something slower
-  than 90 minutes for the most frequent job, change it there too.
+
+### Job schedules
+
+All UTC; pg-boss is given no timezone. The one definition is `JOB_CRON` in
+`src/core/schedules.ts`, which `src/worker/queues.ts` registers and `/admin/sync`
+renders — this table is a copy for readers, not a source.
+
+| Job | Cron | Group |
+|---|---|---|
+| `membership` | `*/30 * * * *` | sweep |
+| `contacts` | `5 * * * *` | sweep |
+| `wanderer` | `10 * * * *` | sweep |
+| `discord-roles` | `15 * * * *` | sweep |
+| `location` | `2,17,32,47 * * * *` | housekeeping |
+| `membership-recheck` | `0 4 * * 0` | on-demand |
+| `token-health` | `0 3 * * *` | housekeeping |
+| `purge` | `30 3 * * *` | housekeeping |
+
+`location` is offset off the :00/:05/:10/:15 minutes on purpose: there is no
+access-token cache, so it quadruples per-character SSO refreshes and would
+otherwise race the contacts job for the same rows.
+
+The 90-minute freshness threshold used by `/api/health/sync` is a constant in
+`src/core/health.ts`, compared with `<=`. If the most frequent job here ever
+goes slower than 90 minutes, change it there too.
 
 ## Sizing and redundancy — decisions, not defaults
 
@@ -169,7 +192,7 @@ character already on the ACL.
 | `ALLIANCE_ID` | yes | membership anchor: main in this alliance ⇒ member |
 | `BOOTSTRAP_ADMIN_CHARACTER_IDS` | no | comma-separated; see recovery caveat below |
 | `EVE_SSO_CLIENT_ID` / `EVE_SSO_CLIENT_SECRET` | yes | EVE application credentials |
-| `EVE_SSO_SCOPES` | yes | space-separated full scope set requested at every login. Adding a scope flips every existing character to `needs_reauth` until its holder logs in again — a capability warning, not an outage: `src/jobs/contacts.ts` gates per job on the scopes it actually needs |
+| `EVE_SSO_SCOPES` | yes | space-separated full scope set requested at every login. Adding a scope flips every existing character to `needs_reauth` until its holder logs in again — a capability warning, not an outage: each job gates on the scopes it actually needs (`src/jobs/contacts.ts`, and `src/jobs/location.ts`, which gates on its one required scope and degrades rather than skipping when the other two are missing) |
 | `DISCORD_CLIENT_ID` / `DISCORD_CLIENT_SECRET` | yes | Discord OAuth (identify only) |
 | `DISCORD_BOT_TOKEN` | yes | bot with Manage Roles above the three managed roles |
 | `DISCORD_GUILD_ID` | yes | the guild whose roles are managed |
@@ -216,7 +239,7 @@ per member as they log in again.
 case above): run
 
 ```bash
-fly secrets set EVE_SSO_SCOPES="esi-characters.read_contacts.v1 esi-characters.write_contacts.v1 esi-ui.open_window.v1"
+fly secrets set EVE_SSO_SCOPES="esi-characters.read_contacts.v1 esi-characters.write_contacts.v1 esi-ui.open_window.v1 esi-location.read_location.v1 esi-universe.read_structures.v1 esi-location.read_online.v1"
 fly deploy   # only if the secret change did not already trigger the rolling restart
 ```
 

@@ -15,11 +15,15 @@ export const JOB_CRON = {
   "discord-roles": "15 * * * *",
   "token-health": "0 3 * * *",
   purge: "30 3 * * *",
+  // Offset off :00/:05/:10/:15 on purpose. There is no access-token cache, so
+  // this job quadruples per-character SSO refreshes and would otherwise race
+  // the contacts job for the same rows (src/services/tokens.ts:100).
+  location: "2,17,32,47 * * * *",
 } as const satisfies Record<string, string>;
 
 /**
  * The job types this table schedules. `as const` above is what makes this a
- * union of the seven literals rather than `string`: indexing `JOB_CRON` with an
+ * union of the eight literals rather than `string`: indexing `JOB_CRON` with an
  * arbitrary string is now a compile error, so every lookup has to come through
  * `cronFor` and prove it handled the absent case. Typing the table as
  * `Record<string, string>` instead made `JOB_CRON[x] ?? fallback` typecheck
@@ -61,6 +65,7 @@ export const JOB_GROUP: Record<JobType, JobGroup> = {
   "membership-recheck": "on-demand",
   "token-health": "housekeeping",
   purge: "housekeeping",
+  location: "housekeeping",
 };
 
 /** The strip a job type belongs to, or null when nothing schedules it. */

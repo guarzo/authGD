@@ -357,3 +357,143 @@ describe("openInformationWindow", () => {
     expect(calls).toBe(0);
   });
 });
+
+describe("location reads", () => {
+  it("maps a docked-in-structure reading", async () => {
+    let auth: string | null = null;
+    server.use(
+      http.get(`${BASE}/characters/90000001/location/`, ({ request }) => {
+        auth = request.headers.get("authorization");
+        return HttpResponse.json({
+          solar_system_id: 31000123,
+          structure_id: 1035466617946,
+        });
+      }),
+    );
+    const esi = createEsiClient();
+    expect(await esi.getLocation(90000001, "at")).toEqual({
+      systemId: 31000123,
+      stationId: null,
+      structureId: 1035466617946,
+    });
+    expect(auth).toBe("Bearer at");
+  });
+
+  it("maps a docked-in-station reading", async () => {
+    server.use(
+      http.get(`${BASE}/characters/90000001/location/`, () =>
+        HttpResponse.json({ solar_system_id: 30000142, station_id: 60003760 }),
+      ),
+    );
+    const esi = createEsiClient();
+    expect(await esi.getLocation(90000001, "at")).toEqual({
+      systemId: 30000142,
+      stationId: 60003760,
+      structureId: null,
+    });
+  });
+
+  it("maps a character in space to null on both dock ids", async () => {
+    server.use(
+      http.get(`${BASE}/characters/90000001/location/`, () =>
+        HttpResponse.json({ solar_system_id: 31000123 }),
+      ),
+    );
+    const esi = createEsiClient();
+    expect(await esi.getLocation(90000001, "at")).toEqual({
+      systemId: 31000123,
+      stationId: null,
+      structureId: null,
+    });
+  });
+
+  it("still reads in dry-run — dryRun gates writes only", async () => {
+    let calls = 0;
+    server.use(
+      http.get(`${BASE}/characters/90000001/location/`, () => {
+        calls++;
+        return HttpResponse.json({ solar_system_id: 31000123 });
+      }),
+    );
+    const esi = createEsiClient({ syncMode: "dry-run" });
+    expect((await esi.getLocation(90000001, "at")).systemId).toBe(31000123);
+    expect(calls).toBe(1);
+  });
+
+  it("unwraps the online flag both ways", async () => {
+    server.use(
+      http.get(`${BASE}/characters/90000001/online/`, () =>
+        HttpResponse.json({ online: true }),
+      ),
+    );
+    const esi = createEsiClient();
+    expect(await esi.getOnline(90000001, "at")).toBe(true);
+    server.use(
+      http.get(`${BASE}/characters/90000001/online/`, () =>
+        HttpResponse.json({ online: false, last_login: "2026-08-06T12:00:00Z" }),
+      ),
+    );
+    expect(await esi.getOnline(90000001, "at")).toBe(false);
+  });
+
+  it("fails closed on a malformed location body", async () => {
+    server.use(
+      http.get(`${BASE}/characters/90000001/location/`, () =>
+        HttpResponse.json({ solar_system_id: "Jita" }),
+      ),
+    );
+    const esi = createEsiClient();
+    const err = await esi.getLocation(90000001, "at").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(EsiError);
+    expect((err as EsiError).kind).toBe("permanent");
+  });
+});
+
+describe("universe name reads", () => {
+  it("reads a system name without a token", async () => {
+    let auth: string | null = null;
+    server.use(
+      http.get(`${BASE}/universe/systems/31000123/`, ({ request }) => {
+        auth = request.headers.get("authorization");
+        return HttpResponse.json({ name: "J123456" });
+      }),
+    );
+    const esi = createEsiClient();
+    expect(await esi.getSystemName(31000123)).toBe("J123456");
+    expect(auth).toBeNull();
+  });
+
+  it("reads a station name", async () => {
+    server.use(
+      http.get(`${BASE}/universe/stations/60003760/`, () =>
+        HttpResponse.json({ name: "Jita IV - Moon 4 - Caldari Navy Assembly Plant" }),
+      ),
+    );
+    const esi = createEsiClient();
+    expect(await esi.getStationName(60003760)).toBe(
+      "Jita IV - Moon 4 - Caldari Navy Assembly Plant",
+    );
+  });
+
+  it("sends the token on a structure name, and throws 403 when access is denied", async () => {
+    let auth: string | null = null;
+    server.use(
+      http.get(`${BASE}/universe/structures/1035466617946/`, ({ request }) => {
+        auth = request.headers.get("authorization");
+        return HttpResponse.json({ name: "Home Astrahus" });
+      }),
+    );
+    const esi = createEsiClient();
+    expect(await esi.getStructureName(1035466617946, "at")).toBe("Home Astrahus");
+    expect(auth).toBe("Bearer at");
+
+    server.use(
+      http.get(`${BASE}/universe/structures/1035466617946/`, () =>
+        HttpResponse.json({ error: "Forbidden" }, { status: 403 }),
+      ),
+    );
+    const err = await esi.getStructureName(1035466617946, "at").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(EsiError);
+    expect((err as EsiError).status).toBe(403);
+  });
+});

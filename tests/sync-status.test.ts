@@ -25,6 +25,7 @@ describe("getSyncStatus", () => {
     "discord-roles",
     "token-health",
     "purge",
+    "location",
   ];
 
   it("returns a row for every scheduled job on a fresh database", async () => {

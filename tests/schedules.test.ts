@@ -31,6 +31,15 @@ describe("formatCadence", () => {
       expect(formatCadence(cron)).toBe(cron);
     }
   });
+
+  it("renders a comma-list minute as the raw expression", () => {
+    // The location cadence. `formatCadence` models */n, a bare minute, and the
+    // daily/weekly shapes; a comma list falls through all of them, so the admin
+    // sync page shows the cron verbatim. Terse but honest — and pinned here so
+    // it reads as a decision rather than an accident. `nextFire` DOES parse
+    // comma lists, so the next-run time beside it is still correct.
+    expect(formatCadence("2,17,32,47 * * * *")).toBe("2,17,32,47 * * * *");
+  });
 });
 
 describe("cadenceFor", () => {
@@ -252,8 +261,11 @@ describe("JOB_GROUP / groupFor", () => {
     expect(groupFor("membership-recheck")).toBe("on-demand");
   });
 
-  it("groups token-health and purge as housekeeping", () => {
-    for (const job of ["token-health", "purge"]) {
+  it("groups token-health, purge and location as housekeeping", () => {
+    // location refreshes itself every 15 minutes, so widening the "sync
+    // everything" fan-out to shave minutes off it is not worth the dispatch
+    // change (spec: Cadence).
+    for (const job of ["token-health", "purge", "location"]) {
       expect(JOB_GROUP[job as keyof typeof JOB_GROUP], job).toBe("housekeeping");
       expect(groupFor(job)).toBe("housekeeping");
     }

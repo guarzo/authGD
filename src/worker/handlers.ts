@@ -3,6 +3,7 @@ import type { Config } from "@/config";
 import type { Db } from "@/db";
 import { runContactsJob, type ContactsEsi } from "@/jobs/contacts";
 import { runDiscordRolesJob } from "@/jobs/discord-roles";
+import { runLocationJob, type LocationEsi } from "@/jobs/location";
 import { runMembershipJob } from "@/jobs/membership";
 import { runPurgeJob } from "@/jobs/purge";
 import { runTokenHealthJob } from "@/jobs/token-health";
@@ -35,11 +36,12 @@ const discordSchema = z
   .strict();
 const tokenHealthSchema = z.object({ jobType: z.literal(QUEUES.tokenHealth) }).strict();
 const purgeSchema = z.object({ jobType: z.literal(QUEUES.purge) }).strict();
+const locationSchema = z.object({ jobType: z.literal(QUEUES.location) }).strict();
 
 export type JobDeps = {
   db: Db;
   cfg: Config;
-  esi: Pick<EsiClient, "postAffiliation"> & ContactsEsi;
+  esi: Pick<EsiClient, "postAffiliation"> & ContactsEsi & LocationEsi;
   wanderer: WandererClient;
   discord: DiscordClient;
   fetchImpl?: typeof fetch;
@@ -82,6 +84,10 @@ export function buildJobHandlers(
     [QUEUES.purge]: async (data) => {
       purgeSchema.parse(data);
       await runPurgeJob(deps);
+    },
+    [QUEUES.location]: async (data) => {
+      locationSchema.parse(data);
+      await runLocationJob(deps);
     },
   };
 }

@@ -36,9 +36,17 @@ export const STUCK_MULTIPLIER = 3;
 
 /**
  * Floor for the stuck threshold. It binds only when the cadence is unknown: the
- * shortest scheduled cadence is membership's 30 minutes, so the smallest
- * derived threshold is already 90. An unscheduled/on-demand run has no cadence
- * at all, and no job here legitimately runs for a quarter of an hour.
+ * shortest scheduled cadence is location's 15 minutes, which derives a
+ * 45-minute threshold and so still clears this floor comfortably — the
+ * `Math.max` below has never once picked the floor over a derived value. An
+ * unscheduled/on-demand run has no cadence at all, and no job here legitimately
+ * runs for a quarter of an hour.
+ *
+ * The margin is thinner than it was (this said "membership's 30 minutes" and
+ * "already 90" before the location job): a scheduled cadence under 5 minutes
+ * would be the first to derive a threshold below this floor, at which point the
+ * floor would start overriding a real cadence rather than standing in for a
+ * missing one. Revisit here if one is ever added.
  */
 export const STUCK_FLOOR_MS = 15 * 60 * 1000;
 
