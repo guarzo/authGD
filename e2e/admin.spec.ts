@@ -1056,6 +1056,71 @@ for (const width of [320, 390, 768]) {
   });
 }
 
+/**
+ * Pressing a tier mounts the `auto` button next to the three tier buttons
+ * (page.tsx renders it under `r.tierLocked`), so the press that pins a tier is
+ * the press that grows this group. Measured at 320px with `.btn-group` unable
+ * to wrap: the group went 251.3px → 282.9px inside a 262px drawer panel, which
+ * put `auto` — the control that undoes the pin — off the panel and behind a
+ * sideways scroll of the accounts table.
+ *
+ * The bound is the drawer's control column as it stood *before* the press, not
+ * `.drawer` itself and not the column measured afterwards. Two measurements
+ * rule those out. `.drawer__controls` is 264.5 against a 262px panel with
+ * nothing pressed — the note field's own intrinsic minimum, which is there
+ * whenever the drawer is open (hiding the Note group drops the column to
+ * exactly 262), so a panel-relative bound would be pinning that instead of
+ * this. And measuring the column *after* the press is circular: the tier group
+ * is a stretch item in that column, so an unwrapped group widens `.note-form`
+ * and every sibling to match itself — a draft asserting group ⊆ column passed
+ * with this fix reverted, at 311.9 vs 311.9.
+ */
+test("accounts at 320px: the tier group stays in the drawer when the press adds auto", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedDenseWorld();
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.setViewportSize({ width: 320, height: 720 });
+  await page.goto("/admin/accounts");
+  await page.waitForSelector(".scroller tbody tr");
+
+  const row = rowFor(page, "Member 00");
+  const drawer = drawerOf(row);
+  await toggleOf(row).click();
+  await expect(drawer).toBeVisible();
+
+  const columnRight = (loc: Locator) =>
+    loc.evaluate(
+      (tr) =>
+        (tr.querySelector(".drawer__controls") as HTMLElement).getBoundingClientRect()
+          .right,
+    );
+  const before = await columnRight(drawer);
+
+  await drawer
+    .getByRole("button", { name: "Set Member 00 to Friends", exact: true })
+    .click();
+  // The guard: without the press actually landing, the group never grows and
+  // every measurement below passes on the pre-press layout.
+  await expect(
+    drawer.getByRole("button", { name: "return Member 00 to auto tier", exact: true }),
+  ).toBeVisible();
+
+  const after = await drawer.evaluate((tr) => {
+    const group = tr.querySelector(".btn-group") as HTMLElement;
+    return {
+      groupRight: group.getBoundingClientRect().right,
+      buttons: group.querySelectorAll("button").length,
+    };
+  });
+  expect(after.buttons, "three tiers plus auto").toBe(4);
+  expect(
+    after.groupRight,
+    "pinning a tier does not push the group past where the drawer's controls already ended",
+  ).toBeLessThanOrEqual(before + 0.5);
+});
+
 test("pinned cells keep the scroll region's tab stop and the row's focus order", async ({
   page,
   context,
