@@ -28,7 +28,8 @@
 export const CONTACT_SYNC_RESULTS = [
   /** Contacts were pushed, or were already correct. */
   "ok",
-  /** No label named STANDINGS_LABEL on the character. */
+  /** No label on the character matches STANDINGS_LABEL, even allowing for
+   *  capitalization and surrounding whitespace. */
   "missing_label",
   /** Two or more labels differ only in capitalization or spacing from the
    *  configured name, with none matching exactly, so there is no single label

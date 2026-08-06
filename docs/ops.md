@@ -428,8 +428,10 @@ Five properties worth knowing before changing it:
   those members need do nothing. One case survives, and it is worth knowing
   before you announce nothing: a member holding *two* labels that differ only in
   case or spacing syncs today only because one of them matches the configured
-  value exactly. Recapitalize and neither does, so they fall into the ambiguous
-  refusal above and must delete one label before their sync resumes. The other
+  value exactly. Recapitalize to a spelling neither label uses and neither
+  matches, so they fall into the ambiguous refusal above and must delete one
+  label before their sync resumes. (Recapitalizing *onto* one of the two labels
+  they already hold is fine — that one becomes the exact match.) The other
   trade is that authGD's reach widened — see the warning above about
   hand-curated labels, which now also covers a label whose name differs from
   `STANDINGS_LABEL` only in case. Such a label was previously ignored and is now
