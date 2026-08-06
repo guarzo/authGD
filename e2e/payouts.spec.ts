@@ -953,6 +953,56 @@ test("notes save from an always-open textarea, twice running", async ({
   await expect(notes).toHaveValue("Third fleet, two losses. Salvage split later.");
 });
 
+/*
+ * The notes textarea is the one editable field that sits open on the page for
+ * as long as the operation is editable, so it is the one an operator can be
+ * mid-paragraph in when the operation freezes underneath them — a second tab,
+ * or another operator finalizing first. `canEdit` narrows that window and
+ * cannot close it. Uncaught, `assertEditable`'s throw lands on error.tsx,
+ * which apologizes for a server fault we did not have and never says why the
+ * text vanished. This asserts the operator is told what actually happened.
+ */
+test("notes saved onto a freshly finalized operation say so, not 'something broke'", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "FC Raced",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+
+  await page.goto("/payouts/new");
+  await page.getByLabel("Name").fill("Raced roam");
+  await page.getByLabel("Date").fill("2026-08-01");
+  await page.getByRole("button", { name: "Create operation" }).click();
+  await expect(page.getByRole("heading", { name: "Raced roam" })).toBeVisible();
+
+  const notes = page.getByRole("textbox", { name: "operation notes" });
+  await notes.fill("Half-written note that is about to be lost.");
+
+  // The freeze arrives from outside this page, which is the whole premise:
+  // the operator's tab still shows an editable operation. Writing the status
+  // directly is what another operator's finalize looks like from here.
+  await db
+    .update(payoutOperation)
+    .set({ status: "finalized" })
+    .where(eq(payoutOperation.name, "Raced roam"));
+
+  await page.getByRole("button", { name: "Save notes" }).click();
+
+  await expect(page.locator("p.notice--bad")).toContainText("no longer be edited");
+  // Not the error boundary: the operator is not told we broke.
+  await expect(page.getByText("Something broke")).toHaveCount(0);
+  // And the note really did not land — the copy says so, so it had better.
+  const [op] = await db
+    .select()
+    .from(payoutOperation)
+    .where(eq(payoutOperation.name, "Raced roam"));
+  expect(op.notes).toBeNull();
+});
+
 for (const [code, phrase] of [
   ["appraisal_failed", "did not answer"],
   ["pricing_mode", "four pricing modes"],

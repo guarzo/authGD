@@ -133,6 +133,15 @@ export const OPERATION_ERRORS = {
     "This deployment is in dry-run mode, so nothing is sent to EVE. The amounts and the payment controls are real; only the in-game window is suppressed.",
   delete_has_paid:
     "This operation has a currently-paid participant and cannot be deleted. Revert every payment first, then try again.",
+  // The one lifecycle error in this map rather than on error.tsx. See
+  // `setNotesAction` (actions.ts) for why it earns the exception: the rule is
+  // "input rejections redirect, lifecycle errors go to error.tsx", and the
+  // reason lifecycle errors go there is that none of them has typed text to
+  // hand back. An open textarea does. Written generically, not about notes, so
+  // the other always-open editable fields can adopt it as they hit the same
+  // race.
+  locked:
+    "This operation was finalized or paid while you had it open, so it can no longer be edited. What you typed was not saved.",
 } as const;
 
 export type NewOperationErrorCode = keyof typeof NEW_OPERATION_ERRORS;

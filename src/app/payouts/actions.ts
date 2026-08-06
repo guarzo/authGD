@@ -16,6 +16,7 @@ import {
   MAX_SHARES_HUNDREDTHS,
   PayoutDuplicateParticipantError,
   PayoutHasPaidError,
+  PayoutLockedError,
   addParticipant,
   createOperationWithContents,
   deleteOperation,
@@ -527,13 +528,42 @@ export async function setBattleReportUrlAction(
   revalidateOperation(operationId);
 }
 
+/**
+ * Saves the operation's notes from the always-open textarea on the detail
+ * page (`[id]/notes-form.tsx`).
+ *
+ * The `PayoutLockedError` catch is a deliberate exception to this file's own
+ * rule that input rejections redirect and lifecycle errors belong on
+ * error.tsx (see `revertPaymentAction`). That rule holds because no lifecycle
+ * error there has anything the operator typed at stake. This one does: the
+ * notes textarea sits open on the page for as long as the operation is
+ * editable, so an operator can be a paragraph into it when a second tab, or
+ * another operator, finalizes underneath them. `canEdit` narrows that window
+ * and cannot close it. Uncaught, `assertEditable`'s throw lands on error.tsx,
+ * which apologizes for a server fault we did not have and tells them nothing
+ * about why their text is gone. Redirecting says what actually happened.
+ *
+ * The text is lost either way — that is what the freeze means, and pretending
+ * otherwise would mean holding an edit against an operation that is closed to
+ * edits. What changes is that the operator learns the operation is now
+ * finalized instead of being told we broke.
+ *
+ * `operationFailed` redirects, and `redirect()` works by throwing, so it must
+ * stay in the catch rather than the try — the same shape `setBattleReportUrlAction`
+ * uses above.
+ */
 export async function setNotesAction(
   operationId: string,
   formData: FormData,
 ): Promise<void> {
   const actor = await requireOperatorAccount();
   const notes = field(formData, "notes").trim() || null;
-  await getDb().transaction((dbtx) => setNotes(dbtx, actor, operationId, notes));
+  try {
+    await getDb().transaction((dbtx) => setNotes(dbtx, actor, operationId, notes));
+  } catch (err) {
+    if (err instanceof PayoutLockedError) operationFailed(operationId, "locked");
+    throw err;
+  }
   revalidateOperation(operationId);
 }
 

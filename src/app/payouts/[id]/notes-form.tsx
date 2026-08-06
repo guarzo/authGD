@@ -26,17 +26,15 @@ type SaveState = { ok: true; at: number } | null;
  *
  * `setNotesAction` validates nothing, so unlike `InlineEdit` this component
  * has no bad-input path to convert into a redirect: there is no such thing as
- * a malformed note. It can still reject, though, and the docblock here used to
- * claim otherwise. `setNotes` calls `assertEditable`, which throws
- * `PayoutLockedError` once the operation is finalized or has a payment. The
- * `canEdit` gate at the call site means this form is only rendered while the
- * operation is editable, so reaching that throw takes a page that has gone
- * stale underneath the operator (a second tab, or another operator finalizing
- * first). When it happens the throw lands on error.tsx like every other
- * unhandled action rejection on this page, which costs the operator whatever
- * they had typed and blames it on us. Narrow, but real; converting it to the
- * `operationFailed`/`?error=` path the input rejections in `actions.ts` use is
- * the fix if it ever shows up in practice.
+ * a malformed note. It can still reject, though. `setNotes` calls
+ * `assertEditable`, which throws `PayoutLockedError` once the operation is
+ * finalized or has a payment, and the `canEdit` gate at the call site narrows
+ * that window without closing it — a second tab, or another operator
+ * finalizing first, freezes the operation while this textarea sits open. That
+ * throw is caught in `setNotesAction` and redirected as `?error=locked` rather
+ * than left to error.tsx, so the operator is told the operation froze instead
+ * of being told we broke. The typed text is gone either way; only the
+ * explanation differs.
  */
 export function NotesForm({
   action,
