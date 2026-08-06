@@ -222,10 +222,14 @@ export function ConfirmCost({
  * out with the button's actual font, weight, case transform and
  * letter-spacing and sizes the label span to fit it. `content: attr(...)` is
  * not a DOM node: it cannot appear in `element.textContent`, so it is invisible
- * to Playwright's text-matching engine (`getByText`, `toHaveText`) even
- * though several call sites already assert exact button text (`freeze`,
- * "Testers", …) via `toHaveText`, which does read hidden real elements and
- * would otherwise pick up a duplicate. `visibility: hidden` (not
+ * to Playwright's text-matching engine (`getByText`, `toHaveText`) whether it
+ * is painted or not. That is what rules out the obvious alternative — a second
+ * real `<span>` holding the wider label and hidden with CSS — rather than
+ * anything `visibility: hidden` does: `toHaveText` *does* read hidden real
+ * elements (`e2e/admin.spec.ts:569-571` documents that), so a ghost span would
+ * concatenate into the exact button text several call sites already assert
+ * (`freeze`, "Testers", …). Generated content cannot, at any visibility.
+ * `visibility: hidden` (not
  * `.visually-hidden`'s `position: absolute`) keeps the generated box in flow
  * so it still counts toward that sizing, while removing it from paint,
  * hit-testing and — per the ARIA accessible-name spec, which explicitly
