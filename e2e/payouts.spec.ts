@@ -1687,9 +1687,12 @@ test("paying a row moves focus to the next unpaid row and announces who is next"
   await expect(
     page.getByRole("button", { name: "copy amount for Bo Relay" }),
   ).toBeFocused();
-  // ...and the same fact is available to someone who cannot see the focus ring.
+  // ...and the same fact is available to someone who cannot see the focus ring,
+  // including the amount: three equal shares of 1,000,000.00 ISK is
+  // 333,333.33 ISK apiece (`fmtIsk`), so a wrong or unformatted amount here
+  // would fail this assertion even though it never touches the focus ring.
   await expect(page.locator("#pay-flow-status")).toContainText(
-    "Paid Ada Relay. 1 of 3 paid. Next: Bo Relay,",
+    "Paid Ada Relay. 1 of 3 paid. Next: Bo Relay, 333,333.33 ISK.",
   );
 });
 

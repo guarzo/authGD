@@ -30,14 +30,6 @@ const PayFlowContext = createContext<{
   dispatch: (id: string, kind: "pay" | "revert") => void;
 } | null>(null);
 
-// `copyAmountId` itself lives in `./pay-flow-ids` — a plain module with no
-// `"use client"` directive — and is re-exported here so client consumers of
-// this file keep one import. `page.tsx`, a Server Component, imports it from
-// `./pay-flow-ids` directly instead: every export of a `"use client"` file
-// becomes a client reference, and a Server Component cannot call a client
-// reference as a plain function.
-export { copyAmountId };
-
 function usePayFlow(): { dispatch: (id: string, kind: "pay" | "revert") => void } {
   const ctx = useContext(PayFlowContext);
   if (!ctx) throw new Error("MarkPaidForm/RevertForm must be inside a PayFlow");
