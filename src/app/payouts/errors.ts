@@ -135,11 +135,11 @@ export const OPERATION_ERRORS = {
     "This operation has a currently-paid participant and cannot be deleted. Revert every payment first, then try again.",
   // The one lifecycle error in this map rather than on error.tsx. See
   // `setNotesAction` (actions.ts) for why it earns the exception: the rule is
-  // "input rejections redirect, lifecycle errors go to error.tsx", and the
-  // reason lifecycle errors go there is that none of them has typed text to
-  // hand back. An open textarea does. Written generically, not about notes, so
-  // the other always-open editable fields can adopt it as they hit the same
-  // race.
+  // "input rejections come back as `useActionState` validation state, lifecycle
+  // errors go to error.tsx", and the reason lifecycle errors go there is that
+  // none of them has typed text to hand back. An open textarea does. Written
+  // generically, not about notes, so the other always-open editable fields can
+  // adopt it as they hit the same race.
   locked:
     "This operation was finalized or paid while you had it open, so it can no longer be edited. What you typed was not saved.",
 } as const;

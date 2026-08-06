@@ -226,6 +226,29 @@ test("a search with no matches says so, distinctly from an empty roster", async 
   );
 });
 
+/*
+ * Next hands a page `string | string[]` for every search param, and a repeated
+ * one is not exotic: appending `&q=Zed` to a URL that already carries a `q` is
+ * how a shared link picks up a second value. The page declared `q?: string`,
+ * so the array reached `.trim()` and the whole roster came back as a 500 —
+ * an admin loses the screen entirely over a malformed link. Last value wins,
+ * matching `/admin/audit`'s filters.
+ */
+test("a repeated q parameter renders rather than throwing", async ({ page, context }) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
+  await seedMember(db, { name: "Azzy", tier: "member" });
+  await seedMember(db, { name: "Zed", tier: "member" });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+
+  await page.goto("/admin/accounts?q=Azzy&q=Zed");
+  await expect(page.getByText("Something broke")).toHaveCount(0);
+  await expect(page.locator(ROWS)).toHaveCount(1);
+  await expect(rowFor(page, "Zed")).toBeVisible();
+  await expect(page.getByRole("searchbox", { name: "Name or handle" })).toHaveValue(
+    "Zed",
+  );
+});
+
 /** An alt's name, not just the main's, is a handle an admin searches by — the
  *  roster's own crew table shows alts by name and nothing else. */
 test("a search also matches an alt's name, not only the main", async ({

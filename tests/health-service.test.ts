@@ -63,16 +63,33 @@ describe("newestSyncRun", () => {
 });
 
 describe("workerHeartbeat", () => {
+  // Whether this file built the pgboss objects it tests against, which decides
+  // how afterAll puts the database back. Both branches matter, because
+  // `fileParallelism: false` means the suite runs in a fixed but unpinned file
+  // order and `tests/worker-queues.test.ts` boots a REAL pg-boss against this
+  // same database — so this file runs either before or after that install and
+  // has to be harmless in both directions.
+  let createdSchema = false;
+  let createdVersionTable = false;
+
   // Minimal stand-in for the table pg-boss itself creates on `boss.start()`
   // (node_modules/pg-boss/src/plans.js, `createTableVersion`). Built by hand
   // rather than by booting a real PgBoss instance, because its maintenance
   // loop only ticks `maintained_on` on its own ~120s timer
   // (`maintenanceIntervalSeconds`) — far too slow for a unit test — and this
   // function only cares about the column's shape, not pg-boss's scheduling.
-  // `IF NOT EXISTS` so this is a no-op on a shared test database where
-  // `tests/worker-queues.test.ts` has already created the real thing.
   beforeAll(async () => {
+    const schema = await ctx.db.execute(
+      sql`select 1 from information_schema.schemata where schema_name = 'pgboss'`,
+    );
+    createdSchema = schema.rows.length === 0;
     await ctx.db.execute(sql`create schema if not exists pgboss`);
+
+    const table = await ctx.db.execute(
+      sql`select 1 from information_schema.tables
+          where table_schema = 'pgboss' and table_name = 'version'`,
+    );
+    createdVersionTable = table.rows.length === 0;
     await ctx.db.execute(sql`
       create table if not exists pgboss.version (
         version int primary key,
@@ -81,20 +98,37 @@ describe("workerHeartbeat", () => {
         monitored_on timestamptz
       )
     `);
-    // Snapshot before the tests below delete every row and insert a version
-    // pg-boss will never ship. `truncateAll` does not touch the pgboss schema,
-    // so without a restore those edits outlive this file: the real version row
-    // is what pg-boss reads on `boss.start()` to decide whether its schema is
-    // current, and `tests/worker-queues.test.ts` boots a real one. A copy table
-    // rather than a row-by-row save so it stays correct if pg-boss adds a
-    // column.
-    await ctx.db.execute(sql`drop table if exists pgboss.version_test_backup`);
-    await ctx.db.execute(
-      sql`create table pgboss.version_test_backup as select * from pgboss.version`,
-    );
+
+    // Only worth snapshotting what was already there. A copy table rather than
+    // a row-by-row save, so it stays correct if pg-boss adds a column.
+    if (!createdVersionTable) {
+      await ctx.db.execute(sql`drop table if exists pgboss.version_test_backup`);
+      await ctx.db.execute(
+        sql`create table pgboss.version_test_backup as select * from pgboss.version`,
+      );
+    }
   });
 
+  // Leave the database as this file found it. The tests below delete every row
+  // and insert a version pg-boss will never ship, and nothing else clears them:
+  // `truncateAll` truncates this app's tables and pgboss is not one of them.
+  //
+  // Restoring is NOT enough on its own, which is the trap here. On a fresh
+  // database this file runs first and there is nothing to restore — and leaving
+  // behind an empty, hand-rolled `pgboss.version` is worse than leaving the
+  // fake row, because `boss.start()` reads that table to decide whether its
+  // schema is already installed. An existing table with no version in it sends
+  // pg-boss down the migrate path, which then fails on the `pgboss.job` it
+  // never got to create. So what this file created, this file removes.
   afterAll(async () => {
+    if (createdSchema) {
+      await ctx.db.execute(sql`drop schema pgboss cascade`);
+      return;
+    }
+    if (createdVersionTable) {
+      await ctx.db.execute(sql`drop table pgboss.version`);
+      return;
+    }
     await ctx.db.execute(sql`delete from pgboss.version`);
     await ctx.db.execute(
       sql`insert into pgboss.version select * from pgboss.version_test_backup`,

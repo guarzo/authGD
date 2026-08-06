@@ -15,18 +15,39 @@ import { JOB_CRON } from "../src/core/schedules";
 import { resetDb, seedMember, sessionCookieFor, testDb } from "./helpers";
 
 const { db, pool } = testDb();
-// The fake version row `setHeartbeat` writes outlives every test in this file:
-// `resetDb` truncates this app's tables and pgboss is not one of them. Left
-// behind, a version pg-boss will never ship (999999) sits in the table it reads
-// on `boss.start()` to decide whether its schema is already current — so a
-// later run that DOES start a real worker against this database can skip its
-// own setup. Cheap to remove, expensive to debug.
+
+/**
+ * Whether `setHeartbeat` built the pgboss objects, and so whether this file is
+ * the one that has to remove them.
+ *
+ * Deleting the sentinel row is not enough on its own. `resetDb` truncates this
+ * app's tables and pgboss is not one of them, so what this file creates outlives
+ * it — and an existing-but-empty `pgboss.version` is worse to leave behind than
+ * the fake row, because `boss.start()` reads that table to decide whether its
+ * schema is already installed and an empty one sends it down the migrate path
+ * for tables it never created. Restore what was here; drop what was not.
+ */
+const pgboss = {
+  probed: false,
+  createdSchema: false,
+  createdVersionTable: false,
+  hadRow: false,
+};
+
 test.afterAll(async () => {
-  await db.execute(sql`delete from pgboss.version where version = 999999`).catch(() => {
-    // No pgboss schema means no test in this run called setHeartbeat. Nothing
-    // to clean, and failing here would mask whatever the run actually found.
-  });
-  await pool.end();
+  try {
+    if (pgboss.createdSchema) {
+      await db.execute(sql`drop schema pgboss cascade`);
+    } else if (pgboss.createdVersionTable) {
+      await db.execute(sql`drop table pgboss.version`);
+    } else if (pgboss.probed && !pgboss.hadRow) {
+      await db.execute(sql`delete from pgboss.version where version = 999999`);
+    }
+  } finally {
+    // Always, whatever the cleanup did: a leaked pool hangs the run on open
+    // handles instead of reporting whatever the tests actually found.
+    await pool.end();
+  }
 });
 test.beforeEach(() => resetDb(db));
 
@@ -108,8 +129,36 @@ async function asAdmin(context: import("@playwright/test").BrowserContext) {
  * touched by `resetDb`, which only truncates this app's own tables, so a
  * test that calls `resetDb` between two heartbeats still has to set the
  * second one explicitly rather than relying on the first having been cleared.
+ *
+ * Records what it had to build, so `afterAll` above can put the database back
+ * exactly as it found it rather than guessing.
  */
 async function setHeartbeat(at: Date) {
+  // Probed once, on the first call only. A second probe would see the schema,
+  // table and row this function itself created a test earlier and conclude they
+  // were pre-existing — which is precisely backwards, and would leave the fake
+  // row behind for the next run to trip over.
+  if (!pgboss.probed) {
+    pgboss.probed = true;
+    const schema = await db.execute(
+      sql`select 1 from information_schema.schemata where schema_name = 'pgboss'`,
+    );
+    pgboss.createdSchema = schema.rows.length === 0;
+    if (!pgboss.createdSchema) {
+      const table = await db.execute(
+        sql`select 1 from information_schema.tables
+            where table_schema = 'pgboss' and table_name = 'version'`,
+      );
+      pgboss.createdVersionTable = table.rows.length === 0;
+      if (!pgboss.createdVersionTable) {
+        const row = await db.execute(
+          sql`select 1 from pgboss.version where version = 999999`,
+        );
+        pgboss.hadRow = row.rows.length > 0;
+      }
+    }
+  }
+
   await db.execute(sql`create schema if not exists pgboss`);
   await db.execute(sql`
     create table if not exists pgboss.version (

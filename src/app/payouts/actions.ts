@@ -145,6 +145,38 @@ function battleReportUrlProblem(
   return scheme === "http:" || scheme === "https:" ? null : "url_scheme";
 }
 
+/**
+ * The `<input type="date">` wire format, parsed strictly. Shared by the two
+ * places an operation date arrives (`createOperationAction` and
+ * `setOccurredAtAction`) for the same reason `battleReportUrlProblem` is
+ * shared: two copies of a check drift.
+ *
+ * `new Date(...)` alone is not enough. It rejects "not-a-date" and month 13,
+ * but it *normalizes* a day past the end of the month rather than refusing it
+ * — `new Date("2026-02-30")` is 2026-03-02 — so a hand-built request (the
+ * browser's own date picker cannot produce one) would store a different day
+ * than it submitted, silently, on a record operators reconcile against their
+ * own logs. Comparing the parsed UTC components back against the submitted
+ * digits is what catches the rollover; the format guard in front of it is what
+ * keeps locale-ish spellings like "2026-2-3" out, since those parse in local
+ * time and would shift the stored day by a timezone.
+ */
+function parseYmd(raw: string): Date | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw.trim());
+  if (!m) return null;
+  const [, y, mo, d] = m;
+  const parsed = new Date(`${y}-${mo}-${d}T00:00:00.000Z`);
+  if (Number.isNaN(parsed.getTime())) return null;
+  if (
+    parsed.getUTCFullYear() !== Number(y) ||
+    parsed.getUTCMonth() + 1 !== Number(mo) ||
+    parsed.getUTCDate() !== Number(d)
+  ) {
+    return null;
+  }
+  return parsed;
+}
+
 /** The composer's own rejection state. `null` is `useActionState`'s initial
  *  value, matching `AppraiseActionState`'s own convention: `state === null`
  *  never renders a notice, whether that means "hasn't submitted yet" or
@@ -202,8 +234,8 @@ export async function createOperationAction(
   const actor = await requireOperatorAccount();
   const name = field(formData, "name").trim();
   if (!name) return { ok: false, code: "name_required" };
-  const occurredAt = new Date(field(formData, "occurredAt"));
-  if (Number.isNaN(occurredAt.getTime())) return { ok: false, code: "date_invalid" };
+  const occurredAt = parseYmd(field(formData, "occurredAt"));
+  if (occurredAt === null) return { ok: false, code: "date_invalid" };
 
   // Checked before any network call, alongside name and date, so a bad scheme
   // never triggers an appraisal only to be thrown away.
@@ -593,8 +625,8 @@ export async function setOccurredAtAction(
 ): Promise<StringFieldEditState> {
   const actor = await requireOperatorAccount();
   const raw = field(formData, "occurredAt");
-  const occurredAt = new Date(raw);
-  if (Number.isNaN(occurredAt.getTime())) {
+  const occurredAt = parseYmd(raw);
+  if (occurredAt === null) {
     return { ok: false, code: "date_invalid", value: raw };
   }
   await getDb().transaction((dbtx) =>

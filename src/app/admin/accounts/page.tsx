@@ -86,23 +86,46 @@ function fmt(d: Date | null): string {
   return d ? d.toISOString().slice(0, 10) : "—";
 }
 
+/** Collapses a possibly-repeated query param to one value, last wins —
+ *  matching `/admin/audit`'s `one`, for the same reason: a duplicate arises by
+ *  appending `&q=x` to a URL that already has one, so the appended value is
+ *  the intent. */
+function one(v: string | string[] | undefined): string | undefined {
+  return Array.isArray(v) ? v[v.length - 1] : v;
+}
+
 export default async function AdminAccountsPage({
   searchParams,
 }: {
+  // Next passes `string | string[]` for any param. A repeated one
+  // (`?q=Azzy&q=Zed`) reaching `.trim()` on an array takes the whole roster
+  // down with a 500 — the same defect `/admin/audit` already fixed, and the
+  // same fix: declare the real type and collapse it before anything reads it.
   searchParams: Promise<{
-    tier?: string;
-    status?: string;
-    sort?: string;
-    dir?: string;
-    error?: string;
-    done?: string;
-    name?: string;
-    at?: string;
-    q?: string;
+    tier?: string | string[];
+    status?: string | string[];
+    sort?: string | string[];
+    dir?: string | string[];
+    error?: string | string[];
+    done?: string | string[];
+    name?: string | string[];
+    at?: string | string[];
+    q?: string | string[];
   }>;
 }) {
   await requireAdminPage();
-  const params = await searchParams;
+  const raw = await searchParams;
+  const params = {
+    tier: one(raw.tier),
+    status: one(raw.status),
+    sort: one(raw.sort),
+    dir: one(raw.dir),
+    error: one(raw.error),
+    done: one(raw.done),
+    name: one(raw.name),
+    at: one(raw.at),
+    q: one(raw.q),
+  };
   const sort = (
     SORTS.some((s) => s.key === params.sort) ? params.sort : "name"
   ) as AdminListSort;

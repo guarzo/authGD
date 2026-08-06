@@ -113,6 +113,13 @@ export function InlineEdit({
   // error to the editing session that produced it: set when a rejection
   // arrives, cleared whenever the editor opens or the operator types.
   const [showError, setShowError] = useState(false);
+  // The trigger button only exists while `editing` is false, so `triggerRef`
+  // is null at the moment a save or a cancel decides focus should go back to
+  // it: `setEditing(false)` is batched, the DOM node has not been created yet,
+  // and `triggerRef.current?.focus()` is a silent no-op that drops focus to
+  // `<body>`. Both paths therefore record the intent here and let the effect
+  // below act on it once the trigger is actually mounted.
+  const [refocusTrigger, setRefocusTrigger] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const fieldRef = useRef<HTMLInputElement & HTMLTextAreaElement>(null);
   const [state, formAction] = useActionState<StringFieldEditState, FormData>(
@@ -127,7 +134,7 @@ export function InlineEdit({
       setEditing(false);
       setShowError(false);
       setAnnouncement(`${label} saved`);
-      triggerRef.current?.focus();
+      setRefocusTrigger(true);
       const t = setTimeout(() => setAnnouncement(""), 2000);
       return () => clearTimeout(t);
     }
@@ -141,10 +148,20 @@ export function InlineEdit({
     fieldRef.current?.select();
   }, [state, label]);
 
+  // Runs after the render that brought the trigger back, which is the earliest
+  // point `triggerRef` holds a node. Guarded on the flag rather than on
+  // `editing` alone so opening and closing the editor by any other route does
+  // not steal focus from wherever the operator actually is.
+  useEffect(() => {
+    if (editing || !refocusTrigger) return;
+    triggerRef.current?.focus();
+    setRefocusTrigger(false);
+  }, [editing, refocusTrigger]);
+
   function cancel() {
     setEditing(false);
     setShowError(false);
-    triggerRef.current?.focus();
+    setRefocusTrigger(true);
   }
 
   if (!editing) {

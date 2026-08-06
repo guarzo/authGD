@@ -791,6 +791,33 @@ test("an invalid date is refused with a specific message", async ({ page, contex
   await expect(page.getByText("Something broke")).toHaveCount(0);
 });
 
+/*
+ * The nastier half of the same check, and the one `new Date()` alone gets
+ * wrong: February 30th is not rejected by the platform parser, it is rolled
+ * forward to March 2nd. Without the strict parse the operation would be
+ * created — silently dated three days off what the operator submitted, on the
+ * record they reconcile against their own logs. The message promises a "real
+ * calendar date"; this is the test that the promise is kept.
+ */
+test("a date that does not exist is refused rather than rolled forward", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "FC Rollover",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+  await page.goto("/payouts/new");
+  await page.getByLabel("Name").fill("Impossible date roam");
+  await bypassClientGuard(page.getByLabel("Date"), "2026-02-30");
+  await page.getByRole("button", { name: "Create operation" }).click();
+  await expect(page).toHaveURL(/\/payouts\/new$/);
+  await expect(page.locator("p.notice--bad")).toContainText("real calendar date");
+  await expect(page.getByText("Something broke")).toHaveCount(0);
+});
+
 test("a battle report link is stored, and a bad scheme is refused without losing the rest of the form", async ({
   page,
   context,
@@ -1877,6 +1904,14 @@ test("an inline share edit saves without a page navigation", async ({
   await expect(
     rowFor("Alice Pilot").getByRole("button", { name: "edit shares for Alice Pilot" }),
   ).toBeVisible();
+  // ...with focus back on the trigger that opened it. The trigger does not
+  // exist while the editor is open, so focusing it in the same tick that
+  // closes the editor is a no-op against a null ref and drops focus to
+  // `<body>` — a keyboard operator working down a roster would land back at
+  // the top of the document after every save.
+  await expect(
+    rowFor("Alice Pilot").getByRole("button", { name: "edit shares for Alice Pilot" }),
+  ).toBeFocused();
   // ...and Bob's, left open with an unsaved "3", is still open and still
   // holding it.
   await expect(page.getByLabel(/^shares for bob pilot$/i)).toHaveValue("3");
