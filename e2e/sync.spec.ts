@@ -449,6 +449,58 @@ test("the worker line reports liveness, and a dead worker says so", async ({
 });
 
 /**
+ * `workerHeartbeat` (@/services/health) reads `maintained_on` as pg's own raw
+ * text output, not a driver-parsed `Date` — see that function's own comment.
+ * Postgres accepts `timestamptz`'s special value `'infinity'`, which is a
+ * real, reachable string on that raw-text path and which `new Date(...)`
+ * does not understand (`Invalid Date`, not a throw). This is the "error"
+ * branch, not "never": pg-boss's own maintenance loop DID write something,
+ * so the honest claim is "the check failed to make sense of it", not "no
+ * heartbeat has ever been recorded" — the exact regression `workerLine`'s
+ * exhaustive switch (page.tsx) exists to make a compile error if a future
+ * variant reintroduces it by accident.
+ */
+test("an unparseable heartbeat value renders as a failed check, not as no heartbeat recorded", async ({
+  page,
+  context,
+}) => {
+  await asAdmin(context);
+  await setHeartbeat(ago(2 * MIN)); // creates/tracks pgboss.version for cleanup
+  await db.execute(sql`
+    update pgboss.version set maintained_on = 'infinity' where version = 999999
+  `);
+  // `finally`, not a trailing statement: a failing `goto` or assertion would
+  // otherwise exit before the restore and leak 'infinity' into every later
+  // test in the file — turning one real failure into a cascade of unrelated
+  // ones and hiding which test actually broke.
+  try {
+    await page.goto("/admin/sync");
+    await expect(page.locator(".notice--bad .worker")).toHaveText(
+      "worker · heartbeat check failed — unknown whether the worker is running",
+    );
+  } finally {
+    await restoreInheritedStaleHeartbeat();
+  }
+});
+
+/**
+ * `resetDb` (the per-test `beforeEach`) does not touch `pgboss`, so an
+ * unrestored heartbeat leaks into every test that runs after it in this file,
+ * not just the next one — and several of them (e.g. "an overdue job...")
+ * never call `setHeartbeat` themselves and rely on inheriting a STALE,
+ * not-fresh heartbeat from the immediately preceding test.
+ *
+ * So this restores exactly that inherited state — what "the worker line
+ * reports liveness" above leaves behind, 240 minutes stale — rather than a
+ * fresh one, which would silently flip `worker.fresh` for everything after it.
+ * Caught failing "an overdue job..." during review, which is a same-file
+ * example of why this file is this careful about what each test leaves behind.
+ */
+async function restoreInheritedStaleHeartbeat() {
+  await setHeartbeat(ago(240 * MIN));
+}
+
+/**
  * A dead worker puts every row overdue at once. Opening on overdue would
  * expand all seven drawers together and destroy exactly the "this one job
  * needs you" signal auto-open exists to create — so overdue is a visible

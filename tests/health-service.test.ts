@@ -136,14 +136,14 @@ describe("workerHeartbeat", () => {
     await ctx.db.execute(sql`drop table pgboss.version_test_backup`);
   });
 
-  it("returns null when the table has no rows at all", async () => {
+  it("reports 'never' when the table has no rows at all", async () => {
     // A schema-having, row-having database is the realistic empty state
     // (pg-boss inserts its version row before any maintenance tick ever
     // sets `maintained_on`), but an ungrouped `max()` over zero ROWS is also
     // reachable if something else has truncated the table — both must
-    // degrade to null rather than throwing.
+    // degrade to "never" rather than throwing.
     await ctx.db.execute(sql`delete from pgboss.version`);
-    expect(await workerHeartbeat(ctx.db)).toBeNull();
+    expect(await workerHeartbeat(ctx.db)).toEqual({ status: "never" });
   });
 
   it("reads the newest maintained_on across every row in the table", async () => {
@@ -158,7 +158,8 @@ describe("workerHeartbeat", () => {
       on conflict (version) do update set maintained_on = excluded.maintained_on
     `);
     const result = await workerHeartbeat(ctx.db);
-    expect(result?.getTime()).toBe(stamp.getTime());
+    expect(result.status).toBe("ok");
+    expect(result.status === "ok" && result.at.getTime()).toBe(stamp.getTime());
   });
 
   // The pgboss schema is created by pg-boss's own `boss.start()`, not by this
@@ -167,7 +168,7 @@ describe("workerHeartbeat", () => {
   // Exercised against a stub rather than a real connection: dropping the real
   // `pgboss` schema to reach this branch would break `tests/worker-queues.test.ts`
   // if it ran concurrently against the same shared database.
-  it("falls open to null when the pgboss schema does not exist (42P01)", async () => {
+  it("falls open to 'never' when the pgboss schema does not exist (42P01)", async () => {
     const undefinedTable: Dbx = {
       execute: async () => {
         const err = new Error('relation "pgboss.version" does not exist') as Error & {
@@ -177,6 +178,40 @@ describe("workerHeartbeat", () => {
         throw err;
       },
     } as unknown as Dbx;
-    expect(await workerHeartbeat(undefinedTable)).toBeNull();
+    expect(await workerHeartbeat(undefinedTable)).toEqual({ status: "never" });
+  });
+
+  // A permissions/connectivity fault on the read itself is NOT the same claim
+  // as "no worker has ever run" — the worker could be perfectly healthy and
+  // this query still fail. Distinguishing them is what lets `/admin/sync`
+  // say something honest instead of "no heartbeat recorded" about a worker
+  // it never actually asked about.
+  it("reports 'error' (not 'never') when the read fails for a reason other than a missing schema", async () => {
+    const brokenConnection: Dbx = {
+      execute: async () => {
+        const err = new Error("permission denied for schema pgboss") as Error & {
+          code?: string;
+        };
+        err.code = "42501";
+        throw err;
+      },
+    } as unknown as Dbx;
+    expect(await workerHeartbeat(brokenConnection)).toEqual({
+      status: "error",
+      message: "permission denied for schema pgboss",
+    });
+  });
+
+  // A non-null `maintained_on` that doesn't parse as a timestamp is evidence
+  // pg-boss DID write something, just not something readable — the "error"
+  // case, not "never" (which claims no evidence at all) and not "ok" (which
+  // would hand every caller an Invalid Date to do arithmetic on unchecked).
+  it("reports 'error' when maintained_on comes back non-null but unparseable", async () => {
+    const malformedTimestamp: Dbx = {
+      execute: async () => ({ rows: [{ maintained_on: "not-a-timestamp" }] }),
+    } as unknown as Dbx;
+    const result = await workerHeartbeat(malformedTimestamp);
+    expect(result.status).toBe("error");
+    expect(result.status === "error" && result.message).toMatch(/not-a-timestamp/);
   });
 });

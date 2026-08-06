@@ -91,10 +91,27 @@ export async function syncJobAction(
   // worker line above the strip — read fresh here rather than threaded
   // through, since this action returns straight into the drawer with no
   // round trip through the page's own server-component render.
-  const heartbeatAt = await workerHeartbeat(db);
-  const worker = evaluateFreshness(heartbeatAt, new Date(), HEARTBEAT_STALE_AFTER_MS);
+  //
+  // A ternary, not `page.tsx`'s exhaustive switch, is a deliberate choice
+  // here rather than an accidentally-narrower copy: this call site only ever
+  // needs a binary "do I have a real instant or not" for `evaluateFreshness`,
+  // and `heartbeat.status === "error"` is consumed directly and separately
+  // below, passed straight into `queuedNotice`. A future fourth
+  // `WorkerHeartbeat` variant can't silently fall through to the wrong
+  // sentence here the way it could before — there is no sentence built from
+  // this ternary's result, only a `Date | null` for freshness math, and
+  // `queuedNotice`'s own `heartbeatErrored` param is what actually varies the
+  // copy for a bad read.
+  const heartbeat = await workerHeartbeat(db);
+  const worker = evaluateFreshness(
+    heartbeat.status === "ok" ? heartbeat.at : null,
+    new Date(),
+    HEARTBEAT_STALE_AFTER_MS,
+  );
   const workerAge = worker.ageSec === null ? null : elapsedShort(worker.ageSec * 1000);
-  return { text: queuedNotice(jobType, undefined, workerAge) };
+  return {
+    text: queuedNotice(jobType, undefined, workerAge, heartbeat.status === "error"),
+  };
 }
 
 export async function recheckInvalidAction(): Promise<void> {

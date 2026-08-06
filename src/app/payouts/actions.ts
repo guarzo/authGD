@@ -420,30 +420,33 @@ export async function addAppraisedPoolAction(
  * exactly one text/number input to preserve.
  *
  * `value` is only ever the REJECTED input — an `ok: true` state carries none,
- * on purpose. The client component that renders this (`InlineEdit`) falls back
- * to the current server value once `ok` is true, so a successful save is never
- * left showing a value that merely resembles what was committed; it shows what
- * the reload actually says.
+ * on purpose. Two different client components render this, and each treats
+ * `ok: true` as "nothing to echo" for its own reason: `InlineEdit` (editing an
+ * existing field) falls back to the current server value, so a successful
+ * save is never left showing a value that merely resembles what was
+ * committed — it shows what the reload actually says. `AddParticipantForm`
+ * (adding a new one, no server value to fall back to) instead clears its own
+ * controlled input in a success effect; see that component's docblock. Both
+ * read `state.value` only on the `ok: false` branch.
  */
 export type StringFieldEditState =
   { ok: true } | { ok: false; code: OperationErrorCode; value: string } | null;
 
 /**
- * `addFlatPoolAction`'s own three-field twin of `StringFieldEditState` — a
- * flat pool has no single field to echo back, and totalValue/notes/rawPaste
- * all have to survive a rejection together or an operator who mistypes the
- * total loses the note explaining where the number came from too.
+ * `addFlatPoolAction`'s own twin of `StringFieldEditState` — a flat pool has
+ * no single field to echo back, so this carries only the rejection `code`,
+ * not the three submitted strings. `useActionState` still keeps this
+ * function's caller (`FlatPoolForm`) mounted across a rejection the same way
+ * `StringFieldEditState`'s consumers do, but the field values that survive
+ * the rejection now come from `FlatPoolForm`'s own controlled state, not from
+ * this state being echoed back — see that component's docblock. An earlier
+ * version of this type carried `totalValue`/`notes`/`rawPaste` for exactly
+ * the restore job the controlled inputs now do themselves; kept as
+ * `{code}`-only rather than removed entirely, because the rejection still has
+ * to say which of the three fields is wrong.
  */
 export type FlatPoolEditState =
-  | { ok: true }
-  | {
-      ok: false;
-      code: OperationErrorCode;
-      totalValue: string;
-      notes: string;
-      rawPaste: string;
-    }
-  | null;
+  { ok: true } | { ok: false; code: OperationErrorCode } | null;
 
 export async function addFlatPoolAction(
   operationId: string,
@@ -455,7 +458,7 @@ export async function addFlatPoolAction(
   const notes = field(formData, "notes").trim();
   const rawPaste = field(formData, "rawPaste").trim();
   if (!notes) {
-    return { ok: false, code: "note_required", totalValue, notes, rawPaste };
+    return { ok: false, code: "note_required" };
   }
   // <input type="number"> accepts scientific notation like "1e5" client-side;
   // iskToCents' regex rejects it, but let this action fail with the same
@@ -463,11 +466,13 @@ export async function addFlatPoolAction(
   // solely on addFlatPool's deeper (also correct) check.
   //
   // No leading minus, matching setItemPriceAction below. addFlatPool rejects a
-  // negative total too, but by throwing -- which reaches the error boundary and
-  // takes the operator's note and paste with it, the exact loss this state
-  // shape exists to prevent. Rejecting here keeps all three fields.
+  // negative total too, but by throwing -- which reaches the error boundary
+  // and takes the operator straight to it instead of leaving them on this
+  // form to fix the number. Rejecting here keeps them on the form, with
+  // `FlatPoolForm`'s controlled inputs — not this state — holding what they
+  // typed.
   if (!/^\d+(\.\d{1,2})?$/.test(totalValue)) {
-    return { ok: false, code: "total_invalid", totalValue, notes, rawPaste };
+    return { ok: false, code: "total_invalid" };
   }
 
   await getDb().transaction((dbtx) =>

@@ -949,6 +949,70 @@ test("an error returns the admin to the filter and sort they were working", asyn
 });
 
 /**
+ * `accountsConfirmation` (view.ts) is unit-tested directly, and `isDoneCode`
+ * with it, but neither of those proves `AdminAccountsPage` actually applies
+ * `isDoneCode` to `params.done` before calling it — that wiring at the page
+ * boundary is the entire point of narrowing `accountsConfirmation`'s
+ * signature, and it has no coverage anywhere else. `syncAccountAction` is the
+ * cheapest of the four `doneUrl` call sites to reach: no confirm-arm, no
+ * side effect worth asserting beyond the redirect itself.
+ */
+test("a recognised ?done= code renders its confirmation", async ({ page, context }) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
+  await seedMember(db, { name: "Sync Target", tier: "member", status: "active" });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.goto("/admin/accounts");
+
+  // "sync now" is a row action, not a drawer control — it sits in the row's
+  // own admin-actions cell, unlike grant/revoke/tier/freeze which live behind
+  // the row's toggle.
+  const row = rowFor(page, "Sync Target");
+  await row
+    .getByRole("button", { name: "sync now for Sync Target", exact: true })
+    .click();
+
+  await expect(page).toHaveURL(/[?&]done=sync(&|$)/);
+  // Scoped to `ConfirmNotice`'s own wrapper (the `tabIndex={-1}` focus
+  // target): the page mounts two other `Notice`s unconditionally
+  // (`errorMessage`, the pending-queue banner), and a bare `p.notice` would
+  // match whichever of the three happens to have text.
+  const notice = page.locator('div[tabindex="-1"] p.notice');
+  await expect(notice).toHaveText(
+    "Sync queued for Sync Target. The worker picks it up within a few seconds.",
+  );
+});
+
+/**
+ * The other half of the same boundary: a hand-edited `?done=` (or one a build
+ * has since dropped) must not become copy on the page. Reached by direct
+ * navigation, not a button — there is no in-app way to produce an
+ * unrecognised code, which is exactly why the page-level guard, not a form
+ * validator, is what has to catch it.
+ *
+ * Asserted on text content, not element count: `Notice` mounts an empty
+ * `.notice-slot` unconditionally (ui.tsx's own docblock), so a bare
+ * `toHaveCount` would pass whether or not `isDoneCode` actually ran — see
+ * `docs/design-sweep`'s note on the audit page's identical trap. This page
+ * carries two OTHER unconditional `Notice`s beside `ConfirmNotice`
+ * (`errorMessage`, the pending-queue banner), both empty here too since
+ * neither `?error=` nor a pending queue is in play — scoping to
+ * `ConfirmNotice`'s own `tabIndex={-1}` wrapper is what keeps this pinned to
+ * the boundary under test rather than any of the three.
+ */
+test("an unrecognised ?done= code renders no confirmation", async ({ page, context }) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+
+  await page.goto("/admin/accounts?done=delete_account&name=Nobody");
+
+  const slot = page.locator('div[tabindex="-1"] p');
+  await expect(slot).toHaveCount(1);
+  await expect(slot).toHaveClass("notice-slot");
+  await expect(slot).toHaveText("");
+  await expect(slot).not.toHaveAttribute("data-glyph", /./);
+});
+
+/**
  * The same race one level up, on the actor rather than the target: an admin
  * de-roled while the queue was open. requireAdminAction catches this before
  * approveAccount's own `not_authorized` check ever runs, so what this pins is

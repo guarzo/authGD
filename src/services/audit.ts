@@ -42,19 +42,13 @@ function stableStringify(v: unknown): string {
  * on, or resolved and came back differently) — it collapses reruns of the
  * unchanged failure, it does not suppress the failure itself.
  *
- * Costs one extra lookup per call, and nothing indexes the part that narrows
- * it: the only declared index on `audit_log` is `audit_log_at_idx` on `at`,
- * so the `action`+`target` filter has no index to use. "Most recent" here is
- * `id desc limit 1`, not `at desc` — `id` is the serial primary key, so its
- * own index gives the ordering for free, but Postgres still has to walk that
- * index backwards discarding rows until it finds one matching the filter.
- * That walk is short while the matching action is recent and unbounded once
- * it is not. Acceptable today because it runs only on the already-exceptional
- * failure path, never on a sync tick's success rows — but `audit_log` is
- * append-only and grows without bound, so it degrades monotonically. The fix
- * is an index on `(action, target, id desc)`, which would also serve
- * `queryAuditLog`'s own filters; it needs a generated migration and so is
- * deliberately left out of the change that added this.
+ * Costs one extra lookup per call, served by `audit_log_action_target_id_idx`
+ * on `(action, target, id desc)` — an equality match on both leading columns,
+ * which is what that index answers. It does not help `queryAuditLog`'s action
+ * filter, which is a LIKE prefix; see the index's own comment in
+ * `src/db/schema.ts`. "Most recent" here is `id desc limit 1`, not `at desc` — `id` is
+ * the serial primary key, so ordering by it matches insertion order without
+ * relying on clock precision.
  */
 export async function logAuditIfChanged(
   dbx: Dbx,

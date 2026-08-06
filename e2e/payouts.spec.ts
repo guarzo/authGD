@@ -299,6 +299,107 @@ test("create, add a flat pool, paste a roster, finalize, mark paid", async ({
   expect(paid[0].details).toMatchObject({ participantId: brainTartare.id });
 });
 
+/**
+ * `defaultValue` compiles to the `value` *attribute*, which a browser ignores
+ * once an input's dirty value flag is set — which it is, the operator having
+ * typed in it — so an uncontrolled field here left the total and note on
+ * screen after a successful add and let a second press of "Add flat pool"
+ * bank the same numbers twice, inflating a payout total real people get paid
+ * from. `flat-pool-form.tsx` is controlled now and clears in a success
+ * effect; this pins that against a regression back to `defaultValue`.
+ */
+test("a successful flat pool add clears the form", async ({ page, context }) => {
+  const operator = await seedMember(db, {
+    name: "FC Prime",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+
+  const [op] = await db
+    .insert(payoutOperation)
+    .values({
+      name: "Clears after add",
+      occurredAt: new Date("2026-08-01"),
+      corpSharePct: "0",
+      createdBy: operator.id,
+    })
+    .returning();
+
+  await page.goto(`/payouts/${op.id}`);
+  await openFlatPoolPanel(page);
+  await page.getByLabel("Total value (ISK)").fill("1000000");
+  await page.getByLabel("Note (required — why this number)").fill("sold privately");
+  await page.getByLabel("What was in it (optional)").fill("a stack of PLEX");
+  await page.getByRole("button", { name: "Add flat pool" }).click();
+
+  const flatPoolRow = page.getByRole("row").filter({ hasText: "flat (manual)" });
+  await expect(flatPoolRow).toContainText("1,000,000.00 ISK");
+  await expect(flatPoolRow).toHaveCount(1);
+
+  // All three fields are back to empty, not still holding what was just
+  // banked — the exact hazard the docblock names: a second press with the
+  // same numbers still visible would have created a second pool.
+  await expect(page.getByLabel("Total value (ISK)")).toHaveValue("");
+  await expect(page.getByLabel("Note (required — why this number)")).toHaveValue("");
+  await expect(page.getByLabel("What was in it (optional)")).toHaveValue("");
+});
+
+/**
+ * The other half of the same conversion, and the more important one: moving
+ * `flat-pool-form.tsx`'s fields from `defaultValue` to controlled `useState`
+ * fixed the duplicate-bank hazard above, but the whole risk in doing that was
+ * trading it for a lost-input regression on rejection — a mistyped total that
+ * also cost the operator their note, the exact loss `FlatPoolEditState`
+ * exists to prevent (see `actions.ts`'s docblock). No `bypassClientGuard`
+ * needed here: `<input type="number">` accepts scientific notation like
+ * "1e5" client-side, and `total_invalid`'s own copy calls that out by name —
+ * a real rejection reachable by typing normally, not a hand-built request.
+ */
+test("a rejected flat pool submission keeps what was typed in all three fields", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "FC Prime",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+
+  const [op] = await db
+    .insert(payoutOperation)
+    .values({
+      name: "Rejected flat pool",
+      occurredAt: new Date("2026-08-01"),
+      corpSharePct: "0",
+      createdBy: operator.id,
+    })
+    .returning();
+
+  await page.goto(`/payouts/${op.id}`);
+  await openFlatPoolPanel(page);
+  await page.getByLabel("Total value (ISK)").fill("1e5");
+  await page.getByLabel("Note (required — why this number)").fill("sold privately");
+  await page.getByLabel("What was in it (optional)").fill("a stack of PLEX");
+  await page.getByRole("button", { name: "Add flat pool" }).click();
+
+  await expect(page.locator("p.notice--bad")).toContainText("no shorthand like 1e5");
+  await expect(page.getByText("Something broke")).toHaveCount(0);
+  // Nothing was banked — the rejection added no pool row.
+  await expect(page.getByRole("row").filter({ hasText: "flat (manual)" })).toHaveCount(0);
+
+  // All three fields still hold exactly what was typed — this is the fix the
+  // conversion to controlled state must not have traded away.
+  await expect(page.getByLabel("Total value (ISK)")).toHaveValue("1e5");
+  await expect(page.getByLabel("Note (required — why this number)")).toHaveValue(
+    "sold privately",
+  );
+  await expect(page.getByLabel("What was in it (optional)")).toHaveValue(
+    "a stack of PLEX",
+  );
+});
+
 test("pasting two alts of one account collapses them into one participant row", async ({
   page,
   context,
@@ -1588,6 +1689,43 @@ test("manual participant entry offers known character names and adds one", async
   await expect(page.getByRole("row").filter({ hasText: "Latecomer Pilot" })).toHaveCount(
     1,
   );
+});
+
+/**
+ * Same hazard as the flat pool form's clear-on-success test above, on the
+ * other add-form: `defaultValue` compiles to the `value` attribute, which a
+ * browser ignores once the field's dirty value flag is set, so an
+ * uncontrolled input here left the typed name on screen after a successful
+ * add. A second press of "Add participant" then added the same person twice,
+ * and each duplicate drew a full share. `add-participant-form.tsx` is
+ * controlled now and clears in a success effect.
+ */
+test("a successful participant add clears the character name field", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "FC Prime",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+
+  const [op] = await db
+    .insert(payoutOperation)
+    .values({
+      name: "Clears after add",
+      occurredAt: new Date("2026-08-01"),
+      corpSharePct: "0",
+      createdBy: operator.id,
+    })
+    .returning();
+
+  await page.goto(`/payouts/${op.id}`);
+  await page.getByLabel("Character name").fill("Once Pilot");
+  await page.getByRole("button", { name: "Add participant" }).click();
+  await expect(page.getByRole("row").filter({ hasText: "Once Pilot" })).toHaveCount(1);
+  await expect(page.getByLabel("Character name")).toHaveValue("");
 });
 
 /**

@@ -5,6 +5,19 @@ because it was deferred on purpose, not because it was missed, and each one says
 who deferred it and why — so the next sweep recognises it as a known open item
 rather than rediscovering it as a new finding.
 
+> **Status as of 2026-08-06.** A follow-up pass (branch
+> `worktree-design-sweep-backlog`) worked this list rather than re-running the
+> sweep — the Aug-5 review was still current, so re-reviewing would have
+> re-derived it and risked re-flagging entries in
+> `docs/settled-design-decisions.md`. **Closed:** section 1 (discord-roles audit
+> gap), section 5's `audit_log` index, and three of section 4's rows — the
+> `workerHeartbeat` null conflation, both add-forms' duplicate-submit hazard,
+> and `accountsConfirmation`'s loose signature (merged with CodeRabbit's
+> `DONE_CODES` note, which was the same defect from the other end). Each is
+> marked inline below. **Still open:** section 2 (nav membership, needs a
+> product decision), section 3 (sweep backlog items 6, 10, 20 and the cosmetics),
+> and the remaining section 4 rows.
+
 Two sources feed this list: the sweep's own backlog (`SYNTHESIS.md`), and the
 `my:polish-core` pass run over the resulting diff, which reviewed the sweep's
 own work and found things the sweep introduced or walked past.
@@ -21,7 +34,19 @@ can see what happened to them rather than assuming they were dropped.
 
 ---
 
-## 1. `discord-roles` drops the audit record of role changes that succeeded
+## 1. `discord-roles` drops the audit record of role changes that succeeded — **CLOSED 2026-08-06**
+
+> Fixed on `worktree-design-sweep-backlog`. Both paths now accumulate what
+> actually landed and write `discord.role_changed` with `partial: true` from the
+> catch. Two things worth knowing before touching it again: the partial write
+> sits **above** the permanence check on both paths deliberately — a transient
+> failure rethrows for pg-boss to retry, and the retry re-derives its work from
+> current state, so it only ever audits the remainder and the first batch's
+> record would be lost for good. And the strip path guards its audit write in
+> try/catch while the main sweep path deliberately does not; the comment at the
+> guard explains why, and the asymmetry is intentional. Covered by three tests in
+> `tests/discord-roles-job.test.ts` (permanent mid-sweep, permanent mid-strip,
+> transient mid-strip).
 
 **Source:** `my:polish-core` / `silent-failure-hunter`, verified by reading the
 code. **Severity: Warning, HIGH confidence.** This is the most consequential
@@ -77,10 +102,10 @@ bugs, type design, and over-engineering to `report` rather than auto-fix.
 
 | Finding | Where | Why deferred |
 |---|---|---|
-| `workerHeartbeat` returns `null` for every error, the same value as "worker never ran" — a grant problem renders "no heartbeat recorded" on a live worker | `src/services/health.ts:70-74` | Behaviour change; also a regression vs. `newestSyncRun`, which had no catch and let DB faults reach the error boundary |
-| Both add-forms keep their values after a successful add, so a flat pool can be created twice | `payouts/[id]/flat-pool-form.tsx:33`, `add-participant-form.tsx:41` | Pre-existing behaviour, not introduced here; the false comment was fixed, the behaviour was not. `AppraiseForm` now shows the pattern to copy — a controlled value plus `setPaste("")` in a success effect — so this is no longer an open design question, only unwritten |
+| ~~`workerHeartbeat` returns `null` for every error~~ **CLOSED 2026-08-06** | `src/services/health.ts` | Now a tagged union `{status:"ok"\|"never"\|"error"}`. `42P01` and an empty table still map to `"never"`; anything else is `"error"` and `/admin/sync` says the check failed rather than claiming nothing ran. The catch was kept, not removed — it still protects the page from a DB fault on an auxiliary read |
+| ~~Both add-forms keep their values after a successful add~~ **CLOSED 2026-08-06** | `payouts/[id]/flat-pool-form.tsx`, `add-participant-form.tsx` | Converted to controlled state per `AppraiseForm`'s pattern, cleared in an effect only on `state.ok`. Note the rejection path needed no restore code at all: these forms settle through `formAction`, so nothing ever clears what was typed — the missing half was always the reset, never the restore |
 | `ConfirmingForm` without a `ConfirmGroup` ancestor silently discards its confirmation | `_components/confirm-group.tsx:122` | All four current call sites are correct; nothing enforces it for the fifth |
-| `accountsConfirmation` takes `done: string` while `AdminAccountsDoneCode` is exported ten lines above; a typo'd code typechecks and returns `""` | `admin/accounts/view.ts:157` | Cheapest real fix on this list; `doneUrl` in the same file already types it correctly |
+| ~~`accountsConfirmation` takes `done: string`~~ **CLOSED 2026-08-06** | `admin/accounts/view.ts` | One signature, `AdminAccountsDoneCode \| undefined`; `isDoneCode` exported so `page.tsx` narrows the query string at the boundary. **An overload pair was tried first and reverted as inert** — TypeScript resolves overloads in declaration order, so a permissive second signature always catches what the narrow one rejects, and a typo'd literal still compiled. Verified this time by compiling a probe against the real module: `"teir"` now raises TS2345. Fixed together with section 5's `DONE_CODES` note, being the same defect from the other end |
 | `ActionOutcome = {text: string} \| null` admits `{text: ""}`, which bumps `seq` and focuses an unnamed `div` | `_components/confirm-group.tsx:104` | Both producers have documented `""` paths |
 | `detailAccountNames` is a `Record` but its only consumer takes `ReadonlyMap`, forcing a per-row `new Map(...)` | `services/audit.ts:87`, `admin/audit/page.tsx:646` | Sibling argument `roleNames` is a Map end to end; pure cleanup |
 | ~~`InlineEditField`'s unused props~~ **(resolved by the merge)** | — | The component was deleted. Main's #124 shipped its own `InlineEdit`, this branch folded its value preservation into that one, and `inline-edit-field.tsx` is gone |
@@ -88,21 +113,47 @@ bugs, type design, and over-engineering to `report` rather than auto-fix.
 | `CONTACT_SYNC_RESULTS`' partition comment enumerates seven of nine, omitting `sync_failed` | `core/contact-result.ts:53-56` | May be deliberate, but neither this comment nor `services/accounts.ts:139-144` says so |
 | pg-boss's `maintained_on` is a gated single-row update, so the "three missed ticks" margin is nearer 1.5 | `core/health.ts:28` | The liveness conclusion holds; only the margin arithmetic is off |
 
+## 4b. Found while closing the above (2026-08-06) — open, deliberately out of scope
+
+Three things the follow-up pass surfaced and chose not to fix, so the branch
+would not keep growing. None is urgent; all are recorded so the next sweep
+recognises them.
+
+| Finding | Where | Why deferred |
+|---|---|---|
+| `/admin/audit`'s action filter has no index that serves it | `services/audit.ts`'s `queryAuditLog` | It matches `action` with a LIKE prefix, and under this deployment's `en_US.utf8` collation a plain btree cannot answer `LIKE 'x%'` — EXPLAIN puts it in `Filter`, not `Index Cond`. `audit_log_action_target_id_idx` does **not** cover it, despite looking like it should; the index's own comment now says so. A `text_pattern_ops` index would fix it and is a separate migration and a separate decision |
+| `audit_log` index migrations block writes while they build | `drizzle/`, `fly.toml` | `0010`'s `CREATE INDEX` takes a `SHARE` lock (writes block, reads don't) for the build's duration, and `fly.toml` runs migrations as a deploy-gating release command. `CONCURRENTLY` is not available without work: it cannot run inside a transaction, Drizzle's migrator wraps every migration in one, and a failed concurrent build leaves an INVALID index needing manual cleanup — in a release step nobody watches. Fine at current size (low tens of thousands of rows, sub-second). If `audit_log` grows enough for the build to matter, the honest fix is a custom migration runner, not the `COMMIT;`-in-the-file hack. Raised by CodeRabbit on #163 and answered there |
+| The `"error"` variant's `message` has no reader | `services/health.ts` | Logged by `console.error` already. Harmless today, but it is a raw Postgres string (`"permission denied for schema pgboss"`) sitting in a server-component return value — if anyone later renders it to answer "why did the check fail", an unfiltered DB error reaches the page |
+
+(An earlier draft of this table also listed `workerHeartbeat` tagging an
+Invalid Date as `"ok"`. That was closed in the same pass, not deferred: an
+unparseable `maintained_on` now returns `"error"` rather than `"never"`,
+on the grounds that a non-null raw value means pg-boss wrote *something* —
+the evidence exists and simply isn't parseable, which is the check failing
+rather than an absence of evidence. Covered by an e2e test using
+`timestamptz`'s `'infinity'`.)
+
 ## 5. Also known
 
-The `audit_log` index on `(action, target, id desc)` that `logAuditIfChanged`'s
-docblock asks for. It needs a generated migration, which the sweep's gate did not
-cover. Not urgent — the lookup runs only on the exceptional failure path — but it
-degrades monotonically, since `audit_log` is append-only.
+~~The `audit_log` index on `(action, target, id desc)`~~ **CLOSED 2026-08-06.**
+Added via `npm run db:generate` (never hand-written) as
+`drizzle/0009_useful_frightful_four.sql`; no already-applied migration was
+touched. `logAuditIfChanged`'s docblock was updated too, since it described the
+index as missing and that claim is now false. This also closes CodeRabbit's
+independent report of the same item on PR #128 (`src/services/audit.ts:73`) —
+one item, two reviewers, one migration.
 
-CodeRabbit's review of PR #128 raised it independently (`src/services/audit.ts:73`),
-which is corroboration rather than a new finding: two reviewers, one unresolved
-item, still blocked on the same migration sign-off.
-
-The same review's `admin/accounts/view.ts:131` note — derive one of
-`AdminAccountsDoneCode` / `DONE_CODES` from the other — is the same defect as
-section 4's `accountsConfirmation` row, reached from the other end. Fix them
-together.
+~~The same review's `admin/accounts/view.ts:131` note — derive one of
+`AdminAccountsDoneCode` / `DONE_CODES` from the other~~ **CLOSED 2026-08-06**,
+together with section 4's `accountsConfirmation` row as that entry advised. On
+inspection the two types were *already* derived from each other
+(`(typeof DONE_CODES)[number]`), and `isDoneCode` already existed as the runtime
+fail-safe; the real remaining gap was the exported function accepting a bare
+`string` at call sites that know their code at authorship time. Closed by
+narrowing the single signature to `AdminAccountsDoneCode | undefined` and
+moving the runtime guard out to `page.tsx`'s query-string boundary — not by
+overloads, which were tried first and are inert for this (see the section 4
+row above).
 
 Everything else CodeRabbit raised on #128 was resolved in the branch: the flat-pool
 action's regex admitted a negative total (it reached `addFlatPool`, threw, and cost

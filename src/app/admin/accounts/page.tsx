@@ -15,7 +15,7 @@ import { CharacterLocation } from "@/app/_components/character-location";
 import { ConfirmNotice } from "@/app/_components/confirm-notice";
 import { Tier } from "@/app/_components/tier";
 import { tierLabel } from "@/app/_components/labels";
-import { accountsConfirmation, matchesAccountSearch } from "./view";
+import { accountsConfirmation, isDoneCode, matchesAccountSearch } from "./view";
 import { ConfirmGroup, ConfirmingForm } from "@/app/_components/confirm-group";
 // Shared with the member's own character table rather than reimplemented here:
 // the near-miss label copy and the "not managed" wording are the same question
@@ -210,7 +210,15 @@ export default async function AdminAccountsPage({
   // never carries a tier label. The other four mutating actions build their
   // own confirmation directly (see view.ts's docblock) and never touch
   // `?done=` at all.
-  const confirmation = accountsConfirmation(params.done, params.name, undefined);
+  //
+  // `params.done` is a raw query-string value — `string | undefined`, with no
+  // way for Next.js to know about `AdminAccountsDoneCode` — so it's narrowed
+  // here with `isDoneCode` before the call, rather than `accountsConfirmation`
+  // itself accepting a bare string. This is the one real boundary an
+  // unrecognised code (a hand-edited URL, or a build that has since dropped
+  // one) can reach; `undefined` renders no confirmation either way.
+  const doneCode = isDoneCode(params.done) ? params.done : undefined;
+  const confirmation = accountsConfirmation(doneCode, params.name, undefined);
 
   const listParams = (over: Record<string, string | undefined> = {}) => {
     const p = new URLSearchParams();

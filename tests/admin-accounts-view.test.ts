@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { accountsConfirmation, matchesAccountSearch } from "@/app/admin/accounts/view";
+import {
+  accountsConfirmation,
+  isDoneCode,
+  matchesAccountSearch,
+  type AdminAccountsDoneCode,
+} from "@/app/admin/accounts/view";
 
 // The success confirmation the eight redirecting /admin/accounts server
 // actions carry back — setTierAction, approveAction, returnToAutoAction,
@@ -122,10 +127,34 @@ describe("accountsConfirmation", () => {
     expect(accountsConfirmation(undefined, undefined, undefined)).toBe("");
   });
 
-  it("renders nothing for a done code this build doesn't recognize", () => {
+  // `accountsConfirmation` itself is typed to `AdminAccountsDoneCode |
+  // undefined` now — a real caller can no longer pass an unrecognized string
+  // and have TypeScript let it through. The one boundary where an
+  // unrecognized `?done=` can legitimately arrive is `page.tsx`'s
+  // `params.done`, a raw query-string value, and that boundary narrows with
+  // `isDoneCode` before ever calling this function. So the "unrecognized
+  // code" behaviour is tested at that boundary directly, not through
+  // `accountsConfirmation`'s own signature.
+  it("isDoneCode rejects a done code this build doesn't recognize", () => {
     // A hand-typed `?done=` (or one a future rollback no longer emits) must
-    // not silently pass through to become copy on the page.
-    expect(accountsConfirmation("delete_account", undefined, undefined)).toBe("");
+    // not narrow into a code `page.tsx` would go on to pass through.
+    expect(isDoneCode("delete_account")).toBe(false);
+    expect(isDoneCode(undefined)).toBe(false);
+  });
+
+  it("still degrades to no confirmation if an unrecognized code reaches it directly", () => {
+    // Defence in depth, not the load-bearing check any more — see this
+    // function's own docblock in view.ts. Exercised via a cast because the
+    // exported signature no longer admits an arbitrary string; the runtime
+    // guard inside still does, on purpose, in case a future caller adds a new
+    // code to `actions.ts` before `DONE_CODES` learns about it.
+    expect(
+      accountsConfirmation(
+        "delete_account" as AdminAccountsDoneCode,
+        undefined,
+        undefined,
+      ),
+    ).toBe("");
   });
 });
 

@@ -255,7 +255,22 @@ export const auditLog = pgTable(
     target: text("target").notNull(),
     details: jsonb("details").$type<Record<string, unknown>>(),
   },
-  (t) => [index("audit_log_at_idx").on(t.at)],
+  (t) => [
+    index("audit_log_at_idx").on(t.at),
+    // Serves logAuditIfChanged's "most recent row for this action+target"
+    // lookup, and the two equality lookups in src/services/audit.ts that
+    // resolve identities — resolveAuditIdentities' `payout.deleted` read and
+    // resolveFilterIdentity's.
+    //
+    // It does NOT serve /admin/audit's action filter, and that is worth
+    // stating because it looks like it should: queryAuditLog matches `action`
+    // with a LIKE prefix, not equality, and under this deployment's
+    // en_US.utf8 collation a plain btree cannot answer `LIKE 'x%'` without
+    // text_pattern_ops. EXPLAIN puts it in Filter, not Index Cond. A
+    // text_pattern_ops index would be a separate migration and a separate
+    // decision; do not assume this one already covers that page.
+    index("audit_log_action_target_id_idx").on(t.action, t.target, t.id.desc()),
+  ],
 );
 
 export const payoutOperationStatusEnum = pgEnum("payout_operation_status", [
