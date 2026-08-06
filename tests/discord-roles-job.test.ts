@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Db } from "@/db";
 import { auditLog, discordLink, outbox, syncRun } from "@/db/schema";
 import { runDiscordRolesJob } from "@/jobs/discord-roles";
 import { DiscordApiError, type DiscordClient } from "@/lib/discord/rest";
@@ -54,6 +55,46 @@ function fakeDiscord(members: Record<string, FakeMember>, guildRoles = validGuil
     },
   };
   return { client, added, removed };
+}
+
+/**
+ * Makes the first `failTimes` `db.insert(auditLog)` calls reject, then
+ * restores normal behaviour for every call after — `failTimes: 1` is a
+ * one-time DB fault (a statement timeout, a serialization conflict) and
+ * exercises the retry-within-the-same-tick path both jobs' catch blocks
+ * rely on: it fails the "written inside the try" success write once,
+ * forcing the catch's own attempt to be what actually lands the row.
+ * `failTimes: Infinity` is a database that stays down for the whole
+ * deprovision/row, so BOTH the success write and the catch's compensating
+ * retry fail — this is what exercises the `catch (auditErr)` swallow-and-log
+ * itself, which the one-time-fault tests never reach because their retry
+ * succeeds.
+ *
+ * Restores `db.insert` in `finally` at each call site — `ctx.db` is a shared,
+ * module-level connection reused by every test in this file, and an
+ * unrestored override would leak into whichever test runs next.
+ */
+function failAuditInserts(db: Db, failTimes = 1) {
+  const originalInsert = db.insert.bind(db) as (
+    table: unknown,
+  ) => ReturnType<Db["insert"]>;
+  let calls = 0;
+  db.insert = ((table: unknown) => {
+    if (table === auditLog) {
+      calls++;
+      if (calls <= failTimes) {
+        return {
+          values: async () => {
+            throw new Error("simulated audit insert failure");
+          },
+        };
+      }
+    }
+    return originalInsert(table);
+  }) as unknown as typeof db.insert;
+  return () => {
+    db.insert = originalInsert as unknown as typeof db.insert;
+  };
 }
 
 describe("runDiscordRolesJob", () => {
@@ -321,6 +362,111 @@ describe("runDiscordRolesJob", () => {
     expect(rows.filter((r) => r.action === "discord.role_sync_failed")).toHaveLength(2);
   });
 
+  it("audits the roles that landed even when a later role write in the same tick fails permanently", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "member", discordUserId: "u1" });
+    await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
+    // Member wants role 10 and currently holds 11 → add ["10"], remove ["11"].
+    // The add succeeds; the remove then fails permanently.
+    const d = fakeDiscord({ u1: ["11"] });
+    const client: DiscordClient = {
+      ...d.client,
+      removeMemberRole: async () => {
+        throw new DiscordApiError("discord DELETE roles failed (403)", {
+          status: 403,
+          transient: false,
+        });
+      },
+    };
+    const result = await runDiscordRolesJob({ db: ctx.db, cfg, discord: client });
+    expect(result.status).toBe("partial");
+    expect(result.counts).toMatchObject({ changed: 1, failed: 1 });
+    const rows = await ctx.db.select().from(auditLog);
+    // The add that really landed is recorded, not just the failure.
+    const changedRows = rows.filter((r) => r.action === "discord.role_changed");
+    expect(changedRows).toHaveLength(1);
+    expect(changedRows[0]).toMatchObject({ target: "u1" });
+    expect(changedRows[0].details).toMatchObject({
+      added: ["10"],
+      removed: [],
+      tier: "member",
+      partial: true,
+    });
+    const failureRows = rows.filter((r) => r.action === "discord.role_sync_failed");
+    expect(failureRows).toHaveLength(1);
+  });
+
+  it("audits the strips that landed even when a later strip in the same tick fails permanently", async () => {
+    const d = fakeDiscord({ u9: ["10", "11", "12"] });
+    let calls = 0;
+    const client: DiscordClient = {
+      ...d.client,
+      removeMemberRole: async (userId, roleId) => {
+        calls++;
+        if (calls === 2) {
+          throw new DiscordApiError("discord DELETE roles failed (403)", {
+            status: 403,
+            transient: false,
+          });
+        }
+        await d.client.removeMemberRole(userId, roleId);
+      },
+    };
+    const result = await runDiscordRolesJob(
+      { db: ctx.db, cfg, discord: client },
+      { discordUserId: "u9" },
+    );
+    expect(result.status).toBe("failed");
+    const rows = await ctx.db.select().from(auditLog);
+    // The first removal really landed and must be recorded, not just the
+    // strip failure on the second one.
+    const changedRows = rows.filter((r) => r.action === "discord.role_changed");
+    expect(changedRows).toHaveLength(1);
+    expect(changedRows[0]).toMatchObject({ target: "u9" });
+    expect(changedRows[0].details).toMatchObject({
+      removed: ["10"],
+      cause: "discord unlinked",
+      partial: true,
+    });
+    const failureRows = rows.filter((r) => r.action === "discord.role_strip_failed");
+    expect(failureRows).toHaveLength(1);
+  });
+
+  it("still audits the strips that landed when a later strip in the same tick fails transiently", async () => {
+    const d = fakeDiscord({ u9: ["10", "11", "12"] });
+    let calls = 0;
+    const client: DiscordClient = {
+      ...d.client,
+      removeMemberRole: async (userId, roleId) => {
+        calls++;
+        if (calls === 2) {
+          throw new DiscordApiError("discord DELETE roles failed (503)", {
+            status: 503,
+            transient: true,
+          });
+        }
+        await d.client.removeMemberRole(userId, roleId);
+      },
+    };
+    // Transient → thrown, not returned, so pg-boss retries the whole job. A
+    // retry re-derives `remove` from the member's CURRENT roles, so it only
+    // ever sees and audits what's left — the removal from THIS attempt must
+    // be recorded now or it never appears in audit_log at all.
+    await expect(
+      runDiscordRolesJob({ db: ctx.db, cfg, discord: client }, { discordUserId: "u9" }),
+    ).rejects.toThrow(/503/);
+    const rows = await ctx.db.select().from(auditLog);
+    const changedRows = rows.filter((r) => r.action === "discord.role_changed");
+    expect(changedRows).toHaveLength(1);
+    expect(changedRows[0]).toMatchObject({ target: "u9" });
+    expect(changedRows[0].details).toMatchObject({
+      removed: ["10"],
+      cause: "discord unlinked",
+      partial: true,
+    });
+    // `role_strip_failed` is written only for permanent failures.
+    expect(rows.some((r) => r.action === "discord.role_strip_failed")).toBe(false);
+  });
+
   it("does not audit a transient failure (pg-boss retry already covers it)", async () => {
     const acc = await seedAccount(ctx.db, { tier: "member", discordUserId: "u1" });
     await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
@@ -390,5 +536,152 @@ describe("runDiscordRolesJob", () => {
       { accountId: a1.id },
     );
     expect(d.added).toEqual([["u1", "10"]]); // u2 untouched
+  });
+
+  it("strip path: a one-time DB fault on the success audit write is retried and lands, not lost or mislabeled partial", async () => {
+    const d = fakeDiscord({ u9: ["10", "12"] });
+    const restore = failAuditInserts(ctx.db);
+    try {
+      // The first insert (the success write, now inside the try) fails; the
+      // catch's own attempt is the second `db.insert(auditLog)` call and
+      // succeeds. The failure is not a Discord error, so it still propagates
+      // once the write has landed — that propagation is what makes
+      // `sync_run.status` show "failed" instead of a false "ok".
+      await expect(
+        runDiscordRolesJob(
+          { db: ctx.db, cfg, discord: d.client },
+          { discordUserId: "u9" },
+        ),
+      ).rejects.toThrow(/simulated audit insert failure/);
+    } finally {
+      restore();
+    }
+    const rows = await ctx.db.select().from(auditLog);
+    const changedRows = rows.filter((r) => r.action === "discord.role_changed");
+    // Exactly one row, not zero (the fault didn't erase it) and not two (the
+    // retry didn't duplicate it).
+    expect(changedRows).toHaveLength(1);
+    expect(changedRows[0]).toMatchObject({ target: "u9" });
+    // Both roles landed at Discord before the audit write failed, so this is
+    // a COMPLETE strip whose audit attempt needed a retry — `partial` must
+    // read false, not true, even though the row came from the catch.
+    expect(changedRows[0].details).toMatchObject({
+      removed: ["10", "12"],
+      cause: "discord unlinked",
+      partial: false,
+    });
+  });
+
+  it("main sweep: a one-time DB fault on the success audit write is retried and lands, without double-counting or mislabeling partial", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "member", discordUserId: "u1" });
+    await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
+    const d = fakeDiscord({ u1: ["999"] }); // needs only role 10 added
+    const restore = failAuditInserts(ctx.db);
+    try {
+      // Not a Discord error, so it's bucketed as a transient failure and the
+      // job retries via `JobRetryError` — the same visible-failure shape the
+      // strip path's propagation produces, reached a different way here
+      // because this loop never rethrows per-row.
+      await expect(
+        runDiscordRolesJob({ db: ctx.db, cfg, discord: d.client }),
+      ).rejects.toThrow(/simulated audit insert failure/);
+    } finally {
+      restore();
+    }
+    const rows = await ctx.db.select().from(auditLog);
+    const changedRows = rows.filter((r) => r.action === "discord.role_changed");
+    expect(changedRows).toHaveLength(1);
+    expect(changedRows[0]).toMatchObject({ target: "u1" });
+    // The add fully landed before the audit write failed — complete, not
+    // partial — and `counts.changed` must reflect ONE change, not two, even
+    // though the write was attempted twice.
+    expect(changedRows[0].details).toMatchObject({
+      added: ["10"],
+      removed: [],
+      tier: "member",
+      partial: false,
+    });
+    const [run] = await ctx.db.select().from(syncRun);
+    expect(run.counts).toMatchObject({ changed: 1 });
+  });
+
+  it("strip path: swallows a persistent audit-write failure (both attempts) and still propagates the original error", async () => {
+    const d = fakeDiscord({ u9: ["10", "12"] });
+    const restore = failAuditInserts(ctx.db, Infinity);
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    let calls: unknown[][];
+    try {
+      // Both the success write and the catch's compensating retry fail —
+      // the `catch (auditErr)` swallow itself has to run, not just the
+      // retry-succeeds path the one-time-fault test above exercises.
+      await expect(
+        runDiscordRolesJob(
+          { db: ctx.db, cfg, discord: d.client },
+          { discordUserId: "u9" },
+        ),
+      ).rejects.toThrow(/simulated audit insert failure/);
+    } finally {
+      // Read the recorded calls BEFORE restoring — `mockRestore` also clears
+      // call history, not just the implementation, so asserting after it
+      // would always see zero calls regardless of what actually happened.
+      calls = spy.mock.calls;
+      restore();
+      spy.mockRestore();
+    }
+    // Neither attempt landed: no row exists to mislabel or duplicate.
+    const rows = await ctx.db.select().from(auditLog);
+    expect(rows.some((r) => r.action === "discord.role_changed")).toBe(false);
+    // The swallow logs rather than staying silent, correlatable to the member
+    // and to what actually came off before the write failed.
+    expect(calls).toContainEqual([
+      expect.stringContaining("discord.role_changed audit write failed for u9"),
+    ]);
+    expect(calls).toContainEqual([expect.stringContaining("removed 10, 12")]);
+  });
+
+  it("main sweep: swallows a persistent audit-write failure (both attempts), still marks the row failed, and does not abort the rest of the sweep", async () => {
+    const a1 = await seedAccount(ctx.db, { tier: "member", discordUserId: "u1" });
+    await seedCharacter(ctx.db, cfg, { id: 1, accountId: a1.id, main: true });
+    const a2 = await seedAccount(ctx.db, { tier: "member", discordUserId: "u2" });
+    await seedCharacter(ctx.db, cfg, { id: 2, accountId: a2.id, main: true });
+    const d = fakeDiscord({ u1: ["999"], u2: ["11"] }); // both need role 10 added
+    const restore = failAuditInserts(ctx.db, Infinity);
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    let calls: unknown[][];
+    try {
+      // Every `db.insert(auditLog)` in the whole run fails, so u1's row
+      // reaches the swallow — the point of this test is that this does NOT
+      // escape u1's own catch and abort u2 along with it.
+      await expect(
+        runDiscordRolesJob({ db: ctx.db, cfg, discord: d.client }),
+      ).rejects.toThrow(/simulated audit insert failure/);
+    } finally {
+      // See the strip-path test above: read calls before restoring.
+      calls = spy.mock.calls;
+      restore();
+      spy.mockRestore();
+    }
+    // u2's real Discord role change still landed, even though its own audit
+    // write also failed and was swallowed — the loop reached it at all,
+    // which an unguarded throw on u1's write would have prevented entirely.
+    expect(d.added).toEqual(
+      expect.arrayContaining([
+        ["u1", "10"],
+        ["u2", "10"],
+      ]),
+    );
+    const rows = await ctx.db.select().from(auditLog);
+    expect(rows.some((r) => r.action === "discord.role_changed")).toBe(false);
+    expect(calls).toContainEqual([
+      expect.stringContaining("discord.role_changed audit write failed for u1"),
+    ]);
+    expect(calls).toContainEqual([
+      expect.stringContaining("discord.role_changed audit write failed for u2"),
+    ]);
+    const [run] = await ctx.db.select().from(syncRun);
+    // Both rows are real changes with no audit trail to show for it —
+    // `counts.changed` still reflects that they happened.
+    expect(run.counts).toMatchObject({ changed: 2 });
+    expect(run.status).toBe("partial");
   });
 });
