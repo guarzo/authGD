@@ -72,7 +72,7 @@
   --t-body: 0.9375rem;
   --t-data: 0.875rem;
   /* Two steps a type-scale audit found already load-bearing under raw
-     declarations: --t-caption at .dim/.table-note/.footnote (a de-emphasised
+     declarations: --t-caption at .dim/.table-note (a de-emphasised
      prose line, one step under --t-data) and --t-detail at
      .json/.detail/.filter-form__hint/.strip__cadence/.strip__window (a
      smaller mono-or-prose line for secondary values). Both were reused across
@@ -530,7 +530,7 @@ a:hover {
    origin land on one vertical everywhere — and on the same vertical as the
    header's seal, which the fixed-measure bar (ui.tsx) could not reach before.
    :where() keeps this at zero specificity for the child, so components that
-   set their own tighter cap (.notice, .table-note, .footnote > span, all on
+   set their own tighter cap (.notice, .table-note, both on
    --measure) still win on source order.
 
    Replaces a `max-width: var(--measure-page-narrow)` on the page box itself,
@@ -1961,7 +1961,7 @@ h3.rule-head__label {
   display: inline-block;
   min-width: 5rem;
   font-size: var(--t-label);
-  letter-spacing: 0.08em;
+  letter-spacing: var(--track-value);
 }
 
 /* --- Fields ------------------------------------------------------------- */
@@ -3251,8 +3251,7 @@ h3.rule-head__label {
 
 /* A standing explanation belonging to a table rather than to the page. Sits
    between the section rule and the table it describes, so it reads as a caption
-   on the manifest — unlike .footnote, which is a page-foot device and carries a
-   rule of its own that would fight the table's own header rule. */
+   on the manifest. */
 .table-note {
   max-width: var(--measure);
   margin-bottom: var(--s-4);
@@ -3271,23 +3270,6 @@ h3.rule-head__label {
 
 .table-notes .table-note:last-child {
   margin-bottom: 0;
-}
-
-/* The hairline runs the full width of the content column, so it terminates on
-   the same vertical as the crew-manifest table above it — every rule in a
-   given column ends on one edge. The prose is capped separately, on the inner
-   span, because 68ch is a reading limit and not a structural one. */
-.footnote {
-  margin-top: var(--s-7);
-  padding-top: var(--s-4);
-  border-top: 1px solid var(--rule);
-  font-size: var(--t-caption);
-  color: var(--ink-faint);
-}
-
-.footnote > span {
-  display: block;
-  max-width: var(--measure);
 }
 
 /* --- Sync schedule ------------------------------------------------------ */
