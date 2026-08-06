@@ -776,6 +776,47 @@ test("a battle report link is stored, and a bad scheme is refused without losing
 });
 
 /*
+ * The other half of the same rule, on the other entry point. Both the create
+ * form and this inline edit go through `battleReportUrlProblem`
+ * (src/app/payouts/actions.ts), and both have to refuse a non-http(s) scheme,
+ * because the stored value renders as a plain `<a href>` right here. They
+ * differ only in how they say no: the create form returns a code so the loot
+ * paste beside the field survives, this one redirects.
+ */
+test("the inline battle report edit refuses a javascript: scheme too", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "FC Inline",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+
+  await page.goto("/payouts/new");
+  await page.getByLabel("Name").fill("Inline link roam");
+  await page.getByLabel("Date").fill("2026-08-01");
+  await page.getByRole("button", { name: "Create operation" }).click();
+  await expect(page.getByRole("heading", { name: "Inline link roam" })).toBeVisible();
+
+  await page.getByRole("button", { name: "edit battle report URL" }).click();
+  const field = page.getByRole("textbox", { name: "battle report URL" });
+  // `type="url"` refuses a bare `javascript:alert(1)` in the browser, so
+  // reaching the server check at all means going around the client guard —
+  // which is the only path that matters here, since a real attempt would.
+  await bypassClientGuard(field, "javascript:alert(1)");
+  await page.getByRole("button", { name: "save battle report URL" }).click();
+
+  await expect(page.locator("p.notice--bad")).toContainText("http:// or https://");
+  const [op] = await db
+    .select()
+    .from(payoutOperation)
+    .where(eq(payoutOperation.name, "Inline link roam"));
+  expect(op.battleReportUrl).toBeNull();
+});
+
+/*
  * Finalize deletes its own button: `canFinalize` flips on the server and the
  * re-render drops the control that fired. Focus had nowhere to go and fell to
  * `<body>`, which drops a keyboard operator back to the top of the document
@@ -810,6 +851,56 @@ test("finalizing hands focus to the operation heading", async ({ page, context }
   await expect(page.getByRole("button", { name: "Unlock" })).toBeVisible();
 
   await expect(page.locator("#operation-name")).toBeFocused();
+});
+
+/*
+ * The announcement survives the case that deletes the whole lifecycle block,
+ * not just the button. Any operator can finalize any draft (`canFinalize`
+ * wants operator + draft), but only the creator or an admin can unlock it
+ * (`canRelease` wants `canUnlock`). So for an operator who is neither, a
+ * successful finalize turns every disjunct of `showLifecycle` false at once
+ * and the block goes away. While the announcer lived inside that block it was
+ * unmounted by the very response it existed to describe, and this operator —
+ * uniquely — heard nothing at all.
+ */
+test("finalizing announces to an operator who cannot unlock", async ({
+  page,
+  context,
+}) => {
+  const creator = await seedMember(db, {
+    name: "FC Creator",
+    tier: "member",
+    status: "active",
+  });
+  const other = await seedMember(db, {
+    name: "FC Bystander",
+    tier: "member",
+    status: "active",
+  });
+
+  await context.addCookies([await sessionCookieFor(db, creator.id)]);
+  await page.goto("/payouts/new");
+  await page.getByLabel("Name").fill("Someone else's roam");
+  await page.getByLabel("Date").fill("2026-08-01");
+  await page.getByRole("button", { name: "Create operation" }).click();
+  await expect(page.getByRole("heading", { name: "Someone else's roam" })).toBeVisible();
+  const url = page.url();
+
+  // Hand the page to the second operator: same draft, no creator claim on it.
+  await context.clearCookies();
+  await context.addCookies([await sessionCookieFor(db, other.id)]);
+  await page.goto(url);
+
+  await page.getByRole("button", { name: "Finalize" }).click();
+  await page.getByRole("button", { name: /^confirm finalize/ }).click();
+
+  // The announcement is `.visually-hidden`, so attached rather than visible,
+  // and it clears itself after 2s — assert before that window closes.
+  await expect(page.getByText("Operation finalized.")).toBeAttached();
+  // The premise of the test: this operator really has lost every lifecycle
+  // control, which is what used to take the live region with it.
+  await expect(page.getByRole("button", { name: "Unlock" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Finalize" })).toHaveCount(0);
 });
 
 /*

@@ -8,7 +8,8 @@
  * rather than a redirect that renders an unchanged form and no explanation.
  *
  * TWO maps, not one, and codes are deliberately NOT globally unique.
- * `name_required` and `date_invalid` appear in both with different copy: the
+ * `name_required`, `date_invalid`, `url_invalid` and `url_scheme` appear in
+ * both with different copy: the
  * detail page's "The old value is unchanged." is true there (a stored value is
  * at stake) and false on the create form (the operation does not exist yet).
  * A single map would force one message that is wrong on one of the two pages,
@@ -20,8 +21,9 @@
 /** Every code `createOperationAction` can reject with, rendered by
  *  `/payouts/new`.
  *
- *  The composer collects name, date, an optional loot paste and an optional
- *  roster paste in one screen. Every rejection here is returned as
+ *  The composer collects name, date, an optional battle report link, an
+ *  optional loot paste and an optional roster paste in one screen. Every
+ *  rejection here is returned as
  *  `useActionState` state rather than a `?error=` redirect — a redirect can
  *  only carry a fixed code in the query string, and a loot paste running
  *  hundreds of lines cannot survive that round trip. See

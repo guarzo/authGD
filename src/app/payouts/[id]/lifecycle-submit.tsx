@@ -15,18 +15,23 @@ const AnnounceContext = createContext<((message: string) => void) | null>(null);
 
 /**
  * Holds the live region for whatever the lifecycle controls inside it just
- * did, and stays mounted while they do not.
+ * did. Mount it somewhere that outlives those controls: `payouts/[id]/page.tsx`
+ * puts it outside the `showLifecycle` gate, because a finalize by a
+ * non-creator operator turns that gate false and would otherwise take the
+ * announcer down with the button.
  *
  * That separation is the whole point. Finalize and Unlock each delete their
  * own button on success: `canFinalize`/`canRelease` flip on the server, and
  * the re-render that arrives with the action's own response drops the control
  * that fired. A `role="status"` span rendered by that button goes with it, and
- * a `useEffect` inside it never commits at all — the first version of this
- * file announced and moved focus from an effect, and the e2e assertion that
- * focus reaches the heading failed on `inactive`, because the component
- * holding the effect was gone before React ever ran it. So the region lives
- * out here, on a wrapper that renders whenever the lifecycle block does, and
- * the button reaches it through context.
+ * so does any effect that would have filled it — an effect inside the button
+ * does commit on mount like any other, but the post-success one never runs,
+ * because the `setState` that would schedule it lands after the response has
+ * already unmounted the component. The first version of this file announced
+ * and moved focus from exactly such an effect, and the e2e assertion that
+ * focus reaches the heading failed on `inactive`. So the region lives out
+ * here, on a wrapper the response cannot unmount, and the button reaches it
+ * through context.
  *
  * Focus is handled the same way and for the same reason, but in the action's
  * own continuation rather than here (see `LifecycleSubmit`).

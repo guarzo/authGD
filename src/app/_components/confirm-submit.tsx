@@ -95,19 +95,20 @@ export function ConfirmArmScope({ children }: { children: ReactNode }) {
  * moves the armed button out from under a stationary mouse, `pointerLeave`
  * below fires, and the control disarms itself — the reveal undoes the arm. The
  * admin accounts table therefore keeps its own cost sentence hand-rolled and
- * `.visually-hidden` always (#111) rather than using this component at all —
- * that table's scope is the whole `tbody`, three confirms per row, and arming
- * any one of them would reveal every row's cost were this component dropped
- * in unmodified. The payout page's own Finalize and Unlock controls hit the
- * same reflow problem without a shared-scope excuse: both sit in a `.btn-row`,
- * and revealing the sentence there widens the row exactly the way #112 found
- * in a table cell, nudging Unlock (or whatever sits beside Finalize) out from
- * under the mouse mid-arm. For those two, `alwaysHidden` gets the same
- * outcome as the admin table's hand-rolled span without leaving this
- * component. The account page's Discord row still reveals because it is a
- * `dd` in a `.facts` grid that already reserves a wrapping line, so nothing
- * moves. Before reaching for the default reveal in a new dense layout, check
- * what it reflows; if it moves anything, reach for `alwaysHidden` instead.
+ * `.visually-hidden` always (#111) rather than using this component at all.
+ *
+ * The payout page's Finalize and Unlock controls pass `alwaysHidden` for a
+ * different reason, and it is worth not confusing the two: not reflow, but
+ * that a sentence appearing under Finalize the moment it arms reads as an
+ * error message rather than as a cost. Those two controls are mutually
+ * exclusive anyway (`canFinalize` wants a draft, `canRelease` wants a
+ * finalized operation), so there is no neighbour to shove; the row simply
+ * grows rightward from a fixed left edge and the armed button does not move.
+ * The reveal here is a copy decision, not a layout one. The account page's
+ * Discord row still reveals because a `dd` in a `.facts` grid is a place a
+ * sentence belongs. Before reaching for the default reveal in a new dense
+ * layout, check both: what it reflows, and whether prose appearing mid-press
+ * reads as explanation or as alarm.
  */
 export function ConfirmCost({
   id,
@@ -118,14 +119,15 @@ export function ConfirmCost({
   id: string;
   className?: string;
   children: ReactNode;
-  /** Skip the reveal and stay `.visually-hidden` permanently, the admin
-   *  accounts table's own choice (#111 below). Default false: most call
-   *  sites (the account page's Discord row, the roster-replace and
-   *  delete-operation controls here) sit in a layout the reveal doesn't
-   *  disturb, and for those the reveal is the point — a sighted operator
-   *  reads the cost only once it is load-bearing. Set true for a control
-   *  whose neighbours the reveal would shove, e.g. Finalize/Unlock in the
-   *  page's `.btn-row`. */
+  /** Skip the reveal and stay `.visually-hidden` permanently. Default false:
+   *  most call sites (the account page's Discord row, and the roster-replace
+   *  and delete-operation controls in `payouts/[id]/page.tsx`) sit in a layout
+   *  the reveal doesn't disturb, and for those the reveal is the point — a
+   *  sighted operator reads the cost only once it is load-bearing. Set true
+   *  where the sentence would reflow its neighbours, or where it would read as
+   *  an error rather than a cost; the lifecycle controls in
+   *  `payouts/[id]/lifecycle-submit.tsx` are the second case and currently the
+   *  only caller. */
   alwaysHidden?: boolean;
 }) {
   const ctx = useContext(ArmContext);

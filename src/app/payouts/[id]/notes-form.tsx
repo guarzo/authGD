@@ -24,23 +24,37 @@ type SaveState = { ok: true; at: number } | null;
  * first mounted. A controlled value survives that reset because React
  * re-applies it on the next render.
  *
- * `setNotesAction` has no rejection path at all — it trims, saves and
- * revalidates unconditionally — so unlike `InlineEdit` this component does
- * not need a redirect-on-reject escape hatch: every submit here either
- * succeeds or throws, and a throw lands on error.tsx like everywhere else on
- * this page.
+ * `setNotesAction` validates nothing, so unlike `InlineEdit` this component
+ * has no bad-input path to convert into a redirect: there is no such thing as
+ * a malformed note. It can still reject, though, and the docblock here used to
+ * claim otherwise. `setNotes` calls `assertEditable`, which throws
+ * `PayoutLockedError` once the operation is finalized or has a payment. The
+ * `canEdit` gate at the call site means this form is only rendered while the
+ * operation is editable, so reaching that throw takes a page that has gone
+ * stale underneath the operator (a second tab, or another operator finalizing
+ * first). When it happens the throw lands on error.tsx like every other
+ * unhandled action rejection on this page, which costs the operator whatever
+ * they had typed and blames it on us. Narrow, but real; converting it to the
+ * `operationFailed`/`?error=` path the input rejections in `actions.ts` use is
+ * the fix if it ever shows up in practice.
  */
 export function NotesForm({
   action,
-  value,
+  initialValue,
 }: {
   /** The server action, already bound to the operation id
    *  (`setNotesAction.bind(null, operation.id)`). */
   action: (formData: FormData) => Promise<void>;
-  /** The stored notes, used as the textarea's initial content. */
-  value: string;
+  /** The stored notes as of mount. Deliberately NOT named `value`: this is a
+   *  starting point, not a binding. The state below is seeded from it once and
+   *  never re-syncs, which is what lets a half-typed note survive an unrelated
+   *  action elsewhere on the page revalidating underneath it — and it is why a
+   *  note another operator saved in the meantime will not appear here until
+   *  the page is reloaded. A last-write-wins field on a page one operator runs
+   *  at a time; if that stops being true, this is the line to revisit. */
+  initialValue: string;
 }) {
-  const [notes, setNotes] = useState(value);
+  const [notes, setNotes] = useState(initialValue);
   const [announcement, setAnnouncement] = useState("");
   const [state, formAction] = useActionState<SaveState, FormData>(
     async (_prev, formData) => {

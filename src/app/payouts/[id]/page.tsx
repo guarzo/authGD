@@ -420,22 +420,27 @@ export default async function PayoutOperationPage({
               a <dt>/<dd> pair is invalid HTML the parser silently reshuffles —
               the same class of bug as the <p><form> nesting fixed in da8c7d0,
               which `expectNoFormInParagraph` in e2e/payouts.spec.ts guards. */}
-          {showLifecycle && (
-            <div className="lifecycle">
-              {locked && (
-                <p className="dim">
-                  A payment has been recorded, so the loot pools, roster, shares and corp
-                  share are fixed permanently. Reverting a payment does not reopen
-                  editing: it only corrects who was paid, so revert the wrong one and pay
-                  the right person while still frozen.
-                </p>
-              )}
-              <div className="btn-row btn-row--tight">
-                {/* The announcer wraps both controls rather than sitting in
-                    either: each one deletes itself on success, and a live
-                    region inside the button that fired would be gone before
-                    it said anything (lifecycle-submit.tsx). */}
-                <LifecycleAnnouncer>
+          {/* The announcer sits OUTSIDE the `showLifecycle` gate, not inside
+              it. An operator who is neither the creator nor an admin can
+              finalize (canFinalize wants only operator + draft) but cannot
+              unlock (canRelease wants canUnlock), so for them the successful
+              finalize turns all three disjuncts of `showLifecycle` false at
+              once and takes the whole block away. An announcer nested in
+              there would be unmounted by the very response it was waiting to
+              describe, and "Operation finalized." would be spoken to nothing.
+              Out here it survives the block it describes. */}
+          <LifecycleAnnouncer>
+            {showLifecycle && (
+              <div className="lifecycle">
+                {locked && (
+                  <p className="dim">
+                    A payment has been recorded, so the loot pools, roster, shares and
+                    corp share are fixed permanently. Reverting a payment does not reopen
+                    editing: it only corrects who was paid, so revert the wrong one and
+                    pay the right person while still frozen.
+                  </p>
+                )}
+                <div className="btn-row btn-row--tight">
                   {canFinalize && (
                     <LifecycleSubmit
                       action={finalizeAction.bind(null, operation.id)}
@@ -478,10 +483,10 @@ export default async function PayoutOperationPage({
                       }
                     />
                   )}
-                </LifecycleAnnouncer>
+                </div>
               </div>
-            </div>
-          )}
+            )}
+          </LifecycleAnnouncer>
 
           {/* --- Loot ---------------------------------------------------- */}
           <RuleHead
@@ -1101,7 +1106,7 @@ export default async function PayoutOperationPage({
               {canEdit ? (
                 <NotesForm
                   action={setNotesAction.bind(null, operation.id)}
-                  value={operation.notes ?? ""}
+                  initialValue={operation.notes ?? ""}
                 />
               ) : operation.notes ? (
                 <span className="notes-text">{operation.notes}</span>
