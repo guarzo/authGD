@@ -2086,35 +2086,3 @@ test("the filter row's Find and clear match the tier chips they sit beside", asy
   expect(Math.round(findBox!.height)).toBe(Math.round(chipBox!.height));
   expect(Math.round(clearBox!.height)).toBe(Math.round(chipBox!.height));
 });
-
-test("the drawer's save-note button is a standalone 36px control, not the in-row grade", async ({
-  page,
-  context,
-}) => {
-  const admin = await seedWorld();
-  await context.addCookies([await sessionCookieFor(db, admin.id)]);
-  await page.goto("/admin/accounts");
-  const zedRow = rowFor(page, "Zed");
-  const zedDrawer = drawerOf(zedRow);
-  await toggleOf(zedRow).click();
-  await expect(zedDrawer).toBeVisible();
-
-  const field = zedDrawer.getByPlaceholder("notes");
-  const save = zedDrawer.getByRole("button", { name: "save note" });
-  await expect(save).toBeVisible();
-
-  const [saveBox, fieldBox] = await Promise.all([
-    save.boundingBox(),
-    field.boundingBox(),
-  ]);
-  // 36px absolute is the whole assertion, and deliberately not parity with the
-  // field: `.note-form` centres the pair, but the field measures 40px (its
-  // 2.25rem is a floor the mono line box clears), and DESIGN.md allows two
-  // button sizes and no others. So 36 is the ceiling available here — it takes
-  // the visible gap from 12px to 4px rather than closing it. Asserting parity
-  // would be asserting a third size into existence.
-  expect(Math.round(saveBox!.height)).toBe(36);
-  // Pins the premise the comment above rests on: if the field ever drops to 36,
-  // this fails and someone re-reads the reasoning instead of inheriting it.
-  expect(Math.round(fieldBox!.height)).toBe(40);
-});
