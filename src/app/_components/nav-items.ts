@@ -113,6 +113,25 @@ export function navFor({ canReadPayouts, isAdmin }: Reach): NavItem[] {
 }
 
 /**
+ * `/admin` and `/admin/…`, but not `/admin-old`. The whole rule in this module
+ * is that a link is offered only on proof, and "the string starts with these
+ * letters" is not proof: a sibling route whose name merely shares a prefix sits
+ * behind none of the guards the branch below is citing.
+ *
+ * Not reachable today — no such route exists, and an unmatched URL renders the
+ * root `not-found.tsx`, which calls `navFor` directly rather than coming
+ * through here. It is the next `/admin-old`-shaped route that would make it
+ * reachable, which is exactly when nobody would think to look at this file.
+ *
+ * Exported because `error.tsx` branches on the same question a second time, for
+ * its `admin` register marker and its "Back to …" escape. Two spellings of one
+ * predicate is how the chrome ends up claiming ADMIN over a member's nav.
+ */
+export function inSection(pathname: string, section: string): boolean {
+  return pathname === section || pathname.startsWith(`${section}/`);
+}
+
+/**
  * The same rule, evaluated from the URL alone — see the module docblock for
  * why each branch proves what it claims. Expressed as `navFor` calls rather
  * than separate literal arrays, so a change to the rule above cannot be
@@ -120,10 +139,10 @@ export function navFor({ canReadPayouts, isAdmin }: Reach): NavItem[] {
  * one.
  */
 export function navFromPath(pathname: string): NavItem[] {
-  if (pathname.startsWith("/admin")) {
+  if (inSection(pathname, "/admin")) {
     return navFor({ canReadPayouts: false, isAdmin: true });
   }
-  if (pathname.startsWith("/payouts")) {
+  if (inSection(pathname, "/payouts")) {
     return navFor({ canReadPayouts: true, isAdmin: false });
   }
   return navFor({ canReadPayouts: false, isAdmin: false });

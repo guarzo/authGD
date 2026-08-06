@@ -4,7 +4,12 @@ import { useEffect, useState, useTransition } from "react";
 import { usePathname } from "next/navigation";
 import { FocusHeading } from "@/app/_components/focus-heading";
 import { utcHhmm } from "@/app/_components/utc-time";
-import { MEMBERS_ITEM, PAYOUTS_ITEM, navFromPath } from "@/app/_components/nav-items";
+import {
+  MEMBERS_ITEM,
+  PAYOUTS_ITEM,
+  inSection,
+  navFromPath,
+} from "@/app/_components/nav-items";
 import { Notice, RuleHead, SiteHeader, type NavItem } from "@/app/_components/ui";
 import { useBrand } from "@/app/_components/brand-context";
 
@@ -73,7 +78,7 @@ function sectionFor(pathname: string): {
   admin: boolean;
   back: NavItem;
 } {
-  if (pathname.startsWith("/admin")) {
+  if (inSection(pathname, "/admin")) {
     return {
       items: navFromPath(pathname),
       admin: true,
@@ -81,7 +86,7 @@ function sectionFor(pathname: string): {
       back: MEMBERS_ITEM,
     };
   }
-  if (pathname.startsWith("/payouts")) {
+  if (inSection(pathname, "/payouts")) {
     return {
       items: navFromPath(pathname),
       admin: false,
