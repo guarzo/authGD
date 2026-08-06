@@ -1545,22 +1545,54 @@ h3.rule-head__label {
 .st::before {
   content: "";
   width: 0.5em;
-  height: 0.5em;
-  border-radius: 50%;
   background: currentColor;
   flex-shrink: 0;
+  /* Neutral's own mark, drawn thin rather than filled: a bar, not a dot. This
+     is the one shape a caller never asks for explicitly (tone="neutral" adds
+     no modifier class, so it's what every unrecognised or default Status
+     renders), and it has to read as visibly quieter than every signal tone
+     below — payouts/page.tsx puts a neutral "N/N paid" next to an ok one with
+     identical wording, so the dot is the only thing telling a draft mid-
+     payment apart from a finished one. Width stays 0.5em in every rule below;
+     only height and radius change, so the column's advance never moves. */
+  height: 0.15em;
+  border-radius: 1px;
 }
 
 .st--ok {
   color: var(--signal-ok);
 }
 
+.st--ok::before {
+  height: 0.5em;
+  border-radius: 50%;
+}
+
 .st--warn {
   color: var(--signal-warn);
 }
 
+.st--warn::before {
+  /* Triangle, not a dot: the shape convention "caution" already carries
+     outside this app, so it doesn't have to be learned from this table
+     alone. Clipped rather than a border-radius change so a colour-only
+     reading of an amber circle can never be mistaken for the ok tone's
+     green one. */
+  height: 0.5em;
+  border-radius: 0;
+  clip-path: polygon(50% 0%, 0% 100%, 100% 100%);
+}
+
 .st--bad {
   color: var(--signal-bad);
+}
+
+.st--bad::before {
+  /* Square: the one filled shape left with straight edges, so bad reads as
+     distinct from ok's circle and warn's triangle without adding a fourth
+     clip-path. */
+  height: 0.5em;
+  border-radius: 0;
 }
 
 .st--off {
@@ -1568,6 +1600,8 @@ h3.rule-head__label {
 }
 
 .st--off::before {
+  height: 0.5em;
+  border-radius: 50%;
   background: transparent;
   border: 1px solid currentColor;
 }
