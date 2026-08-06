@@ -138,8 +138,9 @@ the label is doing rather than left as a number at the call site:
 `.btn`, `.tier` and `.st` carry the register's family, size and case but are
 deliberately **not** in the shared list: they are components with their own states, and
 their type belongs next to their behaviour. They take a tracking token and nothing
-else. (`.st` is currently the one exception to the weight rule — it declares no
-`font-weight` and so renders at 400. That is a defect, not a variant.)
+else. (`.st` used to leave weight to inherit, rendering at 400 while `.btn` and `.tier`
+declared 600 — a real inconsistency, not a variant. It now declares its own explicit
+`600` alongside the other two.)
 
 The register is for **labels** — a fixed word naming a field. Small mono text that is
 itself a value, or a value with a prose word attached ("next 14:32", "checked 20:25:25
