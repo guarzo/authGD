@@ -133,8 +133,11 @@ export interface AccountView {
      * crossed the database boundary. See src/core/contact-result.ts.
      */
     contactSyncResult: string | null;
-    /** Context for `contactSyncResult` — the label name(s) actually found when
-     *  the result is `label_mismatch`, else null. */
+    /** Context for `contactSyncResult` — the JSON-encoded fold-equal candidate
+     *  names when the result is `label_mismatch`, the bare name of the loosely
+     *  matched label when it is `ok` and the member's label differed only in
+     *  case or surrounding whitespace, else null. Nothing renders the `ok`
+     *  case; it is recorded for operators (src/db/schema.ts). */
     contactSyncDetail: string | null;
     onMapAcl: boolean;
   }>;

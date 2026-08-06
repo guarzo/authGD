@@ -75,11 +75,13 @@ const envSchema = z.object({
   WANDERER_BASE_URL: z.string().url(),
   WANDERER_API_KEY: z.string().min(1),
   WANDERER_ACL_ID: z.string().min(1),
-  // Matched against the in-game contact label by exact string equality
-  // (src/jobs/contacts.ts), so the case here must match the label as typed in
-  // the client. The app OWNS this label and deletes anything under it that
-  // isn't a member, so the default names the app rather than the corp: point
-  // it at a label created for authGD, never one humans also curate.
+  // Matched against the in-game contact label ignoring capitalization and
+  // surrounding whitespace (src/core/contact-label.ts), so the case here need
+  // not match what members typed in the client — but two of a member's labels
+  // that differ only that way are refused rather than guessed between. The app
+  // OWNS this label and deletes anything under it that isn't a member, so the
+  // default names the app rather than the corp: point it at a label created for
+  // authGD, never one humans also curate.
   STANDINGS_LABEL: z.string().min(1).default("authgd"),
   STANDINGS_VALUE: z.coerce.number().min(-10).max(10).default(5),
   // CCP requires ESI consumers to send identifying contact info.

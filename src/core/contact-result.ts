@@ -30,7 +30,9 @@ export const CONTACT_SYNC_RESULTS = [
   "ok",
   /** No label named STANDINGS_LABEL on the character. */
   "missing_label",
-  /** A label exists that differs only in capitalization or spacing. */
+  /** Two or more labels differ only in capitalization or spacing from the
+   *  configured name, with none matching exactly, so there is no single label
+   *  to sync under. A lone such label is accepted and records `ok`. */
   "label_mismatch",
   /** The character's refresh token is dead or absent. */
   "token_invalid",
