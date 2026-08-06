@@ -132,8 +132,9 @@ export type CreateOperationState = { ok: false; code: NewOperationErrorCode } | 
  *
  * Order matters and is deliberate:
  *
- *   1. validate name/date — the two required fields, checked before any
- *      network call so a typo never triggers an appraisal.
+ *   1. validate name/date/battle-report-scheme — the required fields plus the
+ *      one optional field with a security-relevant shape, all checked before
+ *      any network call so a typo or a bad scheme never triggers an appraisal.
  *   2. appraise the loot paste (network: triff/ESI), OUTSIDE any transaction,
  *      the same rule `addAppraisedPoolAction` already follows and for the
  *      same reason — a slow upstream must never hold a row lock.
@@ -166,6 +167,24 @@ export async function createOperationAction(
   if (!name) return { ok: false, code: "name_required" };
   const occurredAt = new Date(field(formData, "occurredAt"));
   if (Number.isNaN(occurredAt.getTime())) return { ok: false, code: "date_invalid" };
+
+  // Same http(s)-only check `setBattleReportUrlAction` runs, and for the same
+  // reason: this value is rendered as a plain `<a href>` on the operation's own
+  // page, so a `javascript:` or other scheme must never reach the database.
+  // Checked before any network call, alongside name/date, so a bad scheme
+  // never triggers an appraisal only to be thrown away.
+  const battleReportUrl = field(formData, "battleReportUrl").trim() || null;
+  if (battleReportUrl) {
+    let scheme: string;
+    try {
+      scheme = new URL(battleReportUrl).protocol;
+    } catch {
+      return { ok: false, code: "url_invalid" };
+    }
+    if (scheme !== "http:" && scheme !== "https:") {
+      return { ok: false, code: "url_scheme" };
+    }
+  }
 
   const lootPaste = field(formData, "lootPaste").trim();
   const rosterPaste = field(formData, "rosterPaste").trim();
@@ -226,6 +245,7 @@ export async function createOperationAction(
     return createOperationWithContents(dbtx, actor, {
       name,
       occurredAt,
+      battleReportUrl,
       // A deployment-wide default, not a per-operation one — same source
       // the old create action read it from.
       corpSharePct: getConfig().payoutCorpSharePct,

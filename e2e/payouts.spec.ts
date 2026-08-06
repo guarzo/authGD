@@ -717,6 +717,151 @@ test("an invalid date is refused with a specific message", async ({ page, contex
   await expect(page.getByText("Something broke")).toHaveCount(0);
 });
 
+test("a battle report link is stored, and a bad scheme is refused without losing the rest of the form", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "FC Codes",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+
+  // The rejected-scheme half first, on its own operation: `createOperationAction`
+  // runs this check before any network call, alongside name/date, so a bad
+  // scheme never triggers an appraisal only to be thrown away (actions.ts).
+  await page.goto("/payouts/new");
+  await page.getByLabel("Name").fill("Roam with a link");
+  await page.getByLabel("Date").fill("2026-08-01");
+  await page
+    .getByLabel("Roster paste (optional: one per line, or separated by /)")
+    .fill("Brain Tartare");
+  // type="url" only checks URL syntax, not scheme, so `javascript:` alone
+  // would pass the browser's own constraint validation — bypassClientGuard
+  // isn't needed to reach the server check here, but the roster paste above
+  // proves the rejection doesn't cost the rest of the form either way.
+  await page.getByLabel("Battle report (optional)").fill("javascript:alert(1)");
+  await page.getByRole("button", { name: "Create operation" }).click();
+  await expect(page.locator("p.notice--bad")).toContainText("http:// or https://");
+  await expect(page.getByText("Something broke")).toHaveCount(0);
+  // Everything else the operator typed is still there, per that message.
+  await expect(page.getByLabel("Name")).toHaveValue("Roam with a link");
+  await expect(
+    page.getByLabel("Roster paste (optional: one per line, or separated by /)"),
+  ).toHaveValue("Brain Tartare");
+
+  const rejected = await db
+    .select()
+    .from(payoutOperation)
+    .where(eq(payoutOperation.name, "Roam with a link"));
+  expect(rejected).toHaveLength(0);
+
+  // Now the accepted half: an http(s) link round-trips onto the operation it
+  // created and renders as a link on its own page.
+  await page
+    .getByLabel("Battle report (optional)")
+    .fill("https://zkillboard.com/related/1/");
+  await page.getByRole("button", { name: "Create operation" }).click();
+  await expect(page.getByRole("heading", { name: "Roam with a link" })).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "https://zkillboard.com/related/1/" }),
+  ).toHaveAttribute("href", "https://zkillboard.com/related/1/");
+
+  const [created] = await db
+    .select()
+    .from(payoutOperation)
+    .where(eq(payoutOperation.name, "Roam with a link"));
+  expect(created.battleReportUrl).toBe("https://zkillboard.com/related/1/");
+});
+
+/*
+ * Finalize deletes its own button: `canFinalize` flips on the server and the
+ * re-render drops the control that fired. Focus had nowhere to go and fell to
+ * `<body>`, which drops a keyboard operator back to the top of the document
+ * with nothing said. `LifecycleSubmit` hands it to the page's H1 instead
+ * (`src/app/payouts/[id]/lifecycle-submit.tsx`), and this is the assertion that
+ * the handoff actually commits — it runs in an effect of a component the same
+ * response unmounts, which is exactly the shape that silently never fires.
+ */
+test("finalizing hands focus to the operation heading", async ({ page, context }) => {
+  const operator = await seedMember(db, {
+    name: "FC Focus",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+
+  await page.goto("/payouts/new");
+  await page.getByLabel("Name").fill("Focus roam");
+  await page.getByLabel("Date").fill("2026-08-01");
+  await page.getByRole("button", { name: "Create operation" }).click();
+  await expect(page.getByRole("heading", { name: "Focus roam" })).toBeVisible();
+
+  await openFlatPoolPanel(page);
+  await page.getByLabel("Total value (ISK)").fill("1000000");
+  await page.getByLabel("Note (required — why this number)").fill("sold privately");
+  await page.getByRole("button", { name: "Add flat pool" }).click();
+  await page.getByLabel("Paste (names separated by /)").fill("Brain Tartare");
+  await page.getByRole("button", { name: "Set roster" }).click();
+
+  await page.getByRole("button", { name: "Finalize" }).click();
+  await page.getByRole("button", { name: /^confirm finalize/ }).click();
+  await expect(page.getByRole("button", { name: "Unlock" })).toBeVisible();
+
+  await expect(page.locator("#operation-name")).toBeFocused();
+});
+
+/*
+ * Notes are a standing field, not a value behind an edit toggle: the textarea
+ * is always open and Save writes it. The second save is the half that matters —
+ * the form never unmounts, so an uncontrolled textarea would snap back to its
+ * mount-time value the instant the first action settled.
+ */
+test("notes save from an always-open textarea, twice running", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "FC Notes",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+
+  await page.goto("/payouts/new");
+  await page.getByLabel("Name").fill("Noted roam");
+  await page.getByLabel("Date").fill("2026-08-01");
+  await page.getByRole("button", { name: "Create operation" }).click();
+  await expect(page.getByRole("heading", { name: "Noted roam" })).toBeVisible();
+
+  // No "edit" trigger to reach for, and no "None" placeholder: the field is
+  // the affordance.
+  const notes = page.getByRole("textbox", { name: "operation notes" });
+  await expect(notes).toHaveValue("");
+
+  const stored = () =>
+    db
+      .select()
+      .from(payoutOperation)
+      .where(eq(payoutOperation.name, "Noted roam"))
+      .then(([row]) => row.notes);
+
+  await notes.fill("Third fleet, two losses.");
+  await page.getByRole("button", { name: "Save notes" }).click();
+  // Polled against the row rather than the field: the textarea is controlled,
+  // so it shows what was typed whether or not the save ever landed.
+  await expect.poll(stored).toBe("Third fleet, two losses.");
+
+  // The second save is the half that matters. The form never unmounts, so an
+  // uncontrolled textarea would have snapped back to its mount-time value the
+  // instant the first action settled, and this would write "" or the old text.
+  await notes.fill("Third fleet, two losses. Salvage split later.");
+  await page.getByRole("button", { name: "Save notes" }).click();
+  await expect.poll(stored).toBe("Third fleet, two losses. Salvage split later.");
+  await expect(notes).toHaveValue("Third fleet, two losses. Salvage split later.");
+});
+
 for (const [code, phrase] of [
   ["appraisal_failed", "did not answer"],
   ["pricing_mode", "four pricing modes"],

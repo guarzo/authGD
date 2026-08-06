@@ -1764,6 +1764,39 @@ describe("createOperationWithContents", () => {
     expect(created).toHaveLength(1);
   });
 
+  it("stores the battle report link the create form now collects", async () => {
+    const operator = await seedOperator();
+    const { id: operationId } = await ctx.db.transaction((tx) =>
+      createOperationWithContents(tx, operator.id, {
+        name: "With a link",
+        occurredAt: new Date(),
+        corpSharePct: "10",
+        battleReportUrl: "https://zkillboard.com/related/1/",
+      }),
+    );
+    const [op] = await ctx.db
+      .select()
+      .from(payoutOperation)
+      .where(eq(payoutOperation.id, operationId));
+    expect(op.battleReportUrl).toBe("https://zkillboard.com/related/1/");
+  });
+
+  it("leaves the battle report null when the create form's optional field is empty", async () => {
+    const operator = await seedOperator();
+    const { id: operationId } = await ctx.db.transaction((tx) =>
+      createOperationWithContents(tx, operator.id, {
+        name: "Without a link",
+        occurredAt: new Date(),
+        corpSharePct: "10",
+      }),
+    );
+    const [op] = await ctx.db
+      .select()
+      .from(payoutOperation)
+      .where(eq(payoutOperation.id, operationId));
+    expect(op.battleReportUrl).toBeNull();
+  });
+
   it("adds the priced pool and audits payout.pool_added when appraisal is given", async () => {
     const operator = await seedOperator();
     const { id: operationId } = await ctx.db.transaction((tx) =>

@@ -35,6 +35,10 @@ export const NEW_OPERATION_ERRORS = {
     "Date must be a real calendar date. Everything else you typed is still here.",
   appraisal_failed:
     "Could not price that loot paste right now (triff.tools did not answer). Nothing was created — adjust the paste and try again, or leave it blank and price loot later.",
+  url_invalid:
+    "That battle report is not a URL. Everything else you typed is still here.",
+  url_scheme:
+    "Battle report links must start with http:// or https://. Everything else you typed is still here.",
 } as const;
 
 /** Every code an action on `/payouts/[id]` can redirect with.
