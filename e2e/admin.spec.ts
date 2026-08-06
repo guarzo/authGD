@@ -1225,6 +1225,184 @@ test("a control scrolled to the top of the pinned region stays clear of the head
 });
 
 /**
+ * The crew table scrolls inside its own Scroller instead of escaping the drawer
+ * panel. `.drawer__crew` zeroes its own `min-width` so the drawer's grid column
+ * can be the 262px the panel asked for — but that section is a grid too, and
+ * the `min-width: auto` floor simply moved down onto its grid item, the crew
+ * Scroller's `.scroller-frame`. Measured at 320px before the second floor was
+ * zeroed: a 264.5px section holding a 397.8px frame holding a 395.8px table, so
+ * a 396px crew table sat inside a 262px panel and the region it was supposed to
+ * scroll in never overflowed at all.
+ *
+ * Three assertions, because any one of them alone is satisfiable without the
+ * fix. Containment says the frame stops at its section; the scroll range says
+ * the table is genuinely wider than the box holding it rather than merely
+ * shrunk; and the tab stop is the consequence that matters — scroller.tsx
+ * withdraws `tabIndex` from a region with nothing to scroll, so an escaped
+ * table costs the crew list its keyboard reachability, not just its edge fades.
+ *
+ * Containment is asserted against `.drawer__crew` and not against `.drawer`:
+ * the panel computes to 262px while the grid column inside it measures 264.5px,
+ * a 2.5px overflow that predates this rule and comes from `.drawer__controls`'
+ * own min-content. The frame following its section is the property this fix
+ * owns; the 2.5px is a separate question and not this test's.
+ */
+test("the crew table scrolls inside its region rather than escaping the drawer", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedDenseWorld();
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.setViewportSize({ width: 320, height: 720 });
+  await page.goto("/admin/accounts");
+
+  const row = page.locator(ROWS).nth(12);
+  await toggleOf(row).click();
+  await expect(drawerOf(row)).toBeVisible();
+  // The stop is granted by a ResizeObserver measurement after hydration, not by
+  // the server render, so wait for the measured state rather than reading
+  // tabIndex the instant the drawer appears.
+  await expect(drawerOf(row).locator(".scroller")).toHaveAttribute("tabindex", "0");
+
+  const geom = await drawerOf(row).evaluate((tr) => {
+    const width = (sel: string) => {
+      const el = tr.querySelector<HTMLElement>(sel);
+      return el ? el.getBoundingClientRect().width : null;
+    };
+    const region = tr.querySelector<HTMLElement>(".drawer__crew .scroller");
+    if (!region) return null;
+    return {
+      section: width(".drawer__crew"),
+      frame: width(".drawer__crew .scroller-frame"),
+      table: width(".log--crew"),
+      scrollWidth: region.scrollWidth,
+      clientWidth: region.clientWidth,
+      tabIndex: region.tabIndex,
+    };
+  });
+
+  expect(
+    geom,
+    "the drawer's crew section, frame, region and table all resolved",
+  ).not.toBeNull();
+  // The crew table has to be wider than the panel for any of this to mean
+  // anything — at a viewport where it fits there is no overflow to place and
+  // nothing to assert. 395.8px against a 264.5px section as measured.
+  expect(
+    geom!.table!,
+    "the crew table is wider than the section holding it",
+  ).toBeGreaterThan(geom!.section!);
+  expect(
+    geom!.frame!,
+    "the crew Scroller's frame stays within its grid section instead of flooring at the table's min-content",
+  ).toBeLessThanOrEqual(geom!.section!);
+  expect(
+    geom!.scrollWidth,
+    "the region has a scroll range, so the overflow is inside it",
+  ).toBeGreaterThan(geom!.clientWidth);
+  expect(geom!.tabIndex, "a region with a scroll range keeps its tab stop").toBe(0);
+});
+
+/**
+ * WCAG 2.2 2.4.11 again, for the one tab stop in this table that is not an
+ * interactive element: the crew Scroller the spec above just gave a scroll
+ * range. It is a `div[role="region"]` that takes `tabIndex={0}` while it
+ * overflows, so it is reached by Tab like anything else and scrolled into view
+ * like anything else — but it matches none of the hand-enumerated selectors the
+ * scroll-margin rule lists, so it alone lands flush under the sticky header,
+ * ring invisible and the first crew rows it was about to show painted over.
+ *
+ * 320px, and it has to be narrow: the tab stop is conditional. The drawer sizes
+ * to the scrollport (262px here) while the crew table is 395.8px, so the region
+ * overflows and earns a stop. Widen the viewport and the crew table fits,
+ * `tabIndex` goes to -1, and there is nothing here to obscure — which is why a
+ * desktop pass never found this.
+ *
+ * Same measurement discipline as the `.row-toggle` spec above, for the same
+ * reasons: rects via getBoundingClientRect inside one evaluate rather than
+ * through boundingBox(), which scrolls the element into view itself; and
+ * nearest-edge alignment rather than focus() as the trigger, because Chromium's
+ * programmatic focus scroll centres an off-screen element and so never
+ * reproduces the obscured case.
+ */
+test("the crew region scrolled to the top of the pinned table stays clear of the header", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedDenseWorld();
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.setViewportSize({ width: 320, height: 720 });
+  await page.goto("/admin/accounts");
+
+  // A row well down the list, so there is scroll range above the drawer to put
+  // it out of sight — the same reason the spec above it uses row 12.
+  const ROW = 12;
+  const row = page.locator(ROWS).nth(ROW);
+  await toggleOf(row).click();
+  await expect(drawerOf(row)).toBeVisible();
+  await expect(drawerOf(row).locator(".scroller")).toHaveAttribute("tabindex", "0");
+
+  const geom = await page.evaluate((r) => {
+    const sc = document.querySelector(".scroller") as HTMLElement;
+    const rows = sc.querySelectorAll(".log--dense > tbody > tr:not(.drawer-row)");
+    const tr = rows[r] as HTMLElement | undefined;
+    const drawer = tr?.nextElementSibling as HTMLElement | undefined;
+    const region = drawer?.querySelector<HTMLElement>(".drawer__crew .scroller");
+    const th = sc.querySelector<HTMLElement>(".log--dense > thead th");
+    if (!tr || !drawer || !region || !th) return null;
+
+    // One short scroll past the drawer, so revealing the crew region scrolls
+    // *up* by less than a screenful. From the very bottom the browser would run
+    // the region back to 0 instead, landing the target below the header for a
+    // reason that has nothing to do with scroll-margin.
+    sc.scrollTop = drawer.offsetTop + drawer.offsetHeight + 40;
+    const scrolled = sc.scrollTop > 0 && sc.scrollTop >= region.offsetTop;
+    const before = region.getBoundingClientRect().top;
+    const headTop = th.getBoundingClientRect().top;
+
+    region.scrollIntoView({ block: "nearest" });
+    // After the scroll, not before: focusing an off-screen element centres it
+    // in Chromium, which would make the alignment above a no-op. On an element
+    // already in view, focus() scrolls nothing.
+    region.focus();
+
+    const head = th.getBoundingClientRect();
+    return {
+      scrolled,
+      startedAbove: before < headTop,
+      // -1 is the state where the crew table fits its region and the stop is
+      // withdrawn. The whole case would be vacuous there, so it is asserted
+      // rather than assumed — an earlier draft of this test, written before the
+      // frame's min-width floor was zeroed, reported exactly that.
+      tabIndex: region.tabIndex,
+      focused: document.activeElement === region,
+      regionTop: region.getBoundingClientRect().top,
+      headBottom: head.bottom,
+    };
+  }, ROW);
+
+  expect(
+    geom,
+    "the dense table, its header, row 12's drawer and the crew region all resolved",
+  ).not.toBeNull();
+  // The same three guards the spec above uses, plus the tab stop: without them
+  // this passes when the region never scrolled, when the target was on screen
+  // all along so nothing moved, or when the target was never focusable.
+  expect(
+    geom!.scrolled,
+    "the outer region scrolled far enough to put the crew region above it",
+  ).toBe(true);
+  expect(geom!.startedAbove, "the crew region starts above the sticky header").toBe(true);
+  expect(geom!.tabIndex, "the crew region overflows, so it holds a tab stop").toBe(0);
+  expect(geom!.focused, "the crew region actually took focus").toBe(true);
+
+  expect(
+    geom!.regionTop,
+    "the focused crew region's top edge is below the sticky header's bottom edge",
+  ).toBeGreaterThanOrEqual(geom!.headBottom);
+});
+
+/**
  * This used to be "an open row drawer unpins the first column at 320px", and
  * the rule it guarded is gone. The drawer used to live inside the name cell,
  * and its crew group is `flex: 1 1 100%`, so opening one row widened column 1

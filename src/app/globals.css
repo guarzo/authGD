@@ -1305,8 +1305,24 @@ h3.rule-head__label {
    is nearest-edge alignment that does — which is what the engines that don't
    centre use for sequential focus navigation, and what e2e triggers directly.
    Untested on WebKit, which is the engine least consistent about applying
-   scroll-margin during sequential focus navigation. See the note in the PR. */
-.log--sticky-head :is(a, button, summary, input, .row-toggle) {
+   scroll-margin during sequential focus navigation. See the note in the PR.
+
+   `.scroller` is in the list even though every other entry is an interactive
+   element, because a tab stop is what the list is really enumerating and a
+   scroll region earns one: the accounts drawer nests a Scroller for the crew
+   table inside this table, and scroller.tsx gives it
+   `role="region" tabIndex={0}` whenever it overflows. Without an entry here it
+   is the one tab stop in the region with no margin, so tabbing into a crew list
+   parks it flush under the header — ring invisible, first crew rows painted
+   over. The stop is conditional (`tabIndex` is -1 when the region fits), which
+   is why this reproduces only where the crew table overflows, roughly 320–390px
+   wide, and why a desktop pass never showed it. It reproduces at all only since
+   `.drawer__crew .scroller-frame` got its `min-width: 0`: before that the crew
+   table escaped the Scroller instead of scrolling in it, so the region never
+   overflowed and never held a stop to obscure. A descendant selector, so the
+   OUTER region — the ancestor of `.log--sticky-head`, not a descendant — is
+   untouched and keeps aligning to its own scrollport as before. */
+.log--sticky-head :is(a, button, summary, input, .row-toggle, .scroller) {
   scroll-margin-top: 3rem;
 }
 
@@ -3301,8 +3317,29 @@ h3.rule-head__label {
      was 262px wide with a 372.5px column inside it and `.drawer__controls`
      stretched to 372.5 as well: wide enough to keep the tier group and freeze
      on one line, which put freeze's right edge 4.3px past the 286px region.
-     Zeroing the floor lets the column be the 262px the drawer asked for and
-     hands the overflow to the Scroller, which is what a Scroller is for. */
+     Zeroing the floor lets the column be the 262px the drawer asked for. It
+     does not, on its own, hand the overflow to the Scroller — this section is
+     `display: grid` too, so the floor simply moved down one level onto
+     `.scroller-frame`, which is a grid item of THIS grid and still defaulted to
+     `min-width: auto`. Measured at 320px with the drawer open: the section is
+     264.5px and the frame inside it 397.8px, holding a 395.8px crew table, i.e.
+     a 396px table laid out inside a 262px panel. So the crew table escaped the
+     panel exactly as before, one box further in — and the Scroller it escaped
+     through never overflowed (`scrollWidth === clientWidth`), which cost it its
+     edge fades and, because scroller.tsx withdraws the stop from a region with
+     no scroll range, its keyboard tab stop as well. The rule below is the
+     second floor, and the one that actually reaches the Scroller. */
+  min-width: 0;
+}
+
+/* The floor `.drawer__crew` above pushes down onto its own grid item. Scoped to
+   the drawer rather than set on `.scroller-frame` globally: of the ten Scroller
+   call sites, only two sit in a grid or flex parent where the floor can bite at
+   all — this one and `.pool-items` on the payout detail page. The rest hang off
+   `.page` or a plain `<div>`, where `min-width: auto` and `0` are the same
+   number, so a global rule would be inert on eight surfaces and load-bearing on
+   a ninth nobody measured. */
+.drawer__crew .scroller-frame {
   min-width: 0;
 }
 
