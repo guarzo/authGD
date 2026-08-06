@@ -117,14 +117,14 @@ test("the contacts note describes the column via a table caption, and shows visi
 
   // The note lives in a <caption>, announced for the table as a whole — a
   // keyboard/screen-reader user reaches it whether they land on the header or
-  // any cell in the CONTACTS column, unlike a `<th>`'s aria-describedby, which
+  // any cell in the STATUS column, unlike a `<th>`'s aria-describedby, which
   // only ever reached the header.
   const caption = page.locator("table.log caption");
   await expect(caption).toHaveText(/authGD owns the authgd contact label/);
   await expect(caption).toHaveClass(/visually-hidden/);
   await expect(page.locator("[title]")).toHaveCount(0);
   await expect(page.locator(".footnote")).toHaveCount(0);
-  await expect(page.getByRole("columnheader", { name: "Contacts" })).not.toHaveAttribute(
+  await expect(page.getByRole("columnheader", { name: "Status" })).not.toHaveAttribute(
     "aria-describedby",
   );
 

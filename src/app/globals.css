@@ -1508,6 +1508,49 @@ h3.rule-head__label {
   color: var(--ink-dim);
 }
 
+/* The location line under a character's name in either manifest. Declared here,
+   directly after `.char__main` and BEFORE `.dim` below, on purpose: the
+   component adds `.dim` alongside this class for an offline or stale reading,
+   both are single-class selectors, so source order is the whole tiebreak — move
+   this rule below `.dim` and a stale location silently stops looking stale. */
+.char__location {
+  display: block;
+  font-size: var(--t-caption);
+  color: var(--ink-dim);
+  /* A structure name is member-supplied and can be long. The name column sets
+     the manifest's width, so let this line clip rather than push the STATUS and
+     ACTIONS columns off a 320px viewport. */
+  max-width: 22rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* One labelled entry in the account manifest's merged STATUS cell. Three tokens
+   stacked with nothing naming them read as "ok / ok / on" now that the TOKEN,
+   CONTACTS and MAP headers that named them are gone — and two of those three
+   are literally the word "ok". The label is visible, not visually-hidden: a
+   sighted reader cannot tell the token's "ok" from the standings' "ok" either,
+   so hiding it would fix the problem for exactly the readers who did not have
+   it. */
+.status-line {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
+}
+
+.status-line__label {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: var(--t-label);
+  letter-spacing: var(--track-value);
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  /* The three labels are a column of their own inside the cell, so the tokens
+     line up rather than stepping in and out with the label's width. */
+  min-width: 5.5rem;
+  flex-shrink: 0;
+}
+
 .dim {
   color: var(--ink-faint);
   font-size: var(--t-caption);
