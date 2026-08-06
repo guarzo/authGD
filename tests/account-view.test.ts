@@ -111,6 +111,32 @@ describe("getAccountView", () => {
     expect(alt.onMapAcl).toBe(false);
   });
 
+  it("orders characters main-first, then by name case-insensitively, tying on id", async () => {
+    // Main's name ("Zed") would sort LAST alphabetically, pinning that it
+    // still comes first. "alt" vs "Bravo" checks the compare is
+    // case-insensitive. The two "Same" characters have equal names and must
+    // still land in a fixed order (lower id first) rather than whatever
+    // Postgres happened to return.
+    const acc = await ctx.db.transaction(async (tx) => {
+      const [row] = await tx
+        .insert(account)
+        .values({ tier: "member", mainCharacterId: 3001 })
+        .returning();
+      await tx.insert(character).values([
+        { id: 3001, accountId: row.id, name: "Zed", ownerHash: "o1" },
+        { id: 3002, accountId: row.id, name: "Bravo", ownerHash: "o1" },
+        { id: 3003, accountId: row.id, name: "alt", ownerHash: "o1" },
+        { id: 3005, accountId: row.id, name: "Same", ownerHash: "o1" },
+        { id: 3004, accountId: row.id, name: "Same", ownerHash: "o1" },
+      ]);
+      return row;
+    });
+
+    const view = await getAccountView(ctx.db, cfg, acc.id);
+    expect(view.characters.map((c) => c.id)).toEqual([3001, 3003, 3002, 3004, 3005]);
+    expect(view.characters[0].isMain).toBe(true);
+  });
+
   it("handles an account with no characters and no discord link", async () => {
     const [acc] = await ctx.db.insert(account).values({}).returning();
     const view = await getAccountView(ctx.db, cfg, acc.id);
