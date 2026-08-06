@@ -210,6 +210,47 @@ describe("resolveAuditIdentities / queryAuditLog resolution", () => {
     expect(row.targetName).toBeNull();
   });
 
+  it("resolves a reclaim's fromAccount to the origin account's main character name", async () => {
+    const oldAcc = await seedAccount(ctx.db);
+    await seedCharacter(ctx.db, cfg, {
+      id: 90005,
+      accountId: oldAcc.id,
+      name: "Old Owner",
+      main: true,
+    });
+    await logAudit(ctx.db, {
+      actor: "system",
+      action: "character.reclaimed",
+      target: "90006",
+      details: { fromAccount: oldAcc.id },
+    });
+    const [row] = await queryAuditLog(ctx.db);
+    expect(row.detailAccountNames).toEqual({ fromAccount: "Old Owner" });
+  });
+
+  it("leaves detailAccountNames empty when the reclaim's origin account no longer resolves", async () => {
+    const fakeUuid = "00000000-0000-0000-0000-000000000000";
+    await logAudit(ctx.db, {
+      actor: "system",
+      action: "character.reclaimed",
+      target: "90007",
+      details: { fromAccount: fakeUuid },
+    });
+    const [row] = await queryAuditLog(ctx.db);
+    expect(row.detailAccountNames).toEqual({});
+  });
+
+  it("leaves detailAccountNames empty for actions that don't declare an account-uuid detail key", async () => {
+    await logAudit(ctx.db, {
+      actor: "system",
+      action: "tier.changed",
+      target: "all",
+      details: { from: "member", to: "alumni" },
+    });
+    const [row] = await queryAuditLog(ctx.db);
+    expect(row.detailAccountNames).toEqual({});
+  });
+
   it("resolves a full page of 200+ rows with a small, constant number of queries (no N+1)", async () => {
     const accounts = await Promise.all(
       Array.from({ length: 20 }, () => seedAccount(ctx.db)),

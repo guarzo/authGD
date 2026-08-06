@@ -17,11 +17,78 @@ export async function logAudit(
   await dbx.insert(auditLog).values(entry);
 }
 
+// `jsonb` does not preserve key order (Postgres canonicalizes its own way on
+// write), so a row read back can list the same keys in a different order than
+// the plain object this module builds them in. A raw `JSON.stringify`
+// comparison would treat that reordering as a change and defeat the dedupe on
+// every single call — sort keys first so only the actual content is compared.
+function stableStringify(v: unknown): string {
+  if (v === null || typeof v !== "object") return JSON.stringify(v);
+  if (Array.isArray(v)) return `[${v.map(stableStringify).join(",")}]`;
+  const obj = v as Record<string, unknown>;
+  const keys = Object.keys(obj).sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(obj[k])}`).join(",")}}`;
+}
+
+/**
+ * `logAudit`, but silent when the most recent row for this exact
+ * `action`+`target` already carries the same `details`. Written for
+ * hourly-cron failure reporting (discord-roles is the first caller): a
+ * permanent failure — a role hierarchy change, a bot missing permission, a
+ * member the API rejects outright — reproduces identically every tick for as
+ * long as its cause persists, and with plain `logAudit` that is one row per
+ * tick forever. This still writes the FIRST occurrence (nothing to compare
+ * against) and writes again the moment `details` changes (the failure moved
+ * on, or resolved and came back differently) — it collapses reruns of the
+ * unchanged failure, it does not suppress the failure itself.
+ *
+ * Costs one extra lookup per call, and nothing indexes the part that narrows
+ * it: the only declared index on `audit_log` is `audit_log_at_idx` on `at`,
+ * so the `action`+`target` filter has no index to use. "Most recent" here is
+ * `id desc limit 1`, not `at desc` — `id` is the serial primary key, so its
+ * own index gives the ordering for free, but Postgres still has to walk that
+ * index backwards discarding rows until it finds one matching the filter.
+ * That walk is short while the matching action is recent and unbounded once
+ * it is not. Acceptable today because it runs only on the already-exceptional
+ * failure path, never on a sync tick's success rows — but `audit_log` is
+ * append-only and grows without bound, so it degrades monotonically. The fix
+ * is an index on `(action, target, id desc)`, which would also serve
+ * `queryAuditLog`'s own filters; it needs a generated migration and so is
+ * deliberately left out of the change that added this.
+ */
+export async function logAuditIfChanged(
+  dbx: Dbx,
+  entry: {
+    actor: string;
+    action: string;
+    target: string;
+    details?: Record<string, unknown>;
+  },
+): Promise<void> {
+  const [last] = await dbx
+    .select({ details: auditLog.details })
+    .from(auditLog)
+    .where(and(eq(auditLog.action, entry.action), eq(auditLog.target, entry.target)))
+    .orderBy(desc(auditLog.id))
+    .limit(1);
+  const unchanged =
+    last !== undefined &&
+    stableStringify(last.details ?? null) === stableStringify(entry.details ?? null);
+  if (unchanged) return;
+  await logAudit(dbx, entry);
+}
+
 export type ResolvedAuditRow = typeof auditLog.$inferSelect & {
   actorName: string | null;
   actorKind: "system" | "account" | "unresolved";
   targetName: string | null;
   targetKind: "account" | "character" | "discord" | "payout" | "literal" | "unresolved";
+  /** Account uuids embedded in `details` (not the row's own actor/target),
+   * resolved to their main character's name the same way actor/target are.
+   * Keyed by the `details` field name so `summarizeDetails` can look one up
+   * without knowing which action wrote it. Empty for every row that carries
+   * no such field — see `DETAIL_ACCOUNT_KEYS`. */
+  detailAccountNames: Record<string, string>;
 };
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -109,6 +176,23 @@ function targetKindFromAction(
 }
 
 /**
+ * `details` keys that hold an account uuid, per action, resolved through the
+ * same account-and-character join actor/target use. `character.reclaimed`'s
+ * `fromAccount` is the one case in the repo today (services/accounts.ts):
+ * unlike `account.merged`'s `sourceAccountId`, the account this points to is
+ * NOT deleted by the write that logs it -- only the one character is -- so it
+ * stays resolvable for as long as the account exists, and reading its full
+ * uuid off the Details column (summarize.ts previously rendered it with
+ * `labelled`, verbatim) was pure recitation with no reason for it. Add a row
+ * here, not a hardcoded field name, so a future action gets the same
+ * treatment by declaring its key rather than by another pass through this
+ * file.
+ */
+const DETAIL_ACCOUNT_KEYS: Readonly<Record<string, readonly string[]>> = {
+  "character.reclaimed": ["fromAccount"],
+};
+
+/**
  * Resolves actor/target ids to human (main character) names in a fixed,
  * small number of batched queries, independent of row count:
  *   1. accounts referenced directly (as actor or an account-shaped target)
@@ -137,14 +221,23 @@ export async function resolveAuditIdentities(
 
   for (const r of rows) {
     if (r.actor !== "system" && UUID_RE.test(r.actor)) accountIds.add(r.actor);
-    if (RESERVED_TARGET_LITERALS.has(r.target)) continue;
-    const kind = targetKindFromAction(r.action);
-    if (kind === "account" && UUID_RE.test(r.target)) accountIds.add(r.target);
-    else if (kind === "character" && DIGITS_RE.test(r.target))
-      targetCharacterIds.add(Number(r.target));
-    else if (kind === "discord" && DIGITS_RE.test(r.target))
-      targetDiscordIds.add(r.target);
-    else if (kind === "payout" && UUID_RE.test(r.target)) targetPayoutIds.add(r.target);
+    if (!RESERVED_TARGET_LITERALS.has(r.target)) {
+      const kind = targetKindFromAction(r.action);
+      if (kind === "account" && UUID_RE.test(r.target)) accountIds.add(r.target);
+      else if (kind === "character" && DIGITS_RE.test(r.target))
+        targetCharacterIds.add(Number(r.target));
+      else if (kind === "discord" && DIGITS_RE.test(r.target))
+        targetDiscordIds.add(r.target);
+      else if (kind === "payout" && UUID_RE.test(r.target)) targetPayoutIds.add(r.target);
+    }
+    // Same join, a different source: an account uuid living inside `details`
+    // rather than in the target/actor columns themselves. Folded into the
+    // same `accountIds` set so it costs nothing beyond the (already
+    // in-flight) account query gaining one more id to look up.
+    for (const key of DETAIL_ACCOUNT_KEYS[r.action] ?? []) {
+      const raw = r.details?.[key];
+      if (typeof raw === "string" && UUID_RE.test(raw)) accountIds.add(raw);
+    }
   }
 
   const [directAccounts, links, payoutOperations] = await Promise.all([
@@ -281,7 +374,17 @@ export async function resolveAuditIdentities(
       }
     }
 
-    return { ...r, actorName, actorKind, targetName, targetKind };
+    // Same lookup as actor/target, run per declared key rather than per
+    // field name so a row with none of these keys (nearly every row) does
+    // no work beyond an empty-array `??` check.
+    const detailAccountNames: Record<string, string> = {};
+    for (const key of DETAIL_ACCOUNT_KEYS[r.action] ?? []) {
+      const raw = r.details?.[key];
+      const name = typeof raw === "string" ? mainNameOf(raw) : null;
+      if (name !== null) detailAccountNames[key] = name;
+    }
+
+    return { ...r, actorName, actorKind, targetName, targetKind, detailAccountNames };
   });
 }
 

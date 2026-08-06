@@ -40,13 +40,27 @@ import { useEffect } from "react";
  * threaded through all of them. Capture also runs before React's own submit
  * handling, so the URL is clean before the action is dispatched.
  *
- * Forms whose action performs its own `redirect()` opt out with
- * `data-navigates`. Those are the appraisal form (which redirects to
- * `?dropped=` on a partial parse) and the delete form (which leaves for
- * `/payouts` entirely, or comes back with `?error=delete_has_paid`). For them
- * the replace is not merely redundant but actively unsafe: two client
- * transitions to different destinations would be in flight at once, and this
- * one targets the page the delete is trying to leave. Every other form here
+ * Forms whose action performs its own server-side `redirect()` opt out with
+ * `data-navigates` — today that is only the delete form, which leaves for
+ * `/payouts` entirely, or comes back with `?error=delete_has_paid`. For it the
+ * replace is not merely redundant but actively unsafe: two client transitions
+ * to different destinations would be in flight at once, and this one targets
+ * the page the delete is trying to leave.
+ *
+ * The appraisal form used to be a second opt-out here, redirecting to
+ * `?dropped=<payload>` itself on a partial parse — removed once that redirect
+ * turned out to be the exact bug this docblock's first bullet warns about: a
+ * route transition back to the SAME page still remounts every `Disclosure`,
+ * so a paste that dropped a line was silently closing whatever pool or
+ * roster panel the operator had open elsewhere. `AppraiseForm` now carries
+ * the dropped payload home through `useActionState` and does its own
+ * `router.replace` once the action resolves (see that component's docblock),
+ * the same query-only mechanism this file uses rather than a second one.
+ * Nothing here opts it out anymore: its submit clears a stale `?dropped=`/
+ * `?error=` exactly like every other form's does, and its own replace fires
+ * strictly later — only after the action's promise has resolved, which is
+ * necessarily after this listener's synchronous, capture-phase clear — so the
+ * two `replace` calls are sequenced, never concurrent. Every other form here
  * settles with `revalidatePath` and no navigation, so the replace is the only
  * thing touching the URL.
  */

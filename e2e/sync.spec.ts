@@ -9,12 +9,46 @@
  * months later, which is a long way from the line that caused it. Use `ago()`.
  */
 import { expect, test } from "@playwright/test";
+import { sql } from "drizzle-orm";
 import { auditLog, outbox, syncRun } from "../src/db/schema";
 import { JOB_CRON } from "../src/core/schedules";
 import { resetDb, seedMember, sessionCookieFor, testDb } from "./helpers";
 
 const { db, pool } = testDb();
-test.afterAll(() => pool.end());
+
+/**
+ * Whether `setHeartbeat` built the pgboss objects, and so whether this file is
+ * the one that has to remove them.
+ *
+ * Deleting the sentinel row is not enough on its own. `resetDb` truncates this
+ * app's tables and pgboss is not one of them, so what this file creates outlives
+ * it — and an existing-but-empty `pgboss.version` is worse to leave behind than
+ * the fake row, because `boss.start()` reads that table to decide whether its
+ * schema is already installed and an empty one sends it down the migrate path
+ * for tables it never created. Restore what was here; drop what was not.
+ */
+const pgboss = {
+  probed: false,
+  createdSchema: false,
+  createdVersionTable: false,
+  hadRow: false,
+};
+
+test.afterAll(async () => {
+  try {
+    if (pgboss.createdSchema) {
+      await db.execute(sql`drop schema pgboss cascade`);
+    } else if (pgboss.createdVersionTable) {
+      await db.execute(sql`drop table pgboss.version`);
+    } else if (pgboss.probed && !pgboss.hadRow) {
+      await db.execute(sql`delete from pgboss.version where version = 999999`);
+    }
+  } finally {
+    // Always, whatever the cleanup did: a leaked pool hangs the run on open
+    // handles instead of reporting whatever the tests actually found.
+    await pool.end();
+  }
+});
 test.beforeEach(() => resetDb(db));
 
 const MIN = 60_000;
@@ -45,7 +79,6 @@ async function seedRuns() {
   const seeded = {
     membership: { startedAt: ago(5 * MIN), finishedAt: ago(5 * MIN - 1200) },
     wanderer: { startedAt: ago(4 * MIN), finishedAt: ago(4 * MIN - 900) },
-    // Newest by insertion order, so this is the row the worker line reports.
     purge: { startedAt: ago(2 * MIN), finishedAt: ago(2 * MIN - 300) },
   };
   await db.insert(syncRun).values([
@@ -83,6 +116,63 @@ async function asAdmin(context: import("@playwright/test").BrowserContext) {
   const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
   await context.addCookies([await sessionCookieFor(db, admin.id)]);
   return admin;
+}
+
+/**
+ * Controls the worker-liveness signal the top-of-page line and its alarm
+ * Notice now read (`workerHeartbeat`, @/services/health): pg-boss's own
+ * `pgboss.version.maintained_on`, not `sync_run` — see the "the worker line
+ * reports liveness" test below for why. pg-boss creates that schema itself
+ * on a real worker's `boss.start()` (node_modules/pg-boss/src/plans.js), and
+ * e2e never starts a real worker (dry-run, `next dev` only), so it does not
+ * exist here until a test asks for it — hence `IF NOT EXISTS` on both. Not
+ * touched by `resetDb`, which only truncates this app's own tables, so a
+ * test that calls `resetDb` between two heartbeats still has to set the
+ * second one explicitly rather than relying on the first having been cleared.
+ *
+ * Records what it had to build, so `afterAll` above can put the database back
+ * exactly as it found it rather than guessing.
+ */
+async function setHeartbeat(at: Date) {
+  // Probed once, on the first call only. A second probe would see the schema,
+  // table and row this function itself created a test earlier and conclude they
+  // were pre-existing — which is precisely backwards, and would leave the fake
+  // row behind for the next run to trip over.
+  if (!pgboss.probed) {
+    pgboss.probed = true;
+    const schema = await db.execute(
+      sql`select 1 from information_schema.schemata where schema_name = 'pgboss'`,
+    );
+    pgboss.createdSchema = schema.rows.length === 0;
+    if (!pgboss.createdSchema) {
+      const table = await db.execute(
+        sql`select 1 from information_schema.tables
+            where table_schema = 'pgboss' and table_name = 'version'`,
+      );
+      pgboss.createdVersionTable = table.rows.length === 0;
+      if (!pgboss.createdVersionTable) {
+        const row = await db.execute(
+          sql`select 1 from pgboss.version where version = 999999`,
+        );
+        pgboss.hadRow = row.rows.length > 0;
+      }
+    }
+  }
+
+  await db.execute(sql`create schema if not exists pgboss`);
+  await db.execute(sql`
+    create table if not exists pgboss.version (
+      version int primary key,
+      maintained_on timestamptz,
+      cron_on timestamptz,
+      monitored_on timestamptz
+    )
+  `);
+  await db.execute(sql`
+    insert into pgboss.version (version, maintained_on)
+    values (999999, ${at})
+    on conflict (version) do update set maintained_on = excluded.maintained_on
+  `);
 }
 
 const summaryFor = (page: import("@playwright/test").Page, job: string) =>
@@ -322,7 +412,12 @@ test("no permanently empty error column; the error rides the status cell", async
 /**
  * The page's one job, and the case it used to answer wrong: with the worker
  * dead every row still renders whatever it last succeeded at, so the strip
- * alone cannot say the process stopped.
+ * alone cannot say the process stopped — and reading liveness off `sync_run`
+ * (whether any JOB has fired lately) couldn't either, since a live worker
+ * between two due jobs and a dead one both go quiet for the same reason to
+ * that signal. The worker line reads pg-boss's own maintenance heartbeat
+ * instead (`setHeartbeat` above), which ticks on a fixed ~120s cadence with
+ * no job involved at all.
  */
 test("the worker line reports liveness, and a dead worker says so", async ({
   page,
@@ -330,30 +425,24 @@ test("the worker line reports liveness, and a dead worker says so", async ({
 }) => {
   await asAdmin(context);
   await seedRuns();
+  await setHeartbeat(ago(2 * MIN));
   await page.goto("/admin/sync");
 
   const worker = page.locator(".worker");
-  // "2m", not `\d+m`: purge is the newest seeded run at 2 minutes old, and a
-  // digit-agnostic regex passes just as happily on membership's 5m — which is
-  // exactly the bug this line exists to catch, since reporting the OLDEST run
-  // as the worker's liveness would make a dead worker look alive.
-  await expect(worker).toHaveText("worker · last run 2m ago");
+  await expect(worker).toHaveText("worker · alive, checked in 2m ago");
   // Healthy is a quiet line, not a notice.
   await expect(page.locator(".notice--bad")).toHaveCount(0);
 
-  // Nothing has run in four hours: the strip's newest row is old, so the
-  // process itself is the finding.
+  // No heartbeat in four hours — far past HEARTBEAT_STALE_AFTER_MS's 6
+  // minutes (@/core/health), so this is a worker that has actually stopped,
+  // not one merely between two due jobs.
   await resetDb(db);
   await asAdmin(context);
-  await db.insert(syncRun).values({
-    jobType: "membership",
-    startedAt: ago(240 * MIN),
-    finishedAt: ago(239 * MIN),
-    status: "ok",
-    counts: null,
-  });
+  await setHeartbeat(ago(240 * MIN));
   await page.goto("/admin/sync");
-  await expect(page.locator(".notice--bad .worker")).toHaveText(/worker · no run in 4h/i);
+  await expect(page.locator(".notice--bad .worker")).toHaveText(
+    /worker · no heartbeat in 4h/i,
+  );
 });
 
 /**
@@ -438,7 +527,7 @@ test("a wedged run reads stuck, with its elapsed time, and opens", async ({
 
 /* --- Controls ------------------------------------------------------------ */
 
-test("the fan-out reports back, and Refresh clears the flag", async ({
+test("the fan-out reports back, moves focus to the confirmation, and Refresh clears the flag", async ({
   page,
   context,
 }) => {
@@ -446,40 +535,123 @@ test("the fan-out reports back, and Refresh clears the flag", async ({
   await seedRuns();
   await page.goto("/admin/sync");
 
-  // The live region is in the DOM before the press, so the announcement is an
-  // update to a registered region rather than an inserted one.
-  await expect(page.getByRole("status")).toHaveCount(1);
+  // The confirmation slot is in the DOM before the press — an empty
+  // `ConfirmNotice` — so the text arriving on press is a mutation of an
+  // existing node rather than one appearing fresh. Scoped to `ConfirmNotice`'s
+  // own wrapping div, and to a DIRECT child of `<main>`: the worker-liveness
+  // Notice above the strip is also `.notice` (or `.notice--bad`) whenever the
+  // test database carries no pg-boss heartbeat, which is the default here, and
+  // every job drawer now carries its own `ConfirmGroup`-owned notice slot
+  // (`_components/confirm-group.tsx`) nested well below `<main>`'s direct
+  // children — a bare `div[tabindex="-1"] > p.notice-slot` matches those too.
+  const notice = page.locator(
+    'main > div[tabindex="-1"] > p.notice, main > div[tabindex="-1"] > p.notice-slot',
+  );
+  await expect(notice).toHaveCount(1);
+  // `live={false}`: this slot carries no ARIA role at all. The enqueue
+  // buttons sit below seven job rows and however many drawers are open, so
+  // nothing here relies on a live-region mutation to be heard — focus moving
+  // to the slot's wrapper (asserted below) is what carries the announcement,
+  // for a sighted admin scrolled to the bottom of the page as much as for AT.
+  await expect(notice).not.toHaveAttribute("role", /.+/);
+  // `ConfirmNotice` puts the `tabIndex={-1}` that actually receives focus on
+  // the wrapping div matched above, not on the `<p>` itself.
+  const noticeFocusTarget = notice.locator("xpath=..");
 
   await page.getByRole("button", { name: "Sync now" }).click();
-  const notice = page.getByRole("status");
   await expect(notice).toContainText(
     "membership, contacts, wanderer and discord-roles queued for every account",
   );
   await expect(page).toHaveURL(/queued=all/);
+  // Focus lands on the confirmation itself, not on wherever the pressed
+  // button (now off the bottom of the viewport again after the redirect)
+  // happened to be.
+  await expect(noticeFocusTarget).toBeFocused();
 
   // Refresh drops ?queued=, so a reload hours later does not re-show a stale
   // "queued a few seconds ago".
   await page.getByRole("link", { name: "Refresh" }).click();
   await expect(page).toHaveURL(/\/admin\/sync$/);
-  await expect(page.getByRole("status")).toHaveText("");
+  await expect(page.locator('main > div[tabindex="-1"] > p.notice-slot')).toHaveText("");
   await expect(page.locator(".btn-row__stamp")).toHaveText(
     /checked \d{2}:\d{2}:\d{2} UTC/i,
   );
 });
 
 /**
+ * A second "Sync now" press produces the identical sentence but a new `at`,
+ * and focus has to move again rather than staying wherever the first press
+ * left it — the same repeat-press hazard `queuedNotice`'s own `at` argument
+ * exists to close for the text, now closed for focus too.
+ */
+test("a second identical press moves focus again", async ({ page, context }) => {
+  await asAdmin(context);
+  await seedRuns();
+  await page.goto("/admin/sync");
+
+  // Scoped to a direct child of `<main>` — see the fan-out test above for why
+  // a bare `div[tabindex="-1"]` now also matches every job drawer's own
+  // `ConfirmGroup` notice slot.
+  const noticeFocusTarget = page
+    .locator(
+      'main > div[tabindex="-1"] > p.notice, main > div[tabindex="-1"] > p.notice-slot',
+    )
+    .locator("xpath=..");
+  await page.getByRole("button", { name: "Sync now" }).click();
+  await expect(noticeFocusTarget).toBeFocused();
+
+  // Move focus elsewhere, then press again: if the second press didn't
+  // re-trigger the effect, focus would stay on the Refresh link instead of
+  // returning to the notice.
+  await page.getByRole("link", { name: "Refresh" }).focus();
+  await page.getByRole("button", { name: "Sync now" }).click();
+  await expect(noticeFocusTarget).toBeFocused();
+});
+
+/**
  * The lever a failed row actually wants: before this, retrying wanderer after
  * a 502 meant a fan-out that also re-ran three jobs that were fine.
+ *
+ * This is also the regression test for the drawer-collapse bug: `wanderer`'s
+ * row auto-opens because it's failing, and `syncJobAction` used to redirect
+ * back to this same route on success — which reset `Disclosure`'s own
+ * `useState` and closed the very drawer this button lives inside, on the
+ * first press. The button now returns its confirmation through
+ * `useActionState` (`ConfirmingForm`/`ConfirmGroup`,
+ * `@/app/_components/confirm-group`) with no navigation at all, so the
+ * assertion on `aria-expanded` staying `"true"` — and the URL never gaining
+ * `?queued=` — is the thing that catches a reintroduced redirect.
  */
-test("a failed row re-runs its own job", async ({ page, context }) => {
+test("a failed row re-runs its own job, and its own drawer stays open", async ({
+  page,
+  context,
+}) => {
   const admin = await asAdmin(context);
   await seedRuns();
   await page.goto("/admin/sync");
 
+  const wanderer = summaryFor(page, "wanderer");
   // wanderer is already open — that is the whole point of auto-open.
-  await page.getByRole("button", { name: "Re-run wanderer" }).click();
-  await expect(page).toHaveURL(/queued=wanderer/);
-  await expect(page.getByRole("status")).toContainText("wanderer queued");
+  await expect(wanderer).toHaveAttribute("aria-expanded", "true");
+
+  const drawer = page.locator(".strip__job", { hasText: "wanderer" });
+  await drawer.getByRole("button", { name: "Re-run wanderer" }).click();
+  // Settles whether the press soft-navigated (the bug this guards against) or
+  // not, so the assertions below read the final state rather than racing a
+  // navigation still in flight.
+  await page.waitForLoadState("networkidle");
+
+  // The confirmation lands inside the drawer itself, not in the page-level
+  // `ConfirmNotice` two of this page's three enqueue actions still use — see
+  // `syncJobAction`'s own docblock.
+  await expect(drawer).toContainText("wanderer queued");
+
+  // The drawer the button lives inside must still be open after the press —
+  // this is what a redirect used to break on the very first click.
+  await expect(wanderer).toHaveAttribute("aria-expanded", "true");
+  // No navigation at all: the redirect-shaped siblings (`syncAllAction`,
+  // `recheckInvalidAction`) land on `?queued=...`, and this control must not.
+  await expect(page).toHaveURL(/\/admin\/sync$/);
 
   const queued = await db.select().from(outbox);
   expect(queued.map((r) => r.payload)).toEqual([{ kind: "job", jobType: "wanderer" }]);
@@ -493,6 +665,41 @@ test("a failed row re-runs its own job", async ({ page, context }) => {
   expect(audit.map((r) => [r.actor, r.action, r.target])).toEqual([
     [admin.id, "sync.requested", "wanderer"],
   ]);
+});
+
+/**
+ * The same regression as above, from the other side: a healthy row an admin
+ * had to open by hand rather than one auto-opened by the page. Covers the
+ * ordinary path (open a closed drawer, press its button) rather than the
+ * already-open one the failing-row test exercises.
+ */
+test("opening a healthy row's drawer by hand and pressing its enqueue control leaves it open", async ({
+  page,
+  context,
+}) => {
+  await asAdmin(context);
+  await seedRuns();
+  await page.goto("/admin/sync");
+
+  const purge = summaryFor(page, "purge");
+  await expect(purge).toHaveAttribute("aria-expanded", "false");
+  await purge.click();
+  await expect(purge).toHaveAttribute("aria-expanded", "true");
+
+  const drawer = page.locator(".strip__job", { hasText: "purge" });
+  await drawer.getByRole("button", { name: "Re-run purge" }).click();
+  // Settles whether the press soft-navigated (the bug this guards against) or
+  // not, so the aria-expanded check below reads the final state rather than
+  // racing a navigation still in flight.
+  await page.waitForLoadState("networkidle");
+  // Checked first: this is the exact assertion a reintroduced redirect fails —
+  // a redirect back to this same route replaces the whole route tree and
+  // resets `Disclosure`'s `useState`, collapsing a healthy row's drawer (which
+  // does not auto-reopen the way a failing row's does) on the very click that
+  // enqueued its re-run.
+  await expect(purge).toHaveAttribute("aria-expanded", "true");
+  await expect(drawer).toContainText("purge queued");
+  await expect(page).toHaveURL(/\/admin\/sync$/);
 });
 
 /**

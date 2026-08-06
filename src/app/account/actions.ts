@@ -37,6 +37,17 @@ export async function setMainAction(characterId: number): Promise<void> {
     redirect(accountErrorUrl("stale_character"));
   }
   revalidatePath("/account");
+  // `redirect` rather than a bare return: the button that was pressed
+  // unmounts the instant this succeeds (the row that was "make main" becomes
+  // the main row), so the press otherwise lands with no confirmation and
+  // focus stranded on `<body>` — see `@/app/_components/confirm-notice`. `at`
+  // is what makes the *second* press of a different character's "make main"
+  // land, same reasoning as `admin/sync`'s `queuedNotice`: `ConfirmNotice`
+  // moves focus to the notice on every `at` change rather than relying on a
+  // live region (it renders `live={false}` deliberately — see its docblock),
+  // and without `at` in its dependency list only the FIRST press would move
+  // focus.
+  redirect(`/account?done=main&name=${encodeURIComponent(result.name)}&at=${Date.now()}`);
 }
 
 export async function unlinkAction(characterId: number): Promise<void> {
@@ -53,15 +64,21 @@ export async function unlinkAction(characterId: number): Promise<void> {
     .from(character)
     .where(and(eq(character.id, characterId), eq(character.accountId, accountId)));
   if (owned.length === 0) redirect(accountErrorUrl("stale_character"));
-  await db.transaction(async (dbtx) => {
+  const result = await db.transaction((dbtx) =>
     // A last_character / not_owned rejection is a silent no-op here: the page
     // hides the unlink control for the final character, and a reclaim race
     // resolves itself on the revalidated render.
-    await unlinkCharacter(dbtx, cfg, accountId, characterId, {
+    unlinkCharacter(dbtx, cfg, accountId, characterId, {
       expectedAccountId: accountId,
-    });
-  });
+    }),
+  );
   revalidatePath("/account");
+  // Confirmation only on a genuine unlink: a lost race (`result.ok === false`)
+  // did nothing this press, and claiming "Character unlinked" over a no-op
+  // would tell the member something that isn't true. The plain redirect below
+  // still lands them on the revalidated page, silently, matching the no-op
+  // reasoning above.
+  redirect(result.ok ? `/account?done=unlink&at=${Date.now()}` : "/account");
 }
 
 /** Member self-serve: leave cryo. Only ever moves the caller's own account,
@@ -72,6 +89,7 @@ export async function wakeSelfAction(): Promise<void> {
   const result = await getDb().transaction((dbtx) => wakeSelf(dbtx, accountId));
   if (!result.ok) throw new Error(result.error);
   revalidatePath("/account");
+  redirect(`/account?done=wake&at=${Date.now()}`);
 }
 
 /** Member self-serve: disconnect Discord. Only ever the caller's own account,
@@ -83,6 +101,11 @@ export async function wakeSelfAction(): Promise<void> {
  *  for that very account. Same reasoning as `unlinkAction`'s rejections. */
 export async function unlinkDiscordAction(): Promise<void> {
   const accountId = await requireAccount();
-  await getDb().transaction((dbtx) => unlinkDiscord(dbtx, accountId, accountId, "self"));
+  const result = await getDb().transaction((dbtx) =>
+    unlinkDiscord(dbtx, accountId, accountId, "self"),
+  );
   revalidatePath("/account");
+  // Same "don't confirm a no-op" rule as unlinkAction: a lost race reports
+  // nothing rather than claiming a press that didn't do anything.
+  redirect(result.ok ? `/account?done=discord&at=${Date.now()}` : "/account");
 }
