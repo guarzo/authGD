@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { auditLog, discordLink, payoutOperation, syncRun } from "../src/db/schema";
 import { AUDIT_PAGE_SIZE } from "../src/services/audit";
-import { pinGeometry, TALL_SCROLLER_GUTTER_SLOP } from "./geometry";
+import { pinGeometry } from "./geometry";
 import { resetDb, seedMember, sessionCookieFor, testDb } from "./helpers";
 
 const { db, pool } = testDb();
@@ -965,10 +965,12 @@ for (const width of [320, 390]) {
     );
     expect(pinned.maxScrollLeft).toBeGreaterThan(0);
     // `.scroller--tall` reserves a vertical-scrollbar gutter unconditionally
-    // (globals.css, `scrollbar-gutter: stable`); see TALL_SCROLLER_GUTTER_SLOP
-    // for why the true rightmost scrollLeft lands short of the naive figure.
+    // (globals.css, `scrollbar-gutter: stable`); `gutterWidth` measures it
+    // directly (see geometry.ts), so the rightmost scrollLeft only has to
+    // clear the naive figure less that measured reservation, not an assumed
+    // one.
     expect(pinned.scrolledLeft).toBeGreaterThanOrEqual(
-      pinned.maxScrollLeft - TALL_SCROLLER_GUTTER_SLOP,
+      pinned.maxScrollLeft - pinned.gutterWidth,
     );
     expect(pinned.overlapX).toBeCloseTo(pinned.cellWidth, 0);
 

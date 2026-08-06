@@ -1,12 +1,7 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { eq } from "drizzle-orm";
 import { account, discordLink } from "../src/db/schema";
-import {
-  clearOfPin,
-  coveredByPin,
-  pinGeometry,
-  TALL_SCROLLER_GUTTER_SLOP,
-} from "./geometry";
+import { clearOfPin, coveredByPin, pinGeometry } from "./geometry";
 import { BASE_URL } from "./env";
 import { resetDb, seedMember, sessionCookieFor, testDb } from "./helpers";
 
@@ -940,10 +935,12 @@ for (const width of [320, 390, 768]) {
     // There has to be something to scroll past, or the assertion is vacuous.
     expect(pinned.maxScrollLeft).toBeGreaterThan(0);
     // `.scroller--tall` reserves a vertical-scrollbar gutter unconditionally
-    // (globals.css, `scrollbar-gutter: stable`); see TALL_SCROLLER_GUTTER_SLOP
-    // for why the true rightmost scrollLeft lands short of the naive figure.
+    // (globals.css, `scrollbar-gutter: stable`); `gutterWidth` measures it
+    // directly (see geometry.ts), so the rightmost scrollLeft only has to
+    // clear the naive figure less that measured reservation, not an assumed
+    // one.
     expect(pinned.scrolledLeft).toBeGreaterThanOrEqual(
-      pinned.maxScrollLeft - TALL_SCROLLER_GUTTER_SLOP,
+      pinned.maxScrollLeft - pinned.gutterWidth,
     );
     // Fully on screen, not merely intersecting by a sliver.
     expect(pinned.overlapX).toBeCloseTo(pinned.cellWidth, 0);

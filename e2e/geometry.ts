@@ -1,23 +1,6 @@
 import type { Page } from "@playwright/test";
 
 /**
- * How far short of `pinGeometry`'s `maxScrollLeft` a `.scroller--tall`
- * region's true rightmost `scrollLeft` can land now that `scrollbar-gutter:
- * stable` (globals.css, `.scroller--tall`) reserves room for a vertical
- * scrollbar unconditionally. That reservation isn't reachable by horizontal
- * scrolling, but in this project's test environment it is still counted
- * toward `scrollWidth` — so `scrollWidth - clientWidth` overshoots the actual
- * maximum by about the gutter's own width, even though `scrollLeft` itself
- * clamps correctly to the real extreme. Confirmed by direct probe (a
- * throwaway instrumented copy of `pinGeometry` showed `scrollWidth` and
- * `clientWidth` unchanged for the entire call; only the clamped `scrollLeft`
- * differs), not assumed from a flaky margin. The value is this environment's
- * measured gap, not a spec guarantee — a real scrollbar's width varies by
- * platform, so callers should treat it as a tolerance, not an exact offset.
- */
-export const TALL_SCROLLER_GUTTER_SLOP = 10;
-
-/**
  * Rect-vs-rect measurement of a table cell against its scroll region, taken
  * after driving the region to an extreme.
  *
@@ -28,6 +11,15 @@ export const TALL_SCROLLER_GUTTER_SLOP = 10;
  *
  * `maxScrollLeft` / `maxScrollTop` come back with the measurement so a caller
  * can prove there was something to scroll past before claiming the pin held.
+ *
+ * `gutterWidth` is `offsetWidth - clientWidth` on the scroll region itself,
+ * measured in the same call. A region with `scrollbar-gutter: stable`
+ * (globals.css, `.scroller--tall`) reserves that much width unconditionally —
+ * `clientWidth` shrinks by it, `scrollWidth` does not — so the true rightmost
+ * `scrollLeft` a caller can drive the region to sits up to `gutterWidth` short
+ * of the naive `scrollWidth - clientWidth` figure. Measuring it here rather
+ * than hardcoding a number keeps the comparison correct on any platform,
+ * whatever that platform's own scrollbar happens to cost.
  */
 export async function pinGeometry(
   page: Page,
@@ -55,6 +47,7 @@ export async function pinGeometry(
         scrolledTop: sc.scrollTop,
         maxScrollLeft: sc.scrollWidth - sc.clientWidth,
         maxScrollTop: sc.scrollHeight - sc.clientHeight,
+        gutterWidth: sc.offsetWidth - sc.clientWidth,
       };
     },
     { scroller, cell, scroll },

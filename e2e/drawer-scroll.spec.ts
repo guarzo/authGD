@@ -16,27 +16,32 @@ import { resetDb, seedMember, sessionCookieFor, testDb } from "./helpers";
  * the vertical-overflow threshold no longer changes the content-box width.
  *
  * This project has no jsdom, so a drawer can only be exercised against a real
- * engine via Playwright — and every attempt to *measure* the horizontal
- * overflow directly, in this environment, came back uninterpretable: headless
- * Chromium renders scrollbars as zero-width overlays regardless of host OS or
+ * engine via Playwright. The one thing that environment genuinely cannot
+ * reproduce is the *original* bug: headless Chromium paints scrollbars as
+ * zero-width overlays regardless of host OS or
  * `--disable-features=OverlayScrollbar` (confirmed against a trivial,
- * unconditionally-overflowing test element, not just this drawer), so
- * `offsetWidth - clientWidth` never reflects a real scrollbar's width here.
- * That means **this spec cannot regress-test the horizontal-overflow fix
- * itself** — no CI run in this environment will ever see the symptom the
- * user reported, on a real Windows/WSL2 Chrome session with classic
- * scrollbars, appear or disappear.
+ * unconditionally-overflowing test element, not just this drawer), so an
+ * *unreserved* scrollbar never narrows `clientWidth` here and the reported
+ * symptom cannot appear or disappear in this CI run.
  *
- * What it asserts instead, and why each one is still meaningful:
+ * `scrollbar-gutter: stable` is a different thing, and this environment *can*
+ * measure it: it reserves layout width unconditionally, independent of
+ * whether a scrollbar is ever painted, so `offsetWidth - clientWidth` on the
+ * region is genuinely nonzero here even though no scrollbar is visible.
+ * That's the fix actually taking effect, not a blind spot — see the
+ * `gutterWidth` assertion below.
+ *
+ * What this spec asserts, and why each one is still meaningful:
  *   - The vertical-overflow *threshold* the fix is keyed to: a
  *     many-character drawer crosses `.scroller--tall`'s cap and a
  *     few-character one does not. That's real geometry, independent of
  *     scrollbar rendering, and it's the exact behavior Task 12 (a location
  *     line added to every drawer row) is about to make more rows cross.
- *   - That `scrollbar-gutter: stable` is actually the computed value on the
- *     scroll container, so the fix can't silently regress via a future
- *     refactor of this rule even though nothing here can observe its visual
- *     effect.
+ *   - That the reservation is materially in effect: `offsetWidth -
+ *     clientWidth` on the scroll container is greater than zero, both closed
+ *     and with the many-character drawer open — not just that the CSS
+ *     parsed (`scrollbar-gutter: stable` as a computed value, checked
+ *     alongside it), but that it actually reserved something.
  *
  * The horizontal-overflow fix is therefore unverified by automated test in
  * this repo and needs confirmation in a real classic-scrollbar browser.
@@ -59,6 +64,7 @@ async function measure(page: Page) {
     return {
       scrollWidth: sc.scrollWidth,
       clientWidth: sc.clientWidth,
+      offsetWidth: sc.offsetWidth,
       scrollHeight: sc.scrollHeight,
       clientHeight: sc.clientHeight,
       scrollbarGutter: getComputedStyle(sc).getPropertyValue("scrollbar-gutter"),
@@ -96,6 +102,10 @@ test("a many-character drawer crosses the region's vertical-overflow threshold; 
     "stable",
   );
   expect(
+    closed.offsetWidth - closed.clientWidth,
+    "the reservation actually took width from the region, not just a parsed property",
+  ).toBeGreaterThan(0);
+  expect(
     closed.scrollWidth,
     "the collapsed table does not scroll horizontally",
   ).toBeLessThanOrEqual(closed.clientWidth + 1);
@@ -117,6 +127,10 @@ test("a many-character drawer crosses the region's vertical-overflow threshold; 
     openMany.scrollbarGutter,
     "scrollbar-gutter: stable is the computed value while the drawer is open",
   ).toBe("stable");
+  expect(
+    openMany.offsetWidth - openMany.clientWidth,
+    "the reservation still actually took width from the region while the drawer is open",
+  ).toBeGreaterThan(0);
 
   await toggleOf(bigRow).click();
   await expect(drawerOf(bigRow)).toBeHidden();
