@@ -412,7 +412,7 @@ export default async function AccountPage({
                     the truth rather than contradicted. The verb survived the
                     trim from 17 words to 11 because it is the one fact in the
                     sentence a member can catch this page being wrong about. */}
-                <ConfirmCost id="discord-unlink-cost" className="dim">
+                <ConfirmCost id="discord-unlink-cost">
                   Queues removal of the Discord roles authGD manages. Relink any time.
                 </ConfirmCost>
               </ConfirmArmScope>

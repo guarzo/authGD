@@ -126,7 +126,7 @@ export function LifecycleSubmit({
         confirmName={confirmName}
         describedBy={costId}
       />
-      <ConfirmCost id={costId} className="dim" alwaysHidden>
+      <ConfirmCost id={costId} alwaysHidden>
         {cost}
       </ConfirmCost>
     </form>

@@ -685,6 +685,18 @@ h3.rule-head__label {
   flex-wrap: wrap;
 }
 
+/* The cost sentence's own register, rather than a `.dim` every call site had
+   to remember. All four callers passed `className="dim"` and nothing else, so
+   the class was not configuration — it was a required argument the type system
+   could not enforce, and a fifth caller that forgot it would have rendered the
+   cost at full body size and full ink, reading as primary copy at the exact
+   moment the reveal puts it in front of someone. Same two declarations `.dim`
+   carries, moved onto the component's own class. */
+.confirm-cost {
+  color: var(--ink-faint);
+  font-size: var(--t-caption);
+}
+
 /* The revealed confirm cost takes its own line, always. Without this it is just
    another flex item: at widths where the sentence still fits beside the button
    (roughly 641-851px on the Discord row) it grows the line box, and

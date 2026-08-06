@@ -124,12 +124,10 @@ export function ConfirmArmScope({ children }: { children: ReactNode }) {
  */
 export function ConfirmCost({
   id,
-  className,
   children,
   alwaysHidden = false,
 }: {
   id: string;
-  className?: string;
   children: ReactNode;
   /** Skip the reveal and stay `.visually-hidden` permanently. Default false:
    *  most call sites (the account page's Discord row, and the roster-replace
@@ -148,15 +146,15 @@ export function ConfirmCost({
   }
   const revealed = !alwaysHidden && ctx.armedDescribedBy === id;
 
+  // No `className` passthrough. All four call sites passed exactly `"dim"` and
+  // nothing else, which made it a required argument dressed as an optional one:
+  // the component owned when the sentence is visible but not what it looked
+  // like when it got there, so forgetting the prop rendered the cost as primary
+  // copy. `.confirm-cost` carries `.dim`'s two declarations itself now. A caller
+  // that genuinely needs different treatment should get a named prop with a
+  // reason, not an open class slot.
   return (
-    <span
-      id={id}
-      className={
-        revealed
-          ? `confirm-cost ${className ?? ""}`
-          : `confirm-cost ${className ?? ""} visually-hidden`
-      }
-    >
+    <span id={id} className={revealed ? "confirm-cost" : "confirm-cost visually-hidden"}>
       {children}
     </span>
   );
