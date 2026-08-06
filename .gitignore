@@ -1,5 +1,10 @@
 tmp/
-node_modules/
+# No trailing slash, unlike the entries around it: a pattern ending in `/`
+# matches directories only, and a symlink is not a directory to git. Linked
+# worktrees under .claude/worktrees/ get their node_modules by symlinking the
+# main checkout's, which the directory-only form left showing as untracked —
+# one `git add .` away from committing the link. The bare form matches both.
+node_modules
 .next/
 .env*
 !.env.example

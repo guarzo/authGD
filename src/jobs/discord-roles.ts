@@ -6,7 +6,7 @@ import { diffRoles, stripManagedRoles, validateRoleConfig } from "@/core/role-di
 import { DiscordApiError, type DiscordClient } from "@/lib/discord/rest";
 import { postOpsWebhook } from "@/lib/ops-webhook";
 import { isDryRun } from "@/lib/sync-mode";
-import { logAudit } from "@/services/audit";
+import { logAudit, logAuditIfChanged } from "@/services/audit";
 import { enqueueSync } from "@/services/outbox";
 import { runJob, type JobResult } from "@/services/sync-run";
 
@@ -70,6 +70,10 @@ export async function runDiscordRolesJob(
       }
       let member;
       let remove: string[];
+      // Tracks which removal was in flight when a failure lands, so the audit
+      // row (below) can say which role we were acting on rather than just
+      // "something failed" — the whole point of writing it at all.
+      let inFlightRoleId: string | undefined;
       try {
         member = await discord.getGuildMember(opts.discordUserId);
         if (!member) {
@@ -78,11 +82,24 @@ export async function runDiscordRolesJob(
         }
         remove = stripManagedRoles(cfg.discord.roleIds, member.roles);
         for (const roleId of remove) {
+          inFlightRoleId = roleId;
           await discord.removeMemberRole(opts.discordUserId, roleId);
         }
       } catch (err) {
         if (err instanceof DiscordApiError && !err.transient) {
           const msg = `discord role strip failed for ${opts.discordUserId}: ${err.message}`;
+          // A permanent failure here means an unlinked member keeps roles they
+          // no longer qualify for, silently, until someone happens to notice.
+          // Not dry-run-guarded: removeMemberRole itself is a no-op in dry-run
+          // (src/lib/discord/rest.ts), so a DiscordApiError reaching here can
+          // only be a real API rejection or a real read failure — never a
+          // suppressed write masquerading as one.
+          await logAuditIfChanged(db, {
+            actor: "system",
+            action: "discord.role_strip_failed",
+            target: opts.discordUserId,
+            details: { roleId: inFlightRoleId ?? null, error: err.message },
+          });
           return { status: "failed", errorSummary: msg };
         }
         throw err;
@@ -141,6 +158,9 @@ export async function runDiscordRolesJob(
     let transientFailures = 0;
     const errors: string[] = [];
     for (const row of rows) {
+      // Tracks which role call was in flight when a failure lands (below),
+      // same reasoning as the strip path above.
+      let inFlight: { op: "add" | "remove"; roleId: string } | null = null;
       try {
         const member = await discord.getGuildMember(row.discordUserId);
         if (!member) {
@@ -171,11 +191,14 @@ export async function runDiscordRolesJob(
           .where(eq(discordLink.discordUserId, row.discordUserId));
 
         for (const roleId of diff.add) {
+          inFlight = { op: "add", roleId };
           await discord.addMemberRole(row.discordUserId, roleId);
         }
         for (const roleId of diff.remove) {
+          inFlight = { op: "remove", roleId };
           await discord.removeMemberRole(row.discordUserId, roleId);
         }
+        inFlight = null;
         if (diff.add.length + diff.remove.length > 0) {
           counts.changed++;
           if (!dry) {
@@ -188,11 +211,34 @@ export async function runDiscordRolesJob(
           }
         }
       } catch (err) {
-        if (err instanceof DiscordApiError && !err.transient) counts.failed++;
+        const permanent = err instanceof DiscordApiError && !err.transient;
+        if (permanent) counts.failed++;
         else transientFailures++;
         errors.push(
           `${row.discordUserId}: ${err instanceof Error ? err.message : String(err)}`,
         );
+        // Only permanent failures get an audit row. Transient trouble already
+        // retries the whole job (see `retry` on the returned JobResult below)
+        // and, if genuinely transient, resolves without ever needing a
+        // record; logging every retry attempt would multiply the flood this
+        // is meant to avoid rather than diagnose one. Not dry-run-guarded:
+        // addMemberRole/removeMemberRole are no-ops in dry-run, so a
+        // DiscordApiError reaching here in dry-run is still a real read
+        // failure (getGuildMember, a malformed body), never a suppressed
+        // write pretending to be one.
+        if (permanent) {
+          await logAuditIfChanged(db, {
+            actor: "system",
+            action: "discord.role_sync_failed",
+            target: row.discordUserId,
+            details: {
+              op: inFlight?.op ?? null,
+              roleId: inFlight?.roleId ?? null,
+              tier: row.tier,
+              error: err instanceof Error ? err.message : String(err),
+            },
+          });
+        }
       }
     }
 

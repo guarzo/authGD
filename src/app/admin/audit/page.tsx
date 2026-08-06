@@ -86,7 +86,7 @@ function ActorCell({
   if (r.actorKind === "system") {
     return (
       <a
-        className="mono dim cell-link"
+        className="mono dim-ink cell-link"
         href={filterHref(params, "actor", "system")}
         title={r.actor}
       >
@@ -148,7 +148,7 @@ function TargetCell({
   if (r.targetKind === "literal") {
     return (
       <a
-        className="mono dim ellipsis-cell cell-link"
+        className="mono dim-ink ellipsis-cell cell-link"
         href={filterHref(params, "target", r.target)}
         title={r.target}
       >
@@ -629,7 +629,7 @@ export default async function AdminAuditPage({
                         r.action
                       ) : (
                         <>
-                          <span className="dim">{r.action.slice(0, dot + 1)}</span>
+                          <span className="dim-ink">{r.action.slice(0, dot + 1)}</span>
                           {r.action.slice(dot + 1)}
                         </>
                       )}
@@ -647,10 +647,11 @@ export default async function AdminAuditPage({
                           r.details,
                           roleNames,
                           tierLabels,
+                          new Map(Object.entries(r.detailAccountNames)),
                         )}
                       />
                     ) : (
-                      <span className="dim">&mdash;</span>
+                      <span className="dim-ink">&mdash;</span>
                     )}
                   </td>
                 </tr>

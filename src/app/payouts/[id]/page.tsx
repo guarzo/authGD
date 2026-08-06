@@ -14,8 +14,6 @@ import {
 } from "@/app/_components/confirm-submit";
 import { requirePayoutReader } from "../access";
 import {
-  addFlatPoolAction,
-  addParticipantAction,
   deleteOperationAction,
   deletePoolAction,
   finalizeAction,
@@ -36,9 +34,11 @@ import {
 } from "../actions";
 import { DROPPED_REASONS, decodeDropped } from "../dropped";
 import { OPERATION_ERRORS, lookupErrorMessage } from "../errors";
+import { AddParticipantForm } from "./add-participant-form";
 import { AppraiseForm } from "./appraise-form";
 import { ClearStaleQuery } from "./clear-stale-query";
 import { CopyAmountButton } from "./copy-amount-button";
+import { FlatPoolForm } from "./flat-pool-form";
 import { InlineEdit } from "./inline-edit";
 import { LifecycleAnnouncer, LifecycleSubmit } from "./lifecycle-submit";
 import { NotesForm } from "./notes-form";
@@ -99,10 +99,6 @@ const PRICING_LABELS: Record<PricingMode, string> = {
   buy_p05: "Buy (5th percentile)",
 };
 
-/** The `<datalist>` the add-participant field points at. One per page, so a
- *  constant rather than a `useId` (this is a server component). */
-const CHARACTER_LIST_ID = "known-character-names";
-
 /** Below this many rows, `.scroller--tall`'s cap does more harm than good — see
  *  `.scroller--tall:has(.log--roster)` in globals.css, which gives this table
  *  its own chrome-relative cap rather than inheriting /admin/accounts'. */
@@ -128,28 +124,7 @@ function FlatPoolDisclosure({ operationId }: { operationId: string }) {
       summary="Or enter a flat value"
       ariaLabel="Or enter a flat value — a manual total for when triff can't price something"
     >
-      <form action={addFlatPoolAction.bind(null, operationId)} className="form-stack">
-        <label className="form-stack__field">
-          Total value (ISK)
-          <input
-            className="field"
-            type="number"
-            step="0.01"
-            min="0"
-            name="totalValue"
-            required
-          />
-        </label>
-        <label className="form-stack__field">
-          Note (required — why this number)
-          <input className="field" name="notes" required />
-        </label>
-        <label className="form-stack__field">
-          What was in it (optional)
-          <textarea className="field" name="rawPaste" rows={3} />
-        </label>
-        <Submit className="btn">Add flat pool</Submit>
-      </form>
+      <FlatPoolForm operationId={operationId} />
     </Disclosure>
   );
 }
@@ -498,15 +473,6 @@ export default async function PayoutOperationPage({
           >
             Loot
           </RuleHead>
-          {canEdit && pools.length === 0 && (
-            <>
-              <AppraiseForm
-                operationId={operation.id}
-                primary={primaryStage === "appraise"}
-              />
-              <FlatPoolDisclosure operationId={operation.id} />
-            </>
-          )}
           {pools.length > 0 && (
             <>
               <Scroller label="Loot pools">
@@ -679,21 +645,29 @@ export default async function PayoutOperationPage({
                     </div>
                   ),
               )}
-
-              {canEdit && (
-                <Disclosure
-                  as="details"
-                  className="disc"
-                  summary="Add another paste"
-                  ariaLabel="Add another paste — appraise more loot, or enter a flat value"
-                >
-                  <div className="form-stack">
-                    <AppraiseForm operationId={operation.id} primary={false} />
-                    <FlatPoolDisclosure operationId={operation.id} />
-                  </div>
-                </Disclosure>
-              )}
             </>
+          )}
+
+          {/* One slot, both states — the paste form is bare while there is no
+              loot and tucked into "Add another paste" once there is, but it is
+              the SAME element in the same position either way, so React keeps
+              the component mounted across that switch. That matters beyond
+              tidiness: `AppraiseForm` carries a dropped-lines payload home in
+              `useActionState` and pushes it into `?dropped=` from an effect
+              (see its docblock). Rendering it under `pools.length === 0` and
+              again under `pools.length > 0` unmounts it on the very commit that
+              the first paste succeeds, so that effect never runs and the
+              "N items ignored" notice for the first paste is silently lost —
+              the common case, since most operations start empty. The collapsed
+              presentation is a prop, not a second call site. */}
+          {canEdit && (
+            <AppraiseForm
+              operationId={operation.id}
+              primary={primaryStage === "appraise"}
+              collapsed={pools.length > 0}
+            >
+              <FlatPoolDisclosure operationId={operation.id} />
+            </AppraiseForm>
           )}
 
           {/* --- Split / Roster ------------------------------------------ */}
@@ -752,29 +726,10 @@ export default async function PayoutOperationPage({
                 The only way to add someone without discarding existing share edits.
                 Pasting a roster replaces the whole thing.
               </p>
-              <form
-                action={addParticipantAction.bind(null, operation.id)}
-                className="form-stack"
-              >
-                <label className="form-stack__field">
-                  Character name
-                  <input
-                    className="field"
-                    name="name"
-                    list={characterNames ? CHARACTER_LIST_ID : undefined}
-                    autoComplete="off"
-                    required
-                  />
-                </label>
-                {characterNames && (
-                  <datalist id={CHARACTER_LIST_ID}>
-                    {characterNames.map((n) => (
-                      <option key={n} value={n} />
-                    ))}
-                  </datalist>
-                )}
-                <Submit className="btn">Add participant</Submit>
-              </form>
+              <AddParticipantForm
+                operationId={operation.id}
+                characterNames={characterNames}
+              />
             </Disclosure>
           )}
           {participants.length > 0 && (

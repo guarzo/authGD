@@ -1,5 +1,6 @@
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import type { Config } from "@/config";
+import { TOKEN_FAULT_RESULTS } from "@/core/contact-result";
 import type { DbTx } from "@/db";
 import {
   account,
@@ -131,10 +132,29 @@ async function reauthCharacter(
   accountId: string,
   ch: EveCallbackCharacter,
 ) {
-  await dbx
-    .update(character)
-    .set(tokenFields(cfg, ch))
-    .where(eq(character.id, ch.characterId));
+  const fields = tokenFields(cfg, ch);
+  await dbx.update(character).set(fields).where(eq(character.id, ch.characterId));
+  // A fresh, fully-scoped token retires whatever token-fault verdict is sitting
+  // on contact_sync_state — otherwise /account keeps telling the member their
+  // token is dead, with a re-auth link, until the sync enqueued below actually
+  // runs. Only the four token-fault codes qualify (TOKEN_FAULT_RESULTS):
+  // label_mismatch/missing_label are findings about the character's in-game
+  // labels, unrelated to the token, and dry_run is an operator setting — none
+  // of those are made stale by this re-auth, so clearing them would erase a
+  // true finding. Cleared to null, not left stale and not set to "ok": the row
+  // hasn't actually been synced yet, and ContactState renders null as "not yet
+  // run" with no remedy link, which is the honest state pending the enqueued sync.
+  if (fields.tokenStatus === "valid") {
+    await dbx
+      .update(contactSyncState)
+      .set({ lastResult: null, lastDetail: null })
+      .where(
+        and(
+          eq(contactSyncState.characterId, ch.characterId),
+          inArray(contactSyncState.lastResult, TOKEN_FAULT_RESULTS),
+        ),
+      );
+  }
   await logAudit(dbx, {
     actor: accountId,
     action: "character.reauthed",
@@ -511,7 +531,7 @@ export async function setMainCharacter(
   dbx: DbTx,
   accountId: string,
   characterId: number,
-): Promise<{ ok: true } | { ok: false; error: "not_on_account" }> {
+): Promise<{ ok: true; name: string } | { ok: false; error: "not_on_account" }> {
   const rows = await dbx
     .select()
     .from(character)
@@ -530,7 +550,11 @@ export async function setMainCharacter(
     details: { mainCharacterId: characterId },
   });
   await enqueueSync(dbx, { kind: "account", accountId });
-  return { ok: true };
+  // The name rides along on success rather than making account/actions.ts run
+  // a second query for it: the row is already locked and read right above,
+  // and the caller's own redirect needs it to name the confirmation
+  // ("Main character set to <name>") rather than a bare verb.
+  return { ok: true, name: rows[0].name };
 }
 
 export async function maybeGrantBootstrapAdmin(

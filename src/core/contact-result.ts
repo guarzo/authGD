@@ -47,3 +47,19 @@ export const CONTACT_SYNC_RESULTS = [
 ] as const;
 
 export type ContactSyncResult = (typeof CONTACT_SYNC_RESULTS)[number];
+
+/**
+ * The subset of `CONTACT_SYNC_RESULTS` that a successful re-auth invalidates.
+ * All four describe the *token*, not the character's in-game labels or an
+ * operator setting — so a fresh, fully-scoped token makes every one of them
+ * stale. `label_mismatch` / `missing_label` are findings about labels and
+ * survive a re-auth untouched; `dry_run` and `ok` aren't faults to begin with.
+ * Used by `reauthCharacter` to decide whether to clear a stale verdict rather
+ * than let it sit on screen until the enqueued sync overwrites it.
+ */
+export const TOKEN_FAULT_RESULTS = [
+  "token_invalid",
+  "missing_scope",
+  "needs_reauth",
+  "token_refresh_failed",
+] as const satisfies readonly ContactSyncResult[];

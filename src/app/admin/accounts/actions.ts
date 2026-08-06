@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { getDb } from "@/db";
 import { requireAdminAction } from "@/lib/admin-guard";
 import { adminAccountsErrorUrl } from "@/lib/error-redirects";
+import { tierLabel } from "@/app/_components/labels";
 import { demoteAdmin, promoteAdmin } from "@/services/accounts";
 import {
   approveAccount,
@@ -16,6 +17,63 @@ import {
 import { logAudit } from "@/services/audit";
 import { unlinkDiscord } from "@/services/discord-link";
 import { enqueueSync } from "@/services/outbox";
+import { type ActionOutcome } from "@/app/_components/confirm-group";
+import { accountsConfirmation, type AdminAccountsDoneCode } from "./view";
+
+/**
+ * `/admin/accounts?[<listSearch>&]done=<code>&name=<name>&at=<instant>`.
+ *
+ * Four of this page's nine actions redirect through this on success —
+ * `unlinkDiscordAction`, `promoteAdminAction`, `demoteAdminAction`,
+ * `syncAccountAction`. Their controls sit in the row's always-visible
+ * `cells`, not the `Disclosure` drawer, so a redirect back to this same route
+ * costs nothing: nothing stateful the admin cares about lives in a control
+ * that isn't there. `ConfirmNotice` (mounted once, at the top of the page) is
+ * where focus lands — same shape as `/account`'s `setMainAction` and
+ * `/admin/sync`'s `queuedNotice`, and the same `?done=&name=&at=` triple
+ * `/account` uses.
+ *
+ * The other four mutating actions (`setTierAction`, `approveAction`,
+ * `returnToAutoAction`, `setStatusAction`) do NOT use this — they live inside
+ * the drawer, where a redirect resets the drawer's own open/closed
+ * `useState` (`disclosure.tsx`) by replacing the route tree. They call
+ * `accountsConfirmation` (`view.ts`) directly and return it through
+ * `useActionState` instead; see `view.ts`'s docblock for the full account,
+ * including the failing e2e run that found the drawer-reset problem, and
+ * `confirm-group.tsx` for how that half lands focus without navigating.
+ *
+ * `name` is the row's own `identity` — page.tsx's mainName-or-firstName-or-id
+ * pick — bound in by the caller below rather than looked up here, so this
+ * function itself makes no extra query. Same reasoning as
+ * `adminAccountsErrorUrl` for carrying `listSearch`: this page is a filtered,
+ * sorted list, and a row a mutation just changed may no longer be in the
+ * admin's own view (a tier change can drop it straight out of a `?tier=`
+ * filter), so the confirmation naming the account by name is the only trace
+ * of the change left on screen. None of the four codes that still reach this
+ * function (`discord`, `grant`, `revoke`, `sync`) need a tier label —
+ * `accountsConfirmation`'s `tier` argument is only ever read for `tier` and
+ * `approve`, both handled by the other four actions above — so this no
+ * longer carries a `doneTier`; the earlier version of this fix did, and
+ * dropping it here is what stopped it from being dead weight on every one of
+ * these four redirects.
+ *
+ * Drops `error`, `queued`, `done`, `name` and `at` from the inherited search
+ * before setting them again — same one-shot-notice reasoning as
+ * `adminAccountsErrorUrl`. `queued` is dropped rather than reused: this
+ * supersedes the old `?queued=account` scheme `syncAccountAction` alone used
+ * to carry, which named no account and used a bare `{cond && <Notice>}` that
+ * defeats the live region it asked for (`ui.tsx`'s `Notice` docblock).
+ */
+function doneUrl(code: AdminAccountsDoneCode, listSearch: string, name: string): string {
+  const search = new URLSearchParams(listSearch);
+  for (const key of ["error", "queued", "done", "name", "at"]) {
+    search.delete(key);
+  }
+  search.set("done", code);
+  search.set("name", name);
+  search.set("at", String(Date.now()));
+  return `/admin/accounts?${search.toString()}`;
+}
 
 // `not_authorized` is a real race, not a bug: the actor's own admin bit can be
 // cleared by another admin (demoteAdminAction) between this row rendering and
@@ -78,55 +136,102 @@ function redirectOnMutationError(
   }
 }
 
+// These four (through `setStatusAction`, below) live in the row's
+// `Disclosure` drawer, unlike their six siblings — and that is why they don't
+// `redirect()` on success. A drawer row holds its open/closed state in a
+// plain `useState` (`disclosure.tsx`) with nowhere else to live; navigating,
+// even back to this exact URL, replaces the route tree and resets it,
+// closing the very drawer the admin had open to press the button (an e2e run
+// of the first, all-redirect version of this fix caught this: the drawer
+// collapsed on the first tier change). `revalidatePath` alone refreshes the
+// row without navigating, so these return their confirmation through
+// `useActionState` instead, for `confirm-group.tsx`'s `ConfirmingForm` to
+// carry — no `doneUrl`, no query string. See `view.ts`'s docblock for the
+// full two-shapes account and `confirm-group.tsx`'s for the focus mechanics.
 export async function setTierAction(
   accountId: string,
   tier: "member" | "associate" | "alumni",
   listSearch: string,
-): Promise<void> {
+  // The row's own display identity (page.tsx's mainName-or-firstName-or-id
+  // pick), bound in purely to name the account in the confirmation this
+  // returns — see `view.ts`'s docblock for why the confirmation has to name
+  // the account on a filtered list page.
+  identity: string,
+  _prevState: ActionOutcome,
+  _formData: FormData,
+): Promise<ActionOutcome> {
   const { accountId: actor } = await requireAdminAction();
   const result = await getDb().transaction((tx) =>
     setTierManual(tx, actor, accountId, tier),
   );
   if (!result.ok) redirectOnMutationError(result.error, listSearch);
   revalidatePath("/admin/accounts");
+  // Not a bare return: the pressed button is the one tier control that
+  // immediately locks itself `disabled` (page.tsx: `r.tierLocked && r.tier
+  // === t`), and a disabled element cannot hold focus — see `view.ts`.
+  return { text: accountsConfirmation("tier", identity, tierLabel(tier)) };
 }
 
 export async function approveAction(
   accountId: string,
   tier: "alumni" | "associate",
   listSearch: string,
-): Promise<void> {
+  identity: string,
+  _prevState: ActionOutcome,
+  _formData: FormData,
+): Promise<ActionOutcome> {
   const { accountId: actor } = await requireAdminAction();
   const result = await getDb().transaction((tx) =>
     approveAccount(tx, actor, accountId, tier),
   );
   if (!result.ok) redirectOnMutationError(result.error, listSearch);
   revalidatePath("/admin/accounts");
+  // The pending-only "Approve as …" buttons unmount into the ordinary
+  // three-tier row the instant approval succeeds.
+  return { text: accountsConfirmation("approve", identity, tierLabel(tier)) };
 }
 
 export async function returnToAutoAction(
   accountId: string,
   listSearch: string,
-): Promise<void> {
+  identity: string,
+  _prevState: ActionOutcome,
+  _formData: FormData,
+): Promise<ActionOutcome> {
   const { accountId: actor } = await requireAdminAction();
   const result = await getDb().transaction((tx) =>
     returnTierToAuto(tx, actor, accountId),
   );
   if (!result.ok) redirectOnMutationError(result.error, listSearch);
   revalidatePath("/admin/accounts");
+  // The "auto" button only renders while `r.tierLocked`, so it unmounts
+  // outright the moment this succeeds — the tier it exists to unlock is gone.
+  return { text: accountsConfirmation("auto", identity, undefined) };
 }
 
 export async function setStatusAction(
   accountId: string,
   status: "active" | "cryo",
   listSearch: string,
-): Promise<void> {
+  identity: string,
+  _prevState: ActionOutcome,
+  _formData: FormData,
+): Promise<ActionOutcome> {
   const { accountId: actor } = await requireAdminAction();
   const result = await getDb().transaction((tx) =>
     setAccountStatus(tx, actor, accountId, status),
   );
   if (!result.ok) redirectOnMutationError(result.error, listSearch);
   revalidatePath("/admin/accounts");
+  // freeze/wake are two branches of the same slot (page.tsx), so whichever
+  // one was pressed unmounts into the other.
+  return {
+    text: accountsConfirmation(
+      status === "cryo" ? "freeze" : "wake",
+      identity,
+      undefined,
+    ),
+  };
 }
 
 // `useActionState` needs the bound action shaped `(prevState, formData) =>
@@ -167,13 +272,14 @@ export async function saveNoteAction(
 
 export async function syncAccountAction(
   accountId: string,
-  // The page's current tier/status/sort/dir query string, plus queued=account,
-  // bound in by the caller: without it the redirect below would always land
-  // on the unfiltered list, dropping whatever filter the admin was scanning.
-  // A full href rather than the bare search string every other action takes,
-  // because this one is the success path and picks its own destination; the
-  // error paths go through `adminAccountsErrorUrl`, which owns the path.
-  redirectTo: string,
+  // The page's current tier/status/sort/dir query string, bound in by the
+  // caller — same reasoning every other mutation on this page carries it: an
+  // admin who filtered or sorted the list must land back on that view, not
+  // the unfiltered default. Used to take a full pre-built `redirectTo` href
+  // instead; that shape predates `doneUrl` naming the account, which needs
+  // `listSearch` and `identity` as separate values rather than one baked URL.
+  listSearch: string,
+  identity: string,
 ): Promise<void> {
   const { accountId: actor } = await requireAdminAction();
   await getDb().transaction(async (tx) => {
@@ -181,12 +287,13 @@ export async function syncAccountAction(
     await enqueueSync(tx, { kind: "account", accountId });
   });
   revalidatePath("/admin/accounts");
-  redirect(redirectTo);
+  redirect(doneUrl("sync", listSearch, identity));
 }
 
 export async function promoteAdminAction(
   accountId: string,
   listSearch: string,
+  identity: string,
 ): Promise<void> {
   const { accountId: actor } = await requireAdminAction();
   const result = await getDb().transaction((tx) => promoteAdmin(tx, actor, accountId));
@@ -201,11 +308,14 @@ export async function promoteAdminAction(
     redirectOnMutationError(result.error, listSearch);
   }
   revalidatePath("/admin/accounts");
+  // "grant" unmounts into "revoke" the instant this succeeds.
+  redirect(doneUrl("grant", listSearch, identity));
 }
 
 export async function demoteAdminAction(
   accountId: string,
   listSearch: string,
+  identity: string,
 ): Promise<void> {
   const { accountId: actor } = await requireAdminAction();
   const result = await getDb().transaction((tx) => demoteAdmin(tx, actor, accountId));
@@ -216,6 +326,8 @@ export async function demoteAdminAction(
   if (!result.ok && result.error === "not_authorized") redirectNotAdmin(listSearch);
   if (!result.ok) throw new Error(result.error);
   revalidatePath("/admin/accounts");
+  // "revoke" unmounts into "grant" the instant this succeeds.
+  redirect(doneUrl("revoke", listSearch, identity));
 }
 
 /** Admin control: disconnect a member's Discord.
@@ -236,6 +348,7 @@ export async function demoteAdminAction(
 export async function unlinkDiscordAction(
   accountId: string,
   listSearch: string,
+  identity: string,
 ): Promise<void> {
   const { accountId: actor } = await requireAdminAction();
   const result = await getDb().transaction((tx) =>
@@ -249,9 +362,13 @@ export async function unlinkDiscordAction(
     switch (result.error) {
       case "not_found":
         return redirectOnMutationError("not_found", listSearch);
-      // The row is already in the state the admin asked for. Nothing to say.
+      // The row is already in the state the admin asked for. Nothing to say,
+      // and no confirmation to send: a lost race that did nothing this press
+      // must not claim otherwise — same "don't confirm a no-op" rule
+      // `/account`'s own unlinkDiscordAction follows for the identical race.
       case "not_linked":
-        break;
+        revalidatePath("/admin/accounts");
+        return;
       default: {
         const unhandled: never = result.error;
         throw new Error(`unhandled unlinkDiscord error: ${String(unhandled)}`);
@@ -259,4 +376,7 @@ export async function unlinkDiscordAction(
     }
   }
   revalidatePath("/admin/accounts");
+  // The button unmounts into the column's bare "none" status the instant a
+  // genuine unlink succeeds.
+  redirect(doneUrl("discord", listSearch, identity));
 }
