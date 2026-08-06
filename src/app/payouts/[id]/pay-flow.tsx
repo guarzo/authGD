@@ -41,7 +41,7 @@ function usePayFlow(): { dispatch: (id: string, kind: "pay" | "revert") => void 
  *
  * Hosted ABOVE the table rather than in a row, and that placement is the whole
  * design. `mark paid` renders only while a row is unpaid and `revert` only
- * while it is paid (`page.tsx:866`, `page.tsx:891`), so *both* controls unmount
+ * while it is paid (`page.tsx:888`, `page.tsx:901`), so *both* controls unmount
  * themselves on success — which is exactly why focus falls to `<body>` today.
  * A focus effect hosted in either button would race its own unmount.
  * `InlineEdit` can use `useActionState` for this precisely because it never
@@ -61,7 +61,7 @@ function usePayFlow(): { dispatch: (id: string, kind: "pay" | "revert") => void 
  * shape assistive tech most often misses.
  *
  * It carries an `id` because it is not the only `role="status"` on this page —
- * every copy button renders one (`copy-amount-button.tsx:81`) and so does every
+ * every copy button renders one (`copy-amount-button.tsx:88`) and so does every
  * `ConfirmSubmit` (`confirm-submit.tsx:261`), so on a twelve-row roster there
  * are two dozen. The id is what lets a test address this one specifically; it
  * is not read by anything at runtime.
@@ -180,7 +180,7 @@ export function MarkPaidForm({
   participantId: string;
   displayName: string;
   /** True only for the FIRST payment on the operation, which is the one that
-   *  freezes it permanently. Mirrors `firstPayment` in `page.tsx:211`. */
+   *  freezes it permanently. Mirrors `firstPayment` in `page.tsx:224`. */
   arm: boolean;
   describedBy?: string;
 }) {
