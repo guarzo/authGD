@@ -101,7 +101,14 @@ export function NewOperationForm({ today }: { today: string }) {
 
       <RuleHead as="h2">Loot</RuleHead>
       <label className="form-stack__field">
-        Loot paste (optional)
+        {/* The format goes in the label, like the Roster field ten lines
+            below: two sibling pastes on one form, and only one of them used
+            to answer "what do I put here". `parseLootPaste` takes a quantity
+            on either side of the name and reads column two of a tab-separated
+            line, so an EVE inventory paste needs no instruction — but a
+            hand-typed list does, and a bare quantity on its own line is
+            dropped rather than guessed at (core/loot-paste.ts:145). */}
+        Loot paste (optional: one item per line, quantity before or after the name)
         <textarea
           className="field"
           name="lootPaste"
