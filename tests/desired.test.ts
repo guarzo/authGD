@@ -1,6 +1,10 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { Tier } from "@/core/tier";
-import { getMemberCharacters, isContactsTarget } from "@/services/desired";
+import {
+  getLocatableCharacters,
+  getMemberCharacters,
+  isContactsTarget,
+} from "@/services/desired";
 import { setupTestDb, truncateAll } from "./helpers/db";
 import { testConfig } from "./helpers/config";
 import { seedAccount, seedCharacter } from "./helpers/seed";
@@ -62,5 +66,62 @@ describe("getMemberCharacters", () => {
     for (const c of cases) {
       expect(isContactsTarget(c)).toBe(inSet.has(c.id));
     }
+  });
+});
+
+describe("getLocatableCharacters", () => {
+  it("returns characters of EVERY tier, not just members", async () => {
+    const member = await seedAccount(ctx.db, { tier: "member" });
+    const alumni = await seedAccount(ctx.db, { tier: "alumni" });
+    const associate = await seedAccount(ctx.db, { tier: "associate" });
+    const pending = await seedAccount(ctx.db, { tier: "pending" });
+    await seedCharacter(ctx.db, cfg, { id: 1, accountId: member.id, main: true });
+    await seedCharacter(ctx.db, cfg, { id: 2, accountId: alumni.id });
+    await seedCharacter(ctx.db, cfg, { id: 3, accountId: associate.id });
+    await seedCharacter(ctx.db, cfg, { id: 4, accountId: pending.id });
+    const rows = await getLocatableCharacters(ctx.db);
+    expect(rows.map((r) => r.characterId).sort((a, b) => a - b)).toEqual([1, 2, 3, 4]);
+  });
+
+  it("excludes affiliation_invalid characters — ESI rejects biomassed ids", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "member" });
+    await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
+    await seedCharacter(ctx.db, cfg, {
+      id: 2,
+      accountId: acc.id,
+      affiliationInvalid: true,
+    });
+    const rows = await getLocatableCharacters(ctx.db);
+    expect(rows.map((r) => r.characterId)).toEqual([1]);
+  });
+
+  it("excludes characters with no stored refresh token — nothing to read with", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "member" });
+    await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
+    await seedCharacter(ctx.db, cfg, { id: 2, accountId: acc.id, refreshToken: null });
+    const rows = await getLocatableCharacters(ctx.db);
+    expect(rows.map((r) => r.characterId)).toEqual([1]);
+  });
+
+  it("contains every member character, and more", async () => {
+    // The guard against the two queries drifting: a location gap on a row the
+    // contacts job syncs would be a bug. The fixture gives every member a
+    // token deliberately — getMemberCharacters does NOT filter on
+    // refresh_token_enc (a tokenless member is still a contact target), so
+    // that is the condition under which the containment holds.
+    const member = await seedAccount(ctx.db, { tier: "member" });
+    const associate = await seedAccount(ctx.db, { tier: "associate" });
+    await seedCharacter(ctx.db, cfg, { id: 1, accountId: member.id, main: true });
+    await seedCharacter(ctx.db, cfg, { id: 2, accountId: member.id });
+    await seedCharacter(ctx.db, cfg, { id: 3, accountId: associate.id });
+
+    const members = await getMemberCharacters(ctx.db);
+    const locatable = new Set(
+      (await getLocatableCharacters(ctx.db)).map((r) => r.characterId),
+    );
+    for (const m of members) {
+      expect(locatable.has(m.characterId), `member ${m.characterId} missing`).toBe(true);
+    }
+    expect(locatable.size).toBeGreaterThan(members.length); // the associate
   });
 });
