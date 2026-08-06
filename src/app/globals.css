@@ -2091,9 +2091,19 @@ h3.rule-head__label {
   color: var(--ink-faint);
 }
 
+/* Wraps, because its contents grow: pressing a tier mounts the `auto` button
+   beside the three tier buttons, and measured at 320px that takes the group
+   from 251.3px to 282.9px inside a 262px drawer panel. Unwrapped, the press
+   that pins a tier is the press that pushes the control undoing it past the
+   panel edge. Row-gap is wider than the 2px column gap and not equal to it:
+   two rows meet along a whole button width rather than along one 28px edge,
+   so 2px there reads as the seam the note below says the gap exists to
+   prevent. */
 .btn-group {
   display: inline-flex;
+  flex-wrap: wrap;
   gap: 2px;
+  row-gap: var(--s-1);
 }
 
 /* In-row controls. A table with a control set on every row cannot carry the
