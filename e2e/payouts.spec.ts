@@ -50,6 +50,60 @@ async function expectNoFormInParagraph(page: Page, url: string): Promise<void> {
   await expect(page.locator("p form")).toHaveCount(0);
 }
 
+/**
+ * Seeds a finalized operation with a flat pool and the given roster, straight
+ * through the database. The UI path for this (create → pool → paste → finalize →
+ * mark paid) is already covered by "create, add a flat pool, paste a roster,
+ * finalize, mark paid"; re-driving it in every pay-flow test would test the
+ * setup rather than the flow. Returns the operation id.
+ *
+ * Column names follow `src/db/schema.ts:233-323`, which is the authority here.
+ * The operation and pool shapes also appear in the existing direct-insert block
+ * at `e2e/payouts.spec.ts:305-323` (`occurredAt` is a Date, `corpSharePct` a
+ * numeric string, the creator is `createdBy`); that block seeds no participants,
+ * so `shares`, `excluded` and `amount` come from the schema alone —
+ * `amount` is `numeric(20, 2)`, i.e. a string, not cents.
+ *
+ * `excluded` names are seeded excluded, which is how the pay flow's
+ * skip-the-excluded-row behaviour gets a fixture. They get amount 0 and are
+ * left out of the split, matching what the service would have produced.
+ */
+async function seedFinalizedRoster(
+  database: typeof db,
+  createdBy: string,
+  names: string[],
+  excluded: string[] = [],
+): Promise<string> {
+  const owed = names.filter((n) => !excluded.includes(n));
+  const each = (1_000_000 / owed.length).toFixed(2);
+  const [op] = await database
+    .insert(payoutOperation)
+    .values({
+      name: "Payout run",
+      occurredAt: new Date("2026-08-01"),
+      corpSharePct: "0",
+      createdBy,
+      status: "finalized",
+    })
+    .returning();
+  await database.insert(lootPool).values({
+    operationId: op.id,
+    valuationSource: "flat",
+    totalValue: "1000000.00",
+    notes: "seeded",
+  });
+  await database.insert(payoutParticipant).values(
+    names.map((displayName) => ({
+      operationId: op.id,
+      displayName,
+      shares: "1",
+      excluded: excluded.includes(displayName),
+      amount: excluded.includes(displayName) ? "0.00" : each,
+    })),
+  );
+  return op.id;
+}
+
 test("the payouts list pages with an Older link", async ({ page, context }) => {
   const reader = await seedMember(db, { name: "List Reader", tier: "member" });
   await context.addCookies([await sessionCookieFor(db, reader.id)]);
@@ -1573,4 +1627,35 @@ test("exactly one gold primary control renders in each draft state", async ({
   await expect(page.getByRole("button", { name: "Finalize" })).toHaveClass(
     /btn--primary/,
   );
+});
+
+test("the roster heading and each owed row's copy button are addressable", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "Anchor FC",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+
+  const opId = await seedFinalizedRoster(db, operator.id, ["Ada Anchor", "Bo Anchor"]);
+  await page.goto(`/payouts/${opId}`);
+
+  // The heading is focusable programmatically but never lands in the tab
+  // order: it is a destination for the all-paid announcement, not a stop on
+  // the way to the controls.
+  const heading = page.locator("#roster-heading");
+  await expect(heading).toHaveAttribute("tabindex", "-1");
+  await expect(heading).toHaveText("Split / Roster");
+
+  // One addressable copy button per owed row, id keyed by participant uuid.
+  const ids = await page
+    .locator('[id^="pay-copy-"]')
+    .evaluateAll((els) => els.map((el) => el.id));
+  expect(ids).toHaveLength(2);
+  for (const id of ids) {
+    await expect(page.locator(`#${id}`)).toHaveAccessibleName(/^copy amount for /);
+  }
 });

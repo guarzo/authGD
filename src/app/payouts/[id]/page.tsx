@@ -671,6 +671,7 @@ export default async function PayoutOperationPage({
           {/* --- Split / Roster ------------------------------------------ */}
           <RuleHead
             as="h2"
+            id="roster-heading"
             aside={
               owedParticipants.length > 0 && (
                 <span className="dim mono">
@@ -842,6 +843,7 @@ export default async function PayoutOperationPage({
                               p.paymentState !== "excluded" && (
                                 <>
                                   <CopyAmountButton
+                                    id={`pay-copy-${p.id}`}
                                     amount={p.amount}
                                     participantName={p.displayName}
                                   />
