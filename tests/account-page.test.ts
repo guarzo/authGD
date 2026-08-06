@@ -3,6 +3,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ContactRemedy } from "@/app/account/contact-state";
 import { StandingTier } from "@/app/account/standing";
+import { accountConfirmation } from "@/app/account/view";
 import type { Tier } from "@/core/tier";
 
 // The job stores near-miss candidates as a JSON array (src/core/contact-label.ts),
@@ -226,5 +227,46 @@ describe("StandingTier", () => {
 
   it("still renders a badge for a granted tier", () => {
     expect(render("alumni")).toContain("tier--alumni");
+  });
+});
+
+// The success confirmation the four /account server actions redirect back
+// with — setMainAction, unlinkAction, wakeSelfAction, unlinkDiscordAction all
+// end in a control unmounting, and this is the only evidence a member gets
+// that the press landed. `done` and `name` arrive off the query string,
+// exactly like `queuedNotice`'s `queued`/`at` in admin/sync/view.ts, so an
+// unrecognized or missing value is untrusted input reaching copy and has to
+// degrade rather than throw or print garbage.
+describe("accountConfirmation", () => {
+  it("names the character for a main-character change", () => {
+    expect(accountConfirmation("main", "Aiden Sol")).toBe(
+      "Main character set to Aiden Sol.",
+    );
+  });
+
+  it("falls back to a bare verb when the name didn't survive the redirect", () => {
+    expect(accountConfirmation("main", undefined)).toBe("Main character updated.");
+  });
+
+  it("confirms an unlink without repeating the character's name", () => {
+    expect(accountConfirmation("unlink", "Someone Else")).toBe("Character unlinked.");
+  });
+
+  it("names both halves of leaving cryo: the state change and the resync", () => {
+    expect(accountConfirmation("wake", undefined)).toBe("Active again. Sync queued.");
+  });
+
+  it("confirms a Discord unlink", () => {
+    expect(accountConfirmation("discord", undefined)).toBe("Discord unlinked.");
+  });
+
+  it("renders nothing for a missing done code", () => {
+    expect(accountConfirmation(undefined, undefined)).toBe("");
+  });
+
+  it("renders nothing for a done code this build doesn't recognize", () => {
+    // A hand-typed `?done=` (or one a future rollback no longer emits) must
+    // not silently pass through to become copy on the page.
+    expect(accountConfirmation("delete_account", undefined)).toBe("");
   });
 });

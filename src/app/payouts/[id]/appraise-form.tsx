@@ -1,7 +1,9 @@
 "use client";
 
 import { useActionState, useEffect, useState } from "react";
+import { usePathname, useRouter } from "next/navigation";
 import { Notice, RuleHead } from "@/app/_components/ui";
+import { Disclosure } from "@/app/_components/disclosure";
 import { Submit } from "@/app/_components/submit";
 import { addAppraisedPoolAction, type AppraiseActionState } from "../actions";
 import { OPERATION_ERRORS, lookupErrorMessage } from "../errors";
@@ -36,6 +38,27 @@ import { OPERATION_ERRORS, lookupErrorMessage } from "../errors";
  * wrong in the same way. Keep the two in step: a controlled value here is not
  * a style choice, and reverting it to `defaultValue` will not fail any test.
  *
+ * A SUCCESS that dropped lines used to navigate too — `addAppraisedPoolAction`
+ * redirected straight to `?dropped=<payload>`, because the dropped-lines
+ * notice itself renders at page level (`[id]/page.tsx`), not in this form. That
+ * was its own defect: a `redirect()` back to the very page already on screen
+ * is still a route transition, and every `Disclosure` on this page remounts on
+ * one, silently closing whatever pool or roster panel the operator had open
+ * elsewhere — see `AppraiseActionState`'s own comment and
+ * `clear-stale-query.tsx`'s docblock for the full argument. The payload now
+ * travels home as state instead, same as the failure path, and this effect is
+ * what pushes it into the URL — a same-route `router.replace`, not a
+ * `redirect()`, so the page re-renders with the new `?dropped=` param without
+ * the transition that collapses everything else. Nothing to do when
+ * `state.dropped` is null: a clean success needs no query change, and any
+ * *stale* `?dropped=`/`?error=` from an earlier submit was already cleared by
+ * `ClearStaleQuery`'s document-level listener the instant this form's own
+ * submit began — strictly before this effect can run, since it depends on the
+ * action's promise having resolved. That ordering is also why this form no
+ * longer needs `data-navigates`: it now settles exactly like every other form
+ * here (a same-route `replace`, never a hard navigation), so the two
+ * mechanisms cannot collide.
+ *
  * This used to also collect a pricing mode (four options), a price-at kind
  * (station or region), and a station/region id (free numeric, defaulted to
  * Jita 4-4). This deployment has one pricing policy and always will — Jita
@@ -49,6 +72,8 @@ import { OPERATION_ERRORS, lookupErrorMessage } from "../errors";
 export function AppraiseForm({
   operationId,
   primary = true,
+  collapsed = false,
+  children,
 }: {
   operationId: string;
   /** Defaults to true — the common case is an empty operation, where this
@@ -58,24 +83,53 @@ export function AppraiseForm({
    *  renders again from "Add another paste" at the plain grade instead, so
    *  the page never shows two gold buttons at once. */
   primary?: boolean;
+  /** Wraps this form (and `children`) in the "Add another paste" disclosure
+   *  instead of rendering it bare. A prop rather than a second call site in
+   *  `page.tsx`, because two call sites under opposite conditions unmount this
+   *  component on the commit where the first paste lands — taking the
+   *  dropped-lines effect below with it. See that page's comment on the slot. */
+  collapsed?: boolean;
+  /** The flat-value escape hatch, which belongs beside this form in both
+   *  states. Passed in rather than imported so the collapsed wrapper can hold
+   *  both without `page.tsx` needing a second copy of either. */
+  children?: React.ReactNode;
 }) {
   const [state, formAction] = useActionState<AppraiseActionState, FormData>(
     addAppraisedPoolAction.bind(null, operationId),
     null,
   );
+  const router = useRouter();
+  const pathname = usePathname();
   const [paste, setPaste] = useState("");
+
+  // See the docblock above: pushes a dropped-lines payload into the URL with
+  // a query-only `replace` rather than letting the action redirect there
+  // itself, so the `Disclosure`s elsewhere on this page survive a paste that
+  // drops a line. `state` is a fresh object every time the action resolves
+  // (even a paste that drops the exact same line twice), so this effect fires
+  // once per submission and never on a stale `state` left over from before.
+  useEffect(() => {
+    if (state?.ok && state.dropped) {
+      router.replace(`${pathname}?dropped=${state.dropped}`, { scroll: false });
+    }
+  }, [state, pathname, router]);
 
   // Controlled means React's post-submit reset no longer empties the field, so
   // the success case has to do it explicitly: the paste has been priced and
   // banked into a pool by this point, and leaving it sitting in the box reads
   // as "that didn't take". Keyed off `state` rather than `state.ok` because a
   // fresh object arrives per submit, so a second successful paste clears too.
+  //
+  // Kept separate from the `dropped` effect above rather than folded into it:
+  // that one fires only for the drop case and this one for every success, and
+  // merging them would tie a URL write to a field reset that has no need of
+  // one. They share a dependency, not a purpose.
   useEffect(() => {
     if (state?.ok) setPaste("");
   }, [state]);
 
-  return (
-    <form action={formAction} className="form-stack" data-navigates>
+  const form = (
+    <form action={formAction} className="form-stack">
       <RuleHead as="h3">Appraise a loot paste</RuleHead>
       {/* Only rendered once a submit has actually failed — `state === null`
           covers both "hasn't submitted yet" and "still pending", and neither
@@ -98,5 +152,28 @@ export function AppraiseForm({
         Appraise
       </Submit>
     </form>
+  );
+
+  if (!collapsed) {
+    return (
+      <>
+        {form}
+        {children}
+      </>
+    );
+  }
+
+  return (
+    <Disclosure
+      as="details"
+      className="disc"
+      summary="Add another paste"
+      ariaLabel="Add another paste — appraise more loot, or enter a flat value"
+    >
+      <div className="form-stack">
+        {form}
+        {children}
+      </div>
+    </Disclosure>
   );
 }

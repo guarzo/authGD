@@ -3,8 +3,8 @@ import { Fragment } from "react";
 import { getDb } from "@/db";
 import { requireAdminPage } from "@/lib/admin-guard";
 import { getSyncStatus } from "@/services/sync-status";
-import { newestSyncRun } from "@/services/health";
-import { evaluateFreshness } from "@/core/health";
+import { workerHeartbeat } from "@/services/health";
+import { evaluateFreshness, HEARTBEAT_STALE_AFTER_MS } from "@/core/health";
 import { rowHealth } from "@/core/run-health";
 import { cadenceFor, cronFor, groupFor, type JobGroup } from "@/core/schedules";
 import {
@@ -16,6 +16,8 @@ import {
   isNoChange,
 } from "@/core/run-summary";
 import { Json, Notice, RuleHead, Scroller, Status } from "@/app/_components/ui";
+import { ConfirmNotice } from "@/app/_components/confirm-notice";
+import { ConfirmGroup, ConfirmingForm } from "@/app/_components/confirm-group";
 import { Disclosure } from "@/app/_components/disclosure";
 import { Submit } from "@/app/_components/submit";
 import { elapsedShort, formatAgo } from "@/app/_components/format-ago";
@@ -105,20 +107,30 @@ export default async function AdminSyncPage({
   await requireAdminPage();
   const { queued, at } = await searchParams;
   const db = getDb();
-  const [groups, newest] = await Promise.all([getSyncStatus(db), newestSyncRun(db)]);
+  const [groups, heartbeatAt] = await Promise.all([
+    getSyncStatus(db),
+    workerHeartbeat(db),
+  ]);
   // One instant for the whole render: the worker line, every row's health and
   // the "checked at" stamp all have to agree, and reading the clock per row
   // would let them disagree by however long the page takes to build.
   const renderedAt = new Date();
   const now = renderedAt.getTime();
-  const worker = evaluateFreshness(newest?.startedAt ?? null, renderedAt);
+  // pg-boss's own maintenance heartbeat, not `sync_run`: a job only writes a
+  // row when it fires, so that table can't tell "the worker is dead" from
+  // "the worker is alive and none of its jobs happened to be due" — this can,
+  // because pg-boss ticks `maintained_on` on a fixed ~120s cadence with no job
+  // involved at all. See `HEARTBEAT_STALE_AFTER_MS` (@/core/health) for the
+  // threshold this replaces, and `workerHeartbeat` (@/services/health) for
+  // where the timestamp comes from.
+  const worker = evaluateFreshness(heartbeatAt, renderedAt, HEARTBEAT_STALE_AFTER_MS);
   const workerAge = worker.ageSec === null ? null : elapsedShort(worker.ageSec * 1000);
   const workerLine =
     workerAge === null
-      ? "worker · no runs recorded"
+      ? "worker · no heartbeat recorded"
       : worker.fresh
-        ? `worker · last run ${workerAge} ago`
-        : `worker · no run in ${workerAge}`;
+        ? `worker · alive, checked in ${workerAge} ago`
+        : `worker · no heartbeat in ${workerAge}`;
   const notice = queuedNotice(queued, at, workerAge);
   // How far back this page can see the worker doing anything at all. Only this
   // lets a never-run row escalate: see `evidenceSince` and `rowHealth`.
@@ -149,15 +161,35 @@ export default async function AdminSyncPage({
         </p>
       </div>
 
-      {/* Mounted unconditionally, empty string and all. A live region
-          *inserted* with its content already in place is announced unreliably,
-          NVDA and JAWS especially, because the region has to be registered
-          before the mutation it is meant to report — and a server action
-          redirect re-renders without a document load, so this element stays in
-          the tree across the press and only its text changes. This page
-          hand-rolled that behaviour before `Notice` had it; the slot mode in
-          the primitive is the same thing, so the local copy is gone. */}
-      <Notice>{notice}</Notice>
+      {/* `ConfirmNotice`, not a bare `Notice`: two of this page's three enqueue
+          actions (`syncAllAction`, `recheckInvalidAction`, both below the
+          strip in `btn-row--controls`) redirect back to this same page
+          carrying `notice` in `?queued=` and `?at=`, and both buttons sit
+          below seven job rows and however many drawers are open — well out of
+          view of this slot at the top. A bare `<Notice>` relied on the text
+          mutating a permanently-mounted live region to be heard, which covers
+          a screen reader but leaves a sighted admin, who pressed a button
+          they can no longer see the top of the page from, looking at exactly
+          nothing: the same "nothing happened, press again" trap `/account`'s
+          four self-serve actions had before `ConfirmNotice` started moving
+          focus there too. Moving focus here scrolls it into view for
+          everyone, not only assistive tech, which is the whole of what this
+          page was missing — the sentence itself was already answering "what
+          did the press cause" via `queuedNotice`. See
+          `@/app/_components/confirm-notice` for the focus/live-region
+          reasoning; `admin/sync`'s own `queued`/`at` redirect shape is what
+          that component's `text`/`at` props were generalized from.
+
+          The third action, `syncJobAction`, does NOT redirect here: its
+          `<form>` sits inside that job's own `Disclosure` (line ~740 below),
+          and a redirect back to this route — even carrying only a query
+          string — resets that `Disclosure`'s `useState` and closes the
+          drawer the admin opened to press it. That one instead returns its
+          confirmation through `useActionState`, landing in the drawer itself
+          via `ConfirmGroup`/`ConfirmingForm` (`@/app/_components/confirm-group`)
+          rather than here. See `actions.ts`'s own docblock on `syncJobAction`
+          and `confirm-group.tsx` for the full account. */}
+      <ConfirmNotice text={notice} at={at} />
 
       {/* Every row below reports on one job. This line reports on the process
           that runs all of them: without it a worker that died at 02:00 leaves
@@ -546,7 +578,7 @@ export default async function AdminSyncPage({
                                               <td
                                                 key={k}
                                                 className={
-                                                  v ? "mono num" : "mono num dim"
+                                                  v ? "mono num" : "mono num dim-ink"
                                                 }
                                               >
                                                 {v ?? (
@@ -661,7 +693,9 @@ export default async function AdminSyncPage({
                                           return (
                                             <td
                                               key={k}
-                                              className={v ? "mono num" : "mono num dim"}
+                                              className={
+                                                v ? "mono num" : "mono num dim-ink"
+                                              }
                                             >
                                               {/* The column exists because some other
                                           run in the window moved this counter;
@@ -708,14 +742,32 @@ export default async function AdminSyncPage({
                     to read why it failed, and the error string is the top
                     row of that table. Only for jobs the worker actually has
                     a queue for — the action rejects anything else, and a
-                    control that can only fail is worse than none. */}
+                    control that can only fail is worse than none.
+
+                    `ConfirmGroup`/`ConfirmingForm`
+                    (`@/app/_components/confirm-group`), not a bare `<form>`:
+                    this control sits inside the job's own `Disclosure` above,
+                    and `syncJobAction` returns its confirmation through
+                    `useActionState` rather than a redirect for exactly the
+                    reason `ConfirmNotice`'s docblock above and
+                    `syncJobAction`'s own explain — a redirect back to this
+                    route would reset this `Disclosure`'s `useState` and close
+                    the drawer the admin opened to press the button. One group
+                    per job is enough: each drawer holds exactly one enqueue
+                    control, not several mutually-exclusive ones the way
+                    `/admin/accounts`'s tier group does. */}
                         {cronFor(g.jobType) !== null && (
-                          <form action={syncJobAction} className="btn-row strip__act">
-                            <input type="hidden" name="jobType" value={g.jobType} />
-                            <Submit className="btn btn--micro" pendingLabel="Queueing…">
-                              Re-run {g.jobType}
-                            </Submit>
-                          </form>
+                          <ConfirmGroup>
+                            <ConfirmingForm
+                              action={syncJobAction}
+                              className="btn-row strip__act"
+                            >
+                              <input type="hidden" name="jobType" value={g.jobType} />
+                              <Submit className="btn btn--micro" pendingLabel="Queueing…">
+                                Re-run {g.jobType}
+                              </Submit>
+                            </ConfirmingForm>
+                          </ConfirmGroup>
                         )}
                       </Disclosure>
                     </li>
