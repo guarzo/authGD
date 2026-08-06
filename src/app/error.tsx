@@ -125,8 +125,10 @@ export default function Error({
   // Set after mount rather than during render. This boundary renders on the
   // server for a server-side throw, and a clock read in the render body would
   // be a hydration mismatch on every one of those. `null` until the effect
-  // runs, so the block below prints the two facts it already has and gains the
-  // third — which is the one an admin needs to bracket a search.
+  // runs, and the block below renders the row as `—` in the meantime rather
+  // than dropping it — the row is the one an admin needs to bracket a search,
+  // and a row that appears late moves the buttons under it. See the comment on
+  // the block itself.
   const [seenAt, setSeenAt] = useState<string | null>(null);
   useEffect(() => {
     setSeenAt(`${utcHhmm(new Date())} UTC`);
@@ -231,7 +233,22 @@ export default function Error({
             thing the sentence points at.
 
             `seenAt` is absent on the server render and arrives after mount, so
-            the row is conditional rather than showing an empty value.
+            the row prints `—` in the meantime rather than being omitted. Both
+            options are honest; only one keeps the block the same height. What
+            sits directly below this is the button row, and the lede above warns
+            that a submitted action may already have taken effect — so **Try
+            again** is a control with consequences, and a reader who has read
+            that, decided, and moved to press it should not have it slide out
+            from under the pointer when the effect fires. `—` is this app's
+            existing answer to a value that is not there (`admin/accounts` falls
+            back to it directly, `admin/sync` wraps it in `Absent`), so a block
+            copied during that first moment reads as a record with one field
+            pending rather than as a rendering fault.
+
+            `error.digest` stays conditional for the opposite reason: it is
+            absent *permanently* for client-side throws, per the comment above,
+            so there is no arrival and no shift — only a line of noise on every
+            client error.
 
             `as="h2"` rather than the `span` default: it is the only section
             heading on the page, under the h1, and a reader navigating by
@@ -243,7 +260,7 @@ export default function Error({
         <pre className="escalation mono">
           <code>
             {`page    ${pathname}`}
-            {seenAt ? `\nseen    ${seenAt}` : ""}
+            {`\nseen    ${seenAt ?? "—"}`}
             {error.digest ? `\nref     ${error.digest}` : ""}
           </code>
         </pre>
