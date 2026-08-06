@@ -324,9 +324,14 @@ export default async function AdminAccountsPage({
           <span className="visually-hidden" id="accounts-search-hint">
             Matches a main, an alt, or a linked Discord handle.
           </span>
-          <Submit className="btn btn--micro">Find</Submit>
+          {/* Full 36px on both, not the 28px in-row grade: this is the filter
+              row, and the tier and status chips beside it (`:338` onward) are
+              already bare `.btn`. `clear` additionally needs the
+              `.filters .btn--quiet` buy-back in globals.css — dropping
+              `--micro` alone leaves it at `.btn--quiet`'s own 1.75rem. */}
+          <Submit className="btn">Find</Submit>
           {q && (
-            <a className="btn btn--micro btn--quiet" href={qs({ q: undefined })}>
+            <a className="btn btn--quiet" href={qs({ q: undefined })}>
               clear
             </a>
           )}

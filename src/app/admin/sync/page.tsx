@@ -763,7 +763,15 @@ export default async function AdminSyncPage({
                               className="btn-row strip__act"
                             >
                               <input type="hidden" name="jobType" value={g.jobType} />
-                              <Submit className="btn btn--micro" pendingLabel="Queueing…">
+                              {/* Full 36px, not the 28px `.btn--micro` grade: this sits in
+                                  a drawer strip below the runs table (`.strip__act`), not in
+                                  a table row, and DESIGN.md gives the smaller size to "the
+                                  in-row controls of the admin tables… and nowhere else".
+                                  Same call `account/page.tsx:372-381` and
+                                  `inline-edit.tsx:75-83` already made for the facts grid.
+                                  Nothing had to be bought back here — this control carries
+                                  no `.btn--quiet`, so dropping `--micro` is the whole fix. */}
+                              <Submit className="btn" pendingLabel="Queueing…">
                                 Re-run {g.jobType}
                               </Submit>
                             </ConfirmingForm>

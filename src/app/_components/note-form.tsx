@@ -52,6 +52,28 @@ export function NoteForm({
         aria-label={`Note for ${identity}`}
         onChange={() => setDirty(true)}
       />
+      {/* Stays at the 28px in-row grade, and the reasoning is worth keeping
+          because this looks like a violation and is not.
+
+          `.note-form` is a centre-aligned flex pair whose `.field` *measures*
+          40px — `min-height: 2.25rem` (globals.css:2108) is only a floor, and
+          the mono `--t-data` line box plus `var(--s-2)` padding clears it. So
+          this button does sit 12px shorter than the input it is glued to, and
+          a sweep looking only at this file will keep re-finding that.
+
+          It is still correct. The sole caller renders inside `Disclosure`'s
+          `as="row"` drawer (`admin/accounts/page.tsx:972`), which is literally
+          a second `<tr className="drawer-row">` (`disclosure.tsx:121-125`) —
+          an admin table row by the codebase's own operative definition — and
+          every other control in that drawer is `.btn--micro` (`page.tsx:860,
+          895, 916, 948, 956, 999`). Raising only this one would leave it alone
+          at 36px among eight siblings at 28px: a new inconsistency inside one
+          panel, traded for a smaller one against the input.
+
+          Closing the 12px gap properly means deciding whether a drawer row is
+          "in-row" for DESIGN.md's purposes at all — its stated rationale is
+          density on rows that carry a control set each, which a one-at-a-time
+          full-width panel does not. That is a call for a human, not a sweep. */}
       <Submit
         className="btn btn--micro"
         pendingLabel="saving…"

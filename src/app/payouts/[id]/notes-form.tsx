@@ -87,7 +87,13 @@ export function NotesForm({
         onChange={(e) => setNotes(e.target.value)}
         aria-label="operation notes"
       />
-      <Submit className="btn btn--micro" aria-label="save notes" pendingLabel="saving…">
+      {/* Full 36px: this sits under the notes textarea in the operation's own
+          panel, not in a table row, so DESIGN.md's 28px ration does not cover
+          it. (An earlier version of this comment said `.field` "beside it" is
+          2.25rem — wrong twice over: `.form-stack` puts the textarea *above*
+          this button, and a `rows={3}` textarea is far past that floor anyway.
+          The 36px is DESIGN.md's standalone grade, not a match to a neighbour.) */}
+      <Submit className="btn" aria-label="save notes" pendingLabel="saving…">
         Save
       </Submit>
       {/* Mounted unconditionally, empty at rest — the shape AT most often

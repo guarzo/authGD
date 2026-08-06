@@ -966,3 +966,44 @@ test("a collapsed row's hidden text carries both ends, and the count exactly onc
   await expect(startedCell.locator(".strip__group-count")).toBeVisible();
   await expect(startedCell.locator(".strip__group-count")).toHaveText("3 runs");
 });
+
+/**
+ * The Re-run control's size, which nothing else on this page pins.
+ *
+ * It carried `.btn--micro` until this sweep. DESIGN.md rations the 28px grade
+ * to the in-row controls of the admin tables, and this one sits in a drawer
+ * strip below the runs table rather than in a row of it — so it belongs at the
+ * standalone 36px grade, alongside `Sync now` at the top of the same page.
+ *
+ * Written because the fix was otherwise invisible to the suite: every
+ * assertion on this button addresses it by accessible name, and a regression
+ * putting `btn--micro` back on `page.tsx` would leave the whole file green
+ * while the control quietly shrank below the hit target its placement earns.
+ */
+test("a drawer's Re-run control sits at the standalone grade, not the in-row one", async ({
+  page,
+  context,
+}) => {
+  await asAdmin(context);
+  await seedRuns();
+  await page.goto("/admin/sync");
+
+  const purge = summaryFor(page, "purge");
+  await purge.click();
+  await expect(purge).toHaveAttribute("aria-expanded", "true");
+
+  const rerun = page
+    .locator(".strip__job", { hasText: "purge" })
+    .getByRole("button", { name: "Re-run purge" });
+  // `Sync now`: the same page's own standalone button, and the comparison that
+  // makes the number below mean something rather than restate a constant.
+  const syncNow = page.getByRole("button", { name: "Sync now" });
+
+  const [rerunBox, syncNowBox] = await Promise.all([
+    rerun.boundingBox(),
+    syncNow.boundingBox(),
+  ]);
+
+  expect(Math.round(syncNowBox!.height)).toBe(36);
+  expect(Math.round(rerunBox!.height)).toBe(Math.round(syncNowBox!.height));
+});

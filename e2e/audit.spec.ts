@@ -1445,3 +1445,35 @@ test("an audit row's control stays clear of the sticky header when focused", asy
     "the focused control's top edge is below the sticky header's bottom edge",
   ).toBeGreaterThanOrEqual(geom!.headBottom);
 });
+
+test("the filter row's clear link matches the height of the Filter button beside it", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
+  await db.insert(auditLog).values([
+    {
+      actor: admin.id,
+      action: "tier.changed",
+      target: admin.id,
+      details: { to: "member" },
+    },
+  ]);
+
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  // `clear` only renders on a filtered view.
+  await page.goto("/admin/audit?action=tier.changed");
+
+  const clear = page.getByRole("link", { name: "clear" });
+  const filter = page.getByRole("button", { name: "Filter" });
+  await expect(clear).toBeVisible();
+
+  const [clearBox, filterBox] = await Promise.all([
+    clear.boundingBox(),
+    filter.boundingBox(),
+  ]);
+  // Both assertions matter: equality alone would pass if a later change shrank
+  // them together, and 36 alone would not catch the pair drifting apart.
+  expect(Math.round(clearBox!.height)).toBe(36);
+  expect(Math.round(clearBox!.height)).toBe(Math.round(filterBox!.height));
+});
