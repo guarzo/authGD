@@ -204,9 +204,12 @@ describe("runLocationJob", () => {
       main: true,
       scopes: ALL_SCOPES,
     });
+    // Real EVE id ranges, not adjacent numbers: a structure id can never fall
+    // in the solar-system range (src/services/universe-names.ts:55-58 relies
+    // on that separation to treat `id` alone as a safe cache key).
     const { esi } = fakeLocationEsi({
-      location: { 1: docked(31000042, 31000001) },
-      structures: { 31000001: "fail" },
+      location: { 1: docked(30000142, 1035466617946) },
+      structures: { 1035466617946: "fail" },
     });
     const result = await runLocationJob({ db: ctx.db, cfg, esi, fetchImpl: okToken });
     // An unresolvable structure is a steady state, not a job fault.
@@ -214,8 +217,100 @@ describe("runLocationJob", () => {
     expect(result.counts?.namesUnresolved).toBe(1);
     expect(result.counts?.updated).toBe(1);
     const r = await row(1);
-    expect(r.locationStructureId).toBe(31000001);
+    expect(r.locationStructureId).toBe(1035466617946);
     expect(r.locationCheckedAt).not.toBeNull();
+  });
+
+  it("does not let one character's failure abort the run for the others", async () => {
+    // Two characters in one run: if the try/catch around a single character's
+    // ESI calls were ever hoisted out of the loop, char 1's throw would abort
+    // the whole `for` and char 2 would never be updated — updated would read
+    // 0, not 1.
+    const acc = await seedAccount(ctx.db, { tier: "member" });
+    await seedCharacter(ctx.db, cfg, {
+      id: 1,
+      accountId: acc.id,
+      main: true,
+      scopes: ALL_SCOPES,
+    });
+    await seedCharacter(ctx.db, cfg, {
+      id: 2,
+      accountId: acc.id,
+      scopes: ALL_SCOPES,
+    });
+    const { esi } = fakeLocationEsi({
+      location: { 1: "fail", 2: inSpace(30000142) },
+    });
+    await expect(
+      runLocationJob({ db: ctx.db, cfg, esi, fetchImpl: okToken }),
+    ).rejects.toBeInstanceOf(JobRetryError);
+
+    const [run] = await ctx.db.select().from(syncRun);
+    expect(run.status).toBe("partial");
+
+    const result = await ctx.db.select().from(character).where(eq(character.id, 2));
+    expect(result[0].locationSystemId).toBe(30000142);
+    // char 1 failed and wrote nothing; char 2 still updated despite it.
+    expect((await row(1)).locationCheckedAt).toBeNull();
+  });
+
+  it("marks needs_reauth under a CAS on the refresh-token blob, and does not retry", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "member" });
+    await seedCharacter(ctx.db, cfg, {
+      id: 1,
+      accountId: acc.id,
+      main: true,
+      scopes: ALL_SCOPES,
+    });
+    const esi: LocationEsi = {
+      ...fakeLocationEsi().esi,
+      getLocation: async () => {
+        throw new EsiError("missing scope", 403, "needs_reauth");
+      },
+    };
+    const result = await runLocationJob({ db: ctx.db, cfg, esi, fetchImpl: okToken });
+    // needs_reauth counts as failed, not transient — retrying would hammer a
+    // token that will not improve without operator action.
+    expect(result.status).toBe("partial");
+    expect(result.retry).toBe(false);
+    expect(result.counts?.failed).toBe(1);
+    const r = await row(1);
+    expect(r.tokenStatus).toBe("needs_reauth");
+  });
+
+  it("skips the needs_reauth write when the refresh-token blob rotated underneath it", async () => {
+    // Simulates a concurrent rotation landing between this job's token
+    // refresh and its needs_reauth write: the CAS predicate must see the row
+    // has moved on and refuse to write a decision based on stale state.
+    const acc = await seedAccount(ctx.db, { tier: "member" });
+    await seedCharacter(ctx.db, cfg, {
+      id: 1,
+      accountId: acc.id,
+      main: true,
+      scopes: ALL_SCOPES,
+      tokenStatus: "valid",
+    });
+    const esi: LocationEsi = {
+      ...fakeLocationEsi().esi,
+      getLocation: async () => {
+        // Land a concurrent rotation of the encrypted refresh token AFTER
+        // this job's own refresh already stored its rotated value, but
+        // BEFORE the needs_reauth branch runs its CAS update.
+        await ctx.db
+          .update(character)
+          .set({ refreshTokenEnc: "rotated-by-someone-else" })
+          .where(eq(character.id, 1));
+        throw new EsiError("missing scope", 403, "needs_reauth");
+      },
+    };
+    const result = await runLocationJob({ db: ctx.db, cfg, esi, fetchImpl: okToken });
+    expect(result.status).toBe("partial");
+    expect(result.counts?.failed).toBe(1);
+    const r = await row(1);
+    // The CAS predicate missed (refreshTokenEnc no longer matches what our
+    // refresh wrote), so tokenStatus must be left exactly as it was.
+    expect(r.tokenStatus).toBe("valid");
+    expect(r.refreshTokenEnc).toBe("rotated-by-someone-else");
   });
 
   it("covers every tier but never an affiliation_invalid character", async () => {

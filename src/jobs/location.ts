@@ -93,7 +93,7 @@ export async function runLocationJob(deps: {
         const loc = await esi.getLocation(ch.characterId, token.accessToken);
         // Optional scope. Its absence costs this character the online/offline
         // treatment and nothing else — it must NOT skip the character.
-        const online = ch.scopes.includes("esi-location.read_online.v1")
+        const online = ch.scopes.includes(LOCATION_SCOPES_OPTIONAL[1])
           ? await esi.getOnline(ch.characterId, token.accessToken)
           : null;
 
@@ -114,10 +114,7 @@ export async function runLocationJob(deps: {
           });
           if (station === null) counts.namesUnresolved++;
         }
-        if (
-          loc.structureId !== null &&
-          ch.scopes.includes("esi-universe.read_structures.v1")
-        ) {
+        if (loc.structureId !== null && ch.scopes.includes(LOCATION_SCOPES_OPTIONAL[0])) {
           const structure = await resolveUniverseName(db, esi, {
             id: loc.structureId,
             kind: "structure",
