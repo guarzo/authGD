@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  classifyCharacter,
   computeAccountHealth,
   type CharacterHealthInput,
   type DiscordPushInput,
@@ -213,5 +214,93 @@ describe("computeAccountHealth", () => {
         health(0, 1, false, "stalled", true),
       );
     });
+  });
+});
+
+describe("classifyCharacter", () => {
+  it("calls a valid, untargeted character ok", () => {
+    expect(classifyCharacter(char())).toBe("ok");
+  });
+
+  it("calls a targeted character with no result yet ok", () => {
+    expect(classifyCharacter(char({ contactsTarget: true }))).toBe("ok");
+  });
+
+  it("calls a successful sync ok", () => {
+    expect(
+      classifyCharacter(char({ contactsTarget: true, contactSyncResult: "ok" })),
+    ).toBe("ok");
+  });
+
+  // The five MEMBER_FIXABLE codes, each cleared by re-linking or renaming a
+  // label in game. Table-driven so a code added to the set without a decision
+  // about this table fails loudly here.
+  for (const result of [
+    "missing_label",
+    "label_mismatch",
+    "token_invalid",
+    "missing_scope",
+    "needs_reauth",
+  ]) {
+    it(`calls ${result} attention`, () => {
+      expect(
+        classifyCharacter(char({ contactsTarget: true, contactSyncResult: result })),
+      ).toBe("attention");
+    });
+  }
+
+  // Not the member's to fix, but not ok either — this is the distinction the
+  // whole design rests on, and the one an earlier draft of the spec collapsed.
+  for (const result of ["token_refresh_failed", "sync_failed", "dry_run"]) {
+    it(`calls ${result} stalled`, () => {
+      expect(
+        classifyCharacter(char({ contactsTarget: true, contactSyncResult: result })),
+      ).toBe("stalled");
+    });
+  }
+
+  // A code written by an older deployment crosses the DB boundary as a plain
+  // string. It must degrade to stalled, never throw and never read as ok.
+  it("calls an unrecognized code stalled", () => {
+    expect(
+      classifyCharacter(
+        char({ contactsTarget: true, contactSyncResult: "from_a_future_deploy" }),
+      ),
+    ).toBe("stalled");
+  });
+
+  it("calls a bad token attention regardless of contacts", () => {
+    expect(classifyCharacter(char({ tokenStatus: "needs_reauth" }))).toBe("attention");
+  });
+
+  it("calls a missing scope attention", () => {
+    expect(classifyCharacter(char({ needsReauthForScopes: true }))).toBe("attention");
+  });
+
+  // An untargeted character cannot be stalled: there is no sync to stall.
+  it("ignores a stale result on an untargeted character", () => {
+    expect(
+      classifyCharacter(
+        char({ contactsTarget: false, contactSyncResult: "sync_failed" }),
+      ),
+    ).toBe("ok");
+  });
+
+  // The guarantee the refactor buys: one taxonomy, not two. If these ever
+  // disagree, the row and the account headline are telling different stories.
+  it("agrees with computeAccountHealth's counts", () => {
+    const chars = [
+      char(),
+      char({ tokenStatus: "invalid" }),
+      char({ contactsTarget: true, contactSyncResult: "dry_run" }),
+      char({ contactsTarget: true, contactSyncResult: "missing_label" }),
+    ];
+    const h = computeAccountHealth(chars, discord());
+    expect(chars.filter((c) => classifyCharacter(c) === "attention")).toHaveLength(
+      h.attention,
+    );
+    expect(chars.filter((c) => classifyCharacter(c) === "stalled")).toHaveLength(
+      h.stalled,
+    );
   });
 });

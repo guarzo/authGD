@@ -24,6 +24,26 @@ export type LocationDisplay =
   { kind: "none" } | { kind: "line"; text: string; offline: boolean };
 
 /**
+ * EVE dock names already contain their system: an NPC station is
+ * "<celestial> - <name>" and the celestial begins with the system name, and
+ * players name structures after the hole they live in. Composing
+ * "system — dock" therefore printed the system twice in every docked row, on a
+ * page whose scarcest resource is line width.
+ *
+ * Taking the last segment keeps the system (the fact a wormhole corp navigates
+ * by) and drops the celestial (which nobody reads off a roster). A structure
+ * with an internal " - " loses its first segment — the accepted cost of a rule
+ * with no special cases. Falls back to the whole name rather than an empty
+ * string, so a name ending in the separator degrades to more detail, never to
+ * nothing.
+ */
+function shortenDock(name: string): string {
+  const parts = name.split(" - ");
+  const last = parts[parts.length - 1].trim();
+  return last.length > 0 ? last : name;
+}
+
+/**
  * Degrades to less detail, never to a wrong answer: an unresolved system falls
  * back to its id, an unresolved dock to the bare word "Docked". A character
  * never read at all — no `checkedAt`, or no system — renders nothing, because
@@ -35,14 +55,20 @@ export function formatLocation(
 ): LocationDisplay {
   if (snap.checkedAt === null || snap.systemId === null) return { kind: "none" };
   const system = names.system ?? `System ${snap.systemId}`;
+  const docked = names.docked === null ? null : shortenDock(names.docked);
   const place =
-    names.docked ??
+    docked ??
     (snap.stationId !== null || snap.structureId !== null ? "Docked" : "in space");
   const text = `${system} — ${place}`;
   // `online === null` means read_online was never granted: show the location
   // plainly rather than assert a presence nobody told us about.
+  //
+  // The word "last seen" no longer rides in `text`. It is the view's to render,
+  // because the view is where the `.dim` treatment that already means "true,
+  // but not now" lives — and where it can be given to screen readers without
+  // spending a line's width on it.
   const offline = snap.online === false;
-  return { kind: "line", text: offline ? `last seen ${text}` : text, offline };
+  return { kind: "line", text, offline };
 }
 
 export type LocationFreshness = {

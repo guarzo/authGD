@@ -9,7 +9,7 @@ import { getAccountView, type PushStatus } from "@/services/account-view";
 import { canReadPayouts } from "@/services/payouts";
 import { listAccountPayouts } from "@/services/payout-view";
 import { getSessionAccount } from "@/services/session";
-import { computeAccountHealth } from "@/core/account-health";
+import { classifyCharacter, computeAccountHealth } from "@/core/account-health";
 import { Notice, RuleHead, Scroller, SiteHeader, Status } from "@/app/_components/ui";
 import { brandProps } from "@/app/_components/brand-server";
 import { RelativeTime } from "@/app/_components/relative-time";
@@ -22,7 +22,12 @@ import {
   ConfirmCost,
   ConfirmSubmit,
 } from "@/app/_components/confirm-submit";
-import { ContactRemedy, ContactState, hasContactRemedy } from "./contact-state";
+import {
+  ContactRemedy,
+  ContactState,
+  contactStateToken,
+  hasContactRemedy,
+} from "./contact-state";
 import { StandingTier } from "./standing";
 import {
   setMainAction,
@@ -69,6 +74,21 @@ export const metadata: Metadata = {
  *  than the generic note would add — so neither surfaces it. */
 function contactsNoteApplies(result: string | null) {
   return result !== "ok" && result !== "missing_label" && result !== "label_mismatch";
+}
+
+/**
+ * The words the collapsed STATUS chip's `aria-label` uses for the standings
+ * fact — the same words `ContactState` would render visibly, so the
+ * accessible name never says something different from what an expanded row
+ * would have shown.
+ */
+function standingsSummary(c: {
+  contactsTarget: boolean;
+  contactSyncResult: string | null;
+}) {
+  if (!c.contactsTarget) return "— not managed";
+  if (c.contactSyncResult === null) return "not yet run";
+  return contactStateToken(c.contactSyncResult).text;
 }
 
 /**
@@ -476,8 +496,9 @@ export default async function AccountPage({
             <caption className="visually-hidden">
               authGD owns the <code>{cfg.standings.label}</code> contact label on your
               characters: contacts under that label are managed automatically and may be
-              added, changed, or removed. Each character&rsquo;s standings sit in its
-              STATUS cell, beside its token and map state.
+              added, changed, or removed. Each character&rsquo;s STATUS cell summarizes
+              its token, standings and map state, and shows the detail when something
+              needs your attention.
             </caption>
             <thead>
               <tr>
@@ -493,123 +514,176 @@ export default async function AccountPage({
             </thead>
             <tbody>
               <ConfirmArmScope>
-                {view.characters.map((c) => (
-                  <tr key={c.id}>
-                    <td>
-                      {/* The EVE image server is a third party serving one
+                {view.characters.map((c) => {
+                  const state = classifyCharacter(c);
+                  // `classifyCharacter` only returns "stalled" when
+                  // `contactSyncResult` is a non-null, non-"ok" code
+                  // (account-health.ts:127), so this narrowing check never
+                  // actually fails for that state — an explicit `!== null`
+                  // rather than a non-null assertion, so `tsc` can follow it.
+                  // Gated on `state === "stalled"` so the value has no meaning
+                  // outside the one arm that reads it.
+                  const stalledToken =
+                    state === "stalled" && c.contactSyncResult !== null
+                      ? contactStateToken(c.contactSyncResult)
+                      : null;
+                  return (
+                    <tr key={c.id}>
+                      <td>
+                        {/* The EVE image server is a third party serving one
                           small thumbnail per row; running each through the
                           image optimizer would add a proxy hop and a
                           dependency on their uptime per row of an admin's
                           scan, for no visible gain on a 32x32 avatar — not
                           adding images.evetech.net to remotePatterns for
                           this. */}
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        className="portrait"
-                        src={`https://images.evetech.net/characters/${c.id}/portrait?size=64`}
-                        alt=""
-                        width={32}
-                        height={32}
-                        loading="lazy"
-                      />
-                    </td>
-                    <td>
-                      <div className="stack">
-                        <span className="char">
-                          {c.name}{" "}
-                          {c.isMain && <strong className="char__main">(main)</strong>}
-                        </span>
-                        <CharacterLocation
-                          location={c.location}
-                          stale={c.locationStale}
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          className="portrait"
+                          src={`https://images.evetech.net/characters/${c.id}/portrait?size=64`}
+                          alt=""
+                          width={32}
+                          height={32}
+                          loading="lazy"
                         />
-                      </div>
-                    </td>
-                    <td
-                      aria-describedby={
-                        hasContactRemedy(c.contactSyncResult, c.contactsTarget)
-                          ? contactRemedyId(c.id)
-                          : undefined
-                      }
-                    >
-                      <div className="stack">
-                        <span className="status-line">
-                          <span className="status-line__label">token</span>
-                          {c.tokenStatus === "valid" && !c.needsReauthForScopes ? (
-                            <Status tone="ok">ok</Status>
-                          ) : (
-                            // A control, not a value: `.st` carries no underline
-                            // of its own (it's display:inline-flex), so an anchor
-                            // wrapping one rendered with no affordance at all —
-                            // identical to an inert token beside it. This is the
-                            // same "make main"/"unlink" grade the row's other
-                            // controls use, per globals.css's value/control
-                            // split. Merging TOKEN into STATUS does not demote it
-                            // to a chip.
-                            <a
-                              className="btn btn--quiet btn--micro"
-                              href="/auth/eve/link"
-                            >
-                              re-authorize
-                            </a>
-                          )}
-                        </span>
-                        <span className="status-line">
-                          <span className="status-line__label">standings</span>
-                          <ContactState
-                            result={c.contactSyncResult}
-                            target={c.contactsTarget}
+                      </td>
+                      <td>
+                        <div className="char-line">
+                          <span className="char">
+                            {c.name}{" "}
+                            {c.isMain && <strong className="char__main">(main)</strong>}
+                          </span>
+                          <CharacterLocation
+                            location={c.location}
+                            stale={c.locationStale}
                           />
-                        </span>
-                        <span className="status-line">
-                          <span className="status-line__label">map</span>
-                          {c.onMapAcl ? (
-                            <Status tone="ok">on</Status>
-                          ) : (
-                            <Status tone="off">off</Status>
-                          )}
-                        </span>
-                      </div>
-                    </td>
-                    <td>
-                      <div className="btn-row btn-row--tight btn-row--end">
-                        {!c.isMain && (
-                          <form
-                            action={setMainAction.bind(null, c.id)}
-                            className="inline-form"
-                          >
-                            <Submit
-                              className="btn btn--quiet btn--micro"
-                              pendingLabel="setting…"
+                        </div>
+                      </td>
+                      <td
+                        data-state={state}
+                        aria-label={
+                          state === "attention"
+                            ? undefined
+                            : // The literal "token ok" is safe only because this
+                              // branch (state !== "attention") is unreachable with
+                              // a non-valid token: `classifyCharacter` returns
+                              // "attention" for any token that isn't valid
+                              // (account-health.ts), so the collapsed "ok" chip
+                              // below and this label can only ever agree. A future
+                              // change loosening that classification would need to
+                              // update this string too — nothing else guards it.
+                              `token ok, standings ${standingsSummary(c)}, map ${
+                                c.onMapAcl ? "on" : "off"
+                              }`
+                        }
+                        aria-describedby={
+                          hasContactRemedy(c.contactSyncResult, c.contactsTarget)
+                            ? contactRemedyId(c.id)
+                            : undefined
+                        }
+                      >
+                        {state === "attention" ? (
+                          <div className="stack">
+                            <span className="status-line">
+                              <span className="status-line__label">token</span>
+                              {c.tokenStatus === "valid" && !c.needsReauthForScopes ? (
+                                <Status tone="ok">ok</Status>
+                              ) : (
+                                // A control, not a value: `.st` carries no underline
+                                // of its own (it's display:inline-flex), so an anchor
+                                // wrapping one rendered with no affordance at all —
+                                // identical to an inert token beside it. This is the
+                                // same "make main"/"unlink" grade the row's other
+                                // controls use, per globals.css's value/control
+                                // split. Merging TOKEN into STATUS does not demote it
+                                // to a chip.
+                                <a
+                                  className="btn btn--quiet btn--micro"
+                                  href="/auth/eve/link"
+                                >
+                                  re-authorize
+                                </a>
+                              )}
+                            </span>
+                            <span className="status-line">
+                              <span className="status-line__label">standings</span>
+                              <ContactState
+                                result={c.contactSyncResult}
+                                target={c.contactsTarget}
+                              />
+                            </span>
+                            <span className="status-line">
+                              <span className="status-line__label">map</span>
+                              {c.onMapAcl ? (
+                                <Status tone="ok">on</Status>
+                              ) : (
+                                <Status tone="off">off</Status>
+                              )}
+                            </span>
+                          </div>
+                        ) : state === "stalled" ? (
+                          // One chip, and it never overstates health: a stalled
+                          // character shows its own state, not `ok`. `map: off`
+                          // rides in the cell's accessible name rather than the
+                          // visible chip because it is unsubstantiable as a fault
+                          // (account-health.ts:27-35) and nothing a member can
+                          // act on.
+                          //
+                          // The null-token branch is unreachable today —
+                          // `classifyCharacter` only returns "stalled" for a
+                          // non-null `contactSyncResult` — but its fallback is
+                          // still a non-"ok" tone. This arm must never be able
+                          // to reach the `ok` chip through any path, so a
+                          // future change to `isStalled` that breaks that
+                          // guarantee fails loud (a wrong chip) rather than
+                          // quiet (a false green).
+                          <Status tone={stalledToken?.tone ?? "warn"}>
+                            {stalledToken?.text ?? "stalled"}
+                          </Status>
+                        ) : (
+                          <Status tone="ok">ok</Status>
+                        )}
+                      </td>
+                      <td>
+                        <div className="btn-row btn-row--tight btn-row--end">
+                          {!c.isMain && (
+                            <form
+                              action={setMainAction.bind(null, c.id)}
+                              className="inline-form"
                             >
-                              make main
-                            </Submit>
-                          </form>
-                        )}
-                        {view.characters.length > 1 && (
-                          <form
-                            action={unlinkAction.bind(null, c.id)}
-                            className="inline-form"
-                          >
-                            <ConfirmSubmit
-                              className="btn btn--quiet btn--micro btn--danger-quiet"
-                              armedClassName="btn btn--micro btn--danger"
-                              label="unlink"
-                              // Named, like the Discord unlink above and every
-                              // unlink on the admin table: three rows each
-                              // offering a bare "unlink" gives a screen-reader
-                              // or speech-input member the verb three times
-                              // with no object, and the manifest is exactly
-                              // where they cannot see which row they are on.
-                              restName={`unlink ${c.name}`}
-                              confirmName={`confirm unlink ${c.name}`}
-                            />
-                          </form>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                              <Submit
+                                className="btn btn--quiet btn--micro"
+                                pendingLabel="setting…"
+                              >
+                                make main
+                              </Submit>
+                            </form>
+                          )}
+                          {view.characters.length > 1 && (
+                            <form
+                              action={unlinkAction.bind(null, c.id)}
+                              className="inline-form"
+                            >
+                              <ConfirmSubmit
+                                className="btn btn--quiet btn--micro btn--danger-quiet"
+                                armedClassName="btn btn--micro btn--danger"
+                                label="unlink"
+                                // Named, like the Discord unlink above and every
+                                // unlink on the admin table: three rows each
+                                // offering a bare "unlink" gives a screen-reader
+                                // or speech-input member the verb three times
+                                // with no object, and the manifest is exactly
+                                // where they cannot see which row they are on.
+                                restName={`unlink ${c.name}`}
+                                confirmName={`confirm unlink ${c.name}`}
+                              />
+                            </form>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
                 {view.characters.length === 0 && (
                   <tr>
                     <td className="log__empty" colSpan={MANIFEST_COLUMN_COUNT}>

@@ -12,7 +12,9 @@ import type { LocationDisplay } from "@/core/location";
  *
  * `.dim` is applied for an offline reading and for a stale one, which are
  * different facts with the same visual answer: in both cases the text is still
- * true, just not now.
+ * true, just not now. Only the offline case also gets hidden "last seen " text,
+ * because a stale-but-online character is genuinely where the line says it is —
+ * "last seen" would be false for it.
  */
 export function CharacterLocation({
   location,
@@ -24,6 +26,7 @@ export function CharacterLocation({
   if (location.kind === "none") return null;
   return (
     <span className={location.offline || stale ? "char__location dim" : "char__location"}>
+      {location.offline ? <span className="visually-hidden">last seen </span> : null}
       {location.text}
     </span>
   );

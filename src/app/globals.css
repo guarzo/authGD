@@ -1577,6 +1577,30 @@ h3.rule-head__label {
   white-space: nowrap;
 }
 
+/* Task 4 planned to put name and location on one line here (the admin drawer
+   keeps them stacked either way). Measurement forced the plan's documented
+   fallback instead: a flex row sums the name's width and the location's own
+   (up to `.char__location`'s 22rem) rather than the stacked layout's
+   `max(name, location)`, and at the 320px narrowest viewport that cost 203px
+   of additional forced horizontal scroll for an ordinary short location and
+   267px for a stress-test long structure name — against a 286px-wide scroll
+   region, i.e. close to a full extra screen's worth of blind scrolling to
+   reach the STATUS/ACTIONS columns a member came for. `e2e/account.spec.ts`'s
+   horizontal-cost test pins the measurement that forced this call and trips
+   if a future change reintroduces the flex row without re-checking it.
+   `.char-line` keeps the name Task 4 introduced as its styling hook, but is
+   now `.stack` (globals.css:3529) in every way that matters: two lines per
+   character, still a win over the three before this plan. (The existing
+   `.stack >` descendant rules — `.stack > .inline-form:has(.field--grow)`
+   and `.log td.num > .stack` — don't reach this cell today, since it has no
+   `.inline-form` and isn't a `.num` cell; don't assume a future `.stack >`
+   rule applies here without checking.) */
+.char-line {
+  display: grid;
+  gap: var(--s-2);
+  justify-items: start;
+}
+
 /* One labelled entry in the account manifest's merged STATUS cell. Three tokens
    stacked with nothing naming them read as "ok / ok / on" now that the TOKEN,
    CONTACTS and MAP headers that named them are gone — and two of those three
