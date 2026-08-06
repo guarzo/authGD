@@ -107,8 +107,15 @@ export function NewOperationForm({ today }: { today: string }) {
             on either side of the name and reads column two of a tab-separated
             line, so an EVE inventory paste needs no instruction — but a
             hand-typed list does, and a bare quantity on its own line is
-            dropped rather than guessed at (core/loot-paste.ts:145). */}
-        Loot paste (optional: one item per line, quantity before or after the name)
+            dropped rather than guessed at (core/loot-paste.ts:145).
+
+            Phrased "one line per item" and NOT "…before or after the name":
+            `getByLabel` matches on a substring, so a label containing the
+            word "name" is also a match for `getByLabel("Name")` — the Name
+            field is ten lines above, and the two resolving together is a
+            strict-mode violation that took out 22 payouts specs. Any wording
+            added here has to stay clear of every other label on the form. */}
+        Loot paste (optional: one line per item, quantity before or after)
         <textarea
           className="field"
           name="lootPaste"
