@@ -157,6 +157,143 @@ test("admin list sorts by name and by tier, and filters cryo", async ({
   await expect(mains).toHaveText(["Azzy"]);
 });
 
+/**
+ * The roster's own "find one member" answer (see view.ts's
+ * `matchesAccountSearch`): a GET form submitting `?q=`, exercised end to end
+ * because a redirect/navigation and the resulting accessible-name and
+ * heading-count behavior are exactly the things a unit test over the pure
+ * predicate cannot see.
+ */
+test("a name search finds the member, works from the keyboard, and reports the count", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedWorld();
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.goto("/admin/accounts");
+
+  // Heading-based count, the same mechanism /admin/audit already uses for its
+  // own row count — no aria-live region exists anywhere in this codebase's
+  // filtering flows, so this is the one place a screen-reader admin can learn
+  // how many rows a search left them with.
+  await expect(page.getByRole("heading", { name: "3 members" })).toBeVisible();
+
+  // Keyboard only: no pointer click on the input or the button below.
+  const search = page.getByRole("searchbox", { name: "Name or handle" });
+  await search.focus();
+  await search.fill("zed");
+  await page.keyboard.press("Enter");
+
+  await expect(page).toHaveURL(/[?&]q=zed(&|$)/);
+  await expect(page.locator(ROWS)).toHaveCount(1);
+  await expect(rowFor(page, "Zed")).toBeVisible();
+  // The count in the heading moved with the filtered list, not just the rows.
+  await expect(page.getByRole("heading", { name: "1 member" })).toBeVisible();
+  // The value the admin typed is still in the box after the round trip, same
+  // as every other filter chip's active state surviving a reload.
+  await expect(search).toHaveValue("zed");
+});
+
+/**
+ * The known trap this test is written to avoid: the empty state is one `<tr>`
+ * whether the roster itself is empty or a filter merely matched nothing, so a
+ * bare `toHaveCount(0)` (or `toHaveCount(1)` on the wrong locator) would pass
+ * either way. The two states render different text (page.tsx), and that text
+ * is what this asserts — a search that matches nobody must say so, distinctly
+ * from "no accounts exist at all".
+ */
+test("a search with no matches says so, distinctly from an empty roster", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedWorld();
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.goto("/admin/accounts?q=nobody-by-this-name");
+
+  // ROWS itself is not the right locator here: the empty-state `<tr>` is not
+  // `.drawer-row`, so it matches ROWS too and a bare `toHaveCount(0)` on it
+  // would fail whether or not the search actually ran — the exact trap this
+  // test exists to avoid. None of the seeded names are on screen, and the
+  // cell says why.
+  await expect(rowFor(page, "Boss")).toHaveCount(0);
+  await expect(rowFor(page, "Azzy")).toHaveCount(0);
+  await expect(rowFor(page, "Zed")).toHaveCount(0);
+  await expect(page.locator("td.log__empty")).toHaveText("No members match this filter.");
+  // Distinct from the truly-empty-roster message, which this filtered search
+  // must never render even though both are rendered by the same `<td>`.
+  await expect(page.locator("td.log__empty")).not.toHaveText(
+    "No accounts yet. They appear here after someone signs in with EVE.",
+  );
+});
+
+/*
+ * Next hands a page `string | string[]` for every search param, and a repeated
+ * one is not exotic: appending `&q=Zed` to a URL that already carries a `q` is
+ * how a shared link picks up a second value. The page declared `q?: string`,
+ * so the array reached `.trim()` and the whole roster came back as a 500 —
+ * an admin loses the screen entirely over a malformed link. Last value wins,
+ * matching `/admin/audit`'s filters.
+ */
+test("a repeated q parameter renders rather than throwing", async ({ page, context }) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
+  await seedMember(db, { name: "Azzy", tier: "member" });
+  await seedMember(db, { name: "Zed", tier: "member" });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+
+  await page.goto("/admin/accounts?q=Azzy&q=Zed");
+  await expect(page.getByText("Something broke")).toHaveCount(0);
+  await expect(page.locator(ROWS)).toHaveCount(1);
+  await expect(rowFor(page, "Zed")).toBeVisible();
+  await expect(page.getByRole("searchbox", { name: "Name or handle" })).toHaveValue(
+    "Zed",
+  );
+});
+
+/** An alt's name, not just the main's, is a handle an admin searches by — the
+ *  roster's own crew table shows alts by name and nothing else. */
+test("a search also matches an alt's name, not only the main", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
+  await seedMember(db, { name: "Zed", tier: "member", alts: ["Zed Alt"] });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+
+  await page.goto("/admin/accounts?q=Zed+Alt");
+  await expect(page.locator(ROWS)).toHaveCount(1);
+  // The row is still identified by its main, "Zed" — the alt matched the
+  // search, but it is not what names the row.
+  await expect(rowFor(page, "Zed")).toBeVisible();
+});
+
+/**
+ * Searching must not reset the choices an admin already made narrowing the
+ * roster — the hidden fields in the search form (page.tsx) carry tier/status/
+ * sort/dir through the GET submission for exactly this.
+ */
+test("a search preserves an active status filter across the submission", async ({
+  page,
+  context,
+}) => {
+  await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
+  await seedMember(db, { name: "Azzy", tier: "alumni", status: "cryo" });
+  await seedMember(db, { name: "Zed Cryo", tier: "member", status: "cryo" });
+  const admin = await seedMember(db, { name: "Admin", tier: "member", isAdmin: true });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+
+  await page.goto("/admin/accounts?status=cryo");
+  await expect(page.locator(ROWS)).toHaveCount(2);
+
+  const search = page.getByRole("searchbox", { name: "Name or handle" });
+  await search.fill("zed");
+  await page.keyboard.press("Enter");
+
+  await expect(page).toHaveURL(/[?&]status=cryo(&|$)/);
+  await expect(page).toHaveURL(/[?&]q=zed(&|$)/);
+  await expect(page.locator(ROWS)).toHaveCount(1);
+  await expect(rowFor(page, "Zed Cryo")).toBeVisible();
+});
+
 test("tier and cryo read as values; their controls live behind the row expander", async ({
   page,
   context,
@@ -1434,6 +1571,53 @@ test("an open drawer is not clipped by the region's height cap", async ({
     open.content,
     "the region is still capped, so sticky keeps its range",
   ).toBeGreaterThan(open.visible);
+});
+
+/**
+ * `.scroller--tall:has(.log--dense)`'s cap is `100svh - 29rem`: 29rem is a
+ * fixed CSS-px measurement of the chrome above the table, but `svh` shrinks
+ * with browser zoom (a 200% zoom halves the effective viewport in CSS px
+ * without touching anything expressed in rem). Past 200% on an ordinary
+ * screen the subtraction goes negative and `max(18rem, ...)` floors it — but
+ * flat, not scaled: two zoomed-in viewports of different heights both floor
+ * to the exact same 18rem, so the region stops answering to the viewport at
+ * all. That is the porthole: a fixed-size slot that does not grow even when
+ * the (zoomed) viewport pinching it does.
+ *
+ * Simulated the way the sweep's own note suggests — a viewport at half the
+ * CSS-pixel size of a normal one, which is what page zoom does to `svh`
+ * without touching `rem`. Two heights below the 29rem/464px chrome floor
+ * stand in for two different zoom levels on the same physical screen.
+ */
+test("the accounts scroller does not floor to the same height at every zoom level", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedDenseWorld();
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+
+  const visibleHeightAt = async (height: number) => {
+    await page.setViewportSize({ width: 640, height });
+    await page.goto("/admin/accounts");
+    // `.scroller--tall`, not `.scroller`: the page mounts a second, untall
+    // Scroller for the drawer's crew table, and the bare class would silently
+    // start measuring that one the day the two swap document order.
+    await page.waitForSelector(".scroller--tall tbody tr");
+    return page.evaluate(
+      () => (document.querySelector(".scroller--tall") as HTMLElement).clientHeight,
+    );
+  };
+
+  // Both heights are under 464px (29rem): the chrome above the table no
+  // longer fits the "svh minus chrome" arithmetic at all, which is exactly
+  // the regime a 200% zoom produces on an ordinary screen.
+  const shorter = await visibleHeightAt(400);
+  const taller = await visibleHeightAt(460);
+
+  expect(
+    taller,
+    "a taller (less-zoomed) viewport must not floor to the same region height as a shorter one",
+  ).toBeGreaterThan(shorter);
 });
 
 test("the start fade never paints over the pinned column", async ({ page, context }) => {

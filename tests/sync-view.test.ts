@@ -243,34 +243,34 @@ describe("queuedNotice", () => {
   it("promises enqueue, never execution, for every accepted value", () => {
     for (const q of ["all", "recheck", ...Object.keys(JOB_CRON)]) {
       expect(queuedNotice(q, undefined, AGE), q).toMatch(/queued/);
-      expect(queuedNotice(q, undefined, AGE), q).toMatch(/worker last ran/);
+      expect(queuedNotice(q, undefined, AGE), q).toMatch(/worker last checked in/);
     }
   });
 
   /**
    * The age is the whole differentiator now, so the notice needs no separate
    * fresh/stale strings and no second threshold constant of its own — a
-   * worker that ran 5m ago and one that ran 89m ago both get the same shape
-   * of sentence, honestly aged.
+   * worker that checked in 5m ago and one that checked in 89m ago both get
+   * the same shape of sentence, honestly aged.
    */
   it("states the worker's age rather than a freshness verdict", () => {
     expect(queuedNotice("wanderer", undefined, "5m")).toMatch(
-      /The worker last ran 5m ago/,
+      /The worker last checked in 5m ago/,
     );
     expect(queuedNotice("wanderer", undefined, "89m")).toMatch(
-      /The worker last ran 89m ago/,
+      /The worker last checked in 89m ago/,
     );
   });
 
   /**
    * `workerAge === null` is a third state the old boolean collapsed into "not
-   * running": a fresh deploy, or a purge that emptied `sync_run`, has no
-   * evidence either way, and asserting the worker is down would be a claim
-   * from the absence of evidence, not from a check.
+   * running": a fresh deploy, or a database no worker has ever started
+   * against, has no evidence either way, and asserting the worker is down
+   * would be a claim from the absence of evidence, not from a check.
    */
-  it("says no runs are recorded yet rather than asserting the worker is down", () => {
+  it("says no heartbeat is recorded yet rather than asserting the worker is down", () => {
     const notice = queuedNotice("wanderer", undefined, null);
-    expect(notice).toMatch(/no runs have been recorded yet/i);
+    expect(notice).toMatch(/no heartbeat has been recorded yet/i);
     expect(notice).not.toMatch(/not running/);
   });
 });

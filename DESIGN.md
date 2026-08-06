@@ -101,7 +101,21 @@ the system computed."
 
 ### Scale
 
-Ratio 1.25 minimum between adjacent steps, with a hard jump at display sizes.
+A hard jump at display sizes, and a deliberately tight ramp below `--t-h2`.
+
+The tight half is worth stating plainly, because "ratio 1.25 minimum between
+adjacent steps" is what this section used to claim and it has never been true of
+the shipped scale: `--t-body`/`--t-data` is 1.07:1, and every step from
+`--t-body` down to `--t-label` sits between 1.07 and 1.09. The step out of
+`--t-h2` into `--t-body` is the exception at 1.47:1 — only the top of the scale
+ramps at 1.25 or better. That is not drift to be corrected — a dense operational
+screen wants many closely-spaced sizes so a table, its caption and its label can
+each have their own without any of them shouting — but it does mean size alone
+carries very little signal down here. What separates these steps is face
+(proportional prose vs. monospaced state), weight, case and colour; the size
+difference is a nudge on top of those, not the distinction itself. A new step
+justified only by "it should be a bit smaller than the one above" is drift. One
+justified by "this is a different *kind* of thing" is a step.
 
 | Step | Size | Weight | Tracking |
 |---|---|---|---|
@@ -110,7 +124,22 @@ Ratio 1.25 minimum between adjacent steps, with a hard jump at display sizes.
 | `--t-h2` | `1.375rem` | 700 | `-0.01em` |
 | `--t-body` | `0.9375rem` | 400 | `0` |
 | `--t-data` | `0.875rem` | 400 | `0` (mono) |
+| `--t-caption` | `0.8125rem` | 400 | `0` |
+| `--t-detail` | `0.75rem` | 400 | `0` (mono or prose) |
 | `--t-label` | `0.6875rem` | 600 | see below, uppercase (mono) |
+
+`--t-caption` and `--t-detail` were named after the fact, not designed in: a
+type-scale audit found both sizes already reused across three-or-more
+unrelated components under raw `font-size` declarations (`.dim`, `.table-note`
+and `.footnote` at `0.8125rem`; `.json`, `.detail`, `.filter-form__hint`,
+`.strip__cadence` and `.strip__window` at `0.75rem`) before either had a name.
+Repeated, undesigned use across the codebase is what makes a size a step
+rather than drift — see "The label register" below for the same argument
+applied to weight instead of size. A handful of sizes below `--t-label`
+(`0.625rem` on the login page's configurable `BRAND_FOOTER` line, `0.5625rem`
+on the header's subtitle) are true one-offs: each is used exactly once, for a
+stated optical reason, and is commented in place in `globals.css` rather than
+promoted here.
 
 - Body prose caps at **68ch**.
 - All numeric and tabular data uses `font-variant-numeric: tabular-nums`, so columns
@@ -185,6 +214,18 @@ you what it holds.
   `default` (`--hull-hi` ground, `--rule-strong` border), `quiet` (text only, rule
   appears on hover). Destructive actions take `--signal-bad` on the border and text,
   never a filled red ground.
+- **Quiet destructive** (`.btn--danger-quiet`) — a fourth thing, and the one
+  exception to the rule above. A destructive action that is nonetheless an
+  *ordinary* choice — unlinking one of your own characters, removing a
+  participant from a payout — should not be the most saturated element on its
+  page permanently, because that reads as a warning against making the choice at
+  all (PRODUCT.md principle 4). So it rests at `.btn--quiet`'s `--ink-faint` and
+  takes `--signal-bad` only on row hover, its own hover, or keyboard focus.
+  Nothing is gated on hover: the label is fully legible at rest without the
+  colour, so touch and keyboard users get the same reachable, visible control —
+  the red is emphasis arriving with intent, not information withheld until a
+  pointer shows up. Use it where a member or operator does this routinely; use
+  full `.btn--danger` where the action is rare and irreversible.
 - **Field** — `--void` ground inset into `--hull`, `--rule-strong` border, gold border
   on focus plus the global focus ring.
 
@@ -231,3 +272,22 @@ configuration, the other two by overwriting the file.
   cannot reach the `44px` AAA target without growing past a screenful, so density wins
   there and nowhere else. There are **two** sizes and no others: `quiet` is a colour
   grade, like `primary` and `default`, and does not carry a size of its own.
+
+  `.shell__nav a` used to be a third, undocumented size at ~33.05px — `padding:
+  var(--s-2) var(--s-3)` plus the label register's line box, with no floor
+  and no ceiling. It could not simply shrink to 28px or grow to 36px by
+  changing that padding: the active tab's underline (`[aria-current]::after`)
+  is inset `bottom: var(--s-1)` against the padding box, a fixed offset from
+  the link's own bottom edge, and reducing `padding-block` (or setting an
+  explicit `height`) pulls that edge — and the underline with it — up toward
+  the label without moving the label itself. It now takes the same idiom
+  `.btn` already uses for its own 36px floor: `display: inline-flex;
+  align-items: center; min-height: 2.25rem`. That makes the link a flex
+  container centred on its own text rather than a padding-sized box, so
+  reaching 36px moves the *label* toward the middle of a taller box instead of
+  moving the box's edge toward a fixed label — the gap between the label and
+  the underline grew (measured: ~5.05px before, ~6.5px after) rather than
+  closing. Standalone, because it is one destination per click, not a row's
+  worth of controls competing for space — the same case that puts `.btn` at
+  36px rather than 28px. `e2e/shell.spec.ts` pins both the 36px box and a
+  minimum label-to-underline gap.

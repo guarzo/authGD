@@ -30,6 +30,8 @@ import {
   wakeSelfAction,
 } from "./actions";
 import { AccountPayouts } from "./account-payouts";
+import { ConfirmNotice } from "@/app/_components/confirm-notice";
+import { accountConfirmation } from "./view";
 
 /** Columns in the crew manifest table: portrait, name, token, contacts, map,
  *  actions. Kept alongside the empty-state row's `colSpan` so the two can't
@@ -95,7 +97,7 @@ function PushRow({ push, now }: { push: PushStatus; now: number }) {
 export default async function AccountPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string }>;
+  searchParams: Promise<{ error?: string; done?: string; name?: string; at?: string }>;
 }) {
   const cfg = getConfig();
   const sid = (await cookies()).get(cfg.sessionCookieName)?.value;
@@ -117,7 +119,7 @@ export default async function AccountPage({
   // anything added to this array should be weighed against that 5, whose
   // `connectionTimeoutMillis` turns a long wait for a free client into a
   // thrown error rather than a slow page.
-  const [view, { error }, showPayoutsLink, payouts] = await Promise.all([
+  const [view, { error, done, name, at }, showPayoutsLink, payouts] = await Promise.all([
     getAccountView(getDb(), cfg, sess.accountId),
     searchParams,
     // Same tier-only gate the payouts pages themselves re-check — this only
@@ -129,6 +131,7 @@ export default async function AccountPage({
     listAccountPayouts(getDb(), sess.accountId),
   ]);
   const message = lookupErrorMessage(ACCOUNT_ERRORS, error);
+  const confirmation = accountConfirmation(done, name);
   const now = Date.now();
 
   const nav = [
@@ -233,6 +236,20 @@ export default async function AccountPage({
             to already exist for AT to hear a change land in it. See `Notice`'s
             docblock. */}
         <Notice tone="bad">{message}</Notice>
+
+        {/* Success confirmation for the four self-serve actions below
+            (make main, unlink, wake me, unlink Discord) — a separate slot
+            from `message` above rather than a shared one, because `message`
+            is hard-coded `tone="bad"` and a success confirmation must not
+            render in the alarm colour. See `@/app/_components/confirm-notice`
+            for how this also answers the focus half of the same defect: the
+            control that was pressed unmounts the instant one of those four
+            actions succeeds, and this is what focus lands on instead of
+            `<body>`. Shared with `/admin/sync`, which has the identical
+            problem for its own three enqueue actions. It is already mounted
+            unconditionally, and carries `live={false}` on purpose — focus,
+            not the live region, does the announcing there. */}
+        <ConfirmNotice text={confirmation} at={at} />
 
         {/* Only the characters the contacts job actually targets can be waiting
             on a first run. Testing every character instead meant an associate

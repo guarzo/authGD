@@ -423,6 +423,80 @@ test("a resolved sub-cent unit price shows a real line total beside a 0.00 unit 
 });
 
 /**
+ * Regression guard for a defect that survived the design sweep's own audit of
+ * `addAppraisedPoolAction`: a SUCCESSFUL paste that drops at least one line
+ * used to `redirect()` to this same page with `?dropped=<payload>`, and a
+ * `redirect()` back to the page already on screen is still a route
+ * transition. Every `Disclosure` on this page holds its open/closed state in
+ * a plain `useState` (`disclosure.tsx`) with nowhere else to live, so that
+ * transition silently closed whatever else the operator had open — exactly
+ * the class of bug the sweep already fixed twice elsewhere
+ * (`admin/accounts/actions.ts`, `admin/sync/actions.ts`), just missed here
+ * because the sweep's own audit of this action only exercised the rejection
+ * path (the "bad shares"-style tests below), never the success-with-drops one.
+ *
+ * "42" alone is `QTY_ONLY` (`core/loot-paste.ts`) — a bare number with no item
+ * name is dropped as "quantity-only" rather than parsed as an item. Every line
+ * here drops, so `appraiseLoot` never resolves a type id and never calls
+ * triff (`esi.resolveIds` / `triff.quote` are both no-ops on an empty list) —
+ * which is what lets this go through the real form, unlike the two tests
+ * above that seed an appraised pool directly because the priced path depends
+ * on triff.tools.
+ *
+ * "Replace roster from a paste" is the control this pins the regression
+ * against, not "Add loot" or "Add one participant": both of those default
+ * OPEN while there are no pools / no roster yet, so a remount would reopen
+ * them anyway and the assertion would pass whether or not the bug were
+ * present. "Replace roster from a paste" has no `defaultOpen`, and it lives in
+ * the roster section rather than the loot section, so appraising a paste does
+ * not restructure the subtree it sits in — it only reads expanded here if it
+ * was never remounted.
+ */
+test("a dropped-lines paste does not collapse an unrelated disclosure the operator left open", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "FC Prime",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+
+  await page.goto("/payouts/new");
+  await page.getByLabel("Name").fill("Dropped-line regression");
+  await page.getByLabel("Date").fill("2026-08-01");
+  await page.getByRole("button", { name: "Create operation" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Dropped-line regression" }),
+  ).toBeVisible();
+
+  // A roster of one, so the "Replace roster from a paste" disclosure below
+  // exists at all — it only renders once there is a roster to replace.
+  await page.getByLabel("Character name").fill("FC Prime");
+  await page.getByRole("button", { name: "Add participant" }).click();
+  await expect(page.getByRole("cell", { name: "FC Prime" }).first()).toBeVisible();
+
+  const replaceRosterToggle = page.locator("summary", {
+    hasText: "Replace roster from a paste",
+  });
+  await replaceRosterToggle.click();
+  await expect(replaceRosterToggle).toHaveAttribute("aria-expanded", "true");
+
+  // "Add loot" is already open (defaultOpen while pools.length === 0) — no
+  // click needed, and clicking its own summary here would only close it.
+  await page.getByLabel("Loot paste").fill("42");
+  await page.getByRole("button", { name: "Appraise" }).click();
+
+  await expect(page.getByText("1 item ignored")).toBeVisible();
+  await expect(page.getByText("42 (just a number, with no item name)")).toBeVisible();
+
+  // The regression: this used to fail here, because the redirect above
+  // remounted every Disclosure on the page and reset this one to closed.
+  await expect(replaceRosterToggle).toHaveAttribute("aria-expanded", "true");
+});
+
+/**
  * Two payout_participant rows sharing an unresolved display name is
  * unreachable through the UI in this PR — parseRosterPaste dedupes
  * case-insensitively and setRoster fully replaces the roster on every submit,
@@ -717,6 +791,33 @@ test("an invalid date is refused with a specific message", async ({ page, contex
   await expect(page.getByText("Something broke")).toHaveCount(0);
 });
 
+/*
+ * The nastier half of the same check, and the one `new Date()` alone gets
+ * wrong: February 30th is not rejected by the platform parser, it is rolled
+ * forward to March 2nd. Without the strict parse the operation would be
+ * created — silently dated three days off what the operator submitted, on the
+ * record they reconcile against their own logs. The message promises a "real
+ * calendar date"; this is the test that the promise is kept.
+ */
+test("a date that does not exist is refused rather than rolled forward", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "FC Rollover",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+  await page.goto("/payouts/new");
+  await page.getByLabel("Name").fill("Impossible date roam");
+  await bypassClientGuard(page.getByLabel("Date"), "2026-02-30");
+  await page.getByRole("button", { name: "Create operation" }).click();
+  await expect(page).toHaveURL(/\/payouts\/new$/);
+  await expect(page.locator("p.notice--bad")).toContainText("real calendar date");
+  await expect(page.getByText("Something broke")).toHaveCount(0);
+});
+
 test("a battle report link is stored, and a bad scheme is refused without losing the rest of the form", async ({
   page,
   context,
@@ -779,9 +880,11 @@ test("a battle report link is stored, and a bad scheme is refused without losing
  * The other half of the same rule, on the other entry point. Both the create
  * form and this inline edit go through `battleReportUrlProblem`
  * (src/app/payouts/actions.ts), and both have to refuse a non-http(s) scheme,
- * because the stored value renders as a plain `<a href>` right here. They
- * differ only in how they say no: the create form returns a code so the loot
- * paste beside the field survives, this one redirects.
+ * because the stored value renders as a plain `<a href>` right here. Both now
+ * refuse the same way too — `setBattleReportUrlAction` returns a code rather
+ * than redirecting, so the rejected text stays in the field the operator is
+ * still standing in, which is why the assertion below is on `InlineEdit`'s own
+ * `span.inline-form__err` and not on a page-level notice.
  */
 test("the inline battle report edit refuses a javascript: scheme too", async ({
   page,
@@ -808,7 +911,12 @@ test("the inline battle report edit refuses a javascript: scheme too", async ({
   await bypassClientGuard(field, "javascript:alert(1)");
   await page.getByRole("button", { name: "save battle report URL" }).click();
 
-  await expect(page.locator("p.notice--bad")).toContainText("http:// or https://");
+  await expect(page.locator("span.inline-form__err")).toContainText(
+    "http:// or https://",
+  );
+  // The rejected text is still in the field, which is the point of returning
+  // state instead of redirecting.
+  await expect(field).toHaveValue("javascript:alert(1)");
   const [op] = await db
     .select()
     .from(payoutOperation)
@@ -1003,6 +1111,13 @@ test("notes saved onto a freshly finalized operation say so, not 'something brok
   expect(op.notes).toBeNull();
 });
 
+// The detail page's own `?error=` codes no longer have a live producer — every
+// action that used to redirect through `operationFailed` with one of these now
+// returns `useActionState` state instead (see actions.ts's `StringFieldEditState`
+// / `FlatPoolEditState`), which is the fix for "a rejected edit discards what
+// was typed". The codes and their copy stay in `OPERATION_ERRORS` as backstops
+// for a direct `?error=` visit or a hand-built request — this loop is what
+// still proves each renders its message rather than nothing.
 for (const [code, phrase] of [
   ["appraisal_failed", "did not answer"],
   ["pricing_mode", "four pricing modes"],
@@ -1109,7 +1224,7 @@ test("a rejected create form comes back filled in", async ({ page, context }) =>
  * end-to-end version of the check: text and zero both land back on the page
  * with a specific message rather than on error.tsx. Text is the important one
  * — iskToCents *throws* on it, so a naive positivity guard would escape past
- * the redirect it was meant to trigger.
+ * the check it was meant to trigger.
  */
 test("bad shares land on the page, not the error boundary", async ({ page, context }) => {
   const operator = await seedMember(db, {
@@ -1135,19 +1250,34 @@ test("bad shares land on the page, not the error boundary", async ({ page, conte
   await page.getByRole("button", { name: "edit shares for Alice Pilot" }).click();
   await bypassClientGuard(page.getByLabel(/^shares for alice pilot$/i), "abc");
   await page.getByRole("button", { name: "save shares for Alice Pilot" }).click();
-  await expect(page.locator("p.notice--bad")).toContainText("plain number like 1");
+  // The message renders inside the open editor now, not as the page-level
+  // `?error=` notice — `setParticipantSharesAction` returns state instead of
+  // redirecting, which is the whole mechanism that keeps the typed value.
+  await expect(page.locator("span.inline-form__err")).toContainText(
+    "plain number like 1",
+  );
   await expect(page.getByText("Something broke")).toHaveCount(0);
+  // The typed value survived the rejection — not the stored 1.00 the roster
+  // paste defaulted to. Losing it here is the exact defect this guards: an
+  // operator who can no longer see what they typed has to retype it blind,
+  // and retyping under time pressure is where a *different* wrong number
+  // gets entered.
+  await expect(page.getByLabel(/^shares for alice pilot$/i)).toHaveValue("abc");
+  // The rejection also refocuses the field, so a keyboard/screen-reader
+  // operator lands back exactly where the correction goes rather than on
+  // the Submit button they just pressed.
+  await expect(page.getByLabel(/^shares for alice pilot$/i)).toBeFocused();
 
-  // The rejection redirect is a hard navigation, so InlineEdit remounts
-  // closed — reopen it for the second bad value.
-  await page.getByRole("button", { name: "edit shares for Alice Pilot" }).click();
+  // No reopen: the editor stayed open through the rejection, which is what
+  // "the value is still there" means. Drive a second, different bad value
+  // straight into the same field.
   await bypassClientGuard(page.getByLabel(/^shares for alice pilot$/i), "0");
   await page.getByRole("button", { name: "save shares for Alice Pilot" }).click();
-  await expect(page.locator("p.notice--bad")).toContainText("greater than zero");
+  await expect(page.locator("span.inline-form__err")).toContainText("greater than zero");
   await expect(page.getByText("Something broke")).toHaveCount(0);
-  // The stored value survived both rejections.
-  await page.getByRole("button", { name: "edit shares for Alice Pilot" }).click();
-  await expect(page.getByLabel(/^shares for alice pilot$/i)).toHaveValue("1.00");
+  // Same guard, a second time: a different rejection on the same field still
+  // preserves what was just typed rather than snapping back to 1.00.
+  await expect(page.getByLabel(/^shares for alice pilot$/i)).toHaveValue("0");
 });
 
 /**
@@ -1306,7 +1436,8 @@ test("override an item price, finalize, pay, revert, and pay again", async ({
  * The unit-price control is the other money input on the page, alongside
  * shares (see "bad shares land on the page, not the error boundary" above) —
  * a malformed value must land back on the page with a specific message
- * rather than on error.tsx, and the stored price must survive the rejection.
+ * rather than on error.tsx, and the operator's own typed value (not the
+ * stored price) must survive the rejection.
  */
 test("bad unit price lands on the page, not the error boundary", async ({
   page,
@@ -1356,13 +1487,15 @@ test("bad unit price lands on the page, not the error boundary", async ({
   // (or EVE's own comma-grouped paste) would.
   await bypassClientGuard(page.getByLabel(/^unit price for tritanium$/i), "1,234.00");
   await page.getByRole("button", { name: "save unit price for Tritanium" }).click();
-  await expect(page.locator("p.notice--bad")).toContainText("plain number like 12.34");
+  await expect(page.locator("span.inline-form__err")).toContainText(
+    "plain number like 12.34",
+  );
   await expect(page.getByText("Something broke")).toHaveCount(0);
-  // The stored value survived the rejection — `setItemPriceAction`'s redirect
-  // is a hard navigation, so InlineEdit remounts closed; reopen it to read the
-  // field back.
-  await page.getByRole("button", { name: "edit unit price for Tritanium" }).click();
-  await expect(page.getByLabel(/^unit price for tritanium$/i)).toHaveValue("10.00");
+  // The typed value survived the rejection — the field still shows the
+  // rejected "1,234.00", not the stored 10.00. See "bad shares land on the
+  // page" above for the reasoning this pins for the money screen generally.
+  await expect(page.getByLabel(/^unit price for tritanium$/i)).toHaveValue("1,234.00");
+  await expect(page.getByLabel(/^unit price for tritanium$/i)).toBeFocused();
 });
 
 /**
@@ -1441,12 +1574,14 @@ test("adding the same name twice is refused on the page, not on the error bounda
 
   await page.getByLabel("Character name").fill("Twice Pilot");
   await page.getByRole("button", { name: "Add participant" }).click();
-  // p.notice--bad, never getByRole("alert"): this is a soft navigation, so
-  // Next's route announcer carries role="alert" too.
   await expect(page.locator("p.notice--bad")).toContainText("already on this roster");
   await expect(page.getByText("Something broke")).toHaveCount(0);
   // And the roster is unchanged — the rejection added nothing.
   await expect(page.getByRole("row").filter({ hasText: "Twice Pilot" })).toHaveCount(1);
+  // The typed name survived the rejection too — same fix as the shares and
+  // unit-price fields above, applied to this add-form's one field.
+  await expect(page.getByLabel("Character name")).toHaveValue("Twice Pilot");
+  await expect(page.getByLabel("Character name")).toBeFocused();
 });
 
 /**
@@ -1769,6 +1904,14 @@ test("an inline share edit saves without a page navigation", async ({
   await expect(
     rowFor("Alice Pilot").getByRole("button", { name: "edit shares for Alice Pilot" }),
   ).toBeVisible();
+  // ...with focus back on the trigger that opened it. The trigger does not
+  // exist while the editor is open, so focusing it in the same tick that
+  // closes the editor is a no-op against a null ref and drops focus to
+  // `<body>` — a keyboard operator working down a roster would land back at
+  // the top of the document after every save.
+  await expect(
+    rowFor("Alice Pilot").getByRole("button", { name: "edit shares for Alice Pilot" }),
+  ).toBeFocused();
   // ...and Bob's, left open with an unsaved "3", is still open and still
   // holding it.
   await expect(page.getByLabel(/^shares for bob pilot$/i)).toHaveValue("3");
