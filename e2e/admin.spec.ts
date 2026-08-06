@@ -399,6 +399,64 @@ test("sortable headers say so at rest, without changing their accessible names",
   await expect(page.getByRole("link", { name: "Tier", exact: true })).toBeVisible();
 });
 
+/**
+ * The direction a column opens on its first click.
+ *
+ * Every header opened ascending, which is right for Name, Tier and Cryo — a
+ * value you already have in mind, found from the top. It is wrong for "Tier
+ * changed": nobody opens that column to find the account nothing has happened
+ * to since last spring. They open it to answer "what moved while I was away",
+ * and ascending answers the opposite question, putting the answer at the
+ * bottom of the roster behind a second click.
+ *
+ * Asserted through the URL and through the rendered order, because the URL
+ * alone would pass if `dir` stopped reaching the query.
+ */
+test("the date column opens newest-first; the others still open ascending", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  // Two accounts whose tier moved a year apart, named so that alphabetical
+  // order and recency order disagree — otherwise a sort that did nothing at
+  // all would pass this test.
+  const ancient = await seedMember(db, { name: "Ancient", tier: "member" });
+  const zeta = await seedMember(db, { name: "Zeta", tier: "member" });
+  // `seedMember` does not take a tier-change instant — stamped here rather
+  // than by widening a helper five other spec files share.
+  await db
+    .update(account)
+    .set({ tierChangedAt: new Date("2024-01-01T00:00:00Z") })
+    .where(eq(account.id, ancient.id));
+  await db
+    .update(account)
+    .set({ tierChangedAt: new Date("2026-01-01T00:00:00Z") })
+    .where(eq(account.id, zeta.id));
+  await page.goto("/admin/accounts");
+
+  await page.getByRole("link", { name: "Tier changed", exact: true }).click();
+  await expect(page).toHaveURL(/[?&]sort=tierChangedAt(&|$)/);
+  await expect(page).toHaveURL(/[?&]dir=desc(&|$)/);
+  await expect(
+    page.getByRole("columnheader", { name: "Tier changed", exact: true }),
+  ).toHaveAttribute("aria-sort", "descending");
+  // Zeta moved last, so it is first. Boss and Ancient are older.
+  await expect(page.locator(".log--dense tbody tr").first()).toContainText("Zeta");
+
+  // Once active the column toggles as it always did — this change is about
+  // the first press only.
+  await page.getByRole("link", { name: /^Tier changed/ }).click();
+  await expect(page).toHaveURL(/[?&]dir=asc(&|$)/);
+  await expect(page.locator(".log--dense tbody tr").first()).toContainText("Ancient");
+
+  // A non-date column is untouched: still ascending on its first press.
+  await page.goto("/admin/accounts");
+  await page.getByRole("link", { name: "Tier", exact: true }).click();
+  await expect(page).toHaveURL(/[?&]sort=tier(&|$)/);
+  await expect(page).toHaveURL(/[?&]dir=asc(&|$)/);
+});
+
 test("tier controls: manual set locks; return-to-auto unlocks", async ({
   page,
   context,

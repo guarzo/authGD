@@ -54,6 +54,28 @@ const SORTS: Array<{ key: AdminListSort; label: string }> = [
   { key: "status", label: "Cryo" },
   { key: "tierChangedAt", label: "Tier changed" },
 ];
+
+/**
+ * Which way a column opens on the FIRST click, before it has a direction of
+ * its own. Only the direction of that first press; once a column is active it
+ * toggles as it always did.
+ *
+ * `name`, `tier` and `status` open ascending because A-first and
+ * `member`-first are how someone looks for a value they already have in mind.
+ * `tierChangedAt` is not that kind of column. Nobody clicks "Tier changed"
+ * to find the account nothing has happened to since last spring; they click it
+ * to answer "what moved while I was away", and ascending answers the opposite
+ * question — the top of the table fills with the most settled accounts on the
+ * roster and the answer sits at the bottom, one more click away, on a page
+ * whose whole reason to exist is that the sync jobs change things without
+ * telling anyone.
+ */
+const SORT_OPENS: Record<AdminListSort, "asc" | "desc"> = {
+  name: "asc",
+  tier: "asc",
+  status: "asc",
+  tierChangedAt: "desc",
+};
 // What an admin may manually assign. Pending is deliberately absent: it is a
 // state accounts are born in, and setTierManual locks whatever it sets.
 const TIERS = ["member", "associate", "alumni"] as const;
@@ -420,7 +442,17 @@ export default async function AdminAccountsPage({
                   <a
                     href={qs({
                       sort: s.key,
-                      dir: sort === s.key && dir === "asc" ? "desc" : "asc",
+                      // Active column: toggle. Inactive: open the way the
+                      // column is worth reading (`SORT_OPENS`), rather than
+                      // ascending for everything — which cost a second click
+                      // on the one column where ascending is never the
+                      // question being asked.
+                      dir:
+                        sort === s.key
+                          ? dir === "asc"
+                            ? "desc"
+                            : "asc"
+                          : SORT_OPENS[s.key],
                     })}
                   >
                     {s.label}
