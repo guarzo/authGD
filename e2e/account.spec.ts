@@ -1,5 +1,5 @@
-import { expect, test } from "@playwright/test";
-import { eq, sql } from "drizzle-orm";
+import { expect, test, type Page } from "@playwright/test";
+import { eq, inArray, sql } from "drizzle-orm";
 import {
   account,
   character,
@@ -10,7 +10,7 @@ import {
   syncRun,
   universeName,
 } from "../src/db/schema";
-import { rowHeights } from "./geometry";
+import { pinGeometry, rowHeights } from "./geometry";
 import { resetDb, seedMember, sessionCookieFor, testDb } from "./helpers";
 
 const { db, pool } = testDb();
@@ -41,9 +41,15 @@ async function markTokensHealthy(accountId: string) {
     .where(eq(character.accountId, accountId));
 }
 
-/** Puts every character on an account somewhere named, so the name cell's
- *  location line actually renders (mirrors location.spec.ts's placeCrew). */
-async function placeCrew(accountId: string, systemId: number, structureName: string) {
+/** Puts named characters (by id) somewhere named, so the name cell's location
+ *  line actually renders (mirrors location.spec.ts's placeCrew). Takes ids
+ *  rather than an account, so a test can leave one alt without a location
+ *  reading as an in-page one-line reference row. */
+async function placeCrew(
+  characterIds: number[],
+  systemId: number,
+  structureName: string,
+) {
   const structureId = systemId + 1_000_000_000;
   await db
     .insert(universeName)
@@ -60,7 +66,7 @@ async function placeCrew(accountId: string, systemId: number, structureName: str
       locationOnline: true,
       locationCheckedAt: new Date(),
     })
-    .where(eq(character.accountId, accountId));
+    .where(inArray(character.id, characterIds));
 }
 
 // Every code the callbacks can redirect to /login with, checked by name: a code
@@ -761,27 +767,55 @@ test("a stalled chip's accessible name also carries the standings fact", async (
   expect(label).toMatch(/map/i);
 });
 
-// The name column sets the manifest's width and now carries the location
-// line beside the name rather than under it — the design's riskiest step.
-// A DOM count of zero `.status-line`s (the assertion style above) proves
-// nothing about wrapping, so these measure the rendered row height instead.
-//
+// Scoped to the Scroller's own region, as location.spec.ts's `manifest`
+// helper does: the payouts table on this same page (page.tsx renders it after
+// the manifest, once seeded) shares `table tbody tr`, so an unscoped selector
+// is only safe as long as no test below seeds a payout — which a future test
+// here could quietly do.
+const manifest = (page: Page) => page.locator("[aria-label='Your characters']");
+
 // 320px is this project's narrowest supported viewport (see the 320x720/900
 // calls throughout admin.spec.ts and audit.spec.ts).
 const NARROWEST = 320;
 
-// Measured against the running app, not guessed: a healthy character with no
-// location line (so provably one text line) rendered at 56.5px, and the same
-// row before this task's CSS change (name and location stacked, provably two
-// lines) rendered at 74.3-74.8px. 65 sits between the two with margin either
-// side for font-metric and padding differences across platforms.
-const SINGLE_LINE_MAX = 65;
+// Task 4 originally put name and location on one line — the design's
+// riskiest step, since the name column sets the manifest's width and a
+// structure name is member-supplied and can be long. That one-line layout is
+// NOT what ships: see the CSS comment above `.char-line` (globals.css:1580)
+// and task-4-report.md for the full account. In short, a flex row sums the
+// name's width and the location's own (up to `.char__location`'s 22rem)
+// instead of the stacked layout's `max(name, location)`, and at 320px that
+// cost 203-267px of additional forced horizontal scroll against a 286px-wide
+// scroll region — close to a full extra screen of blind scrolling to reach
+// STATUS/ACTIONS. The plan's documented fallback was taken: `.char-line` is
+// now the same stacked layout `.stack` is, two lines per character.
+//
+// These two tests now assert the fallback's actual shape (two lines, not
+// one) and pin the horizontal measurement that forced the call, so a future
+// change reintroducing the flex row without re-measuring trips a test rather
+// than shipping silently.
+//
+// A DOM count of zero `.status-line`s (the assertion style used elsewhere in
+// this file) proves nothing about how many text lines a row wraps to, so
+// these measure rendered row height instead — and derive the one-line
+// reference from an in-page sibling row rather than a hardcoded constant, so
+// the baseline can't go stale the way a number copied from a deleted scratch
+// spec would (see task-4-report.md's fix-round notes).
 
-test("ten healthy characters render one text line each", async ({ page, context }) => {
+test("characters with a location render two text lines, not one, and the location text is present", async ({
+  page,
+  context,
+}) => {
   const acc = await seedMember(db, {
     name: "Main Pilot",
     tier: "alumni",
     alts: [
+      // Sorts alphabetically first among the alts (account-view.ts:258-265
+      // orders main first, then alts by name), so it lands at row index 1 —
+      // right after main — regardless of how many other alts there are.
+      // Left without a location reading on purpose: this is the in-page
+      // one-line reference the other rows are measured against.
+      "AAA No-Location Alt",
       "Alt Pilot One",
       "Alt Pilot Two",
       "Alt Pilot Three",
@@ -794,26 +828,114 @@ test("ten healthy characters render one text line each", async ({ page, context 
     ],
   });
   await markTokensHealthy(acc.id);
-  await placeCrew(acc.id, 30000142, "Home Astrahus");
+  const crew = await db.select().from(character).where(eq(character.accountId, acc.id));
+  const locatedIds = crew
+    .filter((c) => c.name !== "AAA No-Location Alt")
+    .map((c) => c.id);
+  await placeCrew(locatedIds, 30000142, "Home Astrahus");
   await context.addCookies([await sessionCookieFor(db, acc.id)]);
   await page.goto("/account");
-  const heights = await rowHeights(page, "table tbody tr");
-  expect(heights).toHaveLength(10);
-  for (const h of heights) expect(h).toBeLessThan(SINGLE_LINE_MAX);
+
+  const rows = manifest(page).locator("tbody tr");
+  await expect(rows).toHaveCount(11);
+  // Fix 1: prove the seed actually put a location on the ten rows the height
+  // assertion below claims render two lines — a bare height/count check
+  // passes just as well whether or not the location rendered at all.
+  const locationTexts = await rows
+    .filter({ hasNotText: "AAA No-Location Alt" })
+    .locator(".char__location")
+    .allTextContents();
+  expect(locationTexts).toHaveLength(10);
+  for (const t of locationTexts) expect(t).toBe("J30000142 — Home Astrahus");
+
+  const heights = await rowHeights(page, "[aria-label='Your characters'] tbody tr");
+  expect(heights).toHaveLength(11);
+  // Row 0 is main (located, sorts first regardless of name); row 1 is "AAA
+  // No-Location Alt" (the one-line reference, sorts first among alts); rows
+  // 2-10 are the nine remaining located alts.
+  const reference = heights[1];
+  const located = [heights[0], ...heights.slice(2)];
+  // Each line is ~18px at this font (56.5px one line vs 74.3-74.8px two,
+  // measured while deriving SINGLE_LINE_MAX for the original one-line
+  // attempt). >10 rules out "accidentally still one line"; <30 rules out a
+  // three-line regression, with margin either side for platform variance.
+  for (const h of located) {
+    expect(h - reference).toBeGreaterThan(10);
+    expect(h - reference).toBeLessThan(30);
+  }
 });
 
-test("a long structure name still renders one line at the narrowest viewport", async ({
+test("a long structure name renders two lines, not a horizontal blowout, at the narrowest viewport", async ({
+  page,
+  context,
+}) => {
+  const acc = await seedMember(db, {
+    name: "Vanity Pilot",
+    tier: "alumni",
+    alts: ["AAA No-Location Alt"],
+  });
+  await markTokensHealthy(acc.id);
+  // No " - " in this name, so `shortenDock` (src/core/location.ts) returns it
+  // unshortened: the realistic long case Task 3's shortening does not help,
+  // and the stress-test case this test and the horizontal one below exist for.
+  await placeCrew(
+    [acc.mainCharacterId!],
+    30000144,
+    "Someone's Extremely Long Vanity Keepstar Name",
+  );
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.setViewportSize({ width: NARROWEST, height: 900 });
+  await page.goto("/account");
+
+  const rows = manifest(page).locator("tbody tr");
+  await expect(rows.first().locator(".char__location")).toHaveText(
+    "J30000144 — Someone's Extremely Long Vanity Keepstar Name",
+  );
+
+  const heights = await rowHeights(page, "[aria-label='Your characters'] tbody tr");
+  expect(heights).toHaveLength(2);
+  const [located, reference] = heights;
+  expect(located - reference).toBeGreaterThan(10);
+  expect(located - reference).toBeLessThan(30);
+});
+
+// This is the design's actual gate (task-4-report.md's fix-round notes): the
+// vertical one above cannot fail by construction — `.char` is nowrap
+// (globals.css:1551) and `.char__location` is nowrap + ellipsis + a 22rem cap
+// (globals.css:1567-1578), so no string at any viewport wraps to a third
+// line. The real, measured cost of a long name is horizontal, and this test
+// is what forced the plan's documented fallback: reverting `.char-line` to
+// the stacked layout it now is. If a future change reintroduces the flex row
+// from task-4-report.md's superseded attempt, this trips before the
+// horizontal cost ships again.
+test("a long structure name does not blow out the forced horizontal scroll at 320px", async ({
   page,
   context,
 }) => {
   const acc = await seedMember(db, { name: "Vanity Pilot", tier: "alumni" });
   await markTokensHealthy(acc.id);
-  // No " - " in this name, so `shortenDock` (src/core/location.ts) returns it
-  // unshortened: the realistic long case Task 3's shortening does not help.
-  await placeCrew(acc.id, 30000144, "Someone's Extremely Long Vanity Keepstar Name");
+  await placeCrew(
+    [acc.mainCharacterId!],
+    30000144,
+    "Someone's Extremely Long Vanity Keepstar Name",
+  );
   await context.addCookies([await sessionCookieFor(db, acc.id)]);
   await page.setViewportSize({ width: NARROWEST, height: 900 });
   await page.goto("/account");
-  const [h] = await rowHeights(page, "table tbody tr");
-  expect(h).toBeLessThan(SINGLE_LINE_MAX);
+
+  const pinned = await pinGeometry(
+    page,
+    "[aria-label='Your characters']",
+    "tbody tr:first-child td:nth-child(3)",
+    "right",
+  );
+  // House style (e2e/audit.spec.ts:1124): the STATUS column stays a minority
+  // of the scroll region even scrolled to the far right.
+  expect(pinned.cellWidth / pinned.regionWidth).toBeLessThan(0.5);
+  // Measured: the stacked (fallback) layout puts this stress-test name's
+  // forced scroll at ~146px; the flex-row attempt this test replaced
+  // measured 413px for the identical seed — see task-4-report.md. 250 sits
+  // comfortably above the former and well below the latter, so this trips if
+  // the flex row (or something costing the same) comes back.
+  expect(pinned.maxScrollLeft).toBeLessThan(250);
 });
