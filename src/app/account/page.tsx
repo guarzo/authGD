@@ -367,10 +367,22 @@ export default async function AccountPage({
                       of those, so the quiet grade that keeps a dense table
                       from reading as a wall of buttons buys nothing here.
                       Both still upgrade to full `.btn--danger` only once
-                      armed. */}
+                      armed.
+
+                      Full 36px, not the 28px `.btn--micro` grade: this sits
+                      in the facts grid, not in a table row, and DESIGN.md
+                      gives the smaller size to "the in-row controls of the
+                      admin tables… and nowhere else". `inline-edit.tsx:75-83`
+                      already made this exact call for the same grid, and
+                      `.inline-edit--standalone` (globals.css:1695) exists
+                      only to buy the floor back where a class had to keep
+                      its colouring. Here nothing had to be bought back —
+                      dropping `--micro` is the whole fix, and the heavier
+                      rest grade this comment argues for is a colour
+                      decision that never depended on the size. */}
                   <ConfirmSubmit
-                    className="btn btn--micro"
-                    armedClassName="btn btn--micro btn--danger"
+                    className="btn"
+                    armedClassName="btn btn--danger"
                     label="unlink"
                     restName="unlink Discord"
                     confirmName="confirm unlink Discord"
@@ -607,15 +619,22 @@ export default async function AccountPage({
         )}
 
         <p className="btn-row pager">
-          {/* Demoted to the default grade whenever any character needs
-              attention: DESIGN.md rations gold to one primary action per
-              view, and "state before action" means the loudest thing on a
-              broken page must not be adding more to it. Gold only in the
-              nominal state — which a zero-character account also computes to
+          {/* Demoted to the default grade whenever the page is reporting
+              anything: DESIGN.md rations gold to one primary action per view,
+              and "state before action" means the loudest thing on a broken
+              page must not be adding more to it. Gold only in the nominal
+              state — which a zero-character account also computes to
               (`computeAccountHealth` has no target and no fault to find) —
-              where adding a character genuinely is the primary action. */}
+              where adding a character genuinely is the primary action.
+
+              Keyed off the verdict rather than `attention === 0`, which is
+              the weaker test: `stalled`, `discord-stale` and
+              `first-sync-pending` all satisfy it while a `.verdict` line is
+              showing above (see the ladder at account-health.ts:163-177),
+              so the gold fired on three of the four states this comment
+              says it excludes. */}
           <a
-            className={health.attention === 0 ? "btn btn--primary" : "btn"}
+            className={health.verdict === "nominal" ? "btn btn--primary" : "btn"}
             href="/auth/eve/link"
           >
             Add character
