@@ -2056,3 +2056,33 @@ test("freeze arms on the first click, confirms on the second, and Escape disarms
   await zedDrawer.getByRole("button", { name: /^confirm freeze/ }).click();
   await expect(zedRow.getByText("cryo")).toBeVisible();
 });
+
+test("the filter row's Find and clear match the tier chips they sit beside", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  // `clear` only renders once `q` is set.
+  await page.goto("/admin/accounts?q=Boss");
+
+  const find = page.getByRole("button", { name: "Find" });
+  const clear = page.getByRole("link", { name: "clear" });
+  // A tier chip: the same row, already at the standalone grade, and the thing
+  // Find and clear looked short against. Scoped to the tier group because the
+  // status group renders an "all" chip of its own.
+  const chip = page
+    .getByRole("group", { name: "Filter by tier" })
+    .getByRole("link", { name: "Queued" });
+  await expect(clear).toBeVisible();
+
+  const [findBox, clearBox, chipBox] = await Promise.all([
+    find.boundingBox(),
+    clear.boundingBox(),
+    chip.boundingBox(),
+  ]);
+
+  expect(Math.round(chipBox!.height)).toBe(36);
+  expect(Math.round(findBox!.height)).toBe(Math.round(chipBox!.height));
+  expect(Math.round(clearBox!.height)).toBe(Math.round(chipBox!.height));
+});
