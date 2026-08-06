@@ -254,37 +254,55 @@ describe("runLocationJob", () => {
     expect(r.locationCheckedAt).not.toBeNull();
   });
 
-  it("does not let one character's failure abort the run for the others", async () => {
-    // Two characters in one run: if the try/catch around a single character's
-    // ESI calls were ever hoisted out of the loop, char 1's throw would abort
-    // the whole `for` and char 2 would never be updated — updated would read
-    // 0, not 1.
-    const acc = await seedAccount(ctx.db, { tier: "member" });
-    await seedCharacter(ctx.db, cfg, {
-      id: 1,
-      accountId: acc.id,
-      main: true,
-      scopes: ALL_SCOPES,
-    });
-    await seedCharacter(ctx.db, cfg, {
-      id: 2,
-      accountId: acc.id,
-      scopes: ALL_SCOPES,
-    });
-    const { esi } = fakeLocationEsi({
-      location: { 1: "fail", 2: inSpace(30000142) },
-    });
-    await expect(
-      runLocationJob({ db: ctx.db, cfg, esi, fetchImpl: okToken }),
-    ).rejects.toBeInstanceOf(JobRetryError);
+  it("does not let one character's failure abort the run for the others, regardless of row order", async () => {
+    // Two characters in one run: if the try/catch around a single
+    // character's ESI calls were ever hoisted out of the loop, a throw
+    // would abort the whole `for`, and only the characters processed
+    // BEFORE the throw would have been written.
+    //
+    // `getLocatableCharacters` (src/services/desired.ts) has no ORDER BY,
+    // so this repo (see 3ba6405, "give the character manifest a stable
+    // order") has precedent for exactly this failure mode: whichever row
+    // Postgres happens to return first would look like isolation held,
+    // even under a hoisted catch, purely by being processed before the
+    // failing character rather than because of any real per-character
+    // isolation. Asserting only one assignment of "who fails" could pass
+    // green against broken code if the physical row order ever changed.
+    // Running BOTH assignments — the failing character seeded first, then
+    // seeded second — makes the assertion hold regardless of which one
+    // Postgres actually returns first.
+    for (const [failId, okId] of [
+      [1, 2],
+      [2, 1],
+    ] as const) {
+      await truncateAll(ctx.db);
+      const acc = await seedAccount(ctx.db, { tier: "member" });
+      await seedCharacter(ctx.db, cfg, {
+        id: failId,
+        accountId: acc.id,
+        main: true,
+        scopes: ALL_SCOPES,
+      });
+      await seedCharacter(ctx.db, cfg, {
+        id: okId,
+        accountId: acc.id,
+        scopes: ALL_SCOPES,
+      });
+      const { esi } = fakeLocationEsi({
+        location: { [failId]: "fail", [okId]: inSpace(30000142) },
+      });
+      await expect(
+        runLocationJob({ db: ctx.db, cfg, esi, fetchImpl: okToken }),
+      ).rejects.toBeInstanceOf(JobRetryError);
 
-    const [run] = await ctx.db.select().from(syncRun);
-    expect(run.status).toBe("partial");
+      const [run] = await ctx.db.select().from(syncRun);
+      expect(run.status).toBe("partial");
 
-    const result = await ctx.db.select().from(character).where(eq(character.id, 2));
-    expect(result[0].locationSystemId).toBe(30000142);
-    // char 1 failed and wrote nothing; char 2 still updated despite it.
-    expect((await row(1)).locationCheckedAt).toBeNull();
+      // The succeeding character is written no matter which one fails...
+      expect((await row(okId)).locationSystemId).toBe(30000142);
+      // ...and the failing one wrote nothing, regardless of seed order.
+      expect((await row(failId)).locationCheckedAt).toBeNull();
+    }
   });
 
   it("marks needs_reauth under a CAS on the refresh-token blob, and does not retry", async () => {
