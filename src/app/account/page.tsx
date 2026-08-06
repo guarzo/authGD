@@ -231,6 +231,10 @@ export default async function AccountPage({
             ))}
         </div>
 
+        {/* Mounted unconditionally rather than `&&`-gated: unlink, set-main and
+            unlink-Discord all revalidate this route in place, so the region has
+            to already exist for AT to hear a change land in it. See `Notice`'s
+            docblock. */}
         <Notice tone="bad">{message}</Notice>
 
         {/* Success confirmation for the four self-serve actions below
@@ -242,7 +246,9 @@ export default async function AccountPage({
             control that was pressed unmounts the instant one of those four
             actions succeeds, and this is what focus lands on instead of
             `<body>`. Shared with `/admin/sync`, which has the identical
-            problem for its own three enqueue actions. */}
+            problem for its own three enqueue actions. It is already mounted
+            unconditionally, and carries `live={false}` on purpose — focus,
+            not the live region, does the announcing there. */}
         <ConfirmNotice text={confirmation} at={at} />
 
         {/* Only the characters the contacts job actually targets can be waiting

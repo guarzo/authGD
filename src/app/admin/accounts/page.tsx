@@ -199,9 +199,25 @@ export default async function AdminAccountsPage({
         </p>
       </div>
 
+      {/* Mounted unconditionally, not `&&`-gated: every mutation on this page
+          ends in a server-action redirect that re-renders without a document
+          load, so an `&&` would insert the region and its text in the same
+          commit — the shape `Notice`'s own docblock calls out as the one that
+          defeats the live region it just asked for. Empty children render the
+          reserved `.notice-slot`, which is out of flow and draws nothing. */}
       <Notice tone="bad">{errorMessage}</Notice>
 
-      {/* `ConfirmNotice`, not a bare `{cond && <Notice>}`: the four cell-level
+      {/* #131's third slot on this page was `{params.queued === "account" &&
+          …}`, converted there to an unconditional `Notice`. It is gone rather
+          than merged: `?queued=account` was `syncAccountAction`'s own scheme
+          and this branch supersedes it with the `?done=&name=&at=` triple every
+          cell-level action now shares (see `doneUrl` in actions.ts, which drops
+          `queued` deliberately). Its text lives on in `accountsConfirmation`'s
+          `sync` case, rendered by the ConfirmNotice below — which is already
+          mounted unconditionally and carries `live={false}` on purpose, since
+          focus rather than the live region does the announcing there.
+
+          `ConfirmNotice`, not a bare `{cond && <Notice>}`: the four cell-level
           row actions — unlink Discord, grant/revoke admin, sync now — each
           round-trip through a server action that redirects back here, and
           each changes the very control that was pressed out from under
@@ -220,13 +236,13 @@ export default async function AdminAccountsPage({
           docblocks for the full reasoning. */}
       <ConfirmNotice text={confirmation} at={params.at} />
 
-      {pendingCount > 0 && (
-        <Notice>
+      <Notice>
+        {pendingCount > 0 ? (
           <a href="/admin/accounts?tier=pending">
             {pendingCount} account{pendingCount === 1 ? "" : "s"} awaiting approval
           </a>
-        </Notice>
-      )}
+        ) : null}
+      </Notice>
 
       {/* Not a RuleHead. The two groups below already carry their own visible
           labels ("Tier", "Status") and their own `role="group"` names, so a

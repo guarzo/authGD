@@ -523,9 +523,13 @@ export default async function AdminAuditPage({
           says the rows below are a UNION of two people's histories, which is
           the one thing that can make this page answer the question wrongly
           while looking right. */}
-      {ambiguityNotes.length > 0 && (
-        <Notice tone="warn">{ambiguityNotes.join(" · ")}</Notice>
-      )}
+      {/* Mounted unconditionally rather than `&&`-gated: this note appears and
+          disappears as the filter changes, which is exactly the transition a
+          live region exists to announce, and an `&&` would rebuild the region
+          holding its text instead. See `Notice`'s docblock. */}
+      <Notice tone="warn">
+        {ambiguityNotes.length > 0 ? ambiguityNotes.join(" · ") : null}
+      </Notice>
       {/* Also above the table. The bottom pager is roughly 300 tab stops past
           the top of a full page, so on a keyboard the only way to reach the
           next page was to traverse every link in every row. */}
