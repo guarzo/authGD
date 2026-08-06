@@ -1,0 +1,240 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+#
+# CodeRabbit review configuration. Schema reference:
+# https://docs.coderabbit.ai/reference/yaml-template
+
+tone_instructions: "Be direct and specific. Cite file:line. Prefer one concrete
+  problem with a fix over a list of stylistic observations."
+
+reviews:
+  # `assertive` includes the nitpick tier, not just the findings CodeRabbit is
+  # confident about. CI already runs typecheck, eslint, prettier --check, both
+  # test suites, a Next build, and a Docker build on every PR, so the purely
+  # mechanical findings are redundant here — the trade is accepting some of
+  # that noise to catch the marginal real bug. Drop to `chill` if the signal
+  # ratio stops being worth it.
+  profile: assertive
+
+  # On: CodeRabbit submits "Request changes" rather than a plain comment, so a
+  # PR cannot merge until its findings are resolved or explicitly dismissed.
+  # This is a second blocking gate in front of CI's — deliberate, but it means
+  # a false positive now costs a dismissal rather than a judgement call.
+  request_changes_workflow: true
+
+  high_level_summary: true
+  collapse_walkthrough: true
+  sequence_diagrams: true
+  poem: true
+  in_progress_fortune: true
+
+  suggested_labels: true
+  auto_apply_labels: false
+  suggested_reviewers: false
+
+  # Globs are exclusion-only on purpose. A single positive pattern would make
+  # this an allowlist and silently drop every path not named — and because
+  # these globs also drive CodeRabbit's sparse-checkout, a dropped path is one
+  # the reviewer never fetches, not merely one it declines to comment on.
+  path_filters:
+    # Local planning artifacts — specs, plans, handovers, and design sweeps
+    # written while working on a change. `docs/superpowers/` is gitignored and
+    # `docs/design-sweep/` no longer exists in the tree, so neither should
+    # reach a diff today; the filters are here so that a future commit which
+    # does carry them still does not spend review budget on a working record
+    # of one deployment.
+    - "!docs/superpowers/**"
+    - "!docs/design-sweep/**"
+
+    # Generated or vendored, and reviewed by regenerating rather than reading.
+    - "!package-lock.json"
+    - "!drizzle/meta/**"
+    - "!next-env.d.ts"
+
+    # Binary assets.
+    - "!public/**"
+    - "!docs/assets/**"
+
+  path_instructions:
+    - path: "src/worker/**"
+      instructions: |
+        This is the pg-boss worker: queue registration, handlers, and the
+        outbox dispatcher. Check that every handler is idempotent — pg-boss
+        redelivers on timeout and on worker restart, so a handler that appends
+        rather than upserts will double-apply. Check that failures leave the
+        job retryable rather than silently swallowed, and that a handler that
+        partially succeeded cannot lose the remainder on retry.
+
+    - path: "src/core/**"
+      instructions: |
+        `src/core/` holds pure diff and tier logic and must stay pure: no
+        database access, no network calls, no clock or randomness read from
+        ambient state, no imports from `src/db/`, `src/services/`, or
+        `src/lib/`. Flag any import that reaches outside `src/core/` for
+        anything other than types. Time and IDs belong in the arguments.
+
+    - path: "src/services/**"
+      instructions: |
+        The service layer enqueues; it does not execute. Flag any service that
+        performs sync work inline — calling ESI, Discord, or Wanderer directly,
+        or applying a role change — where it should enqueue a job for the
+        worker instead. Every state change needs a corresponding audit write in
+        the same transaction as the change it records. Role removal is
+        derole-don't-boot: losing a tier removes roles, it never kicks or bans.
+
+    - path: "src/app/**"
+      instructions: |
+        Next.js 15 App Router. Every admin route, page, layout, and server
+        action needs its own admin guard — a guard on the page does not cover
+        the server action the page posts to, and a guard on the layout does not
+        cover a route handler beneath it. Server actions must validate their
+        input with zod before touching a service; a hidden field is caller
+        input, not trusted state. Never render a token, secret, or raw session
+        cookie value. Prefer server components; flag `"use client"` on a
+        component that has no interactivity.
+
+    - path: "src/app/auth/**"
+      instructions: |
+        OAuth callback routes. Treat the state parameter, the PKCE flow, and
+        the session cookie as the security boundary of the whole application.
+        Verify that state is compared before any token exchange, that the
+        comparison cannot be skipped on an error path, and that the cookie is
+        HttpOnly, Secure, and SameSite. Any change to how state is generated,
+        stored, or compared deserves an explicit call-out in the review even if
+        it looks correct.
+
+    - path: "src/lib/{esi,discord,wanderer}/**"
+      instructions: |
+        External API clients. Check rate-limit and 429 handling, timeouts on
+        every request, and that a non-2xx response raises rather than returning
+        an empty result a caller will read as "nothing to sync" — an empty diff
+        applied as truth removes roles from everyone. Responses are untrusted
+        input: parse them with zod rather than casting.
+
+    - path: "src/db/**"
+      instructions: |
+        Drizzle schema and migration runner. Schema changes need a generated
+        migration (`npm run db:generate`) in the same PR. Flag a schema edit
+        with no accompanying file under `drizzle/`.
+
+    - path: "drizzle/*.sql"
+      instructions: |
+        Generated migrations, applied by Fly as a release command on every
+        deploy — so they run against production before the new image serves
+        traffic, and a failure there blocks the deploy. Review for safety, not
+        style: a dropped or renamed column, a narrowed type, or a NOT NULL
+        added without a default breaks the currently-running image during the
+        window between migration and cutover. Never suggest editing a migration
+        that has already shipped; suggest a follow-up migration instead.
+
+    - path: "{tests,e2e}/**"
+      instructions: |
+        Assertions should pin behaviour, not shape. Flag a row- or element-count
+        assertion that would pass against an empty state — an empty table still
+        renders one `<tr>`, so `toHaveCount(1)` passes whether or not the filter
+        under test did anything. Prefer asserting on the content that proves the
+        behaviour.
+
+    - path: ".github/workflows/**"
+      instructions: |
+        Check that `permissions` is scoped to the minimum, that actions are
+        pinned, and that no secret can reach a step triggered by an untrusted
+        fork.
+
+  auto_review:
+    enabled: true
+    auto_incremental_review: true
+    drafts: false
+    # Dependabot PRs are auto-merged by .github/workflows/dependabot-auto-merge.yml
+    # once CI passes; a review comment on them is never read.
+    ignore_usernames:
+      - "dependabot"
+      - "dependabot[bot]"
+    ignore_title_keywords:
+      - "wip"
+      - "do not review"
+
+  # Finishing touches are opt-in — they run when invoked from the walkthrough
+  # checkbox or an `@coderabbitai` comment, never on their own. These two are
+  # turned off so they stop being offered: docstrings and tests here are part
+  # of writing the change, not a post-hoc pass, and a generated test asserts
+  # what the code does rather than what it should do. `autofix` and `fix_ci`
+  # are left at their defaults, since those repair something already known to
+  # be wrong.
+  finishing_touches:
+    docstrings:
+      enabled: false
+    unit_tests:
+      enabled: false
+
+  pre_merge_checks:
+    # Advisory, not blocking. Commit and PR titles follow conventional commits
+    # — `fix(payouts): …`, `docs(design): …`.
+    title:
+      mode: warning
+      requirements: |
+        Conventional-commit form: `type(scope): summary`, where type is one of
+        feat, fix, docs, chore, refactor, test, perf, or ci. The summary should
+        name the user-visible effect rather than the mechanism.
+    description:
+      mode: warning
+    # Quoted: bare `off` is a boolean under YAML 1.1, and this field is an enum.
+    docstrings:
+      mode: "off"
+
+  tools:
+    # Matches CI: eslint.config.mjs is flat config and eslint-config-prettier
+    # already turns off the stylistic rules, so this adds no formatting noise.
+    eslint:
+      enabled: true
+    # Not used — this project lints with eslint and formats with prettier.
+    biome:
+      enabled: false
+    oxc:
+      enabled: false
+
+    # Secret scanning. TOKEN_ENCRYPTION_KEY and the ESI/Discord/Wanderer
+    # credentials are the failure that cannot be walked back, and `.env` sits
+    # untracked next to a tracked `.env.example`.
+    gitleaks:
+      enabled: true
+    trufflehog:
+      enabled: true
+
+    actionlint:
+      enabled: true
+    hadolint:
+      enabled: true
+    shellcheck:
+      enabled: true
+    yamllint:
+      enabled: true
+
+    # Migration safety on the generated SQL under drizzle/ — locking DDL,
+    # non-concurrent index builds, NOT NULL without a default.
+    squawk:
+      enabled: true
+    # Off: the SQL here is drizzle-kit output, so style findings are addressed
+    # to a generator that will not read them.
+    sqlfluff:
+      enabled: false
+
+    # Off: *.md is excluded from prettier deliberately (see .prettierignore),
+    # and a second markdown formatter would reintroduce exactly the churn that
+    # exclusion exists to avoid.
+    markdownlint:
+      enabled: false
+
+chat:
+  auto_reply: true
+
+knowledge_base:
+  code_guidelines:
+    enabled: true
+    # CLAUDE.md and AGENTS.md are picked up by the built-in patterns; these are
+    # the project's own prose about how it is meant to work.
+    filePatterns:
+      - "CONTRIBUTING.md"
+      - "DESIGN.md"
+      - "docs/settled-design-decisions.md"
+  learnings:
+    scope: local
