@@ -1659,3 +1659,136 @@ test("the roster heading and each owed row's copy button are addressable", async
     await expect(page.locator(`#${id}`)).toHaveAccessibleName(/^copy amount for /);
   }
 });
+
+test("paying a row moves focus to the next unpaid row and announces who is next", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "Relay FC",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+  // Alphabetical, because the roster renders asc(displayName): Ada, Bo, Cy.
+  const opId = await seedFinalizedRoster(db, operator.id, [
+    "Ada Relay",
+    "Bo Relay",
+    "Cy Relay",
+  ]);
+  await page.goto(`/payouts/${opId}`);
+
+  // The first payment arms — it is the one that freezes the operation.
+  await page.getByRole("button", { name: "mark paid Ada Relay" }).click();
+  await page.getByRole("button", { name: "confirm mark paid Ada Relay" }).click();
+
+  // Focus lands on the next unpaid row's copy button, so the operator's next
+  // action needs no re-scan of the table.
+  await expect(
+    page.getByRole("button", { name: "copy amount for Bo Relay" }),
+  ).toBeFocused();
+  // ...and the same fact is available to someone who cannot see the focus ring.
+  await expect(page.locator("#pay-flow-status")).toContainText(
+    "Paid Ada Relay. 1 of 3 paid. Next: Bo Relay,",
+  );
+});
+
+test("the second payment advances again, on one click", async ({ page, context }) => {
+  const operator = await seedMember(db, {
+    name: "Second FC",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+  const opId = await seedFinalizedRoster(db, operator.id, [
+    "Ada Second",
+    "Bo Second",
+    "Cy Second",
+  ]);
+  await page.goto(`/payouts/${opId}`);
+
+  await page.getByRole("button", { name: "mark paid Ada Second" }).click();
+  await page.getByRole("button", { name: "confirm mark paid Ada Second" }).click();
+  await expect(
+    page.getByRole("button", { name: "copy amount for Bo Second" }),
+  ).toBeFocused();
+
+  // No arming this time: the door the first payment shut is already shut, so
+  // every later payment is a single click. This is the existing rule (see
+  // "override an item price, finalize, pay, revert, and pay again"), asserted
+  // here because the advance must not have re-introduced a confirm step.
+  await page.getByRole("button", { name: "mark paid Bo Second" }).click();
+  await expect(
+    page.getByRole("button", { name: "copy amount for Cy Second" }),
+  ).toBeFocused();
+  await expect(page.locator("#pay-flow-status")).toContainText(
+    "Paid Bo Second. 2 of 3 paid. Next: Cy Second,",
+  );
+});
+
+test("paying the last row focuses the roster heading and says all are paid", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "Last FC",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+  const opId = await seedFinalizedRoster(db, operator.id, ["Ada Last", "Bo Last"]);
+  await page.goto(`/payouts/${opId}`);
+
+  await page.getByRole("button", { name: "mark paid Ada Last" }).click();
+  await page.getByRole("button", { name: "confirm mark paid Ada Last" }).click();
+
+  // Unlike the "next row" tests above, there's no next row's copy button to
+  // assert focus on here, so wait for Ada's own row to settle to "paid"
+  // before clicking Bo's row. Without this, Bo's "mark paid" button is still
+  // mid-transition (its arm state flips from armed to unarmed once Ada's
+  // payment lands, which swaps the underlying control), and a click that
+  // lands during that swap can be lost.
+  await expect(
+    page.getByRole("row", { name: /Ada Last/ }).getByText("paid", { exact: true }),
+  ).toBeVisible();
+
+  await page.getByRole("button", { name: "mark paid Bo Last" }).click();
+
+  // There is no next row, so focus goes somewhere meaningful rather than to
+  // <body> — the section heading, which is where the n/m progress lives.
+  await expect(page.locator("#roster-heading")).toBeFocused();
+  await expect(page.locator("#pay-flow-status")).toContainText(
+    "Paid Bo Last. All 2 paid.",
+  );
+});
+
+test("an excluded participant is never a focus target", async ({ page, context }) => {
+  const operator = await seedMember(db, {
+    name: "Skip FC",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+  const opId = await seedFinalizedRoster(
+    db,
+    operator.id,
+    ["Ada Skip", "Bo Skip", "Cy Skip"],
+    ["Bo Skip"],
+  );
+  await page.goto(`/payouts/${opId}`);
+
+  await page.getByRole("button", { name: "mark paid Ada Skip" }).click();
+  await page.getByRole("button", { name: "confirm mark paid Ada Skip" }).click();
+
+  // Bo is excluded, so the flow steps straight over to Cy, and the counts are
+  // out of 2 — the excluded row is not owed anything and is not part of the
+  // denominator.
+  await expect(
+    page.getByRole("button", { name: "copy amount for Cy Skip" }),
+  ).toBeFocused();
+  await expect(page.locator("#pay-flow-status")).toContainText(
+    "Paid Ada Skip. 1 of 2 paid. Next: Cy Skip,",
+  );
+  // And the excluded row still has no way to be paid at all.
+  await expect(page.getByRole("button", { name: /mark paid Bo Skip/ })).toHaveCount(0);
+});
