@@ -521,8 +521,10 @@ export default async function AccountPage({
                   // (account-health.ts:127), so this narrowing check never
                   // actually fails for that state — an explicit `!== null`
                   // rather than a non-null assertion, so `tsc` can follow it.
+                  // Gated on `state === "stalled"` so the value has no meaning
+                  // outside the one arm that reads it.
                   const stalledToken =
-                    c.contactSyncResult !== null
+                    state === "stalled" && c.contactSyncResult !== null
                       ? contactStateToken(c.contactSyncResult)
                       : null;
                   return (
@@ -611,14 +613,25 @@ export default async function AccountPage({
                               )}
                             </span>
                           </div>
-                        ) : state === "stalled" && stalledToken ? (
+                        ) : state === "stalled" ? (
                           // One chip, and it never overstates health: a stalled
                           // character shows its own state, not `ok`. `map: off`
                           // rides in the cell's accessible name rather than the
                           // visible chip because it is unsubstantiable as a fault
                           // (account-health.ts:27-35) and nothing a member can
                           // act on.
-                          <Status tone={stalledToken.tone}>{stalledToken.text}</Status>
+                          //
+                          // The null-token branch is unreachable today —
+                          // `classifyCharacter` only returns "stalled" for a
+                          // non-null `contactSyncResult` — but its fallback is
+                          // still a non-"ok" tone. This arm must never be able
+                          // to reach the `ok` chip through any path, so a
+                          // future change to `isStalled` that breaks that
+                          // guarantee fails loud (a wrong chip) rather than
+                          // quiet (a false green).
+                          <Status tone={stalledToken?.tone ?? "warn"}>
+                            {stalledToken?.text ?? "stalled"}
+                          </Status>
                         ) : (
                           <Status tone="ok">ok</Status>
                         )}

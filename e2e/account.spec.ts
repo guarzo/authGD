@@ -624,6 +624,10 @@ test("a member-fixable result expands only its own row", async ({ page, context 
   await context.addCookies([await sessionCookieFor(db, acc.id)]);
   await page.goto("/account");
   const rows = page.locator("table tbody tr");
+  // Pinned so the two filtered assertions below can't both pass by matching
+  // zero rows — `hasNotText` counting 0 `.status-line` proves nothing if the
+  // filter itself matched nothing.
+  await expect(rows).toHaveCount(2);
   // Three, not two: the `attention` arm keeps all three of today's existing
   // status lines (token / standings / map) verbatim. Expanding is the change,
   // not what an expanded row contains.
@@ -666,6 +670,28 @@ test("map off alone does not expand a row", async ({ page, context }) => {
   await expect(row.locator("[data-state='ok']")).toBeVisible();
 });
 
+// The alumni rows above are all untargeted. This is the ordinary production
+// row — a member account whose contacts job has actually synced — and the
+// only case where the collapsed chip's aria-label runs `standingsSummary`
+// through `contactStateToken("ok")` rather than one of its two bespoke
+// strings.
+test("a targeted character with a synced result also collapses to ok", async ({
+  page,
+  context,
+}) => {
+  const acc = await seedMember(db, { name: "Synced Pilot", tier: "member" });
+  await markTokensHealthy(acc.id);
+  await db.insert(contactSyncState).values({
+    characterId: acc.mainCharacterId!,
+    lastResult: "ok",
+  });
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.goto("/account");
+  const row = page.locator("table tbody tr").first();
+  await expect(row.locator("[data-state='ok']")).toBeVisible();
+  await expect(row.locator(".status-line")).toHaveCount(0);
+});
+
 // Density must not be bought from screen-reader users: the collapsed chip's
 // accessible name still carries all three facts.
 test("the collapsed chip names token, standings and map", async ({ page, context }) => {
@@ -679,4 +705,27 @@ test("the collapsed chip names token, standings and map", async ({ page, context
   expect(label).toMatch(/standings/i);
   expect(label).toMatch(/map/i);
   expect(label).toMatch(/off/i);
+});
+
+// The name/chip pair is most likely to diverge on a stalled row, since its
+// chip text comes from `contactStateToken` while the name is built alongside
+// it in `standingsSummary` — a second, independent call.
+test("a stalled chip's accessible name also carries the standings fact", async ({
+  page,
+  context,
+}) => {
+  const acc = await seedMember(db, { name: "Stalled Pilot", tier: "member" });
+  await markTokensHealthy(acc.id);
+  await db.insert(contactSyncState).values({
+    characterId: acc.mainCharacterId!,
+    lastResult: "dry_run",
+  });
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.goto("/account");
+  const chip = page.locator("table tbody tr").first().locator("[data-state='stalled']");
+  const label = await chip.getAttribute("aria-label");
+  expect(label).toMatch(/token/i);
+  expect(label).toMatch(/standings/i);
+  expect(label).toMatch(/sync disabled/i);
+  expect(label).toMatch(/map/i);
 });
