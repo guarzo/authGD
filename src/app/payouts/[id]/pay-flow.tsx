@@ -41,7 +41,7 @@ function usePayFlow(): { dispatch: (id: string, kind: "pay" | "revert") => void 
  *
  * Hosted ABOVE the table rather than in a row, and that placement is the whole
  * design. `mark paid` renders only while a row is unpaid and `revert` only
- * while it is paid (`page.tsx:888`, `page.tsx:901`), so *both* controls unmount
+ * while it is paid (`page.tsx:871`, `page.tsx:884`), so *both* controls unmount
  * themselves on success — which is exactly why focus falls to `<body>` today.
  * A focus effect hosted in either button would race its own unmount.
  * `InlineEdit` can use `useActionState` for this precisely because it never
@@ -180,7 +180,7 @@ export function MarkPaidForm({
   participantId: string;
   displayName: string;
   /** True only for the FIRST payment on the operation, which is the one that
-   *  freezes it permanently. Mirrors `firstPayment` in `page.tsx:224`. */
+   *  freezes it permanently. Mirrors `firstPayment` in `page.tsx:201`. */
   arm: boolean;
   describedBy?: string;
 }) {

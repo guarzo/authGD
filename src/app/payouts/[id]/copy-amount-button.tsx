@@ -38,7 +38,7 @@ export function CopyAmountButton({
   participantName: string;
   /** Set on the roster's owed rows so the pay flow can move focus here. This
    *  is the one control in the action cell that renders regardless of paid
-   *  state (`page.tsx:861-868`), which is what makes it the only stable focus
+   *  state (`page.tsx:844-851`), which is what makes it the only stable focus
    *  target across both `mark paid` and `revert`. */
   id?: string;
 }) {
