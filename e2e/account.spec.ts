@@ -772,7 +772,8 @@ test("a stalled chip's accessible name also carries the standings fact", async (
 // the manifest, once seeded) shares `table tbody tr`, so an unscoped selector
 // is only safe as long as no test below seeds a payout — which a future test
 // here could quietly do.
-const manifest = (page: Page) => page.locator("[aria-label='Your characters']");
+const MANIFEST = "[aria-label='Your characters']";
+const manifest = (page: Page) => page.locator(MANIFEST);
 
 // 320px is this project's narrowest supported viewport (see the 320x720/900
 // calls throughout admin.spec.ts and audit.spec.ts).
@@ -848,7 +849,7 @@ test("characters with a location render two text lines, not one, and the locatio
   expect(locationTexts).toHaveLength(10);
   for (const t of locationTexts) expect(t).toBe("J30000142 — Home Astrahus");
 
-  const heights = await rowHeights(page, "[aria-label='Your characters'] tbody tr");
+  const heights = await rowHeights(page, `${MANIFEST} tbody tr`);
   expect(heights).toHaveLength(11);
   // Row 0 is main (located, sorts first regardless of name); row 1 is "AAA
   // No-Location Alt" (the one-line reference, sorts first among alts); rows
@@ -892,7 +893,7 @@ test("a long structure name renders two lines, not a horizontal blowout, at the 
     "J30000144 — Someone's Extremely Long Vanity Keepstar Name",
   );
 
-  const heights = await rowHeights(page, "[aria-label='Your characters'] tbody tr");
+  const heights = await rowHeights(page, `${MANIFEST} tbody tr`);
   expect(heights).toHaveLength(2);
   const [located, reference] = heights;
   expect(located - reference).toBeGreaterThan(10);
@@ -923,15 +924,31 @@ test("a long structure name does not blow out the forced horizontal scroll at 32
   await page.setViewportSize({ width: NARROWEST, height: 900 });
   await page.goto("/account");
 
+  // Fix 1 (round 2): this test is the load-bearing gate, so it needs its own
+  // proof the seed actually rendered a location — the other two tests would
+  // catch a broken seed too, but only as `h - reference` collapsing to ~0,
+  // which reads as "the flex row came back," misdirecting the diagnosis.
+  await expect(
+    manifest(page).locator("tbody tr").first().locator(".char__location"),
+  ).toHaveText("J30000144 — Someone's Extremely Long Vanity Keepstar Name");
+
   const pinned = await pinGeometry(
     page,
-    "[aria-label='Your characters']",
+    MANIFEST,
     "tbody tr:first-child td:nth-child(3)",
     "right",
   );
-  // House style (e2e/audit.spec.ts:1124): the STATUS column stays a minority
-  // of the scroll region even scrolled to the far right.
+  // House style (e2e/audit.spec.ts:1124), kept for shape — but this holds
+  // just as true under the flex row (the STATUS cell's width and the
+  // region's clientWidth are both unaffected by what the name column does),
+  // so it is not a second independent check. `maxScrollLeft` below is the
+  // actual gate.
   expect(pinned.cellWidth / pinned.regionWidth).toBeLessThan(0.5);
+  // Rules out "nothing to scroll at all" reading as success (e.g. if the
+  // seed silently failed to render a location and the name column shrank
+  // enough that nothing forces scroll) — a passing 0 would be exactly as
+  // vacuous as the count-only check Fix 1 above replaced.
+  expect(pinned.maxScrollLeft).toBeGreaterThan(0);
   // Measured: the stacked (fallback) layout puts this stress-test name's
   // forced scroll at ~146px; the flex-row attempt this test replaced
   // measured 413px for the identical seed — see task-4-report.md. 250 sits

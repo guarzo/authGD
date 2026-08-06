@@ -1590,7 +1590,11 @@ h3.rule-head__label {
    if a future change reintroduces the flex row without re-checking it.
    `.char-line` keeps the name Task 4 introduced as its styling hook, but is
    now `.stack` (globals.css:3529) in every way that matters: two lines per
-   character, still a win over the three before this plan. */
+   character, still a win over the three before this plan. (The existing
+   `.stack >` descendant rules — `.stack > .inline-form:has(.field--grow)`
+   and `.log td.num > .stack` — don't reach this cell today, since it has no
+   `.inline-form` and isn't a `.num` cell; don't assume a future `.stack >`
+   rule applies here without checking.) */
 .char-line {
   display: grid;
   gap: var(--s-2);
