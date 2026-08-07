@@ -1017,13 +1017,18 @@ h3.rule-head__label {
   vertical-align: top;
 }
 
-/* The drawer row isn't a data row: no hover tint on the panel it's holding. */
-.log tbody tr.drawer-row:hover {
-  background: none;
-}
-
 .log tbody tr:not(:has(.log__empty)):hover {
   background: color-mix(in oklab, var(--hull-hi) 55%, transparent);
+}
+
+/* The drawer row isn't a data row: no hover tint on the panel it's holding.
+
+   Below the general row-hover rule, not above it. The two selectors weigh the
+   same — (0,3,2) each, since `:not(:has(.log__empty))` contributes one class —
+   so source order decides, and above it this rule lost and the drawer row took
+   the tint anyway. */
+.log tbody tr.drawer-row:hover {
+  background: none;
 }
 
 .log__empty {

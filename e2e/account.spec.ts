@@ -1679,3 +1679,36 @@ for (const { width, height, expected } of FAULTED_FOLD_TARGETS) {
     expect(visible).toBeGreaterThanOrEqual(expected);
   });
 }
+
+test("hovering the manifest's remedy sub-row leaves it untinted", async ({
+  page,
+  context,
+}) => {
+  const acc = await seedNominalCrew();
+  // A contacts fault, not a token fault — `faultOneAlt` renders no sub-row and
+  // this test has nothing to hover. See Task 3 Step 1's note on the two routes.
+  await faultContacts(acc.id, ["Alt Pilot One"], "missing_label");
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+
+  // Background-color transitions over --dur-color (140ms). Reading
+  // getComputedStyle right after a hover can catch that mid-transition value
+  // instead of the settled one. globals.css already collapses all
+  // transitions to 0.01ms under prefers-reduced-motion (an accessibility
+  // feature, not a test-only mechanism), so emulating it here makes the
+  // hover-driven background deterministic without a sleep. See
+  // `e2e/audit.spec.ts`'s "hovering the empty row" test for the same fix.
+  await page.emulateMedia({ reducedMotion: "reduce" });
+
+  await page.goto("/account");
+
+  const sub = manifest(page).locator("tbody tr.drawer-row");
+  await expect(sub).toHaveCount(1);
+
+  // Compared against the row's own unhovered value rather than against a
+  // literal colour: the tint is a `color-mix` of a custom property, so a
+  // hardcoded rgb string would pin the theme rather than the behaviour.
+  const before = await sub.evaluate((el) => getComputedStyle(el).backgroundColor);
+  await sub.hover();
+  const after = await sub.evaluate((el) => getComputedStyle(el).backgroundColor);
+  expect(after).toBe(before);
+});
