@@ -262,14 +262,25 @@ export const auditLog = pgTable(
     // resolve identities — resolveAuditIdentities' `payout.deleted` read and
     // resolveFilterIdentity's.
     //
-    // It does NOT serve /admin/audit's action filter, and that is worth
-    // stating because it looks like it should: queryAuditLog matches `action`
-    // with a LIKE prefix, not equality, and under this deployment's
+    // It does NOT serve /admin/audit's action filter: queryAuditLog matches
+    // `action` with a LIKE prefix, not equality, and under this deployment's
     // en_US.utf8 collation a plain btree cannot answer `LIKE 'x%'` without
-    // text_pattern_ops. EXPLAIN puts it in Filter, not Index Cond. A
-    // text_pattern_ops index would be a separate migration and a separate
-    // decision; do not assume this one already covers that page.
+    // text_pattern_ops. EXPLAIN puts it in Filter, not Index Cond. See
+    // audit_log_action_pattern_idx below for that case.
     index("audit_log_action_target_id_idx").on(t.action, t.target, t.id.desc()),
+    // Serves /admin/audit's action-prefix filter (LIKE 'x%') for the tail
+    // case. Measured at the page's real shape — ORDER BY id DESC LIMIT 100,
+    // AUDIT_PAGE_SIZE, since the page passes no limit. A recent-heavy prefix
+    // is already answered in under 0.2ms by a backward scan of audit_log_pkey
+    // and never touches this index, but a prefix with few or no recent rows
+    // (including a typo in the free-text filter box) otherwise degrades to a
+    // full seq scan — 2.3ms at 40k rows, 26ms at 500k, 52ms at 1M, 80ms at
+    // 2M, against a flat 0.08-0.09ms with this index.
+    // Action-only (not composite with id) because btree deduplication keeps
+    // it small — 304kB at 40k rows, 14MB at 2M — and a composite
+    // (action, id DESC) was measured and rejected: no gain, 82MB at 2M since
+    // adding id defeats the dedup.
+    index("audit_log_action_pattern_idx").on(t.action.op("text_pattern_ops")),
   ],
 );
 

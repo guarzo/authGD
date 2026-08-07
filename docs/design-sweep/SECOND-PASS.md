@@ -17,6 +17,14 @@ rather than rediscovering it as a new finding.
 > marked inline below. **Still open:** section 2 (nav membership, needs a
 > product decision), section 3 (sweep backlog items 6, 10, 20 and the cosmetics),
 > and the remaining section 4 rows.
+>
+> **Update, later on 2026-08-06** (branch `worktree-audit-action-index`): both
+> index-related rows in section 4b are now settled, by measurement rather than
+> by argument. The action filter got its `text_pattern_ops` index; the
+> migration-runner question was answered **no, not yet**, with a trigger
+> condition recorded in `docs/ops.md`. Section 4c records what the measurement
+> checked. Section 4b's third row (`health.ts`'s unread `"error"` message)
+> remains open.
 
 Two sources feed this list: the sweep's own backlog (`SYNTHESIS.md`), and the
 `my:polish-core` pass run over the resulting diff, which reviewed the sweep's
@@ -138,21 +146,20 @@ bugs, type design, and over-engineering to `report` rather than auto-fix.
 | `CONTACT_SYNC_RESULTS`' partition comment enumerates seven of nine, omitting `sync_failed` | `core/contact-result.ts:53-56` | May be deliberate, but neither this comment nor `services/accounts.ts:139-144` says so |
 | pg-boss's `maintained_on` is a gated single-row update, so the "three missed ticks" margin is nearer 1.5 | `core/health.ts:28` | The liveness conclusion holds; only the margin arithmetic is off |
 
-## 4b. Found while closing the above (2026-08-06) — one open, one decided, one closed
+## 4b. Found while closing the above (2026-08-06) — all three now settled
 
 Three things the follow-up pass surfaced and chose not to fix, so the branch
-would not keep growing. None is urgent; all are recorded so the next sweep
-recognises them. Two have since resolved, in different ways: the index-build
-row was **decided** rather than merely deferred — the answer was "no runner",
-and the reasoning and the conditions that would reverse it now live in
-`docs/ops.md` — and the heartbeat-`message` row was **closed without a code
-change**, the concern it records having turned out to be already written into
-the type's own docblock. The audit-filter index is the one still open.
+would not keep growing. All three have since resolved, in different ways: the
+audit-filter row by **adding** the index, after measuring; the index-build row
+by **deciding** against the machinery and recording the triggers in
+`docs/ops.md`; and the heartbeat-`message` row **without a code change**, the
+concern it records having turned out to be already written into the type's own
+docblock.
 
 | Finding | Where | Why deferred |
 |---|---|---|
-| `/admin/audit`'s action filter has no index that serves it | `services/audit.ts`'s `queryAuditLog` | It matches `action` with a LIKE prefix, and under this deployment's `en_US.utf8` collation a plain btree cannot answer `LIKE 'x%'` — EXPLAIN puts it in `Filter`, not `Index Cond`. `audit_log_action_target_id_idx` does **not** cover it, despite looking like it should; the index's own comment now says so. A `text_pattern_ops` index would fix it and is a separate migration and a separate decision |
-| ~~`audit_log` index migrations block writes while they build~~ **DECIDED 2026-08-06 — no runner, trigger recorded** | `drizzle/`, `fly.toml`, now `docs/ops.md` | Decision: keep the transactional build; do **not** add a non-transactional runner. The mechanics as stated were right but understated in one respect — drizzle's migrator wraps the **entire pending batch** in a single transaction, not one per migration (`pg-core/dialect.cjs`: `session.transaction` sits outside the `for await` loop), and `__drizzle_migrations` is read as a high-water mark, not a set. That makes a custom runner *more* dangerous than the row assumed: decoupling the DDL from the bookkeeping insert lets a mid-batch failure commit statements the high-water mark still sits behind, so the retry re-runs them and wedges the deploy — and a failed `CONCURRENTLY` build is precisely the case that triggers it. Against that, the avoided cost is a sub-second `SHARE` lock during one index build, on the only table whose size makes the lock worth discussing at all. Recorded with the revisit triggers (~5M rows, a >5s timed build, multi-tenant, or a third such index) and a watched out-of-band procedure in `docs/ops.md` → *Migrations run in one transaction — deliberately*. Raised by CodeRabbit on #163, answered there, and **withdrawn by the reviewer** |
+| ~~`/admin/audit`'s action filter has no index that serves it~~ **CLOSED 2026-08-06** | `services/audit.ts`'s `queryAuditLog` | Added `audit_log_action_pattern_idx` on `action text_pattern_ops`. Measured first, and the measurement moved the argument: the *slow seq scan this row assumed* is not what most filters do. At the page's real query shape — `ORDER BY id DESC LIMIT 100`, since `/admin/audit` passes no limit and `queryAuditLog` falls back to `AUDIT_PAGE_SIZE` — any prefix with recent matches is answered by a backward scan of `audit_log_pkey` in **under 0.2 ms** and never touches the new index. The cost is entirely in the tail — a prefix with few or **no** recent rows falls back to a full seq scan: **2.3 ms at 40k rows, 26 ms at 500k, 52 ms at 1M, 80 ms at 2M**, growing linearly, and `audit_log` is never purged (`src/jobs/purge.ts` covers sessions, OAuth transactions and outbox only). With the index those same queries are a flat **0.08–0.09 ms**. The case that decided it: the filter is a **free-text box**, so a typo (`teir.`, `discrod.`) is a zero-match prefix, and zero-match is the *worst* case — a full scan for a page that returns nothing. See section 4c for what was verified and what was rejected |
+| ~~`audit_log` index migrations block writes while they build~~ **DECIDED 2026-08-06 — no runner, trigger recorded** | `drizzle/`, `fly.toml`, now `docs/ops.md` | Decision: keep the transactional build; do **not** add a non-transactional runner. The mechanics as stated were right but understated in one respect — drizzle's migrator wraps the **entire pending batch** in a single transaction, not one per migration (`pg-core/dialect.cjs`: `session.transaction` sits outside the `for await` loop), and `__drizzle_migrations` is read as a high-water mark, not a set. That makes a custom runner *more* dangerous than the row assumed: decoupling the DDL from the bookkeeping insert lets a mid-batch failure commit statements the high-water mark still sits behind, so the retry re-runs them and wedges the deploy — and a failed `CONCURRENTLY` build is precisely the case that triggers it. Against that, the avoided cost is a sub-second `SHARE` lock during one index build, on the only table whose size makes the lock worth discussing at all. Recorded with the revisit triggers (~5M rows, a >5s timed build, multi-tenant, or a third such index) and a watched out-of-band procedure in `docs/ops.md` → *Migrations run in one transaction — deliberately*. Raised by CodeRabbit on #163, answered there, and **withdrawn by the reviewer**. **Since measured**, closing the estimate that decision rested on: the build is **33 ms at ~40k rows**, 367 ms at 500k, 816 ms at 1M and 1.58 s at 2M, so the ~5M / >5 s triggers are mutually consistent and neither is close. Note the decision is self-limiting in one direction — adding the action index *now*, while the build is 33 ms, is part of what keeps the runner unnecessary; deferring it lands the build in the regime that would have justified the machinery |
 | ~~The `"error"` variant's `message` has no reader~~ **CLOSED 2026-08-06 — no code change** | `services/health.ts` | Re-read at e9ff584: the risk this row describes is *already* written into `WorkerHeartbeat`'s own docblock (`services/health.ts:46-51`), which names the field's only reader today (`console.error` and a log aggregator), says in as many words that it is not vetted for a browser, and assigns the "is an unfiltered DB error string safe to show" decision to whichever future caller renders it. That is the whole of what this row was asking for, so restating it here would be duplication, not work. Not rendered on `/admin/sync` (nothing there reads `.message`, verified by grep): the page is admin-gated, so severity is low, but a raw driver string can carry query text and parameter values, and this project already logs `.message`-only in the OAuth callbacks for exactly that reason. Not dropped either: `message` is the only structured carrier of *why*, `console.error` is a lossy one-way channel, and a non-browser caller (a health JSON endpoint, a future alert) is the plausible reader. Kept, documented, decision delegated |
 
 (An earlier draft of this table also listed `workerHeartbeat` tagging an
@@ -163,12 +170,51 @@ the evidence exists and simply isn't parseable, which is the check failing
 rather than an absence of evidence. Covered by an e2e test using
 `timestamptz`'s `'infinity'`.)
 
+## 4c. What the index measurement checked (2026-08-06)
+
+Recorded because two of these would have silently defeated the index, and the
+next person to touch `queryAuditLog` needs to know they were tested rather than
+assumed. Postgres 16.11, `en_US.utf8`, `audit_log` seeded to a production-shaped
+action distribution, queried at the page's real shape (`ORDER BY id DESC LIMIT
+100`). Every figure here and in the 4b rows comes from that one sweep.
+
+- **The escaped-underscore path works.** `queryAuditLog` escapes `%`, `_` and
+  `\` before building the pattern, and half the action names contain `_` (25 of
+  the 49 action literals in `src/` — `discord.role_changed`,
+  `payout.pool_added`). Postgres still extracts a prefix from
+  `LIKE 'payout.pool\_addex%'` — `Index Cond: ((action ~>=~
+  'payout.pool_addex') AND (action ~<~ 'payout.pool_addey'))`. The escaping does
+  not cost the index.
+- **Bind parameters do not defeat it.** A prefix `LIKE` against a *parameter*
+  cannot be turned into an index range under a generic plan, which would have
+  made this index useless through Drizzle. Verified with a named `PREPARE`
+  executed seven times — past the five-execution custom-plan threshold, every
+  execution still planned `Index Cond`, because the generic plan costs more and
+  Postgres keeps re-planning custom.
+- **A composite was measured and rejected.** `(action text_pattern_ops, id DESC)`
+  gave no measurable gain over the single column and could not help the
+  scattered-rare case either. It costs **82 MB vs 14 MB** at 2M rows (and 2.24 s
+  to build against 1.58 s): `id` is distinct per row, which defeats the btree
+  deduplication that makes the single-column index small (a handful of distinct
+  `action` values collapse to **304 kB at 40k rows**).
+- **The new index does not disturb the fast plans.** Common prefixes still
+  choose the backward `audit_log_pkey` scan with it present — 0.152 ms with the
+  index at 500k against 0.155 ms without — so no query got slower.
+- **`audit_log_action_target_id_idx` is still needed** and was not replaced. It
+  serves `logAuditIfChanged`'s equality lookup on `(action, target)`; the new
+  index serves prefix ranges. Folding them into one would mean dropping and
+  recreating an index from an applied migration to change its operator class —
+  more risk than the 304 kB it would save.
+
 ## 5. Also known
 
 ~~The `audit_log` index on `(action, target, id desc)`~~ **CLOSED 2026-08-06.**
 Added via `npm run db:generate` (never hand-written) as
-`drizzle/0009_useful_frightful_four.sql`; no already-applied migration was
-touched. `logAuditIfChanged`'s docblock was updated too, since it described the
+`drizzle/0010_even_jetstream.sql`; no already-applied migration was
+touched. (An earlier draft of this line said `0009_useful_frightful_four.sql`,
+copying the name CodeRabbit's review used. That file does not exist — #162 took
+`0009`, so this migration was renumbered to `0010` before merge.)
+`logAuditIfChanged`'s docblock was updated too, since it described the
 index as missing and that claim is now false. This also closes CodeRabbit's
 independent report of the same item on PR #128 (`src/services/audit.ts:73`) —
 one item, two reviewers, one migration.

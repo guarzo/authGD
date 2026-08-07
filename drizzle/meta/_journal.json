@@ -78,6 +78,13 @@
       "when": 1786046498461,
       "tag": "0010_even_jetstream",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1786052105356,
+      "tag": "0011_cold_gargoyle",
+      "breakpoints": true
     }
   ]
 }

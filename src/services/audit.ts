@@ -45,7 +45,8 @@ function stableStringify(v: unknown): string {
  * Costs one extra lookup per call, served by `audit_log_action_target_id_idx`
  * on `(action, target, id desc)` — an equality match on both leading columns,
  * which is what that index answers. It does not help `queryAuditLog`'s action
- * filter, which is a LIKE prefix; see the index's own comment in
+ * filter, which is a LIKE prefix — `audit_log_action_pattern_idx` serves that
+ * one; see both indexes' comments in
  * `src/db/schema.ts`. "Most recent" here is `id desc limit 1`, not `at desc` — `id` is
  * the serial primary key, so ordering by it matches insertion order without
  * relying on clock precision.

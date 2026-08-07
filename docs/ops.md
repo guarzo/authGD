@@ -193,15 +193,28 @@ anything that advances it out of order is not self-correcting.
 
 A plain `CREATE INDEX` takes a `SHARE` lock — **writes block for the duration
 of the build, reads do not**. During a release command the old `worker` machine
-is still up and still writing audit rows, so its writes wait out the build.
+is still up and still writing audit rows, and so is the web process:
+`src/app/admin/*/actions.ts` call `logAudit` directly and the login and
+character-link paths reach it through `src/services/`. Both keep serving while
+the release command runs, so both wait out the build.
 
 `CREATE INDEX CONCURRENTLY` avoids this, and cannot be used here: it cannot run
 inside a transaction block (SQLSTATE 25001), and every migration is in one.
 
 **This is accepted, not overlooked.** At this deployment's size the lock is
-sub-second. The figures below are the operator's own, stated on PR #163 in
-August 2026 — they are estimates, not measurements from the repo, which is why
-trigger 1 below asks you to run the count rather than trust them:
+sub-second. Measured on Postgres 16.11 against a production-shaped `audit_log`,
+building the `action` index this project actually added:
+
+| `audit_log` rows | plain `CREATE INDEX` on `action` | index size |
+|---|---|---|
+| 40k (current scale) | **33 ms** | 304 kB |
+| 500k | 367 ms | 3.4 MB |
+| 1M | **816 ms** | 6.8 MB |
+| 2M | 1.58 s | 14 MB |
+
+Extrapolating, the ~5M row and >5 s triggers below are consistent with each
+other, and current scale is two orders of magnitude short of either. Why it
+stays cheap here:
 
 | Why it's cheap here | |
 |---|---|
@@ -227,7 +240,10 @@ fixed; it does not change this decision.
 job deliberately does not touch it, because the log is the record. So this
 decision has a shelf life. Rework it when any of these is true:
 
-1. `SELECT count(*) FROM audit_log` exceeds ~5 million.
+1. `SELECT count(*) FROM audit_log` exceeds ~5 million. Run it at the psql
+   prompt from `fly postgres connect -a <pg-app> -d <database>` — that command
+   opens an interactive session and has no flag for passing SQL (`-c` is the
+   config-file path).
 2. A timed build of the proposed index against a production-sized copy exceeds
    ~5 seconds. This is the real measurement; the row count above is only a cheap
    proxy for when it becomes worth measuring.
@@ -272,8 +288,12 @@ Apply the index by hand instead, watched, outside the release command:
    ```sql
    SELECT indexrelid::regclass, indisvalid FROM pg_index WHERE NOT indisvalid;
    ```
-   If it lists yours, `DROP INDEX` it and retry. Do not deploy until this
-   returns no rows.
+   If it lists yours, recover with `DROP INDEX CONCURRENTLY` and retry the
+   `CREATE INDEX CONCURRENTLY`, or rebuild it in place with
+   `REINDEX INDEX CONCURRENTLY`. Each of those must run outside a transaction
+   block, and none takes the `ACCESS EXCLUSIVE` lock a plain `DROP INDEX`
+   would — which is the lock this whole procedure exists to avoid. Do not
+   deploy until this returns no rows.
 5. Mark the generated migration applied without re-running its DDL, so the
    release command skips it. The `hash` is the sha256 of the whole `.sql` file
    and `created_at` is that entry's `when` from `drizzle/meta/_journal.json` —
