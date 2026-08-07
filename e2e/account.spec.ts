@@ -1182,7 +1182,20 @@ test("a faulted character does not blow out the forced horizontal scroll at 320p
   // the whole of what this column's width is. Assert the two strings the
   // measurement is of, by name.
   await expect(manifest(page).getByText("re-auth needed")).toHaveCount(2);
-  await expect(manifest(page).getByRole("link", { name: "re-authorize" })).toHaveCount(1);
+  // Scoped to the status line, which is the cell this test measures. An
+  // unscoped manifest-wide count reads 3 since the remedy prose moved into
+  // sub-rows: each contacts-faulted row's `ContactRemedy` carries its own
+  // re-authorize link (its token is valid, so `showReauth` is true), and those
+  // used to sit in a block below the table, outside this locator. The link
+  // whose width is under test is the token line's.
+  await expect(
+    manifest(page).locator(".status-line").getByRole("link", { name: "re-authorize" }),
+  ).toHaveCount(1);
+  // The other two, pinned rather than merely excluded — so a change that stops
+  // rendering them fails here instead of silently loosening the line above.
+  await expect(
+    manifest(page).locator("tr.drawer-row").getByRole("link", { name: "re-authorize" }),
+  ).toHaveCount(2);
   // The same located-row precondition every other measurement in this file
   // carries: an unlocated row is narrower as well as shorter. By text, not by
   // count — a degraded `placeCrew` still renders a `.char__location`, just a

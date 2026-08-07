@@ -815,12 +815,13 @@ export default async function AccountPage({
                           cell: in a cell the sentence wraps against a narrow
                           column and the row's height becomes viewport-
                           dependent (+3px at desktop, +89px at 390px, measured);
-                          spanning the table it still wraps against the table's
-                          own width, but far less sharply — 37px at 1440/1280,
-                          57px at 390px, measured. This costs one fold row at
-                          every viewport, accepted deliberately — proximity to
-                          the failing character is worth more than the tenth
-                          healthy row.
+                          spanning the table it is a flat 37px at 1440, 1280
+                          and 390 alike, measured — at 390 because the table is
+                          inside a horizontal scroller and the sub-row spans
+                          the table's width, not the viewport's. This costs one
+                          fold row at every viewport, accepted deliberately —
+                          proximity to the failing character is worth more than
+                          the tenth healthy row.
 
                           Same `hasContactRemedy` gate as the `aria-describedby`
                           that points here, so the id cannot dangle. Prose and
