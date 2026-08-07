@@ -137,10 +137,12 @@ function isStalled(c: CharacterHealthInput): boolean {
  * returns false for anything `needsAttention` claims), and exporting both
  * would let a caller build a fourth combination the domain does not have.
  *
- * `stalled` exists so a row can be honest and compact at once. It is not the
- * member's to fix, so it does not expand a row — but it is not `ok` either,
- * and rendering it as `ok` would make the manifest's own per-character truth
- * (page.tsx's "Sync schedule" note) a false pointer.
+ * `stalled` exists so a row can be honest without being alarming. It is not
+ * the member's to fix, which governs the wording — never "needs attention" —
+ * but it does expand a row: standings sitting stale is worth saying out loud,
+ * and silence about it reads as health. Rendering it as `ok` would make the
+ * manifest's own per-character truth (page.tsx's "Sync schedule" note) a false
+ * pointer.
  */
 export type CharacterState = "attention" | "stalled" | "ok";
 

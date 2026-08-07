@@ -23,10 +23,12 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 export function Scroller({
   label,
   tall,
+  className,
   children,
 }: {
   label: string;
   tall?: boolean;
+  className?: string;
   children: ReactNode;
 }) {
   const [atStart, setAtStart] = useState(true);
@@ -73,7 +75,7 @@ export function Scroller({
   }, [measure]);
 
   return (
-    <div className="scroller-frame">
+    <div className={className ? `scroller-frame ${className}` : "scroller-frame"}>
       <div
         ref={ref}
         className={tall ? "scroller scroller--tall" : "scroller"}

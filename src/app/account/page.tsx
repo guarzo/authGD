@@ -1,3 +1,4 @@
+import { Fragment } from "react";
 import type { Metadata } from "next";
 import Image from "next/image";
 import { redirect } from "next/navigation";
@@ -219,22 +220,20 @@ export default async function AccountPage({
     now: new Date(now),
   });
 
-  const contactRemedies = view.characters.filter((c) =>
-    hasContactRemedy(c.contactSyncResult, c.contactsTarget),
-  );
-
   // The honest "make main" consequence per non-main character — sweep item
   // #6. Computed once here, not per-row where the button lives, because the
-  // sentence is prose too long for that cell (same reasoning as
-  // `contactRemedies` below) and because "none" of the three outcomes is the
-  // common case: a member's alts are usually in the same corp as their main,
-  // and a blanket warning on every row would be noise on exactly the rows
-  // where pressing the button changes nothing (PRODUCT.md principle 4).
+  // sentence is prose too long for that cell (the same reason the remedy
+  // prose spans a sub-row rather than sitting in one) and because "none" of
+  // the three outcomes is the common case: a member's alts are usually in the
+  // same corp as their main, and a blanket warning on every row would be noise
+  // on exactly the rows where pressing the button changes nothing (PRODUCT.md
+  // principle 4).
   //
-  // `text` never repeats `c.name` — same convention as `contactRemedies`
-  // below, which prefixes the rendered `<strong>{name}:</strong>` itself — and
-  // never guesses a pronoun for the character's owner; each sentence reads as
-  // a standalone clause after that prefix instead.
+  // `text` never repeats `c.name` — the rendered block below prefixes
+  // `<strong>{name}:</strong>` itself, which it still needs because these notes
+  // sit under the table rather than under the row they describe — and never
+  // guesses a pronoun for the character's owner; each sentence reads as a
+  // standalone clause after that prefix instead.
   const mainChangeNotes = view.characters
     .filter((c) => !c.isMain)
     .flatMap((c) => {
@@ -314,8 +313,22 @@ export default async function AccountPage({
                   <Status tone="off">first sync pending</Status>
                 </p>
               ) : (
+                // A green chip, not `--ink` body text reading `nominal`. Three
+                // faults in one line: it was the same colour as the
+                // descriptive prose beside it so it read as a sentence
+                // fragment rather than a status; `nominal` carries no context
+                // standing alone; and it stated account health in the same
+                // breath a per-row `ok` chip would have. Saying the count here
+                // is what lets the STATUS column stay exception-only — this is
+                // the one place the healthy case is reported, so it says the
+                // thing outright. No `title` tooltip: touch devices have no
+                // hover and `title` is unreliably announced.
                 <p className="verdict">
-                  <Status>nominal</Status>
+                  <Status tone="ok">
+                    {view.characters.length === 1
+                      ? "1 character — healthy"
+                      : `${view.characters.length} characters — all healthy`}
+                  </Status>
                 </p>
               ))}
           </div>
@@ -556,7 +569,7 @@ export default async function AccountPage({
           </p>
         )}
 
-        <Scroller label="Your characters">
+        <Scroller label="Your characters" className="full-measure">
           <table className="log log--manifest">
             {/* Always present, unlike the visual copy above: a `<caption>` is
                 announced for the table as a whole, so this is the one place a
@@ -604,194 +617,253 @@ export default async function AccountPage({
                       ? contactStateToken(c.contactSyncResult)
                       : null;
                   return (
-                    <tr key={c.id}>
-                      <td>
-                        {/* The EVE image server is a third party serving one
-                          small thumbnail per row; running each through the
-                          image optimizer would add a proxy hop and a
-                          dependency on their uptime per row of an admin's
-                          scan, for no visible gain on a 32x32 avatar — not
-                          adding images.evetech.net to remotePatterns for
-                          this. */}
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          className="portrait"
-                          src={`https://images.evetech.net/characters/${c.id}/portrait?size=64`}
-                          alt=""
-                          width={32}
-                          height={32}
-                          loading="lazy"
-                        />
-                      </td>
-                      <td>
-                        <div className="char-line">
-                          <span className="char">
-                            {c.name}{" "}
-                            {c.isMain && <strong className="char__main">(main)</strong>}
-                          </span>
-                          <CharacterLocation
-                            location={c.location}
-                            stale={c.locationStale}
+                    <Fragment key={c.id}>
+                      <tr>
+                        <td>
+                          {/* The EVE image server is a third party serving one
+                              small thumbnail per row; running each through the
+                              image optimizer would add a proxy hop and a
+                              dependency on their uptime per row of an admin's
+                              scan, for no visible gain on a 32x32 avatar — not
+                              adding images.evetech.net to remotePatterns for
+                              this. */}
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            className="portrait"
+                            src={`https://images.evetech.net/characters/${c.id}/portrait?size=64`}
+                            alt=""
+                            width={32}
+                            height={32}
+                            loading="lazy"
                           />
-                          {/* Only when the STATUS column is gone. `map on|off`
-                              varies per character while the chip reads `ok`
-                              either way — deliberately, since map membership
-                              cannot substantiate a fault
-                              (account-health.ts:27-35) — so the cell's
-                              accessible name was the only place a
-                              screen-reader user could learn it. Visually
-                              hidden costs no vertical space, which is the
-                              whole point of dropping the column. Never
-                              rendered alongside the column: that would say the
-                              same sentence twice in one row. */}
-                          {!showStatusColumn && (
-                            <span className="visually-hidden" data-status-summary>
-                              {statusSummary(c)}
-                            </span>
-                          )}
-                        </div>
-                      </td>
-                      {showStatusColumn && (
-                        <td
-                          data-state={state}
-                          aria-label={
-                            state === "attention" ? undefined : statusSummary(c)
-                          }
-                          aria-describedby={
-                            hasContactRemedy(c.contactSyncResult, c.contactsTarget)
-                              ? contactRemedyId(c.id)
-                              : undefined
-                          }
-                        >
-                          {state === "attention" ? (
-                            <div className="status-lines">
-                              <span className="status-line">
-                                <span className="status-line__label">token</span>
-                                {c.tokenStatus === "valid" && !c.needsReauthForScopes ? (
-                                  <Status tone="ok">ok</Status>
-                                ) : (
-                                  // A control, not a value: `.st` carries no underline
-                                  // of its own (it's display:inline-flex), so an anchor
-                                  // wrapping one rendered with no affordance at all —
-                                  // identical to an inert token beside it. This is the
-                                  // same "make main"/"unlink" grade the row's other
-                                  // controls use, per globals.css's value/control
-                                  // split. Merging TOKEN into STATUS does not demote it
-                                  // to a chip.
-                                  <a
-                                    className="btn btn--quiet btn--micro"
-                                    href="/auth/eve/link"
-                                  >
-                                    re-authorize
-                                  </a>
-                                )}
-                              </span>
-                              <span className="status-line">
-                                <span className="status-line__label">standings</span>
-                                <ContactState
-                                  result={c.contactSyncResult}
-                                  target={c.contactsTarget}
-                                />
-                              </span>
-                              <span className="status-line">
-                                <span className="status-line__label">map</span>
-                                {c.onMapAcl ? (
-                                  <Status tone="ok">on</Status>
-                                ) : (
-                                  <Status tone="off">off</Status>
-                                )}
-                              </span>
-                            </div>
-                          ) : state === "stalled" ? (
-                            // One chip, and it never overstates health: a stalled
-                            // character shows its own state, not `ok`. `map: off`
-                            // rides in the cell's accessible name rather than the
-                            // visible chip because it is unsubstantiable as a fault
-                            // (account-health.ts:27-35) and nothing a member can
-                            // act on.
-                            //
-                            // The null-token branch is unreachable today —
-                            // `classifyCharacter` only returns "stalled" for a
-                            // non-null `contactSyncResult` — but its fallback is
-                            // still a non-"ok" tone. This arm must never be able
-                            // to reach the `ok` chip through any path, so a
-                            // future change to `isStalled` that breaks that
-                            // guarantee fails loud (a wrong chip) rather than
-                            // quiet (a false green).
-                            <Status tone={stalledToken?.tone ?? "warn"}>
-                              {stalledToken?.text ?? "stalled"}
-                            </Status>
-                          ) : (
-                            <Status tone="ok">ok</Status>
-                          )}
                         </td>
-                      )}
-                      <td>
-                        <div className="btn-row btn-row--tight btn-row--end">
-                          {!c.isMain && (
-                            <form
-                              action={setMainAction.bind(null, c.id)}
-                              className="inline-form"
-                            >
-                              <Submit
-                                className="btn btn--quiet btn--micro"
-                                pendingLabel="setting…"
-                                // Nine of these stack up in a ten-character
-                                // manifest, and "make main" is 89px against
-                                // `main`'s 50px — 39px of a 320px viewport's
-                                // forced horizontal scroll, per character
-                                // column. The verb moves into the accessible
-                                // name rather than being dropped: `unlink`
-                                // beside it already made this exact trade
-                                // (`restName` below), and a column of bare
-                                // "main"s would otherwise announce a noun with
-                                // no object nine times.
-                                aria-label={`make ${c.name} main`}
-                                // Points at the prose below the Scroller only when
-                                // `mainChangeNotes` produced one for this character
-                                // — most rows change nothing (an alt in the same
-                                // corp as the main), and this button carries no
-                                // `aria-describedby` at all on those, matching the
-                                // STATUS cell's `contactRemedyId` wiring above.
-                                //
-                                // Complements the label above rather than competing
-                                // with it: `aria-label` replaces the name a screen
-                                // reader announces, `aria-describedby` is read after
-                                // it, so the row says what the press does and then
-                                // what it will change.
-                                aria-describedby={
-                                  mainChangeNotes.some((n) => n.id === c.id)
-                                    ? mainChangeNoteId(c.id)
-                                    : undefined
-                                }
+                        <td>
+                          <div className="char-line">
+                            <span className="char">
+                              {c.name}{" "}
+                              {c.isMain && <strong className="char__main">(main)</strong>}
+                            </span>
+                            <CharacterLocation
+                              location={c.location}
+                              stale={c.locationStale}
+                            />
+                            {/* Only when the STATUS column is gone. `map on|off`
+                                varies per character while the chip reads `ok`
+                                either way — deliberately, since map membership
+                                cannot substantiate a fault
+                                (account-health.ts:27-35) — so the cell's
+                                accessible name was the only place a
+                                screen-reader user could learn it. Visually
+                                hidden costs no vertical space, which is the
+                                whole point of dropping the column. Never
+                                rendered alongside the column: that would say the
+                                same sentence twice in one row. */}
+                            {!showStatusColumn && (
+                              <span className="visually-hidden" data-status-summary>
+                                {statusSummary(c)}
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                        {showStatusColumn && (
+                          <td
+                            data-state={state}
+                            aria-label={
+                              state === "attention" ? undefined : statusSummary(c)
+                            }
+                            aria-describedby={
+                              hasContactRemedy(c.contactSyncResult, c.contactsTarget)
+                                ? contactRemedyId(c.id)
+                                : undefined
+                            }
+                          >
+                            {state === "attention" ? (
+                              <div className="status-lines">
+                                <span className="status-line">
+                                  <span className="status-line__label">token</span>
+                                  {c.tokenStatus === "valid" &&
+                                  !c.needsReauthForScopes ? (
+                                    <Status tone="ok">ok</Status>
+                                  ) : (
+                                    // A control, not a value: `.st` carries no underline
+                                    // of its own (it's display:inline-flex), so an anchor
+                                    // wrapping one rendered with no affordance at all —
+                                    // identical to an inert token beside it. This is the
+                                    // same "make main"/"unlink" grade the row's other
+                                    // controls use, per globals.css's value/control
+                                    // split. Merging TOKEN into STATUS does not demote it
+                                    // to a chip.
+                                    <a
+                                      className="btn btn--quiet btn--micro"
+                                      href="/auth/eve/link"
+                                    >
+                                      re-authorize
+                                    </a>
+                                  )}
+                                </span>
+                                <span className="status-line">
+                                  <span className="status-line__label">standings</span>
+                                  <ContactState
+                                    result={c.contactSyncResult}
+                                    target={c.contactsTarget}
+                                  />
+                                </span>
+                                <span className="status-line">
+                                  <span className="status-line__label">map</span>
+                                  {c.onMapAcl ? (
+                                    <Status tone="ok">on</Status>
+                                  ) : (
+                                    <Status tone="off">off</Status>
+                                  )}
+                                </span>
+                              </div>
+                            ) : state === "stalled" ? (
+                              // One chip, and it never overstates health: a stalled
+                              // character shows its own state, not `ok`. `map: off`
+                              // rides in the cell's accessible name rather than the
+                              // visible chip because it is unsubstantiable as a fault
+                              // (account-health.ts:27-35) and nothing a member can
+                              // act on.
+                              //
+                              // The null-token branch is unreachable today —
+                              // `classifyCharacter` only returns "stalled" for a
+                              // non-null `contactSyncResult` — but its fallback is
+                              // still a non-"ok" tone. This arm must never be able
+                              // to reach the `ok` chip through any path, so a
+                              // future change to `isStalled` that breaks that
+                              // guarantee fails loud (a wrong chip) rather than
+                              // quiet (a false green).
+                              <Status tone={stalledToken?.tone ?? "warn"}>
+                                {stalledToken?.text ?? "stalled"}
+                              </Status>
+                            ) : (
+                              <Status tone="ok">ok</Status>
+                            )}
+                          </td>
+                        )}
+                        <td>
+                          <div className="btn-row btn-row--tight btn-row--end">
+                            {!c.isMain && (
+                              <form
+                                action={setMainAction.bind(null, c.id)}
+                                className="inline-form"
                               >
-                                main
-                              </Submit>
-                            </form>
-                          )}
-                          {view.characters.length > 1 && (
-                            <form
-                              action={unlinkAction.bind(null, c.id)}
-                              className="inline-form"
-                            >
-                              <ConfirmSubmit
-                                className="btn btn--quiet btn--micro btn--danger-quiet"
-                                armedClassName="btn btn--micro btn--danger"
-                                label="unlink"
-                                // Named, like the Discord unlink above and every
-                                // unlink on the admin table: three rows each
-                                // offering a bare "unlink" gives a screen-reader
-                                // or speech-input member the verb three times
-                                // with no object, and the manifest is exactly
-                                // where they cannot see which row they are on.
-                                restName={`unlink ${c.name}`}
-                                confirmName={`confirm unlink ${c.name}`}
+                                <Submit
+                                  className="btn btn--quiet btn--micro"
+                                  pendingLabel="setting…"
+                                  // Nine of these stack up in a ten-character
+                                  // manifest, and "make main" is 89px against
+                                  // `main`'s 50px — 39px of a 320px viewport's
+                                  // forced horizontal scroll, per character
+                                  // column. The verb moves into the accessible
+                                  // name rather than being dropped: `unlink`
+                                  // beside it already made this exact trade
+                                  // (`restName` below), and a column of bare
+                                  // "main"s would otherwise announce a noun with
+                                  // no object nine times.
+                                  aria-label={`make ${c.name} main`}
+                                  // Points at the prose below the Scroller only when
+                                  // `mainChangeNotes` produced one for this character
+                                  // — most rows change nothing (an alt in the same
+                                  // corp as the main), and this button carries no
+                                  // `aria-describedby` at all on those, matching the
+                                  // STATUS cell's `contactRemedyId` wiring above.
+                                  //
+                                  // Complements the label above rather than competing
+                                  // with it: `aria-label` replaces the name a screen
+                                  // reader announces, `aria-describedby` is read after
+                                  // it, so the row says what the press does and then
+                                  // what it will change.
+                                  aria-describedby={
+                                    mainChangeNotes.some((n) => n.id === c.id)
+                                      ? mainChangeNoteId(c.id)
+                                      : undefined
+                                  }
+                                >
+                                  main
+                                </Submit>
+                              </form>
+                            )}
+                            {view.characters.length > 1 && (
+                              <form
+                                action={unlinkAction.bind(null, c.id)}
+                                className="inline-form"
+                              >
+                                <ConfirmSubmit
+                                  className="btn btn--quiet btn--micro btn--danger-quiet"
+                                  armedClassName="btn btn--micro btn--danger"
+                                  label="unlink"
+                                  // Named, like the Discord unlink above and every
+                                  // unlink on the admin table: three rows each
+                                  // offering a bare "unlink" gives a screen-reader
+                                  // or speech-input member the verb three times
+                                  // with no object, and the manifest is exactly
+                                  // where they cannot see which row they are on.
+                                  restName={`unlink ${c.name}`}
+                                  confirmName={`confirm unlink ${c.name}`}
+                                />
+                              </form>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                      {/* Remediation prose sits under the character it names,
+                          not in a footnote block below the table a member has
+                          to scroll past and then match back by name.
+
+                          A spanning sub-row rather than prose inside the name
+                          cell: in a cell the sentence wraps against a narrow
+                          column and the row's height becomes viewport-
+                          dependent (+3px at desktop, +89px at 390px, measured);
+                          spanning the table it is a flat 37px at 1440, 1280
+                          and 390 alike, measured — at 390 because the table is
+                          inside a horizontal scroller and the sub-row spans
+                          the table's width, not the viewport's. This costs one
+                          fold row at every viewport, accepted deliberately —
+                          proximity to the failing character is worth more than
+                          the tenth healthy row.
+
+                          Same `hasContactRemedy` gate as the `aria-describedby`
+                          that points here, so the id cannot dangle. Prose and
+                          at most a link — never an armed control, which a `<td>`
+                          disarms (#108/#111/#112). */}
+                      {hasContactRemedy(c.contactSyncResult, c.contactsTarget) && (
+                        <tr className="drawer-row">
+                          <td colSpan={manifestColumns(showStatusColumn)}>
+                            <p id={contactRemedyId(c.id)} className="table-note">
+                              {/* The prose used to be prefixed `{c.name}:` when it
+                                  lived in a footnote block below the table, far
+                                  from the row it named. Adjacency made that prefix
+                                  visually redundant, so it was dropped — but no
+                                  `<th scope="row">` exists in this table (every
+                                  `<th>` here is `scope="col"`), so a screen reader
+                                  in table mode gets a 4-column cell with no
+                                  character in it, and in links mode gets N
+                                  identical "re-authorize" links. Kept
+                                  visually-hidden rather than restored on-screen:
+                                  sighted users already have the row above. */}
+                              <span className="visually-hidden">{c.name}: </span>
+                              <ContactRemedy
+                                result={c.contactSyncResult}
+                                detail={c.contactSyncDetail}
+                                label={cfg.standings.label}
+                                // Only when the STATUS cell isn't already
+                                // showing a re-authorize control for this row:
+                                // two links to one href in one row is noise.
+                                // This covers the stale-snapshot case where the
+                                // token has since refreshed to valid but the
+                                // last contacts run still reports a token fault
+                                // — there the cell reads "ok" and this is the
+                                // only place the control can live.
+                                showReauth={
+                                  c.tokenStatus === "valid" && !c.needsReauthForScopes
+                                }
                               />
-                            </form>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
+                            </p>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
                   );
                 })}
                 {view.characters.length === 0 && (
@@ -812,41 +884,19 @@ export default async function AccountPage({
           </table>
         </Scroller>
 
-        {/* Remediation prose lives below the Scroller, never inside it: at
-            320px the table region scrolls horizontally, and up to three
-            sentences of fix instructions inside a cell drove that row to
-            ~340px tall while staying off-screen and unreachable. Each block
-            is capped at `--measure` like every other prose block on the
-            page, and is named by character since more than one row can need
-            explaining at once. */}
-        {contactRemedies.length > 0 && (
-          <div className="table-notes">
-            {contactRemedies.map((c) => (
-              <p key={c.id} id={contactRemedyId(c.id)} className="table-note">
-                <strong>{c.name}:</strong>{" "}
-                <ContactRemedy
-                  result={c.contactSyncResult}
-                  detail={c.contactSyncDetail}
-                  label={cfg.standings.label}
-                  // Only when the STATUS cell isn't already showing a
-                  // re-authorize control for this row: two links to one href in
-                  // one row is noise. This covers the stale-snapshot case where
-                  // the token has since refreshed to valid but the last contacts
-                  // run still reports a token fault — there the cell reads "ok"
-                  // and this is the only place the control can live.
-                  showReauth={c.tokenStatus === "valid" && !c.needsReauthForScopes}
-                />
-              </p>
-            ))}
-          </div>
-        )}
+        {/* State before action (PRODUCT.md principle 2), read by anyone before
+            they press "make main", not surfaced as a tooltip or screen-reader-
+            only aside. Only the characters where pressing it actually moves the
+            tier get a sentence — an alt already in the same corp as the main
+            gets none, so this never reads as a warning on a press that changes
+            nothing.
 
-        {/* Same placement rule as the remediation prose above: state before
-            action (PRODUCT.md principle 2), read by anyone before they press
-            "make main", not surfaced as a tooltip or screen-reader-only aside.
-            Only the characters where pressing it actually moves the tier get a
-            sentence — an alt already in the same corp as the main gets none,
-            so this never reads as a warning on a press that changes nothing. */}
+            Stays below the table, unlike the remediation prose that moved into
+            a sub-row: a remedy marks a character that is currently broken, and
+            adjacency to that row is the whole point. This note describes what a
+            control *would* do on a row that is fine, and up to nine of them can
+            apply at once — a sub-row each would spend the fold budget this
+            round exists to reclaim, on rows where nothing is wrong. */}
         {mainChangeNotes.length > 0 && (
           <div className="table-notes">
             {mainChangeNotes.map((n) => (
