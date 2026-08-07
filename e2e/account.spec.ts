@@ -601,6 +601,24 @@ test("sync schedule is omitted entirely before any character is linked", async (
   await expect(page.getByRole("heading", { name: "Sync schedule" })).toHaveCount(0);
 });
 
+test("the manifest caption does not claim every character is healthy when there are none", async ({
+  page,
+  context,
+}) => {
+  // The caption's no-STATUS-column sentence is chosen by `showStatusColumn`,
+  // which is a `.some()` over the characters — false for an empty crew as
+  // readily as for a healthy one. Without its own branch the table would tell
+  // a screen-reader user that every character is healthy on an account that
+  // has no characters at all.
+  const [acc] = await db.insert(account).values({ tier: "alumni" }).returning();
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.goto("/account");
+
+  const caption = manifest(page).locator("caption");
+  await expect(caption).toContainText("No characters are linked yet");
+  await expect(caption).not.toContainText("Every character is healthy");
+});
+
 test("unlinking a character that already left the account lands on a styled notice, not the error boundary", async ({
   page,
   context,
