@@ -245,7 +245,7 @@ test("the contacts note describes the column via a table caption, and shows visi
   );
 });
 
-test("unlink is quiet at rest and lands on one vertical with make main", async ({
+test("unlink is quiet at rest and lands on one vertical with the main control", async ({
   page,
   context,
 }) => {
@@ -274,8 +274,12 @@ test("unlink is quiet at rest and lands on one vertical with make main", async (
       .first()
       .evaluate((e) => getComputedStyle(e).color),
     page
-      .getByRole("button", { name: "make main" })
-      .first()
+      // Named per character, like `unlink` beside it: nine buttons all
+      // announcing a bare "main" gives a screen-reader or speech-input member
+      // the word with no object, in the one place they cannot see which row
+      // they are on. The visible "main" is contained in this name, which is
+      // what WCAG 2.5.3 label-in-name requires.
+      .getByRole("button", { name: "make Pilot Alt main" })
       .evaluate((e) => getComputedStyle(e).color),
   ]);
   expect(unlinkColor).toBe(makeMainColor);

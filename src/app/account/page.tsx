@@ -646,8 +646,19 @@ export default async function AccountPage({
                               <Submit
                                 className="btn btn--quiet btn--micro"
                                 pendingLabel="setting…"
+                                // Nine of these stack up in a ten-character
+                                // manifest, and "make main" is 89px against
+                                // `main`'s 50px — 39px of a 320px viewport's
+                                // forced horizontal scroll, per character
+                                // column. The verb moves into the accessible
+                                // name rather than being dropped: `unlink`
+                                // beside it already made this exact trade
+                                // (`restName` below), and a column of bare
+                                // "main"s would otherwise announce a noun with
+                                // no object nine times.
+                                aria-label={`make ${c.name} main`}
                               >
-                                make main
+                                main
                               </Submit>
                             </form>
                           )}
