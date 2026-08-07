@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { FocusHeading } from "@/app/_components/focus-heading";
 import { brandProps } from "@/app/_components/brand-server";
+import { navFor } from "@/app/_components/nav-items";
 import { SiteHeader } from "@/app/_components/ui";
 
 /**
@@ -30,6 +31,11 @@ import { SiteHeader } from "@/app/_components/ui";
  *
  * `/payouts/[id]` has its own copy of this boundary, which can say more,
  * because everyone who reaches *that* one has already cleared the guard.
+ *
+ * The nav below is `navFor({ canReadPayouts: false, isAdmin: false })` — the
+ * same shared rule (`nav-items.ts`) every other surface uses, evaluated with
+ * neither bit provable here. It reduces to exactly the one-item list this
+ * comment already argues for.
  */
 export const metadata: Metadata = {
   title: "Not found",
@@ -39,7 +45,7 @@ export default function NotFound() {
   return (
     <>
       <SiteHeader
-        items={[{ href: "/account", label: "Your account" }]}
+        items={navFor({ canReadPayouts: false, isAdmin: false })}
         {...brandProps()}
       />
       <main id="main" tabIndex={-1} className="page page--narrow">

@@ -88,12 +88,37 @@ applied subset as the loops go, and write `discord.role_changed` for it from the
 catch as well as the success path. Note that this changes what the dedupe sees,
 so re-check the `logAuditIfChanged` interaction rather than assuming it holds.
 
-## 2. The nav's membership changes between sections
+## 2. The nav's membership changes between sections — **RESOLVED 2026-08-06**
 
 **Source:** sweep backlog item 21. **Deferred because:** it needs a product
 decision about which destinations belong in the nav at which membership tier,
 which is the user's call and not derivable from the code. Decided 2026-08-05 by
 the user: "leave it, defer to a second pass."
+
+**The product decision, made 2026-08-06.** The nav is keyed to the viewer, not
+the section: it offers every destination the viewer is *provably authorized* to
+reach — `Your account` always, `Payouts` iff `canReadPayouts`, and
+`Members`/`Audit log`/`Sync` iff `isAdmin` — in one fixed order, broadest access
+first. The three surfaces that cannot read the session (`error.tsx` and both
+`not-found.tsx` boundaries) run the same rule on weaker evidence: the strongest
+membership the path alone proves. Each of those three therefore renders exactly
+the set it rendered before; what changed is that they are now the rule under a
+weaker premise rather than three hand-maintained exceptions to it.
+
+The decisive fact, and the reason a plain "show everything and let the target
+gate it" rule was rejected: `isAdmin` and `tier` are orthogonal columns, and the
+default tier is `alumni`. An admin is not necessarily a payouts reader, so an
+unconditional `Payouts` in the admin bar would eject a real and ordinary
+account — which is the thing `not-found.tsx`'s docblock already forbids.
+
+The ten hand-copied definitions across eight components collapsed to one item
+table in `src/app/_components/nav-items.ts`. `error.tsx`'s standing request that
+a future editor keep its `ADMIN_ITEMS` in step with `admin-nav.tsx`'s `ITEMS` by
+hand is gone: each label string now exists once, so the WCAG 3.2.4 divergence it
+was guarding against is structurally impossible rather than merely watched for.
+
+Recorded in `DESIGN.md` ("Nav membership is keyed to the viewer"), `PRODUCT.md`
+(Users), and `docs/settled-design-decisions.md`.
 
 ## 3. Remaining sweep backlog items
 
@@ -121,19 +146,21 @@ bugs, type design, and over-engineering to `report` rather than auto-fix.
 | `CONTACT_SYNC_RESULTS`' partition comment enumerates seven of nine, omitting `sync_failed` | `core/contact-result.ts:53-56` | May be deliberate, but neither this comment nor `services/accounts.ts:139-144` says so |
 | pg-boss's `maintained_on` is a gated single-row update, so the "three missed ticks" margin is nearer 1.5 | `core/health.ts:28` | The liveness conclusion holds; only the margin arithmetic is off |
 
-## 4b. Found while closing the above (2026-08-06) — two settled, one still open
+## 4b. Found while closing the above (2026-08-06) — all three now settled
 
 Three things the follow-up pass surfaced and chose not to fix, so the branch
-would not keep growing. Both index-related rows were taken up and settled later
-the same day on `worktree-audit-action-index` — one by adding the index, one by
-deciding against the machinery and recording the trigger. The `health.ts` row
-is still open.
+would not keep growing. All three have since resolved, in different ways: the
+audit-filter row by **adding** the index, after measuring; the index-build row
+by **deciding** against the machinery and recording the triggers in
+`docs/ops.md`; and the heartbeat-`message` row **without a code change**, the
+concern it records having turned out to be already written into the type's own
+docblock.
 
 | Finding | Where | Why deferred |
 |---|---|---|
 | ~~`/admin/audit`'s action filter has no index that serves it~~ **CLOSED 2026-08-06** | `services/audit.ts`'s `queryAuditLog` | Added `audit_log_action_pattern_idx` on `action text_pattern_ops`. Measured first, and the measurement moved the argument: the *slow seq scan this row assumed* is not what most filters do. At the page's real query shape — `ORDER BY id DESC LIMIT 100`, since `/admin/audit` passes no limit and `queryAuditLog` falls back to `AUDIT_PAGE_SIZE` — any prefix with recent matches is answered by a backward scan of `audit_log_pkey` in **under 0.2 ms** and never touches the new index. The cost is entirely in the tail — a prefix with few or **no** recent rows falls back to a full seq scan: **2.3 ms at 40k rows, 26 ms at 500k, 52 ms at 1M, 80 ms at 2M**, growing linearly, and `audit_log` is never purged (`src/jobs/purge.ts` covers sessions, OAuth transactions and outbox only). With the index those same queries are a flat **0.08–0.09 ms**. The case that decided it: the filter is a **free-text box**, so a typo (`teir.`, `discrod.`) is a zero-match prefix, and zero-match is the *worst* case — a full scan for a page that returns nothing. See section 4c for what was verified and what was rejected |
-| ~~`audit_log` index migrations block writes while they build~~ **ANSWERED 2026-08-06 — no runner, deliberately** | `drizzle/`, `fly.toml` | The prior reasoning holds and now has numbers behind it. A plain `CREATE INDEX` on `audit_log.action` takes a `SHARE` lock for **33 ms at current scale (~40k rows)**; the deploy already stops the world for longer than that. Writers that could contend are the worker's audit writes *and* the web process's own (`src/app/admin/*/actions.ts` call `logAudit` directly, and the login and link paths reach it through `src/services/`), but at 33 ms the window is negligible either way. Building a runner that can apply statements outside a transaction would buy tens of milliseconds and cost a new failure mode — a failed `CONCURRENTLY` build leaves an INVALID index in a release step nobody watches. **Not worth it yet.** Trigger condition recorded in `docs/ops.md`: revisit at **~1M rows** (measured build 816 ms, 1.58 s at 2M), or when an index is proposed on a table already larger than that. Note this is self-limiting in one direction — adding the index *now*, while the build is 33 ms, is what keeps the runner unnecessary; deferring it lands the build in the regime that would have needed the machinery. Raised by CodeRabbit on #163, answered there, and withdrawn by the reviewer |
-| The `"error"` variant's `message` has no reader | `services/health.ts` | Logged by `console.error` already. Harmless today, but it is a raw Postgres string (`"permission denied for schema pgboss"`) sitting in a server-component return value — if anyone later renders it to answer "why did the check fail", an unfiltered DB error reaches the page |
+| ~~`audit_log` index migrations block writes while they build~~ **DECIDED 2026-08-06 — no runner, trigger recorded** | `drizzle/`, `fly.toml`, now `docs/ops.md` | Decision: keep the transactional build; do **not** add a non-transactional runner. The mechanics as stated were right but understated in one respect — drizzle's migrator wraps the **entire pending batch** in a single transaction, not one per migration (`pg-core/dialect.cjs`: `session.transaction` sits outside the `for await` loop), and `__drizzle_migrations` is read as a high-water mark, not a set. That makes a custom runner *more* dangerous than the row assumed: decoupling the DDL from the bookkeeping insert lets a mid-batch failure commit statements the high-water mark still sits behind, so the retry re-runs them and wedges the deploy — and a failed `CONCURRENTLY` build is precisely the case that triggers it. Against that, the avoided cost is a sub-second `SHARE` lock during one index build, on the only table whose size makes the lock worth discussing at all. Recorded with the revisit triggers (~5M rows, a >5s timed build, multi-tenant, or a third such index) and a watched out-of-band procedure in `docs/ops.md` → *Migrations run in one transaction — deliberately*. Raised by CodeRabbit on #163, answered there, and **withdrawn by the reviewer**. **Since measured**, closing the estimate that decision rested on: the build is **33 ms at ~40k rows**, 367 ms at 500k, 816 ms at 1M and 1.58 s at 2M, so the ~5M / >5 s triggers are mutually consistent and neither is close. Note the decision is self-limiting in one direction — adding the action index *now*, while the build is 33 ms, is part of what keeps the runner unnecessary; deferring it lands the build in the regime that would have justified the machinery |
+| ~~The `"error"` variant's `message` has no reader~~ **CLOSED 2026-08-06 — no code change** | `services/health.ts` | Re-read at e9ff584: the risk this row describes is *already* written into `WorkerHeartbeat`'s own docblock (`services/health.ts:46-51`), which names the field's only reader today (`console.error` and a log aggregator), says in as many words that it is not vetted for a browser, and assigns the "is an unfiltered DB error string safe to show" decision to whichever future caller renders it. That is the whole of what this row was asking for, so restating it here would be duplication, not work. Not rendered on `/admin/sync` (nothing there reads `.message`, verified by grep): the page is admin-gated, so severity is low, but a raw driver string can carry query text and parameter values, and this project already logs `.message`-only in the OAuth callbacks for exactly that reason. Not dropped either: `message` is the only structured carrier of *why*, `console.error` is a lossy one-way channel, and a non-browser caller (a health JSON endpoint, a future alert) is the plausible reader. Kept, documented, decision delegated |
 
 (An earlier draft of this table also listed `workerHeartbeat` tagging an
 Invalid Date as `"ok"`. That was closed in the same pass, not deferred: an

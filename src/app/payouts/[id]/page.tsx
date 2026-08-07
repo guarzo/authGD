@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 import { getDb } from "@/db";
 import { getPayoutOperationDetail, listCharacterNames } from "@/services/payout-view";
+import { navFor } from "@/app/_components/nav-items";
 import { Notice, RuleHead, Scroller, SiteHeader, Status } from "@/app/_components/ui";
 import { brandProps } from "@/app/_components/brand-server";
 import { Disclosure } from "@/app/_components/disclosure";
@@ -151,11 +152,9 @@ export default async function PayoutOperationPage({
   // cannot be dated into the future.
   const today = new Date().toISOString().slice(0, 10);
 
-  const nav = [
-    { href: "/account", label: "Your account" },
-    { href: "/payouts", label: "Payouts" },
-    ...(access.isAdmin ? [{ href: "/admin/accounts", label: "Members" }] : []),
-  ];
+  // `canReadPayouts: true` is proven by `requirePayoutReader()` above having
+  // returned non-null rather than redirecting — see payouts/page.tsx.
+  const nav = navFor({ canReadPayouts: true, isAdmin: access.isAdmin });
   // Mirrors `assertEditable` exactly, so an operator discovers the freeze by the
   // controls being absent rather than by a failed submit.
   const canEdit = access.isOperator && operation.status === "draft" && !locked;

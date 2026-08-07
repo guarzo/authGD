@@ -71,6 +71,77 @@ test("aria-current lands on the right tab on every shell route", async ({
   }
 });
 
+/**
+ * The reported symptom, made concrete: before `nav-items.ts`, membership was
+ * hand-copied per section rather than derived from the viewer, so an admin
+ * standing on `/admin/audit` had no route to `/payouts` anywhere in the
+ * chrome — `admin-nav.tsx`'s own `ITEMS` array had never been taught payouts
+ * existed. This test seeds the two reaches that actually differ (admin who
+ * *is* a payouts reader, admin who is *not* — `isAdmin` and `tier` are
+ * orthogonal columns, db/schema.ts) and checks both the account section and
+ * the admin section agree on what that viewer can reach, since the rule is a
+ * property of the viewer, not of which of the two sections is on screen.
+ *
+ * Every locator is scoped to `.shell__nav`: `/admin/accounts` renders its own
+ * filter chips with their own `aria-current` (see the test above), and
+ * `/account` renders body copy that can repeat a nav label.
+ */
+test("nav membership follows the viewer, not the section", async ({ page, context }) => {
+  const adminReader = await seedMember(db, {
+    name: "Boss",
+    tier: "member",
+    isAdmin: true,
+  });
+  await context.addCookies([await sessionCookieFor(db, adminReader.id)]);
+
+  for (const path of ["/account", "/admin/audit"]) {
+    await page.goto(path);
+    const nav = page.locator(".shell__nav");
+    // All five, in the one fixed order — broadest access first — on both a
+    // member surface and an admin surface, for the same admin+member viewer.
+    await expect(nav.getByRole("link")).toHaveText([
+      "Your account",
+      "Payouts",
+      "Members",
+      "Audit log",
+      "Sync",
+    ]);
+  }
+
+  await resetDb(db);
+
+  // The bounce the rule exists to prevent: an admin whose tier is NOT
+  // "member" (the default, "alumni", here) cannot read payouts, and the admin
+  // section must not render a Payouts link that sends them to a redirect.
+  const adminNonReader = await seedMember(db, { name: "Warden", isAdmin: true });
+  await context.clearCookies();
+  await context.addCookies([await sessionCookieFor(db, adminNonReader.id)]);
+
+  await page.goto("/admin/audit");
+  const adminNav = page.locator(".shell__nav");
+  await expect(adminNav.getByRole("link")).toHaveText([
+    "Your account",
+    "Members",
+    "Audit log",
+    "Sync",
+  ]);
+  await expect(adminNav.getByRole("link", { name: "Payouts", exact: true })).toHaveCount(
+    0,
+  );
+
+  await resetDb(db);
+
+  // A plain payouts reader, no admin bit at all: sees exactly the two
+  // destinations they can prove they reach, none of the three admin ones.
+  const plainMember = await seedMember(db, { name: "Pilot", tier: "member" });
+  await context.clearCookies();
+  await context.addCookies([await sessionCookieFor(db, plainMember.id)]);
+
+  await page.goto("/account");
+  const memberNav = page.locator(".shell__nav");
+  await expect(memberNav.getByRole("link")).toHaveText(["Your account", "Payouts"]);
+});
+
 test("the admin header names its own register, and the two navs get distinct accessible names", async ({
   page,
   context,

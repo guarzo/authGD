@@ -1,5 +1,6 @@
 import { FocusHeading } from "@/app/_components/focus-heading";
 import { brandProps } from "@/app/_components/brand-server";
+import { navFor } from "@/app/_components/nav-items";
 import { SiteHeader } from "@/app/_components/ui";
 
 /**
@@ -23,6 +24,11 @@ import { SiteHeader } from "@/app/_components/ui";
  * `/admin/accounts` is deliberately absent even though the wide pages offer it
  * conditionally — `access.isAdmin` is exactly the thing this file cannot know.
  *
+ * The nav below is `navFor({ canReadPayouts: true, isAdmin: false })` — the
+ * same shared rule (`nav-items.ts`) every other surface uses. `canReadPayouts`
+ * is `true` for the reason given above (`page.tsx` proved it before throwing);
+ * `isAdmin` is `false` for the reason given directly above this paragraph.
+ *
  * No `metadata` export here, and it is not an oversight: it was tried and
  * measured inert. A segment-scoped not-found does not get to set the title —
  * `page.tsx`'s own metadata is resolved and applied even though the page
@@ -44,10 +50,7 @@ export default function PayoutOperationNotFound() {
   return (
     <>
       <SiteHeader
-        items={[
-          { href: "/account", label: "Your account" },
-          { href: "/payouts", label: "Payouts" },
-        ]}
+        items={navFor({ canReadPayouts: true, isAdmin: false })}
         current="/payouts"
         section
         {...brandProps()}

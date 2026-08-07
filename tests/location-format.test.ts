@@ -3,6 +3,7 @@ import {
   formatLocation,
   locationFreshness,
   LOCATION_CADENCE_MS,
+  type LocationDisplay,
   type LocationNames,
   type LocationSnapshot,
 } from "@/core/location";
@@ -23,6 +24,13 @@ const names = (over: Partial<LocationNames> = {}): LocationNames => ({
   docked: null,
   ...over,
 });
+
+// Narrows the union so tests can read `.text` directly instead of asserting
+// the whole object every time.
+function text(display: LocationDisplay): string {
+  if (display.kind !== "line") throw new Error("expected a line, got none");
+  return display.text;
+}
 
 describe("formatLocation", () => {
   it("names the structure when the cache has resolved it", () => {
@@ -58,7 +66,7 @@ describe("formatLocation", () => {
     });
   });
 
-  it("prefixes last seen and flags offline when online is false", () => {
+  it("flags offline without putting it in the text", () => {
     expect(
       formatLocation(
         snap({ structureId: 1035466617946, online: false }),
@@ -66,9 +74,57 @@ describe("formatLocation", () => {
       ),
     ).toEqual({
       kind: "line",
-      text: "last seen J123456 — Home Astrahus",
+      text: "J123456 — Home Astrahus",
       offline: true,
     });
+  });
+
+  // An NPC station name is "<celestial> - <name>", and the celestial starts with
+  // the system — so the composed line said "Jita" twice before this.
+  it("keeps only the last segment of a station name", () => {
+    expect(
+      text(
+        formatLocation(
+          snap({ stationId: 60003760 }),
+          names({
+            system: "Jita",
+            docked: "Jita IV - Moon 4 - Caldari Navy Assembly Plant",
+          }),
+        ),
+      ),
+    ).toBe("Jita — Caldari Navy Assembly Plant");
+  });
+
+  it("keeps only the last segment of a player structure name", () => {
+    expect(
+      text(
+        formatLocation(
+          snap({ structureId: 1035466617946 }),
+          names({ system: "J214811", docked: "J214811 - Derelicte" }),
+        ),
+      ),
+    ).toBe("J214811 — Derelicte");
+  });
+
+  // No separator to split on: the name survives whole.
+  it("leaves an unprefixed structure name alone", () => {
+    expect(
+      text(
+        formatLocation(
+          snap({ structureId: 1035466617946 }),
+          names({ system: "J214811", docked: "Derelicte" }),
+        ),
+      ),
+    ).toBe("J214811 — Derelicte");
+  });
+
+  // Degradation is unchanged: an unresolved dock is still the bare word, and a
+  // character in space still says so.
+  it("does not shorten the fallback words", () => {
+    expect(
+      text(formatLocation(snap({ stationId: 60003760 }), names({ docked: null }))),
+    ).toContain("Docked");
+    expect(text(formatLocation(snap(), names({ docked: null })))).toContain("in space");
   });
 
   it("treats a null online exactly like online — read_online was never granted", () => {

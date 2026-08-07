@@ -130,6 +130,27 @@ function isStalled(c: CharacterHealthInput): boolean {
 }
 
 /**
+ * The manifest row's three-way state, and the account verdict's, derived once.
+ *
+ * A single classifier rather than two exported booleans: `needsAttention` and
+ * `isStalled` are already mutually exclusive by construction (`isStalled`
+ * returns false for anything `needsAttention` claims), and exporting both
+ * would let a caller build a fourth combination the domain does not have.
+ *
+ * `stalled` exists so a row can be honest and compact at once. It is not the
+ * member's to fix, so it does not expand a row — but it is not `ok` either,
+ * and rendering it as `ok` would make the manifest's own per-character truth
+ * (page.tsx's "Sync schedule" note) a false pointer.
+ */
+export type CharacterState = "attention" | "stalled" | "ok";
+
+export function classifyCharacter(c: CharacterHealthInput): CharacterState {
+  if (needsAttention(c)) return "attention";
+  if (isStalled(c)) return "stalled";
+  return "ok";
+}
+
+/**
  * `verdict` is a headline and only one fact can lead. The order is by what it
  * asks of the member: something to fix outranks something to merely know
  * about, which outranks an account-wide push that stopped, which outranks a
@@ -145,8 +166,9 @@ export function computeAccountHealth(
   characters: CharacterHealthInput[],
   discord: DiscordPushInput,
 ): AccountHealth {
-  const attention = characters.filter(needsAttention).length;
-  const stalled = characters.filter(isStalled).length;
+  const states = characters.map(classifyCharacter);
+  const attention = states.filter((s) => s === "attention").length;
+  const stalled = states.filter((s) => s === "stalled").length;
   const targets = characters.filter((c) => c.contactsTarget);
   const firstSyncPending =
     targets.length > 0 && targets.every((c) => c.contactSyncResult === null);

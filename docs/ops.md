@@ -41,69 +41,6 @@ Postgres, so the check is the gate, not a formality.
 `TOKEN_ENCRYPTION_KEY`: `openssl rand -base64 32`. Rotating it invalidates
 every stored EVE refresh token (members re-auth); treat it as unrotatable.
 
-### Index migrations block writes while they build
-
-`release_command = "npm run db:migrate"` gates every deploy, and
-`src/db/migrate.ts` runs Drizzle's migrator, which wraps each migration in a
-transaction. A plain `CREATE INDEX` therefore takes a `SHARE` lock for the
-build's duration: **writes block, reads do not**, and the deploy waits.
-
-`CREATE INDEX CONCURRENTLY` would avoid that lock but cannot run inside a
-transaction block (SQLSTATE 25001), so it cannot be expressed through the
-current runner at all. **That is a deliberate accepted limitation, not an
-oversight** — see the sizing note below before proposing a change.
-
-Measured on Postgres 16.11, production-shaped `audit_log`:
-
-| `audit_log` rows | plain `CREATE INDEX` on `action` | index size |
-|---|---|---|
-| 40k (current scale) | **33 ms** | 304 kB |
-| 500k | 367 ms | 3.4 MB |
-| 1M | **816 ms** | 6.8 MB |
-| 2M | 1.58 s | 14 MB |
-
-At current size a build blocks writes for tens of milliseconds during a step
-that already stops the world. Writers that could contend are the worker's audit
-writes and the web process's own — `src/app/admin/*/actions.ts` call `logAudit`
-directly, and the login and character-link paths reach it through
-`src/services/`, all of which keep serving while the release command runs. At
-33 ms that is well inside the noise of a deploy.
-
-**Trigger condition — revisit when `audit_log` passes ~1M rows** (measured
-build 816 ms, and 1.58 s at 2M), or when an index is proposed on a table larger
-than that. Check before adding one:
-
-```bash
-fly postgres connect -a <pg-app> -d <database>
-```
-
-Then at the prompt:
-
-```sql
-SELECT count(*) FROM audit_log;
-```
-
-Below the trigger, add indexes normally: edit `src/db/schema.ts`, run
-`npm run db:generate`, deploy. Above it, the honest fix is a migration runner
-that can apply flagged statements outside a transaction — **not** the
-`COMMIT;`-in-the-migration-file hack, which makes migration files carry runner
-semantics and requires hand-editing a generated migration, which this project
-forbids. The third option, applying such migrations out-of-band before the
-deploy that needs them, is cheaper and is the right choice for a one-off.
-
-Whichever route: a failed `CONCURRENTLY` build leaves an **INVALID** index
-behind that still costs writes but serves no reads. Recover with
-`DROP INDEX CONCURRENTLY`, then retry `CREATE INDEX CONCURRENTLY`; or rebuild in
-place with `REINDEX INDEX CONCURRENTLY`. Each of those must run outside a
-transaction block, and none of them takes the `ACCESS EXCLUSIVE` lock a plain
-`DROP INDEX` would — which is the whole point of being here. In a release
-command nobody is watching, that is the failure mode to design for. Find them
-with:
-
-```sql
-SELECT indexrelid::regclass FROM pg_index WHERE NOT indisvalid;
-```
-
 ## Monitoring
 
 Two public endpoints, deliberately separate:
@@ -230,6 +167,161 @@ check. Once it clears:
 ```bash
 fly scale count web=2 worker=1
 ```
+
+## Migrations run in one transaction — deliberately
+
+`fly.toml` runs `npm run db:migrate` as the release command, so migrations gate
+every deploy. `src/db/migrate.ts` is drizzle's `migrate()` on a single
+connection, and that helper wraps **every pending migration in one
+transaction** — not one transaction per file. Each file's bookkeeping row is
+written inside that same transaction, immediately after its statements:
+
+```
+BEGIN
+  <0009's statements>  INSERT INTO drizzle.__drizzle_migrations ...
+  <0010's statements>  INSERT INTO drizzle.__drizzle_migrations ...
+COMMIT
+```
+
+That coupling is the property worth protecting. A failed deploy leaves the
+database exactly as it was — schema and bookkeeping both — so the retry is
+always safe. Note also that `__drizzle_migrations` is read as a **high-water
+mark** (`order by created_at desc limit 1`), not as a set of applied hashes, so
+anything that advances it out of order is not self-correcting.
+
+### The cost: an index build blocks writes
+
+A plain `CREATE INDEX` takes a `SHARE` lock — **writes block for the duration
+of the build, reads do not**. During a release command the old `worker` machine
+is still up and still writing audit rows, and so is the web process:
+`src/app/admin/*/actions.ts` call `logAudit` directly and the login and
+character-link paths reach it through `src/services/`. Both keep serving while
+the release command runs, so both wait out the build.
+
+`CREATE INDEX CONCURRENTLY` avoids this, and cannot be used here: it cannot run
+inside a transaction block (SQLSTATE 25001), and every migration is in one.
+
+**This is accepted, not overlooked.** At this deployment's size the lock is
+sub-second. Measured on Postgres 16.11 against a production-shaped `audit_log`,
+building the `action` index this project actually added:
+
+| `audit_log` rows | plain `CREATE INDEX` on `action` | index size |
+|---|---|---|
+| 40k (current scale) | **33 ms** | 304 kB |
+| 500k | 367 ms | 3.4 MB |
+| 1M | **816 ms** | 6.8 MB |
+| 2M | 1.58 s | 14 MB |
+
+Extrapolating, the ~5M row and >5 s triggers below are consistent with each
+other, and current scale is two orders of magnitude short of either. Why it
+stays cheap here:
+
+| Why it's cheap here | |
+|---|---|
+| `audit_log` size | low tens of thousands of rows, six narrow columns |
+| Write rate | audit rows are written on *state changes*, not per sweep tick |
+| Deployment | single corporation, a few dozen members |
+
+The five earlier `CREATE INDEX` statements cost nothing, for reasons that do not
+generalise. `0000`'s two run at table creation, against genuinely empty tables.
+`0002`'s (`session`, `outbox`) and `0003`'s (`sync_run`) build against tables
+created back in `0000` — so *not* necessarily empty, merely small at the time.
+`session` and `outbox` are both purged nightly, which caps them.
+
+`sync_run` is **not** purged: `src/jobs/purge.ts` covers expired sessions, spent
+OAuth transactions, and dispatched outbox rows only. It gains a row per job tick
+forever, so it is unbounded too — roughly an order of magnitude slower than
+`audit_log`, and worth its own retention policy eventually. Noted here, not
+fixed; it does not change this decision.
+
+### Revisit when — not before
+
+`audit_log` is the fastest-growing table with no retention policy — the `purge`
+job deliberately does not touch it, because the log is the record. So this
+decision has a shelf life. Rework it when any of these is true:
+
+1. `SELECT count(*) FROM audit_log` exceeds ~5 million. Run it at the psql
+   prompt from `fly postgres connect -a <pg-app> -d <database>` — that command
+   opens an interactive session and has no flag for passing SQL (`-c` is the
+   config-file path).
+2. A timed build of the proposed index against a production-sized copy exceeds
+   ~5 seconds. This is the real measurement; the row count above is only a cheap
+   proxy for when it becomes worth measuring.
+3. The deployment stops being single-corporation. Multi-tenant invalidates the
+   write-rate assumption the whole argument rests on.
+4. You reach for the manual procedure below a third time. Once, it is cheaper
+   than machinery; three times, it is not — build the runner properly then, with
+   per-statement bookkeeping that survives a mid-batch failure.
+
+**The discipline this replaces machinery with:** before adding any index to
+`audit_log`, time the build against production-sized data. That is cheaper than
+any runner and answers the actual question.
+
+### If it does fire: apply it out-of-band
+
+Do **not** build a custom runner that applies statements individually, and do
+**not** use the `COMMIT;`-in-the-migration-file hack. Both are worse than the
+lock they avoid:
+
+- **The `COMMIT;` hack** requires hand-editing a generated migration, which this
+  project forbids. Worse, because the transaction spans the whole *batch*, a
+  `COMMIT;` inside one file also commits every pending migration applied before
+  it and runs every one after it with no transaction at all — a non-local effect
+  that only shows up on a deploy carrying more than one pending migration. It
+  also depends on an unpinned implementation detail of drizzle's migrator.
+- **A custom runner** decouples the DDL from the bookkeeping insert. A mid-batch
+  failure then commits some statements while the high-water mark still points
+  behind them, so the retry re-executes them and dies on "already exists" — a
+  wedged deploy needing manual surgery, in a release command nobody watches. The
+  failed `CONCURRENTLY` build is precisely the case that triggers this *and*
+  leaves an INVALID index needing `DROP`/`REINDEX`. The one feature the runner
+  exists for is the one that detonates it.
+
+Apply the index by hand instead, watched, outside the release command:
+
+1. Add the index to `src/db/schema.ts` and run `npm run db:generate`. Never
+   hand-write the migration.
+2. Read the generated `CREATE INDEX "<name>" ...` and note the exact index name.
+3. Against production, in a session you are watching, run the same statement
+   with `CONCURRENTLY` and that exact name.
+4. Confirm it is valid — a failed concurrent build leaves an INVALID index:
+   ```sql
+   SELECT indexrelid::regclass, indisvalid FROM pg_index WHERE NOT indisvalid;
+   ```
+   If it lists yours, recover with `DROP INDEX CONCURRENTLY` and retry the
+   `CREATE INDEX CONCURRENTLY`, or rebuild it in place with
+   `REINDEX INDEX CONCURRENTLY`. Each of those must run outside a transaction
+   block, and none takes the `ACCESS EXCLUSIVE` lock a plain `DROP INDEX`
+   would — which is the lock this whole procedure exists to avoid. Do not
+   deploy until this returns no rows.
+5. Mark the generated migration applied without re-running its DDL, so the
+   release command skips it. The `hash` is the sha256 of the whole `.sql` file
+   and `created_at` is that entry's `when` from `drizzle/meta/_journal.json` —
+   generate the statement rather than assembling it by hand:
+   ```bash
+   node -e 'const c=require("crypto"),f=require("fs"),t=process.argv[1],q=String.fromCharCode(39);
+   const e=JSON.parse(f.readFileSync("drizzle/meta/_journal.json")).entries.find(e=>e.tag===t);
+   if(!e) throw new Error("no journal entry for "+t);
+   const h=c.createHash("sha256").update(f.readFileSync("drizzle/"+t+".sql").toString()).digest("hex");
+   console.log("INSERT INTO drizzle.__drizzle_migrations (\"hash\", \"created_at\") VALUES ("+q+h+q+", "+e.when+");")' \
+     0011_your_migration_tag
+   ```
+   Run the statement it prints. Nothing else in the file is executed.
+6. Deploy.
+
+**Its failure mode, stated plainly:** step 5 is a manual write to migration
+bookkeeping, and getting it wrong in either direction is bad. Skip it and the
+release command re-runs the `CREATE INDEX`, failing the deploy on "already
+exists" — the transactional build you went out-of-band to avoid, now on a table
+big enough to matter. Insert a wrong `created_at` and, because the table is read
+as a high-water mark, you can silently mask *other* pending migrations as
+already applied. Do steps 3–5 in one sitting, and check
+`SELECT * FROM drizzle.__drizzle_migrations ORDER BY created_at DESC LIMIT 3`
+before and after.
+
+That manual step is the whole cost of this option, paid by a human at a
+keyboard who can see it fail — which is the trade being made against a
+permanent new failure surface inside an automated deploy gate.
 
 ## First-deploy Wanderer smoke check
 
