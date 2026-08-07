@@ -9,7 +9,7 @@ import { RuleHead, Json, Notice, Scroller } from "@/app/_components/ui";
 import { Submit } from "@/app/_components/submit";
 import { formatAgo } from "@/app/_components/format-ago";
 import { renderedAt } from "@/app/_components/utc-time";
-import { summarizeDetails } from "@/app/admin/audit/summarize";
+import { summarizeDetails, isFailureAction } from "@/app/admin/audit/summarize";
 import { tierLabel } from "@/app/_components/labels";
 
 export const dynamic = "force-dynamic";
@@ -606,7 +606,7 @@ export default async function AdminAuditPage({
                   <td>
                     <ActorCell r={r} params={params} />
                   </td>
-                  <td className="mono">
+                  <td className={`mono${isFailureAction(r.action) ? " warn" : ""}`}>
                     {/* Sized to fit the current action vocabulary, but bounded
                         anyway: a longer action name added later truncates with
                         the full value in `title`, the way actor and target
@@ -619,7 +619,21 @@ export default async function AdminAuditPage({
                         interactive and was not. The exact action, not the
                         prefix: `action` is a prefix match, so filtering by the
                         whole string is the narrowest reading of "show me this
-                        one", and the admin can shorten it in the form. */}
+                        one", and the admin can shorten it in the form.
+
+                        `warn` (`.log td.warn`, globals.css) reuses the sync
+                        table's precedent for a failure figure: a row an admin
+                        opened to answer "why is this wrong" should not read
+                        in the same ink as an ordinary change. Not
+                        `isFailureKey`/`FAILURE_KEYS` (core/run-summary.ts) --
+                        those name COUNT COLUMNS inside a sync run's `counts`
+                        object (`failed`, `invalid`, `unresolved`), a
+                        different vocabulary from an audit ACTION name, and
+                        importing one for the other would be a coincidence,
+                        not a shared concept. `isFailureAction` below is this
+                        page's own read of its own vocabulary. Colour is not
+                        the only channel: the word `failed` is already in the
+                        text, unlike a bare figure in a sync table column. */}
                     <a
                       className="ellipsis-cell cell-link"
                       href={filterHref(params, "action", r.action)}

@@ -2017,7 +2017,13 @@ test("the composer creates a populated operation in one submit", async ({
   await page.getByLabel("Roster paste").fill("Brain Tartare / Gustav Oswaldo");
   await page.getByRole("button", { name: "Create operation" }).click();
 
-  await expect(page).toHaveURL(/\/payouts\/[0-9a-f-]+$/);
+  // Neither pasted name is a seeded character, so the redirect now also carries
+  // the `?unresolved=` report backlog item 7 added (`payouts/unresolved.ts`) —
+  // hence no `$` anchor. The names still land on the roster either way:
+  // `resolveRosterNames` gives an unresolved paste entry its own row rather
+  // than refusing it, and the report is a warning about those rows, not a
+  // replacement for them.
+  await expect(page).toHaveURL(/\/payouts\/[0-9a-f-]+(\?|$)/);
   await expect(page.getByRole("heading", { name: "One-shot roam" })).toBeVisible();
   // Both names landed straight on the roster table — no second step.
   await expect(page.getByRole("row").filter({ hasText: "Brain Tartare" })).toBeVisible();

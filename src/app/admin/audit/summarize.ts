@@ -150,6 +150,37 @@ function accountRef(word: string, key: string): Part {
   });
 }
 
+/** A single Discord role id, resolved to its configured tier name where one
+ * exists. The id in `roleId` (role_strip_failed, role_sync_failed) is always
+ * one of `discord.roleIds`' values -- the same set `roleNames` is built from
+ * in page.tsx and the same map `roles()` above resolves each side of a diff
+ * against. Falls back to a shortened id, same as `roles()`'s unknown branch,
+ * rather than a raw snowflake that means nothing to an admin. */
+function roleRef(word: string, key: string): Part {
+  return part([key], (d, roleNames) => {
+    const raw = d[key];
+    if (typeof raw !== "string") return "";
+    return `${word} ${roleNames.get(raw) ?? shortId(raw)}`;
+  });
+}
+
+/** `adding {role}` / `removing {role}` -- the write `discord.role_sync_failed`
+ * was in the middle of when it threw. Both halves can be null: a failure
+ * reading the member's current roles (getGuildMember) throws before a diff
+ * is even chosen, and the row is still written so the failure isn't silently
+ * dropped -- see jobs/discord-roles.ts's `inFlight`. Renders nothing in that
+ * case; `error` (declared alongside this on the action) carries the story. */
+function roleOp(opKey: string, roleKey: string): Part {
+  return part([opKey, roleKey], (d, roleNames) => {
+    const raw = d[roleKey];
+    if (typeof raw !== "string") return "";
+    const name = roleNames.get(raw) ?? shortId(raw);
+    if (d[opKey] === "add") return `adding ${name}`;
+    if (d[opKey] === "remove") return `removing ${name}`;
+    return name;
+  });
+}
+
 /** Keys the line deliberately does not show. Declaring them is the whole
  * point: `summarizeDetails` counts undeclared keys as `+N more`, so a payload
  * id that identifies a sub-object rather than describing the change would
@@ -198,6 +229,12 @@ function noteChange(hadKey: string, hasKey: string): Part {
  * `admin.promoted` is deliberately absent. It was declared here with a scope
  * and a note that no writer produces: the app has no admin-scope concept, and
  * the declaration described seeded test data.
+ *
+ * `discord.linked` is also deliberately absent, for a different reason:
+ * `discord-link.ts` writes that row with no `details` at all, so `page.tsx`
+ * never calls this function for it -- the em dash is already correct, and a
+ * Part here would be machinery for a payload that cannot exist. Confirmed by
+ * `audit-summarize.test.ts`'s no-details table.
  */
 const PARTS: Record<string, readonly Part[]> = {
   "tier.changed": [
@@ -268,8 +305,38 @@ const PARTS: Record<string, readonly Part[]> = {
     tierLabelled("tier", "tier"),
     scalar("cause"),
   ],
+  // `error` leads: this is the row an admin opens the audit log to read
+  // (the deprovision half of `discord.role_sync_failed`'s failure), and the
+  // fallback it used to fall through to renders scalar/labelled parts in
+  // declaration order with no way to put the reason first.
+  "discord.role_strip_failed": [scalar("error"), roleRef("role", "roleId")],
+  // Four payload keys (jobs/discord-roles.ts), all declared: FALLBACK_KEYS is
+  // 3, so the generic fallback this used to fall through to rendered `op`,
+  // `roleId`, `tier` and cut `error` -- the reason the row exists -- as
+  // `+1 more`. `error` leads for the same reason it does on the strip
+  // failure above.
+  "discord.role_sync_failed": [
+    scalar("error"),
+    roleOp("op", "roleId"),
+    tierLabelled("tier", "tier"),
+  ],
   "wanderer.removed": [labelled("role", "role")],
 };
+
+/** Whether an action IS a record of something failing to happen, as opposed
+ * to a state the app changed on purpose. Matches on the vocabulary's own
+ * naming rather than a second list to keep in sync with it: every writer
+ * that logs a failure name it `_failed` (jobs/token-health.ts,
+ * jobs/discord-roles.ts) -- the same word an admin already reads in the
+ * action cell, which is also why colour is not the only channel here (see
+ * page.tsx's Action cell). `token.needs_reauth`, `character.owner_mismatch`
+ * and `character.affiliation_invalid` are deliberately excluded: each names
+ * an ordinary state the app is built to handle (a re-auth prompt, an ESI
+ * mismatch worth a second look), not an action the app attempted and failed
+ * at -- PRODUCT.md's "nothing reads as punishment". */
+export function isFailureAction(action: string): boolean {
+  return action.endsWith("_failed");
+}
 
 /** How many key=value pairs the fallback shows before it says so. */
 const FALLBACK_KEYS = 3;

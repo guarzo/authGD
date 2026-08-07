@@ -89,6 +89,45 @@ test("the description outranks the identifier in the reading order that matters:
   expect(luminance(ddColor)).toBeGreaterThan(luminance(dtColor));
 });
 
+test("the sign-in control renders before the scope disclosure in document order", async ({
+  page,
+}) => {
+  await page.goto("/login");
+
+  // item 12 of the layout sweep: the control used to follow ~480px (computed
+  // from tokens, not measured) of permission copy, putting it below the fold
+  // on a short viewport. The fix reorders the DOM rather than chasing that
+  // estimate — this asserts the order directly, which holds regardless of how
+  // long the disclosure copy actually renders at any width or zoom.
+  const order = await page.evaluate(() => {
+    const action = document.querySelector(".launch__action")!;
+    const disclosure = document.querySelector(".launch__disclosure")!;
+    // Bitmask per Node.compareDocumentPosition: 4 = "action follows disclosure".
+    return action.compareDocumentPosition(disclosure) & Node.DOCUMENT_POSITION_FOLLOWING;
+  });
+  expect(order).toBeGreaterThan(0);
+
+  // The disclosure is still fully present and reachable by scrolling — this
+  // is not a case of "press the button to see it": it asserts the paragraph
+  // and the scope list are both attached and visible, just later in the page.
+  await expect(page.locator(".launch__disclosure-note")).toBeVisible();
+  await expect(page.locator(".launch__scopes")).toBeVisible();
+});
+
+test("the sign-in control is reachable without scrolling on a short viewport", async ({
+  page,
+}) => {
+  // A member alt-tabbed on a phone: short viewport, no scroll performed yet.
+  // This measures the actual rendered position rather than trusting a
+  // computed estimate of the copy above it.
+  await page.setViewportSize({ width: 390, height: 700 });
+  await page.goto("/login");
+
+  const box = await page.locator(".launch__action").boundingBox();
+  expect(box).not.toBeNull();
+  expect(box!.y).toBeLessThan(700);
+});
+
 test("the scope list stays readable at a narrow width", async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 700 });
   await page.goto("/login");

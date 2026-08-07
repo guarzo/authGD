@@ -8,8 +8,11 @@ import { ACCOUNT_ERRORS, loginErrorUrl, lookupErrorMessage } from "@/lib/error-r
 import { getAccountView, type PushStatus } from "@/services/account-view";
 import { canReadPayouts } from "@/services/payouts";
 import { listAccountPayouts } from "@/services/payout-view";
+import { getMainChangeContext } from "@/services/accounts";
 import { getSessionAccount } from "@/services/session";
 import { classifyCharacter, computeAccountHealth } from "@/core/account-health";
+import { previewMainChange } from "@/core/tier";
+import { tierLabel } from "@/app/_components/labels";
 import { navFor } from "@/app/_components/nav-items";
 import { Notice, RuleHead, Scroller, SiteHeader, Status } from "@/app/_components/ui";
 import { brandProps } from "@/app/_components/brand-server";
@@ -54,6 +57,11 @@ const manifestColumns = (showStatus: boolean) => (showStatus ? 4 : 3);
  *  element are gated on the same `hasContactRemedy` predicate, so the id can
  *  never dangle. */
 const contactRemedyId = (characterId: number) => `contact-remedy-${characterId}`;
+
+/** Same dangling-id guarantee as `contactRemedyId` above, for the "make main"
+ *  consequence sentence — the id is only ever referenced from the button for a
+ *  character `mainChangeNotes` actually produced a note for. */
+const mainChangeNoteId = (characterId: number) => `main-change-note-${characterId}`;
 
 // Reads the session cookie and hits the DB on every request; getConfig() also
 // requires env vars that aren't present at build time, so this route must
@@ -153,24 +161,29 @@ export default async function AccountPage({
   // their sum. `searchParams` is a Next-supplied promise with no DB dependency
   // of its own, so it joins the same `Promise.all` instead of a separate await.
   //
-  // Three concurrent queries against a pool of `max = 5` (src/db/index.ts).
-  // Total connection-milliseconds are unchanged — the same three reads, just
+  // Four concurrent queries against a pool of `max = 5` (src/db/index.ts).
+  // Total connection-milliseconds are unchanged — the same four reads, just
   // overlapped — so average pool occupancy is what it was; only the per-request
-  // burst grew from 1 slot to 3. That fits, but it is most of the headroom:
+  // burst grew from 1 slot to 4. That fits, but it is nearly all the headroom:
   // anything added to this array should be weighed against that 5, whose
   // `connectionTimeoutMillis` turns a long wait for a free client into a
   // thrown error rather than a slow page.
-  const [view, { error, done, name, at }, showPayoutsLink, payouts] = await Promise.all([
-    getAccountView(getDb(), cfg, sess.accountId),
-    searchParams,
-    // Same tier-only gate the payouts pages themselves re-check — this only
-    // decides whether the link appears, never whether the route is reachable.
-    canReadPayouts(getDb(), sess.accountId),
-    // Finalized operations only, and only rows whose participant resolved to
-    // this account — see listAccountPayouts for both, including what the second
-    // one cannot show.
-    listAccountPayouts(getDb(), sess.accountId),
-  ]);
+  const [view, { error, done, name, at }, showPayoutsLink, payouts, mainChangeContext] =
+    await Promise.all([
+      getAccountView(getDb(), cfg, sess.accountId),
+      searchParams,
+      // Same tier-only gate the payouts pages themselves re-check — this only
+      // decides whether the link appears, never whether the route is reachable.
+      canReadPayouts(getDb(), sess.accountId),
+      // Finalized operations only, and only rows whose participant resolved to
+      // this account — see listAccountPayouts for both, including what the second
+      // one cannot show.
+      listAccountPayouts(getDb(), sess.accountId),
+      // Backs the honest "make main" consequence below — see
+      // `previewMainChange`'s own doc for why this is a separate query rather
+      // than a field on `AccountView`.
+      getMainChangeContext(getDb(), sess.accountId),
+    ]);
   const message = lookupErrorMessage(ACCOUNT_ERRORS, error);
   const confirmation = accountConfirmation(done, name);
   const now = Date.now();
@@ -209,6 +222,41 @@ export default async function AccountPage({
   const contactRemedies = view.characters.filter((c) =>
     hasContactRemedy(c.contactSyncResult, c.contactsTarget),
   );
+
+  // The honest "make main" consequence per non-main character — sweep item
+  // #6. Computed once here, not per-row where the button lives, because the
+  // sentence is prose too long for that cell (same reasoning as
+  // `contactRemedies` below) and because "none" of the three outcomes is the
+  // common case: a member's alts are usually in the same corp as their main,
+  // and a blanket warning on every row would be noise on exactly the rows
+  // where pressing the button changes nothing (PRODUCT.md principle 4).
+  //
+  // `text` never repeats `c.name` — same convention as `contactRemedies`
+  // below, which prefixes the rendered `<strong>{name}:</strong>` itself — and
+  // never guesses a pronoun for the character's owner; each sentence reads as
+  // a standalone clause after that prefix instead.
+  const mainChangeNotes = view.characters
+    .filter((c) => !c.isMain)
+    .flatMap((c) => {
+      const preview = previewMainChange({
+        tier: mainChangeContext.tier,
+        tierLocked: mainChangeContext.tierLocked,
+        allianceId: mainChangeContext.allianceIdByCharacter.get(c.id) ?? null,
+        configuredAllianceId: cfg.allianceId,
+      });
+      if (preview.kind === "none") return [];
+      const text =
+        preview.kind === "unknown"
+          ? "Alliance standing not checked yet — setting as main means your tier follows whatever the next check finds."
+          : preview.nextTier === "alumni"
+            ? `Not in the alliance right now — setting as main moves your tier to ${tierLabel(
+                "alumni",
+              )} once the next check runs, and standings and map access follow it.`
+            : `In the alliance — setting as main moves your tier to ${tierLabel(
+                "member",
+              )} once the next check runs.`;
+      return [{ id: c.id, name: c.name, text }];
+    });
 
   return (
     <>
@@ -699,6 +747,23 @@ export default async function AccountPage({
                                 // "main"s would otherwise announce a noun with
                                 // no object nine times.
                                 aria-label={`make ${c.name} main`}
+                                // Points at the prose below the Scroller only when
+                                // `mainChangeNotes` produced one for this character
+                                // — most rows change nothing (an alt in the same
+                                // corp as the main), and this button carries no
+                                // `aria-describedby` at all on those, matching the
+                                // STATUS cell's `contactRemedyId` wiring above.
+                                //
+                                // Complements the label above rather than competing
+                                // with it: `aria-label` replaces the name a screen
+                                // reader announces, `aria-describedby` is read after
+                                // it, so the row says what the press does and then
+                                // what it will change.
+                                aria-describedby={
+                                  mainChangeNotes.some((n) => n.id === c.id)
+                                    ? mainChangeNoteId(c.id)
+                                    : undefined
+                                }
                               >
                                 main
                               </Submit>
@@ -771,6 +836,22 @@ export default async function AccountPage({
                   // and this is the only place the control can live.
                   showReauth={c.tokenStatus === "valid" && !c.needsReauthForScopes}
                 />
+              </p>
+            ))}
+          </div>
+        )}
+
+        {/* Same placement rule as the remediation prose above: state before
+            action (PRODUCT.md principle 2), read by anyone before they press
+            "make main", not surfaced as a tooltip or screen-reader-only aside.
+            Only the characters where pressing it actually moves the tier get a
+            sentence — an alt already in the same corp as the main gets none,
+            so this never reads as a warning on a press that changes nothing. */}
+        {mainChangeNotes.length > 0 && (
+          <div className="table-notes">
+            {mainChangeNotes.map((n) => (
+              <p key={n.id} id={mainChangeNoteId(n.id)} className="table-note">
+                <strong>{n.name}:</strong> {n.text}
               </p>
             ))}
           </div>

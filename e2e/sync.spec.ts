@@ -283,6 +283,55 @@ test("a scheduled job that has never run gets a row saying so", async ({
 });
 
 /**
+ * A run's counters are a row of mono figures of equal weight, and one of them
+ * means the opposite of the rest: `addFailed: 3` is three members who did NOT
+ * get map access, sitting in the same ink as the `added: 4` beside it. The
+ * status cell already says `partial`, so the fact is not missing — the
+ * quantity just wasn't weighted. `isFailureKey` (@/core/run-summary) decides
+ * which keys get the emphasis, and `notInGuild` is the control: a state the
+ * job reports rather than something it tried and failed at.
+ */
+test("a non-zero failure counter is weighted apart from the successes beside it", async ({
+  page,
+  context,
+}) => {
+  await asAdmin(context);
+  await setHeartbeat(ago(2 * MIN));
+  await db.insert(syncRun).values([
+    {
+      jobType: "wanderer",
+      startedAt: ago(3 * MIN),
+      finishedAt: ago(3 * MIN - 400),
+      status: "partial",
+      errorSummary: "3 adds rejected by wanderer",
+      counts: { added: 4, removed: 0, addFailed: 3, removeFailed: 0, unblockFailed: 0 },
+    },
+    {
+      jobType: "discord-roles",
+      startedAt: ago(2 * MIN),
+      finishedAt: ago(2 * MIN - 200),
+      status: "ok",
+      counts: { changed: 2, notInGuild: 5, failed: 0 },
+    },
+  ]);
+  await page.goto("/admin/sync");
+
+  // `partial` is `degraded`, which `NEEDS_ATTENTION` opens on render — so the
+  // row is already expanded and clicking it here would shut it.
+  await expect(summaryFor(page, "wanderer")).toHaveAttribute("aria-expanded", "true");
+  const wanderer = page.locator(".strip__job", { hasText: "wanderer" });
+  // `countColumns` only gives a column to a counter that moved somewhere in
+  // the window, so the zero-valued failure keys have no cell to weight here.
+  await expect(wanderer.locator("td.num.warn")).toHaveText(["3"]);
+
+  // `notInGuild: 5` is non-zero and still not a failure — the emphasis has to
+  // be earned by the key, not by the figure being large.
+  await summaryFor(page, "discord-roles").click();
+  const roles = page.locator(".strip__job", { hasText: "discord-roles" });
+  await expect(roles.locator("td.num.warn")).toHaveCount(0);
+});
+
+/**
  * The scroll region inside a collapsed row measures 0×0, so it correctly holds
  * no tab stop while shut — and getting the stop back when the drawer opens
  * rests entirely on the ResizeObserver firing. That is engine-dependent:
@@ -435,6 +484,14 @@ test("the worker line reports liveness, and a dead worker says so", async ({
   await expect(worker).toHaveText("worker · alive, checked in 2m ago");
   // Healthy is a quiet line, not a notice.
   await expect(page.locator(".notice--bad")).toHaveCount(0);
+
+  // A live worker and a live deployment are separate facts, and this is the
+  // page where the second one used to be unstated: every outbound write can be
+  // suppressed at the client boundary while the line above still reads
+  // "alive". `playwright.config.ts:54` runs the whole suite under
+  // SYNC_MODE=dry-run, so the banner is present on every page of this run —
+  // which is exactly the deployment shape the finding describes.
+  await expect(page.locator(".notice--warn")).toContainText(/SYNC_MODE=dry-run/);
 
   // No heartbeat in four hours — far past HEARTBEAT_STALE_AFTER_MS's 6
   // minutes (@/core/health), so this is a worker that has actually stopped,

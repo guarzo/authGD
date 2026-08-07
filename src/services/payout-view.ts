@@ -233,7 +233,21 @@ export async function getPayoutOperationDetail(
   if (!op) return null;
 
   const [pools, participants, locked] = await Promise.all([
-    dbx.select().from(lootPool).where(eq(lootPool.operationId, operationId)),
+    // The page numbers pools positionally ("Pool 1", "Pool 2", ...) straight
+    // off this array's index (src/app/payouts/[id]/page.tsx), so without an
+    // ORDER BY an operator's edit to one pool's row can relocate its Postgres
+    // tuple and silently renumber every heading. Neither pool type carries a
+    // creation-order column that works for both: `appraisedAt` is set only on
+    // appraised pools (addAppraisedPool) and stays null on flat ones
+    // (addFlatPool), so it can't rank the two kinds against each other.
+    // `id`, though a random uuid with no chronological meaning, is the one
+    // column every pool has and never changes — ordering by it trades
+    // "meaningful" for "stable", which is the property this bug is about.
+    dbx
+      .select()
+      .from(lootPool)
+      .where(eq(lootPool.operationId, operationId))
+      .orderBy(asc(lootPool.id)),
     dbx
       .select()
       .from(payoutParticipant)
@@ -243,8 +257,20 @@ export async function getPayoutOperationDetail(
   ]);
 
   const poolIds = pools.map((p) => p.id);
+  // Alphabetical by name, following the roster query's idiom above: the item
+  // column is what an operator scans to find the line they're about to fix
+  // (see the mispriced-item cost in the sweep item this fixes), and unlike
+  // pool order there is no positional heading riding on it — so a meaningful
+  // order costs nothing over an arbitrary one. `id` tie-breaks two lines that
+  // share a name (a duplicated stack in the parsed paste) for the same
+  // reason every other tie-break in this file exists: so they don't swap
+  // between loads.
   const items = poolIds.length
-    ? await dbx.select().from(lootItem).where(inArray(lootItem.poolId, poolIds))
+    ? await dbx
+        .select()
+        .from(lootItem)
+        .where(inArray(lootItem.poolId, poolIds))
+        .orderBy(asc(lootItem.name), asc(lootItem.id))
     : [];
   const itemsByPool = new Map<string, typeof items>();
   for (const item of items) {

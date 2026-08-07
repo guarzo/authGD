@@ -24,14 +24,24 @@ describe("accountsConfirmation", () => {
   });
 
   // The reason the sentence says "pinned" rather than "set": setTierManual
-  // writes `tierLocked: true` on every manual set, including a set to the tier
-  // the account already shows — and that button is live, painted
-  // `aria-pressed`, and looks exactly like the filter chips above it that mean
-  // "you are already here, this does nothing". An admin who presses it takes
-  // the account out of the membership job's reach for good. Every shape of the
-  // sentence has to say so, including the two degraded ones, which is what
-  // makes this worth asserting as a rule over all three rather than three
-  // separate literals: the pin is the fact, not a decoration on the full form.
+  // locks the account on any manual set that actually changes the tier — and
+  // that button is live, painted `aria-pressed`, and looks exactly like the
+  // filter chips above it that mean "you are already here, this does
+  // nothing". An admin who presses it to move the tier takes the account out
+  // of the membership job's reach for good. Every shape of the sentence has
+  // to say so, including the two degraded ones, which is what makes this
+  // worth asserting as a rule over all three rather than three separate
+  // literals: the pin is the fact, not a decoration on the full form.
+  //
+  // A same-tier press on an unlocked account also lands here and pins it —
+  // that IS the pin (see `setTierManual`, admin-accounts.ts) — so there is no
+  // second, "already X" shape to test: every "tier" outcome this function can
+  // be given now says the account got pinned. An earlier pass through this
+  // sweep gave `accountsConfirmation` a fourth `locked` parameter and an
+  // "already X" branch for a no-op it introduced; that no-op was reverted
+  // (it made the real pin route through a fabricated demote-then-repromote,
+  // audit row and all) and the parameter went with it, so those tests are
+  // gone rather than kept for a branch `setTierAction` can no longer reach.
   it("names the pin, and the control that undoes it, in every shape", () => {
     for (const text of [
       accountsConfirmation("tier", "Aiden Sol", "Alumni"),

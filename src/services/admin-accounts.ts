@@ -7,6 +7,18 @@ import { enqueueSync } from "@/services/outbox";
 export type AdminMutationResult =
   { ok: true } | { ok: false; error: "not_authorized" | "not_found" };
 
+/**
+ * `setTierManual`'s own result, distinct from the shared `AdminMutationResult`
+ * above: the caller (`setTierAction`) has to know whether THIS press left the
+ * account locked in order to word the confirmation honestly — see
+ * `accountsConfirmation`'s "tier" case (`view.ts`). `tierLocked` is the
+ * account's state after this call returns, whether this press just set it,
+ * left a pre-existing lock alone, or (the no-op case) changed nothing at all.
+ */
+export type SetTierResult =
+  | { ok: true; tierLocked: boolean }
+  | { ok: false; error: "not_authorized" | "not_found" };
+
 /** Defense in depth: routes gate too, but services refuse unauthorized actors. */
 async function isAuthorized(dbx: DbTx, actor: string): Promise<boolean> {
   if (actor === "system") return true;
@@ -24,20 +36,32 @@ async function lockTarget(dbx: DbTx, accountId: string) {
 }
 
 /**
- * Spec tier state machine: ANY manual set (member, associate, or alumni) locks the
- * account — the membership job never touches locked accounts. Change + audit
- * + outbox commit in one transaction (the caller supplies the DbTx).
+ * Spec tier state machine: ANY manual set (member, associate, or alumni) locks
+ * the account — the membership job never touches locked accounts, including a
+ * set to the tier the account already holds. That is deliberate: `tierLocked`
+ * exists so an admin can pin a member BEFORE they leave the alliance, which is
+ * exactly the moment the account already shows that tier. The row's arm step
+ * (`ConfirmSubmit`, `admin/accounts/page.tsx`) is what makes the accidental
+ * press and the deliberate pin distinguishable, not this guard — see that
+ * file for how the currently-selected chip carries both `aria-pressed` and
+ * the arm step together. Change + audit + outbox commit in one transaction
+ * (the caller supplies the DbTx).
  */
 export async function setTierManual(
   dbx: DbTx,
   actor: string,
   accountId: string,
   tier: "member" | "associate" | "alumni",
-): Promise<AdminMutationResult> {
+): Promise<SetTierResult> {
   if (!(await isAuthorized(dbx, actor))) return { ok: false, error: "not_authorized" };
   const acc = await lockTarget(dbx, accountId);
   if (!acc) return { ok: false, error: "not_found" };
-  if (acc.tier === tier && acc.tierLocked) return { ok: true };
+  // Only a press that changes nothing at all — same tier, already locked — is
+  // a no-op. A same-tier press on an UNLOCKED account still locks it: that is
+  // the pin, not a bug, and `enqueueSync`/the audit row below are what make it
+  // a real, visible action rather than a silent one now that the row arms
+  // first.
+  if (acc.tier === tier && acc.tierLocked) return { ok: true, tierLocked: true };
   await dbx
     .update(account)
     .set({ tier, tierLocked: true, tierChangedAt: new Date(), tierChangedBy: actor })
@@ -49,7 +73,7 @@ export async function setTierManual(
     details: { from: acc.tier, to: tier, locked: true, cause: "manual" },
   });
   await enqueueSync(dbx, { kind: "account", accountId });
-  return { ok: true };
+  return { ok: true, tierLocked: true };
 }
 
 /**

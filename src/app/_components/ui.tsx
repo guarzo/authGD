@@ -283,16 +283,33 @@ export function Status({
  * second announcement is worse than none: a surface that already announces
  * itself by moving focus (`error.tsx` focuses its `h1`) gets its heading
  * preempted by an assertive region rendering in the same commit.
+ *
+ * `id` is for the opposite case: a surface with nothing else moving focus,
+ * where a sighted operator can stand at a control well below this notice and
+ * never see it arrive (item 10 — `/payouts/new`'s rejection lands ~1000px
+ * above the submit button the operator is still looking at). Carrying an
+ * `id` implies `tabIndex={-1}`, the same paired contract `RuleHead` already
+ * documents on its own `id` prop: a landing place a caller moves focus to
+ * after a rejection must never also become a stop in the tab order on the
+ * way to the form's controls. The two travel together so a call site cannot
+ * get one without the other. This primitive only carries the plumbing —
+ * moving focus here on a rejection is still the call site's own effect, the
+ * same way `error.tsx` focuses its own `h1`.
  */
 export function Notice({
   tone = "info",
   live = true,
+  id,
   children,
 }: {
   tone?: "bad" | "warn" | "info";
   /** Set `false` to render the notice with no `role`, when something else on
    *  the page already announces the same arrival. */
   live?: boolean;
+  /** Set only when a caller needs to move focus here, e.g. on a rejection
+   *  that lands out of the sighted operator's view. Implies `tabIndex={-1}`
+   *  — see the doc above. */
+  id?: string;
   children: ReactNode;
 }) {
   const empty =
@@ -305,6 +322,8 @@ export function Notice({
       className={empty ? "notice-slot" : className}
       data-glyph={empty ? undefined : glyph}
       role={live ? role : undefined}
+      id={id}
+      tabIndex={id ? -1 : undefined}
     >
       {children}
     </p>

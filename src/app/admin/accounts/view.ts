@@ -145,19 +145,24 @@ export function isDoneCode(value: string | undefined): value is AdminAccountsDon
 /**
  * The half of the tier confirmation that says what the press actually did.
  *
- * `setTierManual` (services/admin-accounts.ts) writes `tierLocked: true` on
- * EVERY manual set, including a set to the tier the account already holds —
- * the tier buttons stay live unless the account is already locked at that tier
- * (`page.tsx`: `disabled={r.tierLocked && r.tier === t}`), and the
- * already-current one carries `aria-pressed="true"`, which globals.css paints
- * with the raised ground and leading `▪` the filter chips above use to mean
- * "you are already here, this does nothing". Pressing it is not a no-op: it
- * takes the account out of the membership job's reach permanently. Nothing in
- * the group label, the button, or the old sentence ("… set to …") said so, so
- * the admin who pressed what looked like the selected chip found out only when
- * a member who had left the alliance kept their tier, their map ACL entry and
- * their Discord roles indefinitely — the exact outcome derole-don't-boot
- * exists to prevent.
+ * `setTierManual` (services/admin-accounts.ts) locks the account on any
+ * manual set that changes the tier — including approving the row's OTHER two
+ * chips, which is why this sentence names the pin at all rather than reading
+ * like a plain "set". A press on the tier the account already holds locks it
+ * too, on an account that was unlocked: that IS the pin (an admin reaching
+ * for it before a member leaves the alliance, while the tier still reads
+ * correctly), so this sentence is the true outcome for every "tier" press
+ * that reaches here, not a special case to word around.
+ *
+ * (An earlier pass through this sweep briefly treated a same-tier press on
+ * an unlocked account as a no-op instead and gave this function a `locked`
+ * parameter so it could say "already X" for that case. That guard proved
+ * costly — it made the one real way to pin an already-current tier route
+ * through a fabricated demote-then-repromote, which wrote a false audit row
+ * and enqueued real Discord/map churn for nothing — so `setTierManual`
+ * reverted to locking unconditionally on any set. `setTierAction` can no
+ * longer produce a `false` here, so the parameter and its branch are gone
+ * rather than kept for a case the UI can no longer reach.)
  *
  * The clause names the undo by the word written on the control that performs
  * it (`auto`, rendered only while `r.tierLocked`), rather than describing the

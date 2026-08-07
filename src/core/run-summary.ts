@@ -75,6 +75,34 @@ export function countColumns(jobType: string, runs: RunLike[]): string[] {
   return [...ordered, ...rest];
 }
 
+/**
+ * Count keys whose value is a count of things that did NOT happen — a target
+ * the job could not act on, not a target it acted on successfully. Read
+ * against `COLUMN_ORDER` above: `failed` (contacts, discord-roles),
+ * `addFailed`/`removeFailed`/`unblockFailed` (wanderer), `invalid` (membership,
+ * membership-recheck, token-health — an affiliation or token that could not be
+ * resolved), `unresolved` (membership, membership-recheck), and `needsReauth`
+ * (token-health). `notInGuild` and `unlinked` are deliberately excluded: both
+ * are states the job reports, not failures to act — a departed Discord member
+ * or an already-unlinked token isn't something the run tried and failed at.
+ */
+const FAILURE_KEYS: ReadonlySet<string> = new Set([
+  "failed",
+  "addFailed",
+  "removeFailed",
+  "unblockFailed",
+  "invalid",
+  "unresolved",
+  "needsReauth",
+]);
+
+/** Whether a count column names something the job failed to do, rather than
+ *  something it did. Used to give a non-zero failure count its own colour in
+ *  the runs tables — see `page.tsx`'s two `cols.map` branches. */
+export function isFailureKey(key: string): boolean {
+  return FAILURE_KEYS.has(key);
+}
+
 /** True when the run recorded counts and every one of them was zero. */
 export function isNoChange(counts: Record<string, number> | null): boolean {
   if (!counts) return false;

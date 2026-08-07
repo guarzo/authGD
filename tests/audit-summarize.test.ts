@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { summarizeDetails } from "@/app/admin/audit/summarize";
+import { isFailureAction, summarizeDetails } from "@/app/admin/audit/summarize";
 
 describe("summarizeDetails", () => {
   it("renders a tier transition with its from value", () => {
@@ -341,6 +341,75 @@ describe("summarizeDetails, declared fields and role rendering", () => {
     );
   });
 
+  it("renders a role strip failure with its error and resolved role", () => {
+    const names = new Map([["300", "alumni"]]);
+    expect(
+      summarizeDetails(
+        "discord.role_strip_failed",
+        { roleId: "300", error: "missing permissions" },
+        names,
+      ),
+    ).toBe("missing permissions, role alumni");
+  });
+
+  it("falls back to a shortened id for an unresolved strip-failure role", () => {
+    expect(
+      summarizeDetails("discord.role_strip_failed", {
+        roleId: "999888777",
+        error: "missing permissions",
+      }),
+    ).toBe("missing permissions, role 999888…");
+  });
+
+  it("degrades when a strip failure records no role at all", () => {
+    expect(
+      summarizeDetails("discord.role_strip_failed", { roleId: null, error: "boom" }),
+    ).toBe("boom");
+  });
+
+  it("renders a role sync failure with its error, in-flight op and tier", () => {
+    const names = new Map([["300", "alumni"]]);
+    expect(
+      summarizeDetails(
+        "discord.role_sync_failed",
+        { op: "add", roleId: "300", tier: "alumni", error: "rate limited" },
+        names,
+        {},
+      ),
+    ).toBe("rate limited, adding alumni, tier alumni");
+    expect(
+      summarizeDetails(
+        "discord.role_sync_failed",
+        { op: "remove", roleId: "300", tier: "alumni", error: "rate limited" },
+        names,
+      ),
+    ).toBe("rate limited, removing alumni, tier alumni");
+  });
+
+  it("does not hide any of the role sync failure's four payload keys", () => {
+    expect(
+      summarizeDetails("discord.role_sync_failed", {
+        op: "add",
+        roleId: "300",
+        tier: "alumni",
+        error: "rate limited",
+      }),
+    ).not.toContain("more");
+  });
+
+  it("degrades a role sync failure whose diff never got chosen", () => {
+    // getGuildMember can throw before `diff` exists -- op and roleId are both
+    // null, and the error is the whole story.
+    expect(
+      summarizeDetails("discord.role_sync_failed", {
+        op: null,
+        roleId: null,
+        tier: "alumni",
+        error: "guild unreachable",
+      }),
+    ).toBe("guild unreachable, tier alumni");
+  });
+
   it("renders a self-service status change", () => {
     expect(
       summarizeDetails("status.changed", { from: "cryo", to: "active", self: true }),
@@ -445,5 +514,29 @@ describe("summarizeDetails with configured tier labels", () => {
     expect(
       summarizeDetails("tier.changed", { from: "green", to: "flygd" }, new Map(), LABELS),
     ).toBe("green → flygd");
+  });
+});
+
+describe("isFailureAction", () => {
+  it("matches every action a writer actually names _failed", () => {
+    expect(isFailureAction("discord.role_strip_failed")).toBe(true);
+    expect(isFailureAction("discord.role_sync_failed")).toBe(true);
+    expect(isFailureAction("token.verify_failed")).toBe(true);
+  });
+
+  it("does not match an ordinary state change, including a tier demotion", () => {
+    expect(isFailureAction("discord.role_changed")).toBe(false);
+    expect(isFailureAction("tier.changed")).toBe(false);
+  });
+
+  it("does not match a state the app is built to handle, not a failed action", () => {
+    // token.needs_reauth, character.owner_mismatch and
+    // character.affiliation_invalid are ordinary states this app handles by
+    // design (a re-auth prompt, an ESI mismatch worth a look) -- not an
+    // action the app attempted and failed at. See PARTS's doc for why the
+    // failure/state line is drawn here rather than by hand-picking actions.
+    expect(isFailureAction("token.needs_reauth")).toBe(false);
+    expect(isFailureAction("character.owner_mismatch")).toBe(false);
+    expect(isFailureAction("character.affiliation_invalid")).toBe(false);
   });
 });

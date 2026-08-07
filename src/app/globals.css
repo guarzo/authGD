@@ -2789,7 +2789,11 @@ h3.rule-head__label {
 
 /* Left-aligned against the panel's centred composition: the prose reads as a
    paragraph, not a slogan, and left-alignment keeps a multi-line block from
-   looking like ragged poetry. */
+   looking like ragged poetry. Now placed after .launch__action in document
+   order — see the JSX comment above that control for why — so the rule and
+   top margin here separate the fine print from the button above it rather
+   than from the prose that used to sit there; the geometry needed no change
+   either way. */
 .launch__disclosure {
   margin-top: var(--s-5);
   padding-top: var(--s-5);
@@ -3339,6 +3343,26 @@ h3.rule-head__label {
   text-align: right;
 }
 
+/* A non-zero failure count (isFailureKey, @/core/run-summary) — a target the
+   run could not act on — otherwise reads in the same ink and weight as a
+   count of targets it succeeded on. --signal-warn, not --signal-bad: the
+   run's own status cell already carries `bad` when it errored, and this is a
+   secondary emphasis on one figure within a row, not a second alarm.
+   Colour is not the only channel — the column header already names the key
+   ("add failed", "invalid") — but scanning a row of otherwise-identical mono
+   figures is exactly the case colour helps with.
+
+   Also carries the audit log's Action cell (isFailureAction, @/app/admin/
+   audit/summarize) for a `discord.role_sync_failed` row: same reasoning,
+   still --signal-warn not --signal-bad, and the same "colour is not the
+   only channel" holds — the word `failed` is already in the action name. No
+   separate status cell to defer to there, but the alarm being reserved for
+   THIS row's own bad state rather than a second, louder one is the same
+   argument either way. */
+.log td.warn {
+  color: var(--signal-warn);
+}
+
 /* `text-align` moves inline content, but the payout tables put their money
    cells in a block-level `.stack` (the amount plus its copy button) or
    `.inline-form` (the shares input plus its save button) — both lay out
@@ -3451,6 +3475,18 @@ h3.rule-head__label {
   display: grid;
   gap: var(--s-2);
   justify-items: start;
+}
+
+/* Prose inside a control group (the tier-lock consequence sentence,
+   admin/accounts/page.tsx). Without a measure it lays out at max-content — one
+   unbroken ~90ch line — which makes its group the widest flex item on the row
+   and wraps the note group onto a line of its own, 105px below the controls it
+   is supposed to sit level with. The cap is a measure, not a guess at the
+   sentence: any prose that lands in a control group wants one. 34ch keeps the
+   group close to the 168.3px the tier buttons alone asked for, well inside the
+   `--measure` used for real body copy, which would be far too wide here. */
+.drawer__note {
+  max-width: 34ch;
 }
 
 .drawer__crew {

@@ -79,6 +79,46 @@ export function ConfirmGroup({ children }: { children: ReactNode }) {
     if (seq > 0) ref.current?.focus();
   }, [seq]);
 
+  // Approve, set-tier and set-status all move a row out of whatever `tier=`
+  // or `status=` filter is currently applied — that is what `revalidatePath`
+  // is for — and `Disclosure`'s `as="row"` (disclosure.tsx) renders this
+  // group's own toggle row AND drawer row from the same `.map()` entry as the
+  // account, so the row this notice landed focus on above can vanish in the
+  // very next paint. Left alone, the browser drops focus to `<body>` with no
+  // trace of where the admin was, which is the concrete cost item 9 (this
+  // pass's brief) describes on a twenty-row roster.
+  //
+  // This cleanup is the fix. A cleanup function fires synchronously as part
+  // of the unmount, before React detaches the DOM, so — unlike a `focusout`
+  // listener racing the removal — it can hand focus off before `ref.current`
+  // stops existing rather than reacting after `<body>` already has it. It
+  // only acts when this group's own notice is what currently holds focus:
+  // an admin who has since moved on (tabbed to another row, opened a
+  // different drawer) is not this effect's business.
+  //
+  // The fallback is the enclosing `<table>`, not a specific row: that is the
+  // one ancestor guaranteed to survive a single row leaving the list. Of the
+  // two callers today it is `/admin/accounts` that has one; `/admin/sync`'s
+  // group sits in a drawer strip below the runs table rather than in a row
+  // (`admin/sync/page.tsx:802`), where `closest` finds nothing and this
+  // cleanup correctly does nothing — that surface's control does not unmount
+  // on its own press. It is not "land on row 15" — this
+  // component has no way to know which row comes next, only `PayFlow`
+  // (`payouts/[id]/pay-flow.tsx`) does, because it is hosted above the whole
+  // list and reads server-rendered `rows` to find one. What this buys back is
+  // the smaller claim: the admin lands at the top of the table they were
+  // already scanning, not at the top of the document.
+  useEffect(() => {
+    const node = ref.current;
+    return () => {
+      if (!node || document.activeElement !== node) return;
+      const table = node.closest("table");
+      if (!table) return;
+      if (!table.hasAttribute("tabindex")) table.setAttribute("tabindex", "-1");
+      table.focus();
+    };
+  }, []);
+
   return (
     <ReportContext.Provider
       value={(nextText) => {

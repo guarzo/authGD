@@ -275,6 +275,8 @@ export function ConfirmSubmit({
   pendingLabel,
   describedBy,
   confirm = true,
+  ariaPressed,
+  disabled = false,
 }: {
   className: string;
   /** Classes to use only while armed; defaults to `className` when the rest
@@ -303,6 +305,28 @@ export function ConfirmSubmit({
    *  without this one's reserved label width or its (empty) live region, and a
    *  reader who sees `ConfirmSubmit` has every right to expect an arm step. */
   confirm?: boolean;
+  /** Passed straight through to the button's `aria-pressed`, undefined by
+   *  default so the eleven other call sites render exactly as before. Named
+   *  and reasoned rather than an open class/attr slot, per this file's own
+   *  rule on `ConfirmCost`'s `className`. Exists for a toggle-style control
+   *  that needs BOTH the "you are already here" semantics `aria-pressed`
+   *  carries and an arm step on the press that would change that — the
+   *  admin-accounts tier chips (`/admin/accounts/page.tsx`) are the first and
+   *  so far only caller, since `Submit`'s own `aria-pressed` has no way to gate
+   *  a press behind a second click. Independent of `armed`/`confirm`: this
+   *  is about which tier the row holds right now, not about whether this
+   *  press is mid-confirm. */
+  ariaPressed?: boolean;
+  /** Passed through to the button, and short-circuits `onClick` so a
+   *  disabled control can never arm — belt-and-suspenders alongside the
+   *  native `disabled` attribute, which already stops the browser from
+   *  firing `click` at all, for the one caller (the same tier chips above)
+   *  that renders this control disabled rather than swapping it out of the
+   *  tree, so an event that somehow still reached this handler (e.g. a
+   *  synthetic dispatch in a test) cannot arm a control the row says is
+   *  inert. Default `false`, matching the native attribute's default and
+   *  every existing call site. */
+  disabled?: boolean;
 }) {
   // Read unconditionally — hooks can't be conditional — but only *require* the
   // scope when this control can actually arm. A `confirm={false}` control has
@@ -350,9 +374,12 @@ export function ConfirmSubmit({
         type="submit"
         className={armed ? (armedClassName ?? className) : className}
         aria-busy={pending}
+        aria-pressed={ariaPressed}
         aria-label={armed ? confirmName : restName}
         aria-describedby={describedBy}
+        disabled={disabled}
         onClick={(e) => {
+          if (disabled) return;
           if (!confirm) {
             // Plain grade: an ordinary submit, guarded against a double-press
             // exactly the way `Submit` guards its own (`submit.tsx:63`).

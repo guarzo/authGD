@@ -4,8 +4,9 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect } from "react";
 
 /**
- * Drops `?error=`/`?dropped=` at the moment the NEXT submit starts, so a notice
- * from an earlier failure cannot outlive the thing it described.
+ * Drops `?error=`/`?dropped=`/`?unresolved=` at the moment the NEXT submit
+ * starts, so a notice from an earlier failure cannot outlive the thing it
+ * described.
  *
  * The two halves of this are in tension and the timing is the whole design:
  *
@@ -63,13 +64,23 @@ import { useEffect } from "react";
  * two `replace` calls are sequenced, never concurrent. Every other form here
  * settles with `revalidatePath` and no navigation, so the replace is the only
  * thing touching the URL.
+ *
+ * `?unresolved=` (an unresolved roster name from `createOperationAction`,
+ * decoded by `../unresolved`) joined the `stale` check for the identical
+ * reason `?dropped=` is in it: it arrives once, on the redirect that created
+ * this page, and nothing else on this page ever rewrites it, so left out of
+ * this check it would sit in the address bar and be silently re-rendered
+ * against whatever edit came next.
  */
 export function ClearStaleQuery() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
-  const stale = searchParams.has("error") || searchParams.has("dropped");
+  const stale =
+    searchParams.has("error") ||
+    searchParams.has("dropped") ||
+    searchParams.has("unresolved");
 
   useEffect(() => {
     if (!stale) return;

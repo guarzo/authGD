@@ -6,6 +6,7 @@ import {
   countColumns,
   formatDuration,
   humanizeKey,
+  isFailureKey,
   isNoChange,
 } from "@/core/run-summary";
 
@@ -58,6 +59,46 @@ describe("isNoChange", () => {
     expect(isNoChange({ a: 0, b: 1 })).toBe(false);
     expect(isNoChange({})).toBe(false); // nothing recorded is not "no change"
     expect(isNoChange(null)).toBe(false); // still running
+  });
+});
+
+describe("isFailureKey", () => {
+  it("names the counters that count targets the run could not act on", () => {
+    for (const k of [
+      "failed",
+      "addFailed",
+      "removeFailed",
+      "unblockFailed",
+      "invalid",
+      "unresolved",
+      "needsReauth",
+    ]) {
+      expect(isFailureKey(k)).toBe(true);
+    }
+  });
+
+  it("leaves reported states and successes alone", () => {
+    // `notInGuild` and `unlinked` are states the job reports, not things it
+    // tried and failed at — see the set's own doc.
+    for (const k of [
+      "added",
+      "removed",
+      "refreshed",
+      "skipped",
+      "notInGuild",
+      "unlinked",
+      "wouldAdd",
+      "wouldRemove",
+    ]) {
+      expect(isFailureKey(k)).toBe(false);
+    }
+  });
+
+  it("only recognises exact keys", () => {
+    expect(isFailureKey("Failed")).toBe(false);
+    expect(isFailureKey("")).toBe(false);
+    // A plain object's inherited members must not read as failure keys.
+    expect(isFailureKey("toString")).toBe(false);
   });
 });
 
