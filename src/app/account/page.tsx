@@ -664,7 +664,7 @@ export default async function AccountPage({
                           }
                         >
                           {state === "attention" ? (
-                            <div className="stack">
+                            <div className="status-lines">
                               <span className="status-line">
                                 <span className="status-line__label">token</span>
                                 {c.tokenStatus === "valid" && !c.needsReauthForScopes ? (

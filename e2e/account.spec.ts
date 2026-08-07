@@ -10,6 +10,7 @@ import {
   syncRun,
   universeName,
 } from "../src/db/schema";
+import type { ContactSyncResult } from "../src/core/contact-result";
 import { pinGeometry, rowHeights } from "./geometry";
 import { resetDb, seedMember, sessionCookieFor, testDb } from "./helpers";
 
@@ -119,6 +120,40 @@ async function faultOneAlt(altName: string) {
     .update(character)
     .set({ tokenStatus: "invalid" })
     .where(eq(character.name, altName));
+}
+
+/** Faults named characters through their *contacts* result rather than their
+ *  token, which is what makes them classify `attention` and render the full
+ *  three-line STATUS stack. `faultOneAlt` above sets `tokenStatus` instead,
+ *  which also mounts the column but fills the token line with the
+ *  `re-authorize` control; both shapes are wanted, for different tests.
+ *
+ *  The result is a parameter because the STATUS column is content-sized and
+ *  every code renders a different string, so "a faulted crew" is not one
+ *  width but a range. Measured at 320px, forced scroll, the member-fixable
+ *  codes (MEMBER_FIXABLE in account-health.ts, the ones that classify
+ *  `attention`) run 275px for `label_mismatch` to 299px for `needs_reauth`.
+ *  A geometry test must name which one it means and seed the widest, or it
+ *  reports the narrowest case as though it were the column's worst.
+ *
+ *  Asserts the update actually hit every name: a typo silently updates zero
+ *  rows, and a seed that faults nobody leaves the exception-only STATUS column
+ *  out of the DOM entirely — which is the healthy layout, passing a width
+ *  budget for the one reason the budget exists to rule out. */
+async function faultContacts(names: string[], result: ContactSyncResult) {
+  const updated = await db
+    .update(contactSyncState)
+    .set({ lastResult: result })
+    .where(
+      inArray(
+        contactSyncState.characterId,
+        db
+          .select({ id: character.id })
+          .from(character)
+          .where(inArray(character.name, names)),
+      ),
+    );
+  expect(updated.rowCount).toBe(names.length);
 }
 
 // Every code the callbacks can redirect to /login with, checked by name: a code
@@ -1067,6 +1102,158 @@ test("a long structure name does not blow out the forced horizontal scroll at 32
   // arrangement that keeps a portrait, a name and an unlink fits 320px.
   expect(pinned.maxScrollLeft).toBeLessThan(170);
 });
+
+// The gate above measures a healthy crew, and a healthy crew is the case that
+// does not need it: `showStatusColumn` (src/app/account/page.tsx) is
+// exception-only, so on an all-ok seed the widest column in the manifest is not
+// in the DOM at all. The member who actually has to reach STATUS and ACTIONS is
+// the member with something wrong, and that is the layout nothing measured.
+//
+// `needs_reauth`, not `missing_label`, and the choice is the point. The STATUS
+// column is content-sized, so its width is the rendered width of whichever
+// string the seed happens to pick, and the member-fixable codes span 24px:
+//
+//   label_mismatch  "label wrong"     275px forced scroll
+//   missing_label   "label needed"    283px
+//   token_invalid   "token invalid"   291px
+//   missing_scope   "scope missing"   291px
+//   needs_reauth    "re-auth needed"  299px
+//
+// A gate seeded with `missing_label` passes at 283px and says nothing about
+// the 299px a `needs_reauth` member is actually served. Seeding the widest is
+// what makes this a bound rather than a sample.
+//
+// Two faulted characters, not one: one is enough to mount the column, but the
+// widest cell is the `attention` stack, and seeding two proves the width comes
+// from the stack rather than from whichever single row happened to be first.
+// A third is faulted through its *token* instead, which renders the
+// `re-authorize` control in the token line — the one grid item with a border
+// box, and so the one that showed the `justify-items` default stretching it to
+// the standings chip's width.
+test("a faulted character does not blow out the forced horizontal scroll at 320px", async ({
+  page,
+  context,
+}) => {
+  const acc = await seedNominalCrew();
+  await faultContacts(["Alt Pilot Two", "Alt Pilot Five"], "needs_reauth");
+  await faultOneAlt("Alt Pilot Seven");
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.setViewportSize({ width: NARROWEST, height: 900 });
+  await page.goto("/account");
+  // Every number below is a text-advance measurement with a margin in the
+  // single-digit px, and the page loads Archivo and IBM Plex Mono through
+  // next/font (src/app/layout.tsx). A fallback-metrics measurement would be a
+  // different layout than the one under test.
+  await page.evaluate(() => document.fonts.ready);
+
+  // The preconditions this test exists for. Without them it passes for the
+  // exact reason the old gate did: no STATUS column in the DOM. A seed that
+  // silently failed to fault anyone measures the healthy layout and reports it
+  // as the faulted one.
+  await expect(
+    manifest(page).getByRole("columnheader", { name: "Status" }),
+  ).toBeVisible();
+  await expect(manifest(page).locator(".status-line")).toHaveCount(9);
+  // Count alone would not notice the copy changing under it, and the copy is
+  // the whole of what this column's width is. Assert the two strings the
+  // measurement is of, by name.
+  await expect(manifest(page).getByText("re-auth needed")).toHaveCount(2);
+  await expect(manifest(page).getByRole("link", { name: "re-authorize" })).toHaveCount(1);
+  // The same located-row precondition every other measurement in this file
+  // carries: an unlocated row is narrower as well as shorter. By text, not by
+  // count — a degraded `placeCrew` still renders a `.char__location`, just a
+  // much shorter one, which narrows the NAME column and loosens every budget
+  // below while the count stays 10.
+  await expect(manifest(page).locator(".char__location").first()).toHaveText(
+    "J30000142 — Home Astrahus",
+  );
+
+  const pinned = await pinGeometry(
+    page,
+    MANIFEST,
+    // Fourth cell: with the STATUS column mounted, ACTIONS moves right by one.
+    "tbody tr:first-child td:nth-child(4)",
+    "right",
+  );
+  // Same anti-vacuity floor as the healthy gate — a passing 0 would mean the
+  // region had nothing to scroll and the measurement said nothing.
+  expect(pinned.maxScrollLeft).toBeGreaterThan(0);
+  // The property this change actually controls, asserted directly so a
+  // regression names itself instead of showing up only as a few px on the
+  // total. This seed measured 240.2px when the labels carried a
+  // `min-width: 5.5rem` gutter and 223.1px with the label column sized to
+  // content; 232 sits between them, so putting the gutter back trips this
+  // line rather than the softer total below.
+  const status = await page.evaluate(() => {
+    const td = document
+      .querySelector("[aria-label='Your characters'] .status-line")!
+      .closest("td") as HTMLElement;
+    return td.getBoundingClientRect().width;
+  });
+  expect(status).toBeLessThan(232);
+  // The `re-authorize` control at its own width, not the standings chip's.
+  // `.status-lines` is a grid and `justify-items` defaults to `stretch`, which
+  // sized this border box to the widest value in the column — 168px next to a
+  // "token refresh failed" row. It measures 112.6px; 120 catches the stretch
+  // without pinning the button's own metrics.
+  const reauth = await page.evaluate(() => {
+    const a = document.querySelector(
+      "[aria-label='Your characters'] .status-lines a.btn",
+    ) as HTMLElement;
+    return a.getBoundingClientRect().width;
+  });
+  expect(reauth).toBeLessThan(120);
+  // The member-facing total: 316px before this change, 299px after, against a
+  // 286px region. Note what that does NOT say — 299 is still more than one
+  // region-width, so the worst member-fixable state has not been brought
+  // inside the fold and this line must not be read as claiming it was. 308
+  // brackets before-and-after so the regression is caught; closing the last
+  // 13px is a copy change, described below.
+  expect(pinned.maxScrollLeft).toBeLessThan(308);
+});
+
+// What the two gates above do NOT claim, recorded so the next person does not
+// re-derive it: the STATUS cell is already at its content floor, and it is not
+// where the remaining width is.
+//
+// Measured at a 320px viewport (286px scroll region), ten characters, seeded
+// `needs_reauth` as the gate above is:
+//
+//   portrait  56px   the image plus cell padding
+//   name     151px   "J30000142 — Home Astrahus" is the binding string
+//   status   223px   71px label column + 8px gap + 120px value column + 24px padding
+//   actions  155px   `main` + `unlink`
+//   -------------
+//   table    585px  ->  299px forced scroll against the 286px region
+//
+// The 71px is the rendered width of "STANDINGS" (the widest of the three
+// labels, so dropping the two `ok` lines would not narrow it) and the 120px is
+// the rendered width of the "re-auth needed" chip. Both are content, and the
+// 8px is --s-2. That is the whole cell: there is no padding left in it to
+// remove, and deleting the STATUS column outright still leaves 362px of table
+// against a 286px region. Four columns of genuine content do not fit 320px,
+// and no arrangement that keeps a portrait, a name, a status and an unlink
+// will.
+//
+// So the last 13px between 299px and one region-width is the copy. "re-auth
+// needed" is the binding string, not "label needed" — the widest MEMBER_FIXABLE
+// value, and the only one whose row exceeds the region by more than a rounding
+// error. Shortening it is a real lever and is deliberately not taken here,
+// because it changes what a member reads rather than how it is laid out, and
+// the same strings render on the admin members drawer.
+//
+// One case is unbounded and no threshold here covers it: an unrecognized result
+// code falls through to `result.replace(/_/g, " ")` (contact-state.tsx) and
+// renders verbatim inside a `white-space: nowrap` chip in a content-sized
+// column. A long enough code from an older deployment forces arbitrary
+// horizontal scroll. That is an error path, not a layout one, and it is noted
+// rather than gated.
+//
+// The other lever — dropping the two `ok` lines from the `attention` stack so
+// only the fault shows — is worth measuring on its own terms. It does nothing
+// for width, because "standings" is still the widest label, but it would take a
+// faulted row from 86px back toward the 63px nominal pitch, which is the
+// fold-count metric the density work is actually judged on.
 
 // The round-1 failure written as a test. #167's band assertion measured a
 // located row against a no-location row and required the difference to sit in

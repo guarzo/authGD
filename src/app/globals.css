@@ -1651,17 +1651,91 @@ h3.rule-head__label {
   justify-items: start;
 }
 
+/* The three labelled entries of the manifest's merged STATUS cell, as one grid.
+   The alignment this buys — every token starting at the same x, rather than
+   stepping in and out with its label's width — was previously bought by a
+   `min-width: 5.5rem` on the label itself. That worked, but it priced the
+   alignment at a fixed 88px whether the labels needed it or not, and they did
+   not: the widest of the three ("standings") measures 71px, so 17px of every
+   label was padding and the other 71 was a column the grid can size for free.
+
+   Why this is worth a rule of its own: the STATUS column exists only when
+   something is wrong, so its width is paid by exactly the member who has a
+   fault to fix and needs to reach the ACTIONS column beyond it. At a 320px
+   viewport the manifest's scroll region is 286px, and every faulted state was
+   over it. Sizing the label column to content takes 17px off all of them
+   uniformly — the gutter is a constant, so the saving is too.
+
+   What that does and does not buy, measured across every result code
+   `contactStateToken` can render (src/app/account/contact-state.tsx), forced
+   scroll at 320px, before -> after:
+
+     label_mismatch  "label wrong"     293 -> 275
+     missing_label   "label needed"    300 -> 283
+     token_invalid   "token invalid"   308 -> 291
+     missing_scope   "scope missing"   308 -> 291
+     needs_reauth    "re-auth needed"  316 -> 299
+
+   So the common case clears one region-width and the worst member-fixable one
+   does not: `needs_reauth` still forces 299px of scroll against a 286px
+   region. Do not read this rule as having closed that gap. The remaining 13px
+   is the difference between "re-auth needed" and "label needed" — content, not
+   layout, and the faulted-crew gate in e2e/account.spec.ts records the levers
+   that would reach it. What this rule does buy is 17px that no state has to
+   pay for an alignment none of them were using.
+
+   `column-gap` and `row-gap` are both --s-2, which is what the `.stack` this
+   replaced used between lines: the change is horizontal only, and the row
+   height of a faulted character is deliberately unchanged. */
+.status-lines {
+  display: grid;
+  /* Both `auto`, not `auto 1fr`: `1fr` would stretch the token to the cell's
+     full width, the same blow-out `.stack`'s `justify-items: start` exists to
+     prevent (see `.stack`). `justify-content: start` keeps the pair packed
+     left instead.
+
+     Exactly two, because `display: contents` on `.status-line` means each line
+     contributes its children directly. A `.status-line` given a third child
+     does not error — it wraps onto an implicit row, putting that child under
+     the labels — so keep the pairs pairs. */
+  grid-template-columns: auto auto;
+  justify-content: start;
+  /* Not the default `stretch`: a grid item stretches to its *track*, and the
+     value column's track is as wide as the widest of the three values. `.st`
+     is colour-only with no box, so stretching it is invisible — but the
+     `re-authorize` control on the token line is a bordered `.btn`, and it grew
+     to whatever the standings chip below it happened to measure: 168px beside
+     "token refresh failed", 199px beside an unrecognized result code. `.stack`
+     never did that, because a flex item does not stretch along the main axis.
+     Measured with the probe that produced the numbers in the faulted gate:
+     `start` leaves every cell width and every forced-scroll figure unchanged
+     and caps the control at its own 112.6px. */
+  justify-items: start;
+  align-items: baseline;
+  gap: var(--s-2);
+}
+
 /* One labelled entry in the account manifest's merged STATUS cell. Three tokens
    stacked with nothing naming them read as "ok / ok / on" now that the TOKEN,
    CONTACTS and MAP headers that named them are gone — and two of those three
    are literally the word "ok". The label is visible, not visually-hidden: a
    sighted reader cannot tell the token's "ok" from the standings' "ok" either,
    so hiding it would fix the problem for exactly the readers who did not have
-   it. */
+   it.
+
+   `display: contents` so the label and its token become items of the
+   `.status-lines` grid above rather than of a flex box of their own — that is
+   what lets one shared column size to the widest label. The span survives as a
+   DOM grouping only; it carries no role, and `display: contents` drops the box
+   without dropping the text, so the label and value still contribute to the
+   cell exactly as before. That matters more than it looks: the STATUS `<td>`
+   sets `aria-label` only for the states that are NOT `attention`
+   (src/app/account/page.tsx), so on precisely the rows this rule applies to,
+   the cell's accessible name is its text content and nothing else. There is no
+   aria-label here to fall back on — the text is the whole of it, which is why
+   it has to survive. */
 .status-line {
-  display: flex;
-  align-items: baseline;
-  gap: var(--s-2);
+  display: contents;
 }
 
 .status-line__label {
@@ -1670,10 +1744,6 @@ h3.rule-head__label {
   letter-spacing: var(--track-value);
   text-transform: uppercase;
   color: var(--ink-faint);
-  /* The three labels are a column of their own inside the cell, so the tokens
-     line up rather than stepping in and out with the label's width. */
-  min-width: 5.5rem;
-  flex-shrink: 0;
 }
 
 .dim {
