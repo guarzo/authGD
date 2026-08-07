@@ -567,6 +567,21 @@ a:hover {
   max-width: calc(var(--measure-page-narrow) - 2 * var(--s-5));
 }
 
+/* The one direct child of a narrow page that wants the full page measure.
+   `.page--narrow > :where(*)` is (0,1,0) — `:where()` contributes nothing, so
+   the selector weighs only its one class — and this is (0,2,0), so a class on
+   the child is all it takes to opt out.
+
+   The manifest is a data table, not prose: its name column carries
+   member-supplied structure names, and the reading measure forced wrapping
+   that the full width does not. Prose on this page keeps the narrow cap, which
+   is the entire reason `page--narrow` stays rather than being deleted from the
+   page — `.page__head` self-caps at nothing at all (:570), so removing it
+   wholesale would stretch the head to 1248px. */
+.page--narrow > .full-measure {
+  max-width: none;
+}
+
 .page__head {
   margin-bottom: var(--s-6);
 }

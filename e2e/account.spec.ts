@@ -1523,3 +1523,29 @@ test("an account with no characters renders no verdict at all", async ({
   await expect(page.locator("p.verdict")).toHaveCount(0);
   await expect(page.locator(".log__empty")).toHaveCount(1);
 });
+
+test("the crew manifest is wider than the page's prose measure", async ({
+  page,
+  context,
+}) => {
+  const acc = await seedNominalCrew();
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/account");
+
+  // Compared against a sibling that keeps the narrow cap rather than against a
+  // hardcoded pixel figure: the point is that the manifest opts OUT of a cap
+  // its neighbours still take, and a bare number would pass just as well if
+  // `page--narrow` were deleted from the page wholesale — the change this
+  // explicitly is not.
+  const widths = await page.evaluate(() => {
+    const frame = document.querySelector(".scroller-frame") as HTMLElement;
+    const lede = document.querySelector(".page__lede") as HTMLElement;
+    return {
+      manifest: frame.getBoundingClientRect().width,
+      lede: lede.getBoundingClientRect().width,
+    };
+  });
+  expect(widths.manifest).toBeGreaterThan(widths.lede);
+  expect(widths.manifest).toBeGreaterThan(960);
+});
