@@ -611,9 +611,59 @@ a:hover {
    fold worth reading. It is always a `.st` Status token, same as everything
    else this page calls state, so "the mono word is what the system computed"
    holds here too. Layout only, no colour of its own — that comes from the
-   token's own tone (or lack of one for the quiet states). */
+   token's own tone (or lack of one for the quiet states).
+   This margin is dead in practice today: every call site renders inside
+   `.page__head-row`, which zeroes it below. Left as the base rule rather than
+   removed, since a future `.verdict` rendered outside that row — its own row
+   again, say — would want the top margin back without anyone having to
+   reconstruct why it was there. */
 .verdict {
   margin-top: var(--s-3);
+}
+
+/* The verdict shares the H1's line rather than taking one of its own. The
+   token's own top margin is what made it a row; inside the head row it is a
+   flex item and the margin only pushes it off the h1's baseline. */
+.page__head-row > .verdict {
+  margin-top: 0;
+}
+
+/* The account page's two standing facts — tier and Discord — on one line under
+   the lede, in place of a rule-head plus a two-row definition grid. Wraps at
+   its own gap rather than forcing the head to scroll at 320px, same call
+   `.page__head-row` above makes. */
+.page__meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s-3) var(--s-5);
+  margin-top: var(--s-4);
+}
+
+/* One fact and its controls. The row-level gap above separates facts; this one
+   holds a badge, a qualifier and a button together as a single fact. */
+.page__meta-item {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  flex-wrap: wrap;
+}
+
+/* The revealed confirm cost takes its own line, always. Without it the
+   sentence is just another flex item: at widths where it still fits beside
+   the button it grows the line box, `align-items: center` re-centres the
+   button vertically out from under a stationary pointer, and the
+   `pointerLeave` that fires disarms the control the member armed a moment
+   ago. That is the #112 mechanism.
+   `flex-basis: 100%` costs nothing at rest, because at rest the span is
+   `.visually-hidden` and out of flow.
+   The `>` combinator depends on `ConfirmArmScope` staying a pass-through: it
+   renders no DOM element of its own, so `.confirm-cost` is a genuine direct
+   child of `.page__meta-item` today. If `ConfirmArmScope` ever grows a
+   wrapper element, this selector stops matching and the #112 fix silently
+   goes dark — update it alongside that change. */
+.page__meta-item > .confirm-cost {
+  flex-basis: 100%;
 }
 
 /* --- Section header ----------------------------------------------------- */
@@ -679,15 +729,6 @@ h3.rule-head__label {
   grid-template-columns: 8rem 1fr;
 }
 
-/* The row carrying the page's headline fact. Lays its badge and any qualifier
-   (cryo) on one line rather than relying on a text space between them. */
-.facts__lead {
-  display: flex;
-  align-items: center;
-  gap: var(--s-3);
-  flex-wrap: wrap;
-}
-
 /* The cost sentence's own register, rather than a `.dim` every call site had
    to remember. All four callers passed `className="dim"` and nothing else, so
    the class was not configuration — it was a required argument the type system
@@ -698,19 +739,6 @@ h3.rule-head__label {
 .confirm-cost {
   color: var(--ink-faint);
   font-size: var(--t-caption);
-}
-
-/* The revealed confirm cost takes its own line, always. Without this it is just
-   another flex item: at widths where the sentence still fits beside the button
-   (roughly 641-851px on the Discord row) it grows the line box, and
-   `align-items: center` re-centres the button vertically — out from under a
-   stationary mouse pointer. That fires `pointerLeave`, which disarms the
-   control the member armed a moment ago, and the disarm looks like the app
-   ignoring the click. This is the #112 mechanism; the row is not exempt from it.
-   `flex-basis: 100%` costs nothing at rest, because at rest the span is
-   `.visually-hidden` and out of flow. */
-.facts__lead > .confirm-cost {
-  flex-basis: 100%;
 }
 
 .facts dt {
@@ -1048,6 +1076,22 @@ h3.rule-head__label {
    drop a column, since every column here answers a real admin question. */
 .log--dense th,
 .log--dense td {
+  padding: var(--s-2) var(--s-3);
+}
+
+/* The account manifest's own density. Deliberately NOT `.log--dense`: that
+   class's padding is exactly right, but its rule set also carries
+   `vertical-align: middle` (:965) and a `tr.drawer-row` override (:973) that
+   mean nothing on a table with no drawer, and its comment argues from a
+   ten-column admin table this one is not. Borrowing the class would make a
+   future change to the admin table's density silently change the manifest's.
+
+   The 12px this buys back is worth ~0.2 of a row on its own. It is here
+   because the row is 75px and the fold is 900px, and every 12px compounds
+   against the 159px the page head gives back — see
+   docs/superpowers/specs/2026-08-07-manifest-density-round-2-design.md. */
+.log--manifest th,
+.log--manifest td {
   padding: var(--s-2) var(--s-3);
 }
 
@@ -1594,10 +1638,16 @@ h3.rule-head__label {
    `.stack >` descendant rules — `.stack > .inline-form:has(.field--grow)`
    and `.log td.num > .stack` — don't reach this cell today, since it has no
    `.inline-form` and isn't a `.num` cell; don't assume a future `.stack >`
-   rule applies here without checking.) */
+   rule applies here without checking. The manifest-density-round-2 pass
+   tightens the gap below from `--s-2` to `--s-1`, taking the row from 75px to
+   63px; see that gap's own comment for why.) */
 .char-line {
   display: grid;
-  gap: var(--s-2);
+  /* --s-1, not the --s-2 every other stack uses: at 4px the name and its
+     location still read as two facts rather than one wrapped string, and the
+     manifest renders this gap once per character where other stacks render
+     theirs once per page. */
+  gap: var(--s-1);
   justify-items: start;
 }
 
@@ -1743,10 +1793,10 @@ h3.rule-head__label {
 }
 
 /* The account page's verdict in its loud states, and only there. At --t-label
-   the verdict read quieter than the .tier--lead badge a block below it, which
-   is 14px inside a gold border and fill — so on a degraded account the loudest
-   thing above the fold was the one fact that needs no action. This outranks it
-   on size while spending no extra colour.
+   the verdict read quieter than the .tier--lead badge one line below it in the
+   same page head, which is 14px inside a gold border and fill — so on a
+   degraded account the loudest thing above the fold was the one fact that
+   needs no action. This outranks it on size while spending no extra colour.
 
    Uppercase and the wide tracking come off deliberately: they are legible
    devices at 11px, where they mark a value in a table, but at this size they
@@ -3476,7 +3526,7 @@ h3.rule-head__label {
 }
 
 /* The account page's Discord identity: display name then dimmed @handle, one
-   unit. Its own flex row rather than two more children of `.facts__lead`,
+   unit. Its own flex row rather than two more children of `.page__meta-item`,
    because the two names are one thing and the button beside them is another —
    `--s-2` holds the pair together against the `--s-3` that separates it from
    the control, which is the spacing argument #108 spent two passes on. */

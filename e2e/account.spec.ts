@@ -69,6 +69,58 @@ async function placeCrew(
     .where(inArray(character.id, characterIds));
 }
 
+/** Ten characters, all token-healthy, all contacts-`ok`, all located: the shape
+ *  the density design was measured against, and the only seed whose row heights
+ *  and fold counts mean anything.
+ *
+ *  `contactSyncState` is seeded per character rather than left null on purpose.
+ *  A targeted character with a null result makes `firstSyncPending` true
+ *  (account-health.ts:173-174), which mounts a Notice ABOVE the manifest and
+ *  pushes every row down — a seed that skipped this measured 696px of chrome
+ *  against the 539px a real nominal account renders. */
+async function seedNominalCrew(name = "Pilot Prime") {
+  const acc = await seedMember(db, {
+    name,
+    tier: "member",
+    alts: [
+      "Alt Pilot One",
+      "Alt Pilot Two",
+      "Alt Pilot Three",
+      "Alt Pilot Four",
+      "Alt Pilot Five",
+      "Alt Pilot Six",
+      "Alt Pilot Seven",
+      "Alt Pilot Eight",
+      "Alt Pilot Nine",
+    ],
+  });
+  await markTokensHealthy(acc.id);
+  const crew = await db.select().from(character).where(eq(character.accountId, acc.id));
+  await db
+    .insert(contactSyncState)
+    .values(crew.map((c) => ({ characterId: c.id, lastResult: "ok" as const })));
+  await placeCrew(
+    crew.map((c) => c.id),
+    30000142,
+    "Home Astrahus",
+  );
+  return acc;
+}
+
+/** Faults one named character so it can never classify `ok`, which makes the
+ *  exception-only STATUS column render and leaves an `ok` row's own chip
+ *  assertable. Keyed by name alone: `resetDb` runs before every test, so one
+ *  account's characters are the only ones in the table.
+ *
+ *  The main character stays first in the manifest (account-view.ts orders
+ *  main, then alts by name), so `tbody tr:first-child` is still the ok row. */
+async function faultOneAlt(altName: string) {
+  await db
+    .update(character)
+    .set({ tokenStatus: "invalid" })
+    .where(eq(character.name, altName));
+}
+
 // Every code the callbacks can redirect to /login with, checked by name: a code
 // with no entry in the ERRORS map renders nothing at all, which is the one
 // failure mode this page cannot show the member.
@@ -207,7 +259,7 @@ test("the contacts note describes the column via a table caption, and shows visi
   );
 });
 
-test("unlink is quiet at rest and lands on one vertical with make main", async ({
+test("unlink is quiet at rest and lands on one vertical with the main control", async ({
   page,
   context,
 }) => {
@@ -236,8 +288,12 @@ test("unlink is quiet at rest and lands on one vertical with make main", async (
       .first()
       .evaluate((e) => getComputedStyle(e).color),
     page
-      .getByRole("button", { name: "make main" })
-      .first()
+      // Named per character, like `unlink` beside it: nine buttons all
+      // announcing a bare "main" gives a screen-reader or speech-input member
+      // the word with no object, in the one place they cannot see which row
+      // they are on. The visible "main" is contained in this name, which is
+      // what WCAG 2.5.3 label-in-name requires.
+      .getByRole("button", { name: "make Pilot Alt main" })
       .evaluate((e) => getComputedStyle(e).color),
   ]);
   expect(unlinkColor).toBe(makeMainColor);
@@ -516,7 +572,7 @@ test("a pending member is told their access is awaiting approval", async ({
   await context.addCookies([await sessionCookieFor(db, acc.id)]);
   await page.goto("/account");
 
-  // Scoped to the Standing row's own field rather than a bare page-wide text
+  // Scoped to the meta line's tier field rather than a bare page-wide text
   // match: the word "pending" also appears in the first-sync copy elsewhere on
   // this page, and the claim here is about the tier value specifically. The
   // tier reads as its configured label ("Queued" in the e2e env), which is the
@@ -543,6 +599,24 @@ test("sync schedule is omitted entirely before any character is linked", async (
   await page.goto("/account");
   await expect(page.getByRole("heading", { name: "Your account" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Sync schedule" })).toHaveCount(0);
+});
+
+test("the manifest caption does not claim every character is healthy when there are none", async ({
+  page,
+  context,
+}) => {
+  // The caption's no-STATUS-column sentence is chosen by `showStatusColumn`,
+  // which is a `.some()` over the characters — false for an empty crew as
+  // readily as for a healthy one. Without its own branch the table would tell
+  // a screen-reader user that every character is healthy on an account that
+  // has no characters at all.
+  const [acc] = await db.insert(account).values({ tier: "alumni" }).returning();
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.goto("/account");
+
+  const caption = manifest(page).locator("caption");
+  await expect(caption).toContainText("No characters are linked yet");
+  await expect(caption).not.toContainText("Every character is healthy");
 });
 
 test("unlinking a character that already left the account lands on a styled notice, not the error boundary", async ({
@@ -630,8 +704,17 @@ test("a demoted member sees their payout row with no link to the operation", asy
 test("a healthy character collapses to a single ok chip", async ({ page, context }) => {
   // Alumni: untargeted, so the only way this row could still expand is a bad
   // token — ruled out by markTokensHealthy below.
-  const acc = await seedMember(db, { name: "Healthy Pilot", tier: "alumni" });
+  const acc = await seedMember(db, {
+    name: "Healthy Pilot",
+    tier: "alumni",
+    alts: ["Faulted Alt"],
+  });
   await markTokensHealthy(acc.id);
+  // A companion the column exists for: STATUS renders only when at least one
+  // character is not `ok`, so an all-ok seed would leave this test asserting a
+  // chip that correctly does not exist — and its `.status-line` count of 0
+  // would pass for want of a cell rather than for want of expansion.
+  await faultOneAlt("Faulted Alt");
   await context.addCookies([await sessionCookieFor(db, acc.id)]);
   await page.goto("/account");
   const row = page.locator("table tbody tr").first();
@@ -691,8 +774,17 @@ test("dry_run stays one line and never reads ok", async ({ page, context }) => {
 test("map off alone does not expand a row", async ({ page, context }) => {
   // Alumni and no wanderer_acl_observation row at all: legitimately off the
   // map, and there is nothing this member could do about it from this page.
-  const acc = await seedMember(db, { name: "Grounded Pilot", tier: "alumni" });
+  const acc = await seedMember(db, {
+    name: "Grounded Pilot",
+    tier: "alumni",
+    alts: ["Faulted Alt"],
+  });
   await markTokensHealthy(acc.id);
+  // A companion the column exists for: STATUS renders only when at least one
+  // character is not `ok`, so an all-ok seed would leave this test asserting a
+  // chip that correctly does not exist — and its `.status-line` count of 0
+  // would pass for want of a cell rather than for want of expansion.
+  await faultOneAlt("Faulted Alt");
   await context.addCookies([await sessionCookieFor(db, acc.id)]);
   await page.goto("/account");
   const row = page.locator("table tbody tr").first();
@@ -709,8 +801,17 @@ test("a targeted character with a synced result also collapses to ok", async ({
   page,
   context,
 }) => {
-  const acc = await seedMember(db, { name: "Synced Pilot", tier: "member" });
+  const acc = await seedMember(db, {
+    name: "Synced Pilot",
+    tier: "member",
+    alts: ["Faulted Alt"],
+  });
   await markTokensHealthy(acc.id);
+  // A companion the column exists for: STATUS renders only when at least one
+  // character is not `ok`, so an all-ok seed would leave this test asserting a
+  // chip that correctly does not exist — and its `.status-line` count of 0
+  // would pass for want of a cell rather than for want of expansion.
+  await faultOneAlt("Faulted Alt");
   await db.insert(contactSyncState).values({
     characterId: acc.mainCharacterId!,
     lastResult: "ok",
@@ -732,8 +833,17 @@ test("a targeted character with a synced result also collapses to ok", async ({
 // Density must not be bought from screen-reader users: the collapsed chip's
 // accessible name still carries all three facts.
 test("the collapsed chip names token, standings and map", async ({ page, context }) => {
-  const acc = await seedMember(db, { name: "Nameable Pilot", tier: "alumni" });
+  const acc = await seedMember(db, {
+    name: "Nameable Pilot",
+    tier: "alumni",
+    alts: ["Faulted Alt"],
+  });
   await markTokensHealthy(acc.id);
+  // A companion the column exists for: STATUS renders only when at least one
+  // character is not `ok`, so an all-ok seed would leave this test asserting a
+  // chip that correctly does not exist — and its `.status-line` count of 0
+  // would pass for want of a cell rather than for want of expansion.
+  await faultOneAlt("Faulted Alt");
   await context.addCookies([await sessionCookieFor(db, acc.id)]);
   await page.goto("/account");
   const chip = page.locator("table tbody tr").first().locator("[data-state='ok']");
@@ -791,10 +901,13 @@ const NARROWEST = 320;
 // STATUS/ACTIONS. The plan's documented fallback was taken: `.char-line` is
 // now the same stacked layout `.stack` is, two lines per character.
 //
-// These two tests now assert the fallback's actual shape (two lines, not
-// one) and pin the horizontal measurement that forced the call, so a future
-// change reintroducing the flex row without re-measuring trips a test rather
-// than shipping silently.
+// The one-line prohibition is now guarded by two properties instead of a
+// height band: the pitch ceiling at the end of this file (a flex row is one
+// line, but the horizontal cost is what made it unshippable) and the
+// ten-character horizontal gate below (413px flex vs ~137px stacked). What
+// remains in these two tests is the location text itself — that the seed and
+// the component actually render it — which every geometry test in this file
+// depends on and none of them re-proves.
 //
 // A DOM count of zero `.status-line`s (the assertion style used elsewhere in
 // this file) proves nothing about how many text lines a row wraps to, so
@@ -803,10 +916,7 @@ const NARROWEST = 320;
 // the baseline can't go stale the way a number copied from a deleted scratch
 // spec would.
 
-test("characters with a location render two text lines, not one, and the location text is present", async ({
-  page,
-  context,
-}) => {
+test("characters with a location render the location text", async ({ page, context }) => {
   const acc = await seedMember(db, {
     name: "Main Pilot",
     tier: "alumni",
@@ -839,34 +949,18 @@ test("characters with a location render two text lines, not one, and the locatio
 
   const rows = manifest(page).locator("tbody tr");
   await expect(rows).toHaveCount(11);
-  // Fix 1: prove the seed actually put a location on the ten rows the height
-  // assertion below claims render two lines — a bare height/count check
-  // passes just as well whether or not the location rendered at all.
+  // Fix 1: prove the seed actually put a location on the ten rows this test
+  // claims render it — a bare row/column count passes just as well whether or
+  // not the location text itself rendered.
   const locationTexts = await rows
     .filter({ hasNotText: "AAA No-Location Alt" })
     .locator(".char__location")
     .allTextContents();
   expect(locationTexts).toHaveLength(10);
   for (const t of locationTexts) expect(t).toBe("J30000142 — Home Astrahus");
-
-  const heights = await rowHeights(page, `${MANIFEST} tbody tr`);
-  expect(heights).toHaveLength(11);
-  // Row 0 is main (located, sorts first regardless of name); row 1 is "AAA
-  // No-Location Alt" (the one-line reference, sorts first among alts); rows
-  // 2-10 are the nine remaining located alts.
-  const reference = heights[1];
-  const located = [heights[0], ...heights.slice(2)];
-  // Each line is ~18px at this font (56.5px one line vs 74.3-74.8px two,
-  // measured while deriving SINGLE_LINE_MAX for the original one-line
-  // attempt). >10 rules out "accidentally still one line"; <30 rules out a
-  // three-line regression, with margin either side for platform variance.
-  for (const h of located) {
-    expect(h - reference).toBeGreaterThan(10);
-    expect(h - reference).toBeLessThan(30);
-  }
 });
 
-test("a long structure name renders two lines, not a horizontal blowout, at the narrowest viewport", async ({
+test("a long structure name renders in full at the narrowest viewport", async ({
   page,
   context,
 }) => {
@@ -892,12 +986,6 @@ test("a long structure name renders two lines, not a horizontal blowout, at the 
   await expect(rows.first().locator(".char__location")).toHaveText(
     "J30000144 — Someone's Extremely Long Vanity Keepstar Name",
   );
-
-  const heights = await rowHeights(page, `${MANIFEST} tbody tr`);
-  expect(heights).toHaveLength(2);
-  const [located, reference] = heights;
-  expect(located - reference).toBeGreaterThan(10);
-  expect(located - reference).toBeLessThan(30);
 });
 
 // This is the design's actual gate: the
@@ -914,8 +1002,11 @@ test("a long structure name does not blow out the forced horizontal scroll at 32
   page,
   context,
 }) => {
-  const acc = await seedMember(db, { name: "Vanity Pilot", tier: "alumni" });
-  await markTokensHealthy(acc.id);
+  // A ten-character account, not a single character: the previous seed
+  // measured this gate's threshold at a size no real account has. Placed on
+  // the main alone so the stress case (an unshortened, member-supplied
+  // structure name) still survives against the other nine nominal rows.
+  const acc = await seedNominalCrew("Vanity Pilot");
   await placeCrew(
     [acc.mainCharacterId!],
     30000144,
@@ -936,25 +1027,237 @@ test("a long structure name does not blow out the forced horizontal scroll at 32
   const pinned = await pinGeometry(
     page,
     MANIFEST,
+    // Third cell, which is now ACTIONS: the STATUS column renders only on
+    // exception and this seed is all-ok. The ratio below is a shape check
+    // either way; `maxScrollLeft` is the actual gate.
     "tbody tr:first-child td:nth-child(3)",
     "right",
   );
   // House style (e2e/audit.spec.ts:1124), kept for shape — but this holds
-  // just as true under the flex row (the STATUS cell's width and the
+  // just as true under the flex row (the ACTIONS cell's width and the
   // region's clientWidth are both unaffected by what the name column does),
   // so it is not a second independent check. `maxScrollLeft` below is the
   // actual gate.
-  expect(pinned.cellWidth / pinned.regionWidth).toBeLessThan(0.5);
+  //
+  // 0.6, not 0.5: on a ten-character account the main row's ACTIONS cell
+  // holds a lone `unlink` button (no `main` button on main's own row) at
+  // ~155px against this viewport's ~286px region — 0.54 — where the old
+  // one-character seed never rendered `unlink` at all (`view.characters.length
+  // > 1` gates it) and measured a bare STATUS chip instead. Still comfortably
+  // a minority of the region; 0.6 both holds today and would still catch the
+  // cell growing to dominate the row.
+  expect(pinned.cellWidth / pinned.regionWidth).toBeLessThan(0.6);
   // Rules out "nothing to scroll at all" reading as success (e.g. if the
   // seed silently failed to render a location and the name column shrank
   // enough that nothing forces scroll) — a passing 0 would be exactly as
   // vacuous as the count-only check Fix 1 above replaced.
   expect(pinned.maxScrollLeft).toBeGreaterThan(0);
-  // Measured: the stacked (fallback) layout puts this stress-test name's
-  // forced scroll at ~146px; the flex-row attempt this test replaced
-  // measured 413px for the identical seed (see the CSS comment above
-  // `.char-line`, globals.css:1580). 250 sits
-  // comfortably above the former and well below the latter, so this trips if
-  // the flex row (or something costing the same) comes back.
-  expect(pinned.maxScrollLeft).toBeLessThan(250);
+  // Measured on a ten-character account, which is the size this gate exists
+  // for — the previous 250 was derived from a one-character seed and never
+  // checked at scale. Today's stacked layout measures 258px before this plan
+  // and ~137px after (STATUS column −82, `make main` → `main` −39). 170 sits
+  // above the latter and far below the 413px the reverted flex row cost, so
+  // this trips if the flex row or either removed column comes back.
+  //
+  // Not zero, and it cannot be: the floor is a 64px portrait plus a 196px name
+  // cell plus a bare unlink cell at ~121px = 381px against a 286px region. No
+  // arrangement that keeps a portrait, a name and an unlink fits 320px.
+  expect(pinned.maxScrollLeft).toBeLessThan(170);
 });
+
+// The round-1 failure written as a test. #167's band assertion measured a
+// located row against a no-location row and required the difference to sit in
+// 10-30px — which is a two-line row by definition, so it passed at 75px and
+// would pass at 95px. The pitch is the property that decides how many
+// characters clear the fold, so assert the pitch.
+test("a located manifest row stays inside the 63px density budget", async ({
+  page,
+  context,
+}) => {
+  const acc = await seedNominalCrew();
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.goto("/account");
+
+  // The precondition every row measurement in this file needs: a seed that
+  // silently failed to place a location renders a one-line row, which passes
+  // a height ceiling for exactly the wrong reason.
+  const locations = manifest(page).locator(".char__location");
+  await expect(locations).toHaveCount(10);
+  for (const t of await locations.allTextContents()) {
+    expect(t).toBe("J30000142 — Home Astrahus");
+  }
+
+  const heights = await rowHeights(page, `${MANIFEST} tbody tr`);
+  expect(heights).toHaveLength(10);
+  // 63px budget: padding 8 + name 22 + `.char-line` gap 4 + location 20 +
+  // padding 8 + border 1. 65 leaves margin for platform font variance.
+  for (const h of heights) expect(h).toBeLessThanOrEqual(65);
+});
+
+// The STATUS column reads "ok" on every row of the common account, costing a
+// header, a column and 82px of a 320px viewport to say "nothing here". It
+// renders only when at least one character is not `ok` — an exception column,
+// so its presence is itself the signal.
+test("an all-ok account renders no STATUS column and keeps the per-character facts", async ({
+  page,
+  context,
+}) => {
+  const acc = await seedNominalCrew();
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.goto("/account");
+
+  const head = manifest(page).locator("thead > tr > th");
+  await expect(head).toHaveCount(3);
+  await expect(page.getByRole("columnheader", { name: "Status" })).toHaveCount(0);
+  await expect(manifest(page).locator("[data-state]")).toHaveCount(0);
+
+  // `map on|off` varies per character while the chip reads `ok` either way, so
+  // the cell's accessible name was the only place it lived. Dropping the cell
+  // must not drop the fact: it moves into the NAME cell, visually hidden, at
+  // zero vertical cost.
+  const summaries = manifest(page).locator("[data-status-summary]");
+  await expect(summaries).toHaveCount(10);
+  for (const t of await summaries.allTextContents()) {
+    expect(t).toMatch(/token ok, standings ok, map (on|off)/);
+  }
+});
+
+// The other half of the rule: one faulted character brings the column back for
+// every row, so an `ok` row still says `ok` beside the row that does not.
+//
+// This one is GREEN before the change and green after — it asserts that today's
+// behaviour survives on a mixed account, which is a regression guard, not a TDD
+// step. Its red is proven by mutation in Step 8b instead. Do not try to make it
+// fail first; the honest version of that is the mutation check.
+test("one non-ok character brings the STATUS column back for every row", async ({
+  page,
+  context,
+}) => {
+  const acc = await seedNominalCrew();
+  await db
+    .update(character)
+    .set({ tokenStatus: "invalid" })
+    .where(eq(character.name, "Alt Pilot Nine"));
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.goto("/account");
+
+  await expect(page.getByRole("columnheader", { name: "Status" })).toBeVisible();
+  await expect(manifest(page).locator("[data-state='ok']")).toHaveCount(9);
+  await expect(manifest(page).locator("[data-state='attention']")).toHaveCount(1);
+  // The hidden span is the column's substitute, not its companion: two copies
+  // of the same sentence in one row is what the aria-label already avoids.
+  await expect(manifest(page).locator("[data-status-summary]")).toHaveCount(0);
+});
+
+// `<dt>Tier</dt>` and `<dt>Discord</dt>` were the only thing naming these two
+// values — the tier badge visibly reads "Testers", not "Tier: Testers" — so
+// flattening the definition list deletes a label rather than restyling one.
+// The deleted STANDING heading does not substitute: a heading groups, it does
+// not name a field.
+test("the page head's meta line keeps a programmatic label on each fact", async ({
+  page,
+  context,
+}) => {
+  const acc = await seedMember(db, { name: "Labelled Pilot", tier: "member" });
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.goto("/account");
+
+  const meta = page.locator(".page__meta");
+  await expect(meta).toBeVisible();
+  await expect(meta.locator("[data-field='tier']")).toContainText("Tier");
+  await expect(meta.locator("[data-field='tier']")).toContainText("Testers");
+  await expect(meta).toContainText("Discord");
+
+  // Visually hidden, not absent: the mockup this design was approved from puts
+  // the tokens on one line with no visible label. Measured, not asserted with
+  // toBeHidden() or not.toBeInViewport() — `.visually-hidden` is a 1px clip,
+  // not display:none, so Playwright counts it visible and in-viewport BY
+  // DESIGN, which is exactly what keeps it readable to a screen reader. Same
+  // idiom and same reason as the confirm-cost measurement at :491-498.
+  const labelWidth = (await meta.locator(".visually-hidden").first().boundingBox())
+    ?.width;
+  expect(labelWidth ?? 0).toBeLessThanOrEqual(1);
+
+  // The block this replaces is gone, not merely restyled.
+  await expect(page.getByRole("heading", { name: "Standing" })).toHaveCount(0);
+});
+
+// #112, as geometry. Arming reveals the cost sentence; if that sentence lands
+// as another flex item on the same line rather than taking its own, it grows
+// the line box, `align-items: center` re-centres the button, and the button
+// slides out from under a pointer that never moved — firing pointerLeave,
+// which disarms the control the member just armed.
+//
+// ~700px on purpose: wide enough that the sentence would still FIT beside the
+// button, which is the only band where the bug can happen. At 390px it wraps
+// anyway and the test would pass with the CSS rule deleted.
+test("arming the Discord unlink does not move it out from under the pointer", async ({
+  page,
+  context,
+}) => {
+  const acc = await seedMember(db, { name: "Linked Pilot", tier: "member" });
+  await db.insert(discordLink).values({
+    accountId: acc.id,
+    discordUserId: "duid-112-geometry",
+  });
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.setViewportSize({ width: 700, height: 900 });
+  await page.goto("/account");
+
+  const unlink = page.getByRole("button", { name: "unlink Discord", exact: true });
+  const rest = await unlink.boundingBox();
+  await unlink.click();
+
+  const confirm = page.getByRole("button", {
+    name: "confirm unlink Discord",
+    exact: true,
+  });
+  await expect(confirm).toBeVisible();
+  const armed = await confirm.boundingBox();
+  expect(armed?.y).toBe(rest?.y);
+});
+
+// The success criterion, written as an assertion. Round 1 shipped a change
+// that collapsed a cell from three lines to one and moved this number by
+// zero, because the metric it was measured against was lines per cell. This
+// is the number that matters: how many characters a member can see without
+// scrolling.
+//
+// All three viewports, not just the desktop one. 390x844 is the weakest
+// target — its site header is 173px against 61px, and the meta line may wrap
+// there — which is the reason to gate it, not a reason to skip it.
+const FOLD_TARGETS = [
+  { width: 1440, height: 900, expected: 8 },
+  { width: 1280, height: 800, expected: 6 },
+  { width: 390, height: 844, expected: 4 },
+];
+
+for (const { width, height, expected } of FOLD_TARGETS) {
+  test(`at least ${expected} characters clear the fold at ${width}x${height}`, async ({
+    page,
+    context,
+  }) => {
+    const acc = await seedNominalCrew();
+    await context.addCookies([await sessionCookieFor(db, acc.id)]);
+    await page.setViewportSize({ width, height });
+    await page.goto("/account");
+
+    // The precondition, again: an unlocated row is 24px shorter, so a broken
+    // seed makes this test pass for the wrong reason — the exact way #167's
+    // band assertion passed.
+    await expect(manifest(page).locator(".char__location")).toHaveCount(10);
+
+    const visible = await page.evaluate(
+      // Counted from `getBoundingClientRect().bottom` rather than with
+      // `toBeInViewport`: that matcher reports any non-zero intersection, so a
+      // row with one pixel showing under the fold would count as visible. The
+      // criterion is a row a member can actually read.
+      ({ sel, h }) =>
+        Array.from(document.querySelectorAll(sel)).filter(
+          (r) => r.getBoundingClientRect().bottom <= h,
+        ).length,
+      { sel: `${MANIFEST} tbody tr`, h: height },
+    );
+    expect(visible).toBeGreaterThanOrEqual(expected);
+  });
+}
