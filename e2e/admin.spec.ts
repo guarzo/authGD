@@ -1,6 +1,11 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { eq } from "drizzle-orm";
-import { account, discordLink } from "../src/db/schema";
+import { eq, inArray } from "drizzle-orm";
+import {
+  account,
+  character,
+  discordLink,
+  wandererAclObservation,
+} from "../src/db/schema";
 import { clearOfPin, coveredByPin, pinGeometry } from "./geometry";
 import { BASE_URL } from "./env";
 import { resetDb, seedMember, sessionCookieFor, testDb } from "./helpers";
@@ -2637,4 +2642,111 @@ test("the pending-queue link is a standalone-grade target, not a bare line of te
 
   expect(Math.round(chipBox!.height)).toBe(36);
   expect(Math.round(linkBox!.height)).toBe(Math.round(chipBox!.height));
+});
+
+/*
+ * The Map column (`account-view.ts`'s `mapStatus`, rendered in
+ * `admin/accounts/page.tsx`). It had no e2e at all: unit tests cover the
+ * desired/observed arithmetic, but nothing proved the four render branches
+ * are reachable, or that the two regressions the column was rebuilt to fix
+ * stay fixed.
+ *
+ * All five accounts are asserted from one page load. The column is a
+ * comparison between accounts as much as a value per account — "which rows
+ * need attention" is read by scanning it — and five separate page loads
+ * would each prove a branch while proving nothing about the scan.
+ */
+
+/** The 7th column: SORTS (Name, Tier, Cryo, Tier changed) then Tokens, Discord, Map. */
+const MAP_CELL = 6;
+
+/** `wandererAclObservation` is keyed by character id, and `seedMember` returns
+ *  only the account — so the characters are looked up by name after the fact. */
+async function observeCharacters(names: string[]) {
+  const rows = await db
+    .select({ id: character.id })
+    .from(character)
+    .where(inArray(character.name, names));
+  expect(rows).toHaveLength(names.length);
+  await db.insert(wandererAclObservation).values(
+    rows.map((c) => ({
+      characterId: c.id,
+      role: "member",
+      observedAt: new Date("2026-08-01T00:00:00Z"),
+    })),
+  );
+}
+
+test("the Map column separates a healthy account from every way it can drift", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
+
+  // Every character on the ACL, and every character that should be.
+  await seedMember(db, { name: "Ok Member", tier: "member", alts: ["Ok Alt"] });
+  // Two alts never added to the ACL: the ordinary "there is work to do" case.
+  await seedMember(db, {
+    name: "Partial Member",
+    tier: "member",
+    alts: ["Partial Alt One", "Partial Alt Two"],
+  });
+  // The costly direction, and the one the old `mapCount` reported as healthy:
+  // an alumni account still sitting on the ACL after it stopped being a member.
+  await seedMember(db, { name: "Stale Alum", tier: "alumni" });
+  await seedMember(db, { name: "Clean Alum", tier: "alumni" });
+  // The regression the `affiliationInvalid` filter fixed: a biomassed alt is
+  // not a contacts target, so it must not hold the account amber forever with
+  // nothing an admin could do about it.
+  await seedMember(db, {
+    name: "Biomassed Member",
+    tier: "member",
+    alts: ["Biomassed Alt"],
+  });
+  await db
+    .update(character)
+    .set({ affiliationInvalid: true })
+    .where(eq(character.name, "Biomassed Alt"));
+
+  await observeCharacters([
+    "Ok Member",
+    "Ok Alt",
+    "Partial Member",
+    "Stale Alum",
+    "Biomassed Member",
+  ]);
+
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.goto("/admin/accounts");
+
+  // Self-check on the index: a column inserted to the left of Map would
+  // otherwise turn every assertion below into a silent test of the wrong cell.
+  await expect(page.locator(".log--dense > thead th").nth(MAP_CELL)).toHaveText("Map");
+
+  const mapCell = (name: string) => rowFor(page, name).locator("td").nth(MAP_CELL);
+
+  await expect(mapCell("Ok Member")).toHaveText("2/2");
+  await expect(mapCell("Ok Member").locator("span")).toHaveClass(/st--ok/);
+
+  await expect(mapCell("Partial Member")).toHaveText("1/3");
+  await expect(mapCell("Partial Member").locator("span")).toHaveClass(/st--warn/);
+
+  await expect(mapCell("Stale Alum")).toHaveText("1 extra");
+  await expect(mapCell("Stale Alum").locator("span")).toHaveClass(/st--warn/);
+
+  await expect(mapCell("Clean Alum")).toHaveText("off");
+  await expect(mapCell("Clean Alum").locator("span")).toHaveClass(/st--off/);
+
+  await expect(mapCell("Biomassed Member")).toHaveText("1/1");
+  await expect(mapCell("Biomassed Member").locator("span")).toHaveClass(/st--ok/);
+
+  // Neither drift is destructive, and DESIGN.md reserves `--signal-bad` for
+  // acts that destroy something. Asserted rather than assumed: `bad` is the
+  // reflex tone for "something is wrong", and this column is exactly where
+  // that reflex would land. Scoped to the Map cells — the Tokens column two
+  // over does render `bad`, legitimately, and a table-wide count would be
+  // asserting on that instead.
+  await expect(
+    page.locator(`${ROWS} > td:nth-child(${MAP_CELL + 1}) .st--bad`),
+  ).toHaveCount(0);
 });

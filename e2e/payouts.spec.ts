@@ -2843,3 +2843,126 @@ test("deleting the only pool returns focus to the Loot heading", async ({
     "Removed pool 1. 0 pools remain.",
   );
 });
+
+/*
+ * The `?unresolved=` report (`payouts/unresolved.ts`, `new/unresolved-roster.ts`).
+ * Both halves have unit tests, but nothing until now proved the two ends are
+ * actually wired to each other: the composer builds a payload, redirects, and
+ * the detail page decodes it on arrival. A test that encodes the param itself
+ * and navigates to it would pass with the composer wired to nothing.
+ *
+ * `ClearStaleQuery` is why the param survives long enough to assert on — it
+ * clears `?unresolved=` on the NEXT submit, not on mount; see its docblock.
+ *
+ * The curly apostrophe is the page's own (`didn&rsquo;t`), not a typo.
+ */
+const UNRESOLVED_NOTICE = "didn’t match a linked character";
+
+test("a paste with names no character matches reports them on arrival", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "Report FC",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+
+  await page.goto("/payouts/new");
+  await page.getByLabel("Name").fill("Typo roam");
+  await page.getByLabel("Date").fill("2026-08-01");
+  await page.getByLabel("Roster paste").fill("Report FC / Wrogn Speling / Anothr Typo");
+  await page.getByRole("button", { name: "Create operation" }).click();
+
+  await expect(page).toHaveURL(/\?unresolved=/);
+  const notice = page.locator("p.notice--warn", { hasText: UNRESOLVED_NOTICE });
+  await expect(notice).toContainText("2 roster names didn’t match a linked character");
+  // Asserted separately rather than as one "a, b" string: the sample's order
+  // is not a promise the report makes, only its membership.
+  await expect(notice).toContainText("Wrogn Speling");
+  await expect(notice).toContainText("Anothr Typo");
+  // The operator's own linked character resolved, so it is not in the report —
+  // a report that named every pasted line would say nothing.
+  await expect(notice).not.toContainText("Report FC");
+
+  // The unresolved rows are still on the roster drawing a share. The report is
+  // a warning about them, not a rejection of them.
+  await expect(page.getByRole("row").filter({ hasText: "Wrogn Speling" })).toBeVisible();
+});
+
+test("a single unresolved name is reported in the singular", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "Solo Report FC",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+
+  await page.goto("/payouts/new");
+  await page.getByLabel("Name").fill("One typo roam");
+  await page.getByLabel("Date").fill("2026-08-01");
+  await page.getByLabel("Roster paste").fill("Solo Report FC / Lone Typo");
+  await page.getByRole("button", { name: "Create operation" }).click();
+
+  await expect(
+    page.locator("p.notice--warn", { hasText: UNRESOLVED_NOTICE }),
+  ).toContainText("1 roster name didn’t match a linked character");
+});
+
+test("an unresolved report past the sample cap counts the remainder", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "Cap FC",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+
+  // 25 against DROPPED_SAMPLE_LIMIT = 20. Zero-padded so no name is a
+  // substring of another — "Ghost 2" would match "Ghost 20" below.
+  const ghosts = Array.from(
+    { length: 25 },
+    (_, i) => `Ghost ${String(i + 1).padStart(2, "0")}`,
+  );
+  await page.goto("/payouts/new");
+  await page.getByLabel("Name").fill("Ghost fleet");
+  await page.getByLabel("Date").fill("2026-08-01");
+  await page.getByLabel("Roster paste").fill(ghosts.join(" / "));
+  await page.getByRole("button", { name: "Create operation" }).click();
+
+  const notice = page.locator("p.notice--warn", { hasText: UNRESOLVED_NOTICE });
+  // The total is exact even though the sample is capped: it is what the
+  // operator decides on, and "20 or so" would not support a re-paste.
+  await expect(notice).toContainText("25 roster names didn’t match a linked character");
+  await expect(notice).toContainText("Ghost 20");
+  await expect(notice).not.toContainText("Ghost 21");
+  await expect(notice).toContainText("…and 5 more.");
+});
+
+test("a hand-typed unresolved param renders the plain page", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "Garbage Reader",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+  const opId = await seedDraft(db, operator.id, { names: ["Ada Plain"] });
+
+  await page.goto(`/payouts/${opId}?unresolved=not-base64url-json`);
+
+  // Degrades to the plain page, never to an empty or half-filled notice —
+  // `decodeUnresolved` returns null and the notice never renders.
+  await expect(page.getByRole("heading", { name: "Draft run" })).toBeVisible();
+  await expect(
+    page.locator("p.notice--warn", { hasText: UNRESOLVED_NOTICE }),
+  ).toHaveCount(0);
+});
