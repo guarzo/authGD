@@ -1463,10 +1463,15 @@ test("arming the Discord unlink does not move it out from under the pointer", as
 // All three viewports, not just the desktop one. 390x844 is the weakest
 // target — its site header is 173px against 61px, and the meta line may wrap
 // there — which is the reason to gate it, not a reason to skip it.
+//
+// Measured with `document.fonts.ready` awaited (see below): 8 / 6 / 5 across
+// three repeats at each viewport, with no run-to-run variance observed. 5,
+// not 4, at 390x844 — the previous floor predates the fonts wait and was
+// slack, passing on a number this gate never actually produced.
 const FOLD_TARGETS = [
   { width: 1440, height: 900, expected: 8 },
   { width: 1280, height: 800, expected: 6 },
-  { width: 390, height: 844, expected: 4 },
+  { width: 390, height: 844, expected: 5 },
 ];
 
 for (const { width, height, expected } of FOLD_TARGETS) {
@@ -1478,6 +1483,12 @@ for (const { width, height, expected } of FOLD_TARGETS) {
     await context.addCookies([await sessionCookieFor(db, acc.id)]);
     await page.setViewportSize({ width, height });
     await page.goto("/account");
+    // The page loads Archivo and IBM Plex Mono through next/font
+    // (src/app/layout.tsx); a fallback-metrics measurement before they finish
+    // swapping in is a different layout than the one under test, and the row
+    // height this gate counts against the fold is exactly what a font swap
+    // moves. The faulted fold test below waits on this for the same reason.
+    await page.evaluate(() => document.fonts.ready);
 
     // The precondition, again: an unlocated row is 24px shorter, so a broken
     // seed makes this test pass for the wrong reason — the exact way #167's
