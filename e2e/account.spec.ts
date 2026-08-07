@@ -1467,3 +1467,59 @@ for (const { width, height, expected } of FOLD_TARGETS) {
     expect(visible).toBeGreaterThanOrEqual(expected);
   });
 }
+
+test("a healthy account states its character count in a green chip", async ({
+  page,
+  context,
+}) => {
+  const acc = await seedNominalCrew();
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.goto("/account");
+
+  // Tone and copy are one decision, so assert both. `.st--ok` is what makes
+  // this read as a status rather than as the body prose beside it — the whole
+  // complaint against the word `nominal` it replaces.
+  const verdict = page.locator("p.verdict .st");
+  await expect(verdict).toHaveText("10 characters — all healthy");
+  await expect(verdict).toHaveClass(/st--ok/);
+});
+
+test("a healthy one-character account says character, singular", async ({
+  page,
+  context,
+}) => {
+  const acc = await seedMember(db, { name: "Solo Pilot", tier: "member" });
+  await markTokensHealthy(acc.id);
+  // Token health alone is not account health. A `member`-tier character is a
+  // contacts target (`src/services/desired.ts:20`), and `seedMember` writes no
+  // `contactSyncState` row at all, so its result reads back as null
+  // (`src/services/account-view.ts:307`) and `firstSyncPending` goes true
+  // (`src/core/account-health.ts:172-174`). That branch renders
+  // `first sync pending` at `page.tsx:262` — one branch ABOVE the healthy one
+  // this task rewrites — so without this insert the test is red no matter what
+  // Step 3 does. `seedNominalCrew`'s docblock (`e2e/account.spec.ts:74-79`)
+  // seeds contacts for exactly this reason; this is the one-character case of
+  // the same requirement.
+  const [solo] = await db.select().from(character).where(eq(character.accountId, acc.id));
+  await db.insert(contactSyncState).values({ characterId: solo.id, lastResult: "ok" });
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.goto("/account");
+
+  await expect(page.locator("p.verdict .st")).toHaveText("1 character — healthy");
+});
+
+test("an account with no characters renders no verdict at all", async ({
+  page,
+  context,
+}) => {
+  const acc = await seedMember(db, { name: "Departing Pilot", tier: "member" });
+  await db.update(account).set({ mainCharacterId: null }).where(eq(account.id, acc.id));
+  await db.delete(character).where(eq(character.accountId, acc.id));
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.goto("/account");
+
+  // Not "renders something quieter" — nothing. The empty state inside the
+  // manifest is what speaks here.
+  await expect(page.locator("p.verdict")).toHaveCount(0);
+  await expect(page.locator(".log__empty")).toHaveCount(1);
+});

@@ -314,8 +314,22 @@ export default async function AccountPage({
                   <Status tone="off">first sync pending</Status>
                 </p>
               ) : (
+                // A green chip, not `--ink` body text reading `nominal`. Three
+                // faults in one line: it was the same colour as the
+                // descriptive prose beside it so it read as a sentence
+                // fragment rather than a status; `nominal` carries no context
+                // standing alone; and it stated account health in the same
+                // breath a per-row `ok` chip would have. Saying the count here
+                // is what lets the STATUS column stay exception-only — this is
+                // the one place the healthy case is reported, so it says the
+                // thing outright. No `title` tooltip: touch devices have no
+                // hover and `title` is unreliably announced.
                 <p className="verdict">
-                  <Status>nominal</Status>
+                  <Status tone="ok">
+                    {view.characters.length === 1
+                      ? "1 character — healthy"
+                      : `${view.characters.length} characters — all healthy`}
+                  </Status>
                 </p>
               ))}
           </div>
