@@ -6,13 +6,17 @@ import {
 } from "@/core/contact-label";
 
 /**
- * Split in two so the account page can put the status token in the CONTACTS
- * cell and the explanatory prose below the table entirely: at 320px the table
- * lives in a horizontally-scrolling Scroller, and prose inside a cell drove
- * row height to ~340px while staying unreachable off-screen. `ContactState`
- * is the token; `ContactRemedy` is everything a member would need to read to
- * fix (or stop worrying about) that state. Neither renders anything for "ok",
- * "not yet run", or a non-target character — there is nothing to explain.
+ * Split in two so the account page can put the status token in the STATUS cell
+ * and the explanatory prose in a sub-row spanning the whole table: at 320px
+ * the table lives in a horizontally-scrolling Scroller, and prose inside a
+ * *cell* drove row height to ~340px while staying unreachable off-screen. A
+ * spanning `tr.drawer-row` is the shape that measurement points at — it is not
+ * in the narrow column, so its height is flat across viewports — which is why
+ * the split survives even though the prose is back inside the table.
+ * `ContactState` is the token; `ContactRemedy` is everything a member would
+ * need to read to fix (or stop worrying about) that state. Neither renders
+ * anything for "ok", "not yet run", or a non-target character — there is
+ * nothing to explain.
  *
  * "ok" and the label states get bespoke treatment. The remaining codes split
  * three ways: `token_invalid`/`missing_scope`/`needs_reauth` are the member's

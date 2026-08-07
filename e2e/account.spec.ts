@@ -151,7 +151,11 @@ async function faultOneAlt(accountId: string, altName: string) {
  *  out of the DOM entirely — which is the healthy layout, passing a width
  *  budget for the one reason the budget exists to rule out. Account-scoped for
  *  the reason given on `faultOneAlt`; without it the count would also be
- *  satisfiable by two half-matches across two accounts. */
+ *  satisfiable by two half-matches across two accounts.
+ *
+ *  Separate from `faultOneAlt`, which faults the *token*: the two reach
+ *  `attention` by different routes and only this one satisfies
+ *  `hasContactRemedy`, so only this one gives a row remedy prose to render. */
 async function faultContacts(
   accountId: string,
   names: string[],
@@ -790,7 +794,11 @@ test("a member-fixable result expands only its own row", async ({ page, context 
   });
   await context.addCookies([await sessionCookieFor(db, acc.id)]);
   await page.goto("/account");
-  const rows = page.locator("table tbody tr");
+  // `:not(.drawer-row)` because a faulted character now renders a second `<tr>`
+  // holding its remedy. Scoped rather than counted up to 3: the pin below only
+  // works if this counts character rows, and a bare 3 would pass whether or not
+  // it did.
+  const rows = page.locator("table tbody tr:not(.drawer-row)");
   // Pinned so the two filtered assertions below can't both pass by matching
   // zero rows — `hasNotText` counting 0 `.status-line` proves nothing if the
   // filter itself matched nothing.
@@ -1549,3 +1557,116 @@ test("the crew manifest is wider than the page's prose measure", async ({
   expect(widths.manifest).toBeGreaterThan(widths.lede);
   expect(widths.manifest).toBeGreaterThan(960);
 });
+
+test("a faulted character's remedy renders in a sub-row under that character", async ({
+  page,
+  context,
+}) => {
+  const acc = await seedNominalCrew();
+  await faultContacts(acc.id, ["Alt Pilot One"], "missing_label");
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.goto("/account");
+
+  const subRows = manifest(page).locator("tbody tr.drawer-row");
+  await expect(subRows).toHaveCount(1);
+
+  // Adjacency is the whole point of the change: a note that renders anywhere
+  // else on the page is the layout this replaced. Assert the DOM relationship,
+  // not merely that the text exists somewhere.
+  const owner = manifest(page).locator("tbody tr:not(.drawer-row)", {
+    hasText: "Alt Pilot One",
+  });
+  const followsOwner = await page.evaluate(() => {
+    const sub = document.querySelector("tr.drawer-row") as HTMLElement;
+    const prev = sub.previousElementSibling as HTMLElement;
+    return prev.textContent?.includes("Alt Pilot One") ?? false;
+  });
+  expect(followsOwner).toBe(true);
+  await expect(owner).toHaveCount(1);
+
+  // Spans the whole table, which is what keeps its height from wrapping
+  // against one narrow column — the property the in-cell alternative did not
+  // have.
+  await expect(subRows.locator("td")).toHaveAttribute("colspan", "4");
+
+  // The footnote copy is gone, not merely duplicated. Scoped to the remedy's
+  // own id rather than to `.table-notes` as a whole: that container survives
+  // for the "make main" consequence notes, which did not move.
+  await expect(page.locator('.table-notes [id^="contact-remedy-"]')).toHaveCount(0);
+  await expect(page.locator('[id^="contact-remedy-"]')).toHaveCount(1);
+});
+
+test("a faulted character's status cell is still described by its remedy", async ({
+  page,
+  context,
+}) => {
+  const acc = await seedNominalCrew();
+  await faultContacts(acc.id, ["Alt Pilot One"], "missing_label");
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.goto("/account");
+
+  // The reference and its target are gated on the same `hasContactRemedy`
+  // predicate, so this proves the gate did not drift apart when the target
+  // moved rows.
+  const cell = manifest(page).locator("td[data-state='attention']");
+  const describedBy = await cell.getAttribute("aria-describedby");
+  expect(describedBy).toBeTruthy();
+  await expect(page.locator(`#${describedBy}`)).toHaveCount(1);
+  await expect(page.locator(`#${describedBy}`)).toContainText("label");
+});
+
+test("a stalled character gets a sub-row too", async ({ page, context }) => {
+  const acc = await seedNominalCrew();
+  // `sync_failed` is stalled, not attention: it retries on its own and is not
+  // the member's to fix. It still expands a row now — silence about standings
+  // sitting stale reads as health, which is the rationale this change
+  // supersedes in `classifyCharacter`'s docblock.
+  await faultContacts(acc.id, ["Alt Pilot Two"], "sync_failed");
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.goto("/account");
+
+  await expect(manifest(page).locator("tbody tr.drawer-row")).toHaveCount(1);
+});
+
+// The fold cost of Decision 4, pinned so it cannot drift further. The block
+// this replaced sat after the table and could not displace a row, so moving
+// the prose inside the table is a deliberate regression on this metric — one
+// row at every viewport. Pinned as a floor, not an equality: a future change
+// that gets a row back should not have to edit this number.
+const FAULTED_FOLD_TARGETS = [
+  { width: 1440, height: 900, expected: 6 },
+  { width: 1280, height: 800, expected: 5 },
+  { width: 390, height: 844, expected: 4 },
+];
+
+for (const { width, height, expected } of FAULTED_FOLD_TARGETS) {
+  test(`at least ${expected} characters clear the fold at ${width}x${height} with two faults`, async ({
+    page,
+    context,
+  }) => {
+    const acc = await seedNominalCrew();
+    // `faultContacts`, not `faultOneAlt`: this test measures the fold with
+    // sub-rows present, and only a contacts fault renders one. Seeded with
+    // `faultOneAlt` the page would render ten plain rows and "confirm" fold
+    // targets that describe the layout this task replaces.
+    await faultContacts(acc.id, ["Alt Pilot One", "Alt Pilot Two"], "missing_label");
+    await context.addCookies([await sessionCookieFor(db, acc.id)]);
+    await page.setViewportSize({ width, height });
+    await page.goto("/account");
+
+    // The precondition every row measurement in this file needs: an unlocated
+    // row is 24px shorter, so a broken seed makes this pass for the wrong
+    // reason — the exact way #167's band assertion passed.
+    await expect(manifest(page).locator(".char__location")).toHaveCount(10);
+    await expect(manifest(page).locator("tbody tr.drawer-row")).toHaveCount(2);
+
+    const visible = await page.evaluate(
+      ({ sel, h }) =>
+        Array.from(document.querySelectorAll(sel)).filter(
+          (r) => r.getBoundingClientRect().bottom <= h,
+        ).length,
+      { sel: `${MANIFEST} tbody tr:not(.drawer-row)`, h: height },
+    );
+    expect(visible).toBeGreaterThanOrEqual(expected);
+  });
+}

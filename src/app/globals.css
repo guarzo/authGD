@@ -3717,7 +3717,10 @@ h3.rule-head__label {
    caption position needs no top margin, so a .table-note following a table's
    last row butts straight against the border; this restores the gap without
    changing the caption case. The last note's own bottom margin is dropped so
-   the group spaces against what follows it, not doubly. */
+   the group spaces against what follows it, not doubly.
+
+   One consumer left: the "make main" consequence notes. The remediation prose
+   that was the other moved into a spanning sub-row inside the table. */
 .table-notes {
   margin-top: var(--s-4);
 }
