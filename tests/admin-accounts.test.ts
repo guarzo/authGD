@@ -36,7 +36,7 @@ describe("setTierManual", () => {
     const r = await ctx.db.transaction((tx) =>
       setTierManual(tx, admin.id, target.id, "associate"),
     );
-    expect(r).toEqual({ ok: true });
+    expect(r).toEqual({ ok: true, tierLocked: true });
     const after = await getAcc(target.id);
     expect(after.tier).toBe("associate");
     expect(after.tierLocked).toBe(true);
@@ -53,19 +53,43 @@ describe("setTierManual", () => {
     expect(await outboxRows()).toHaveLength(1);
   });
 
-  it("locking at the SAME tier is still a change (alumni → locked alumni)", async () => {
+  // Sweep item #1. Pressing the tier an account already holds, while it is
+  // still UNLOCKED, is the pin: it stops the membership job from moving the
+  // account later, which is the whole reason `tierLocked` exists. Admins reach
+  // for it at exactly the moment the account already reads `member` — before
+  // someone leaves the alliance — so this press must keep working in one
+  // press. What made it a hazard was that it was indistinguishable from an
+  // accidental press, and that is fixed on the surface (the chip arms first,
+  // page.tsx) rather than here by removing the capability.
+  it("pressing the tier already held on an UNLOCKED account pins it (locks, audits, syncs)", async () => {
     const admin = await seedAdmin();
-    const target = await seedAccount(ctx.db, { tier: "alumni" });
-    await ctx.db.transaction((tx) => setTierManual(tx, admin.id, target.id, "alumni"));
+    const target = await seedAccount(ctx.db, { tier: "alumni", tierLocked: false });
+    const r = await ctx.db.transaction((tx) =>
+      setTierManual(tx, admin.id, target.id, "alumni"),
+    );
+    // `r.tierLocked` is what `setTierAction` reads to keep the confirmation
+    // honest (view.ts): this press really did lock the account.
+    expect(r).toEqual({ ok: true, tierLocked: true });
     const after = await getAcc(target.id);
+    expect(after.tier).toBe("alumni");
     expect(after.tierLocked).toBe(true);
+    expect(after.tierChangedBy).toBe(admin.id);
+    // One audit row and one sync, naming the tier as unchanged — the record an
+    // admin later reads on /admin/audit says "pinned at alumni", not a
+    // demotion to some other tier and back.
+    const audit = await lastAudit();
+    expect(audit.action).toBe("tier.changed");
+    expect(audit.details).toMatchObject({ from: "alumni", to: "alumni", locked: true });
     expect(await outboxRows()).toHaveLength(1);
   });
 
   it("is a no-op when already locked at that tier", async () => {
     const admin = await seedAdmin();
     const target = await seedAccount(ctx.db, { tier: "associate", tierLocked: true });
-    await ctx.db.transaction((tx) => setTierManual(tx, admin.id, target.id, "associate"));
+    const r = await ctx.db.transaction((tx) =>
+      setTierManual(tx, admin.id, target.id, "associate"),
+    );
+    expect(r).toEqual({ ok: true, tierLocked: true });
     expect(await outboxRows()).toHaveLength(0);
     expect(await lastAudit()).toBeUndefined();
   });

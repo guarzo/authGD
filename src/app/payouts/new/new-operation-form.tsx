@@ -1,10 +1,14 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useActionState, useEffect, useState } from "react";
 import { Notice, RuleHead } from "@/app/_components/ui";
 import { Submit } from "@/app/_components/submit";
 import { createOperationAction, type CreateOperationState } from "../actions";
 import { NEW_OPERATION_ERRORS, lookupErrorMessage } from "../errors";
+
+/** The `Notice` this form moves focus to on a rejection — see the effect
+ *  below. */
+const ERROR_NOTICE_ID = "new-operation-error";
 
 /**
  * One screen, one submit: name, date, an optional battle report link, an
@@ -19,7 +23,10 @@ import { NEW_OPERATION_ERRORS, lookupErrorMessage } from "../errors";
  * rejection rather than redirecting through a `?error=` query string — a
  * redirect can only carry a fixed code, and losing the redirect is what keeps
  * this component mounted with both textareas exactly as the operator left
- * them.
+ * them. A success always redirects, whether or not the roster paste left a
+ * name unresolved — see `CreateOperationState`'s own doc for where that
+ * report goes instead (`/payouts/[id]`'s own `?unresolved=` notice, the
+ * roster twin of that page's `?dropped=` one).
  *
  * Every field is controlled (`useState`, not `defaultValue`) rather than
  * left to the DOM: React DOM's `<form action>` integration resets a form's
@@ -38,6 +45,19 @@ import { NEW_OPERATION_ERRORS, lookupErrorMessage } from "../errors";
  * at all, since it lives beside `/payouts/[id]`, but the attribute costs
  * nothing and keeps this form consistent with every other one that redirects
  * on success.
+ *
+ * The rejection `Notice`, mounted unconditionally rather than behind `&&`,
+ * for the reason the primitive's own doc gives — a region has to exist
+ * before the text that fills it, or AT meets a node born already holding a
+ * message rather than a change to announce. It carries an `id` and is
+ * focused when it gains content: a rejection is answered by staying on this
+ * page rather than navigating, and without an explicit focus move the
+ * operator is left standing at the Submit button roughly 1000px below where
+ * the notice renders (item 10, this pass's design sweep). `state` is the
+ * effect's dependency rather than a derived boolean because `useActionState`
+ * hands back a brand-new object on every submit regardless of whether the
+ * code repeats — the same distinction `InlineEdit` (`../[id]/inline-edit.tsx`)
+ * draws for its own per-field rejection.
  */
 export function NewOperationForm({ today }: { today: string }) {
   const [state, formAction] = useActionState<CreateOperationState, FormData>(
@@ -50,12 +70,16 @@ export function NewOperationForm({ today }: { today: string }) {
   const [lootPaste, setLootPaste] = useState("");
   const [rosterPaste, setRosterPaste] = useState("");
 
+  useEffect(() => {
+    if (state && !state.ok) document.getElementById(ERROR_NOTICE_ID)?.focus();
+  }, [state]);
+
   return (
     <form action={formAction} className="form-stack" data-navigates>
       {/* Mounted unconditionally, not behind `&&`: the reserved slot registers
           the live region before the text arrives, so AT announces a change to
           it rather than a region born holding its own message. */}
-      <Notice tone="bad">
+      <Notice tone="bad" id={ERROR_NOTICE_ID}>
         {state && !state.ok ? lookupErrorMessage(NEW_OPERATION_ERRORS, state.code) : null}
       </Notice>
 

@@ -197,7 +197,10 @@ test("account page shows characters, main marker, and tier", async ({
   await expect(page.getByRole("heading", { name: "Your account" })).toBeVisible();
   await expect(page.getByText("Pilot Prime")).toBeVisible();
   await expect(page.getByText("(main)")).toBeVisible();
-  await expect(page.getByText("Pilot Alt")).toBeVisible();
+  // Exact: the character also appears as the `<strong>{name}:</strong>` prefix
+  // on a set-as-main note when one is due for it (account/page.tsx), so a
+  // substring match here is ambiguous about which element it found.
+  await expect(page.getByText("Pilot Alt", { exact: true })).toBeVisible();
   // STANDINGS_LABEL is "authgd" in the e2e env, which the page echoes.
   await expect(page.locator("[data-field='tier']")).toContainText("Testers");
 });

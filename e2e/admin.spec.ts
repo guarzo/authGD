@@ -468,6 +468,9 @@ test("tier controls: manual set locks; return-to-auto unlocks", async ({
   const zedDrawer = drawerOf(zedRow);
   await toggleOf(zedRow).click();
   await zedDrawer.getByRole("button", { name: "Set Zed to Friends" }).click();
+  // Two presses, not one: every tier chip arms first now (backlog item 1), so
+  // an accidental brush of a chip can no longer lock the account.
+  await zedDrawer.getByRole("button", { name: "confirm set Zed to Friends" }).click();
   // The lock mark is a CSS ::after (see ui.tsx/globals.css), not text, so it's
   // asserted via the element it's drawn on rather than getByText.
   await expect(zedRow.locator(".tier__lock")).toBeVisible();
@@ -516,7 +519,17 @@ test("pressing the already-selected tier says it pinned the account", async ({
   const already = zedDrawer.getByRole("button", { name: "Set Zed to Testers" });
   await expect(already).toHaveAttribute("aria-pressed", "true");
   await expect(already).toBeEnabled();
+  // Backlog item 1. This press is the pin, and it is also the press most easily
+  // made by accident — the chip is painted "you are already here", so nothing
+  // about pressing it looks like it does anything. The arm step is what tells
+  // the two apart, so assert it happened rather than just clicking through it:
+  // one press must NOT have locked the account.
   await already.click();
+  await expect(zedRow.locator(".tier__lock")).not.toBeVisible();
+  // Arming keeps `aria-pressed` — which tier the row holds is not a fact about
+  // whether this press is mid-confirm — and the account is still unlocked.
+  await expect(already).toHaveAttribute("aria-pressed", "true");
+  await zedDrawer.getByRole("button", { name: "confirm set Zed to Testers" }).click();
 
   const confirmation = zedDrawer.locator(".notice");
   await expect(confirmation).toBeVisible();
@@ -1222,6 +1235,9 @@ test("accounts at 320px: the tier group stays in the drawer when the press adds 
 
   await drawer
     .getByRole("button", { name: "Set Member 00 to Friends", exact: true })
+    .click();
+  await drawer
+    .getByRole("button", { name: "confirm set Member 00 to Friends", exact: true })
     .click();
   // The guard: without the press actually landing, the group never grows and
   // every measurement below passes on the pre-press layout.
@@ -2347,6 +2363,11 @@ test("every per-account control names the row it acts on", async ({ page, contex
   // The lock-releasing control is in the same group and had the same gap.
   await zedDrawer
     .getByRole("button", { name: "Set Zed to Friends", exact: true })
+    .click();
+  // The armed name carries the row too, for the same reason the rest name does:
+  // it is the name spoken at the moment of the press that actually commits.
+  await zedDrawer
+    .getByRole("button", { name: "confirm set Zed to Friends", exact: true })
     .click();
   await expect(zedRow.locator(".tier__lock")).toBeVisible();
   await expect(

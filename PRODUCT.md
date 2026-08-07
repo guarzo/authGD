@@ -115,5 +115,7 @@ what is true. Never exclaims. Never apologizes twice.
 - **Zoom and reflow.** Usable to 200% zoom and down to 320px width without
   horizontal scrolling of the page. Wide data tables scroll within their own region,
   which is focusable and labelled.
-- Artwork is decorative and carries empty `alt`; the seal used as identity carries a
-  real name.
+- Artwork is decorative and carries empty `alt` — including the brand seal. It
+  renders in exactly one place (`app/login/page.tsx`), immediately above an `<h1>`
+  holding the same brand name, so a real `alt` would announce the deployment's
+  name twice in a row to a screen reader and nothing else.

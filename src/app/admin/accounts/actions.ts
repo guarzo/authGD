@@ -166,9 +166,9 @@ export async function setTierAction(
   );
   if (!result.ok) redirectOnMutationError(result.error, listSearch);
   revalidatePath("/admin/accounts");
-  // Not a bare return: the pressed button is the one tier control that
-  // immediately locks itself `disabled` (page.tsx: `r.tierLocked && r.tier
-  // === t`), and a disabled element cannot hold focus — see `view.ts`.
+  // Not a bare return: `ConfirmGroup`'s `Notice` (`confirm-group.tsx`) is what
+  // gets focus after this action settles, and it has nothing to focus
+  // without text here.
   return { text: accountsConfirmation("tier", identity, tierLabel(tier)) };
 }
 

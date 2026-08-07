@@ -136,6 +136,14 @@ function one(v: string | string[] | undefined): string | undefined {
   return Array.isArray(v) ? v[v.length - 1] : v;
 }
 
+/** Id of the always-visible "locking a tier" sentence in one row's drawer, and
+ *  the `describedBy` target the two arming tier buttons in that row point at.
+ *  Per-account, not per-button: all three tier presses in a row lock the same
+ *  account the same way, so one sentence per row covers all of them. */
+function tierLockNoteId(accountId: string): string {
+  return `tier-lock-note-${accountId}`;
+}
+
 export default async function AdminAccountsPage({
   searchParams,
 }: {
@@ -802,14 +810,32 @@ function AccountRow({
           </td>
 
           <td>
-            {/* Every character of a member account is meant to be on the map ACL, so
-                a partial count is a gap to chase, not a healthy state. Non-member
-                accounts have none by design, which is the "off" case. */}
-            {r.mapCount === 0 ? (
+            {/* Sweep item #3. Reads `mapStatus` (desired vs. observed), NOT the
+                old `mapCount`/`tokens.total` pair: the denominator has to be
+                the set the wanderer job actually wants on the ACL, not every
+                character the account has. Against the total, a member with a
+                biomassed alt sat permanently amber with nothing to fix, and —
+                the costly direction — an alumni account whose characters were
+                never removed from the ACL showed a healthy count, hiding the
+                one failure on this row that still grants map access to someone
+                who no longer has a tier.
+
+                Three outcomes, and a surplus must not read like a shortfall:
+                both are `warn`, so the TEXT is what separates them ("2 extra"
+                vs "1/3"). Not `bad` — DESIGN.md reserves `--signal-bad` for
+                destructive acts, and per PRODUCT.md nothing that is merely
+                out of sync should read as punishment. A surplus prints the
+                overage alone because the in-sync denominator can be 0 (the
+                alumni case), which has no ratio worth printing. */}
+            {r.mapStatus.desired === 0 && r.mapStatus.observed === 0 ? (
               <Status tone="off">off</Status>
+            ) : r.mapStatus.observed > r.mapStatus.desired ? (
+              <Status tone="warn">
+                {r.mapStatus.observed - r.mapStatus.desired} extra
+              </Status>
             ) : (
-              <Status tone={r.mapCount === tokens.total ? "ok" : "warn"}>
-                {r.mapCount}/{tokens.total}
+              <Status tone={r.mapStatus.observed === r.mapStatus.desired ? "ok" : "warn"}>
+                {r.mapStatus.observed}/{r.mapStatus.desired}
               </Status>
             )}
           </td>
@@ -956,40 +982,74 @@ function AccountRow({
                   ))}
                 </>
               ) : (
-                TIERS.map((t) => (
-                  <ConfirmingForm
-                    key={t}
-                    action={setTierAction.bind(
-                      null,
-                      r.accountId,
-                      t,
-                      listSearch,
-                      identity,
-                    )}
-                    className="inline-form"
-                  >
-                    {/* No `pendingLabel` here, unlike every other control in this
-                        drawer: the label is the tier itself, and swapping it for
-                        "setting…" would erase which of the three was pressed at
-                        exactly the moment the admin is checking. `disabled` plus
-                        `aria-busy` still report the in-flight state.
-
-                        Same principle as the note field for the accessible name: a
-                        speech-input or screen-reader user reaches this control with
-                        only the tier word to go on, and this is the control
-                        derole-don't-boot turns on. The visible text stays the bare
-                        tier word, so the accessible name keeps it verbatim (WCAG
-                        2.5.3) and adds the row in front of it. */}
-                    <Submit
-                      className="btn btn--micro"
-                      disabled={r.tierLocked && r.tier === t}
-                      aria-pressed={r.tier === t}
-                      aria-label={`Set ${identity} to ${tierLabel(t)}`}
+                TIERS.map((t) => {
+                  const selected = r.tier === t;
+                  return (
+                    <ConfirmingForm
+                      key={t}
+                      action={setTierAction.bind(
+                        null,
+                        r.accountId,
+                        t,
+                        listSearch,
+                        identity,
+                      )}
+                      className="inline-form"
                     >
-                      {tierLabel(t)}
-                    </Submit>
-                  </ConfirmingForm>
-                ))
+                      {/* One `ConfirmSubmit` for all three tiers, selected or
+                          not: `setTierManual` locks the account on a press to
+                          the tier it already holds just as much as on a press
+                          to a different one (admin-accounts.ts) — that IS the
+                          pin an admin reaches for before a member leaves the
+                          alliance — so the selected chip needs the same arm
+                          step as the other two, not an exemption from it.
+                          `ariaPressed`/`disabled` (confirm-submit.tsx) are
+                          what let this one control also carry the "you are
+                          already here" semantics the CSS keys off
+                          `aria-pressed` for, so the chip's rest-state
+                          appearance stays exactly what it was.
+
+                          `disabled` only for the selected chip once the
+                          account is ALREADY locked: at that point every OTHER
+                          tier press still needs to work (moving a locked
+                          account to a different tier is a real, one-click
+                          change, same as before), but re-submitting the tier
+                          already held and already locked is the true no-op
+                          `setTierManual`'s own guard short-circuits — nothing
+                          to arm, nothing to press.
+
+                          `confirm={!r.tierLocked}` for all three: once
+                          locked, no tier press here does anything new to the
+                          membership job's reach (it already isn't touching
+                          this account), so there's nothing fresh to arm
+                          against and every press stays the single click it
+                          was before this fix. `describedBy` points at the
+                          same per-row lock note for the same reason — it's
+                          about what THIS press does to an unlocked account,
+                          not about which tier word is on the button.
+
+                          Same accessible-name reasoning as every other
+                          control in this drawer: the visible text stays the
+                          bare tier word (WCAG 2.5.3), and `restName`/
+                          `confirmName` carry the row identity a
+                          screen-reader or speech-input admin can't otherwise
+                          reach out of visual context — the exact audience
+                          derole-don't-boot exists to protect. */}
+                      <ConfirmSubmit
+                        className="btn btn--micro"
+                        label={tierLabel(t)}
+                        restName={`Set ${identity} to ${tierLabel(t)}`}
+                        confirmName={`confirm set ${identity} to ${tierLabel(t)}`}
+                        describedBy={
+                          r.tierLocked ? undefined : tierLockNoteId(r.accountId)
+                        }
+                        confirm={!r.tierLocked}
+                        ariaPressed={selected}
+                        disabled={selected && r.tierLocked}
+                      />
+                    </ConfirmingForm>
+                  );
+                })
               )}
               {r.tierLocked && (
                 <ConfirmingForm
@@ -1012,6 +1072,34 @@ function AccountRow({
               )}
             </div>
           </ConfirmGroup>
+          {/* Static, not `ConfirmCost`'s reveal-on-arm: #111/#112 already
+              established that a sentence appearing inside a `td` on THIS
+              table moves the armed button out from under the pointer and
+              disarms it before it can be read. Rendered unconditionally
+              whenever a press here can still lock the account — and gone
+              entirely once `tierLocked` is already true, where none of the
+              three presses above can newly cause it. Not shown on a `pending`
+              row either: `approveAccount` has its own, already-documented lock
+              rule (alumni unlocked, associate locked), and this sentence is
+              about `setTierManual`'s rule, not that one.
+
+              BELOW the group, not above it, and the position is load-bearing:
+              `.drawer__controls` lays its sections out as columns whose control
+              rows line up across, and prose above the buttons pushes this
+              column's `.btn-group` a full row below the freeze control it is
+              meant to sit level with (e2e/admin.spec.ts measures exactly that).
+              Nothing is lost by moving it — it is still adjacent and still read
+              before any press, the buttons carry it as `aria-describedby` so a
+              screen reader hears it WITH the control regardless of DOM order,
+              and `set by` below already establishes prose-after-the-group as
+              this section's shape. */}
+          {r.tier !== "pending" && !r.tierLocked && (
+            <p className="dim drawer__note" id={tierLockNoteId(r.accountId)}>
+              Setting a tier here locks it: the membership job stops raising or lowering
+              it automatically — including moving it to {tierLabel("alumni")} if this
+              member leaves the alliance — until you press auto.
+            </p>
+          )}
           {r.tierChangedByName && (
             <span className="dim mono">set by {r.tierChangedByName}</span>
           )}

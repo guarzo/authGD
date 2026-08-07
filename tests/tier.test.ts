@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decideTier } from "@/core/tier";
+import { decideTier, previewMainChange, type MainChangePreview } from "@/core/tier";
 
 describe("decideTier", () => {
   const cases: Array<{
@@ -117,6 +117,86 @@ describe("decideTier", () => {
           mainInAlliance: c.mainInAlliance,
         }),
       ).toBe(c.expected);
+    });
+  }
+});
+
+describe("previewMainChange", () => {
+  const cases: Array<{
+    name: string;
+    tier: "pending" | "member" | "associate" | "alumni";
+    tierLocked: boolean;
+    allianceId: number | null;
+    configuredAllianceId: number;
+    expected: MainChangePreview;
+  }> = [
+    {
+      name: "locked account: never a change, regardless of affiliation",
+      tier: "associate",
+      tierLocked: true,
+      allianceId: null,
+      configuredAllianceId: 99,
+      expected: { kind: "none" },
+    },
+    {
+      name: "never-resolved affiliation (freshly linked alt): unknown, not none",
+      tier: "member",
+      tierLocked: false,
+      allianceId: null,
+      configuredAllianceId: 99,
+      expected: { kind: "unknown" },
+    },
+    {
+      name: "alumni main whose alt is in the alliance: change to member",
+      tier: "alumni",
+      tierLocked: false,
+      allianceId: 99,
+      configuredAllianceId: 99,
+      expected: { kind: "change", nextTier: "member" },
+    },
+    {
+      name: "member main whose alt has left the alliance: change to alumni",
+      tier: "member",
+      tierLocked: false,
+      allianceId: 12345,
+      configuredAllianceId: 99,
+      expected: { kind: "change", nextTier: "alumni" },
+    },
+    {
+      name: "member main whose alt is in the same alliance: no change",
+      tier: "member",
+      tierLocked: false,
+      allianceId: 99,
+      configuredAllianceId: 99,
+      expected: { kind: "none" },
+    },
+    {
+      name: "pending account whose alt is outside the alliance: no change (never auto-alumni)",
+      tier: "pending",
+      tierLocked: false,
+      allianceId: 12345,
+      configuredAllianceId: 99,
+      expected: { kind: "none" },
+    },
+    {
+      name: "pending account whose alt is in the alliance: change to member",
+      tier: "pending",
+      tierLocked: false,
+      allianceId: 99,
+      configuredAllianceId: 99,
+      expected: { kind: "change", nextTier: "member" },
+    },
+  ];
+  for (const c of cases) {
+    it(c.name, () => {
+      expect(
+        previewMainChange({
+          tier: c.tier,
+          tierLocked: c.tierLocked,
+          allianceId: c.allianceId,
+          configuredAllianceId: c.configuredAllianceId,
+        }),
+      ).toEqual(c.expected);
     });
   }
 });

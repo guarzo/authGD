@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
 import { Fragment } from "react";
+import { getConfig } from "@/config";
 import { getDb } from "@/db";
 import { requireAdminPage } from "@/lib/admin-guard";
+import { isDryRun } from "@/lib/sync-mode";
 import { getSyncStatus } from "@/services/sync-status";
 import { workerHeartbeat } from "@/services/health";
 import { evaluateFreshness, HEARTBEAT_STALE_AFTER_MS } from "@/core/health";
@@ -13,6 +15,7 @@ import {
   formatDuration,
   formatDurationMs,
   humanizeKey,
+  isFailureKey,
   isNoChange,
 } from "@/core/run-summary";
 import { Json, Notice, RuleHead, Scroller, Status } from "@/app/_components/ui";
@@ -107,6 +110,13 @@ export default async function AdminSyncPage({
   await requireAdminPage();
   const { queued, at } = await searchParams;
   const db = getDb();
+  // The same predicate the three integration clients apply at the write
+  // boundary (`@/lib/sync-mode`), read here rather than re-tested against the
+  // string, so this page cannot drift from the guard it reports. This is the
+  // one page where distribution's own health is stated, so an admin arriving
+  // because a role never showed up must be told the deployment isn't live
+  // before they read seven "OK" rows and conclude it should have been.
+  const dryRun = isDryRun(getConfig());
   const [groups, heartbeat] = await Promise.all([getSyncStatus(db), workerHeartbeat(db)]);
   // One instant for the whole render: the worker line, every row's health and
   // the "checked at" stamp all have to agree, and reading the clock per row
@@ -242,6 +252,34 @@ export default async function AdminSyncPage({
       ) : (
         <Notice tone="bad">
           <span className="worker">{workerLine}</span>
+        </Notice>
+      )}
+
+      {/* An operator setting, not a fault — `tone="warn"`, never `tone="bad"`.
+          Without this, the only trace of a non-live deployment is the
+          `wouldAdd`/`wouldRemove`/`wouldChangeRoles` counter columns below,
+          which exist only when the counter is non-zero in the window
+          (`countColumns`, @/core/run-summary): a converged deployment shows
+          "no change" on every row and no tell at all. Placed above the strip,
+          not folded into the worker line — this is a fact about the
+          deployment's configuration, not about whether the worker is running,
+          and the worker can be perfectly alive while every write it makes is
+          suppressed at the client boundary (`@/lib/sync-mode`). Same "sync
+          disabled" vocabulary as `/account`'s own dry-run copy
+          (`contact-state.tsx:72`), so a member reading their own account and
+          an admin reading this page describe the same guard the same way.
+
+          `live={false}`: this is a standing property of the deployment, not an
+          arrival. It is in the document from first paint on every load, and
+          `Notice`'s own doc explains why a region born holding its text is the
+          shape AT announces least reliably anyway — so the live region buys
+          nothing here and would re-fire on every soft navigation back from
+          `syncAllAction`'s redirect. Read in document order, above the strip,
+          it lands before the rows it qualifies. */}
+      {dryRun && (
+        <Notice tone="warn" live={false}>
+          SYNC_MODE=dry-run — jobs run and record counts, but no contact, ACL or Discord
+          write leaves this deployment.
         </Notice>
       )}
 
@@ -620,7 +658,11 @@ export default async function AdminSyncPage({
                                               <td
                                                 key={k}
                                                 className={
-                                                  v ? "mono num" : "mono num dim-ink"
+                                                  v
+                                                    ? isFailureKey(k)
+                                                      ? "mono num warn"
+                                                      : "mono num"
+                                                    : "mono num dim-ink"
                                                 }
                                               >
                                                 {v ?? (
@@ -736,7 +778,11 @@ export default async function AdminSyncPage({
                                             <td
                                               key={k}
                                               className={
-                                                v ? "mono num" : "mono num dim-ink"
+                                                v
+                                                  ? isFailureKey(k)
+                                                    ? "mono num warn"
+                                                    : "mono num"
+                                                  : "mono num dim-ink"
                                               }
                                             >
                                               {/* The column exists because some other

@@ -5,6 +5,7 @@ import * as schema from "@/db/schema";
 import {
   account,
   character,
+  lootItem,
   lootPool,
   payoutOperation,
   payoutParticipant,
@@ -211,6 +212,99 @@ describe("getPayoutOperationDetail — exact money on the read side", () => {
     expect(iskToCents(detail!.corpAmount)).not.toBe(
       (totalCents * naiveBasisPoints) / 10000n,
     );
+  });
+});
+
+describe("getPayoutOperationDetail — pool and item ordering", () => {
+  // Without an ORDER BY, the pool array's row order is whatever Postgres
+  // happens to return, and the page numbers pools positionally off that
+  // array's index ("Pool 1", "Pool 2", ...). Ordering by `id` doesn't make
+  // the numbering meaningful, but it makes it STABLE: the same pool is always
+  // "Pool N" across reads, which is the property the bug report is about.
+  it("orders pools by id, not by insertion order", async () => {
+    const operator = await seedOperator();
+    const { id: operationId } = await ctx.db.transaction((tx) =>
+      createOperation(tx, operator.id, {
+        name: "Ordering fight",
+        occurredAt: new Date(),
+        corpSharePct: "0",
+      }),
+    );
+    const inserted = await ctx.db
+      .insert(lootPool)
+      .values([
+        { operationId, valuationSource: "flat", totalValue: "1.00", notes: "first" },
+        { operationId, valuationSource: "flat", totalValue: "2.00", notes: "second" },
+        { operationId, valuationSource: "flat", totalValue: "3.00", notes: "third" },
+      ])
+      .returning({ id: lootPool.id });
+
+    const detail = await getPayoutOperationDetail(ctx.db, operationId);
+    const expected = [...inserted.map((p) => p.id)].sort();
+    expect(detail!.pools.map((p) => p.id)).toEqual(expected);
+  });
+
+  // The item table is what an operator scans to find one mispriced line in a
+  // long pool. Alphabetical order lets them find it predictably, and — unlike
+  // pool order — nothing downstream is numbered off this array's index, so a
+  // meaningful order costs nothing over an arbitrary one.
+  it("orders a pool's items alphabetically by name, and an edit doesn't reshuffle them", async () => {
+    const { operationId, poolId } = await seedOperation({
+      totalValue: "300.00",
+      names: ["A"],
+    });
+    const [zed, mike, alpha] = await ctx.db
+      .insert(lootItem)
+      .values([
+        {
+          poolId,
+          name: "Zydrine",
+          qty: 1,
+          unitPrice: "1.00",
+          totalValue: "1.00",
+          priceSource: "triff",
+        },
+        {
+          poolId,
+          name: "Mercaba",
+          qty: 1,
+          unitPrice: "1.00",
+          totalValue: "1.00",
+          priceSource: "triff",
+        },
+        {
+          poolId,
+          name: "Alloyed Tritanium Bar",
+          qty: 1,
+          unitPrice: "1.00",
+          totalValue: "1.00",
+          priceSource: "triff",
+        },
+      ])
+      .returning();
+
+    const before = await getPayoutOperationDetail(ctx.db, operationId);
+    expect(before!.pools[0].items.map((i) => i.name)).toEqual([
+      "Alloyed Tritanium Bar",
+      "Mercaba",
+      "Zydrine",
+    ]);
+
+    // The exact scenario from the cost report: correcting one item's price
+    // must not relocate it in the manifest.
+    await ctx.db
+      .update(lootItem)
+      .set({ unitPrice: "5.00", totalValue: "5.00" })
+      .where(eq(lootItem.id, mike.id));
+
+    const after = await getPayoutOperationDetail(ctx.db, operationId);
+    expect(after!.pools[0].items.map((i) => i.name)).toEqual([
+      "Alloyed Tritanium Bar",
+      "Mercaba",
+      "Zydrine",
+    ]);
+    expect(zed).toBeTruthy();
+    expect(alpha).toBeTruthy();
   });
 });
 

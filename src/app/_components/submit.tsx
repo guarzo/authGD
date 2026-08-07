@@ -42,6 +42,12 @@ export function Submit({
   // drawer or not, because "associate", "freeze" and "sync now" all say nothing
   // about whose account is about to change.
   "aria-label": ariaLabel,
+  // Opt-in only, same reasoning as `aria-label`: most Submits have nothing
+  // below them worth pointing at. Wires a button to a consequence sentence
+  // rendered elsewhere on the page (below a Scroller, say) when one exists for
+  // this row — see `/account`'s "make main" note and `contactRemedyId` for the
+  // pattern this follows.
+  "aria-describedby": ariaDescribedBy,
 }: {
   className?: string;
   children: ReactNode;
@@ -49,6 +55,7 @@ export function Submit({
   pendingLabel?: ReactNode;
   "aria-pressed"?: boolean;
   "aria-label"?: string;
+  "aria-describedby"?: string;
 }) {
   const { pending } = useFormStatus();
   const guard = useSubmitGuard(pending);
@@ -60,6 +67,7 @@ export function Submit({
       aria-busy={pending}
       aria-pressed={ariaPressed}
       aria-label={ariaLabel}
+      aria-describedby={ariaDescribedBy}
       onClick={guard}
     >
       {pending && pendingLabel ? pendingLabel : children}

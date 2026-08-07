@@ -332,7 +332,7 @@ describe("getAdminAccountsList", () => {
       (r) => r.accountId === a.id,
     )!;
     expect(refreshed.discordUsername).toBe("guarzo");
-    expect(rowA.mapCount).toBe(1);
+    expect(rowA.mapStatus.observed).toBe(1);
     expect(rowA.characters.find((ch) => ch.id === 1)?.mapObservedAt).toEqual(
       new Date("2026-08-01T00:00:00Z"),
     );
@@ -395,6 +395,67 @@ describe("getAdminAccountsList", () => {
     const rows = await getAdminAccountsList(ctx.db, cfg, { sort: "tier" });
 
     expect(rows.map((r) => r.tier)).toEqual(["pending", "member", "associate", "alumni"]);
+  });
+
+  describe("mapStatus", () => {
+    // The map ACL's desired set is exactly getMemberCharacters (see
+    // src/jobs/wanderer.ts), reused here via isContactsTarget rather than the
+    // account's total character count — `tokenSummary.total` counts every
+    // character regardless of whether it belongs on the ACL at all.
+
+    it("reports desired === observed when every member character is on the ACL", async () => {
+      const acc = await seedAccount(ctx.db, { tier: "member" });
+      await seedCharacter(ctx.db, cfg, { id: 100, accountId: acc.id, main: true });
+      await seedCharacter(ctx.db, cfg, { id: 101, accountId: acc.id });
+      await ctx.db.insert(wandererAclObservation).values([
+        { characterId: 100, role: "member", observedAt: new Date() },
+        { characterId: 101, role: "member", observedAt: new Date() },
+      ]);
+
+      const [row] = await getAdminAccountsList(ctx.db, cfg);
+      expect(row.mapStatus).toEqual({ desired: 2, observed: 2 });
+    });
+
+    it("excludes a biomassed alt from desired, so its correct absence doesn't read as a shortfall", async () => {
+      const acc = await seedAccount(ctx.db, { tier: "member" });
+      await seedCharacter(ctx.db, cfg, { id: 102, accountId: acc.id, main: true });
+      await seedCharacter(ctx.db, cfg, {
+        id: 103,
+        accountId: acc.id,
+        affiliationInvalid: true,
+      });
+      await ctx.db
+        .insert(wandererAclObservation)
+        .values({ characterId: 102, role: "member", observedAt: new Date() });
+
+      const [row] = await getAdminAccountsList(ctx.db, cfg);
+      // Only the main is desired; the biomassed alt is neither desired nor
+      // observed. desired === observed at 1, not a permanent 1/2 amber.
+      expect(row.mapStatus).toEqual({ desired: 1, observed: 1 });
+    });
+
+    it("reports a surplus for an alumni account still sitting on the ACL", async () => {
+      const acc = await seedAccount(ctx.db, { tier: "alumni" });
+      await seedCharacter(ctx.db, cfg, { id: 104, accountId: acc.id, main: true });
+      // The removal the wanderer job should have made never landed.
+      await ctx.db
+        .insert(wandererAclObservation)
+        .values({ characterId: 104, role: "member", observedAt: new Date() });
+
+      const [row] = await getAdminAccountsList(ctx.db, cfg);
+      // desired is 0 (alumni is never a target); observed is 1. A ratio
+      // ("1/0") is nonsense to print — the caller compares the two counts.
+      expect(row.mapStatus).toEqual({ desired: 0, observed: 1 });
+      expect(row.mapStatus.observed).toBeGreaterThan(row.mapStatus.desired);
+    });
+
+    it("reports zero and zero for an account with nothing on the ACL", async () => {
+      const acc = await seedAccount(ctx.db, { tier: "associate" });
+      await seedCharacter(ctx.db, cfg, { id: 105, accountId: acc.id, main: true });
+
+      const [row] = await getAdminAccountsList(ctx.db, cfg);
+      expect(row.mapStatus).toEqual({ desired: 0, observed: 0 });
+    });
   });
 
   it("summarizes token health", async () => {

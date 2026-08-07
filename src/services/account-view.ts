@@ -350,7 +350,22 @@ export interface AdminAccountRow {
   discordUsername: string | null;
   characters: AdminCharacterRow[];
   tokenSummary: { total: number; healthy: number; needsReauth: number; dead: number };
-  mapCount: number;
+  /**
+   * Map ACL membership, desired vs. observed. `desired` is the count of this
+   * account's characters `isContactsTarget` would put on the ACL — the exact
+   * set `runWandererJob` (src/jobs/wanderer.ts) diffs against — not the
+   * account's total character count: a member's biomassed alt is correctly
+   * outside `desired`, and an alumni account's `desired` is 0. `observed` is
+   * how many of them `wanderer_acl_observation` currently shows.
+   *
+   * `observed === desired` is the only state that means "in sync". Exposed as
+   * two counts rather than a ratio because a surplus against `desired === 0`
+   * (e.g. every character on an alumni account still sitting on the ACL) has
+   * no sane ratio to print — the caller compares the two directly and can
+   * distinguish a shortfall (`observed < desired`, additions pending) from a
+   * surplus (`observed > desired`, a removal that didn't take).
+   */
+  mapStatus: { desired: number; observed: number };
   /** Oldest reading across this account's crew — see buildManifestLocations. */
   locationAsOf: Date | null;
 }
@@ -458,7 +473,12 @@ export async function getAdminAccountsList(
         needsReauth,
         dead,
       },
-      mapCount: characters.filter((c) => c.mapObservedAt !== null).length,
+      mapStatus: {
+        desired: accChars.filter((c) =>
+          isContactsTarget({ tier: acc.tier, affiliationInvalid: c.affiliationInvalid }),
+        ).length,
+        observed: characters.filter((c) => c.mapObservedAt !== null).length,
+      },
       locationAsOf: locations.asOf,
     };
   });

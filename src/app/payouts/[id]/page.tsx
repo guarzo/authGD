@@ -34,6 +34,7 @@ import {
   unlockAction,
 } from "../actions";
 import { DROPPED_REASONS, decodeDropped } from "../dropped";
+import { decodeUnresolved } from "../unresolved";
 import { OPERATION_ERRORS, lookupErrorMessage } from "../errors";
 import { AddParticipantForm } from "./add-participant-form";
 import { AppraiseForm } from "./appraise-form";
@@ -43,9 +44,17 @@ import { FlatPoolForm } from "./flat-pool-form";
 import { InlineEdit } from "./inline-edit";
 import { LifecycleAnnouncer, LifecycleSubmit } from "./lifecycle-submit";
 import { NotesForm } from "./notes-form";
-import { MarkPaidForm, PayFlow, RevertForm, type PayRow } from "./pay-flow";
-import { ROSTER_HEADING_ID, copyAmountId } from "./pay-flow-ids";
+import {
+  MarkPaidForm,
+  PayFlow,
+  RemoveParticipantForm,
+  RevertForm,
+  type PayRow,
+  type RosterRow,
+} from "./pay-flow";
+import { LOOT_HEADING_ID, ROSTER_HEADING_ID, copyAmountId } from "./pay-flow-ids";
 import { PaymentHistory } from "./payment-history";
+import { DeletePoolForm, PoolFlow } from "./pool-flow";
 import { deriveRosterWarnings } from "./roster-warnings";
 import type { PricingMode } from "@/core/pricing";
 import { fmtIsk } from "@/app/_components/format-isk";
@@ -137,14 +146,15 @@ export default async function PayoutOperationPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ error?: string; dropped?: string }>;
+  searchParams: Promise<{ error?: string; dropped?: string; unresolved?: string }>;
 }) {
   const access = await readAccess();
   if (!access) redirect("/account");
   const { id } = await params;
-  const { error, dropped } = await searchParams;
+  const { error, dropped, unresolved } = await searchParams;
   const errorMessage = lookupErrorMessage(OPERATION_ERRORS, error);
   const droppedReport = decodeDropped(dropped);
+  const unresolvedReport = decodeUnresolved(unresolved);
   const detail = await loadDetail(id);
   if (!detail) notFound();
   const { operation, pools, participants, totalValue, corpAmount, locked } = detail;
@@ -197,6 +207,14 @@ export default async function PayoutOperationPage({
     displayName: p.displayName,
     amountLabel: `${fmtIsk(p.amount)} ISK`,
     state: p.paymentState === "paid" ? "paid" : "unpaid",
+  }));
+
+  // The FULL roster, for `remove` — unlike `payRows`, this must not drop
+  // excluded participants: `remove` is reachable on an excluded row too, so
+  // one has to stay a valid next-focus target for `PayFlow`.
+  const allParticipants: RosterRow[] = participants.map((p) => ({
+    id: p.id,
+    displayName: p.displayName,
   }));
 
   // Only the *first* payment is worth an arm step — see the original comment
@@ -338,6 +356,34 @@ export default async function PayoutOperationPage({
                   <br />
                   <span className="dim">
                     …and {droppedReport.total - droppedReport.sample.length} more.
+                  </span>
+                </>
+              )}
+            </span>
+          </Notice>
+        )}
+
+        {/* Roster twin of the `droppedReport` notice above, same shape and
+            same reasoning — the operation was created either way (see
+            `createOperationAction`'s own doc), and this is where that
+            creation's operator lands, so this is where the report belongs. */}
+        {unresolvedReport && (
+          <Notice tone="warn">
+            <span>
+              <strong>
+                {unresolvedReport.total} roster name
+                {unresolvedReport.total === 1 ? "" : "s"} didn&rsquo;t match a linked
+                character
+              </strong>{" "}
+              and will draw a full share as typed. Fix the spelling or link the character,
+              or leave it as is if that&rsquo;s the intent.
+              <br />
+              <span className="dim">{unresolvedReport.sample.join(", ")}</span>
+              {unresolvedReport.total > unresolvedReport.sample.length && (
+                <>
+                  <br />
+                  <span className="dim">
+                    …and {unresolvedReport.total - unresolvedReport.sample.length} more.
                   </span>
                 </>
               )}
@@ -488,12 +534,16 @@ export default async function PayoutOperationPage({
           {/* --- Loot ---------------------------------------------------- */}
           <RuleHead
             as="h2"
+            id={LOOT_HEADING_ID}
             aside={<span className="dim mono">{fmtIsk(totalValue)} ISK</span>}
           >
             Loot
           </RuleHead>
           {pools.length > 0 && (
-            <>
+            <PoolFlow
+              order={pools.map((pool, index) => ({ id: pool.id, number: index + 1 }))}
+              headingId={LOOT_HEADING_ID}
+            >
               <Scroller label="Loot pools">
                 <table className="log">
                   <thead>
@@ -528,17 +578,11 @@ export default async function PayoutOperationPage({
                         {anyPoolNotes && <td>{pool.notes}</td>}
                         <td>
                           {canEdit && (
-                            <form
+                            <DeletePoolForm
                               action={deletePoolAction.bind(null, operation.id, pool.id)}
-                            >
-                              <ConfirmSubmit
-                                className="btn btn--quiet btn--micro btn--danger-quiet"
-                                armedClassName="btn btn--micro btn--danger"
-                                label="delete"
-                                restName={`delete pool ${index + 1}`}
-                                confirmName={`confirm delete pool ${index + 1}`}
-                              />
-                            </form>
+                              poolId={pool.id}
+                              poolNumber={index + 1}
+                            />
                           )}
                         </td>
                       </tr>
@@ -664,7 +708,7 @@ export default async function PayoutOperationPage({
                     </div>
                   ),
               )}
-            </>
+            </PoolFlow>
           )}
 
           {/* One slot, both states — the paste form is bare while there is no
@@ -754,7 +798,31 @@ export default async function PayoutOperationPage({
           )}
           {participants.length > 0 && (
             <>
-              <PayFlow rows={payRows} headingId={ROSTER_HEADING_ID}>
+              {/* Sighted-only, unlike `#mark-paid-cost` below: that span is
+                  `.visually-hidden` permanently (see the comment at its own
+                  render site) because it is far below a twenty-row table and
+                  reveals nothing a sighted operator would read before
+                  scanning down to a row's button. This sits ahead of the
+                  table instead, in the operator's ordinary reading order —
+                  DESIGN.md's "state before action" — so the one irreversible
+                  act on this route is not explained to screen readers only.
+                  It is NOT a replacement for `#mark-paid-cost`: that span
+                  still carries the same sentence as an `aria-describedby` on
+                  the specific button being armed, which is the only way a
+                  screen reader user tabbing straight to a row (never reading
+                  this paragraph) still hears the cost ahead of the press. */}
+              {operation.status === "finalized" && firstPayment && access.isOperator && (
+                <p className="dim">
+                  Marking any row below paid freezes the loot pools, roster, shares and
+                  corp share permanently: Unlock will no longer reopen them once it
+                  happens.
+                </p>
+              )}
+              <PayFlow
+                rows={payRows}
+                allParticipants={allParticipants}
+                headingId={ROSTER_HEADING_ID}
+              >
                 <Scroller
                   label="Roster"
                   tall={participants.length > ROSTER_TALL_THRESHOLD}
@@ -920,20 +988,15 @@ export default async function PayoutOperationPage({
                                       {p.excluded ? "include" : "exclude"}
                                     </Submit>
                                   </form>
-                                  <form
+                                  <RemoveParticipantForm
                                     action={removeParticipantAction.bind(
                                       null,
                                       operation.id,
                                       p.id,
                                     )}
-                                  >
-                                    <ConfirmSubmit
-                                      className="btn btn--quiet btn--micro btn--danger-quiet"
-                                      label="remove"
-                                      restName={`remove ${p.displayName}`}
-                                      confirmName={`confirm remove ${p.displayName}`}
-                                    />
-                                  </form>
+                                    participantId={p.id}
+                                    displayName={p.displayName}
+                                  />
                                 </>
                               )}
                             </div>

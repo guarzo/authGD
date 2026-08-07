@@ -22,7 +22,27 @@ export function copyAmountId(participantId: string): string {
   return `pay-copy-${participantId}`;
 }
 
-/** The Split / Roster heading, focused when the last owed participant is paid
- *  and there is no next row to move to. Rendered by `page.tsx`, focused by
- *  `PayFlow` — two files that must agree, so neither spells it out. */
+/** The Split / Roster heading, focused when the last owed participant is paid,
+ *  or the last participant removed, and there is no next row to move to.
+ *  Rendered by `page.tsx`, focused by `PayFlow` — two files that must agree,
+ *  so neither spells it out. */
 export const ROSTER_HEADING_ID = "roster-heading";
+
+/** The `<form>` wrapping one participant's `remove` control. `PayFlow` reads
+ *  this to find the NEXT row's button after a removal — a query on the form
+ *  rather than a prop threaded onto `ConfirmSubmit`, which does not accept an
+ *  `id` and is out of this route's scope to change (see
+ *  `RemoveParticipantForm` in `pay-flow.tsx`). */
+export function removeParticipantFormId(participantId: string): string {
+  return `remove-participant-${participantId}`;
+}
+
+/** The `<form>` wrapping one pool's `delete` control. Same reasoning and same
+ *  caller-side query as `removeParticipantFormId`, for `PoolFlow`. */
+export function deletePoolFormId(poolId: string): string {
+  return `delete-pool-${poolId}`;
+}
+
+/** The "Loot" heading, focused when the deleted pool was the last one and
+ *  there is no next pool row to move to. */
+export const LOOT_HEADING_ID = "loot-heading";

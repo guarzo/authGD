@@ -46,8 +46,10 @@ import type { PricingMode } from "@/core/pricing";
 import { parseRosterPaste } from "@/core/roster-paste";
 import { iskToCents } from "@/core/payout-split";
 import { encodeDropped } from "./dropped";
+import { encodeUnresolved } from "./unresolved";
 import type { NewOperationErrorCode, OperationErrorCode } from "./errors";
 import type { AppraisalResult } from "@/services/appraisal";
+import { unresolvedRosterNames } from "./new/unresolved-roster";
 
 /**
  * `addAppraisedPoolAction` used to read these from the form: a "Pricing"
@@ -177,10 +179,10 @@ function parseYmd(raw: string): Date | null {
   return parsed;
 }
 
-/** The composer's own rejection state. `null` is `useActionState`'s initial
- *  value, matching `AppraiseActionState`'s own convention: `state === null`
- *  never renders a notice, whether that means "hasn't submitted yet" or
- *  "still pending".
+/** The composer's own state. `null` is `useActionState`'s initial value,
+ *  matching `AppraiseActionState`'s own convention: `state === null` never
+ *  renders a notice, whether that means "hasn't submitted yet" or "still
+ *  pending".
  *
  *  Every rejection here RETURNS this rather than redirecting through a
  *  `?error=` query string, and that is the entire point of the composer: a
@@ -189,7 +191,19 @@ function parseYmd(raw: string): Date | null {
  *  operator's pastes still sitting in their textareas. `createFailed`, the
  *  echo-through-query-string helper the old two-field create form used, is
  *  gone — nothing else in this file needs it now that every path through
- *  this action returns instead. */
+ *  this action returns instead.
+ *
+ *  There is no `ok: true` branch: a create that resolves every field
+ *  succeeds unconditionally, whether or not the roster paste left a name
+ *  unresolved. An unmatched pilot is an ordinary paste typo, not a
+ *  refusal-worthy input — `createOperationAction` still creates the
+ *  operation — but it is also not a reason to keep the operator on this
+ *  page; the loot half of the same submit already reports its own paste
+ *  problems on the destination page rather than the composer, via `dropped`
+ *  in the query string (see `./dropped`), and the roster half now does the
+ *  same via `unresolved` (see `./unresolved`). Both travel on the one
+ *  redirect below, so a submit that hits both problems at once does not
+ *  lose either report. */
 export type CreateOperationState = { ok: false; code: NewOperationErrorCode } | null;
 
 /**
@@ -226,6 +240,13 @@ export type CreateOperationState = { ok: false; code: NewOperationErrorCode } | 
  * transaction ever opens), so anything it does throw is a genuine fault and
  * belongs on error.tsx. See `addAppraisedPoolAction`'s own comment, which
  * solved this same problem first.
+ *
+ * The transaction commits unconditionally into a `redirect()` — see
+ * `CreateOperationState`'s own doc for why there is no longer a branch here
+ * that stays on this page. Both `dropped` (loot) and `unresolved` (roster)
+ * are computed before the redirect and both ride the same URL when either or
+ * both are non-empty, mirroring how `addAppraisedPoolAction` already carries
+ * `dropped` onto its own redirect target.
  */
 export async function createOperationAction(
   _prevState: CreateOperationState,
@@ -296,9 +317,18 @@ export async function createOperationAction(
 
   const names = rosterPaste ? parseRosterPaste(rosterPaste) : [];
 
+  // Read back out of the transaction closure below, the same way
+  // `appraisalInput`/`droppedParam` above are captured across an `await`
+  // boundary before the redirect that follows.
+  let unresolvedNames: string[] = [];
+
   const { id } = await getDb().transaction(async (dbtx) => {
     const rosterEntries =
       names.length > 0 ? await resolveRosterNames(dbtx, names) : undefined;
+    // See `unresolvedRosterNames`'s own doc: an entry with no matching
+    // character is not refused, only reported, so this is a read of what
+    // `resolveRosterNames` already decided rather than a second check.
+    unresolvedNames = rosterEntries ? unresolvedRosterNames(rosterEntries) : [];
     return createOperationWithContents(dbtx, actor, {
       name,
       occurredAt,
@@ -311,7 +341,16 @@ export async function createOperationAction(
     });
   });
   revalidatePath("/payouts");
-  redirect(droppedParam ? `/payouts/${id}?dropped=${droppedParam}` : `/payouts/${id}`);
+  // Same "report through the query string, unconditionally" mechanism
+  // `droppedParam` above already uses, for the roster half of the same
+  // submit — see `CreateOperationState`'s own doc.
+  const unresolvedParam =
+    unresolvedNames.length > 0 ? encodeUnresolved(unresolvedNames) : null;
+  const query = new URLSearchParams();
+  if (droppedParam) query.set("dropped", droppedParam);
+  if (unresolvedParam) query.set("unresolved", unresolvedParam);
+  const qs = query.toString();
+  redirect(qs ? `/payouts/${id}?${qs}` : `/payouts/${id}`);
 }
 
 /** The one rejection on this page that `useActionState` handles instead of a

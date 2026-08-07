@@ -136,6 +136,43 @@ export default async function LoginPage({
             announces least reliably. Tone is per-code — a cancelled sign-in and
             an expired cookie are not faults, and only faults get the alarm. */}
         <Notice tone={tone}>{message}</Notice>
+        {/* The control precedes the disclosure it is granting, not the other
+            way around. The permission copy below runs long — a full
+            paragraph plus a per-scope <dl> — and this is the only
+            unauthenticated page in the app: every visit pays for reading it
+            again before reaching the one thing most visitors came to press.
+            Moving the button here means it renders without depending on the
+            copy's length, at any viewport or zoom, rather than chasing a
+            specific pixel count that the copy could blow past on the next
+            scope added. The disclosure keeps its job — it is still fully
+            rendered below, in document order, reachable by scrolling before
+            the button is ever pressed. Nothing about "read before granting"
+            required "read above the button": scrolling past a control
+            without activating it is not consulting it. */}
+        <a className="launch__action" href="/auth/eve/login">
+          {/* Self-hosted, and the white cut. Hot-linked from
+              web.ccpgamescdn.com this was a third-party request on the one
+              unauthenticated page in the app: every visitor's IP and UA reached
+              CCP's CDN before any sign-in was attempted, and with no
+              preconnect, no fetchPriority and no fallback ground the degraded
+              state was bare alt text on navy — for the product's only entry
+              control. Served from /public it is same-origin, cached with the
+              app, and cannot fail independently of the page. The black-large
+              cut also made the primary action the darkest object on a dark
+              page; CCP publishes this one. */}
+          {/* eslint-disable-next-line @next/next/no-img-element -- a vendor
+              brand mark, published by CCP at exactly the 270x45 it is drawn at
+              and already down to 2,248 bytes. Nothing for the optimizer to
+              reclaim, and re-encoding somebody else's brand asset is not ours
+              to do. */}
+          <img
+            src="/brand/eve-sso-login-white-large.png"
+            alt="Log in with EVE Online"
+            width={270}
+            height={45}
+            fetchPriority="high"
+          />
+        </a>
         <div className="launch__disclosure">
           <p className="launch__disclosure-note">
             Sign in with any EVE character. authGD sets your Discord role; while your main
@@ -169,30 +206,6 @@ export default async function LoginPage({
             </>
           )}
         </div>
-        <a className="launch__action" href="/auth/eve/login">
-          {/* Self-hosted, and the white cut. Hot-linked from
-              web.ccpgamescdn.com this was a third-party request on the one
-              unauthenticated page in the app: every visitor's IP and UA reached
-              CCP's CDN before any sign-in was attempted, and with no
-              preconnect, no fetchPriority and no fallback ground the degraded
-              state was bare alt text on navy — for the product's only entry
-              control. Served from /public it is same-origin, cached with the
-              app, and cannot fail independently of the page. The black-large
-              cut also made the primary action the darkest object on a dark
-              page; CCP publishes this one. */}
-          {/* eslint-disable-next-line @next/next/no-img-element -- a vendor
-              brand mark, published by CCP at exactly the 270x45 it is drawn at
-              and already down to 2,248 bytes. Nothing for the optimizer to
-              reclaim, and re-encoding somebody else's brand asset is not ours
-              to do. */}
-          <img
-            src="/brand/eve-sso-login-white-large.png"
-            alt="Log in with EVE Online"
-            width={270}
-            height={45}
-            fetchPriority="high"
-          />
-        </a>
         {brand.footer && <p className="launch__foot">{brand.footer}</p>}
       </div>
     </main>
