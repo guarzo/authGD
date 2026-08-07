@@ -3703,9 +3703,9 @@ h3.rule-head__label {
   justify-items: start;
 }
 
-/* A standing explanation belonging to a table rather than to the page. Sits
-   between the section rule and the table it describes, so it reads as a caption
-   on the manifest. */
+/* A standing explanation belonging to a table rather than to the page: either
+   a caption sitting between the section rule and the table it describes, or
+   (the manifest's drawer row) prose rendered inside the table itself. */
 .table-note {
   max-width: var(--measure);
   margin-bottom: var(--s-4);
@@ -3726,6 +3726,14 @@ h3.rule-head__label {
 }
 
 .table-notes .table-note:last-child {
+  margin-bottom: 0;
+}
+
+/* The container rule above only reaches a note inside `.table-notes`, and the
+   drawer row's note is not in one. A `<td>` does not collapse a child's margin
+   out, so without this the drawer row would carry `--s-4` of dead space under
+   prose whose whole point is a minimal row height. */
+.drawer-row .table-note {
   margin-bottom: 0;
 }
 

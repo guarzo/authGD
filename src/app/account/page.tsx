@@ -621,12 +621,12 @@ export default async function AccountPage({
                       <tr>
                         <td>
                           {/* The EVE image server is a third party serving one
-                          small thumbnail per row; running each through the
-                          image optimizer would add a proxy hop and a
-                          dependency on their uptime per row of an admin's
-                          scan, for no visible gain on a 32x32 avatar — not
-                          adding images.evetech.net to remotePatterns for
-                          this. */}
+                              small thumbnail per row; running each through the
+                              image optimizer would add a proxy hop and a
+                              dependency on their uptime per row of an admin's
+                              scan, for no visible gain on a 32x32 avatar — not
+                              adding images.evetech.net to remotePatterns for
+                              this. */}
                           {/* eslint-disable-next-line @next/next/no-img-element */}
                           <img
                             className="portrait"
@@ -648,16 +648,16 @@ export default async function AccountPage({
                               stale={c.locationStale}
                             />
                             {/* Only when the STATUS column is gone. `map on|off`
-                              varies per character while the chip reads `ok`
-                              either way — deliberately, since map membership
-                              cannot substantiate a fault
-                              (account-health.ts:27-35) — so the cell's
-                              accessible name was the only place a
-                              screen-reader user could learn it. Visually
-                              hidden costs no vertical space, which is the
-                              whole point of dropping the column. Never
-                              rendered alongside the column: that would say the
-                              same sentence twice in one row. */}
+                                varies per character while the chip reads `ok`
+                                either way — deliberately, since map membership
+                                cannot substantiate a fault
+                                (account-health.ts:27-35) — so the cell's
+                                accessible name was the only place a
+                                screen-reader user could learn it. Visually
+                                hidden costs no vertical space, which is the
+                                whole point of dropping the column. Never
+                                rendered alongside the column: that would say the
+                                same sentence twice in one row. */}
                             {!showStatusColumn && (
                               <span className="visually-hidden" data-status-summary>
                                 {statusSummary(c)}
@@ -815,10 +815,12 @@ export default async function AccountPage({
                           cell: in a cell the sentence wraps against a narrow
                           column and the row's height becomes viewport-
                           dependent (+3px at desktop, +89px at 390px, measured);
-                          spanning the table it is much closer to flat (MEASURE
-                          ME). This costs one fold row at every viewport,
-                          accepted deliberately — proximity to the failing
-                          character is worth more than the tenth healthy row.
+                          spanning the table it still wraps against the table's
+                          own width, but far less sharply — 37px at 1440/1280,
+                          57px at 390px, measured. This costs one fold row at
+                          every viewport, accepted deliberately — proximity to
+                          the failing character is worth more than the tenth
+                          healthy row.
 
                           Same `hasContactRemedy` gate as the `aria-describedby`
                           that points here, so the id cannot dangle. Prose and

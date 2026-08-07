@@ -1632,11 +1632,14 @@ test("a stalled character gets a sub-row too", async ({ page, context }) => {
 // this replaced sat after the table and could not displace a row, so moving
 // the prose inside the table is a deliberate regression on this metric — one
 // row at every viewport. Pinned as a floor, not an equality: a future change
-// that gets a row back should not have to edit this number.
+// that gets a row back should not have to edit this number. Values are the
+// observed minimum across five consecutive runs per viewport (stable after
+// the drawer-row margin fix and waiting on `document.fonts.ready` below —
+// both removed sources of run-to-run variance in the raw measurement).
 const FAULTED_FOLD_TARGETS = [
-  { width: 1440, height: 900, expected: 6 },
-  { width: 1280, height: 800, expected: 5 },
-  { width: 390, height: 844, expected: 4 },
+  { width: 1440, height: 900, expected: 7 },
+  { width: 1280, height: 800, expected: 6 },
+  { width: 390, height: 844, expected: 5 },
 ];
 
 for (const { width, height, expected } of FAULTED_FOLD_TARGETS) {
@@ -1659,6 +1662,12 @@ for (const { width, height, expected } of FAULTED_FOLD_TARGETS) {
     // reason — the exact way #167's band assertion passed.
     await expect(manifest(page).locator(".char__location")).toHaveCount(10);
     await expect(manifest(page).locator("tbody tr.drawer-row")).toHaveCount(2);
+
+    // Without this the fold count races font loading: a row measured before
+    // its font swaps in reports a shorter (or taller, on a re-layout mid-swap)
+    // rect than the same row a frame later, which is what made this floor
+    // flaky to pin exactly. Layout is settled once every font is.
+    await page.evaluate(() => document.fonts.ready);
 
     const visible = await page.evaluate(
       ({ sel, h }) =>
