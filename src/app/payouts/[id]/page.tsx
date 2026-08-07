@@ -539,177 +539,188 @@ export default async function PayoutOperationPage({
           >
             Loot
           </RuleHead>
-          {pools.length > 0 && (
-            <PoolFlow
-              order={pools.map((pool, index) => ({ id: pool.id, number: index + 1 }))}
-              headingId={LOOT_HEADING_ID}
-            >
-              <Scroller label="Loot pools">
-                <table className="log">
-                  <thead>
-                    <tr>
-                      <th scope="col">#</th>
-                      <th scope="col">Source</th>
-                      <th scope="col" className="num">
-                        Value
-                      </th>
-                      {anyPoolNotes && <th scope="col">Notes</th>}
-                      <th scope="col">
-                        <span className="visually-hidden">Actions</span>
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {pools.map((pool, index) => (
-                      <tr key={pool.id}>
-                        <td className="mono nowrap">{index + 1}</td>
-                        <td>
-                          {pool.valuationSource === "appraised" ? (
-                            <Status tone="ok">
-                              appraised
-                              {pool.pricingMode &&
-                                ` · ${PRICING_LABELS[pool.pricingMode as PricingMode] ?? pool.pricingMode}`}
-                            </Status>
-                          ) : (
-                            <Status tone="warn">flat (manual)</Status>
-                          )}
-                        </td>
-                        <td className="mono nowrap num">{fmtIsk(pool.totalValue)} ISK</td>
-                        {anyPoolNotes && <td>{pool.notes}</td>}
-                        <td>
-                          {canEdit && (
-                            <DeletePoolForm
-                              action={deletePoolAction.bind(null, operation.id, pool.id)}
-                              poolId={pool.id}
-                              poolNumber={index + 1}
-                            />
-                          )}
-                        </td>
+          {/* Outside the `pools.length > 0` guard for the same reason
+              `<PayFlow>` sits outside its own — see the note there. */}
+          <PoolFlow
+            order={pools.map((pool, index) => ({ id: pool.id, number: index + 1 }))}
+            headingId={LOOT_HEADING_ID}
+          >
+            {pools.length > 0 && (
+              <>
+                <Scroller label="Loot pools">
+                  <table className="log">
+                    <thead>
+                      <tr>
+                        <th scope="col">#</th>
+                        <th scope="col">Source</th>
+                        <th scope="col" className="num">
+                          Value
+                        </th>
+                        {anyPoolNotes && <th scope="col">Notes</th>}
+                        <th scope="col">
+                          <span className="visually-hidden">Actions</span>
+                        </th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </Scroller>
+                    </thead>
+                    <tbody>
+                      {pools.map((pool, index) => (
+                        <tr key={pool.id}>
+                          <td className="mono nowrap">{index + 1}</td>
+                          <td>
+                            {pool.valuationSource === "appraised" ? (
+                              <Status tone="ok">
+                                appraised
+                                {pool.pricingMode &&
+                                  ` · ${PRICING_LABELS[pool.pricingMode as PricingMode] ?? pool.pricingMode}`}
+                              </Status>
+                            ) : (
+                              <Status tone="warn">flat (manual)</Status>
+                            )}
+                          </td>
+                          <td className="mono nowrap num">
+                            {fmtIsk(pool.totalValue)} ISK
+                          </td>
+                          {anyPoolNotes && <td>{pool.notes}</td>}
+                          <td>
+                            {canEdit && (
+                              <DeletePoolForm
+                                action={deletePoolAction.bind(
+                                  null,
+                                  operation.id,
+                                  pool.id,
+                                )}
+                                poolId={pool.id}
+                                poolNumber={index + 1}
+                              />
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </Scroller>
 
-              {poolsWithUnresolvedItems.length > 0 && (
-                <Notice tone="warn">
-                  <span>
-                    <strong>
-                      {totalUnresolvedItems} item{totalUnresolvedItems === 1 ? "" : "s"}{" "}
-                      priced at 0.00 across {poolsWithUnresolvedItems.length} pool
-                      {poolsWithUnresolvedItems.length === 1 ? "" : "s"}
-                    </strong>{" "}
-                    — not found, or no market data for the chosen pricing. The pool total
-                    is short by whatever they are worth.
-                    <br />
-                    <span className="dim">
-                      {poolsWithUnresolvedItems
-                        .map(
-                          ({ index, unresolved }) =>
-                            `Pool ${index + 1}: ${unresolved
-                              .map((i) => `${i.name} ×${i.qty}`)
-                              .join(", ")}`,
-                        )
-                        .join("; ")}
+                {poolsWithUnresolvedItems.length > 0 && (
+                  <Notice tone="warn">
+                    <span>
+                      <strong>
+                        {totalUnresolvedItems} item{totalUnresolvedItems === 1 ? "" : "s"}{" "}
+                        priced at 0.00 across {poolsWithUnresolvedItems.length} pool
+                        {poolsWithUnresolvedItems.length === 1 ? "" : "s"}
+                      </strong>{" "}
+                      — not found, or no market data for the chosen pricing. The pool
+                      total is short by whatever they are worth.
+                      <br />
+                      <span className="dim">
+                        {poolsWithUnresolvedItems
+                          .map(
+                            ({ index, unresolved }) =>
+                              `Pool ${index + 1}: ${unresolved
+                                .map((i) => `${i.name} ×${i.qty}`)
+                                .join(", ")}`,
+                          )
+                          .join("; ")}
+                      </span>
                     </span>
-                  </span>
-                </Notice>
-              )}
-
-              {poolsWithUnresolvedItems.length > 0 &&
-                !canEdit &&
-                operation.status === "finalized" &&
-                !locked && (
-                  <Notice tone="info">
-                    {canUnlock ? (
-                      <>
-                        Some loot is still unpriced, so the total is short — but repricing
-                        is closed while the operation is finalized. Unlock, in the
-                        Operation block above, reopens it until it is finalized again.
-                      </>
-                    ) : (
-                      <>
-                        Some loot is still unpriced, so the total is short — but repricing
-                        is closed while the operation is finalized. Only this
-                        operation&apos;s creator or an admin can unlock it.
-                      </>
-                    )}
                   </Notice>
                 )}
 
-              {/* One editable table at the top level, not one disclosure per
+                {poolsWithUnresolvedItems.length > 0 &&
+                  !canEdit &&
+                  operation.status === "finalized" &&
+                  !locked && (
+                    <Notice tone="info">
+                      {canUnlock ? (
+                        <>
+                          Some loot is still unpriced, so the total is short — but
+                          repricing is closed while the operation is finalized. Unlock, in
+                          the Operation block above, reopens it until it is finalized
+                          again.
+                        </>
+                      ) : (
+                        <>
+                          Some loot is still unpriced, so the total is short — but
+                          repricing is closed while the operation is finalized. Only this
+                          operation&apos;s creator or an admin can unlock it.
+                        </>
+                      )}
+                    </Notice>
+                  )}
+
+                {/* One editable table at the top level, not one disclosure per
                   pool: a pool's items used to hide behind "Pool N items (M)",
                   which is exactly the loot this section exists to show —
                   DESIGN.md's "scanning is the primary act" argues against
                   burying the thing being scanned. A pool header row names
                   which pool each block of items belongs to when there is more
                   than one. */}
-              {pools.map(
-                (pool, index) =>
-                  pool.items.length > 0 && (
-                    <div key={pool.id} className="pool-items">
-                      {pools.length > 1 && <p className="dim mono">Pool {index + 1}</p>}
-                      <Scroller label={`Pool ${index + 1} items`}>
-                        <table className="log">
-                          <thead>
-                            <tr>
-                              <th scope="col">Item</th>
-                              <th scope="col">Qty</th>
-                              <th scope="col" className="num">
-                                Unit price
-                              </th>
-                              <th scope="col" className="num">
-                                Line total
-                              </th>
-                              <th scope="col">Price source</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {pool.items.map((item) => (
-                              <tr key={item.id}>
-                                <td>{item.name}</td>
-                                <td className="mono nowrap">{item.qty}</td>
-                                <td className="mono nowrap num">
-                                  {canEdit ? (
-                                    <InlineEdit
-                                      action={setItemPriceAction.bind(
-                                        null,
-                                        operation.id,
-                                        item.id,
-                                      )}
-                                      fieldName="unitPrice"
-                                      value={item.unitPrice}
-                                      label={`unit price for ${item.name}`}
-                                      type="number"
-                                      step="0.01"
-                                      min="0"
-                                      fieldClassName="field field--money"
-                                      standalone={false}
-                                    />
-                                  ) : (
-                                    fmtIsk(item.unitPrice)
-                                  )}
-                                </td>
-                                <td className="mono nowrap num">
-                                  {fmtIsk(item.totalValue)} ISK
-                                </td>
-                                <td>
-                                  {item.priceSource === "unresolved" ? (
-                                    <Status tone="warn">unresolved</Status>
-                                  ) : (
-                                    <Status>{item.priceSource}</Status>
-                                  )}
-                                </td>
+                {pools.map(
+                  (pool, index) =>
+                    pool.items.length > 0 && (
+                      <div key={pool.id} className="pool-items">
+                        {pools.length > 1 && <p className="dim mono">Pool {index + 1}</p>}
+                        <Scroller label={`Pool ${index + 1} items`}>
+                          <table className="log">
+                            <thead>
+                              <tr>
+                                <th scope="col">Item</th>
+                                <th scope="col">Qty</th>
+                                <th scope="col" className="num">
+                                  Unit price
+                                </th>
+                                <th scope="col" className="num">
+                                  Line total
+                                </th>
+                                <th scope="col">Price source</th>
                               </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </Scroller>
-                    </div>
-                  ),
-              )}
-            </PoolFlow>
-          )}
+                            </thead>
+                            <tbody>
+                              {pool.items.map((item) => (
+                                <tr key={item.id}>
+                                  <td>{item.name}</td>
+                                  <td className="mono nowrap">{item.qty}</td>
+                                  <td className="mono nowrap num">
+                                    {canEdit ? (
+                                      <InlineEdit
+                                        action={setItemPriceAction.bind(
+                                          null,
+                                          operation.id,
+                                          item.id,
+                                        )}
+                                        fieldName="unitPrice"
+                                        value={item.unitPrice}
+                                        label={`unit price for ${item.name}`}
+                                        type="number"
+                                        step="0.01"
+                                        min="0"
+                                        fieldClassName="field field--money"
+                                        standalone={false}
+                                      />
+                                    ) : (
+                                      fmtIsk(item.unitPrice)
+                                    )}
+                                  </td>
+                                  <td className="mono nowrap num">
+                                    {fmtIsk(item.totalValue)} ISK
+                                  </td>
+                                  <td>
+                                    {item.priceSource === "unresolved" ? (
+                                      <Status tone="warn">unresolved</Status>
+                                    ) : (
+                                      <Status>{item.priceSource}</Status>
+                                    )}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </Scroller>
+                      </div>
+                    ),
+                )}
+              </>
+            )}
+          </PoolFlow>
 
           {/* One slot, both states — the paste form is bare while there is no
               loot and tucked into "Add another paste" once there is, but it is
@@ -796,9 +807,21 @@ export default async function PayoutOperationPage({
               />
             </Disclosure>
           )}
-          {participants.length > 0 && (
-            <>
-              {/* Sighted-only, unlike `#mark-paid-cost` below: that span is
+          {/* Outside the `participants.length > 0` guard on purpose, not
+              inside it: removing the last participant empties that list, so a
+              provider mounted under the guard would unmount in the very render
+              its effect needs to announce the removal and move focus to the
+              heading — the announcement would never be spoken and focus would
+              fall to <body>. Rendering it with an empty roster costs a live
+              region and nothing else. */}
+          <PayFlow
+            rows={payRows}
+            allParticipants={allParticipants}
+            headingId={ROSTER_HEADING_ID}
+          >
+            {participants.length > 0 && (
+              <>
+                {/* Sighted-only, unlike `#mark-paid-cost` below: that span is
                   `.visually-hidden` permanently (see the comment at its own
                   render site) because it is far below a twenty-row table and
                   reveals nothing a sighted operator would read before
@@ -811,18 +834,15 @@ export default async function PayoutOperationPage({
                   the specific button being armed, which is the only way a
                   screen reader user tabbing straight to a row (never reading
                   this paragraph) still hears the cost ahead of the press. */}
-              {operation.status === "finalized" && firstPayment && access.isOperator && (
-                <p className="dim">
-                  Marking any row below paid freezes the loot pools, roster, shares and
-                  corp share permanently: Unlock will no longer reopen them once it
-                  happens.
-                </p>
-              )}
-              <PayFlow
-                rows={payRows}
-                allParticipants={allParticipants}
-                headingId={ROSTER_HEADING_ID}
-              >
+                {operation.status === "finalized" &&
+                  firstPayment &&
+                  access.isOperator && (
+                    <p className="dim">
+                      Marking any row below paid freezes the loot pools, roster, shares
+                      and corp share permanently: Unlock will no longer reopen them once
+                      it happens.
+                    </p>
+                  )}
                 <Scroller
                   label="Roster"
                   tall={participants.length > ROSTER_TALL_THRESHOLD}
@@ -1019,63 +1039,62 @@ export default async function PayoutOperationPage({
                     pools, roster and shares can no longer be reopened with Unlock.
                   </span>
                 )}
-              </PayFlow>
 
-              {duplicateUnresolvedNames.length > 0 && (
-                <Notice tone="warn">
-                  <span>
-                    <strong>
-                      {duplicateUnresolvedNames.length} unresolved name
-                      {duplicateUnresolvedNames.length === 1 ? "" : "s"} appear
-                      {duplicateUnresolvedNames.length === 1 ? "s" : ""} more than once
-                    </strong>{" "}
-                    — each is drawing a full share as a separate person.{" "}
-                    {amendable
-                      ? "If they are the same pilot, remove one before finalizing."
-                      : "If they are the same pilot, this split counted them twice and can no longer be edited."}
-                    <br />
-                    <span className="dim">{duplicateUnresolvedNames.join(", ")}</span>
-                  </span>
-                </Notice>
-              )}
-              {crossStateClashes.length > 0 && (
-                <Notice tone="info">
-                  <span>
-                    <strong>
-                      {crossStateClashes.length} name
-                      {crossStateClashes.length === 1 ? "" : "s"} on this roster{" "}
-                      {crossStateClashes.length === 1 ? "is" : "are"} both linked and
-                      unlinked
-                    </strong>{" "}
-                    — one row is tied to an account, another under the same name is not,
-                    and each is drawing a full share. They may be the same pilot whose
-                    link landed after the roster was written, or two different people who
-                    share a name.{" "}
-                    {amendable
-                      ? "Check before finalizing."
-                      : "Worth checking against what was actually paid — the split itself can no longer be edited."}
-                    <br />
-                    <span className="dim">{crossStateClashes.join(", ")}</span>
-                  </span>
-                </Notice>
-              )}
+                {duplicateUnresolvedNames.length > 0 && (
+                  <Notice tone="warn">
+                    <span>
+                      <strong>
+                        {duplicateUnresolvedNames.length} unresolved name
+                        {duplicateUnresolvedNames.length === 1 ? "" : "s"} appear
+                        {duplicateUnresolvedNames.length === 1 ? "s" : ""} more than once
+                      </strong>{" "}
+                      — each is drawing a full share as a separate person.{" "}
+                      {amendable
+                        ? "If they are the same pilot, remove one before finalizing."
+                        : "If they are the same pilot, this split counted them twice and can no longer be edited."}
+                      <br />
+                      <span className="dim">{duplicateUnresolvedNames.join(", ")}</span>
+                    </span>
+                  </Notice>
+                )}
+                {crossStateClashes.length > 0 && (
+                  <Notice tone="info">
+                    <span>
+                      <strong>
+                        {crossStateClashes.length} name
+                        {crossStateClashes.length === 1 ? "" : "s"} on this roster{" "}
+                        {crossStateClashes.length === 1 ? "is" : "are"} both linked and
+                        unlinked
+                      </strong>{" "}
+                      — one row is tied to an account, another under the same name is not,
+                      and each is drawing a full share. They may be the same pilot whose
+                      link landed after the roster was written, or two different people
+                      who share a name.{" "}
+                      {amendable
+                        ? "Check before finalizing."
+                        : "Worth checking against what was actually paid — the split itself can no longer be edited."}
+                      <br />
+                      <span className="dim">{crossStateClashes.join(", ")}</span>
+                    </span>
+                  </Notice>
+                )}
 
-              {canEdit && (
-                <Disclosure
-                  as="details"
-                  className="disc"
-                  summary="Replace roster from a paste"
-                  ariaLabel="Replace roster from a paste — discards the current roster and every share edit"
-                >
-                  <form
-                    action={setRosterAction.bind(null, operation.id)}
-                    className="form-stack"
+                {canEdit && (
+                  <Disclosure
+                    as="details"
+                    className="disc"
+                    summary="Replace roster from a paste"
+                    ariaLabel="Replace roster from a paste — discards the current roster and every share edit"
                   >
-                    <label className="form-stack__field">
-                      Paste (names separated by /)
-                      <textarea className="field" name="paste" rows={8} required />
-                    </label>
-                    {/* Plain grade, not quiet. This is the terminal submit of
+                    <form
+                      action={setRosterAction.bind(null, operation.id)}
+                      className="form-stack"
+                    >
+                      <label className="form-stack__field">
+                        Paste (names separated by /)
+                        <textarea className="field" name="paste" rows={8} required />
+                      </label>
+                      {/* Plain grade, not quiet. This is the terminal submit of
                         a form the operator has just typed a paste into, and
                         neither of its two structural siblings is quiet: "Add
                         participant" is a plain `.btn`, and "Set roster" is
@@ -1086,25 +1105,26 @@ export default async function PayoutOperationPage({
                         restraint (colour only) without spending the border the
                         affordance needs, which is the pairing "Delete
                         operation" already uses. */}
-                    <ConfirmSubmit
-                      className="btn btn--danger-quiet"
-                      armedClassName="btn btn--danger"
-                      label="Replace roster"
-                      confirmName="confirm replace roster"
-                      describedBy="replace-roster-cost"
-                    />
-                    <ConfirmCost id="replace-roster-cost">
-                      Replaces all {participants.length} participant
-                      {participants.length === 1 ? "" : "s"}.{" "}
-                      {editedParticipantCount > 0
-                        ? `${editedParticipantCount} share edit${editedParticipantCount === 1 ? "" : "s"} will be lost.`
-                        : "No share edits will be lost — nothing on the current roster has been touched yet."}
-                    </ConfirmCost>
-                  </form>
-                </Disclosure>
-              )}
-            </>
-          )}
+                      <ConfirmSubmit
+                        className="btn btn--danger-quiet"
+                        armedClassName="btn btn--danger"
+                        label="Replace roster"
+                        confirmName="confirm replace roster"
+                        describedBy="replace-roster-cost"
+                      />
+                      <ConfirmCost id="replace-roster-cost">
+                        Replaces all {participants.length} participant
+                        {participants.length === 1 ? "" : "s"}.{" "}
+                        {editedParticipantCount > 0
+                          ? `${editedParticipantCount} share edit${editedParticipantCount === 1 ? "" : "s"} will be lost.`
+                          : "No share edits will be lost — nothing on the current roster has been touched yet."}
+                      </ConfirmCost>
+                    </form>
+                  </Disclosure>
+                )}
+              </>
+            )}
+          </PayFlow>
 
           {/* --- Details --------------------------------------------------- */}
           <RuleHead as="h2">Details</RuleHead>

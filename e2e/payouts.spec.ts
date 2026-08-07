@@ -2619,3 +2619,227 @@ test("the notes Save control sits at the page's standalone hit-target grade", as
   expect(Math.round(finalizeBox!.height)).toBe(36);
   expect(Math.round(saveBox!.height)).toBe(Math.round(finalizeBox!.height));
 });
+
+/**
+ * Seeds a *draft* operation — pools, participants, or both. `seedFinalizedRoster`
+ * above cannot stand in for this: `canEdit` is
+ * `access.isOperator && operation.status === "draft" && !locked`
+ * (`src/app/payouts/[id]/page.tsx`), so neither `remove` nor `delete pool` is
+ * rendered at all on a finalized operation.
+ *
+ * Pools come out in `asc(lootPool.id)` order over random uuids
+ * (`src/services/payout-view.ts`), which bears no relation to insertion order —
+ * hence `pools` is a count and the tests read the rendered order back out of the
+ * DOM. Participants order `asc(displayName)`, which is stable, so those tests
+ * address rows by name.
+ */
+async function seedDraft(
+  database: typeof db,
+  createdBy: string,
+  { pools = 0, names = [] }: { pools?: number; names?: string[] },
+): Promise<string> {
+  const [op] = await database
+    .insert(payoutOperation)
+    .values({
+      name: "Draft run",
+      occurredAt: new Date("2026-08-01"),
+      corpSharePct: "0",
+      createdBy,
+      status: "draft",
+    })
+    .returning();
+  if (pools > 0) {
+    await database.insert(lootPool).values(
+      Array.from({ length: pools }, (_, i) => ({
+        operationId: op.id,
+        valuationSource: "flat" as const,
+        totalValue: "1000000.00",
+        // `loot_pool_flat_note_ck` requires one on a flat pool: a manual total
+        // with no explanation is exactly what that constraint exists to reject.
+        notes: `seeded ${i + 1}`,
+      })),
+    );
+  }
+  if (names.length > 0) {
+    await database.insert(payoutParticipant).values(
+      names.map((displayName) => ({
+        operationId: op.id,
+        displayName,
+        shares: "1",
+        excluded: false,
+        amount: (1_000_000 / names.length).toFixed(2),
+      })),
+    );
+  }
+  return op.id;
+}
+
+/**
+ * The per-pool delete forms in rendered table order. `deletePoolFormId` carries
+ * the pool's uuid, so this is position → identity: the only way to assert that
+ * focus landed on *the pool that used to be below the deleted one* rather than
+ * on whichever row happens to be numbered 1 after the renumbering.
+ */
+function deletePoolFormIds(page: Page): Promise<string[]> {
+  return page
+    .locator('[id^="delete-pool-"]')
+    .evaluateAll((els) => els.map((el) => el.id));
+}
+
+test("removing a participant moves focus to the row below and announces the count", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "Roster Editor",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+  const opId = await seedDraft(db, operator.id, {
+    names: ["Ada Draft", "Bo Draft", "Cy Draft"],
+  });
+  await page.goto(`/payouts/${opId}`);
+
+  await page.getByRole("button", { name: "remove Bo Draft", exact: true }).click();
+  await page
+    .getByRole("button", { name: "confirm remove Bo Draft", exact: true })
+    .click();
+
+  // The row below, not the top of the table and not <body>: an operator
+  // pruning a paste of twenty names keeps their place in the list.
+  await expect(
+    page.getByRole("button", { name: "remove Cy Draft", exact: true }),
+  ).toBeFocused();
+  await expect(page.locator("#pay-flow-status")).toHaveText(
+    "Removed Bo Draft. 2 participants remain.",
+  );
+});
+
+test("removing the bottom participant falls back to the row above", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "Tail Editor",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+  const opId = await seedDraft(db, operator.id, {
+    names: ["Ada Tail", "Bo Tail", "Cy Tail"],
+  });
+  await page.goto(`/payouts/${opId}`);
+
+  await page.getByRole("button", { name: "remove Cy Tail", exact: true }).click();
+  await page.getByRole("button", { name: "confirm remove Cy Tail", exact: true }).click();
+
+  await expect(
+    page.getByRole("button", { name: "remove Bo Tail", exact: true }),
+  ).toBeFocused();
+  await expect(page.locator("#pay-flow-status")).toHaveText(
+    "Removed Cy Tail. 2 participants remain.",
+  );
+});
+
+test("removing the only participant returns focus to the roster heading", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "Last Editor",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+  const opId = await seedDraft(db, operator.id, { names: ["Solo Draft"] });
+  await page.goto(`/payouts/${opId}`);
+
+  await page.getByRole("button", { name: "remove Solo Draft", exact: true }).click();
+  await page
+    .getByRole("button", { name: "confirm remove Solo Draft", exact: true })
+    .click();
+
+  // The table is gone entirely; `PayFlow` has to outlive it to say so, which is
+  // why it is mounted outside the `participants.length > 0` guard.
+  await expect(page.locator("#roster-heading")).toBeFocused();
+  await expect(page.locator("#pay-flow-status")).toHaveText(
+    "Removed Solo Draft. 0 participants remain.",
+  );
+});
+
+test("deleting a pool moves focus to the pool below and announces the count", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "Pool Editor",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+  const opId = await seedDraft(db, operator.id, { pools: 3 });
+  await page.goto(`/payouts/${opId}`);
+
+  const ids = await deletePoolFormIds(page);
+  expect(ids).toHaveLength(3);
+
+  await page.getByRole("button", { name: "delete pool 1", exact: true }).click();
+  await page.getByRole("button", { name: "confirm delete pool 1", exact: true }).click();
+
+  // Addressed by the *surviving* pool's own form id: after the deletion it
+  // renumbers to "delete pool 1", so asserting on the label would pass even if
+  // focus had gone to the wrong row.
+  await expect(page.locator(`#${ids[1]} button`)).toBeFocused();
+  await expect(page.locator("#pool-flow-status")).toHaveText(
+    "Removed pool 1. 2 pools remain.",
+  );
+});
+
+test("deleting the bottom pool falls back to the pool above", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "Pool Tail Editor",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+  const opId = await seedDraft(db, operator.id, { pools: 3 });
+  await page.goto(`/payouts/${opId}`);
+
+  const ids = await deletePoolFormIds(page);
+  await page.getByRole("button", { name: "delete pool 3", exact: true }).click();
+  await page.getByRole("button", { name: "confirm delete pool 3", exact: true }).click();
+
+  await expect(page.locator(`#${ids[1]} button`)).toBeFocused();
+  await expect(page.locator("#pool-flow-status")).toHaveText(
+    "Removed pool 3. 2 pools remain.",
+  );
+});
+
+test("deleting the only pool returns focus to the Loot heading", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "Solo Pool Editor",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+  const opId = await seedDraft(db, operator.id, { pools: 1 });
+  await page.goto(`/payouts/${opId}`);
+
+  const heading = page.locator("#loot-heading");
+  await expect(heading).toHaveAttribute("tabindex", "-1");
+
+  await page.getByRole("button", { name: "delete pool 1", exact: true }).click();
+  await page.getByRole("button", { name: "confirm delete pool 1", exact: true }).click();
+
+  await expect(heading).toBeFocused();
+  await expect(page.locator("#pool-flow-status")).toHaveText(
+    "Removed pool 1. 0 pools remain.",
+  );
+});
