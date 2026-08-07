@@ -40,12 +40,11 @@ import { AccountPayouts } from "./account-payouts";
 import { ConfirmNotice } from "@/app/_components/confirm-notice";
 import { accountConfirmation } from "./view";
 
-/** Columns in the crew manifest table: portrait, name, status, actions. Kept
- *  alongside the empty-state row's `colSpan` so the two can't drift apart the
- *  way a bare `4` scattered at both sites could. Token, contacts and map merged
- *  into one STATUS column: at ten or more characters six columns crowded the
- *  name and the location line off a narrow viewport. */
-const MANIFEST_COLUMN_COUNT = 4;
+/** Columns in the crew manifest table: portrait, name, [status], actions.
+ *  Derived rather than constant because STATUS is an exception column — see
+ *  `showStatusColumn` in the page body — and the empty-state row's `colSpan`
+ *  has to follow it or a no-character account renders a short row. */
+const manifestColumns = (showStatus: boolean) => (showStatus ? 4 : 3);
 
 /** The id a contacts cell's `aria-describedby` points at when — and only
  *  when — `ContactRemedy` has something to say about that character. Unlike
@@ -90,6 +89,24 @@ function standingsSummary(c: {
   if (!c.contactsTarget) return "— not managed";
   if (c.contactSyncResult === null) return "not yet run";
   return contactStateToken(c.contactSyncResult).text;
+}
+
+/** The `token ok, standings …, map on|off` sentence, in one place because it
+ *  now has two surfaces: the STATUS cell's accessible name when the column
+ *  renders, and a visually-hidden span in the NAME cell when it does not. Two
+ *  copies would drift, and the one that drifts is the one nobody can see.
+ *
+ *  Only correct for a character that is not `attention`: the literal "token
+ *  ok" holds because `classifyCharacter` returns "attention" for any token
+ *  that is not valid (account-health.ts:112-118), so this string and the `ok`
+ *  chip can only ever agree. A change loosening that classification has to
+ *  update this too — nothing else guards it. */
+function statusSummary(c: {
+  contactsTarget: boolean;
+  contactSyncResult: string | null;
+  onMapAcl: boolean;
+}) {
+  return `token ok, standings ${standingsSummary(c)}, map ${c.onMapAcl ? "on" : "off"}`;
 }
 
 /**
@@ -170,6 +187,13 @@ export default async function AccountPage({
   const showContactsNote = view.characters.some(
     (c) => c.contactsTarget && contactsNoteApplies(c.contactSyncResult),
   );
+
+  // The STATUS column renders only when it has something to say. On the common
+  // account every row reads "ok", which costs a header, a column and 82px of a
+  // 320px viewport to report the absence of news; the column appearing is a
+  // better signal than the column being permanently present. A pure function of
+  // `classifyCharacter` over the crew, so the manifest stays a server component.
+  const showStatusColumn = view.characters.some((c) => classifyCharacter(c) !== "ok");
 
   // One derivation feeds three surfaces: the verdict line, the first-sync
   // notice below (previously computed inline here, separately), and the
@@ -488,9 +512,10 @@ export default async function AccountPage({
             <caption className="visually-hidden">
               authGD owns the <code>{cfg.standings.label}</code> contact label on your
               characters: contacts under that label are managed automatically and may be
-              added, changed, or removed. Each character&rsquo;s STATUS cell summarizes
-              its token, standings and map state, and shows the detail when something
-              needs your attention.
+              added, changed, or removed.
+              {showStatusColumn
+                ? " Each character’s STATUS cell summarizes its token, standings and map state, and shows the detail when something needs your attention."
+                : " Every character is healthy, so each row states its own token, standings and map state in place of a STATUS column."}
             </caption>
             <thead>
               <tr>
@@ -498,7 +523,7 @@ export default async function AccountPage({
                   <span className="visually-hidden">Portrait</span>
                 </th>
                 <th scope="col">Name</th>
-                <th scope="col">Status</th>
+                {showStatusColumn && <th scope="col">Status</th>}
                 <th scope="col">
                   <span className="visually-hidden">Actions</span>
                 </th>
@@ -549,93 +574,99 @@ export default async function AccountPage({
                             location={c.location}
                             stale={c.locationStale}
                           />
+                          {/* Only when the STATUS column is gone. `map on|off`
+                              varies per character while the chip reads `ok`
+                              either way — deliberately, since map membership
+                              cannot substantiate a fault
+                              (account-health.ts:27-35) — so the cell's
+                              accessible name was the only place a
+                              screen-reader user could learn it. Visually
+                              hidden costs no vertical space, which is the
+                              whole point of dropping the column. Never
+                              rendered alongside the column: that would say the
+                              same sentence twice in one row. */}
+                          {!showStatusColumn && (
+                            <span className="visually-hidden" data-status-summary>
+                              {statusSummary(c)}
+                            </span>
+                          )}
                         </div>
                       </td>
-                      <td
-                        data-state={state}
-                        aria-label={
-                          state === "attention"
-                            ? undefined
-                            : // The literal "token ok" is safe only because this
-                              // branch (state !== "attention") is unreachable with
-                              // a non-valid token: `classifyCharacter` returns
-                              // "attention" for any token that isn't valid
-                              // (account-health.ts), so the collapsed "ok" chip
-                              // below and this label can only ever agree. A future
-                              // change loosening that classification would need to
-                              // update this string too — nothing else guards it.
-                              `token ok, standings ${standingsSummary(c)}, map ${
-                                c.onMapAcl ? "on" : "off"
-                              }`
-                        }
-                        aria-describedby={
-                          hasContactRemedy(c.contactSyncResult, c.contactsTarget)
-                            ? contactRemedyId(c.id)
-                            : undefined
-                        }
-                      >
-                        {state === "attention" ? (
-                          <div className="stack">
-                            <span className="status-line">
-                              <span className="status-line__label">token</span>
-                              {c.tokenStatus === "valid" && !c.needsReauthForScopes ? (
-                                <Status tone="ok">ok</Status>
-                              ) : (
-                                // A control, not a value: `.st` carries no underline
-                                // of its own (it's display:inline-flex), so an anchor
-                                // wrapping one rendered with no affordance at all —
-                                // identical to an inert token beside it. This is the
-                                // same "make main"/"unlink" grade the row's other
-                                // controls use, per globals.css's value/control
-                                // split. Merging TOKEN into STATUS does not demote it
-                                // to a chip.
-                                <a
-                                  className="btn btn--quiet btn--micro"
-                                  href="/auth/eve/link"
-                                >
-                                  re-authorize
-                                </a>
-                              )}
-                            </span>
-                            <span className="status-line">
-                              <span className="status-line__label">standings</span>
-                              <ContactState
-                                result={c.contactSyncResult}
-                                target={c.contactsTarget}
-                              />
-                            </span>
-                            <span className="status-line">
-                              <span className="status-line__label">map</span>
-                              {c.onMapAcl ? (
-                                <Status tone="ok">on</Status>
-                              ) : (
-                                <Status tone="off">off</Status>
-                              )}
-                            </span>
-                          </div>
-                        ) : state === "stalled" ? (
-                          // One chip, and it never overstates health: a stalled
-                          // character shows its own state, not `ok`. `map: off`
-                          // rides in the cell's accessible name rather than the
-                          // visible chip because it is unsubstantiable as a fault
-                          // (account-health.ts:27-35) and nothing a member can
-                          // act on.
-                          //
-                          // The null-token branch is unreachable today —
-                          // `classifyCharacter` only returns "stalled" for a
-                          // non-null `contactSyncResult` — but its fallback is
-                          // still a non-"ok" tone. This arm must never be able
-                          // to reach the `ok` chip through any path, so a
-                          // future change to `isStalled` that breaks that
-                          // guarantee fails loud (a wrong chip) rather than
-                          // quiet (a false green).
-                          <Status tone={stalledToken?.tone ?? "warn"}>
-                            {stalledToken?.text ?? "stalled"}
-                          </Status>
-                        ) : (
-                          <Status tone="ok">ok</Status>
-                        )}
-                      </td>
+                      {showStatusColumn && (
+                        <td
+                          data-state={state}
+                          aria-label={
+                            state === "attention" ? undefined : statusSummary(c)
+                          }
+                          aria-describedby={
+                            hasContactRemedy(c.contactSyncResult, c.contactsTarget)
+                              ? contactRemedyId(c.id)
+                              : undefined
+                          }
+                        >
+                          {state === "attention" ? (
+                            <div className="stack">
+                              <span className="status-line">
+                                <span className="status-line__label">token</span>
+                                {c.tokenStatus === "valid" && !c.needsReauthForScopes ? (
+                                  <Status tone="ok">ok</Status>
+                                ) : (
+                                  // A control, not a value: `.st` carries no underline
+                                  // of its own (it's display:inline-flex), so an anchor
+                                  // wrapping one rendered with no affordance at all —
+                                  // identical to an inert token beside it. This is the
+                                  // same "make main"/"unlink" grade the row's other
+                                  // controls use, per globals.css's value/control
+                                  // split. Merging TOKEN into STATUS does not demote it
+                                  // to a chip.
+                                  <a
+                                    className="btn btn--quiet btn--micro"
+                                    href="/auth/eve/link"
+                                  >
+                                    re-authorize
+                                  </a>
+                                )}
+                              </span>
+                              <span className="status-line">
+                                <span className="status-line__label">standings</span>
+                                <ContactState
+                                  result={c.contactSyncResult}
+                                  target={c.contactsTarget}
+                                />
+                              </span>
+                              <span className="status-line">
+                                <span className="status-line__label">map</span>
+                                {c.onMapAcl ? (
+                                  <Status tone="ok">on</Status>
+                                ) : (
+                                  <Status tone="off">off</Status>
+                                )}
+                              </span>
+                            </div>
+                          ) : state === "stalled" ? (
+                            // One chip, and it never overstates health: a stalled
+                            // character shows its own state, not `ok`. `map: off`
+                            // rides in the cell's accessible name rather than the
+                            // visible chip because it is unsubstantiable as a fault
+                            // (account-health.ts:27-35) and nothing a member can
+                            // act on.
+                            //
+                            // The null-token branch is unreachable today —
+                            // `classifyCharacter` only returns "stalled" for a
+                            // non-null `contactSyncResult` — but its fallback is
+                            // still a non-"ok" tone. This arm must never be able
+                            // to reach the `ok` chip through any path, so a
+                            // future change to `isStalled` that breaks that
+                            // guarantee fails loud (a wrong chip) rather than
+                            // quiet (a false green).
+                            <Status tone={stalledToken?.tone ?? "warn"}>
+                              {stalledToken?.text ?? "stalled"}
+                            </Status>
+                          ) : (
+                            <Status tone="ok">ok</Status>
+                          )}
+                        </td>
+                      )}
                       <td>
                         <div className="btn-row btn-row--tight btn-row--end">
                           {!c.isMain && (
@@ -689,7 +720,10 @@ export default async function AccountPage({
                 })}
                 {view.characters.length === 0 && (
                   <tr>
-                    <td className="log__empty" colSpan={MANIFEST_COLUMN_COUNT}>
+                    <td
+                      className="log__empty"
+                      colSpan={manifestColumns(showStatusColumn)}
+                    >
                       <span className="log__empty-text">
                         No characters linked yet. Add one to start pushing standings, map
                         access, and Discord roles for it.
@@ -777,7 +811,10 @@ export default async function AccountPage({
                 per-character truth lives in the manifest above. */}
             <p className="table-note">
               When each job last completed corp-wide, and when it runs next. For your own
-              characters, read the STATUS column in the crew manifest above.
+              characters,{" "}
+              {showStatusColumn
+                ? "read the STATUS column in the crew manifest above."
+                : "read the crew manifest above."}
             </p>
             <dl className="facts">
               <dt>Standings</dt>

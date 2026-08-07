@@ -107,6 +107,20 @@ async function seedNominalCrew(name = "Pilot Prime") {
   return acc;
 }
 
+/** Faults one named character so it can never classify `ok`, which makes the
+ *  exception-only STATUS column render and leaves an `ok` row's own chip
+ *  assertable. Keyed by name alone: `resetDb` runs before every test, so one
+ *  account's characters are the only ones in the table.
+ *
+ *  The main character stays first in the manifest (account-view.ts orders
+ *  main, then alts by name), so `tbody tr:first-child` is still the ok row. */
+async function faultOneAlt(altName: string) {
+  await db
+    .update(character)
+    .set({ tokenStatus: "invalid" })
+    .where(eq(character.name, altName));
+}
+
 // Every code the callbacks can redirect to /login with, checked by name: a code
 // with no entry in the ERRORS map renders nothing at all, which is the one
 // failure mode this page cannot show the member.
@@ -672,8 +686,17 @@ test("a demoted member sees their payout row with no link to the operation", asy
 test("a healthy character collapses to a single ok chip", async ({ page, context }) => {
   // Alumni: untargeted, so the only way this row could still expand is a bad
   // token — ruled out by markTokensHealthy below.
-  const acc = await seedMember(db, { name: "Healthy Pilot", tier: "alumni" });
+  const acc = await seedMember(db, {
+    name: "Healthy Pilot",
+    tier: "alumni",
+    alts: ["Faulted Alt"],
+  });
   await markTokensHealthy(acc.id);
+  // A companion the column exists for: STATUS renders only when at least one
+  // character is not `ok`, so an all-ok seed would leave this test asserting a
+  // chip that correctly does not exist — and its `.status-line` count of 0
+  // would pass for want of a cell rather than for want of expansion.
+  await faultOneAlt("Faulted Alt");
   await context.addCookies([await sessionCookieFor(db, acc.id)]);
   await page.goto("/account");
   const row = page.locator("table tbody tr").first();
@@ -733,8 +756,17 @@ test("dry_run stays one line and never reads ok", async ({ page, context }) => {
 test("map off alone does not expand a row", async ({ page, context }) => {
   // Alumni and no wanderer_acl_observation row at all: legitimately off the
   // map, and there is nothing this member could do about it from this page.
-  const acc = await seedMember(db, { name: "Grounded Pilot", tier: "alumni" });
+  const acc = await seedMember(db, {
+    name: "Grounded Pilot",
+    tier: "alumni",
+    alts: ["Faulted Alt"],
+  });
   await markTokensHealthy(acc.id);
+  // A companion the column exists for: STATUS renders only when at least one
+  // character is not `ok`, so an all-ok seed would leave this test asserting a
+  // chip that correctly does not exist — and its `.status-line` count of 0
+  // would pass for want of a cell rather than for want of expansion.
+  await faultOneAlt("Faulted Alt");
   await context.addCookies([await sessionCookieFor(db, acc.id)]);
   await page.goto("/account");
   const row = page.locator("table tbody tr").first();
@@ -751,8 +783,17 @@ test("a targeted character with a synced result also collapses to ok", async ({
   page,
   context,
 }) => {
-  const acc = await seedMember(db, { name: "Synced Pilot", tier: "member" });
+  const acc = await seedMember(db, {
+    name: "Synced Pilot",
+    tier: "member",
+    alts: ["Faulted Alt"],
+  });
   await markTokensHealthy(acc.id);
+  // A companion the column exists for: STATUS renders only when at least one
+  // character is not `ok`, so an all-ok seed would leave this test asserting a
+  // chip that correctly does not exist — and its `.status-line` count of 0
+  // would pass for want of a cell rather than for want of expansion.
+  await faultOneAlt("Faulted Alt");
   await db.insert(contactSyncState).values({
     characterId: acc.mainCharacterId!,
     lastResult: "ok",
@@ -774,8 +815,17 @@ test("a targeted character with a synced result also collapses to ok", async ({
 // Density must not be bought from screen-reader users: the collapsed chip's
 // accessible name still carries all three facts.
 test("the collapsed chip names token, standings and map", async ({ page, context }) => {
-  const acc = await seedMember(db, { name: "Nameable Pilot", tier: "alumni" });
+  const acc = await seedMember(db, {
+    name: "Nameable Pilot",
+    tier: "alumni",
+    alts: ["Faulted Alt"],
+  });
   await markTokensHealthy(acc.id);
+  // A companion the column exists for: STATUS renders only when at least one
+  // character is not `ok`, so an all-ok seed would leave this test asserting a
+  // chip that correctly does not exist — and its `.status-line` count of 0
+  // would pass for want of a cell rather than for want of expansion.
+  await faultOneAlt("Faulted Alt");
   await context.addCookies([await sessionCookieFor(db, acc.id)]);
   await page.goto("/account");
   const chip = page.locator("table tbody tr").first().locator("[data-state='ok']");
@@ -1006,4 +1056,59 @@ test("a located manifest row stays inside the 63px density budget", async ({
   // 63px budget: padding 8 + name 22 + `.char-line` gap 4 + location 20 +
   // padding 8 + border 1. 65 leaves margin for platform font variance.
   for (const h of heights) expect(h).toBeLessThanOrEqual(65);
+});
+
+// The STATUS column reads "ok" on every row of the common account, costing a
+// header, a column and 82px of a 320px viewport to say "nothing here". It
+// renders only when at least one character is not `ok` — an exception column,
+// so its presence is itself the signal.
+test("an all-ok account renders no STATUS column and keeps the per-character facts", async ({
+  page,
+  context,
+}) => {
+  const acc = await seedNominalCrew();
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.goto("/account");
+
+  const head = manifest(page).locator("thead > tr > th");
+  await expect(head).toHaveCount(3);
+  await expect(page.getByRole("columnheader", { name: "Status" })).toHaveCount(0);
+  await expect(manifest(page).locator("[data-state]")).toHaveCount(0);
+
+  // `map on|off` varies per character while the chip reads `ok` either way, so
+  // the cell's accessible name was the only place it lived. Dropping the cell
+  // must not drop the fact: it moves into the NAME cell, visually hidden, at
+  // zero vertical cost.
+  const summaries = manifest(page).locator("[data-status-summary]");
+  await expect(summaries).toHaveCount(10);
+  for (const t of await summaries.allTextContents()) {
+    expect(t).toMatch(/token ok, standings ok, map (on|off)/);
+  }
+});
+
+// The other half of the rule: one faulted character brings the column back for
+// every row, so an `ok` row still says `ok` beside the row that does not.
+//
+// This one is GREEN before the change and green after — it asserts that today's
+// behaviour survives on a mixed account, which is a regression guard, not a TDD
+// step. Its red is proven by mutation in Step 8b instead. Do not try to make it
+// fail first; the honest version of that is the mutation check.
+test("one non-ok character brings the STATUS column back for every row", async ({
+  page,
+  context,
+}) => {
+  const acc = await seedNominalCrew();
+  await db
+    .update(character)
+    .set({ tokenStatus: "invalid" })
+    .where(eq(character.name, "Alt Pilot Nine"));
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.goto("/account");
+
+  await expect(page.getByRole("columnheader", { name: "Status" })).toBeVisible();
+  await expect(manifest(page).locator("[data-state='ok']")).toHaveCount(9);
+  await expect(manifest(page).locator("[data-state='attention']")).toHaveCount(1);
+  // The hidden span is the column's substitute, not its companion: two copies
+  // of the same sentence in one row is what the aria-label already avoids.
+  await expect(manifest(page).locator("[data-status-summary]")).toHaveCount(0);
 });
