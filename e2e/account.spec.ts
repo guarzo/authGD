@@ -69,6 +69,44 @@ async function placeCrew(
     .where(inArray(character.id, characterIds));
 }
 
+/** Ten characters, all token-healthy, all contacts-`ok`, all located: the shape
+ *  the density design was measured against, and the only seed whose row heights
+ *  and fold counts mean anything.
+ *
+ *  `contactSyncState` is seeded per character rather than left null on purpose.
+ *  A targeted character with a null result makes `firstSyncPending` true
+ *  (account-health.ts:173-174), which mounts a Notice ABOVE the manifest and
+ *  pushes every row down — a seed that skipped this measured 696px of chrome
+ *  against the 539px a real nominal account renders. */
+async function seedNominalCrew(name = "Pilot Prime") {
+  const acc = await seedMember(db, {
+    name,
+    tier: "member",
+    alts: [
+      "Alt Pilot One",
+      "Alt Pilot Two",
+      "Alt Pilot Three",
+      "Alt Pilot Four",
+      "Alt Pilot Five",
+      "Alt Pilot Six",
+      "Alt Pilot Seven",
+      "Alt Pilot Eight",
+      "Alt Pilot Nine",
+    ],
+  });
+  await markTokensHealthy(acc.id);
+  const crew = await db.select().from(character).where(eq(character.accountId, acc.id));
+  await db
+    .insert(contactSyncState)
+    .values(crew.map((c) => ({ characterId: c.id, lastResult: "ok" as const })));
+  await placeCrew(
+    crew.map((c) => c.id),
+    30000142,
+    "Home Astrahus",
+  );
+  return acc;
+}
+
 // Every code the callbacks can redirect to /login with, checked by name: a code
 // with no entry in the ERRORS map renders nothing at all, which is the one
 // failure mode this page cannot show the member.
@@ -791,10 +829,13 @@ const NARROWEST = 320;
 // STATUS/ACTIONS. The plan's documented fallback was taken: `.char-line` is
 // now the same stacked layout `.stack` is, two lines per character.
 //
-// These two tests now assert the fallback's actual shape (two lines, not
-// one) and pin the horizontal measurement that forced the call, so a future
-// change reintroducing the flex row without re-measuring trips a test rather
-// than shipping silently.
+// The one-line prohibition is now guarded by two properties instead of a
+// height band: the pitch ceiling at the end of this file (a flex row is one
+// line, but the horizontal cost is what made it unshippable) and the
+// ten-character horizontal gate below (413px flex vs ~137px stacked). What
+// remains in these two tests is the location text itself — that the seed and
+// the component actually render it — which every geometry test in this file
+// depends on and none of them re-proves.
 //
 // A DOM count of zero `.status-line`s (the assertion style used elsewhere in
 // this file) proves nothing about how many text lines a row wraps to, so
@@ -803,10 +844,7 @@ const NARROWEST = 320;
 // the baseline can't go stale the way a number copied from a deleted scratch
 // spec would.
 
-test("characters with a location render two text lines, not one, and the location text is present", async ({
-  page,
-  context,
-}) => {
+test("characters with a location render the location text", async ({ page, context }) => {
   const acc = await seedMember(db, {
     name: "Main Pilot",
     tier: "alumni",
@@ -839,34 +877,18 @@ test("characters with a location render two text lines, not one, and the locatio
 
   const rows = manifest(page).locator("tbody tr");
   await expect(rows).toHaveCount(11);
-  // Fix 1: prove the seed actually put a location on the ten rows the height
-  // assertion below claims render two lines — a bare height/count check
-  // passes just as well whether or not the location rendered at all.
+  // Fix 1: prove the seed actually put a location on the ten rows this test
+  // claims render it — a bare row/column count passes just as well whether or
+  // not the location text itself rendered.
   const locationTexts = await rows
     .filter({ hasNotText: "AAA No-Location Alt" })
     .locator(".char__location")
     .allTextContents();
   expect(locationTexts).toHaveLength(10);
   for (const t of locationTexts) expect(t).toBe("J30000142 — Home Astrahus");
-
-  const heights = await rowHeights(page, `${MANIFEST} tbody tr`);
-  expect(heights).toHaveLength(11);
-  // Row 0 is main (located, sorts first regardless of name); row 1 is "AAA
-  // No-Location Alt" (the one-line reference, sorts first among alts); rows
-  // 2-10 are the nine remaining located alts.
-  const reference = heights[1];
-  const located = [heights[0], ...heights.slice(2)];
-  // Each line is ~18px at this font (56.5px one line vs 74.3-74.8px two,
-  // measured while deriving SINGLE_LINE_MAX for the original one-line
-  // attempt). >10 rules out "accidentally still one line"; <30 rules out a
-  // three-line regression, with margin either side for platform variance.
-  for (const h of located) {
-    expect(h - reference).toBeGreaterThan(10);
-    expect(h - reference).toBeLessThan(30);
-  }
 });
 
-test("a long structure name renders two lines, not a horizontal blowout, at the narrowest viewport", async ({
+test("a long structure name renders in full at the narrowest viewport", async ({
   page,
   context,
 }) => {
@@ -892,12 +914,6 @@ test("a long structure name renders two lines, not a horizontal blowout, at the 
   await expect(rows.first().locator(".char__location")).toHaveText(
     "J30000144 — Someone's Extremely Long Vanity Keepstar Name",
   );
-
-  const heights = await rowHeights(page, `${MANIFEST} tbody tr`);
-  expect(heights).toHaveLength(2);
-  const [located, reference] = heights;
-  expect(located - reference).toBeGreaterThan(10);
-  expect(located - reference).toBeLessThan(30);
 });
 
 // This is the design's actual gate: the
@@ -957,4 +973,33 @@ test("a long structure name does not blow out the forced horizontal scroll at 32
   // comfortably above the former and well below the latter, so this trips if
   // the flex row (or something costing the same) comes back.
   expect(pinned.maxScrollLeft).toBeLessThan(250);
+});
+
+// The round-1 failure written as a test. #167's band assertion measured a
+// located row against a no-location row and required the difference to sit in
+// 10-30px — which is a two-line row by definition, so it passed at 75px and
+// would pass at 95px. The pitch is the property that decides how many
+// characters clear the fold, so assert the pitch.
+test("a located manifest row stays inside the 63px density budget", async ({
+  page,
+  context,
+}) => {
+  const acc = await seedNominalCrew();
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.goto("/account");
+
+  // The precondition every row measurement in this file needs: a seed that
+  // silently failed to place a location renders a one-line row, which passes
+  // a height ceiling for exactly the wrong reason.
+  const locations = manifest(page).locator(".char__location");
+  await expect(locations).toHaveCount(10);
+  for (const t of await locations.allTextContents()) {
+    expect(t).toBe("J30000142 — Home Astrahus");
+  }
+
+  const heights = await rowHeights(page, `${MANIFEST} tbody tr`);
+  expect(heights).toHaveLength(10);
+  // 63px budget: padding 8 + name 22 + `.char-line` gap 4 + location 20 +
+  // padding 8 + border 1. 65 leaves margin for platform font variance.
+  for (const h of heights) expect(h).toBeLessThanOrEqual(65);
 });

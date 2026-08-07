@@ -1051,6 +1051,22 @@ h3.rule-head__label {
   padding: var(--s-2) var(--s-3);
 }
 
+/* The account manifest's own density. Deliberately NOT `.log--dense`: that
+   class's padding is exactly right, but its rule set also carries
+   `vertical-align: middle` (:965) and a `tr.drawer-row` override (:973) that
+   mean nothing on a table with no drawer, and its comment argues from a
+   ten-column admin table this one is not. Borrowing the class would make a
+   future change to the admin table's density silently change the manifest's.
+
+   The 12px this buys back is worth ~0.2 of a row on its own. It is here
+   because the row is 75px and the fold is 900px, and every 12px compounds
+   against the 159px the page head gives back — see
+   docs/superpowers/specs/2026-08-07-manifest-density-round-2-design.md. */
+.log--manifest th,
+.log--manifest td {
+  padding: var(--s-2) var(--s-3);
+}
+
 /* Sync run tables: no fixed layout, and a width floor set by legibility rather
    than by alignment. The old 60rem existed so the five per-job sections shared
    one grid, which stopped being true when each job started showing only the
@@ -1594,10 +1610,16 @@ h3.rule-head__label {
    `.stack >` descendant rules — `.stack > .inline-form:has(.field--grow)`
    and `.log td.num > .stack` — don't reach this cell today, since it has no
    `.inline-form` and isn't a `.num` cell; don't assume a future `.stack >`
-   rule applies here without checking.) */
+   rule applies here without checking. The manifest-density-round-2 pass
+   tightens the gap below from `--s-2` to `--s-1`, taking the row from 75px to
+   63px; see that gap's own comment for why.) */
 .char-line {
   display: grid;
-  gap: var(--s-2);
+  /* --s-1, not the --s-2 every other stack uses: at 4px the name and its
+     location still read as two facts rather than one wrapped string, and the
+     manifest renders this gap once per character where other stacks render
+     theirs once per page. */
+  gap: var(--s-1);
   justify-items: start;
 }
 

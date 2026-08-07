@@ -476,7 +476,7 @@ export default async function AccountPage({
         )}
 
         <Scroller label="Your characters">
-          <table className="log">
+          <table className="log log--manifest">
             {/* Always present, unlike the visual copy above: a `<caption>` is
                 announced for the table as a whole, so this is the one place a
                 standing fact about the managed contact label reaches a member
