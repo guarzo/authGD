@@ -831,6 +831,18 @@ export default async function AccountPage({
                         <tr className="drawer-row">
                           <td colSpan={manifestColumns(showStatusColumn)}>
                             <p id={contactRemedyId(c.id)} className="table-note">
+                              {/* The prose used to be prefixed `{c.name}:` when it
+                                  lived in a footnote block below the table, far
+                                  from the row it named. Adjacency made that prefix
+                                  visually redundant, so it was dropped — but no
+                                  `<th scope="row">` exists in this table (every
+                                  `<th>` here is `scope="col"`), so a screen reader
+                                  in table mode gets a 4-column cell with no
+                                  character in it, and in links mode gets N
+                                  identical "re-authorize" links. Kept
+                                  visually-hidden rather than restored on-screen:
+                                  sighted users already have the row above. */}
+                              <span className="visually-hidden">{c.name}: </span>
                               <ContactRemedy
                                 result={c.contactSyncResult}
                                 detail={c.contactSyncDetail}

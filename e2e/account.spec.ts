@@ -1196,6 +1196,16 @@ test("a faulted character does not blow out the forced horizontal scroll at 320p
   await expect(
     manifest(page).locator("tr.drawer-row").getByRole("link", { name: "re-authorize" }),
   ).toHaveCount(2);
+  // I1: the table has no `<th scope="row">`, so nothing else ties a drawer-row
+  // to the character it names for assistive tech. Pin the visually-hidden name
+  // prefix by text rather than by presence of the span, so a variant that
+  // renders the name some other way still passes.
+  await expect(
+    manifest(page).locator("tr.drawer-row").filter({ hasText: "Alt Pilot Two" }),
+  ).toHaveCount(1);
+  await expect(
+    manifest(page).locator("tr.drawer-row").filter({ hasText: "Alt Pilot Five" }),
+  ).toHaveCount(1);
   // The same located-row precondition every other measurement in this file
   // carries: an unlocated row is narrower as well as shorter. By text, not by
   // count — a degraded `placeCrew` still renders a `.char__location`, just a
