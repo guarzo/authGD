@@ -572,7 +572,7 @@ test("a pending member is told their access is awaiting approval", async ({
   await context.addCookies([await sessionCookieFor(db, acc.id)]);
   await page.goto("/account");
 
-  // Scoped to the Standing row's own field rather than a bare page-wide text
+  // Scoped to the meta line's tier field rather than a bare page-wide text
   // match: the word "pending" also appears in the first-sync copy elsewhere on
   // this page, and the claim here is about the tier value specifically. The
   // tier reads as its configured label ("Queued" in the e2e env), which is the
@@ -1111,4 +1111,72 @@ test("one non-ok character brings the STATUS column back for every row", async (
   // The hidden span is the column's substitute, not its companion: two copies
   // of the same sentence in one row is what the aria-label already avoids.
   await expect(manifest(page).locator("[data-status-summary]")).toHaveCount(0);
+});
+
+// `<dt>Tier</dt>` and `<dt>Discord</dt>` were the only thing naming these two
+// values — the tier badge visibly reads "Testers", not "Tier: Testers" — so
+// flattening the definition list deletes a label rather than restyling one.
+// The deleted STANDING heading does not substitute: a heading groups, it does
+// not name a field.
+test("the page head's meta line keeps a programmatic label on each fact", async ({
+  page,
+  context,
+}) => {
+  const acc = await seedMember(db, { name: "Labelled Pilot", tier: "member" });
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.goto("/account");
+
+  const meta = page.locator(".page__meta");
+  await expect(meta).toBeVisible();
+  await expect(meta.locator("[data-field='tier']")).toContainText("Tier");
+  await expect(meta.locator("[data-field='tier']")).toContainText("Testers");
+  await expect(meta).toContainText("Discord");
+
+  // Visually hidden, not absent: the mockup this design was approved from puts
+  // the tokens on one line with no visible label. Measured, not asserted with
+  // toBeHidden() or not.toBeInViewport() — `.visually-hidden` is a 1px clip,
+  // not display:none, so Playwright counts it visible and in-viewport BY
+  // DESIGN, which is exactly what keeps it readable to a screen reader. Same
+  // idiom and same reason as the confirm-cost measurement at :491-498.
+  const labelWidth = (await meta.locator(".visually-hidden").first().boundingBox())
+    ?.width;
+  expect(labelWidth ?? 0).toBeLessThanOrEqual(1);
+
+  // The block this replaces is gone, not merely restyled.
+  await expect(page.getByRole("heading", { name: "Standing" })).toHaveCount(0);
+});
+
+// #112, as geometry. Arming reveals the cost sentence; if that sentence lands
+// as another flex item on the same line rather than taking its own, it grows
+// the line box, `align-items: center` re-centres the button, and the button
+// slides out from under a pointer that never moved — firing pointerLeave,
+// which disarms the control the member just armed.
+//
+// ~700px on purpose: wide enough that the sentence would still FIT beside the
+// button, which is the only band where the bug can happen. At 390px it wraps
+// anyway and the test would pass with the CSS rule deleted.
+test("arming the Discord unlink does not move it out from under the pointer", async ({
+  page,
+  context,
+}) => {
+  const acc = await seedMember(db, { name: "Linked Pilot", tier: "member" });
+  await db.insert(discordLink).values({
+    accountId: acc.id,
+    discordUserId: "duid-112-geometry",
+  });
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.setViewportSize({ width: 700, height: 900 });
+  await page.goto("/account");
+
+  const unlink = page.getByRole("button", { name: "unlink Discord", exact: true });
+  const rest = await unlink.boundingBox();
+  await unlink.click();
+
+  const confirm = page.getByRole("button", {
+    name: "confirm unlink Discord",
+    exact: true,
+  });
+  await expect(confirm).toBeVisible();
+  const armed = await confirm.boundingBox();
+  expect(armed?.y).toBe(rest?.y);
 });

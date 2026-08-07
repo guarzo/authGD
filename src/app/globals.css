@@ -616,6 +616,47 @@ a:hover {
   margin-top: var(--s-3);
 }
 
+/* The verdict shares the H1's line rather than taking one of its own. The
+   token's own top margin is what made it a row; inside the head row it is a
+   flex item and the margin only pushes it off the h1's baseline. */
+.page__head-row > .verdict {
+  margin-top: 0;
+}
+
+/* The account page's two standing facts — tier and Discord — on one line under
+   the lede, in place of a rule-head plus a two-row definition grid. Wraps at
+   its own gap rather than forcing the head to scroll at 320px, same call
+   `.page__head-row` above makes. */
+.page__meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s-3) var(--s-5);
+  margin-top: var(--s-4);
+}
+
+/* One fact and its controls. The row-level gap above separates facts; this one
+   holds a badge, a qualifier and a button together as a single fact. */
+.page__meta-item {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  flex-wrap: wrap;
+}
+
+/* The revealed confirm cost takes its own line, always — the same rule
+   `.facts__lead > .confirm-cost` (:712) carries, and this line inherits the
+   defect it exists for along with the layout. Without it the sentence is just
+   another flex item: at widths where it still fits beside the button it grows
+   the line box, `align-items: center` re-centres the button vertically out from
+   under a stationary pointer, and the `pointerLeave` that fires disarms the
+   control the member armed a moment ago. That is the #112 mechanism.
+   `flex-basis: 100%` costs nothing at rest, because at rest the span is
+   `.visually-hidden` and out of flow. */
+.page__meta-item > .confirm-cost {
+  flex-basis: 100%;
+}
+
 /* --- Section header ----------------------------------------------------- */
 /* The signature component: a typed label, then a hairline to the edge. */
 

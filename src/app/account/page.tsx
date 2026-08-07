@@ -215,59 +215,220 @@ export default async function AccountPage({
       <SiteHeader items={nav} current="/account" {...brandProps()} />
       <main id="main" tabIndex={-1} className="page page--narrow">
         <div className="page__head">
-          <h1>Your account</h1>
+          <div className="page__head-row">
+            <h1>Your account</h1>
+            {/* The verdict shares the h1's line: at 24px against the h1's 40px
+                it costs zero vertical pixels, where its own row cost 36. Same
+                five branches, same tones, same size="lead" — see the comment
+                below for why the loud ones outrank the tier badge. */}
+            {/* One line, above everything else: whether there is anything to
+                read past this point before the member can leave. Quiet states
+                stay text-only at the token's own size; the loud ones reuse the
+                same Status token the manifest below uses for its own warn
+                states, at size="lead" so they outrank the gold tier badge a
+                block down — otherwise the loudest thing on a degraded page is
+                the one fact that needs no action. No new colour either way.
+                Suppressed entirely at zero characters — "nominal" would be true
+                and useless, and the manifest's empty state says the real thing. */}
+            {view.characters.length > 0 &&
+              (health.verdict === "degraded" ? (
+                <p className="verdict">
+                  <Status tone="warn" size="lead">
+                    {health.attention} character{health.attention === 1 ? "" : "s"} need
+                    {health.attention === 1 ? "s" : ""} attention
+                  </Status>
+                </p>
+              ) : health.verdict === "stalled" ? (
+                // Not "needs attention": nothing here is the member's to fix
+                // themselves. For an unrecognized code the remedy does name an
+                // action — ask an admin — which is why the wording is about who
+                // owns the fix rather than claiming there is nothing to do.
+                <p className="verdict">
+                  <Status tone="warn" size="lead">
+                    {health.stalled} character{health.stalled === 1 ? "" : "s"} not
+                    syncing
+                  </Status>
+                </p>
+              ) : health.verdict === "discord-stale" ? (
+                // getPushStatus (services/account-view.ts) reports the newest
+                // completed discord-roles run ANYWHERE, not per account, and
+                // counts a "partial" run as pushed — so this can only ever mean
+                // the job itself stopped running corp-wide, never that this
+                // member's own roles are wrong. Wording stays about the
+                // schedule, never "your roles".
+                <p className="verdict">
+                  <Status tone="warn" size="lead">
+                    Discord roles behind schedule
+                  </Status>
+                </p>
+              ) : health.verdict === "first-sync-pending" ? (
+                <p className="verdict">
+                  <Status tone="off">first sync pending</Status>
+                </p>
+              ) : (
+                <p className="verdict">
+                  <Status>nominal</Status>
+                </p>
+              ))}
+          </div>
           <p className="page__lede">
             Membership, characters, and the state authGD is pushing out to standings, the
             map, and Discord.
           </p>
-          {/* One line, above everything else: whether there is anything to
-              read past this point before the member can leave. Quiet states
-              stay text-only at the token's own size; the loud ones reuse the
-              same Status token the manifest below uses for its own warn
-              states, at size="lead" so they outrank the gold tier badge a
-              block down — otherwise the loudest thing on a degraded page is
-              the one fact that needs no action. No new colour either way.
-              Suppressed entirely at zero characters — "nominal" would be true
-              and useless, and the manifest's empty state says the real thing. */}
-          {view.characters.length > 0 &&
-            (health.verdict === "degraded" ? (
-              <p className="verdict">
-                <Status tone="warn" size="lead">
-                  {health.attention} character{health.attention === 1 ? "" : "s"} need
-                  {health.attention === 1 ? "s" : ""} attention
-                </Status>
-              </p>
-            ) : health.verdict === "stalled" ? (
-              // Not "needs attention": nothing here is the member's to fix
-              // themselves. For an unrecognized code the remedy does name an
-              // action — ask an admin — which is why the wording is about who
-              // owns the fix rather than claiming there is nothing to do.
-              <p className="verdict">
-                <Status tone="warn" size="lead">
-                  {health.stalled} character{health.stalled === 1 ? "" : "s"} not syncing
-                </Status>
-              </p>
-            ) : health.verdict === "discord-stale" ? (
-              // getPushStatus (services/account-view.ts) reports the newest
-              // completed discord-roles run ANYWHERE, not per account, and
-              // counts a "partial" run as pushed — so this can only ever mean
-              // the job itself stopped running corp-wide, never that this
-              // member's own roles are wrong. Wording stays about the
-              // schedule, never "your roles".
-              <p className="verdict">
-                <Status tone="warn" size="lead">
-                  Discord roles behind schedule
-                </Status>
-              </p>
-            ) : health.verdict === "first-sync-pending" ? (
-              <p className="verdict">
-                <Status tone="off">first sync pending</Status>
-              </p>
-            ) : (
-              <p className="verdict">
-                <Status>nominal</Status>
-              </p>
-            ))}
+          {/* STANDING's two facts, flattened out of a rule-head + definition
+              list (171px of chrome including the collapsed margin) onto one
+              line inside the head. The h2 that grouped them is not replaced:
+              two facts are not a section, and the labels below carry the
+              naming the heading was doing by proximity. */}
+          <div className="page__meta">
+            <div className="page__meta-item" data-field="tier">
+              {/* Visually hidden because the approved layout puts the token on
+                  its own — but `StandingTier` renders "Testers", a word that
+                  answers nothing without "Tier" in front of it. The `.facts`
+                  grid's `<dt>` was doing this job; nothing else was. */}
+              <span className="visually-hidden">Tier</span>
+              <StandingTier tier={view.tier} />
+              {/* Cryo's copy and its "wake me" control, unchanged from the dd
+                  they used to share. The old comment here argued they could not
+                  have a row of their own because a `.visually-hidden` dt is
+                  `position: absolute` and breaks a grid's tracks; that argument
+                  died with the grid and is not carried over. This is a wrapping
+                  flex line — the sentence and the button take a second line on
+                  their own. */}
+              {view.status === "cryo" && (
+                <>
+                  {/* Neutral, not --signal-warn: cryo is a pause the member
+                      asked for, not a fault. DESIGN.md's amber stays on the
+                      admin table, where cryo is a scanning target rather than a
+                      fact about the member's own state. */}
+                  <Status>cryo</Status>
+                  <span className="dim">
+                    Paused at your request. Tier is retained while you&rsquo;re away.
+                  </span>
+                  <form action={wakeSelfAction} className="inline-form">
+                    <Submit className="btn" pendingLabel="waking…">
+                      wake me
+                    </Submit>
+                  </form>
+                </>
+              )}
+            </div>
+
+            <div className="page__meta-item">
+              <span className="visually-hidden">Discord</span>
+              {view.discordLinked ? (
+                // Its own arm scope, not the manifest's: an arming ConfirmSubmit
+                // throws outside one (confirm-submit.tsx:281), and a scope of one
+                // is right here —
+                // arming this must not disarm a character row three sections down.
+                <ConfirmArmScope>
+                  {/* No `linked` token beside the button. The unlinked branch
+                      below has never rendered one either — it is a bare "Link
+                      Discord" — so the row already trusts a verb to answer "is
+                      Discord linked?" in one state. Rendering a status token in
+                      the other state made the two halves read as one object,
+                      which is the clutter #108 tried to solve with spacing. The
+                      verb carries the state: `unlink` present means linked.
+
+                      The same call the sync-schedule section already made: it
+                      drops its Discord row rather than render an inert "not
+                      linked" token, on the grounds that a nearby element states
+                      the fact with the action attached. */}
+                  {/* ...but a name is not a status token. `linked` restated what
+                      the button already said; this says WHICH Discord account is
+                      on the hook, which is the one thing the row could not
+                      answer before and the only question a member with two
+                      Discord accounts actually has when they see `unlink`.
+
+                      Display name first and in full ink, handle second and
+                      dimmed: the guild nickname is what they are called by the
+                      people they play with, and the @handle is the identifier
+                      that settles it when the nickname is ambiguous. Either may
+                      be missing on its own — a member with no nickname and no
+                      global name has only a handle, and a link made before the
+                      first roles sync has only a handle too — so each is
+                      rendered independently rather than as one string.
+
+                      Both null renders exactly what shipped in #115: the button
+                      alone. That is the reason no backfill has to run before
+                      this is correct. */}
+                  {(view.discordDisplayName || view.discordUsername) && (
+                    <span className="discord-id">
+                      {view.discordDisplayName && <span>{view.discordDisplayName}</span>}
+                      {view.discordUsername && (
+                        <span className="dim mono">@{view.discordUsername}</span>
+                      )}
+                    </span>
+                  )}
+                  <form action={unlinkDiscordAction} className="inline-form">
+                    {/* A grade heavier at rest than the character-row unlinks
+                        below (`.btn--quiet .btn--danger-quiet`), and
+                        deliberately so: those drop one character from an
+                        account that keeps every other one, while this one
+                        enqueues a deprovision that strips every managed role
+                        in the guild. There is one of these and up to a dozen
+                        of those, so the quiet grade that keeps a dense table
+                        from reading as a wall of buttons buys nothing here.
+                        Both still upgrade to full `.btn--danger` only once
+                        armed.
+
+                        Full 36px, not the 28px `.btn--micro` grade: this sits
+                        in the page head, not in a table row, and DESIGN.md
+                        gives the smaller size to "the in-row controls of the
+                        admin tables… and nowhere else". `inline-edit.tsx:75-83`
+                        already made this exact call for the same grid, and
+                        `.inline-edit--standalone` (globals.css:1695) exists
+                        only to buy the floor back where a class had to keep
+                        its colouring. Here nothing had to be bought back —
+                        dropping `--micro` is the whole fix, and the heavier
+                        rest grade this comment argues for is a colour
+                        decision that never depended on the size. */}
+                    <ConfirmSubmit
+                      className="btn"
+                      armedClassName="btn btn--danger"
+                      label="unlink"
+                      restName="unlink Discord"
+                      confirmName="confirm unlink Discord"
+                      describedBy="discord-unlink-cost"
+                    />
+                  </form>
+                  {/* The unlink is not just a disconnected account: the deprovision
+                      it enqueues strips every managed role
+                      (jobs/discord-roles.ts:79), so a member who reads only the
+                      word "unlink" loses their tier role in the guild without
+                      having been told. Carried by the button's aria-describedby
+                      rather than folded into its accessible name — a name is
+                      spoken ahead of every press and has to stay short and match
+                      the visible label, and this sits AFTER the control in reading
+                      order, so a member who tabs straight to it would otherwise
+                      never hear it at all.
+
+                      Shown to sighted users only once armed (see ConfirmCost):
+                      at rest this row's job is to answer "is Discord linked?",
+                      and a permanent sentence about undoing it answers a question
+                      the member has not asked. It stays in the accessible tree at
+                      rest either way — the aria-describedby above depends on it.
+
+                      "Queues", not "removes": the action enqueues a deprovision
+                      and a worker runs it (jobs/discord-roles.ts), so a member who
+                      unlinks and still sees the role a minute later has been told
+                      the truth rather than contradicted. The verb survived the
+                      trim from 17 words to 11 because it is the one fact in the
+                      sentence a member can catch this page being wrong about. */}
+                  <ConfirmCost id="discord-unlink-cost">
+                    Queues removal of the Discord roles authGD manages. Relink any time.
+                  </ConfirmCost>
+                </ConfirmArmScope>
+              ) : (
+                // Raised to the default button grade: high-value but was the
+                // weakest affordance on the page. Not gold — DESIGN.md rations
+                // that to one primary action per view, "Add character" below.
+                <a className="btn" href="/auth/discord/link">
+                  Link Discord
+                </a>
+              )}
+            </div>
+          </div>
         </div>
 
         {/* Mounted unconditionally rather than `&&`-gated: unlink, set-main and
@@ -314,158 +475,6 @@ export default async function AccountPage({
               : "Standings and map access update within a few minutes of linking a character. Discord roles start once you link Discord below."}
           </Notice>
         )}
-
-        <RuleHead as="h2">Standing</RuleHead>
-        <dl className="facts">
-          <dt>Tier</dt>
-          <dd data-field="tier" className="facts__lead">
-            <StandingTier tier={view.tier} />
-            {/* Cryo's copy and its "wake me" control fold into this same dd
-                rather than a row of their own: `.facts` is a grid, and a
-                `.visually-hidden` dt in that grid is taken out of flow by its
-                own `position: absolute`, which shifts every dt/dd after it
-                into the wrong track. `.facts__lead` already wraps, so the
-                sentence and button land on a second line within the value
-                column instead of inventing a row the grid can't place. */}
-            {view.status === "cryo" && (
-              <>
-                {/* Neutral, not --signal-warn: cryo is a pause the member
-                    asked for, not a fault. DESIGN.md's amber stays on the
-                    admin table, where cryo is a scanning target rather than a
-                    fact about the member's own state. */}
-                <Status>cryo</Status>
-                <span className="dim">
-                  Paused at your request. Tier is retained while you&rsquo;re away.
-                </span>
-                <form action={wakeSelfAction} className="inline-form">
-                  <Submit className="btn" pendingLabel="waking…">
-                    wake me
-                  </Submit>
-                </form>
-              </>
-            )}
-          </dd>
-
-          <dt>Discord</dt>
-          {/* Same `.facts__lead` the tier row uses, and for the same reason:
-              the consequence line below has to be able to wrap onto a second
-              line inside the value column, and a `.facts` grid can't be given a
-              row of its own without a dt to pair it with. A layout-only class,
-              despite the "lead" in its name. */}
-          <dd className="facts__lead">
-            {view.discordLinked ? (
-              // Its own arm scope, not the manifest's: an arming ConfirmSubmit
-              // throws outside one (confirm-submit.tsx:281), and a scope of one
-              // is right here —
-              // arming this must not disarm a character row three sections down.
-              <ConfirmArmScope>
-                {/* No `linked` token beside the button. The unlinked branch
-                    below has never rendered one either — it is a bare "Link
-                    Discord" — so the row already trusts a verb to answer "is
-                    Discord linked?" in one state. Rendering a status token in
-                    the other state made the two halves read as one object,
-                    which is the clutter #108 tried to solve with spacing. The
-                    verb carries the state: `unlink` present means linked.
-
-                    The same call the sync-schedule section already made: it
-                    drops its Discord row rather than render an inert "not
-                    linked" token, on the grounds that a nearby element states
-                    the fact with the action attached. */}
-                {/* ...but a name is not a status token. `linked` restated what
-                    the button already said; this says WHICH Discord account is
-                    on the hook, which is the one thing the row could not
-                    answer before and the only question a member with two
-                    Discord accounts actually has when they see `unlink`.
-
-                    Display name first and in full ink, handle second and
-                    dimmed: the guild nickname is what they are called by the
-                    people they play with, and the @handle is the identifier
-                    that settles it when the nickname is ambiguous. Either may
-                    be missing on its own — a member with no nickname and no
-                    global name has only a handle, and a link made before the
-                    first roles sync has only a handle too — so each is
-                    rendered independently rather than as one string.
-
-                    Both null renders exactly what shipped in #115: the button
-                    alone. That is the reason no backfill has to run before
-                    this is correct. */}
-                {(view.discordDisplayName || view.discordUsername) && (
-                  <span className="discord-id">
-                    {view.discordDisplayName && <span>{view.discordDisplayName}</span>}
-                    {view.discordUsername && (
-                      <span className="dim mono">@{view.discordUsername}</span>
-                    )}
-                  </span>
-                )}
-                <form action={unlinkDiscordAction} className="inline-form">
-                  {/* A grade heavier at rest than the character-row unlinks
-                      below (`.btn--quiet .btn--danger-quiet`), and
-                      deliberately so: those drop one character from an
-                      account that keeps every other one, while this one
-                      enqueues a deprovision that strips every managed role
-                      in the guild. There is one of these and up to a dozen
-                      of those, so the quiet grade that keeps a dense table
-                      from reading as a wall of buttons buys nothing here.
-                      Both still upgrade to full `.btn--danger` only once
-                      armed.
-
-                      Full 36px, not the 28px `.btn--micro` grade: this sits
-                      in the facts grid, not in a table row, and DESIGN.md
-                      gives the smaller size to "the in-row controls of the
-                      admin tables… and nowhere else". `inline-edit.tsx:75-83`
-                      already made this exact call for the same grid, and
-                      `.inline-edit--standalone` (globals.css:1695) exists
-                      only to buy the floor back where a class had to keep
-                      its colouring. Here nothing had to be bought back —
-                      dropping `--micro` is the whole fix, and the heavier
-                      rest grade this comment argues for is a colour
-                      decision that never depended on the size. */}
-                  <ConfirmSubmit
-                    className="btn"
-                    armedClassName="btn btn--danger"
-                    label="unlink"
-                    restName="unlink Discord"
-                    confirmName="confirm unlink Discord"
-                    describedBy="discord-unlink-cost"
-                  />
-                </form>
-                {/* The unlink is not just a disconnected account: the deprovision
-                    it enqueues strips every managed role
-                    (jobs/discord-roles.ts:79), so a member who reads only the
-                    word "unlink" loses their tier role in the guild without
-                    having been told. Carried by the button's aria-describedby
-                    rather than folded into its accessible name — a name is
-                    spoken ahead of every press and has to stay short and match
-                    the visible label, and this sits AFTER the control in reading
-                    order, so a member who tabs straight to it would otherwise
-                    never hear it at all.
-
-                    Shown to sighted users only once armed (see ConfirmCost):
-                    at rest this row's job is to answer "is Discord linked?",
-                    and a permanent sentence about undoing it answers a question
-                    the member has not asked. It stays in the accessible tree at
-                    rest either way — the aria-describedby above depends on it.
-
-                    "Queues", not "removes": the action enqueues a deprovision
-                    and a worker runs it (jobs/discord-roles.ts), so a member who
-                    unlinks and still sees the role a minute later has been told
-                    the truth rather than contradicted. The verb survived the
-                    trim from 17 words to 11 because it is the one fact in the
-                    sentence a member can catch this page being wrong about. */}
-                <ConfirmCost id="discord-unlink-cost">
-                  Queues removal of the Discord roles authGD manages. Relink any time.
-                </ConfirmCost>
-              </ConfirmArmScope>
-            ) : (
-              // Raised to the default button grade: high-value but was the
-              // weakest affordance on the page. Not gold — DESIGN.md rations
-              // that to one primary action per view, "Add character" below.
-              <a className="btn" href="/auth/discord/link">
-                Link Discord
-              </a>
-            )}
-          </dd>
-        </dl>
 
         <RuleHead
           as="h2"
