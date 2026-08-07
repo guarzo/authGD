@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import {
   account,
   character,
@@ -110,16 +110,26 @@ async function seedNominalCrew(name = "Pilot Prime") {
 
 /** Faults one named character so it can never classify `ok`, which makes the
  *  exception-only STATUS column render and leaves an `ok` row's own chip
- *  assertable. Keyed by name alone: `resetDb` runs before every test, so one
- *  account's characters are the only ones in the table.
+ *  assertable.
+ *
+ *  Scoped to one account, not keyed by name alone: `resetDb` runs before every
+ *  test, but a single test may seed more than one account (see the demoted-member
+ *  payout test), and character names are not unique across them. An unscoped
+ *  update would fault a second account's identically-named character silently —
+ *  invisible here, and visible only as an unrelated test's mystery failure.
+ *  `rowCount` is asserted for the same reason it is in `faultContacts` below: a
+ *  name that matches nothing updates zero rows and leaves the STATUS column out
+ *  of the DOM, which is the healthy layout passing a test written for a faulted
+ *  one.
  *
  *  The main character stays first in the manifest (account-view.ts orders
  *  main, then alts by name), so `tbody tr:first-child` is still the ok row. */
-async function faultOneAlt(altName: string) {
-  await db
+async function faultOneAlt(accountId: string, altName: string) {
+  const updated = await db
     .update(character)
     .set({ tokenStatus: "invalid" })
-    .where(eq(character.name, altName));
+    .where(and(eq(character.accountId, accountId), eq(character.name, altName)));
+  expect(updated.rowCount).toBe(1);
 }
 
 /** Faults named characters through their *contacts* result rather than their
@@ -139,8 +149,14 @@ async function faultOneAlt(altName: string) {
  *  Asserts the update actually hit every name: a typo silently updates zero
  *  rows, and a seed that faults nobody leaves the exception-only STATUS column
  *  out of the DOM entirely — which is the healthy layout, passing a width
- *  budget for the one reason the budget exists to rule out. */
-async function faultContacts(names: string[], result: ContactSyncResult) {
+ *  budget for the one reason the budget exists to rule out. Account-scoped for
+ *  the reason given on `faultOneAlt`; without it the count would also be
+ *  satisfiable by two half-matches across two accounts. */
+async function faultContacts(
+  accountId: string,
+  names: string[],
+  result: ContactSyncResult,
+) {
   const updated = await db
     .update(contactSyncState)
     .set({ lastResult: result })
@@ -150,7 +166,7 @@ async function faultContacts(names: string[], result: ContactSyncResult) {
         db
           .select({ id: character.id })
           .from(character)
-          .where(inArray(character.name, names)),
+          .where(and(eq(character.accountId, accountId), inArray(character.name, names))),
       ),
     );
   expect(updated.rowCount).toBe(names.length);
@@ -752,7 +768,7 @@ test("a healthy character collapses to a single ok chip", async ({ page, context
   // character is not `ok`, so an all-ok seed would leave this test asserting a
   // chip that correctly does not exist — and its `.status-line` count of 0
   // would pass for want of a cell rather than for want of expansion.
-  await faultOneAlt("Faulted Alt");
+  await faultOneAlt(acc.id, "Faulted Alt");
   await context.addCookies([await sessionCookieFor(db, acc.id)]);
   await page.goto("/account");
   const row = page.locator("table tbody tr").first();
@@ -822,7 +838,7 @@ test("map off alone does not expand a row", async ({ page, context }) => {
   // character is not `ok`, so an all-ok seed would leave this test asserting a
   // chip that correctly does not exist — and its `.status-line` count of 0
   // would pass for want of a cell rather than for want of expansion.
-  await faultOneAlt("Faulted Alt");
+  await faultOneAlt(acc.id, "Faulted Alt");
   await context.addCookies([await sessionCookieFor(db, acc.id)]);
   await page.goto("/account");
   const row = page.locator("table tbody tr").first();
@@ -849,7 +865,7 @@ test("a targeted character with a synced result also collapses to ok", async ({
   // character is not `ok`, so an all-ok seed would leave this test asserting a
   // chip that correctly does not exist — and its `.status-line` count of 0
   // would pass for want of a cell rather than for want of expansion.
-  await faultOneAlt("Faulted Alt");
+  await faultOneAlt(acc.id, "Faulted Alt");
   await db.insert(contactSyncState).values({
     characterId: acc.mainCharacterId!,
     lastResult: "ok",
@@ -881,7 +897,7 @@ test("the collapsed chip names token, standings and map", async ({ page, context
   // character is not `ok`, so an all-ok seed would leave this test asserting a
   // chip that correctly does not exist — and its `.status-line` count of 0
   // would pass for want of a cell rather than for want of expansion.
-  await faultOneAlt("Faulted Alt");
+  await faultOneAlt(acc.id, "Faulted Alt");
   await context.addCookies([await sessionCookieFor(db, acc.id)]);
   await page.goto("/account");
   const chip = page.locator("table tbody tr").first().locator("[data-state='ok']");
@@ -1135,8 +1151,8 @@ test("a faulted character does not blow out the forced horizontal scroll at 320p
   context,
 }) => {
   const acc = await seedNominalCrew();
-  await faultContacts(["Alt Pilot Two", "Alt Pilot Five"], "needs_reauth");
-  await faultOneAlt("Alt Pilot Seven");
+  await faultContacts(acc.id, ["Alt Pilot Two", "Alt Pilot Five"], "needs_reauth");
+  await faultOneAlt(acc.id, "Alt Pilot Seven");
   await context.addCookies([await sessionCookieFor(db, acc.id)]);
   await page.setViewportSize({ width: NARROWEST, height: 900 });
   await page.goto("/account");
