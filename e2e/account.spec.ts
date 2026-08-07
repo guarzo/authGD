@@ -984,8 +984,11 @@ test("a long structure name does not blow out the forced horizontal scroll at 32
   page,
   context,
 }) => {
-  const acc = await seedMember(db, { name: "Vanity Pilot", tier: "alumni" });
-  await markTokensHealthy(acc.id);
+  // A ten-character account, not a single character: the previous seed
+  // measured this gate's threshold at a size no real account has. Placed on
+  // the main alone so the stress case (an unshortened, member-supplied
+  // structure name) still survives against the other nine nominal rows.
+  const acc = await seedNominalCrew("Vanity Pilot");
   await placeCrew(
     [acc.mainCharacterId!],
     30000144,
@@ -1006,27 +1009,42 @@ test("a long structure name does not blow out the forced horizontal scroll at 32
   const pinned = await pinGeometry(
     page,
     MANIFEST,
+    // Third cell, which is now ACTIONS: the STATUS column renders only on
+    // exception and this seed is all-ok. The ratio below is a shape check
+    // either way; `maxScrollLeft` is the actual gate.
     "tbody tr:first-child td:nth-child(3)",
     "right",
   );
   // House style (e2e/audit.spec.ts:1124), kept for shape — but this holds
-  // just as true under the flex row (the STATUS cell's width and the
+  // just as true under the flex row (the ACTIONS cell's width and the
   // region's clientWidth are both unaffected by what the name column does),
   // so it is not a second independent check. `maxScrollLeft` below is the
   // actual gate.
-  expect(pinned.cellWidth / pinned.regionWidth).toBeLessThan(0.5);
+  //
+  // 0.6, not 0.5: on a ten-character account the main row's ACTIONS cell
+  // holds a lone `unlink` button (no `main` button on main's own row) at
+  // ~155px against this viewport's ~286px region — 0.54 — where the old
+  // one-character seed never rendered `unlink` at all (`view.characters.length
+  // > 1` gates it) and measured a bare STATUS chip instead. Still comfortably
+  // a minority of the region; 0.6 both holds today and would still catch the
+  // cell growing to dominate the row.
+  expect(pinned.cellWidth / pinned.regionWidth).toBeLessThan(0.6);
   // Rules out "nothing to scroll at all" reading as success (e.g. if the
   // seed silently failed to render a location and the name column shrank
   // enough that nothing forces scroll) — a passing 0 would be exactly as
   // vacuous as the count-only check Fix 1 above replaced.
   expect(pinned.maxScrollLeft).toBeGreaterThan(0);
-  // Measured: the stacked (fallback) layout puts this stress-test name's
-  // forced scroll at ~146px; the flex-row attempt this test replaced
-  // measured 413px for the identical seed (see the CSS comment above
-  // `.char-line`, globals.css:1580). 250 sits
-  // comfortably above the former and well below the latter, so this trips if
-  // the flex row (or something costing the same) comes back.
-  expect(pinned.maxScrollLeft).toBeLessThan(250);
+  // Measured on a ten-character account, which is the size this gate exists
+  // for — the previous 250 was derived from a one-character seed and never
+  // checked at scale. Today's stacked layout measures 258px before this plan
+  // and ~137px after (STATUS column −82, `make main` → `main` −39). 170 sits
+  // above the latter and far below the 413px the reverted flex row cost, so
+  // this trips if the flex row or either removed column comes back.
+  //
+  // Not zero, and it cannot be: the floor is a 64px portrait plus a 196px name
+  // cell plus a bare unlink cell at ~121px = 381px against a 286px region. No
+  // arrangement that keeps a portrait, a name and an unlink fits 320px.
+  expect(pinned.maxScrollLeft).toBeLessThan(170);
 });
 
 // The round-1 failure written as a test. #167's band assertion measured a
@@ -1180,3 +1198,48 @@ test("arming the Discord unlink does not move it out from under the pointer", as
   const armed = await confirm.boundingBox();
   expect(armed?.y).toBe(rest?.y);
 });
+
+// The success criterion, written as an assertion. Round 1 shipped a change
+// that collapsed a cell from three lines to one and moved this number by
+// zero, because the metric it was measured against was lines per cell. This
+// is the number that matters: how many characters a member can see without
+// scrolling.
+//
+// All three viewports, not just the desktop one. 390x844 is the weakest
+// target — its site header is 173px against 61px, and the meta line may wrap
+// there — which is the reason to gate it, not a reason to skip it.
+const FOLD_TARGETS = [
+  { width: 1440, height: 900, expected: 8 },
+  { width: 1280, height: 800, expected: 6 },
+  { width: 390, height: 844, expected: 4 },
+];
+
+for (const { width, height, expected } of FOLD_TARGETS) {
+  test(`at least ${expected} characters clear the fold at ${width}x${height}`, async ({
+    page,
+    context,
+  }) => {
+    const acc = await seedNominalCrew();
+    await context.addCookies([await sessionCookieFor(db, acc.id)]);
+    await page.setViewportSize({ width, height });
+    await page.goto("/account");
+
+    // The precondition, again: an unlocated row is 24px shorter, so a broken
+    // seed makes this test pass for the wrong reason — the exact way #167's
+    // band assertion passed.
+    await expect(manifest(page).locator(".char__location")).toHaveCount(10);
+
+    const visible = await page.evaluate(
+      // Counted from `getBoundingClientRect().bottom` rather than with
+      // `toBeInViewport`: that matcher reports any non-zero intersection, so a
+      // row with one pixel showing under the fold would count as visible. The
+      // criterion is a row a member can actually read.
+      ({ sel, h }) =>
+        Array.from(document.querySelectorAll(sel)).filter(
+          (r) => r.getBoundingClientRect().bottom <= h,
+        ).length,
+      { sel: `${MANIFEST} tbody tr`, h: height },
+    );
+    expect(visible).toBeGreaterThanOrEqual(expected);
+  });
+}
