@@ -106,8 +106,8 @@ export function ConfirmArmScope({ children }: { children: ReactNode }) {
  * grows rightward from a fixed left edge and the armed button does not move.
  * The reveal here is a copy decision, not a layout one.
  *
- * The account page's Discord row still reveals, because a `dd` in a `.facts`
- * grid is a place a sentence belongs — but only because `.facts__lead >
+ * The account page's Discord row still reveals, because a `.page__meta-item`
+ * is a place a sentence belongs — but only because `.page__meta-item >
  * .confirm-cost` gives the revealed cost `flex-basis: 100%`, which puts it on
  * its own line and leaves the button where it was. That was not true when this
  * comment first called the row safe. The row is a flex line with

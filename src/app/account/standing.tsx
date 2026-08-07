@@ -9,10 +9,11 @@ import type { Tier as TierValue } from "@/core/tier";
  * account/contact-state.tsx.
  *
  * Pending gets cryo's treatment — a neutral token plus a dim sentence — rather
- * than a Notice: this renders inside the `.facts` grid's dd, where a block-level
- * callout would break the two-column tracks, and DESIGN.md reserves warning
- * colour for the admin table. Nothing here reads as a fault (PRODUCT.md); the
- * member has done nothing wrong and is waiting on someone else.
+ * than a Notice: this renders inside a `.page__meta-item` flex line in the
+ * page head, where a block-level callout would force its own row rather than
+ * sit beside the badge, and DESIGN.md reserves warning colour for the admin
+ * table. Nothing here reads as a fault (PRODUCT.md); the member has done
+ * nothing wrong and is waiting on someone else.
  *
  * Alumni and associate get the same badge-plus-sentence treatment for the same
  * reason: both are the account's state AFTER standings and map access stop

@@ -611,7 +611,12 @@ a:hover {
    fold worth reading. It is always a `.st` Status token, same as everything
    else this page calls state, so "the mono word is what the system computed"
    holds here too. Layout only, no colour of its own — that comes from the
-   token's own tone (or lack of one for the quiet states). */
+   token's own tone (or lack of one for the quiet states).
+   This margin is dead in practice today: every call site renders inside
+   `.page__head-row`, which zeroes it below. Left as the base rule rather than
+   removed, since a future `.verdict` rendered outside that row — its own row
+   again, say — would want the top margin back without anyone having to
+   reconstruct why it was there. */
 .verdict {
   margin-top: var(--s-3);
 }
@@ -644,15 +649,19 @@ a:hover {
   flex-wrap: wrap;
 }
 
-/* The revealed confirm cost takes its own line, always — the same rule
-   `.facts__lead > .confirm-cost` (:712) carries, and this line inherits the
-   defect it exists for along with the layout. Without it the sentence is just
-   another flex item: at widths where it still fits beside the button it grows
-   the line box, `align-items: center` re-centres the button vertically out from
-   under a stationary pointer, and the `pointerLeave` that fires disarms the
-   control the member armed a moment ago. That is the #112 mechanism.
+/* The revealed confirm cost takes its own line, always. Without it the
+   sentence is just another flex item: at widths where it still fits beside
+   the button it grows the line box, `align-items: center` re-centres the
+   button vertically out from under a stationary pointer, and the
+   `pointerLeave` that fires disarms the control the member armed a moment
+   ago. That is the #112 mechanism.
    `flex-basis: 100%` costs nothing at rest, because at rest the span is
-   `.visually-hidden` and out of flow. */
+   `.visually-hidden` and out of flow.
+   The `>` combinator depends on `ConfirmArmScope` staying a pass-through: it
+   renders no DOM element of its own, so `.confirm-cost` is a genuine direct
+   child of `.page__meta-item` today. If `ConfirmArmScope` ever grows a
+   wrapper element, this selector stops matching and the #112 fix silently
+   goes dark — update it alongside that change. */
 .page__meta-item > .confirm-cost {
   flex-basis: 100%;
 }
@@ -720,15 +729,6 @@ h3.rule-head__label {
   grid-template-columns: 8rem 1fr;
 }
 
-/* The row carrying the page's headline fact. Lays its badge and any qualifier
-   (cryo) on one line rather than relying on a text space between them. */
-.facts__lead {
-  display: flex;
-  align-items: center;
-  gap: var(--s-3);
-  flex-wrap: wrap;
-}
-
 /* The cost sentence's own register, rather than a `.dim` every call site had
    to remember. All four callers passed `className="dim"` and nothing else, so
    the class was not configuration — it was a required argument the type system
@@ -739,19 +739,6 @@ h3.rule-head__label {
 .confirm-cost {
   color: var(--ink-faint);
   font-size: var(--t-caption);
-}
-
-/* The revealed confirm cost takes its own line, always. Without this it is just
-   another flex item: at widths where the sentence still fits beside the button
-   (roughly 641-851px on the Discord row) it grows the line box, and
-   `align-items: center` re-centres the button vertically — out from under a
-   stationary mouse pointer. That fires `pointerLeave`, which disarms the
-   control the member armed a moment ago, and the disarm looks like the app
-   ignoring the click. This is the #112 mechanism; the row is not exempt from it.
-   `flex-basis: 100%` costs nothing at rest, because at rest the span is
-   `.visually-hidden` and out of flow. */
-.facts__lead > .confirm-cost {
-  flex-basis: 100%;
 }
 
 .facts dt {
@@ -1806,10 +1793,10 @@ h3.rule-head__label {
 }
 
 /* The account page's verdict in its loud states, and only there. At --t-label
-   the verdict read quieter than the .tier--lead badge a block below it, which
-   is 14px inside a gold border and fill — so on a degraded account the loudest
-   thing above the fold was the one fact that needs no action. This outranks it
-   on size while spending no extra colour.
+   the verdict read quieter than the .tier--lead badge one line below it in the
+   same page head, which is 14px inside a gold border and fill — so on a
+   degraded account the loudest thing above the fold was the one fact that
+   needs no action. This outranks it on size while spending no extra colour.
 
    Uppercase and the wide tracking come off deliberately: they are legible
    devices at 11px, where they mark a value in a table, but at this size they
@@ -3539,7 +3526,7 @@ h3.rule-head__label {
 }
 
 /* The account page's Discord identity: display name then dimmed @handle, one
-   unit. Its own flex row rather than two more children of `.facts__lead`,
+   unit. Its own flex row rather than two more children of `.page__meta-item`,
    because the two names are one thing and the button beside them is another —
    `--s-2` holds the pair together against the `--s-3` that separates it from
    the control, which is the spacing argument #108 spent two passes on. */

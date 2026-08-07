@@ -524,7 +524,9 @@ export default async function AccountPage({
               added, changed, or removed.
               {showStatusColumn
                 ? " Each character’s STATUS cell summarizes its token, standings and map state, and shows the detail when something needs your attention."
-                : " Every character is healthy, so each row states its own token, standings and map state in place of a STATUS column."}
+                : view.characters.length > 0
+                  ? " Every character is healthy, so each row states its own token, standings and map state in place of a STATUS column."
+                  : " No characters are linked yet, so there is no STATUS column to show."}
             </caption>
             <thead>
               <tr>
