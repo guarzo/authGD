@@ -90,6 +90,31 @@ function pad(n: string): string {
 }
 
 /**
+ * Whether a step of `n` minutes actually repeats every `n` minutes across the
+ * hour boundary — the same question `evenlySpacedMinutes` answers for a comma
+ * list, asked of a star-slash-`n` step.
+ *
+ * A step is not self-evidently a cadence. Cron restarts the step at :00 every
+ * hour rather than carrying it, so a step of 7 fires :00,:07…:56 and then :00 —
+ * a four-minute gap, not seven. Only a step that divides 60 survives the
+ * restart, which is the same bound `evenlySpacedMinutes` reaches from the other
+ * end: its wrap check forces `60 = gap · count`, and for a step the step *is*
+ * the gap, so the requirement reduces to `60 % n === 0`.
+ *
+ * Zero falls out of that modulo unaided — `60 % 0` is `NaN`, which is not `0` —
+ * so `n > 0` states the domain rather than doing the rejecting. Rejecting it is
+ * what matters: `parseCron` throws on a zero step, so "every 0m" would render
+ * beside a silently absent next-run decoration.
+ *
+ * `n = 60` is deliberately accepted — it yields the single minute :00, which is
+ * genuinely once every 60 minutes. Anything above 60 needs no separate bound:
+ * `60 % n` is then 60 for every such `n`, so divisibility rejects it already.
+ */
+function divides60(n: number): boolean {
+  return n > 0 && 60 % n === 0;
+}
+
+/**
  * Whether a comma-separated list of minutes is truly "every N minutes",
  * including the wrap around the hour boundary — and if so, the gap and the
  * first minute.
@@ -128,7 +153,7 @@ function evenlySpacedMinutes(min: string): { gap: number; first: number } | null
   }
   const wrap = 60 - sorted[sorted.length - 1] + sorted[0];
   if (wrap !== gap) return null;
-  if (60 % gap !== 0 || sorted.length !== 60 / gap) return null;
+  if (!divides60(gap) || sorted.length !== 60 / gap) return null;
 
   return { gap, first: sorted[0] };
 }
@@ -149,7 +174,10 @@ export function formatCadence(cron: string): string {
   const everyMin = /^\*\/(\d+)$/.exec(min);
   if (dow === "*") {
     if (hour === "*") {
-      if (everyMin) return `every ${everyMin[1]}m`;
+      // Render the parsed number, not the capture: `*/030` divides 60 and is
+      // a legal step, but "every 030m" is not how anyone writes a cadence.
+      const step = everyMin ? Number(everyMin[1]) : null;
+      if (step !== null && divides60(step)) return `every ${step}m`;
       if (/^\d+$/.test(min)) return `hourly :${pad(min)}`;
       const spaced = evenlySpacedMinutes(min);
       if (spaced) return `every ${spaced.gap}m from :${pad(String(spaced.first))}`;
