@@ -191,9 +191,20 @@ code {
 }
 
 /* A string quoted back to the member for character-by-character comparison.
-   `pre` is load-bearing: HTML collapses whitespace, so without it "AuthGD "
-   and "AuthGD" render identically and a trailing-space member sees two
-   strings that look the same — the exact bug this message exists to fix. */
+   `pre` is load-bearing: HTML collapses whitespace runs, so without it two
+   labels differing only in spacing are painted identically and the member
+   sees two strings that look the same — the exact bug this message exists to
+   fix.
+
+   The example this comment used to give — "AuthGD " against "AuthGD" — does
+   not demonstrate that, and was measurably wrong. `ContactRemedy` renders the
+   label inside quotes, so a trailing space is interior (between the `D` and
+   the closing `"`) and survives collapsing: both render 7px apart under
+   `normal` as well as under `pre`. The pair that needs this rule is a
+   repeated run, "Auth  GD" against "Auth GD" — which `contact-label.ts`
+   classifies as a `"spacing"` difference and shows to the member — where
+   `normal` paints a 0px difference. See the `.log--crew code.literal`
+   override for the measurements. */
 code.literal {
   white-space: pre;
 }
@@ -4486,15 +4497,26 @@ h3.rule-head__label {
    guard. After this rule the same injection reports 250/250, 320/320,
    409/409, 410/410, 530/530 — overflow zero, tab stop withdrawn.
 
-   `pre-wrap`, not `normal`: `pre`'s whitespace preservation is load-bearing
-   where it was set (a member comparing "AuthGD " against "AuthGD" must see
-   the trailing space), and `normal` would collapse it, silently undoing that
-   fix to close this one. `pre-wrap` keeps every space and only adds the
+   `pre-wrap`, not `normal`: `code.literal`'s whitespace preservation is
+   load-bearing, and `normal` would collapse it to close this hole. Measured
+   at 320px, painted width of one string minus the other:
+
+     "Auth  GD" vs "Auth GD"   pre-wrap 7px   normal 0px   <- collapsed
+     "AuthGD  " vs "AuthGD "   pre-wrap 7px   normal 0px   <- collapsed
+     "AuthGD "  vs "AuthGD"    pre-wrap 7px   normal 7px   <- survives both
+
+   The third row is why the rule above this one describes the wrong example
+   (see the note there): a single trailing space sits between the `D` and the
+   closing quote `ContactRemedy` renders, so it is interior and survives
+   collapsing. The pair that actually needs `pre` is a repeated run —
+   `contact-label.ts` calls `"Auth  GD"` against `"Auth GD"` a `"spacing"`
+   difference and shows it to the member to compare, and under `normal` those
+   two are painted identically. `pre-wrap` keeps every run and only adds the
    ability to break. `overflow-wrap: anywhere` is the half that breaks the
    unbroken run itself; as with `.char`, it is inert without the whitespace
    change, so both declarations are load-bearing. Scoped to `.log--crew`
-   because the cap is a table-layout concern — `code.literal` on /account
-   sits in prose with room to be wide. */
+   because the cap is a table-layout concern — `code.literal` on /account sits
+   in prose with room to be wide. */
 .log--crew code.literal {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
