@@ -333,10 +333,24 @@ reading the code cannot see the failure; only someone using the app can.
   PRODUCT.md principle 3 makes scanning the primary act, and a control that is
   pressed once a month should not cost a column on every row for the other
   thirty days. Move it behind per-row disclosure. Two constraints on how: the
-  cost hint stays hidden-always rather than reveal-on-arm (`confirm-submit.tsx:89-98`
+  cost hint stays hidden-always rather than reveal-on-arm (`confirm-submit.tsx:94-101`
   records why — the widening disarms the control it revealed for), and the
   drawer that receives the control takes the `36px` grade above, not `28px`.
   (Ruling R2.)
+
+  `ConfirmCost` (`confirm-submit.tsx`) has a third `visibility` case beyond
+  reveal-on-arm and hidden-always: `"visible"`, rendered plainly at rest,
+  never hidden, no reveal step. This is NOT a relaxation of the `<td>`
+  constraint above — the `<td>`-reflow case still needs hidden-always, for the
+  reason already recorded — it is a different shape of control entirely. The
+  payout page's Finalize and Unlock (`payouts/[id]/lifecycle-submit.tsx`) sit
+  alone outside a table, so there is no neighbouring `<td>` for a revealed
+  cost to widen, and the sentence they carry is accurate, wanted copy rather
+  than an error — hiding it until arming (`"reveal"`) reads as a fault
+  appearing, and hiding it always (`"hidden"`) was a straight R4 violation: no
+  sighted operator ever read it. `"visible"` is for exactly this shape —
+  a standing, self-contained lifecycle control with its own permanent caption
+  — and stays distinct from the `<td>` case rather than replacing it.
 
 - **Information may not live only in the assistive-tech channel.** Parity runs
   in both directions. The usual failure is a control with no accessible name;

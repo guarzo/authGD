@@ -1,9 +1,7 @@
 "use client";
 
-import { useActionState, useEffect, useState } from "react";
+import { useActionState, useState } from "react";
 import { Submit } from "@/app/_components/submit";
-
-type SaveState = { ok: true; at: number } | null;
 
 /**
  * Notes used to render behind `InlineEdit`'s edit/view toggle: "None" and a
@@ -35,6 +33,21 @@ type SaveState = { ok: true; at: number } | null;
  * than left to error.tsx, so the operator is told the operation froze instead
  * of being told we broke. The typed text is gone either way; only the
  * explanation differs.
+ *
+ * Owner walkthrough 2026-08-07, finding 1.3: the save confirmation used to be
+ * `.visually-hidden` permanently — a sighted operator pressing Save got no
+ * feedback at all, the textarea already showed what was typed so nothing else
+ * on screen changed, and "saving…" flashes for the length of one round trip
+ * and reads as nothing happened. `_components/note-form.tsx`'s `"· saved"` is
+ * the precedent this now follows: one `role="status"` span carries both
+ * channels — visible text for a sighted operator, the same node's content
+ * change for AT — rather than a separate hidden live region saying something
+ * different, which would leave the two channels announcing two different
+ * things for the same event. What gates it is a comparison, not a flag: the
+ * action returns the value it actually sent, and the confirmation shows only
+ * while the textarea still holds that same text. See the state block below for
+ * why a `dirty` boolean — the shape `note-form.tsx` uses, and this file's own
+ * first version — cannot express that correctly.
  */
 export function NotesForm({
   action,
@@ -53,23 +66,40 @@ export function NotesForm({
   initialValue: string;
 }) {
   const [notes, setNotes] = useState(initialValue);
-  const [announcement, setAnnouncement] = useState("");
-  const [state, formAction] = useActionState<SaveState, FormData>(
+  // The text the server last acknowledged — reported by the action itself, from
+  // the `FormData` it actually sent, rather than inferred from a flag. `null`
+  // until the first save of this mount. "Saved" then becomes a comparison
+  // against what is on screen instead of a second piece of state to keep in
+  // sync, which matters because the textarea stays editable while a save is in
+  // flight: `Submit` only relabels itself, so it blocks a second click, not
+  // typing.
+  //
+  // A `dirty` boolean cleared on success — `note-form.tsx`'s shape, and this
+  // file's first version — gets that case wrong. Type "a", press Save, keep
+  // typing during the round trip, and the action resolves for the snapshot it
+  // sent; clearing `dirty` there leaves "· saved" standing over characters the
+  // server never received, until the next keystroke happens to clear it. That
+  // is the exact stale claim the flag was introduced to prevent. Comparing
+  // values is correct by construction: the confirmation is shown only while the
+  // textarea holds the acknowledged text, so it disappears the moment an edit
+  // diverges from it and returns if that edit is undone — which is accurate,
+  // since the server does hold that text.
+  const [saved, formAction] = useActionState<string | null, FormData>(
     async (_prev, formData) => {
       await action(formData);
-      return { ok: true, at: Date.now() };
+      // Narrow rather than coerce: `FormData.get` is typed `string | File |
+      // null` for every field, so `String(...)` would quietly turn a `File`
+      // into "[object File]" — a value that could never equal the textarea and
+      // so would silently disable the confirmation. The impossible branch
+      // returns `null`, which reads as "nothing acknowledged" and shows no
+      // badge; failing closed is the right direction for a control whose whole
+      // job is to not claim a save that did not happen. `action` does not
+      // mutate the `FormData`, so reading it here is the same value it sent.
+      const submitted = formData.get("notes");
+      return typeof submitted === "string" ? submitted : null;
     },
     null,
   );
-
-  useEffect(() => {
-    if (!state?.ok) return;
-    setAnnouncement("notes saved");
-    // Same 2s clear `InlineEdit` uses: long enough to be seen or heard, short
-    // enough that it doesn't sit around claiming a save just happened.
-    const t = setTimeout(() => setAnnouncement(""), 2000);
-    return () => clearTimeout(t);
-  }, [state]);
 
   return (
     <form action={formAction} className="form-stack">
@@ -96,11 +126,18 @@ export function NotesForm({
       <Submit className="btn" aria-label="save notes" pendingLabel="saving…">
         Save
       </Submit>
-      {/* Mounted unconditionally, empty at rest — the shape AT most often
-          misses (see `ConfirmSubmit`'s own live region, `confirm-submit.tsx`,
-          for the same argument). */}
-      <span role="status" className="visually-hidden">
-        {announcement}
+      {/* `notes-form__saved` carries no style rule of its own — `dim mono` do
+          that, same as `note-form.tsx`'s `note-form__saved`. It exists so the
+          e2e test has a selector that survives a wording or utility-class
+          change. Rendered unconditionally, only its text content toggling: AT
+          announces a *change* to a live region far more reliably than one born
+          already holding text (see `ConfirmSubmit`'s own live region for the
+          same argument), and a screen-reader user getting nothing here is
+          exactly the dead-click failure finding 1.3 is about. `saved` is `null`
+          before the first save, and `notes` is always a string, so the
+          comparison is false at rest without needing its own guard. */}
+      <span className="notes-form__saved dim mono" role="status">
+        {notes === saved ? "· saved" : ""}
       </span>
     </form>
   );

@@ -63,9 +63,10 @@ export function LifecycleAnnouncer({ children }: { children: ReactNode }) {
 }
 
 /**
- * Finalize or Unlock: `ConfirmSubmit`'s arm-then-fire pair, plus the two
- * things that used to be missing once it fired — a word about what happened,
- * and somewhere for focus to go.
+ * Finalize or Unlock: `ConfirmSubmit`'s arm-then-fire pair, plus the three
+ * things that used to be missing once it fired (or, for the cost, before it
+ * ever could) — a word about what happened, somewhere for focus to go, and a
+ * readable answer to "what does this cost".
  *
  * Focus has to move because the button that took the press is the one element
  * guaranteed to be gone: leaving it alone drops a keyboard operator back to
@@ -85,6 +86,28 @@ export function LifecycleAnnouncer({ children }: { children: ReactNode }) {
  *
  * The armed-state region `ConfirmSubmit` renders is a separate announcement —
  * arming, not outcome — and is untouched by this.
+ *
+ * `ConfirmCost` renders with `visibility="visible"` (see that component),
+ * not the default `"reveal"`. Owner walkthrough 2026-08-07, finding 1.2: this
+ * used to be `alwaysHidden`, which meant the sentence — good, accurate copy
+ * about what Finalize or Unlock actually does — was `.visually-hidden`
+ * *permanently*, so no sighted operator ever read it, at any point. That is
+ * R4's failure, not the ordering one it was first reported as: the fix is not
+ * "reveal it sooner", it is "stop hiding it from sighted users at all".
+ * `"reveal"` is still wrong here for the reason the previous version of this
+ * comment gave — a sentence appearing under Finalize the moment it arms reads
+ * as an error message rather than as a cost — so `"visible"` is what lands: no
+ * reveal step, rendered plainly every time, still the same `aria-describedby`
+ * target a keyboard operator tabbing straight to the button hears ahead of the
+ * press. `className="form-stack"` on the form below is what gives the button
+ * and its now-permanently-visible cost their own stacked layout (button, then
+ * caption on the line under it) rather than letting them run together as
+ * inline siblings — the same idiom the roster-replace form already uses
+ * (`page.tsx`'s `setRosterAction` form: `className="form-stack"`, holding both
+ * its `ConfirmSubmit` and its `ConfirmCost`). Delete operation looks like a
+ * second precedent and is not one — its `ConfirmCost` sits outside the form
+ * and outside the `.btn-row` wrapping it, so that form never needed a stacking
+ * rule, and its bare `<form>` is not evidence about this one.
  */
 export function LifecycleSubmit({
   action,
@@ -114,6 +137,7 @@ export function LifecycleSubmit({
 
   return (
     <form
+      className="form-stack"
       action={async (formData: FormData) => {
         await action(formData);
         announce(announcement);
@@ -126,7 +150,7 @@ export function LifecycleSubmit({
         confirmName={confirmName}
         describedBy={costId}
       />
-      <ConfirmCost id={costId} alwaysHidden>
+      <ConfirmCost id={costId} visibility="visible">
         {cost}
       </ConfirmCost>
     </form>

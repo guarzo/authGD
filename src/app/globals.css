@@ -778,19 +778,17 @@ h3.rule-head__label {
    describes. It sits inside the Operation section rather than at the foot of
    the page, so it needs a gap that reads as "still this section, new kind of
    thing" — --s-5 against the grid's own --s-5 row gap would read as one more
-   row, so it takes the next step up. The paragraph is capped at --measure for
-   the same reason every other block of prose here is: it is read, not scanned,
-   and a full-page-width line at this size loses the return sweep. */
+   row, so it takes the next step up. Owner walkthrough 2026-08-07, findings
+   1.2+1.7: this used to also hold a standing `<p>` explaining what "locked"
+   meant, capped at --measure like every other read-not-scanned paragraph here
+   — that paragraph has moved to the roster heading it actually explains, so
+   this wrapper's only remaining child is the `.btn-row` holding Finalize or
+   Unlock, and the `<p>` rule below it went with it. */
 .lifecycle {
   margin-top: var(--s-6);
   display: grid;
   gap: var(--s-4);
   justify-items: start;
-}
-
-.lifecycle > p {
-  margin: 0;
-  max-width: var(--measure);
 }
 
 /* --- Tables ------------------------------------------------------------- */
@@ -2168,6 +2166,31 @@ h3.rule-head__label {
 .inline-edit--standalone .btn--quiet {
   min-height: 2.25rem;
   padding: var(--s-2) var(--s-3);
+}
+
+/* Owner walkthrough 2026-08-07, finding 1.1. `.btn--quiet`'s transparent,
+   borderless rest state (above) works where the control sits among
+   neighbours that already read as a control row — the roster and pool
+   action cells, the nav sign-out, a filter's `clear`. Every `InlineEdit`
+   trigger (edit/save/cancel) is different: it stands alone beside a plain
+   text value, with nothing nearby to say "this is a button" until the
+   pointer arrives and the hover state above paints one in. That is not a
+   hover-only *existence* bug — the button is always rendered, always in the
+   tab order, always tappable — but it is a resting-affordance one: at rest
+   it is indistinguishable from the label register it sits beside.
+   `--rule-strong` is DESIGN.md's own token for a control's edge (chosen
+   there for the exact reason it clears WCAG 1.4.11 against every ground it
+   can sit on), so giving the trigger that border at rest is the same
+   decision this codebase already made for every other control, applied to
+   the one component that had opted out of it. Scoped to `.inline-edit`
+   rather than the bare `.btn--quiet`, because that class also backs the
+   nav's sign-out and the filter `clear` controls above, which sit in
+   contexts where transparent-at-rest was a deliberate, unrelated choice —
+   changing it there was never this finding's premise. Colour is untouched:
+   the label stays `--ink-faint`, so this stays a *quiet* control, not a
+   `default`-grade one wearing a border it didn't ask for. */
+.inline-edit .btn--quiet {
+  border-color: var(--rule-strong);
 }
 
 /* The same buy-back for the `clear` escape hatch in a filter row. Both filter

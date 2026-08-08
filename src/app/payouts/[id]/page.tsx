@@ -237,6 +237,21 @@ export default async function PayoutOperationPage({
       : participants.length === 0
         ? "roster"
         : "finalize";
+  // Owner walkthrough 2026-08-07, finding 1.8: `primaryStage` was computed and
+  // never shown, so the one-glance summary line below answered "where does
+  // this stand" but not "what do I do about it" — an operator had to scroll
+  // to whichever gold button was live to learn that. `STAGE_LABEL` turns the
+  // same value already gating that button into the word for it. Deliberately
+  // silent on "none": that value covers both "finalized, nothing left to
+  // promote" and "read-only viewer", and only the first has a next step —
+  // collapsing them into one falsy case here means a viewer is never told to
+  // act on an operation they cannot touch.
+  const STAGE_LABEL: Record<typeof primaryStage, string | null> = {
+    appraise: "appraise loot",
+    roster: "set roster",
+    finalize: "finalize",
+    none: null,
+  };
 
   // How much a roster replace would actually cost, named rather than counted
   // in the abstract: a participant is "edited" once its shares differ from
@@ -260,7 +275,7 @@ export default async function PayoutOperationPage({
   const canFinalize = access.isOperator && operation.status === "draft";
   const canRelease =
     access.isOperator && operation.status === "finalized" && !locked && canUnlock;
-  const showLifecycle = canFinalize || canRelease || (access.isOperator && locked);
+  const showLifecycle = canFinalize || canRelease;
 
   return (
     <>
@@ -325,6 +340,7 @@ export default async function PayoutOperationPage({
             {fmtIsk(totalValue)} ISK
             {owedParticipants.length > 0 &&
               ` · ${paidParticipants.length}/${owedParticipants.length} paid`}
+            {STAGE_LABEL[primaryStage] && ` · next: ${STAGE_LABEL[primaryStage]}`}
           </p>
         </div>
 
@@ -467,22 +483,27 @@ export default async function PayoutOperationPage({
               it. An operator who is neither the creator nor an admin can
               finalize (canFinalize wants only operator + draft) but cannot
               unlock (canRelease wants canUnlock), so for them the successful
-              finalize turns all three disjuncts of `showLifecycle` false at
-              once and takes the whole block away. An announcer nested in
-              there would be unmounted by the very response it was waiting to
+              finalize turns both disjuncts of `showLifecycle` false at once
+              and takes the whole block away. An announcer nested in there
+              would be unmounted by the very response it was waiting to
               describe, and "Operation finalized." would be spoken to nothing.
-              Out here it survives the block it describes. */}
+              Out here it survives the block it describes.
+
+              `showLifecycle` used to carry a third disjunct, `locked`, so this
+              block stayed mounted after the first payment purely to hold the
+              standing "this is frozen now" paragraph — there was never a
+              control left to show once locked (`canFinalize` wants `draft`,
+              `canRelease` wants `!locked`). Owner walkthrough 2026-08-07,
+              findings 1.2+1.7: that paragraph explained a *roster* consequence
+              (why Revert doesn't reopen editing) from the *Operation* section,
+              nowhere near the roster it constrains. It has moved to the roster
+              heading's own standing explanation below, beside the pre-freeze
+              warning it is the other half of — the two were always one
+              coherent "what does locking do to this roster" explanation, not
+              two idioms in two sections. */}
           <LifecycleAnnouncer>
             {showLifecycle && (
               <div className="lifecycle">
-                {locked && (
-                  <p className="dim">
-                    A payment has been recorded, so the loot pools, roster, shares and
-                    corp share are fixed permanently. Reverting a payment does not reopen
-                    editing: it only corrects who was paid, so revert the wrong one and
-                    pay the right person while still frozen.
-                  </p>
-                )}
                 <div className="btn-row btn-row--tight">
                   {canFinalize && (
                     <LifecycleSubmit
@@ -671,13 +692,43 @@ export default async function PayoutOperationPage({
                                 <th scope="col" className="num">
                                   Line total
                                 </th>
-                                <th scope="col">Price source</th>
                               </tr>
                             </thead>
                             <tbody>
                               {pool.items.map((item) => (
                                 <tr key={item.id}>
-                                  <td>{item.name}</td>
+                                  <td>
+                                    {item.name}
+                                    {/* Owner walkthrough 2026-08-07, finding 1.5: "Price
+                                      source" used to be its own column, but a pool is
+                                      appraised as a whole — every item in it shares
+                                      the same source unless an operator overrode one
+                                      row's price by hand — so the column repeated the
+                                      same word down every row of a pool for the sole
+                                      benefit of the rare row that differs. Dropped the
+                                      column; kept the marker, moved onto the row it
+                                      actually distinguishes. `triff` (the pool's own
+                                      appraisal, the common case) gets no badge at all —
+                                      a marker on every row is exactly the noise this
+                                      finding is about — `manual` (this one item's price
+                                      was hand-set, `setItemPrice`,
+                                      services/payout-loot.ts:194) and `unresolved`
+                                      (Triff had no quote for it) are the two states an
+                                      operator needs to notice per row, so those are the
+                                      only two that render. */}
+                                    {item.priceSource === "unresolved" && (
+                                      <>
+                                        {" "}
+                                        <Status tone="warn">unresolved</Status>
+                                      </>
+                                    )}
+                                    {item.priceSource === "manual" && (
+                                      <>
+                                        {" "}
+                                        <Status tone="neutral">manual</Status>
+                                      </>
+                                    )}
+                                  </td>
                                   <td className="mono nowrap">{item.qty}</td>
                                   <td className="mono nowrap num">
                                     {canEdit ? (
@@ -702,13 +753,6 @@ export default async function PayoutOperationPage({
                                   </td>
                                   <td className="mono nowrap num">
                                     {fmtIsk(item.totalValue)} ISK
-                                  </td>
-                                  <td>
-                                    {item.priceSource === "unresolved" ? (
-                                      <Status tone="warn">unresolved</Status>
-                                    ) : (
-                                      <Status>{item.priceSource}</Status>
-                                    )}
                                   </td>
                                 </tr>
                               ))}
@@ -833,16 +877,34 @@ export default async function PayoutOperationPage({
                   still carries the same sentence as an `aria-describedby` on
                   the specific button being armed, which is the only way a
                   screen reader user tabbing straight to a row (never reading
-                  this paragraph) still hears the cost ahead of the press. */}
+                  this paragraph) still hears the cost ahead of the press.
+
+                  The `locked` branch below is this paragraph's other half,
+                  not a separate note: `firstPayment` (`!locked`) and `locked`
+                  never both hold, so exactly one of the two renders once the
+                  operation is finalized, in the same spot, at the same
+                  standing weight — before, what marking paid *will* do; after,
+                  what it *did*. Owner walkthrough 2026-08-07, findings
+                  1.2+1.7: this used to live in the Operation section, keyed
+                  only off `locked`, explaining Revert's semantics nowhere near
+                  the roster Revert acts on. Both halves now sit beside the
+                  control they constrain. */}
                 {operation.status === "finalized" &&
-                  firstPayment &&
-                  access.isOperator && (
+                  access.isOperator &&
+                  (firstPayment ? (
                     <p className="dim">
                       Marking any row below paid freezes the loot pools, roster, shares
                       and corp share permanently: Unlock will no longer reopen them once
                       it happens.
                     </p>
-                  )}
+                  ) : (
+                    <p className="dim">
+                      A payment has been recorded, so the loot pools, roster, shares and
+                      corp share are fixed permanently. Reverting a payment does not
+                      reopen editing: it only corrects who was paid, so revert the wrong
+                      one and pay the right person while still frozen.
+                    </p>
+                  ))}
                 <Scroller
                   label="Roster"
                   tall={participants.length > ROSTER_TALL_THRESHOLD}
