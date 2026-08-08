@@ -576,8 +576,19 @@ a:hover {
    member-supplied structure names, and the reading measure forced wrapping
    that the full width does not. Prose on this page keeps the narrow cap, which
    is the entire reason `page--narrow` stays rather than being deleted from the
-   page — `.page__head` self-caps at nothing at all (:570), so removing it
-   wholesale would stretch the head to 1248px. */
+   page — removing it wholesale would stretch every remaining narrow-capped
+   child, `.page__meta` among them (see its own comment below), to 1248px.
+
+   The account page's `.page__head` also takes this class now (walkthrough
+   3.1). The verdict/health strip right-aligns inside `.page__head-row` via
+   `justify-content: space-between`, so its right edge is only ever as far
+   right as `.page__head`'s own content box — capped here at 912px while the
+   manifest below opts out to the full measure through its own `.full-measure`
+   Scroller, a 287px seam between two elements a reader expects to line up.
+   `.page__head` is the right level to opt out at: `.page__head-row` is a
+   grandchild of `.page--narrow`, invisible to the direct-child selector above
+   regardless of what class it carries, so the opt-out has to happen one level
+   up, on the child the selector actually reaches. */
 .page--narrow > .full-measure {
   max-width: none;
 }
@@ -646,16 +657,28 @@ a:hover {
   margin-top: 0;
 }
 
-/* The account page's two standing facts — tier and Discord — on one line under
-   the lede, in place of a rule-head plus a two-row definition grid. Wraps at
-   its own gap rather than forcing the head to scroll at 320px, same call
-   `.page__head-row` above makes. */
+/* The account page's two standing facts — tier and Discord — on one line
+   under the H1, in place of a rule-head plus a two-row definition grid. Wraps
+   at its own gap rather than forcing the head to scroll at 320px, same call
+   `.page__head-row` above makes.
+
+   Explicitly capped at the narrow measure, unlike `.page__head-row` above:
+   `.page__head` opted out of `.page--narrow`'s cap (walkthrough 3.1) so the
+   verdict could right-align against the manifest's full measure, and that
+   opt-out reaches every descendant, not just the row that needed it. Nothing
+   before 3.1 gave this element its own cap because it never needed one — its
+   parent's 912px was doing the job by accident. Left uncapped, the tier
+   badge and the Discord row would spread apart across the widened head with
+   open whitespace between them, reading as two unrelated fragments rather
+   than the two-fact line the comment above describes, so the measure is
+   restated here on purpose rather than inherited by chance. */
 .page__meta {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: var(--s-3) var(--s-5);
   margin-top: var(--s-4);
+  max-width: calc(var(--measure-page-narrow) - 2 * var(--s-5));
 }
 
 /* One fact and its controls. The row-level gap above separates facts; this one
@@ -843,8 +866,14 @@ h3.rule-head__label {
 
    Narrowed with `:has(.drawer)` rather than applied to `.scroller` bare, the
    way `.scroller-frame:has(.log--sticky-col)` below narrows the start fade:
-   the class is shared with the audit, sync and account pages, and none of
-   those hold a drawer or want inline-size containment.
+   the class is shared with the audit, sync, account and payouts regions, and
+   only the ones actually holding a drawer want inline-size containment. Two
+   do as of walkthrough 3.2 — the admin accounts table (`Disclosure`,
+   `_components/disclosure.tsx`) and the account page's crew manifest
+   (`CharacterRow`, `account/character-row.tsx`), whose per-row actions drawer
+   depends on this rule firing for its `100cqi` width exactly as the accounts
+   drawer does. The narrowing still earns its keep: the audit and sync
+   regions hold no drawer and get no containment.
 
    No `@supports` guard, deliberately. Both ways this can go unsupported fail
    soft: an engine without `:has()` drops this rule, leaving `100cqi` with no
@@ -2274,6 +2303,28 @@ h3.rule-head__label {
   padding: var(--s-2) var(--s-3);
 }
 
+/* Same buy-back as `.inline-edit--standalone` above, for the same reason:
+   the account manifest's per-character MAIN/UNLINK moved out of the table row
+   and into a disclosure drawer (walkthrough finding 3.2), and DESIGN.md
+   ruling R1 settled that a drawer's own controls take the 36px standalone
+   grade — "one drawer is open at a time... spans the full table width...
+   nothing is competing with it for vertical space" is exactly the in-row
+   crowding the 28px grade exists to solve, and a drawer has none of it.
+   `.btn--quiet` still earns MAIN its quiet colouring and UNLINK its
+   `.btn--danger-quiet` escalation; only the size needed buying back.
+
+   Padding matches bare `.btn` exactly (`var(--s-2) var(--s-4)`), not
+   `.inline-edit--standalone`'s `--s-3` — UNLINK is a `ConfirmSubmit` that
+   swaps this class for plain `.btn.btn--danger` once armed (no `--quiet`),
+   and the two states share one ghost-sized label
+   (`.confirm-submit__label`, above) specifically so arming never resizes
+   the button. A padding mismatch between the two classes would reintroduce
+   that jitter through the box model instead of the text. */
+.drawer__controls .btn--quiet {
+  min-height: 2.25rem;
+  padding: var(--s-2) var(--s-4);
+}
+
 /* Owner walkthrough 2026-08-07, finding 1.1. `.btn--quiet`'s transparent,
    borderless rest state (above) works where the control sits among
    neighbours that already read as a control row — the roster and pool
@@ -3298,6 +3349,27 @@ h3.rule-head__label {
 
 .row-toggle:hover {
   color: var(--gold);
+}
+
+/* The account manifest's per-row actions toggle (walkthrough 3.2/R2), which
+   replaced the permanent MAIN/UNLINK column. Same +/- marker convention as
+   `.row-toggle` above and `.disc > summary`, so a member who has learned
+   either affordance elsewhere reads this one for free — but its own class
+   rather than a share of `.row-toggle`: that class is deliberately undimmed
+   because it carries the admin table's row IDENTITY (see the comment on it
+   above), and this button carries no identity of its own. It is a secondary
+   control that opens a panel, the same standing as a `<details>` summary, so
+   it dims like one. `.btn--quiet .btn--micro` already supplies the button's
+   type, colour and 28px height; this only adds the marker `<button>` doesn't
+   get for free the way `<summary>` does. */
+.row-toggle--actions::before {
+  content: "+";
+  font-family: var(--font-mono), ui-monospace, monospace;
+  color: var(--ink-faint);
+}
+
+.row-toggle--actions[aria-expanded="true"]::before {
+  content: "\2212"; /* minus */
 }
 
 /* --- Sync status strip -------------------------------------------------- */
