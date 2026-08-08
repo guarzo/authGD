@@ -65,7 +65,19 @@ export const metadata: Metadata = {
  * full strip of its own rather than being folded behind housekeeping's
  * collapsed line — see `JobGroup`'s own doc in `@/core/schedules`.
  */
-const GROUP_ORDER: JobGroup[] = ["sweep", "member-facing", "on-demand", "housekeeping"];
+const GROUP_ORDER = ["sweep", "member-facing", "on-demand", "housekeeping"] as const;
+
+/**
+ * Every `JobGroup` must appear in `GROUP_ORDER`, and this line is what enforces
+ * it. A group missing from that array does not fall through to the `other`
+ * bucket below — `other` takes only the jobs `groupFor` rejects outright, and
+ * `groupFor` returns the new group happily — so its rows would vanish from this
+ * page entirely, with the `jobs.length > 0` filter guaranteeing not even an
+ * empty section appears as a hint. `GROUP_LABEL` failing to compile two lines
+ * down is proximity, not a guarantee; this is the guarantee.
+ */
+const _everyGroupIsOrdered: (typeof GROUP_ORDER)[number] = null as unknown as JobGroup;
+void _everyGroupIsOrdered;
 
 const GROUP_LABEL: Record<JobGroup | "other", string> = {
   sweep: "Sweep",

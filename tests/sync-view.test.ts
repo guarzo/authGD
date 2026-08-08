@@ -421,6 +421,20 @@ describe("housekeeping's group-level decisions", () => {
         groupTone([member("token-health", "overdue"), member("purge", "failing")]),
       ).toBe("bad");
     });
+
+    it("does not claim green for a group where nothing has ever succeeded", () => {
+      // A fresh deployment: neither housekeeping job has run. Green here would
+      // assert success for two jobs with no successful run between them.
+      expect(groupTone([member("token-health", "never"), member("purge", "never")])).toBe(
+        "off",
+      );
+      expect(
+        groupTone([member("token-health", "never"), member("purge", "inflight")]),
+      ).toBe("off");
+      expect(
+        groupTone([member("token-health", "inflight"), member("purge", "inflight")]),
+      ).toBe("neutral");
+    });
   });
 
   describe("groupHealthSummary", () => {
@@ -452,6 +466,30 @@ describe("housekeeping's group-level decisions", () => {
       ]);
       expect(summary).toContain("token-health failed");
       expect(summary).not.toContain("purge");
+    });
+
+    it("never says nothing is wrong beside a tone that says otherwise", () => {
+      // `overdue` and `unknown` are warn but deliberately do not auto-open, so
+      // the sentence has to be driven by the tone table rather than the
+      // auto-open one — otherwise the line reads "nothing needs attention"
+      // under an amber dot, on a group that stays folded.
+      for (const health of ["overdue", "unknown"] as const) {
+        const members = [member("purge", health), member("token-health", "fresh")];
+        expect(groupTone(members), health).toBe("warn");
+        expect(groupHealthSummary(members), health).not.toContain(
+          "nothing needs attention",
+        );
+        expect(groupHealthSummary(members), health).toContain("purge");
+      }
+    });
+
+    it("agrees with its own tone for every health a member can hold", () => {
+      for (const health of ALL_HEALTH) {
+        const members = [member("purge", health)];
+        const settled = groupHealthSummary(members).includes("nothing needs attention");
+        const faulted = ["bad", "warn"].includes(groupTone(members));
+        expect(settled, health).toBe(!faulted);
+      }
     });
   });
 });

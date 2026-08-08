@@ -100,18 +100,26 @@ function pad(n: string): string {
  * 15m" would be confident and wrong, which is the one thing `formatCadence`
  * exists to avoid.
  *
- * The wrap check is what makes this sound, and it is sufficient on its own: for
- * a uniform gap `g` over `n` entries the last is `first + g(n - 1)`, so the wrap
- * is `60 - g(n - 1)`, and requiring that to equal `g` forces `60 = g · n`
- * exactly. Divisibility and the entry count follow from it rather than adding
- * anything — they are kept below as an explicit floor so that a later change to
- * the gap loop cannot quietly widen what this accepts without tripping them.
+ * The wrap check is what makes the *spacing* sound: for a uniform gap `g` over
+ * `n` entries the last is `first + g(n - 1)`, so the wrap is `60 - g(n - 1)`,
+ * and requiring that to equal `g` forces `60 = g · n` exactly. Divisibility and
+ * the entry count follow from it rather than adding anything — they are kept
+ * below as an explicit floor so that a later change to the gap loop cannot
+ * quietly widen what this accepts without tripping them.
+ *
+ * It says nothing about *range*, though, which is a separate question and needs
+ * its own check: `45,60,75,90` is uniformly spaced and wraps correctly by the
+ * algebra above, so without the bound below it would render "every 15m from
+ * :45" for a cron `parseCron` rejects outright as out of range — leaving the
+ * confident sentence on the page with the next-run decoration beside it
+ * silently absent, which is the exact failure this function exists to prevent.
  */
 function evenlySpacedMinutes(min: string): { gap: number; first: number } | null {
   if (!/^\d+(,\d+)+$/.test(min)) return null;
   const values = min.split(",").map(Number);
   const sorted = [...values].sort((a, b) => a - b);
   if (sorted.some((v, i) => v !== values[i])) return null; // must be written sorted
+  if (sorted[sorted.length - 1] > 59) return null; // minutes only; see the range note above
 
   const gap = sorted[1] - sorted[0];
   if (gap <= 0) return null;

@@ -54,6 +54,16 @@ describe("formatCadence", () => {
     expect(formatCadence("1,2,3 * * * *")).toBe("1,2,3 * * * *");
   });
 
+  it("falls through an evenly-spaced list that leaves the minute range", () => {
+    // Even spacing and a correct wrap say nothing about range: `45,60,75,90`
+    // has gaps of 15 and wraps by 15 under the same algebra `2,17,32,47` does.
+    // `parseCron` rejects it outright, so rendering "every 15m from :45" would
+    // put a confident sentence on the page with the next-run decoration beside
+    // it silently absent — the raw expression is the honest answer.
+    expect(formatCadence("45,60,75,90 * * * *")).toBe("45,60,75,90 * * * *");
+    expect(formatCadence("60,90 * * * *")).toBe("60,90 * * * *");
+  });
+
   it("falls through a comma-list minute on a fixed hour", () => {
     // Evenly-spaced-minutes reasoning only applies to the "every hour" shape;
     // a fixed hour is a different cadence question this formatter does not

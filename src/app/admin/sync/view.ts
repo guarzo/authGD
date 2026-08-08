@@ -160,6 +160,16 @@ export function groupNeedsAttention(members: GroupMember[]): boolean {
 export function groupTone(members: GroupMember[]): Tone {
   if (members.some((m) => HEALTH_TONE[m.health] === "bad")) return "bad";
   if (members.some((m) => HEALTH_TONE[m.health] === "warn")) return "warn";
+  // No member is faulted, but "not faulted" is not the same as "succeeding".
+  // `never` is `off` per-row precisely so a job that has not run yet cannot
+  // claim health it has never demonstrated, and a two-test cascade defaulting
+  // to "ok" would hand that claim straight back at group level: on a fresh
+  // deployment neither housekeeping job has run, and the collapsed line would
+  // render green over two jobs with no successful run between them. Green is
+  // reserved for a group where something actually succeeded.
+  if (!members.some((m) => m.health === "fresh")) {
+    return members.some((m) => HEALTH_TONE[m.health] === "off") ? "off" : "neutral";
+  }
   return "ok";
 }
 
@@ -175,10 +185,23 @@ export function groupTone(members: GroupMember[]): Tone {
  * (`healthLabel`), the same word that row would show if the group were
  * expanded — so the fact does not change shape between the two states, only
  * where it is read from.
+ *
+ * What counts as "flagged" here is `HEALTH_TONE`, not `NEEDS_ATTENTION`, and
+ * the two deliberately differ: `overdue` and `unknown` are `warn` but do not
+ * auto-open, because a dead worker turns every job overdue at once and would
+ * throw open every drawer on the page. That argument is about *opening*, not
+ * about asserting nothing is wrong — keying this sentence off `NEEDS_ATTENTION`
+ * as well would print "nothing needs attention" beside the amber dot
+ * `groupTone` renders for the same member, on a group that stays folded. Since
+ * every `NEEDS_ATTENTION` health is already `warn` or `bad`, reading the tone
+ * table here is a strict widening: the group opens on the narrower rule and
+ * describes itself by the broader one, so the line always matches its colour.
  */
 export function groupHealthSummary(members: GroupMember[]): string {
   const count = `${members.length} job${members.length === 1 ? "" : "s"}`;
-  const flagged = members.filter((m) => needsAttention(m.health));
+  const flagged = members.filter(
+    (m) => HEALTH_TONE[m.health] === "bad" || HEALTH_TONE[m.health] === "warn",
+  );
   if (flagged.length === 0) return `${count} · nothing needs attention`;
   const names = flagged.map((m) => `${m.jobType} ${healthLabel(m.health)}`).join(", ");
   return `${count} · ${names}`;
