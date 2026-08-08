@@ -339,7 +339,7 @@ export default async function AdminAccountsPage({
             roster as a data island to filter over — for a page that is
             `force-dynamic` and already re-fetches on every navigation
             anyway. Submitting it is a navigation, same as clicking a tier
-            chip; unlike the four drawer-scoped actions below, no drawer is
+            chip; unlike the five drawer-scoped actions below, no drawer is
             open yet when an admin is searching for a row to open, so the
             "a redirect resets Disclosure's state" trap those actions work
             around does not apply here.
@@ -1190,6 +1190,14 @@ function AccountRow({
               {r.characters.map((c) => (
                 <tr key={c.id}>
                   <td>
+                    {/* Below 30rem the thead (globals.css, ".log--crew" media
+                        query) is hidden and this row becomes a block, so the
+                        <th scope="col"> association it relied on for its
+                        accessible name is gone. This label stands in for it —
+                        see the finding-4.4 comment on .log--crew in
+                        globals.css for why it's a real element and not
+                        generated content, and for the boundary measurement. */}
+                    <span className="crew__label">Name</span>
                     <div className="stack">
                       <span className="char">
                         {c.name}{" "}
@@ -1199,6 +1207,7 @@ function AccountRow({
                     </div>
                   </td>
                   <td>
+                    <span className="crew__label">Token</span>
                     <div className="stack">
                       <TokenState c={c} />
                       {c.affiliationInvalid && (
@@ -1207,6 +1216,7 @@ function AccountRow({
                     </div>
                   </td>
                   <td>
+                    <span className="crew__label">Standings</span>
                     <div className="stack">
                       <ContactState
                         result={c.contactSyncResult}
@@ -1236,6 +1246,7 @@ function AccountRow({
                     </div>
                   </td>
                   <td>
+                    <span className="crew__label">Map</span>
                     {c.mapObservedAt ? (
                       <Status tone="ok">on</Status>
                     ) : (

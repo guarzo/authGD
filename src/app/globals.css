@@ -4402,3 +4402,115 @@ h3.rule-head__label {
 .log--crew {
   width: 100%;
 }
+
+/* The Name column's bound, and the reason the 30rem breakpoint below is
+   enough. `.char` (above) sets `white-space: nowrap`, so a character name is
+   one unbreakable word and the crew table's min-content tracks the longest
+   name in the row set — which is state, not layout. On the shortest realistic
+   fixture row the table's min-content is 395.77px and everything at and above
+   465px fits, but EVE allows 37 characters and at that length the same table
+   measures 616px: it still overflows by 206px at 480px, 86px at 600px, 2px at
+   700px, and only stops at ~702px. A breakpoint high enough to cover that
+   would have to be ~44rem, which would reflow into blocks at widths where
+   three of the four columns fit side by side comfortably.
+   So the name is bounded instead of the breakpoint raised. Scoped to
+   `.log--crew` deliberately: `.char`'s `nowrap` is shared with the account
+   manifest (`.manifest`), where the name sits in a fixed-width identity block
+   and wrapping it is not wanted. Measured after, on the 37-character name:
+   480px 616 -> 410 (row 38.7 -> 103.75px), 600px 616 -> 530 (row -> 60.375px),
+   700px 616 -> 614 (row -> 60.375px) — overflow 0 and scroller tabIndex -1 at
+   all three. The cost is a taller row at the narrow end, which is the trade
+   this whole finding is making anyway. Both declarations are load-bearing:
+   `overflow-wrap` alone is inert here, because `nowrap` suppresses wrapping
+   before an opportunity is ever looked for — dropping `white-space` leaves
+   all three widths overflowing exactly as before. */
+.log--crew .char {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* The per-cell label the narrow media query below turns on. Off up here,
+   where the real <thead> is already naming the columns via `scope="col"` —
+   showing both would repeat every fact twice in the accessibility tree. */
+.crew__label {
+  display: none;
+}
+
+/* Finding 4.4: the crew table's own Scroller nests a horizontal scrollbar
+   inside the page's own — a scrollbar inside a scrollbar has no good visual
+   state. Measured with the drawer open, on `.drawer__crew .scroller` (the
+   scrollport; `.scroller-frame` is the non-scrolling wrapper above and
+   always reports 0 overflow), against the accounts e2e fixture's plain
+   character row (default token status "missing", not a contacts target, no
+   map observation — the shortest realistic row, one line per cell). The
+   longest-name case is a separate axis, bounded by `.log--crew .char` above;
+   these figures are the short-name floor, and are what set the breakpoint:
+
+     viewport   scroller overflow   scroller tabIndex
+     320px      120px               0
+     390px       50px               0
+     420px       20px               0
+     440px       26px               0   (still overflowing — see below)
+     465px        0px              -1   (first width that fits)
+     480px        0px              -1
+     768px        0px              -1
+
+   The table's own min-content plateaus at 395.77px from 320px up to 464px,
+   then the scrollport catches up to it at 465px and the table starts
+   stretching with the viewport past that. The walkthrough's own note quoted
+   370.45px and put the boundary at 440px; re-measured here on this repo's
+   `seedDenseWorld` fixture, 440px still overflows by 26px and the true
+   boundary is 465px. Content length is state-dependent (a "re-auth needed"
+   token, an "affiliation invalid" line, a longer character name each change
+   which word is the widest unbreakable one per column), so rather than
+   chase an exact zero-slack figure the way the walkthrough's own 27.49rem
+   does, this takes a real margin above the measured 465px: 480px = 30rem,
+   confirmed non-overflowing at 478–481px on the same fixture. `rem`, not
+   `px`: the table's min-content is text-driven, so it scales with the root
+   font size, and a `px` breakpoint would drift out of sync with it under a
+   user zoom or font-size override.
+
+   Dropping columns below a breakpoint was considered and rejected twice
+   already in this file for the same shape of problem — `.log--payouts`'s own
+   comment above, and `account.spec.ts`'s verdict on the manifest ("no
+   arrangement that keeps a portrait, a name and an unlink fits 320px") —
+   so this reflows instead: every column becomes a labelled block inside the
+   row rather than disappearing, no fact lost. `display: grid`/`block` on a
+   `<tr>`/`<td>` strips a table's accessible semantics in every browser tested
+   — the `<th scope="col">` associations painted on the desktop layout stop
+   being exposed once the row is no longer laid out as a row — and
+   `content: attr(data-label)` on a `::before` is not a fix, because
+   generated content is inconsistently exposed to assistive tech. So the
+   `<thead>` is hidden below the breakpoint and a real element inside each
+   `<td>` (`.crew__label`, above) stands in for it instead; the label is a
+   sibling of the cell's own content in the DOM at every width, and only its
+   `display` trades places at the boundary. That keeps the information in
+   both channels (visual and accessible-tree) at both widths, per ruling R4. */
+@media (max-width: 29.9375rem) {
+  .log--crew thead {
+    display: none;
+  }
+
+  .log--crew tbody tr {
+    display: grid;
+    gap: var(--s-2);
+    padding: var(--s-3) 0;
+    border-top: 1px solid var(--rule);
+  }
+
+  .log--crew tbody tr:first-child {
+    border-top: none;
+  }
+
+  .log--crew td {
+    display: block;
+    padding: 0;
+    border-top: none;
+  }
+
+  .crew__label {
+    display: block;
+    letter-spacing: var(--track-label);
+    color: var(--ink-faint);
+  }
+}
