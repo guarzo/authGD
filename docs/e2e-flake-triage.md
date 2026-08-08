@@ -49,19 +49,33 @@ tempting, that comment is aimed at you.
 ## Known exposure: the `useSubmitGuard` latch
 
 `src/app/_components/submit-guard.ts` latches `inFlight` synchronously on click
-and releases it only after an effect observes `pending` true and then false.
-When that transition is swallowed — the action settles before a commit, or an
-unrelated re-render sequence covers it — the latch sticks, and **every
-subsequent press on that button is `preventDefault`'ed with no POST**. The user
-sees a button that does nothing and a save that silently did not happen.
+— on any click that will actually submit, i.e. past the `!form` and
+`checkValidity()` gates — and releases it only after an effect observes
+`pending` true and then false. When that transition is swallowed — the action
+settles before a commit, or an unrelated re-render sequence covers it — the
+latch sticks, and **every subsequent press on that button is
+`preventDefault`'ed with no POST**. The user sees a button that does nothing
+and a save that silently did not happen.
 
 This is a live product bug, fixed separately. It is recorded here because it
 makes a specific *shape* of test intermittently red, and those tests must not be
 mistaken for noise.
 
-Two components use the guard: `Submit` (`submit.tsx`) — every validating click
-latches — and `ConfirmSubmit` (`confirm-submit.tsx`) — only the confirm press
-latches, since the arm press returns before the guard.
+Two components use the guard:
+
+- **`Submit`** (`submit.tsx`) — every validating click latches.
+- **`ConfirmSubmit`** (`confirm-submit.tsx`) — with `confirm={true}` only the
+  confirm press latches, because the arm press `preventDefault`s and returns
+  before reaching the guard. With **`confirm={false}` the single press latches
+  immediately** (`confirm-submit.tsx:409-413`), and two live callers flip that
+  prop at runtime: `payouts/[id]/pay-flow.tsx:333` (`confirm={arm}`) and
+  `admin/accounts/page.tsx:1046` (`confirm={!r.tierLocked}`). Rows in a paid
+  table are therefore exposed on their *first* press, not only a second.
+
+`e2e/submit-guard.spec.ts` is the dedicated regression spec for this primitive.
+It cannot catch the leak: it double-clicks `Create operation` on a form that
+redirects away, so the component unmounts before a third press is possible and a
+permanently-set `inFlight` still passes.
 
 ### The exposed shape
 
@@ -86,14 +100,16 @@ page.** All of `/payouts/[id]`, where every lifecycle action revalidates in
 place:
 
 - `e2e/payouts.spec.ts:1447` "override an item price, finalize, pay, revert, and
-  pay again" — nine guarded presses, zero navigations. Longest chain in the suite.
+  pay again" — ten clicks, zero navigations. Longest chain in the suite.
 - `e2e/payouts.spec.ts:1944` "deleting an operation with a paid participant is
-  refused on the page" — the assertion-bearing press is seven revalidations deep.
+  refused on the page" — the assertion-bearing press comes last, after the whole
+  create/pool/roster/finalize/pay sequence has revalidated the page in place.
 - `e2e/payouts.spec.ts:778`, `:196`, `:1091`, `:1861`, `:2159`, `:2069`, `:403`,
-  `:610`, `:2123` — 3-5 guarded presses in sequence on one document.
+  `:610`, `:2123` — several guarded presses in sequence on one document.
 - `e2e/payouts.spec.ts:2272`, `:2406`, `:2542` — `ConfirmSubmit` in a table with
   `confirm` flipping true→false, the exact "unrelated re-render" the guard's own
-  docblock names.
+  docblock names. Per the `confirm={false}` note above, these latch on a single
+  press.
 
 ### Measured, not inferred
 
@@ -127,11 +143,21 @@ $ npx playwright test e2e/sync.spec.ts \
   10 passed (1.1m)
 ```
 
-So exposure by shape is **not** the same as a current failure rate. `sync.spec.ts:859`
-sits on the identical defect and did not manifest in 10 runs; its second press
-follows a `redirect()`, which apparently gives the effect a reliable commit to
-observe. The rest of the table above is unmeasured — listed because it shares
-the shape, not because it has been seen red. Measure before you act on any row.
+So exposure by shape is **not** the same as a current failure rate.
+`sync.spec.ts:859` sits on the identical defect and did not manifest in 10 runs.
+Why is not established — its redirect is same-route, so by this document's own
+table the instance survives and unmounting is not what saved it. Treat that row
+as "not reproduced at n=10", not as explained. The rest of the table is
+unmeasured — listed because it shares the shape, not because it has been seen
+red. Measure before you act on any row.
+
+One more caveat on reading this document: only `payouts.spec.ts:1175` and
+`e2e/submit-guard.spec.ts` assert against the database. Everything else listed
+asserts on the DOM, so a stuck latch there surfaces as a missing notice, an
+unmoved focus ring, or a stale amount — not as an obvious lost write. That makes
+those failures easier to misread as rendering noise, which is the whole reason
+they are inventoried here.
 
 None of these tests should be rewritten to dodge the latch. They are correct;
-they poll the database precisely so a lost write cannot pass. Fix the guard.
+`payouts.spec.ts:1175` in particular polls the database precisely so a lost
+write cannot pass. Fix the guard.

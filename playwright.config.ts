@@ -78,21 +78,22 @@ export default defineConfig({
   // Zero, deliberately, and it is the setting most likely to be "fixed" by
   // someone staring at a red CI run. Do not raise it.
   //
-  // These specs drive server actions and then assert against the *database*,
-  // so a failure here is a lost write, not a slow paint. Retrying a lost write
-  // does not stabilize anything — it just resamples a real defect until it
-  // comes up green.
+  // A red run here is more often an intermittent *product* defect than a slow
+  // paint: these specs drive real server actions against a real database.
+  // Retrying that does not stabilize anything — it resamples a live defect
+  // until it comes up green and then files it under "flaky".
   //
   // The concrete case: `useSubmitGuard` (src/app/_components/submit-guard.ts)
   // releases its re-entry latch only after an effect observes `pending` true
   // and then false. When that transition is swallowed, the latch sticks and
   // every later press on that button is preventDefault'ed — a silent lost
   // save. `e2e/payouts.spec.ts` "notes save from an always-open textarea,
-  // twice running" catches it, measured at 4 failures in 10 runs
-  // (`--repeat-each=10`, 2026-08-08). Treating attempts as independent, at
-  // that rate `retries: 2` would report green on 1 - 0.4^3 ≈ 94% of CI runs,
-  // and even `retries: 1` on 84% — the bug would be marked "flaky", filtered
-  // out of the report, and shipped.
+  // twice running" catches it — one of the few specs that polls the database
+  // rather than the DOM, so it sees the lost write directly — measured at 4
+  // failures in 10 runs (`--repeat-each=10`, 2026-08-08). Treating attempts as
+  // independent, at that rate `retries: 2` would report green on 1 - 0.4^3 ≈
+  // 94% of CI runs, and even `retries: 1` on 84% — the bug would be marked
+  // "flaky", filtered out of the report, and shipped.
   //
   // The cost of zero is real and accepted: an infrastructure blip fails the
   // whole run. That is the cheaper mistake. A red run gets investigated; a

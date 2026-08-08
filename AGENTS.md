@@ -38,8 +38,8 @@ with no filter re-runs the whole suite N times at one worker.
 - 1..N-1 fail → a real intermittent defect. Find the race.
 - N/N fail → a deterministic regression.
 
-**Do not add `retries` to `playwright.config.ts`.** These specs assert against
-the database, so a failure is a lost write; retrying resamples a real defect
+**Do not add `retries` to `playwright.config.ts`.** A red run here is usually an
+intermittent product defect, not a slow paint; retrying resamples a real defect
 until it comes up green. The rationale is written next to the setting.
 
 `docs/e2e-flake-triage.md` has the full triage workflow and lists the tests
