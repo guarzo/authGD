@@ -291,6 +291,20 @@ configuration, the other two by overwriting the file.
   there and nowhere else. There are **two** sizes and no others: `quiet` is a colour
   grade, like `primary` and `default`, and does not carry a size of its own.
 
+  The `28px` grade is scoped by the *reason* for it, not by the tag it lands in:
+  it applies to rows that each carry a control set and are read many at a time.
+  A disclosure drawer is **not** in-row for this purpose even though
+  `Disclosure as="row"` renders a literal second `<tr>`. One drawer is open at
+  a time, it spans the full table width, and nothing is competing with it for
+  vertical space, so the density argument that buys the `28px` grade does not
+  apply and its controls take `36px`. This is not a new rule so much as the one
+  already in force: `e2e/sync.spec.ts:1095` pins the `/admin/sync` drawer's
+  Re-run control to the standalone grade and has been passing all along, and
+  `payouts/[id]/notes-form.tsx:90-95` reasons the same way for a field in an
+  operation's own panel. `/admin/accounts` is the surface that diverged.
+  (Owner walkthrough 2026-08-07, ruling R1. Supersedes the flat two-grade
+  reading recorded in `docs/settled-design-decisions.md`.)
+
   `.shell__nav a` used to be a third, undocumented size at ~33.05px — `padding:
   var(--s-2) var(--s-3)` plus the label register's line box, with no floor
   and no ceiling. It could not simply shrink to 28px or grow to 36px by
@@ -309,3 +323,26 @@ configuration, the other two by overwriting the file.
   worth of controls competing for space — the same case that puts `.btn` at
   36px rather than 28px. `e2e/shell.spec.ts` pins both the 36px box and a
   minimum label-to-underline gap.
+
+## Disclosure and parity
+
+From the owner walkthrough of 2026-08-07. Both rules exist because a reviewer
+reading the code cannot see the failure; only someone using the app can.
+
+- **Rare destructive controls do not hold permanent width in a scanning table.**
+  PRODUCT.md principle 3 makes scanning the primary act, and a control that is
+  pressed once a month should not cost a column on every row for the other
+  thirty days. Move it behind per-row disclosure. Two constraints on how: the
+  cost hint stays hidden-always rather than reveal-on-arm (`confirm-submit.tsx:89-98`
+  records why — the widening disarms the control it revealed for), and the
+  drawer that receives the control takes the `36px` grade above, not `28px`.
+  (Ruling R2.)
+
+- **Information may not live only in the assistive-tech channel.** Parity runs
+  in both directions. The usual failure is a control with no accessible name;
+  this codebase's failure is the inverse — a `role="status"` confirmation
+  marked `.visually-hidden`, or an affordance named in `aria-label` and absent
+  from the visible summary, so the sighted user is the one left guessing.
+  `.visually-hidden` is for text that is *redundant* on screen (a heading level,
+  a table caption already implied by layout), never for the only copy of a fact.
+  If assistive tech is told something, the screen says it too. (Ruling R4.)

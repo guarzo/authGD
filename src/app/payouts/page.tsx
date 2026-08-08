@@ -90,8 +90,7 @@ export default async function PayoutsPage({
             )}
           </div>
           <p className="page__lede">
-            Every fight operation authGD has recorded: what it was worth, who was in it,
-            and who has been paid. Your own share of each one is on{" "}
+            Your own share of each operation is on{" "}
             <Link href="/account">your account</Link>.
           </p>
         </div>
