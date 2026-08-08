@@ -1623,10 +1623,8 @@ test("a faulted character's remedy renders in a sub-row under that character", a
   // have.
   await expect(subRows.locator("td")).toHaveAttribute("colspan", "4");
 
-  // The footnote copy is gone, not merely duplicated. Scoped to the remedy's
-  // own id rather than to `.table-notes` as a whole: that container survives
-  // for the "make main" consequence notes, which did not move.
-  await expect(page.locator('.table-notes [id^="contact-remedy-"]')).toHaveCount(0);
+  // The footnote copy is gone, not merely duplicated: exactly one remedy
+  // element exists for the one faulted character, and it is the sub-row.
   await expect(page.locator('[id^="contact-remedy-"]')).toHaveCount(1);
 });
 

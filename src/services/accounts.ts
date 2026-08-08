@@ -1,8 +1,7 @@
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import type { Config } from "@/config";
 import { TOKEN_FAULT_RESULTS } from "@/core/contact-result";
-import type { Tier } from "@/core/tier";
-import type { Dbx, DbTx } from "@/db";
+import type { DbTx } from "@/db";
 import {
   account,
   bootstrapAdminGrant,
@@ -526,41 +525,6 @@ export async function unlinkCharacter(
   }
   if (opts.revokeSessions) await revokeAccountSessions(dbx, existing.accountId);
   return { ok: true };
-}
-
-/**
- * Read-only context for previewing what "make main" would do to the
- * account's tier — `core/tier.ts`'s `previewMainChange`, called once per
- * candidate on `/account`. Deliberately its own query rather than a field
- * added to `AccountView` (`services/account-view.ts`): that module's shape is
- * being edited by another change in this same pass, and this is a page-scoped
- * concern (the consequence of one specific action) rather than a fact about
- * the account worth carrying on every read of it.
- *
- * No `.for("update")` — this backs a page render, not a mutation, and the
- * account/character rows it reads are re-locked and re-checked for real
- * inside `setMainCharacter` and the membership job at the point either of
- * them actually acts.
- */
-export async function getMainChangeContext(
-  dbx: Dbx,
-  accountId: string,
-): Promise<{
-  tier: Tier;
-  tierLocked: boolean;
-  allianceIdByCharacter: Map<number, number | null>;
-}> {
-  const [acc] = await dbx.select().from(account).where(eq(account.id, accountId));
-  if (!acc) throw new Error("account not found");
-  const chars = await dbx
-    .select({ id: character.id, allianceId: character.allianceId })
-    .from(character)
-    .where(eq(character.accountId, accountId));
-  return {
-    tier: acc.tier,
-    tierLocked: acc.tierLocked,
-    allianceIdByCharacter: new Map(chars.map((c) => [c.id, c.allianceId])),
-  };
 }
 
 export async function setMainCharacter(

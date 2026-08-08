@@ -15,7 +15,6 @@ import {
 } from "@/db/schema";
 import {
   demoteAdmin,
-  getMainChangeContext,
   handleEveLogin,
   linkCharacter,
   maybeGrantBootstrapAdmin,
@@ -581,34 +580,6 @@ describe("setMainCharacter", () => {
       ok: false,
       error: "not_on_account",
     });
-  });
-});
-
-// The read backing `/account`'s "make main" consequence preview
-// (`core/tier.ts`'s `previewMainChange`) — sweep item #6.
-describe("getMainChangeContext", () => {
-  it("carries the account's tier, lock state, and each character's cached allianceId", async () => {
-    const a = await login(ch());
-    await link(a.accountId, ch({ characterId: 90000003, characterName: "Alt" }));
-    // The membership job is the only writer of `character.allianceId`
-    // (jobs/membership.ts) — never set at link time — so this simulates a
-    // character the job HAS resolved, alongside the freshly-linked one it
-    // hasn't touched yet (still `null` from `link` above).
-    await ctx.db
-      .update(character)
-      .set({ allianceId: 99000001 })
-      .where(eq(character.id, 90000001));
-    const context = await getMainChangeContext(ctx.db, a.accountId);
-    expect(context.tier).toBe("pending");
-    expect(context.tierLocked).toBe(false);
-    expect(context.allianceIdByCharacter.get(90000001)).toBe(99000001);
-    expect(context.allianceIdByCharacter.get(90000003)).toBeNull();
-  });
-
-  it("throws for an account that no longer exists", async () => {
-    await expect(
-      getMainChangeContext(ctx.db, "00000000-0000-0000-0000-000000000000"),
-    ).rejects.toThrow();
   });
 });
 
