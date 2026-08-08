@@ -3,6 +3,7 @@ import { eq, inArray } from "drizzle-orm";
 import {
   account,
   character,
+  contactSyncState,
   discordLink,
   wandererAclObservation,
 } from "../src/db/schema";
@@ -1625,15 +1626,16 @@ for (const { width, reflowed } of [
  * the deleted WCAG 2.2 2.4.11 spec rather than the fixture simply not
  * reaching that state.
  *
- * The name is the only text in this table that needed bounding, which is why
- * this is the only spec of its kind. `.char__location` is the other
- * player-supplied string in a crew row — structure names run past 150
- * characters — but `globals.css` already caps it at `max-width: 22rem` with
- * `overflow: hidden`, and that caps its intrinsic contribution too: a
- * 200-character location injected into an open drawer clips at 352px and
- * moves the scroller's `scrollWidth` not at all, at 480 through 1000px. Not
- * pinned here because the cap is `.char__location`'s own contract, not this
- * table's, and a spec here would fail for whoever legitimately changes it.
+ * The name is one of two texts in this table that needed bounding; the quoted
+ * contact label in the Standings cell is the other, pinned by the spec below.
+ * `.char__location` is the third player-supplied string in a crew row —
+ * structure names run past 150 characters — but `globals.css` already caps it
+ * at `max-width: 22rem` with `overflow: hidden`, and that caps its intrinsic
+ * contribution too: a 200-character location injected into an open drawer
+ * clips at 352px and moves the scroller's `scrollWidth` not at all, at 480
+ * through 1000px. Not pinned here because the cap is `.char__location`'s own
+ * contract, not this table's, and a spec here would fail for whoever
+ * legitimately changes it.
  */
 for (const width of [480, 600, 700]) {
   test(`a 37-character crew name leaves the crew scroller nothing to scroll at ${width}px`, async ({
@@ -1670,6 +1672,76 @@ for (const width of [480, 600, 700]) {
     expect(
       geom.scrollWidth,
       "a 37-character name no longer holds the crew table open past its scrollport",
+    ).toBeLessThanOrEqual(geom.clientWidth + 1);
+  });
+}
+
+/**
+ * The second unbounded text, and the one that nearly shipped as a hole.
+ *
+ * The Standings cell renders `ContactRemedy`, which on a `label_mismatch`
+ * result quotes the member's own label back inside `code.literal` — and
+ * `code.literal` is `white-space: pre`, which suppresses wrapping exactly as
+ * the name cell's `nowrap` did. The quoted text is unbounded from two
+ * directions: `STANDINGS_LABEL` has no maximum length (`z.string().min(1)`,
+ * src/config.ts) and is operator-set, and the candidate labels are raw
+ * player-set EVE contact labels.
+ *
+ * Bounding the name alone left this open at EVERY width, not only in the
+ * reflow band — measured before the fix, `.drawer__crew .scroller` reported
+ * scrollWidth/clientWidth of 976/250 at 320px, 976/409 at 479px, 1205/410 at
+ * 480px and 1205/530 at 600px. That is the tab stop the deleted WCAG 2.2
+ * 2.4.11 spec used to guard, reachable through ordinary content, so this is
+ * pinned rather than merely recorded: it is the premise the deletion rests on.
+ *
+ * Both bands are covered because the bug spanned both, and no earlier spec
+ * seeded a contact result at all.
+ */
+for (const width of [320, 480, 600]) {
+  test(`a long quoted contact label leaves the crew scroller nothing to scroll at ${width}px`, async ({
+    page,
+    context,
+  }) => {
+    const admin = await seedMember(db, {
+      name: "Aaa Boss",
+      tier: "member",
+      isAdmin: true,
+    });
+    const target = await seedMember(db, { name: "Label Holder", tier: "member" });
+    const [ch] = await db
+      .select()
+      .from(character)
+      .where(eq(character.accountId, target.id));
+    // One unbroken 120-character label: the worst case for `pre`, not merely a
+    // long one. EVE imposes no length here that this table can rely on.
+    await db.insert(contactSyncState).values({
+      characterId: ch.id,
+      lastResult: "label_mismatch",
+      lastDetail: JSON.stringify([`${"L".repeat(120)}`]),
+    });
+    await context.addCookies([await sessionCookieFor(db, admin.id)]);
+    await page.setViewportSize({ width, height: 720 });
+    await page.goto("/admin/accounts");
+
+    const row = rowFor(page, "Label Holder");
+    await toggleOf(row).click();
+    await expect(drawerOf(row)).toBeVisible();
+
+    // Fail loudly if the fixture stops producing the remedy at all: without
+    // this the geometry assertion below would pass on an empty cell and the
+    // spec would guard nothing.
+    await expect(drawerOf(row).locator(".log--crew code.literal").first()).toBeVisible();
+
+    const region = drawerOf(row).locator(".drawer__crew .scroller");
+    await expect(region).toHaveAttribute("tabindex", "-1");
+
+    const geom = await region.evaluate((r) => ({
+      scrollWidth: r.scrollWidth,
+      clientWidth: r.clientWidth,
+    }));
+    expect(
+      geom.scrollWidth,
+      "a 120-character quoted label no longer holds the crew table open past its scrollport",
     ).toBeLessThanOrEqual(geom.clientWidth + 1);
   });
 }

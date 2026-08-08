@@ -4454,17 +4454,49 @@ h3.rule-head__label {
    before an opportunity is ever looked for — dropping `white-space` leaves
    all three widths overflowing exactly as before.
 
-   The name is the only unbounded text in this table that needed bounding. The
-   other candidate is `.char__location` (above), whose structure names are
-   player-supplied and can run past 150 characters — but it is already capped
-   by its own `max-width: 22rem` and `overflow: hidden`, and a cap on the used
-   width caps the intrinsic contribution with it. Measured by injecting a
-   200-character unbreakable location into an open drawer at 480/600/700/768/
-   1000px: the line clips at its 352px ceiling and the crew scroller's
-   `scrollWidth` does not move from `clientWidth` at any of them, tab stop
-   withdrawn throughout. Every other cell is fixed vocabulary. */
+   The name is one of two unbounded texts in this table that needed bounding;
+   the other is the quoted label in the Standings cell, bounded by the rule
+   below. A third candidate is `.char__location` (above), whose structure names
+   are player-supplied and can run past 150 characters — but it is already
+   capped by its own `max-width: 22rem` and `overflow: hidden`, and a cap on
+   the used width caps the intrinsic contribution with it. Measured by
+   injecting a 200-character unbreakable location into an open drawer at
+   480/600/700/768/1000px: the line clips at its 352px ceiling and the crew
+   scroller's `scrollWidth` does not move from `clientWidth` at any of them,
+   tab stop withdrawn throughout. Every other cell is fixed vocabulary. */
 .log--crew .char {
   white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* The Standings cell renders `ContactRemedy` (contact-state.tsx), which on a
+   `missing_label`/`label_mismatch` result quotes the label back inside
+   `code.literal` — and `code.literal` is `white-space: pre` (line ~197), which
+   suppresses wrapping exactly as `nowrap` does, spaces or not. Both sources
+   are unbounded: `STANDINGS_LABEL` is `z.string().min(1)` with no ceiling
+   (src/config.ts) and is operator-set, and the candidate labels are raw
+   player-set EVE contact labels.
+
+   Measured by injecting a 120-character quoted literal into an open drawer's
+   Standings cell, `.drawer__crew .scroller` scrollWidth vs clientWidth:
+   320px 976/250, 390px 976/320, 479px 976/409, 480px 1205/410, 600px
+   1205/530. So this axis overflows at EVERY width, not only in the reflow
+   band — it is a wider hole than the name was, and it alone would have put
+   the tab stop back on a region the deleted WCAG 2.2 2.4.11 spec used to
+   guard. After this rule the same injection reports 250/250, 320/320,
+   409/409, 410/410, 530/530 — overflow zero, tab stop withdrawn.
+
+   `pre-wrap`, not `normal`: `pre`'s whitespace preservation is load-bearing
+   where it was set (a member comparing "AuthGD " against "AuthGD" must see
+   the trailing space), and `normal` would collapse it, silently undoing that
+   fix to close this one. `pre-wrap` keeps every space and only adds the
+   ability to break. `overflow-wrap: anywhere` is the half that breaks the
+   unbroken run itself; as with `.char`, it is inert without the whitespace
+   change, so both declarations are load-bearing. Scoped to `.log--crew`
+   because the cap is a table-layout concern — `code.literal` on /account
+   sits in prose with room to be wide. */
+.log--crew code.literal {
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
