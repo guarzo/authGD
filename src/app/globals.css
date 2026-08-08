@@ -2618,12 +2618,24 @@ h3.rule-head__label {
   block-size: 1lh;
 }
 
-/* Static example text under the action-prefix input. A placeholder would
-   vanish once a value is typed and, worse, reads as an applied filter to a
-   scanning admin while the field is empty. */
+/* Static text under the Action input describing what the field matches. A
+   placeholder would vanish once a value is typed and, worse, reads as an
+   applied filter to a scanning admin while the field is empty.
+
+   The zero inline-size is what keeps this cell the same width as Actor and
+   Target. A grid item contributes its own max-content width to the track, and
+   this sentence is wider than the input beside it — left alone it sized the
+   cell, and the Action field rendered ~58px wider than its two siblings at
+   1440px. Zeroing the width removes it from that calculation; `min-inline-size:
+   100%` then hands it the track the label and field settled on, so it wraps
+   instead. It costs one line of height, which the row already tolerates —
+   `align-items: flex-start` above exists precisely so this cell can be taller
+   than its siblings without dragging their fields out of line. */
 .filter-form__hint {
   font-size: var(--t-detail);
   color: var(--ink-faint);
+  inline-size: 0;
+  min-inline-size: 100%;
 }
 
 /* The copy-this-to-an-admin record on `error.tsx`. A `<pre>` rather than a

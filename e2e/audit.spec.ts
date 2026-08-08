@@ -311,6 +311,14 @@ test("mono columns fit their widest value instead of painting over the next one"
  * One filter cell carries a hint and its siblings do not. Bottom-aligning the
  * row made that cell's extra height push its own label and input a full row
  * above the others, so the three fields read as three different rows.
+ *
+ * The width half of this guards the other way the hint can distort its cell.
+ * A grid item contributes its max-content width to the track, so once the
+ * Action hint became a sentence ("matches the start of an action, ...") rather
+ * than `e.g. tier.`, it was wider than the input and sized the cell — the
+ * Action field rendered 257px against its siblings' 199px. `.filter-form__hint`
+ * zeroes its inline-size to opt out of that; this is what would catch the opt-out
+ * being dropped, or a future hint long enough to need a different remedy.
  */
 test("filter labels, fields, and submit each sit on one line", async ({
   page,
@@ -321,23 +329,27 @@ test("filter labels, fields, and submit each sit on one line", async ({
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/admin/audit");
 
-  const tops = await page.evaluate(() => {
-    const y = (sel: string) =>
-      [...document.querySelectorAll(sel)].map((el) =>
-        Math.round(el.getBoundingClientRect().top),
-      );
+  const box = await page.evaluate(() => {
+    const rects = (sel: string) =>
+      [...document.querySelectorAll(sel)].map((el) => el.getBoundingClientRect());
+    const y = (sel: string) => rects(sel).map((r) => Math.round(r.top));
     return {
       labels: y(".filter-form__label"),
       fields: y(".filter-form .field"),
       submit: y(".filter-form__actions .btn"),
+      fieldWidths: rects(".filter-form .field").map((r) => Math.round(r.width)),
     };
   });
 
-  expect(tops.labels).toHaveLength(3);
-  expect(new Set(tops.labels).size).toBe(1);
-  expect(new Set(tops.fields).size).toBe(1);
+  expect(box.labels).toHaveLength(3);
+  expect(new Set(box.labels).size).toBe(1);
+  expect(new Set(box.fields).size).toBe(1);
   // The submit button belongs on the field line, not the label line.
-  expect(Math.abs(tops.submit[0] - tops.fields[0])).toBeLessThanOrEqual(1);
+  expect(Math.abs(box.submit[0] - box.fields[0])).toBeLessThanOrEqual(1);
+
+  // No cell is sized by its hint: all three fields share one width.
+  expect(box.fieldWidths).toHaveLength(3);
+  expect(new Set(box.fieldWidths).size).toBe(1);
 });
 
 test("names are clickable filters, and a name unions a person's identifier forms", async ({
