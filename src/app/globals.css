@@ -4516,7 +4516,14 @@ h3.rule-head__label {
    unbroken run itself; as with `.char`, it is inert without the whitespace
    change, so both declarations are load-bearing. Scoped to `.log--crew`
    because the cap is a table-layout concern — `code.literal` on /account sits
-   in prose with room to be wide. */
+   in prose with room to be wide.
+
+   That scoping is also the maintenance cost: this rule and `.log--crew .char`
+   above bound the two unbounded strings this table renders TODAY, by selector,
+   not by any general rule. A new crew column, or a new remedy branch carrying
+   its own operator- or player-set string, is outside both selectors and
+   reopens the overflow silently — the scroller simply takes a tab stop again
+   and nothing fails. Bound it here at the same time. */
 .log--crew code.literal {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
