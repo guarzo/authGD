@@ -263,6 +263,39 @@ test("a fixed-hour cadence keeps UTC in its accessible name, and an interval one
   await expect(membership).not.toHaveAccessibleName(/UTC/);
 });
 
+/**
+ * The separation between an interval row's two cadence values, pinned. The
+ * cell is a four-value concatenation split across a line break — "every 30m" /
+ * "next HH:MM" — and the two must not run together into "every 30mnext 14:30"
+ * in the AT channel, where the aria-hidden column header cannot help.
+ *
+ * Two sources could be supplying that gap: the explicit `{" "}` in the source
+ * and Chromium's own accessible-name handling of the `<br>`. Measured by
+ * deleting each in turn — without the space the name still reads "every 30m
+ * next 17:30"; without the `<br>` it collapses to "every 30mnext 17:30". So
+ * the break is what holds them apart today and the space is redundant, which
+ * is exactly why this assertion is here rather than left to a comment: it
+ * fails if a rewrite drops both.
+ *
+ * Deliberately not asserted on `textContent`: `visually-hidden` here is
+ * clipped rather than `display: none`, so hidden text counts and the
+ * assertion would pass either way. And `toHaveAccessibleName` normalises
+ * whitespace, so this distinguishes one space from none — the whole question —
+ * but not one from two.
+ */
+test("an interval row's cadence and its next-run time stay separate words", async ({
+  page,
+  context,
+}) => {
+  await asAdmin(context);
+  await seedRuns();
+  await page.goto("/admin/sync");
+
+  await expect(summaryFor(page, "membership")).toHaveAccessibleName(
+    /every 30m next \d{2}:\d{2}/,
+  );
+});
+
 test("the strip answers per job, and only the unhealthy one is open", async ({
   page,
   context,
