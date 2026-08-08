@@ -34,6 +34,17 @@ import { useEffect, useRef, type MouseEvent } from "react";
  * the double-submit window this exists to close. `/payouts/new` has no other
  * client state that could produce such a render, but this is a shared primitive
  * and `ConfirmSubmit` sits in tables that do.
+ *
+ * Testing note, because this guard reads as broken from the outside and is not.
+ * A click that arrives while the form is still in flight is refused with no
+ * POST and no visible trace — correct, and the whole point — so a test that
+ * presses the same button twice has to wait for the *client* to see the first
+ * action settle before the second press. A row read straight from Postgres will
+ * not do it: the row commits before the action's response reaches the browser,
+ * leaving hundreds of milliseconds (335ms and 539ms, measured) in which the
+ * form is still busy and the second press is legitimately swallowed. Gate on
+ * whatever the component shows when its own `useActionState` resolves —
+ * `e2e/payouts.spec.ts`'s notes test uses `· saved` — and then check the row.
  */
 export function useSubmitGuard(pending: boolean) {
   const inFlight = useRef(false);
