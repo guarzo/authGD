@@ -1143,6 +1143,41 @@ h3.rule-head__label {
   max-width: max-content;
 }
 
+/* `.scroller`'s own border is a block box by default: `width` is `auto`,
+   which resolves to "fill the available space" regardless of how wide its
+   child actually is. `.log--runs` above stops at its own content's width, so
+   an unmodified `.scroller` left its border running on to the full strip
+   width anyway — the table's header rule ending at content width, ~445px of
+   bare space, then the scroller's own border closing far past it. Measured on
+   the same 6-counter membership job, at the page's own 1200px strip: the
+   table stopped at 721px, the scroller's border at 1166px. That reads as a
+   rendering fault exactly the way 5.6 describes, not because the table's own
+   edge is wrong (it is deliberately content-sized, see above) but because
+   nothing shrank the box drawn around it to match.
+
+   `width: 100%; max-width: max-content`, the same pairing as `.log--runs`
+   above, not the bare `fit-content` keyword: a `fit-content`-sized ancestor
+   feeding a `width: 100%` child (the table) turned out to affect *its own*
+   ancestor's available-width calculation too, in testing — `.scroller-frame`
+   measured 32px narrower than the region actually had at 320px, and the
+   table's designed 320px overflow (the "hands its scroll region a tab stop"
+   test) stopped triggering, because the browser had sized `.scroller` to the
+   table's full max-content demand instead of clamping it to the space on
+   screen. `width: 100%` first keeps that available-space calculation exactly
+   as it was — every other consumer of it downstream is unaffected — and
+   `max-width: max-content` only ever pulls the box *in* from that 100%,
+   never past it, which is the one direction this fix needs.
+
+   Scoped to this table's own scroller, not `.scroller` bare: the class is
+   shared with /admin/audit and /admin/accounts, both fixed- or wide-layout
+   tables that already consume their full region, where this would be a
+   no-op at best and an unreviewed risk at worst for a fix this page's own
+   finding doesn't ask for. */
+.scroller:has(.log--runs) {
+  width: 100%;
+  max-width: max-content;
+}
+
 /* Third column is Status by construction (Started, Took, Status, …). It is the
    one cell that can carry prose — the folded-in error string — and without a
    floor the auto layout is free to hand it a one-word width and turn a failure
@@ -3370,6 +3405,16 @@ h3.rule-head__label {
   padding-top: var(--s-3);
 }
 
+/* Housekeeping's own collapsed line (5.3) sits where a `.strip__sub` would
+   otherwise be, so the two selectors above and below need a second target
+   each — a `<details>` closed by default reads identically to an always-open
+   `.strip__sub` for spacing purposes, since `Disclosure` keeps its children
+   in the DOM either way (@/app/_components/disclosure). */
+.strip__group-disc + .strip__group {
+  border-top: 1px solid var(--rule-strong);
+  padding-top: var(--s-3);
+}
+
 /* Stands in for the border-top a first-of-group job would otherwise get from
    `.strip__job + .strip__job` above: the group heading's own hairline is
    that job's divider, so the small gap here is only breathing room, not a
@@ -3380,31 +3425,65 @@ h3.rule-head__label {
   padding-top: var(--s-1);
 }
 
-.strip__disc > summary {
+.strip__group + .strip__group-disc {
+  padding-top: var(--s-1);
+}
+
+/* The housekeeping strip's own collapsed line — one sentence, not the four
+   aligned columns a job row carries, so it does not join `.strip__disc`'s
+   grid: a `display: grid` here would centre that one sentence in the name
+   track and leave the rest of the row's tracks empty rather than reflowing
+   around it. Shares the job row's marker, hover and focus-visible treatment
+   below (added to those selectors directly) so a collapsed group reads as
+   the same *kind* of control as the rows inside it, just one level up. */
+.strip__group-disc > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-3) var(--s-4);
+}
+
+/* The first job's own top padding, same value `.strip__group + .strip__sub`
+   gives an ungrouped list — the group heading's hairline above is still that
+   job's own divider, this is only the breathing room under it. Housekeeping's
+   `<ul>` sits inside the disclosure's own content `<div>` rather than as a
+   direct sibling of the heading, so the padding has to travel one level in
+   with it. */
+.strip__group-disc .strip__sub {
+  padding-top: var(--s-1);
+}
+
+.strip__disc > summary,
+.strip__group-disc > summary {
   cursor: pointer;
   list-style: none;
   transition: background-color var(--dur-color) var(--ease);
 }
 
-.strip__disc > summary::-webkit-details-marker {
+.strip__disc > summary::-webkit-details-marker,
+.strip__group-disc > summary::-webkit-details-marker {
   display: none;
 }
 
-.strip__disc > summary::before {
+.strip__disc > summary::before,
+.strip__group-disc > summary::before {
   content: "+";
   font-family: var(--font-mono), ui-monospace, monospace;
   color: var(--ink-faint);
 }
 
-.strip__disc[open] > summary::before {
+.strip__disc[open] > summary::before,
+.strip__group-disc[open] > summary::before {
   content: "\2212"; /* minus */
 }
 
-.strip__disc > summary:hover {
+.strip__disc > summary:hover,
+.strip__group-disc > summary:hover {
   background: var(--hull-hi);
 }
 
-.strip__disc > summary:focus-visible {
+.strip__disc > summary:focus-visible,
+.strip__group-disc > summary:focus-visible {
   outline: 2px solid var(--gold);
   outline-offset: -2px;
 }

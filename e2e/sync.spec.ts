@@ -180,6 +180,89 @@ const summaryFor = (page: import("@playwright/test").Page, job: string) =>
     .locator(`.strip__job:has(.strip__name:text-is("${job}"))`)
     .locator("> .strip__disc > summary");
 
+/**
+ * Opens the housekeeping strip's own collapsed line (5.3) if it is not open
+ * already, so `purge` and `token-health` become reachable for the tests that
+ * still address those two rows directly. Closed `<details>` content is not
+ * merely off-screen — Chromium marks it `content-visibility: hidden`, which
+ * Playwright treats the same as `display: none` for click/focus targeting —
+ * so a test seeding a healthy purge run and then clicking its own disclosure
+ * without this first would fail on an element it never made visible. A no-op
+ * when a seeded fault already auto-opened the group, which is why this checks
+ * `open` rather than unconditionally clicking (a second click on an
+ * already-open `<details>` would close it again).
+ */
+async function openHousekeeping(page: import("@playwright/test").Page) {
+  const group = page.locator(".strip__group-disc");
+  if ((await group.getAttribute("open")) === null) {
+    await group.locator("> summary").click();
+  }
+}
+
+/**
+ * R4, both directions, on the one column that now splits its meaning across
+ * the two channels. Moving "UTC" out of eight per-row strings and into the
+ * column header (5.2) is only sound while every row that needs the word still
+ * carries it in its accessible name: `.strip__head` is `aria-hidden="true"`,
+ * so the header cannot supply it to anyone using a screen reader, and a row
+ * reading "daily 03:00" with no timezone anywhere in the AT channel would be
+ * information living only in the visual one.
+ *
+ * Asserted here rather than trusted to `splitCadenceUtc`'s unit tests: that
+ * function is pure and correct in isolation, but what R4 constrains is the
+ * *rendered accessible name*, which is a concatenation this file is the only
+ * place able to see. A refactor that dropped the `visually-hidden` span, or
+ * that let it collapse against the neighbouring text into "03:00UTC", would
+ * leave every unit test green.
+ *
+ * Both fixed-hour cadences are covered — `membership-recheck` (weekly, plain)
+ * and `token-health` (daily, inside the collapsed housekeeping group) — plus
+ * an interval row, which must NOT gain the word: `every 30m` means the same
+ * thing in every timezone, and a hidden "UTC" there would be the opposite
+ * defect, stating something to screen readers that is not true of the value.
+ */
+test("a fixed-hour cadence keeps UTC in its accessible name, and an interval one never gains it", async ({
+  page,
+  context,
+}) => {
+  await asAdmin(context);
+  await seedRuns();
+  await page.goto("/admin/sync");
+
+  // The header carries it visually, exactly once, for sighted readers.
+  await expect(page.locator(".strip__h-cadence")).toHaveText("Cadence (UTC)");
+
+  // What a sighted reader actually sees in the cell: the same subtree with
+  // its visually-hidden spans removed. `textContent`/`toHaveText` would count
+  // the hidden " UTC" as visible — it is clipped, not `display: none` — and
+  // would pass whether or not 5.2 ever removed the suffix from the visible
+  // string, which is the exact regression this test exists to catch.
+  const seenText = (row: ReturnType<typeof summaryFor>) =>
+    row.locator(".strip__cadence").evaluate((el) => {
+      const copy = el.cloneNode(true) as HTMLElement;
+      copy.querySelectorAll(".visually-hidden").forEach((n) => n.remove());
+      return (copy.textContent ?? "").trim();
+    });
+
+  const recheck = summaryFor(page, "membership-recheck");
+  // Visible text has shed the suffix — that is the whole point of 5.2 …
+  expect(await seenText(recheck)).toContain("Sun 04:00");
+  expect(await seenText(recheck)).not.toContain("UTC");
+  // … and the accessible name has not.
+  await expect(recheck).toHaveAccessibleName(/Sun 04:00 UTC/);
+
+  await openHousekeeping(page);
+  const tokenHealth = summaryFor(page, "token-health");
+  expect(await seenText(tokenHealth)).toContain("daily 03:00");
+  expect(await seenText(tokenHealth)).not.toContain("UTC");
+  await expect(tokenHealth).toHaveAccessibleName(/daily 03:00 UTC/);
+
+  // A timezone-invariant cadence stays timezone-free in both channels.
+  const membership = summaryFor(page, "membership");
+  expect(await seenText(membership)).toContain("every 30m");
+  await expect(membership).not.toHaveAccessibleName(/UTC/);
+});
+
 test("the strip answers per job, and only the unhealthy one is open", async ({
   page,
   context,
@@ -216,7 +299,7 @@ test("the strip answers per job, and only the unhealthy one is open", async ({
  * group, each one's accessible name its own visible heading, and each job
  * still reachable inside it.
  */
-test("the strip's three groups are three named lists, not one flat one with the labels painted over", async ({
+test("the strip's four groups are four named lists, not one flat one with the labels painted over", async ({
   page,
   context,
 }) => {
@@ -229,26 +312,93 @@ test("the strip's three groups are three named lists, not one flat one with the 
   await expect(sweep).toBeVisible();
   await expect(sweep.getByRole("listitem")).toHaveCount(4);
 
+  // member-facing: location alone. Split out of housekeeping because a
+  // member notices a stale location, where token-health and purge answer to
+  // nobody but the admin reading this page.
+  const memberFacing = page.getByRole("list", { name: "Member-facing" });
+  await expect(memberFacing.getByRole("listitem")).toHaveCount(1);
+
   // on-demand: membership-recheck alone.
   const onDemand = page.getByRole("list", { name: "On-demand" });
   await expect(onDemand.getByRole("listitem")).toHaveCount(1);
 
-  // housekeeping: token-health, purge, location.
+  // housekeeping: token-health, purge. Still a `role="list"` of 2 items once
+  // opened — `getByRole` reads the accessibility tree, and Chromium excludes
+  // a closed `<details>`'s content from it exactly the way it already does
+  // for every job's own run-history drawer on this page, so the list has to
+  // be opened first rather than merely present in the DOM.
+  await openHousekeeping(page);
   const housekeeping = page.getByRole("list", { name: "Housekeeping" });
-  await expect(housekeeping.getByRole("listitem")).toHaveCount(3);
+  await expect(housekeeping.getByRole("listitem")).toHaveCount(2);
 
   // Every job is reachable from inside its own group's list, not just from
   // the page as a whole.
   await expect(sweep.locator(".strip__job", { hasText: "membership" })).toHaveCount(1);
-  await expect(housekeeping.locator(".strip__job", { hasText: "purge" })).toHaveCount(1);
-  await expect(housekeeping.locator(".strip__job", { hasText: "location" })).toHaveCount(
+  await expect(memberFacing.locator(".strip__job", { hasText: "location" })).toHaveCount(
     1,
   );
+  await expect(housekeeping.locator(".strip__job", { hasText: "purge" })).toHaveCount(1);
 
   // The visible label itself renders as ordinary text — not aria-hidden —
   // since it is what names the list an assistive technology user reaches.
   const sweepHeading = page.locator(".strip__group", { hasText: "Sweep" });
   await expect(sweepHeading).not.toHaveAttribute("aria-hidden", "true");
+});
+
+/**
+ * Housekeeping's own line is the only surface a token-health or purge fault
+ * has anywhere in the product (5.3) — a screen reader landing on this page
+ * with the group still shut must still hear that something is wrong, and a
+ * sighted admin must not have to open anything to see it either.
+ */
+test("housekeeping's collapsed line auto-expands when one of its jobs is failing", async ({
+  page,
+  context,
+}) => {
+  await asAdmin(context);
+  await db.insert(syncRun).values({
+    jobType: "token-health",
+    startedAt: ago(2 * MIN),
+    finishedAt: ago(2 * MIN - 300),
+    status: "failed",
+    errorSummary: "token refresh failed for 3 accounts",
+    counts: null,
+  });
+  await page.goto("/admin/sync");
+
+  const group = page.locator(".strip__group-disc");
+  await expect(group).toHaveAttribute("open", "");
+  const summary = group.locator("> summary");
+  // Names the faulted job and its own health word, the same word the row
+  // itself carries once the group is open — not a bare count, and not colour
+  // alone: `Status` renders a tone AND this text together.
+  await expect(summary).toContainText("token-health failed");
+  await expect(summary.locator(".st--bad")).toHaveCount(1);
+
+  // purge is clean and unaffected, but still reachable now that the group
+  // opened on token-health's fault.
+  const purge = summaryFor(page, "purge");
+  await expect(purge).toBeVisible();
+});
+
+/**
+ * The clean state states health, not just a count — "2 jobs" alone answers
+ * "how many are folded behind this line" and leaves the actual question (is
+ * anything wrong) for the admin to go find out.
+ */
+test("housekeeping's collapsed line states health when nothing needs attention", async ({
+  page,
+  context,
+}) => {
+  await asAdmin(context);
+  await seedRuns(); // purge: ok. token-health: no rows at all ("never", not a fault).
+  await page.goto("/admin/sync");
+
+  const group = page.locator(".strip__group-disc");
+  await expect(group).not.toHaveAttribute("open", "");
+  const summary = group.locator("> summary");
+  await expect(summary).toHaveText("2 jobs · nothing needs attention");
+  await expect(summary.locator(".st--ok")).toHaveCount(1);
 });
 
 /**
@@ -373,6 +523,9 @@ test("a collapsed job opens from the keyboard", async ({ page, context }) => {
   await asAdmin(context);
   await seedRuns();
   await page.goto("/admin/sync");
+  // purge sits behind housekeeping's own collapsed line (5.3); seedRuns'
+  // purge run is clean so it does not auto-open on its own.
+  await openHousekeeping(page);
 
   const purge = summaryFor(page, "purge");
   await expect(purge).toHaveAttribute("aria-expanded", "false");
@@ -406,12 +559,17 @@ test("counts become columns, an all-zero run collapses to one token", async ({
   ]);
   await expect(membership.locator("tbody td").nth(1)).toHaveText("1.2s");
 
+  // purge sits behind housekeeping's own collapsed line (5.3).
+  await openHousekeeping(page);
   const purge = page.locator(".strip__job", { hasText: "purge" });
   await purge.locator("> .strip__disc > summary").click();
   await expect(purge.locator("tbody")).toContainText("no change");
-  // Full payload still reachable behind the disclosure.
+  // Full payload still reachable behind the disclosure. Compact, not
+  // pretty-printed (5.5, RunPayload in page.tsx) — `"sessions":0` with no
+  // space after the colon, unlike `Json`'s own `JSON.stringify(value, null,
+  // 2)` used elsewhere on this page's audit counterpart.
   await purge.locator("tbody summary").click();
-  await expect(purge.locator(".json__full")).toContainText('"sessions": 0');
+  await expect(purge.locator(".json__full")).toContainText('"sessions":0');
 });
 
 /**
@@ -428,6 +586,8 @@ test("the raw-payload disclosure clears the 24px hit target", async ({
   await seedRuns();
   await page.goto("/admin/sync");
 
+  // purge sits behind housekeeping's own collapsed line (5.3).
+  await openHousekeeping(page);
   const purge = page.locator(".strip__job", { hasText: "purge" });
   await purge.locator("> .strip__disc > summary").click();
   const box = await purge.locator("tbody summary").first().boundingBox();
@@ -793,6 +953,8 @@ test("opening a healthy row's drawer by hand and pressing its enqueue control le
   await seedRuns();
   await page.goto("/admin/sync");
 
+  // purge sits behind housekeeping's own collapsed line (5.3).
+  await openHousekeeping(page);
   const purge = summaryFor(page, "purge");
   await expect(purge).toHaveAttribute("aria-expanded", "false");
   await purge.click();
@@ -1013,6 +1175,11 @@ test("consecutive identical runs collapse to one row; an in-flight run never joi
   ]);
   await page.goto("/admin/sync");
 
+  // purge sits behind housekeeping's own collapsed line (5.3); an in-flight
+  // run does not auto-open it (`groupNeedsAttention` reuses `needsAttention`,
+  // which excludes `inflight` for the same reason a single in-flight row
+  // does not auto-open on its own — see NEEDS_ATTENTION's own comment).
+  await openHousekeeping(page);
   const purge = page.locator(".strip__job", { hasText: "purge" });
   await purge.locator("> .strip__disc > summary").click();
   const rows = purge.locator("tbody tr");
@@ -1060,6 +1227,8 @@ test("a collapsed row's hidden text carries both ends, and the count exactly onc
   await page.setViewportSize({ width: 320, height: 720 });
   await page.goto("/admin/sync");
 
+  // purge sits behind housekeeping's own collapsed line (5.3).
+  await openHousekeeping(page);
   const purge = page.locator(".strip__job", { hasText: "purge" });
   await purge.locator("> .strip__disc > summary").click();
   const group = purge.locator("tbody tr").first();
@@ -1077,6 +1246,32 @@ test("a collapsed row's hidden text carries both ends, and the count exactly onc
   // there announced "3 runs" twice.
   await expect(startedCell.locator(".strip__group-count")).toBeVisible();
   await expect(startedCell.locator(".strip__group-count")).toHaveText("3 runs");
+  // All three seeded runs share one outcome, so the table's own "3 runs"
+  // cell already states the window's full depth — the caption underneath
+  // would only restate it (5.7), and does not render at all.
+  await expect(purge.locator(".strip__window")).toHaveCount(0);
+});
+
+/**
+ * The window caption states a fact the table's own cells do not, so it is
+ * expected to survive: an in-flight run above a collapsed group is two rows,
+ * neither of which states the window's own depth on its own (5.7).
+ */
+test("the window caption survives when the table's own rows don't state its depth", async ({
+  page,
+  context,
+}) => {
+  await asAdmin(context);
+  await seedRuns();
+  await page.goto("/admin/sync");
+
+  // membership has exactly one seeded run — collapseRuns never turns a
+  // single row into a "group", so this is the plainest case where nothing
+  // in the table states how deep the window goes. `.first()`: "membership"
+  // is also a substring of "membership-recheck".
+  const membership = page.locator(".strip__job", { hasText: "membership" }).first();
+  await membership.locator("> .strip__disc > summary").click();
+  await expect(membership.locator(".strip__window")).toHaveText("last run");
 });
 
 /**
@@ -1100,6 +1295,8 @@ test("a drawer's Re-run control sits at the standalone grade, not the in-row one
   await seedRuns();
   await page.goto("/admin/sync");
 
+  // purge sits behind housekeeping's own collapsed line (5.3).
+  await openHousekeeping(page);
   const purge = summaryFor(page, "purge");
   await purge.click();
   await expect(purge).toHaveAttribute("aria-expanded", "true");
@@ -1118,4 +1315,105 @@ test("a drawer's Re-run control sits at the standalone grade, not the in-row one
 
   expect(Math.round(syncNowBox!.height)).toBe(36);
   expect(Math.round(rerunBox!.height)).toBe(Math.round(syncNowBox!.height));
+});
+
+/**
+ * 5.5: opening a run's Raw payload used to stretch its whole row to fit
+ * `Json`'s one-key-per-line pretty print — 227px for a 6-counter run whose
+ * other five cells are one line each (52.5px), 174.75px of it (77%) blank in
+ * every cell but Raw's. `RunPayload` (page.tsx) renders the same payload
+ * compact instead, wrapped by `.json__full`'s own 40ch cap rather than broken
+ * one key per line, and the row comes to well under half its old height.
+ */
+test("opening a run's Raw payload no longer stretches its row past half its old height", async ({
+  page,
+  context,
+}) => {
+  await asAdmin(context);
+  await seedRuns();
+  await page.goto("/admin/sync");
+
+  const membership = page.locator(".strip__job", { hasText: "membership" }).first();
+  await membership.locator("> .strip__disc > summary").click();
+
+  const row = membership.locator("tbody tr").first();
+  const before = await row.boundingBox();
+  await row.locator("summary").first().click();
+  const after = await row.boundingBox();
+
+  // Measured before this fix: 52.5px closed, 227.25px open (pretty-printed,
+  // 4.3x) — after: ~134px (2.6x). The regression this guards is the ratio
+  // creeping back toward the old one, not the exact open height, which still
+  // grows with however many counters a job reports.
+  expect(after!.height).toBeLessThan(before!.height * 3);
+  expect(after!.height).toBeLessThan(140);
+
+  // Compact, not pretty: no newline inside the rendered payload.
+  const text = await membership.locator(".json__full").first().innerText();
+  expect(text).not.toContain("\n");
+});
+
+/**
+ * 5.6: `.log--runs`'s own `max-width: max-content` (globals.css) already
+ * stops the runs table at its own content width rather than stretching it
+ * into a wide strip — but `.scroller` around it used to stay a full-width
+ * block box regardless, so its border kept going another ~445px past the
+ * table's own edge on a 6-counter job at this page's 1200px strip: one
+ * border ending at the content, a second, wider one drawn around the empty
+ * space past it. `.scroller:has(.log--runs)` (globals.css) is `width: 100%;
+ * max-width: max-content`, the same pairing `.log--runs` itself already uses,
+ * so the two now end at the same place — the table's own edge is the only
+ * border, wherever the content stops.
+ */
+test("the runs table's scroller doesn't outrun the table's own edge", async ({
+  page,
+  context,
+}) => {
+  await asAdmin(context);
+  await seedRuns();
+  await page.goto("/admin/sync");
+
+  const membership = page.locator(".strip__job", { hasText: "membership" }).first();
+  await membership.locator("> .strip__disc > summary").click();
+
+  const [scrollerBox, tableBox] = await Promise.all([
+    membership.locator(".scroller").first().boundingBox(),
+    membership.locator(".log--runs").first().boundingBox(),
+  ]);
+
+  // The scroller's border sits right against the table (its own 1px border
+  // on each side, no more) rather than however much wider the strip is.
+  const gap = scrollerBox!.x + scrollerBox!.width - (tableBox!.x + tableBox!.width);
+  expect(gap).toBeLessThan(4);
+});
+
+/**
+ * The fix above is `width: 100%; max-width: max-content` rather than the bare
+ * `fit-content` keyword precisely to leave this test alone: a `fit-content`
+ * scroller measured its own available width from the table's full max-content
+ * demand instead of the region on screen, at 320px, which silently starved it
+ * of the overflow "opening a healthy row hands its scroll region a tab stop"
+ * (above) exists to require.
+ */
+test("the runs table still overflows its scroller at 320px, tab stop and all", async ({
+  page,
+  context,
+}) => {
+  await asAdmin(context);
+  await seedRuns();
+  await page.setViewportSize({ width: 320, height: 720 });
+  await page.goto("/admin/sync");
+
+  const membership = summaryFor(page, "membership");
+  await membership.click();
+  const region = page
+    .locator(".strip__job", { hasText: "membership" })
+    .locator(".scroller");
+  await expect(region).toHaveAttribute("tabindex", "0");
+
+  const dims = await region.evaluate((el) => ({
+    scrollWidth: el.scrollWidth,
+    clientWidth: el.clientWidth,
+  }));
+  expect(dims.scrollWidth).toBeGreaterThan(dims.clientWidth);
 });

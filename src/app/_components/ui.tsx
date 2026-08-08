@@ -337,14 +337,35 @@ export function Notice({
  * CSS-only ellipsis would put them out of reach for good. Pass `summary` when
  * the caller can render a one-line, human summary of the payload (e.g. the
  * audit log's `alumni → member`) rather than falling back to raw JSON.
+ *
+ * `pretty` controls only the *expanded* block. It defaults to the indented
+ * form, which is what a nested payload needs to be readable at all. Pass
+ * `pretty={false}` for a flat payload whose every value is a scalar: the
+ * one-key-per-line indent then buys nothing a compact string doesn't already
+ * say, and in a table it costs real height — see the measured case at
+ * `@/app/admin/sync/page` (Raw column), where it was the difference between a
+ * 227px row and a ~116px one. Deliberately not inferred from the value's own
+ * shape: which form reads better depends on the surface it renders into, not
+ * on the payload, and a component that silently changed layout when a
+ * payload's shape changed would be worse than one that asks.
  */
-export function Json({ value, summary }: { value: unknown; summary?: string }) {
+export function Json({
+  value,
+  summary,
+  pretty = true,
+}: {
+  value: unknown;
+  summary?: string;
+  pretty?: boolean;
+}) {
   return (
     <details className="json">
       <summary>
         <span className="json__peek">{summary ?? JSON.stringify(value)}</span>
       </summary>
-      <pre className="json__full">{JSON.stringify(value, null, 2)}</pre>
+      <pre className="json__full">
+        {pretty ? JSON.stringify(value, null, 2) : JSON.stringify(value)}
+      </pre>
     </details>
   );
 }

@@ -42,20 +42,30 @@ export function cronFor(jobType: string): string | null {
 }
 
 /**
- * Which strip of the admin sync page a job belongs to. This follows what the
- * page's OWN controls can reach, not the job's queue mechanics:
+ * Which strip of the admin sync page a job belongs to. The taxonomy answers
+ * "who needs to see this row", and for three of the four groups that question
+ * happens to be settled by what the page's OWN controls can reach:
  *
  * - `sweep` — the four jobs the primary "sync everything" fan-out enqueues
  *   (membership, contacts, wanderer, discord-roles).
  * - `on-demand` — reachable from a dedicated control other than the fan-out
  *   (membership-recheck, via "Recheck invalid affiliations").
- * - `housekeeping` — not reachable from any page control (token-health, purge).
+ * - `housekeeping` — not reachable from any page control, specifically
+ *   (token-health, purge). Nothing on the page points at these jobs and
+ *   nothing outside the page reads their output either, so control-reach and
+ *   audience agree.
+ * - `member-facing` — control-reachability says `location` is housekeeping
+ *   too (no control enqueues it on demand), but its OUTPUT is the character
+ *   location column on every member's `/account` page. Collapsing it behind
+ *   the housekeeping strip's health line would hide a row members actually
+ *   read, so it gets its own group even though nothing else about its
+ *   dispatch mechanics changed.
  *
  * `Record<JobType, JobGroup>` rather than a partial map: adding a `JOB_CRON`
  * key without deciding its group is a compile error here, the same argument
  * `JobType` itself makes for `cronFor`.
  */
-export type JobGroup = "sweep" | "on-demand" | "housekeeping";
+export type JobGroup = "sweep" | "on-demand" | "housekeeping" | "member-facing";
 
 export const JOB_GROUP: Record<JobType, JobGroup> = {
   membership: "sweep",
@@ -65,7 +75,7 @@ export const JOB_GROUP: Record<JobType, JobGroup> = {
   "membership-recheck": "on-demand",
   "token-health": "housekeeping",
   purge: "housekeeping",
-  location: "housekeeping",
+  location: "member-facing",
 };
 
 /** The strip a job type belongs to, or null when nothing schedules it. */
@@ -77,6 +87,50 @@ const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 function pad(n: string): string {
   return n.padStart(2, "0");
+}
+
+/**
+ * Whether a comma-separated list of minutes is truly "every N minutes",
+ * including the wrap around the hour boundary — and if so, the gap and the
+ * first minute.
+ *
+ * A uniform gap between consecutive entries is not enough on its own: `0,15,30`
+ * has gaps of 15 and 15, but the wrap from 30 back to 0 is 30 minutes, so the
+ * list only fires three times an hour, not four. Paraphrasing that as "every
+ * 15m" would be confident and wrong, which is the one thing `formatCadence`
+ * exists to avoid.
+ *
+ * The wrap check is what makes the *spacing* sound: for a uniform gap `g` over
+ * `n` entries the last is `first + g(n - 1)`, so the wrap is `60 - g(n - 1)`,
+ * and requiring that to equal `g` forces `60 = g · n` exactly. Divisibility and
+ * the entry count follow from it rather than adding anything — they are kept
+ * below as an explicit floor so that a later change to the gap loop cannot
+ * quietly widen what this accepts without tripping them.
+ *
+ * It says nothing about *range*, though, which is a separate question and needs
+ * its own check: `45,60,75,90` is uniformly spaced and wraps correctly by the
+ * algebra above, so without the bound below it would render "every 15m from
+ * :45" for a cron `parseCron` rejects outright as out of range — leaving the
+ * confident sentence on the page with the next-run decoration beside it
+ * silently absent, which is the exact failure this function exists to prevent.
+ */
+function evenlySpacedMinutes(min: string): { gap: number; first: number } | null {
+  if (!/^\d+(,\d+)+$/.test(min)) return null;
+  const values = min.split(",").map(Number);
+  const sorted = [...values].sort((a, b) => a - b);
+  if (sorted.some((v, i) => v !== values[i])) return null; // must be written sorted
+  if (sorted[sorted.length - 1] > 59) return null; // minutes only; see the range note above
+
+  const gap = sorted[1] - sorted[0];
+  if (gap <= 0) return null;
+  for (let i = 1; i < sorted.length; i++) {
+    if (sorted[i] - sorted[i - 1] !== gap) return null;
+  }
+  const wrap = 60 - sorted[sorted.length - 1] + sorted[0];
+  if (wrap !== gap) return null;
+  if (60 % gap !== 0 || sorted.length !== 60 / gap) return null;
+
+  return { gap, first: sorted[0] };
 }
 
 /**
@@ -97,6 +151,8 @@ export function formatCadence(cron: string): string {
     if (hour === "*") {
       if (everyMin) return `every ${everyMin[1]}m`;
       if (/^\d+$/.test(min)) return `hourly :${pad(min)}`;
+      const spaced = evenlySpacedMinutes(min);
+      if (spaced) return `every ${spaced.gap}m from :${pad(String(spaced.first))}`;
       return cron;
     }
     if (/^\d+$/.test(min) && /^\d+$/.test(hour)) {

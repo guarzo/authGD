@@ -1,6 +1,7 @@
 import type { RowHealth } from "@/core/run-health";
 import type { SyncRunStatus } from "@/db/schema";
 import { cronFor, isJobType, nextRunAt } from "@/core/schedules";
+import type { CollapsedRun, CollapsibleRun } from "@/core/run-summary";
 import type { Tone } from "@/app/_components/ui";
 import { elapsedShort } from "@/app/_components/format-ago";
 
@@ -124,6 +125,138 @@ export function healthLabel(health: RowHealth): string {
 
 export function needsAttention(health: RowHealth): boolean {
   return NEEDS_ATTENTION[health];
+}
+
+/**
+ * One member of a strip group, for the three group-level decisions below. Only
+ * the two fields those decisions actually read — the rest of a job's row (its
+ * cadence, its runs) has nothing to say about the group's own collapsed line.
+ */
+export interface GroupMember {
+  jobType: string;
+  health: RowHealth;
+}
+
+/**
+ * Whether a collapsed group container (the housekeeping strip's own
+ * `Disclosure`, page.tsx) should open on its own. The per-row auto-open
+ * (`needsAttention` above) still decides each member's own drawer once the
+ * container is open; this is the same test applied one level up, so folding
+ * a group behind one summary line can never silently stop a failing member
+ * from surfacing — see the finding this exists to close (5.3): a fault in
+ * `token-health` or `purge` has no other surface anywhere in the product.
+ */
+export function groupNeedsAttention(members: GroupMember[]): boolean {
+  return members.some((m) => needsAttention(m.health));
+}
+
+/**
+ * The colour for a group's own collapsed line, the same severity order
+ * `HEALTH_TONE` already states per row: a reported failure outranks a
+ * schedule fact, which outranks a state that is not a fault at all. Reusing
+ * `HEALTH_TONE` rather than a second table keeps the two from silently
+ * disagreeing about which health counts as worse.
+ */
+export function groupTone(members: GroupMember[]): Tone {
+  if (members.some((m) => HEALTH_TONE[m.health] === "bad")) return "bad";
+  if (members.some((m) => HEALTH_TONE[m.health] === "warn")) return "warn";
+  // No member is faulted, but "not faulted" is not the same as "succeeding".
+  // `never` is `off` per-row precisely so a job that has not run yet cannot
+  // claim health it has never demonstrated, and a two-test cascade defaulting
+  // to "ok" would hand that claim straight back at group level: on a fresh
+  // deployment neither housekeeping job has run, and the collapsed line would
+  // render green over two jobs with no successful run between them. Green is
+  // reserved for a group where something actually succeeded.
+  if (!members.some((m) => m.health === "fresh")) {
+    return members.some((m) => HEALTH_TONE[m.health] === "off") ? "off" : "neutral";
+  }
+  return "ok";
+}
+
+/**
+ * The collapsed line's own text. A bare count ("2 jobs") answers "how many
+ * jobs are folded behind this line" and nothing else — the entire point of
+ * collapsing housekeeping to one line rather than dropping it is that a fault
+ * must still be visible without expanding anything (5.3), so the count alone
+ * would defeat the reason this line exists. Clean groups get one settled
+ * word rather than repeating every member's own "ok"/"no runs" distinction,
+ * which is a member-row nuance this line does not need to carry; a group with
+ * a member needing attention names it and states its own health word
+ * (`healthLabel`), the same word that row would show if the group were
+ * expanded — so the fact does not change shape between the two states, only
+ * where it is read from.
+ *
+ * What counts as "flagged" here is `HEALTH_TONE`, not `NEEDS_ATTENTION`, and
+ * the two deliberately differ: `overdue` and `unknown` are `warn` but do not
+ * auto-open, because a dead worker turns every job overdue at once and would
+ * throw open every drawer on the page. That argument is about *opening*, not
+ * about asserting nothing is wrong — keying this sentence off `NEEDS_ATTENTION`
+ * as well would print "nothing needs attention" beside the amber dot
+ * `groupTone` renders for the same member, on a group that stays folded. Since
+ * every `NEEDS_ATTENTION` health is already `warn` or `bad`, reading the tone
+ * table here is a strict widening: the group opens on the narrower rule and
+ * describes itself by the broader one, so the line always matches its colour.
+ */
+export function groupHealthSummary(members: GroupMember[]): string {
+  const count = `${members.length} job${members.length === 1 ? "" : "s"}`;
+  const flagged = members.filter(
+    (m) => HEALTH_TONE[m.health] === "bad" || HEALTH_TONE[m.health] === "warn",
+  );
+  if (flagged.length === 0) return `${count} · nothing needs attention`;
+  const names = flagged.map((m) => `${m.jobType} ${healthLabel(m.health)}`).join(", ");
+  return `${count} · ${names}`;
+}
+
+/**
+ * Whether the window caption below a job's runs table (`.strip__window`,
+ * page.tsx) would only restate what the table's own `.strip__group-count`
+ * cell already says. True exactly when every run in the window collapsed
+ * into one group: that row's "N runs" cell already states the window's full
+ * depth, and "last N runs" underneath it would be the identical fact printed
+ * twice in the same small area (5.7). False the moment the table shows more
+ * than one row — an in-flight run above a group, two groups with different
+ * outcomes, or no collapsing at all — because then no single cell states the
+ * total and the caption is the only thing that does.
+ */
+export function windowRestatesGroup<T extends CollapsibleRun>(
+  collapsed: CollapsedRun<T>[],
+): boolean {
+  return collapsed.length === 1 && collapsed[0].kind === "group";
+}
+
+/**
+ * The visible cadence text with a trailing wall-clock timezone clause
+ * removed, and whether that clause has to survive somewhere else.
+ *
+ * `formatCadence` (@/core/schedules) appends " UTC" only to the two branches
+ * that print an actual clock reading (`daily HH:MM UTC`, `Sun HH:MM UTC`);
+ * every interval cadence (`every 30m`, `hourly :05`) never carries the
+ * suffix, so this is a no-op for those and never touches a string it wasn't
+ * built to. Reading the fact off the string's own trailing text rather than
+ * re-deriving "does this cadence name a wall clock" independently (which
+ * `cadenceNamesTime` above already answers for a different purpose) keeps
+ * this from silently drifting out of step with a future `formatCadence`
+ * rewording — if that function ever stops writing the suffix, this function
+ * stops finding it too, rather than asserting a UTC clause that is no longer
+ * there.
+ *
+ * This exists because the visible per-row suffix has to drop (5.2 — eight
+ * rows' worth of "UTC" read as noise, and the header now carries the fact
+ * once as "Cadence (UTC)") without deleting the timezone from the
+ * accessible name: `.strip__head` is `aria-hidden`, so a header-only fix
+ * would remove the word from the one channel a screen reader has for it.
+ * The caller renders `visible` as ordinary text and, when `hiddenUtc` is
+ * true, an adjacent `visually-hidden` " UTC" so the accessible name still
+ * carries the fact the visible text no longer spells out.
+ */
+export function splitCadenceUtc(cadence: string): {
+  visible: string;
+  hiddenUtc: boolean;
+} {
+  if (cadence.endsWith(" UTC")) {
+    return { visible: cadence.slice(0, -4), hiddenUtc: true };
+  }
+  return { visible: cadence, hiddenUtc: false };
 }
 
 /**
