@@ -1524,17 +1524,28 @@ h3.rule-head__label {
 
    `.scroller` is in the list even though every other entry is an interactive
    element, because a tab stop is what the list is really enumerating and a
-   scroll region earns one: the accounts drawer nests a Scroller for the crew
-   table inside this table, and scroller.tsx gives it
-   `role="region" tabIndex={0}` whenever it overflows. Without an entry here it
-   is the one tab stop in the region with no margin, so tabbing into a crew list
-   parks it flush under the header — ring invisible, first crew rows painted
-   over. The stop is conditional (`tabIndex` is -1 when the region fits), which
-   is why this reproduces only where the crew table overflows, roughly 320–390px
-   wide, and why a desktop pass never showed it. It reproduces at all only since
-   `.drawer__crew .scroller-frame` got its `min-width: 0`: before that the crew
-   table escaped the Scroller instead of scrolling in it, so the region never
-   overflowed and never held a stop to obscure. A descendant selector, so the
+   scroll region earns one: `scroller.tsx` gives one `role="region"
+   tabIndex={0}` whenever it overflows. Without an entry here that is a tab
+   stop in the region with no margin, parking flush under the header — ring
+   invisible, first rows painted over.
+
+   The case that put it here was the accounts drawer's own crew table, which
+   nests a Scroller inside this table and overflowed roughly 320–390px wide.
+   Finding 4.4 (docs/design-walkthrough.md, Session 4) retired that case: the
+   crew table reflows into blocks below 30rem and its Name column is bounded
+   above it (`.log--crew` and `.log--crew .char` below), so that Scroller no
+   longer overflows at any width and `scroller.tsx` never grants it the stop.
+   `e2e/admin.spec.ts` pins tabIndex -1 across the six reflow widths and the
+   three long-name widths.
+
+   The entry stays anyway, and this is the reason to know before deleting it:
+   it is a floor for any Scroller nested in a sticky-headed table, not a patch
+   for the one that happened to need it. It costs nothing while no such region
+   overflows, and re-earns itself the moment one does — a new nested region, or
+   a crew column that outgrows its bound. What is gone is only the way to
+   reproduce it: there is no width today at which a crew list can be tabbed
+   into flush under the header, so a spec asserting that scenario would be
+   asserting a state the CSS no longer permits. A descendant selector, so the
    OUTER region — the ancestor of `.log--sticky-head`, not a descendant — is
    untouched and keeps aligning to its own scrollport as before. */
 .log--sticky-head :is(a, button, summary, input, .row-toggle, .scroller) {
@@ -3879,7 +3890,25 @@ h3.rule-head__label {
    all — this one and `.pool-items` on the payout detail page. The rest hang off
    `.page` or a plain `<div>`, where `min-width: auto` and `0` are the same
    number, so a global rule would be inert on eight surfaces and load-bearing on
-   a ninth nobody measured. */
+   a ninth nobody measured.
+
+   Both floors are kept but are no longer reproducibly load-bearing, and that
+   is measured, not assumed: finding 4.4 (`.log--crew` below) stops the crew
+   table from being wider than the panel in the first place — it reflows into
+   blocks below 30rem and its Name column is bounded above it — so the
+   min-content these floors were zeroing is gone. Setting both back to
+   `min-width: auto` and re-running the six `320px` specs in
+   `e2e/admin.spec.ts` passes all six, where the failure they were written
+   against was `.drawer__controls` stretching to the crew table's 372.5px and
+   pushing freeze's right edge 4.3px past the region.
+
+   Kept rather than deleted, deliberately. `min-width: 0` on a grid item is a
+   floor against being sized by a wide descendant, and 4.4 removed today's wide
+   descendant, not the possibility of one — a column added to the crew table, or
+   a name that outgrows its bound, re-earns them with no other warning. They
+   cost nothing while nothing is wide. Anyone deleting them should re-run that
+   measurement rather than trust this note, and should expect to be deleting a
+   guard, not dead code. */
 .drawer__crew .scroller-frame {
   min-width: 0;
 }
