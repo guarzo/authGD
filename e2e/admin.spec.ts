@@ -1624,6 +1624,16 @@ for (const { width, reflowed } of [
  * scrolled into view by sequential focus navigation, which is what retires
  * the deleted WCAG 2.2 2.4.11 spec rather than the fixture simply not
  * reaching that state.
+ *
+ * The name is the only text in this table that needed bounding, which is why
+ * this is the only spec of its kind. `.char__location` is the other
+ * player-supplied string in a crew row — structure names run past 150
+ * characters — but `globals.css` already caps it at `max-width: 22rem` with
+ * `overflow: hidden`, and that caps its intrinsic contribution too: a
+ * 200-character location injected into an open drawer clips at 352px and
+ * moves the scroller's `scrollWidth` not at all, at 480 through 1000px. Not
+ * pinned here because the cap is `.char__location`'s own contract, not this
+ * table's, and a spec here would fail for whoever legitimately changes it.
  */
 for (const width of [480, 600, 700]) {
   test(`a 37-character crew name leaves the crew scroller nothing to scroll at ${width}px`, async ({

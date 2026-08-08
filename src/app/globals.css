@@ -4452,7 +4452,17 @@ h3.rule-head__label {
    this whole finding is making anyway. Both declarations are load-bearing:
    `overflow-wrap` alone is inert here, because `nowrap` suppresses wrapping
    before an opportunity is ever looked for — dropping `white-space` leaves
-   all three widths overflowing exactly as before. */
+   all three widths overflowing exactly as before.
+
+   The name is the only unbounded text in this table that needed bounding. The
+   other candidate is `.char__location` (above), whose structure names are
+   player-supplied and can run past 150 characters — but it is already capped
+   by its own `max-width: 22rem` and `overflow: hidden`, and a cap on the used
+   width caps the intrinsic contribution with it. Measured by injecting a
+   200-character unbreakable location into an open drawer at 480/600/700/768/
+   1000px: the line clips at its 352px ceiling and the crew scroller's
+   `scrollWidth` does not move from `clientWidth` at any of them, tab stop
+   withdrawn throughout. Every other cell is fixed vocabulary. */
 .log--crew .char {
   white-space: normal;
   overflow-wrap: anywhere;
