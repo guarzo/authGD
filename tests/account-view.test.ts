@@ -530,9 +530,34 @@ describe("getAccountView location", () => {
     // Never read: no line at all, and — the part worth pinning — a character
     // with a null `locationCheckedAt` must not drag the manifest label to null.
     const blind = view.characters.find((c) => c.id === 2002)!;
-    expect(blind.location).toEqual({ kind: "none" });
+    expect(blind.location).toEqual({ kind: "never" });
     expect(blind.locationStale).toBe(false);
     expect(view.locationAsOf).toEqual(AT);
+  });
+
+  // Not reachable through the location job's own writer (it always sets
+  // systemId alongside checkedAt), but the columns are independently nullable
+  // in the schema, and this pins that `getAccountView` still honours a read
+  // that landed with no system: it neither collapses `unresolved` into
+  // `never`, nor drops its checkedAt from the manifest's freshness stamp.
+  it("keeps a checked-but-systemless read out of `line` but inside `asOf`", async () => {
+    const acc = await seedTwo();
+    const older = new Date(AT.getTime() - 5 * 60 * 1000);
+    await ctx.db
+      .update(character)
+      .set({ locationSystemId: 31000123, locationCheckedAt: AT })
+      .where(eq(character.id, 2001));
+    await ctx.db
+      .update(character)
+      .set({ locationSystemId: null, locationCheckedAt: older })
+      .where(eq(character.id, 2002));
+
+    const view = await getAccountView(ctx.db, cfg, acc.id);
+    const unresolved = view.characters.find((c) => c.id === 2002)!;
+    expect(unresolved.location).toEqual({ kind: "unresolved" });
+    // The oldest reading is the systemless one, not the one that renders a
+    // line — a filter keyed on `kind === "line"` would have missed it.
+    expect(view.locationAsOf).toEqual(older);
   });
 
   it("reports the OLDEST reading as the manifest's as-of", async () => {
@@ -597,7 +622,9 @@ describe("getAccountView location", () => {
       text: "J123456 — in space",
       offline: false,
     });
-    expect(row.characters.find((c) => c.id === 2002)!.location).toEqual({ kind: "none" });
+    expect(row.characters.find((c) => c.id === 2002)!.location).toEqual({
+      kind: "never",
+    });
   });
 });
 

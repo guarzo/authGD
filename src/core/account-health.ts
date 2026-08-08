@@ -33,6 +33,30 @@ export interface CharacterHealthInput {
  * it would raise an alarm it cannot substantiate for every member who is
  * legitimately off the map. The MAP column still reports the raw fact per row.
  * If that table ever gains a "checked at" of its own, revisit this.
+ *
+ * Also deliberately not an input: `location` (src/core/location.ts). A
+ * character can sit at `{ kind: "never" }` for reasons nobody needs to act on.
+ * The one that holds in every deployment is simply that no location read has
+ * completed yet: `{ kind: "never" }` is `locationCheckedAt === null`, which is
+ * every newly linked character until the job first runs for it. Counting that
+ * would put a fresh link into `attention` for the gap between linking and the
+ * next job tick, which is not a member-fixable state and not a fault.
+ *
+ * A second route exists but only off the shipped config: reading location is
+ * degradable by the job's own design (src/jobs/location.ts's `canReadLocation`
+ * gates on the character actually holding `esi-location.read_location.v1`), so
+ * a deployment whose `EVE_SSO_SCOPES` omits that scope leaves characters that
+ * never report and never will, with `needsReauthForScopes` legitimately false.
+ * Not the reference deployment — `.env.example`'s `EVE_SSO_SCOPES` includes
+ * the scope, so there a character lacking it trips `needsReauthForScopes` and
+ * is already `attention` through the existing path, not through this one.
+ *
+ * Either way the shape is the ACL case above: "never reported" is structurally
+ * identical to "will never report, on purpose", and a verdict that could not
+ * tell those apart would raise an alarm it cannot substantiate. Location's own
+ * row (the manifest's location line, not this verdict) is where
+ * `{ kind: "never" }` surfaces, exactly as `onMapAcl` surfaces the raw ACL
+ * fact without feeding the headline.
  */
 export interface AccountHealth {
   /** How many characters need the member to do something. */
