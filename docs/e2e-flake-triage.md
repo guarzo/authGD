@@ -46,20 +46,30 @@ filtered out of the report. The rationale lives next to the setting in
 `playwright.config.ts`. If you are here because CI is red and retries look
 tempting, that comment is aimed at you.
 
-## Known exposure: the `useSubmitGuard` latch
+## Known exposure: pressing a guarded button while the last one is in flight
+
+> **Corrected 2026-08-08.** This section previously said the `useSubmitGuard`
+> latch *sticks permanently* once a `pending` transition is swallowed, and
+> closed by telling you to fix the guard. That was inferred from the symptom —
+> a second save missing from the database — and it is wrong. See "Measured, not
+> inferred" below: the swallowed transition was never observed, and a press
+> after a dropped one always went through. The guard is doing what it is for.
+> What follows is the corrected reading; the test inventory it grew out of is
+> still worth having, so it is kept.
 
 `src/app/_components/submit-guard.ts` latches `inFlight` synchronously on click
 — on any click that will actually submit, i.e. past the `!form` and
 `checkValidity()` gates — and releases it only after an effect observes
-`pending` true and then false. When that transition is swallowed — the action
-settles before a commit, or an unrelated re-render sequence covers it — the
-latch sticks, and **every subsequent press on that button is
-`preventDefault`'ed with no POST**. The user sees a button that does nothing
-and a save that silently did not happen.
+`pending` true and then false. So between the press and the client seeing that
+action settle, **the button refuses further presses: `preventDefault`, no POST,
+no visible trace**. That window is the feature. It is what stops a double-click
+on `/payouts/new` from creating two operations, which is not idempotent and has
+no delete path.
 
-This is a live product bug, fixed separately. It is recorded here because it
-makes a specific *shape* of test intermittently red, and those tests must not be
-mistaken for noise.
+The window is also longer than it looks from a test's point of view, and that is
+what makes a specific *shape* of test intermittently red. Those failures must
+not be mistaken for noise, and must not be mistaken for a product defect either:
+they are the test pressing again too early.
 
 Two components use the guard:
 
@@ -70,19 +80,24 @@ Two components use the guard:
   immediately** (`confirm-submit.tsx:409-413`), and two live callers flip that
   prop at runtime: `payouts/[id]/pay-flow.tsx:333` (`confirm={arm}`) and
   `admin/accounts/page.tsx:1046` (`confirm={!r.tierLocked}`). Rows in a paid
-  table are therefore exposed on their *first* press, not only a second.
+  table therefore hold the latch from their *first* press, not only a second.
 
 `e2e/submit-guard.spec.ts` is the dedicated regression spec for this primitive.
-It cannot catch the leak: it double-clicks `Create operation` on a form that
-redirects away, so the component unmounts before a third press is possible and a
-permanently-set `inFlight` still passes.
+It double-clicks `Create operation` on a form that redirects away, so the
+component unmounts before a third press is possible — it proves the double-click
+is refused, and says nothing about release.
 
 ### The exposed shape
 
 A test is exposed when a guarded button is pressed **while still mounted from a
-previous action**. Server actions that only `revalidate` do not unmount the
-form, so the stale ref survives. A press that ends in `redirect()` to a
-different route unmounts the form and is safe.
+previous action**, and the test's own wait does not prove that action reached
+the client. Server actions that only `revalidate` do not unmount the form, so
+the latch is still held. A press that ends in `redirect()` to a different route
+unmounts the form and is safe.
+
+Waiting on the database is the trap. The row commits before the action's
+response reaches the browser, so a `expect.poll` against Postgres can go green
+with the form still busy.
 
 **Shape (a) — the same guarded button pressed twice:**
 
@@ -113,28 +128,51 @@ place:
 
 ### Measured, not inferred
 
+The original observation stands: `payouts.spec.ts:1175` fails intermittently,
+and it fails as a missing row, not a timed-out DOM query.
+
 ```
 $ npx playwright test e2e/payouts.spec.ts \
     -g "notes save from an always-open textarea, twice running" --repeat-each=10
 
   4 failed
     e2e/payouts.spec.ts:1175:5 › notes save from an always-open textarea, twice running
-    e2e/payouts.spec.ts:1175:5 › notes save from an always-open textarea, twice running
-    e2e/payouts.spec.ts:1175:5 › notes save from an always-open textarea, twice running
-    e2e/payouts.spec.ts:1175:5 › notes save from an always-open textarea, twice running
+    ... (3 more)
   6 passed (4.0m)
 ```
-
-Each failure is the second save missing from the database, not a timeout on a
-DOM query:
 
 ```
 Expected: "Third fleet, two losses. Salvage split later."
 Received: "Third fleet, two losses."
 ```
 
-The first value is still there. The second POST never happened — which is the
-latch, observed end to end.
+The rate is machine-dependent — the same test on a second machine failed 1/15,
+2/20, 2/20 and 1/20, roughly 5-10% against the 40% above. Do not treat any one
+number as the rate; treat a non-zero count as the signal.
+
+What the second POST's absence *means* was then measured directly, with a probe
+that presses `Save notes` three times and records, per press, whether a POST was
+emitted, the resulting row, and an `aria-busy` `MutationObserver` log on the
+button itself. Sixty runs across two base commits, four drops observed:
+
+- **`aria-busy` committed `true` on every run, including every failing run.**
+  The swallowed `pending` transition the permanent-latch theory requires was
+  never once observed. `started.current` is set; the release branch runs.
+- **At the instant of a dropped press, `aria-busy` was still `true`** — the
+  previous action had 335ms and 539ms of in-flight time left on the two runs
+  examined closely. The guard refused a genuine second submit over a live one.
+- **The press after a dropped one always went through**, in every run:
+  `dropped3:false`, `afterThird:"third"`. A representative failing run logged
+  `busy=true busy=false busy=true busy=false` — two complete pending cycles for
+  the two presses that fired. The latch released.
+
+A permanent latch predicts `dropped3:true`. It was never seen.
+
+The corollary is the fix: gate on a signal the *client* produces when its own
+`useActionState` resolves. `NotesForm` renders `· saved` for exactly that, and
+`payouts.spec.ts:3085` already selected on it. Adding
+`await expect(page.locator(".notes-form__saved")).toHaveText("· saved")` after
+each click, **with `submit-guard.ts` untouched**, took the test to 20/20 green.
 
 ```
 $ npx playwright test e2e/sync.spec.ts \
@@ -143,21 +181,22 @@ $ npx playwright test e2e/sync.spec.ts \
   10 passed (1.1m)
 ```
 
-So exposure by shape is **not** the same as a current failure rate.
-`sync.spec.ts:859` sits on the identical defect and did not manifest in 10 runs.
-Why is not established — its redirect is same-route, so by this document's own
-table the instance survives and unmounting is not what saved it. Treat that row
-as "not reproduced at n=10", not as explained. The rest of the table is
-unmeasured — listed because it shares the shape, not because it has been seen
-red. Measure before you act on any row.
+Exposure by shape is not the same as a current failure rate. `sync.spec.ts:859`
+has the same shape and did not manifest in 10 runs; its intervening
+`redirect()`, same-route or not, is a round trip the test waits on. The rest of
+the table is unmeasured — listed because it shares the shape, not because it has
+been seen red. Measure before you act on any row.
 
 One more caveat on reading this document: only `payouts.spec.ts:1175` and
 `e2e/submit-guard.spec.ts` assert against the database. Everything else listed
-asserts on the DOM, so a stuck latch there surfaces as a missing notice, an
+asserts on the DOM, so a refused press there surfaces as a missing notice, an
 unmoved focus ring, or a stale amount — not as an obvious lost write. That makes
 those failures easier to misread as rendering noise, which is the whole reason
 they are inventoried here.
 
-None of these tests should be rewritten to dodge the latch. They are correct;
-`payouts.spec.ts:1175` in particular polls the database precisely so a lost
-write cannot pass. Fix the guard.
+So: the tests are not wrong about *something* being off, but a database poll is
+not a settle signal, and `payouts.spec.ts:1175` polling the row is what let it
+press again mid-flight. Fix the wait, not the guard. If a row on this list turns
+red, find the client-side signal that the previous action resolved and wait on
+that; only then check the database, which is still the only thing that proves
+the server agreed.

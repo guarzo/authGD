@@ -1195,6 +1195,11 @@ test("notes save from an always-open textarea, twice running", async ({
   const notes = page.getByRole("textbox", { name: "operation notes" });
   await expect(notes).toHaveValue("");
 
+  // The client's own "this action has settled" signal, awaited after each of
+  // the two saves below. The DB row is not a substitute for it; the block after
+  // the first click says why.
+  const saved = page.locator(".notes-form__saved");
+
   const stored = () =>
     db
       .select()
@@ -1204,7 +1209,25 @@ test("notes save from an always-open textarea, twice running", async ({
 
   await notes.fill("Third fleet, two losses.");
   await page.getByRole("button", { name: "Save notes" }).click();
-  // Polled against the row rather than the field: the textarea is controlled,
+  // Two waits, in this order, because they answer different questions and only
+  // one of them can sequence the next step.
+  //
+  // `· saved` is the barrier. The row commits before the action's response even
+  // reaches the browser, so `expect.poll(stored)` can return while the form is
+  // still genuinely in flight — measured at 335ms and 539ms of remaining
+  // in-flight time on the two runs that failed. Editing and pressing Save again
+  // inside that window is a second submit over a live one, which `useSubmitGuard`
+  // refuses by design (`_components/submit-guard.ts`): the click is
+  // preventDefault'ed, no POST is emitted, and the second save silently never
+  // happens. That is the guard doing its job on `/payouts/new`'s behalf, not a
+  // defect, and it made this test fail about one run in ten. Gating on the
+  // confirmation waits for `useActionState` to have resolved on the client,
+  // which is the only thing that means the button is free again.
+  //
+  // The row check stays, after it: the confirmation proves the client thinks it
+  // saved, and only the row proves the server agrees.
+  await expect(saved).toHaveText("· saved");
+  // Checked against the row rather than the field: the textarea is controlled,
   // so it shows what was typed whether or not the save ever landed.
   await expect.poll(stored).toBe("Third fleet, two losses.");
 
@@ -1213,6 +1236,7 @@ test("notes save from an always-open textarea, twice running", async ({
   // instant the first action settled, and this would write "" or the old text.
   await notes.fill("Third fleet, two losses. Salvage split later.");
   await page.getByRole("button", { name: "Save notes" }).click();
+  await expect(saved).toHaveText("· saved");
   await expect.poll(stored).toBe("Third fleet, two losses. Salvage split later.");
   await expect(notes).toHaveValue("Third fleet, two losses. Salvage split later.");
 });
