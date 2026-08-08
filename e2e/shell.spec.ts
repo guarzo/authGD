@@ -37,12 +37,12 @@ test("aria-current lands on the right tab on every shell route", async ({
     ["/admin/accounts", "Members", "page"],
     ["/admin/audit", "Audit log", "page"],
     ["/admin/sync", "Sync", "page"],
-    ["/payouts", "Payouts", "page"],
-    // `/payouts/new` sits under the Payouts tab without being it, so the tab
+    ["/payouts", "Operations", "page"],
+    // `/payouts/new` sits under the Operations tab without being it, so the tab
     // is current-within-the-set rather than the page you are on. Asserting the
     // exact token, not just its presence: "page" here is the bug — a screen
     // reader is told the link's target is this document when it is not.
-    ["/payouts/new", "Payouts", "true"],
+    ["/payouts/new", "Operations", "true"],
   ] as const) {
     await page.goto(path);
     await expect(page.getByRole("link", { name: label })).toHaveAttribute(
@@ -101,7 +101,7 @@ test("nav membership follows the viewer, not the section", async ({ page, contex
     // member surface and an admin surface, for the same admin+member viewer.
     await expect(nav.getByRole("link")).toHaveText([
       "Your account",
-      "Payouts",
+      "Operations",
       "Members",
       "Audit log",
       "Sync",
@@ -112,7 +112,7 @@ test("nav membership follows the viewer, not the section", async ({ page, contex
 
   // The bounce the rule exists to prevent: an admin whose tier is NOT
   // "member" (the default, "alumni", here) cannot read payouts, and the admin
-  // section must not render a Payouts link that sends them to a redirect.
+  // section must not render an Operations link that sends them to a redirect.
   const adminNonReader = await seedMember(db, { name: "Warden", isAdmin: true });
   await context.clearCookies();
   await context.addCookies([await sessionCookieFor(db, adminNonReader.id)]);
@@ -125,9 +125,9 @@ test("nav membership follows the viewer, not the section", async ({ page, contex
     "Audit log",
     "Sync",
   ]);
-  await expect(adminNav.getByRole("link", { name: "Payouts", exact: true })).toHaveCount(
-    0,
-  );
+  await expect(
+    adminNav.getByRole("link", { name: "Operations", exact: true }),
+  ).toHaveCount(0);
 
   await resetDb(db);
 
@@ -139,7 +139,7 @@ test("nav membership follows the viewer, not the section", async ({ page, contex
 
   await page.goto("/account");
   const memberNav = page.locator(".shell__nav");
-  await expect(memberNav.getByRole("link")).toHaveText(["Your account", "Payouts"]);
+  await expect(memberNav.getByRole("link")).toHaveText(["Your account", "Operations"]);
 });
 
 test("the admin header names its own register, and the two navs get distinct accessible names", async ({

@@ -756,7 +756,7 @@ test("a demoted member sees their payout row with no link to the operation", asy
   // The name is there; the link is not.
   await expect(row.getByRole("link")).toHaveCount(0);
   // And the nav offers no way in either — same tier gate, one control up.
-  await expect(page.getByRole("link", { name: "Payouts" })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Operations" })).toHaveCount(0);
 });
 
 test("a healthy character collapses to a single ok chip", async ({ page, context }) => {

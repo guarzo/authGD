@@ -34,7 +34,7 @@ viewer every destination they are authorized for, in one fixed order, on every p
 an admin reading the audit log reaches the payouts list in one click, not by going out
 through "Your account" first. It never offers a destination the viewer would be
 bounced out of. Admin rights and membership tier are separate things, so being an
-admin does not by itself put `Payouts` in the bar.
+admin does not by itself put `Operations` in the bar.
 
 ## Product Purpose
 

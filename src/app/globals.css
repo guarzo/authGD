@@ -593,9 +593,12 @@ a:hover {
 }
 
 /* Mission-patch furniture: a small designation above the page's own H1,
-   naming the instrument rather than the page ("Flight log", not "Payouts") —
-   DESIGN.md's own metaphor for this surface ("the flight log, not the
-   cockpit display"). Same four properties as `.launch__motto` and
+   naming the instrument rather than the page — DESIGN.md's own metaphor for
+   this surface ("the flight log, not the cockpit display"). One live use
+   remains, `/payouts/new`'s "Flight log" above a "New operation" H1; the
+   `/payouts` stamp was removed when that H1 became "Operations", since a
+   stamp and an H1 both naming the same thing is the collision walkthrough
+   ruling R3 called out. Same four properties as `.launch__motto` and
    `.shell__wordmark span` (mono, `--track-furniture`, `--ink-faint`), and
    deliberately not weight 600: the label register above is for a fixed word
    naming a field, and this names nothing — it is a running masthead, the same
@@ -1073,15 +1076,83 @@ h3.rule-head__label {
   width: 1%;
 }
 
-/* Payouts list only. The edge columns get more room than the interior ones,
-   so the row's rhythm varies with the step (DESIGN.md: "rhythm comes from
-   varying the step, not from repeating one padding value") instead of
-   spending .log's one padding value identically across all five columns.
-   Name is the row's link and the first thing the eye lands on; Paid is the
-   last fact and sits against the table's own outer rule. */
+/* Payouts list only. Tightened the same way .log--dense tightens the accounts
+   table (s-3/s-4 base padding down to s-2/s-3), not by reusing that class:
+   .log--dense also carries `vertical-align: middle` and a drawer-row override
+   this table has no use for — the same reasoning .log--manifest gives for its
+   own copy rather than borrowing the accounts table's class.
+
+   Added with the Yours column (walkthrough finding 2.1, "was I paid?"): this
+   table's Scroller was already the escape valve for content wider than a
+   narrow viewport (measured 444px against a 288px scroller region at 320px,
+   BEFORE this column existed — five columns already didn't fit unscrolled),
+   and a sixth column pushed that to 517px. This buys back 8px on each of the
+   four interior columns and 4px each on Name and Yours, whose outer sides keep
+   `--s-5` below — 40px in total. It narrows the gap, it does not close it.
+
+   Those figures are a typical row, and their "288px" region is a hair off:
+   remeasured here, and independently in `account.spec.ts`, the region at 320px
+   is 286px. The full column budget was measured once, at 320px against a worst
+   case (28-character operation name, 12-digit ISK total, two-digit paid
+   fraction): 736px of table against that 286px region —
+   Name 114, Date 104, Status 105, Total 192, Paid 113, Yours 109. Every
+   abbreviation available (`12.35B` for the ISK figure, `08-01` for the date,
+   dropping the word "paid") totals 200px of saving and still lands at 536px.
+   Six columns do not fit 320px by any arrangement, which is the same verdict
+   the account manifest reached at `account.spec.ts` ("no arrangement that
+   keeps a portrait, a name and an unlink fits 320px").
+
+   So the table scrolls, and Name is pinned (`log--sticky-col` on the element).
+   The defect was never the scroll itself: it is that panning right to read
+   Total costs the reader the row's identity, which on a corp-wide ledger —
+   ruling R3 — is the one column every other cell is meaningless without.
+   Dropping columns below a breakpoint was the alternative and was rejected:
+   it hides Total, Paid and Status on a phone, turning the ledger into a
+   personal list and collapsing the very /payouts-vs-/account distinction R3
+   draws. A pin hides nothing from anyone. */
+.log--payouts th,
+.log--payouts td {
+  padding-top: var(--s-2);
+  padding-bottom: var(--s-2);
+  padding-left: var(--s-3);
+  padding-right: var(--s-3);
+}
+
+/* The edge columns still get more room than the interior ones, so the row's
+   rhythm varies with the step (DESIGN.md: "rhythm comes from varying the step,
+   not from repeating one padding value") instead of spending one padding
+   value identically across every column. Name is the row's link and the
+   first thing the eye lands on; Yours is the last fact now and sits against
+   the table's own outer rule. */
 .log--payouts th:first-child,
 .log--payouts td:first-child {
   padding-left: var(--s-5);
+}
+
+/* The pinned column is auto-sized around the operation name, as the accounts
+   table's is around a character name — but an operation name is operator-typed
+   `text` with no length cap in schema.ts, where a character name is bounded by
+   EVE. A single unbroken 60-character token would otherwise set the column's
+   minimum content width and drag the pin across most of a 286px region, which
+   is the one way a pin turns into the problem it was added to solve. Letting
+   the token break puts the column back under the table layout algorithm's
+   control. Measured at 320px with the pin in place, the column is 69px of the
+   286px region — 24%, against the 114px the pre-pin budget above recorded for
+   an unpinned 28-character name. Set this back to `normal` and one 60-char
+   name widens the column to 637px for EVERY row, since a table column is as
+   wide as its widest cell: the pin then exceeds the region it anchors and
+   `payouts.spec.ts` fails on the spot. That test holds the ratio under 60% at
+   both 320px and 390px, so the ceiling is asserted rather than assumed.
+
+   No `scroll-margin-left` companion rule, unlike `.log--audit` and
+   `.log--dense` above. That rule exists for a control in a non-first column
+   that focus can park under the pin; every interactive element in this table
+   is the name link in column 1, so there is no such control to rescue. Adding
+   the rule anyway would be a figure with nothing to keep it honest — the exact
+   drift the audit table's own breakpoint comment warns about. If a control
+   ever lands in a later column, it needs one. */
+.log--payouts td:first-child {
+  overflow-wrap: anywhere;
 }
 
 .log--payouts th:last-child,

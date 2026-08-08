@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, lt, or } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, lt, or, sql } from "drizzle-orm";
 import type { Dbx } from "@/db";
 import {
   account,
@@ -20,6 +20,30 @@ export type PayoutOperationSummary = {
   totalValue: string;
   participantCount: number;
   paidCount: number;
+  /**
+   * The viewer's own state on this operation — walkthrough finding 2.1, "the
+   * list cannot answer 'was I paid?'". Present only when `viewerAccountId` was
+   * passed to `listPayoutOperations`; absent (not `undefined`-valued, the key
+   * itself is missing) otherwise, so a caller that never asked for it doesn't
+   * see a field it must remember to ignore.
+   *
+   * Deliberately a STATE, never an amount. `listAccountPayouts` below is
+   * finalized-only for exactly the reason documented there: `recalculate`
+   * rewrites a draft's `amount` on every roster or pool edit, so an amount
+   * shown mid-draft states a commitment the operation hasn't made. A state
+   * ("paid"/"unpaid") carries no such commitment and is honest at any status,
+   * which is why this field has no ISK figure beside it.
+   *
+   * A participant whose name never resolved has `accountId = NULL` and cannot
+   * be matched to any viewer (the KNOWN LIMITATION paragraph on
+   * `listAccountPayouts` below — named rather than cited by line, since the
+   * line moved once already). That limitation is REPORTED here rather than
+   * inherited silently: `listAccountPayouts` omits an unmatched row, and an
+   * omission claims nothing, but this field speaks on every operation, so the
+   * same NULL would otherwise turn into a false sentence. Hence `unresolved`
+   * as a state distinct from `absent` — see `ViewerPayoutState`.
+   */
+  viewerState?: ViewerPayoutState;
 };
 
 export const PAYOUTS_PAGE_SIZE = 50;
@@ -66,6 +90,14 @@ export function decodePayoutCursor(
   return { occurredAt, id };
 }
 
+// `%`, `_` and the escape character itself, escaped so a user typing a literal
+// percent sign (e.g. searching for a fleet named "100% Isk") gets a substring
+// match rather than a wildcard. `ILIKE ... ESCAPE '\'` (below) is what makes
+// the backslash here mean "escape", not "literal backslash".
+function escapeLikePattern(q: string): string {
+  return q.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+}
+
 /**
  * One row per operation for the /payouts list. Reads only — the list page has
  * nothing to protect, unlike setRoster/addAppraisedPool/etc, which is why this
@@ -77,10 +109,50 @@ export function decodePayoutCursor(
  */
 export async function listPayoutOperations(
   dbx: Dbx,
-  opts: { before?: PayoutListCursor; limit?: number } = {},
+  opts: {
+    before?: PayoutListCursor;
+    limit?: number;
+    /** Collapses this account's own participant rows into one viewerState per
+     *  operation on the returned summary. See PayoutOperationSummary.viewerState. */
+    viewerAccountId?: string;
+    /** Operation-name substring match, case-insensitive. Trimmed; an
+     *  empty/whitespace-only value means no filter. */
+    q?: string;
+    status?: "draft" | "finalized";
+  } = {},
 ): Promise<PayoutListPage> {
   const limit = Math.min(opts.limit ?? PAYOUTS_PAGE_SIZE, PAYOUTS_PAGE_SIZE);
   const before = opts.before;
+  const trimmedQ = opts.q?.trim();
+
+  // Every filter ANDs onto the cursor predicate rather than replacing it, so
+  // keyset paging keeps working within the narrowed set — the walkthrough's
+  // rule that "a filter must DROP `before`" (now carried by the pager comment
+  // in payouts/page.tsx, named rather than cited by line because this diff
+  // already moved it once) is about the CALLER resetting `before` to undefined
+  // on a fresh filter, not about this query; here cursor and filters compose.
+  const conditions = [];
+  if (before) {
+    conditions.push(
+      or(
+        lt(payoutOperation.occurredAt, before.occurredAt),
+        and(
+          eq(payoutOperation.occurredAt, before.occurredAt),
+          lt(payoutOperation.id, before.id),
+        ),
+      ),
+    );
+  }
+  if (opts.status) {
+    conditions.push(eq(payoutOperation.status, opts.status));
+  }
+  if (trimmedQ) {
+    // Explicit ESCAPE clause, not the bare `ilike` helper: drizzle's `ilike`
+    // has no way to say "% and _ in this pattern are literal", so a search for
+    // an operation literally named "100%" would otherwise match everything.
+    const pattern = `%${escapeLikePattern(trimmedQ)}%`;
+    conditions.push(sql`${payoutOperation.name} ILIKE ${pattern} ESCAPE '\\'`);
+  }
 
   // Explicit column lists, not `select()`. A bare select on loot_pool drags
   // every operation's `raw_paste` — an entire pasted inventory window, per
@@ -89,6 +161,14 @@ export async function listPayoutOperations(
   //
   // One row past the limit: its presence is the "there is more" signal, and
   // the row itself is trimmed before anything downstream sees it.
+  //
+  // Deliberately unindexed: `docs/design-walkthrough.md` calls the missing
+  // filter "invisible at one row; structural at two hundred" — a statement
+  // about when the UX problem bites, not a stated row budget, so read it as
+  // the order of magnitude this page is being designed against rather than a
+  // ceiling. A migration is out of scope, and the existing `(occurredAt desc,
+  // id desc)` ordering above is already an unindexed sequential scan at that
+  // size. Filtering doesn't change that.
   const page = await dbx
     .select({
       id: payoutOperation.id,
@@ -97,17 +177,7 @@ export async function listPayoutOperations(
       status: payoutOperation.status,
     })
     .from(payoutOperation)
-    .where(
-      before
-        ? or(
-            lt(payoutOperation.occurredAt, before.occurredAt),
-            and(
-              eq(payoutOperation.occurredAt, before.occurredAt),
-              lt(payoutOperation.id, before.id),
-            ),
-          )
-        : undefined,
-    )
+    .where(conditions.length ? and(...conditions) : undefined)
     .orderBy(desc(payoutOperation.occurredAt), desc(payoutOperation.id))
     .limit(limit + 1);
 
@@ -121,6 +191,7 @@ export async function listPayoutOperations(
     operationId: string;
     excluded: boolean;
     paidAmount: string | null;
+    accountId: string | null;
   };
   const [pools, participants]: [PoolRow[], ParticipantRow[]] = pageIds.length
     ? await Promise.all([
@@ -134,6 +205,12 @@ export async function listPayoutOperations(
             operationId: payoutParticipant.operationId,
             excluded: payoutParticipant.excluded,
             paidAmount: payoutParticipant.paidAmount,
+            // Added for viewerState (finding 2.1), NOT as a `where` on this
+            // query: this same result also feeds participantCount/paidCount
+            // below, so filtering these rows to one account would empty the
+            // existing counts for everyone else. One extra column, computed
+            // over in memory, keeps both readers of this query intact.
+            accountId: payoutParticipant.accountId,
           })
           .from(payoutParticipant)
           .where(inArray(payoutParticipant.operationId, pageIds)),
@@ -160,6 +237,38 @@ export async function listPayoutOperations(
     // Excluded rows are not owed anything and are not part of "how many have
     // been paid" — an all-excluded roster reading as 0/0 rather than 0/N.
     const owed = (participantsByOp.get(op.id) ?? []).filter((p) => !p.excluded);
+
+    // One participant row per account per operation is a SERVICE-enforced
+    // invariant, not a schema one: `resolveRosterNames` collapses an account's
+    // alts into a single entry keyed by accountId, and `addParticipant` merges
+    // a second character into the existing `twin` row. There is no unique
+    // constraint on (operation_id, account_id) in schema.ts to back that up,
+    // so the filter/every pair below stays correct if a row ever slips past
+    // the service layer, rather than assuming a shape the database permits.
+    //
+    // `viewerAccountId` is undefined for every caller that didn't ask for it,
+    // in which case `viewerState` stays undefined and the key is dropped from
+    // the returned object entirely, below.
+    let viewerState: ViewerPayoutState | undefined;
+    if (opts.viewerAccountId) {
+      const roster = participantsByOp.get(op.id) ?? [];
+      const viewerRows = roster.filter((p) => p.accountId === opts.viewerAccountId);
+      if (viewerRows.length > 0) {
+        const nonExcluded = viewerRows.filter((p) => !p.excluded);
+        viewerState =
+          nonExcluded.length === 0
+            ? "excluded"
+            : nonExcluded.every((p) => p.paidAmount !== null)
+              ? "paid"
+              : "unpaid";
+      } else {
+        // Absence is only a fact when every name on the roster resolved. See
+        // `ViewerPayoutState` for why an unresolved name has to downgrade the
+        // claim rather than read as "not on this roster".
+        viewerState = roster.some((p) => p.accountId === null) ? "unresolved" : "absent";
+      }
+    }
+
     return {
       id: op.id,
       name: op.name,
@@ -171,6 +280,7 @@ export async function listPayoutOperations(
       // lock, so a paid-then-reverted participant reads unpaid here without
       // this function folding an event history to find that out.
       paidCount: owed.filter((p) => p.paidAmount !== null).length,
+      ...(viewerState !== undefined ? { viewerState } : {}),
     };
   });
 
@@ -186,6 +296,26 @@ export type PayoutPoolView = typeof lootPool.$inferSelect & {
 };
 
 export type ParticipantPaymentState = "excluded" | "unpaid" | "paid";
+
+/**
+ * A participant's payment state, plus the two cases that exist only once you
+ * ask about a specific VIEWER rather than about a row.
+ *
+ * `absent` and `unresolved` are both "no row here is yours", split because
+ * only one of them is provable. `payoutParticipant.accountId` is nullable and
+ * NULL is a routine, designed outcome — `resolveRosterNames` emits an entry
+ * with `accountId: null` for any pasted name that matched no character, and
+ * `/payouts/[id]` has a whole `?unresolved=` notice for them. So:
+ *
+ * - `absent` — every name on this roster resolved to an account, and none of
+ *   them is the viewer. A true negative, and safe to state as one.
+ * - `unresolved` — this roster carries at least one name that resolved to
+ *   nobody. The viewer may well be one of those names (an alt they hadn't
+ *   linked when the fleet was pasted; `accountId` is frozen at paste time and
+ *   never backfilled), so absence cannot be claimed. The honest answer is
+ *   "this list can't tell you", not "you weren't there".
+ */
+export type ViewerPayoutState = ParticipantPaymentState | "absent" | "unresolved";
 
 export type PayoutPaymentView = typeof payoutPayment.$inferSelect & {
   /** The operator who recorded this event, resolved to their main character's

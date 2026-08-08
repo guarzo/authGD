@@ -12,6 +12,7 @@ import {
 } from "../src/db/schema";
 import { centsToIsk, iskToCents } from "../src/core/payout-split";
 import { OPEN_WINDOW_SCOPE } from "../src/lib/esi/client";
+import { pinGeometry } from "./geometry";
 
 const { db, pool } = testDb();
 test.afterAll(() => pool.end());
@@ -118,7 +119,7 @@ test("the payouts list pages with an Older link", async ({ page, context }) => {
 
   await page.goto("/payouts");
   // The count is a page count now, so the heading must not claim a total.
-  await expect(page.getByRole("heading", { name: "Operations" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Operations", level: 1 })).toBeVisible();
   await expect(page.getByRole("link", { name: "Op 00", exact: true })).toBeVisible();
   await expect(page.getByRole("link", { name: "Op 49", exact: true })).toBeVisible();
   await expect(page.getByRole("link", { name: "Op 50", exact: true })).toHaveCount(0);
@@ -177,7 +178,7 @@ test("a cryo member can read but not mutate", async ({ page, context }) => {
 
   // Read: the list and the detail both render for a cryo member.
   await page.goto("/payouts");
-  await expect(page.getByRole("heading", { name: "Payouts" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Operations", level: 1 })).toBeVisible();
   await expect(page.getByText("Thursday roam")).toBeVisible();
   // No create control for a non-operator reader.
   await expect(page.getByRole("link", { name: "New operation" })).toHaveCount(0);
@@ -3364,3 +3365,411 @@ test("the frozen-roster paragraph lives beside the roster it explains, and the l
   // mounted for the paragraph alone did not leave a stray empty wrapper.
   await expect(page.locator(".lifecycle")).toHaveCount(0);
 });
+
+/*
+ * Walkthrough finding 2.1: "/payouts cannot answer 'was I paid?'". One
+ * operation per `viewerState`, each seeded with a distinct `occurredAt` so
+ * ordering is deterministic and each row is found by name. The viewer's
+ * participant row is tied to their account by `accountId` (`payout-view.ts`'s
+ * viewerState collapse matches on that column, not on display name), which is
+ * what makes "paid"/"unpaid"/"excluded" resolvable at all.
+ *
+ * "absent" and "unresolved" differ only in whether the OTHER rows resolved:
+ * a roster carrying a null `accountId` cannot prove the viewer wasn't one of
+ * those names, so it must not claim they weren't there.
+ */
+test("the Yours column renders paid, unpaid, excluded, absent and unresolved distinctly", async ({
+  page,
+  context,
+}) => {
+  const viewer = await seedMember(db, {
+    name: "Viewer Pilot",
+    tier: "member",
+    status: "active",
+  });
+  const other = await seedMember(db, {
+    name: "Other Pilot",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, viewer.id)]);
+
+  async function seedOp(opts: {
+    name: string;
+    occurredAt: Date;
+    status: "draft" | "finalized";
+    // undefined = viewer has no row; `resolved` then decides whether the
+    // rest of the roster resolved, i.e. "absent" vs "unresolved".
+    viewer?: { excluded?: boolean; paid?: boolean };
+    resolved?: boolean;
+  }): Promise<void> {
+    const [op] = await db
+      .insert(payoutOperation)
+      .values({
+        name: opts.name,
+        occurredAt: opts.occurredAt,
+        corpSharePct: "0",
+        status: opts.status,
+      })
+      .returning();
+    await db.insert(lootPool).values({
+      operationId: op.id,
+      valuationSource: "flat",
+      totalValue: "100.00",
+      notes: "seeded",
+    });
+    if (opts.viewer) {
+      await db.insert(payoutParticipant).values({
+        operationId: op.id,
+        accountId: viewer.id,
+        displayName: "Viewer Pilot",
+        shares: "1",
+        excluded: opts.viewer.excluded ?? false,
+        amount: opts.viewer.excluded ? "0.00" : "100.00",
+        paidAmount: opts.viewer.paid ? "100.00" : null,
+      });
+    } else {
+      // Someone else's roster. Resolved to a real account, the viewer's
+      // absence is a fact; left null it is only an unmatched paste.
+      await db.insert(payoutParticipant).values({
+        operationId: op.id,
+        accountId: opts.resolved ? other.id : null,
+        displayName: "Someone Else",
+        shares: "1",
+        amount: "100.00",
+      });
+    }
+  }
+
+  await seedOp({
+    name: "Paid op",
+    occurredAt: new Date("2026-08-05"),
+    status: "finalized",
+    viewer: { paid: true },
+  });
+  await seedOp({
+    name: "Unpaid finalized op",
+    occurredAt: new Date("2026-08-04"),
+    status: "finalized",
+    viewer: { paid: false },
+  });
+  await seedOp({
+    name: "Unpaid draft op",
+    occurredAt: new Date("2026-08-03"),
+    status: "draft",
+    viewer: { paid: false },
+  });
+  await seedOp({
+    name: "Excluded op",
+    occurredAt: new Date("2026-08-02"),
+    status: "finalized",
+    viewer: { excluded: true },
+  });
+  await seedOp({
+    name: "Absent op",
+    occurredAt: new Date("2026-08-01"),
+    status: "finalized",
+    resolved: true,
+  });
+  await seedOp({
+    name: "Unresolved op",
+    occurredAt: new Date("2026-07-31"),
+    status: "finalized",
+    resolved: false,
+  });
+
+  await page.goto("/payouts");
+
+  const yoursCellFor = (opName: string) =>
+    page.getByRole("row").filter({ hasText: opName }).getByRole("cell").last();
+
+  // paid: tone ok, same token the roster page uses for a paid participant.
+  const paidCell = yoursCellFor("Paid op");
+  await expect(paidCell.locator(".st--ok")).toHaveText("paid");
+
+  // unpaid + finalized: the stalled case, tone warn — matching the Paid
+  // column's own logic for a finalized roster still owing money.
+  const finalizedUnpaidCell = yoursCellFor("Unpaid finalized op");
+  await expect(finalizedUnpaidCell.locator(".st--warn")).toHaveText("unpaid");
+
+  // unpaid + draft: ordinary work in progress, tone neutral — not alarming.
+  const draftUnpaidCell = yoursCellFor("Unpaid draft op");
+  await expect(draftUnpaidCell.locator(".st")).toHaveText("unpaid");
+  await expect(draftUnpaidCell.locator(".st--warn")).toHaveCount(0);
+  await expect(draftUnpaidCell.locator(".st--ok")).toHaveCount(0);
+
+  // excluded: distinct word and tone from "unpaid" — the roster explicitly
+  // left this viewer out, rather than simply not having paid them yet.
+  const excludedCell = yoursCellFor("Excluded op");
+  await expect(excludedCell.locator(".st--off")).toHaveText("excluded");
+
+  // absent: not on the roster at all, distinct from excluded. The dash idiom
+  // this file already uses elsewhere — aria-hidden glyph plus visually-hidden
+  // words, never an aria-label on a bare span (see the Total cell's comment).
+  const absentCell = yoursCellFor("Absent op");
+  await expect(absentCell.getByText("not on this roster")).toBeAttached();
+  await expect(absentCell.locator(".st")).toHaveCount(0);
+
+  // unresolved: the same dash, a different sentence. The roster carries a name
+  // that matched no character, so the viewer may be on it under an unlinked
+  // alt — stating "not on this roster" here would be a false claim to exactly
+  // the reader this column was added for.
+  const unresolvedCell = yoursCellFor("Unresolved op");
+  await expect(unresolvedCell.getByText("roster has unresolved names")).toBeAttached();
+  await expect(unresolvedCell.getByText("not on this roster")).toHaveCount(0);
+  await expect(unresolvedCell.locator(".st")).toHaveCount(0);
+
+  // No ISK figure in the Yours column — the read model deliberately carries
+  // no amount (payout-view.ts's viewerState docblock).
+  await expect(paidCell).not.toContainText("ISK");
+});
+
+test("searching the operation name narrows the list", async ({ page, context }) => {
+  const reader = await seedMember(db, { name: "Search Reader", tier: "member" });
+  await context.addCookies([await sessionCookieFor(db, reader.id)]);
+  await db.insert(payoutOperation).values([
+    { name: "Thursday roam", occurredAt: new Date("2026-08-05") },
+    { name: "Friday CTA", occurredAt: new Date("2026-08-04") },
+  ]);
+
+  await page.goto("/payouts");
+  await page.getByLabel("Name").fill("thurs");
+  await page.getByRole("button", { name: "Filter" }).click();
+
+  await expect(page).toHaveURL(/[?&]q=thurs\b/);
+  await expect(page.getByRole("link", { name: "Thursday roam" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Friday CTA" })).toHaveCount(0);
+  // The clear control is only offered while a filter is active.
+  await expect(page.getByRole("link", { name: "clear" })).toBeVisible();
+});
+
+test("the status filter narrows to draft or finalized", async ({ page, context }) => {
+  const reader = await seedMember(db, { name: "Status Reader", tier: "member" });
+  await context.addCookies([await sessionCookieFor(db, reader.id)]);
+  await db.insert(payoutOperation).values([
+    { name: "Draft only", occurredAt: new Date("2026-08-05"), status: "draft" },
+    {
+      name: "Finalized only",
+      occurredAt: new Date("2026-08-04"),
+      status: "finalized",
+    },
+  ]);
+
+  await page.goto("/payouts?status=draft");
+  await expect(page.getByRole("link", { name: "Draft only" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Finalized only" })).toHaveCount(0);
+  await expect(page.getByLabel("Status")).toHaveValue("draft");
+});
+
+/*
+ * The correctness rule pre-written above the pager: a filter must DROP
+ * `before`, because a cursor taken from a wider query pages into the middle
+ * of a narrower one. 51 operations so `Older` is on screen, landing this test
+ * on a page carrying `?before=`; submitting the filter form must not carry
+ * that cursor forward into the newly (and differently) scoped query.
+ */
+test("submitting a filter drops an active cursor", async ({ page, context }) => {
+  const reader = await seedMember(db, { name: "Cursor Filter Reader", tier: "member" });
+  await context.addCookies([await sessionCookieFor(db, reader.id)]);
+  await db.insert(payoutOperation).values(
+    Array.from({ length: 51 }, (_, i) => ({
+      name: `Cursor Op ${String(i).padStart(2, "0")}`,
+      occurredAt: new Date(Date.UTC(2026, 6, 1) - i * 86_400_000),
+    })),
+  );
+
+  await page.goto("/payouts");
+  await page.getByRole("link", { name: "Older" }).click();
+  await expect(page).toHaveURL(/\/payouts\?before=/);
+
+  await page.getByLabel("Name").fill("Cursor Op 00");
+  await page.getByRole("button", { name: "Filter" }).click();
+
+  await expect(page).toHaveURL(/[?&]q=Cursor(\+|%20)Op(\+|%20)00\b/);
+  // Synchronous — `page.url()` returns a string, not a Promise, so awaiting it
+  // is a no-op the lint rule correctly rejects.
+  expect(page.url()).not.toContain("before=");
+  await expect(
+    page.getByRole("link", { name: "Cursor Op 00", exact: true }),
+  ).toBeVisible();
+});
+
+/*
+ * `Older` must carry the active filter forward, not just the cursor — a
+ * filtered list that only grew an `Older` link because the pager forgot the
+ * filter would silently widen the result set on page 2.
+ */
+test("the pager preserves an active filter across Older", async ({ page, context }) => {
+  const reader = await seedMember(db, { name: "Pager Filter Reader", tier: "member" });
+  await context.addCookies([await sessionCookieFor(db, reader.id)]);
+  // 51 matching rows plus one distractor that must never appear on either page.
+  await db.insert(payoutOperation).values([
+    ...Array.from({ length: 51 }, (_, i) => ({
+      name: `Fleet Op ${String(i).padStart(2, "0")}`,
+      occurredAt: new Date(Date.UTC(2026, 6, 1) - i * 86_400_000),
+    })),
+    { name: "Distractor", occurredAt: new Date("2026-05-01") },
+  ]);
+
+  await page.goto("/payouts?q=Fleet");
+  await expect(
+    page.getByRole("link", { name: "Fleet Op 00", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "Fleet Op 49", exact: true }),
+  ).toBeVisible();
+
+  await page.getByRole("link", { name: "Older" }).click();
+  await expect(page).toHaveURL(/[?&]q=Fleet\b/);
+  await expect(page).toHaveURL(/[?&]before=/);
+  await expect(
+    page.getByRole("link", { name: "Fleet Op 50", exact: true }),
+  ).toBeVisible();
+  await expect(page.getByRole("link", { name: "Distractor" })).toHaveCount(0);
+
+  // `← Latest` from here must return to page 1 of the SAME filter, not the
+  // unfiltered list.
+  await page.getByRole("link", { name: "Latest" }).click();
+  await expect(page).toHaveURL(/[?&]q=Fleet\b/);
+  // Synchronous — `page.url()` returns a string, not a Promise, so awaiting it
+  // is a no-op the lint rule correctly rejects.
+  expect(page.url()).not.toContain("before=");
+  await expect(
+    page.getByRole("link", { name: "Fleet Op 00", exact: true }),
+  ).toBeVisible();
+  await expect(page.getByRole("link", { name: "Distractor" })).toHaveCount(0);
+});
+
+/*
+ * A filter matching nothing is a THIRD empty case, distinct from both "no
+ * operations recorded yet" (nothing was ever created) and the past-end
+ * cursor state — reading it as either would tell an operator their data is
+ * gone, which is false.
+ */
+test("a filter matching nothing renders its own empty state, not 'no operations'", async ({
+  page,
+  context,
+}) => {
+  const reader = await seedMember(db, { name: "No Match Reader", tier: "member" });
+  await context.addCookies([await sessionCookieFor(db, reader.id)]);
+  await db.insert(payoutOperation).values({
+    name: "Real operation",
+    occurredAt: new Date("2026-08-01"),
+  });
+
+  await page.goto("/payouts?q=nonexistent-fleet-name");
+  await expect(page.getByText("Nothing matches this filter.")).toBeVisible();
+  await expect(page.getByText("No operations recorded yet.")).toHaveCount(0);
+
+  await page.getByRole("link", { name: "Back to every operation" }).click();
+  await expect(page).toHaveURL(/\/payouts$/);
+  await expect(page.getByRole("link", { name: "Real operation" })).toBeVisible();
+});
+
+/**
+ * The pinned Name column, at the widths where the table is forced to scroll.
+ *
+ * Six columns need 736px worst case against a 286px region at 320px (the
+ * budget is measured out in globals.css beside `.log--payouts`), so scrolling
+ * is not the defect — losing the row's identity while panning to Total is.
+ * Under ruling R3 /payouts is a corp-wide ledger, which makes "which operation
+ * is this figure for?" the question every other cell depends on, so these are
+ * correctness tests in the same sense as the accounts table's pin tests, not
+ * cosmetic ones.
+ *
+ * A deliberately unbroken 60-character name is seeded because operation names
+ * are operator-typed `text` with no cap in schema.ts, unlike the EVE-bounded
+ * character names the accounts table pins. That token is the one input that
+ * could grow the pin until it covers the region it is meant to anchor.
+ */
+for (const width of [320, 390]) {
+  test(`payouts at ${width}px: the operation name stays put while Total is reached`, async ({
+    page,
+    context,
+  }) => {
+    const viewer = await seedMember(db, {
+      name: "Pin Viewer",
+      tier: "member",
+      status: "active",
+    });
+    await context.addCookies([await sessionCookieFor(db, viewer.id)]);
+
+    for (const [i, name] of [
+      "Aaa First Operation Name",
+      "B".repeat(60),
+      "Ccc Third Operation",
+    ].entries()) {
+      const [op] = await db
+        .insert(payoutOperation)
+        .values({
+          name,
+          occurredAt: new Date(`2026-08-0${5 - i}`),
+          corpSharePct: "0",
+          status: "finalized",
+        })
+        .returning();
+      await db.insert(lootPool).values({
+        operationId: op.id,
+        valuationSource: "flat",
+        // A 12-digit total is the worst case the column budget was measured
+        // against; a short one would understate how far the row scrolls.
+        totalValue: "123456789012.00",
+        notes: "seeded",
+      });
+      await db.insert(payoutParticipant).values({
+        operationId: op.id,
+        accountId: viewer.id,
+        displayName: "Pin Viewer",
+        shares: "1",
+        amount: "123456789012.00",
+        paidAmount: "123456789012.00",
+      });
+    }
+
+    await page.setViewportSize({ width, height: 720 });
+    await page.goto("/payouts");
+    await page.waitForSelector(".scroller tbody tr");
+
+    const pinned = await pinGeometry(
+      page,
+      ".scroller",
+      "tbody tr:first-child td:first-child",
+      "right",
+    );
+    // Vacuous unless there was something to scroll past in the first place.
+    expect(pinned.maxScrollLeft).toBeGreaterThan(0);
+    expect(pinned.scrolledLeft).toBeGreaterThanOrEqual(
+      pinned.maxScrollLeft - pinned.gutterWidth,
+    );
+    // Fully on screen at the far right, not merely intersecting by a sliver —
+    // the distinction `toBeInViewport` cannot make (see geometry.ts).
+    expect(pinned.overlapX).toBeCloseTo(pinned.cellWidth, 0);
+    expect(pinned.overlapY).toBeGreaterThan(0);
+    expect(pinned.text).toContain("Aaa First Operation Name");
+
+    // The corner cell rides with the column it heads: a NAME column left under
+    // a heading that reads TOTAL is worse than no heading at all.
+    const corner = await pinGeometry(page, ".scroller", "thead th:first-child", "right");
+    expect(corner.overlapX, "the Name heading stays over the pinned column").toBeCloseTo(
+      corner.cellWidth,
+      0,
+    );
+    expect(corner.text).toContain("Name");
+
+    // The pin has to leave most of the region for the columns it exists to let
+    // you reach. The same 60% ceiling the account manifest is held to — and
+    // the reason `overflow-wrap: anywhere` is on this column, since the
+    // 60-character row below would otherwise set its width.
+    const longRow = await pinGeometry(
+      page,
+      ".scroller",
+      "tbody tr:nth-child(2) td:first-child",
+      "right",
+    );
+    expect(longRow.text).toContain("B");
+    expect(
+      longRow.cellWidth / longRow.regionWidth,
+      "an unbroken 60-character name does not turn the pin into the page",
+    ).toBeLessThan(0.6);
+  });
+}

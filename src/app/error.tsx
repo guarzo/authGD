@@ -145,7 +145,7 @@ export default function Error({
     <>
       {/* React hoists this into <head>, and it wins: measured on `/payouts`
           with its list query broken, whose `page.tsx` exports a static
-          `metadata.title = "Payouts"` that resolves regardless, the tab reads
+          `metadata.title = "Operations"` that resolves regardless, the tab reads
           "Something broke · <brand name>". Do not carry that result across to
           `payouts/[id]/not-found.tsx` — the opposite was measured there, and
           that file's comment records it. A not-found boundary loses to the

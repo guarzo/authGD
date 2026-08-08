@@ -187,11 +187,11 @@ you what it holds.
   below in a single measured column; admin tables are allowed to run wider.
 - **Nav membership is keyed to the viewer, not the section.** The bar offers every
   destination this viewer is *provably authorized* to reach — `Your account` always,
-  `Payouts` when they can read payouts, `Members`/`Audit log`/`Sync` when they are an
+  `Operations` when they can read payouts, `Members`/`Audit log`/`Sync` when they are an
   admin — in one fixed order, broadest access first. Membership does not change as you
   walk between sections, so no destination is ever two hops away from a viewer who is
   entitled to it in one. Note that `isAdmin` and `tier` are independent, so an admin is
-  not automatically a payouts reader and `Payouts` is never unconditional in the admin
+  not automatically a payouts reader and `Operations` is never unconditional in the admin
   bar. Where the session cannot be read — `error.tsx` is a client component, and a
   not-found boundary would change render mode if it called `cookies()` — the same rule
   runs on weaker evidence: the strongest membership the *path* alone proves, because
