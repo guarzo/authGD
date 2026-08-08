@@ -82,9 +82,61 @@ test("resolved names, distinguishable system actor, one-line details, filtered c
   await page.goto("/admin/audit?action=tier.");
   await expect(page.getByRole("heading", { name: "2 matching entries" })).toBeVisible();
 
-  // The example hint must not leak into the field's accessible name: it sits
-  // outside the <label> and is wired up with aria-describedby instead.
-  await expect(page.getByLabel("Action prefix", { exact: true })).toBeVisible();
+  // The hint must not leak into the field's accessible name: it sits outside
+  // the <label> and is wired up with aria-describedby instead.
+  await expect(page.getByLabel("Action", { exact: true })).toBeVisible();
+});
+
+/**
+ * The datalist is inert HTML, not a type-ahead: it ships with the page, the
+ * browser filters it, and the form submits without JavaScript. This asserts
+ * the field is wired to it and that the vocabulary offered is the real one,
+ * not that a browser popup shows them -- see `payouts.spec.ts`'s
+ * identical-purpose test on `AddParticipantForm`.
+ *
+ * The expected list is spelled out here rather than imported from
+ * `ACTION_NAMESPACES`, deliberately. Importing it would make this test read
+ * its expectation off the same object the page renders from, so it could only
+ * ever prove "the page renders whatever that constant holds" -- true even if a
+ * namespace were dropped or misspelled inside `NAMESPACE_TARGET_KIND`. Written
+ * out independently, it is the guard the type system cannot give: there is no
+ * compile-time vocabulary of real action strings anywhere in the repo, so
+ * `"tie."` for `"tier."` type-checks (the `${string}.` constraint on that map
+ * catches a dropped dot, and nothing catches a misspelling). Equality on the
+ * whole array, not membership, is what makes this bite -- it pins the set,
+ * the order the admin reads them in, and the count, so a namespace added on
+ * purpose is meant to fail here once and be added here on purpose too.
+ */
+const EXPECTED_ACTION_NAMESPACES = [
+  "account.",
+  "admin.",
+  "character.",
+  "discord.",
+  "payout.",
+  "status.",
+  "sync.",
+  "tier.",
+  "token.",
+  "wanderer.",
+];
+
+test("the action filter offers the namespace vocabulary via a datalist", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.goto("/admin/audit");
+
+  const input = page.getByLabel("Action", { exact: true });
+  const listId = await input.getAttribute("list");
+  expect(listId).toBeTruthy();
+  await expect(page.locator(`datalist#${listId}`)).toHaveCount(1);
+
+  const options = page.locator(`datalist#${listId} option`);
+  expect(
+    await options.evaluateAll((els) => els.map((e) => e.getAttribute("value"))),
+  ).toEqual(EXPECTED_ACTION_NAMESPACES);
 });
 
 /**
@@ -259,6 +311,14 @@ test("mono columns fit their widest value instead of painting over the next one"
  * One filter cell carries a hint and its siblings do not. Bottom-aligning the
  * row made that cell's extra height push its own label and input a full row
  * above the others, so the three fields read as three different rows.
+ *
+ * The width half of this guards the other way the hint can distort its cell.
+ * A grid item contributes its max-content width to the track, so once the
+ * Action hint became a sentence ("matches the start of an action, ...") rather
+ * than `e.g. tier.`, it was wider than the input and sized the cell — the
+ * Action field rendered 257px against its siblings' 199px. `.filter-form__hint`
+ * zeroes its inline-size to opt out of that; this is what would catch the opt-out
+ * being dropped, or a future hint long enough to need a different remedy.
  */
 test("filter labels, fields, and submit each sit on one line", async ({
   page,
@@ -269,23 +329,27 @@ test("filter labels, fields, and submit each sit on one line", async ({
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/admin/audit");
 
-  const tops = await page.evaluate(() => {
-    const y = (sel: string) =>
-      [...document.querySelectorAll(sel)].map((el) =>
-        Math.round(el.getBoundingClientRect().top),
-      );
+  const box = await page.evaluate(() => {
+    const rects = (sel: string) =>
+      [...document.querySelectorAll(sel)].map((el) => el.getBoundingClientRect());
+    const y = (sel: string) => rects(sel).map((r) => Math.round(r.top));
     return {
       labels: y(".filter-form__label"),
       fields: y(".filter-form .field"),
       submit: y(".filter-form__actions .btn"),
+      fieldWidths: rects(".filter-form .field").map((r) => Math.round(r.width)),
     };
   });
 
-  expect(tops.labels).toHaveLength(3);
-  expect(new Set(tops.labels).size).toBe(1);
-  expect(new Set(tops.fields).size).toBe(1);
+  expect(box.labels).toHaveLength(3);
+  expect(new Set(box.labels).size).toBe(1);
+  expect(new Set(box.fields).size).toBe(1);
   // The submit button belongs on the field line, not the label line.
-  expect(Math.abs(tops.submit[0] - tops.fields[0])).toBeLessThanOrEqual(1);
+  expect(Math.abs(box.submit[0] - box.fields[0])).toBeLessThanOrEqual(1);
+
+  // No cell is sized by its hint: all three fields share one width.
+  expect(box.fieldWidths).toHaveLength(3);
+  expect(new Set(box.fieldWidths).size).toBe(1);
 });
 
 test("names are clickable filters, and a name unions a person's identifier forms", async ({
@@ -827,9 +891,7 @@ test("the action is a filter link like actor and target", async ({ page, context
   await expect(page.locator("tbody tr").first().locator("td").nth(2)).toHaveText(
     "status.changed",
   );
-  await expect(page.getByLabel("Action prefix", { exact: true })).toHaveValue(
-    "status.changed",
-  );
+  await expect(page.getByLabel("Action", { exact: true })).toHaveValue("status.changed");
 });
 
 /**
