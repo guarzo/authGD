@@ -54,6 +54,40 @@ describe("formatCadence", () => {
     expect(formatCadence("1,2,3 * * * *")).toBe("1,2,3 * * * *");
   });
 
+  it("falls through a step that does not divide the hour", () => {
+    // The `*/n` counterpart of the wrap case above. Cron restarts the step at
+    // :00 each hour instead of carrying it, so `*/7` fires :00,:07…:56 and then
+    // :00 — a four-minute gap. "every 7m" is the same confident-and-wrong
+    // rendering `0,15,30` is rejected for, so it falls through identically.
+    expect(formatCadence("*/7 * * * *")).toBe("*/7 * * * *");
+    expect(formatCadence("*/8 * * * *")).toBe("*/8 * * * *");
+  });
+
+  it("falls through a step wider than the hour, which parses as hourly", () => {
+    // The sharpest case, because nothing errors: `parseCron` accepts `*/90`
+    // and yields the single minute {0}, so the next-run decoration correctly
+    // reports the next :00 while an unguarded cadence claims 90 minutes. The
+    // page would state two contradictory facts with nothing logged anywhere.
+    expect(formatCadence("*/90 * * * *")).toBe("*/90 * * * *");
+    expect([...parseCron("*/90 * * * *").minute]).toEqual([0]);
+  });
+
+  it("falls through a zero step rather than rendering 'every 0m'", () => {
+    // `parseCron` throws on this, so `nextRunAt` swallows it to null: the
+    // confident sentence would sit on the page with no next run beside it.
+    expect(formatCadence("*/0 * * * *")).toBe("*/0 * * * *");
+    expect(() => parseCron("*/0 * * * *")).toThrow(/non-zero/);
+  });
+
+  it("renders the steps that do divide the hour", () => {
+    // The bound is divisibility, not a whitelist — including n = 60, which
+    // yields the single minute :00 and is genuinely once every 60 minutes.
+    expect(formatCadence("*/1 * * * *")).toBe("every 1m");
+    expect(formatCadence("*/20 * * * *")).toBe("every 20m");
+    expect(formatCadence("*/60 * * * *")).toBe("every 60m");
+    expect([...parseCron("*/60 * * * *").minute]).toEqual([0]);
+  });
+
   it("falls through an evenly-spaced list that leaves the minute range", () => {
     // Even spacing and a correct wrap say nothing about range: `45,60,75,90`
     // has gaps of 15 and wraps by 15 under the same algebra `2,17,32,47` does.
