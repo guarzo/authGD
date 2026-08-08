@@ -32,13 +32,33 @@ describe("formatCadence", () => {
     }
   });
 
-  it("renders a comma-list minute as the raw expression", () => {
-    // The location cadence. `formatCadence` models */n, a bare minute, and the
-    // daily/weekly shapes; a comma list falls through all of them, so the admin
-    // sync page shows the cron verbatim. Terse but honest — and pinned here so
-    // it reads as a decision rather than an accident. `nextFire` DOES parse
-    // comma lists, so the next-run time beside it is still correct.
-    expect(formatCadence("2,17,32,47 * * * *")).toBe("2,17,32,47 * * * *");
+  it("renders an evenly-spaced comma-list minute, wrap included, as 'every Nm from :MM'", () => {
+    // The location cadence: gaps 15, 15, 15, and the wrap 47 -> (60+2) is also
+    // 15, so this is genuinely every 15 minutes and safe to paraphrase.
+    expect(formatCadence("2,17,32,47 * * * *")).toBe("every 15m from :02");
+    // A second evenly-spaced shape, to prove the branch isn't hardcoded to
+    // location's four values: gaps 20, 20, wrap 40 -> (60+0) is also 20.
+    expect(formatCadence("0,20,40 * * * *")).toBe("every 20m from :00");
+  });
+
+  it("falls through a comma list whose wrap breaks the even spacing", () => {
+    // `0,15,30` has uniform internal gaps (15, 15) but the wrap from 30 back
+    // to 0 is 30 minutes, not 15 — the list only fires 3 times an hour, not 4.
+    // Paraphrasing it as "every 15m" would be the exact wrong-but-confident
+    // rendering the module's docblock exists to prevent, so it must keep
+    // falling through to the raw expression.
+    expect(formatCadence("0,15,30 * * * *")).toBe("0,15,30 * * * *");
+  });
+
+  it("falls through a comma list with no consistent gap at all", () => {
+    expect(formatCadence("1,2,3 * * * *")).toBe("1,2,3 * * * *");
+  });
+
+  it("falls through a comma-list minute on a fixed hour", () => {
+    // Evenly-spaced-minutes reasoning only applies to the "every hour" shape;
+    // a fixed hour is a different cadence question this formatter does not
+    // model, so it falls through even though the minute list itself is fine.
+    expect(formatCadence("2,17,32,47 3 * * *")).toBe("2,17,32,47 3 * * *");
   });
 });
 
@@ -261,14 +281,19 @@ describe("JOB_GROUP / groupFor", () => {
     expect(groupFor("membership-recheck")).toBe("on-demand");
   });
 
-  it("groups token-health, purge and location as housekeeping", () => {
-    // location refreshes itself every 15 minutes, so widening the "sync
-    // everything" fan-out to shave minutes off it is not worth the dispatch
-    // change (spec: Cadence).
-    for (const job of ["token-health", "purge", "location"]) {
+  it("groups token-health and purge as housekeeping", () => {
+    for (const job of ["token-health", "purge"]) {
       expect(JOB_GROUP[job as keyof typeof JOB_GROUP], job).toBe("housekeeping");
       expect(groupFor(job)).toBe("housekeeping");
     }
+  });
+
+  it("groups location as member-facing, not housekeeping", () => {
+    // location is not reachable from any page control either, but its output
+    // is the character location column on every member's /account page — a
+    // row members actually read, unlike the other two housekeeping jobs.
+    expect(JOB_GROUP.location).toBe("member-facing");
+    expect(groupFor("location")).toBe("member-facing");
   });
 
   it("returns null for a job type nothing schedules", () => {

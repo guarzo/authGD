@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { JOB_CRON } from "@/core/schedules";
 import type { RowHealth } from "@/core/run-health";
+import { collapseRuns, type CollapsibleRun } from "@/core/run-summary";
 import {
   cadenceNamesTime,
   evidenceSince,
+  type GroupMember,
+  groupHealthSummary,
+  groupNeedsAttention,
+  groupTone,
   healthLabel,
   HEALTH_LABEL,
   HEALTH_TONE,
@@ -13,7 +18,9 @@ import {
   queuedMarkerText,
   queuedNotice,
   queuedStamp,
+  splitCadenceUtc,
   tone,
+  windowRestatesGroup,
 } from "@/app/admin/sync/view";
 
 const MIN = 60 * 1000;
@@ -361,5 +368,168 @@ describe("queuedMarkerStuck", () => {
     // Escalation is a claim about how long something has waited; a null age
     // cannot support one, however long the row has actually been there.
     expect(queuedMarkerStuck(null, NOON)).toBe(false);
+  });
+});
+
+describe("housekeeping's group-level decisions", () => {
+  const member = (jobType: string, health: RowHealth): GroupMember => ({
+    jobType,
+    health,
+  });
+
+  describe("groupNeedsAttention", () => {
+    it("is false when every member is clean", () => {
+      expect(
+        groupNeedsAttention([member("token-health", "never"), member("purge", "fresh")]),
+      ).toBe(false);
+    });
+
+    it("is true the moment one member needs attention, regardless of position", () => {
+      expect(
+        groupNeedsAttention([
+          member("token-health", "failing"),
+          member("purge", "fresh"),
+        ]),
+      ).toBe(true);
+      expect(
+        groupNeedsAttention([
+          member("token-health", "never"),
+          member("purge", "missing"),
+        ]),
+      ).toBe(true);
+    });
+
+    it("agrees with needsAttention on every health, so a group can never open on a health its own row would not", () => {
+      for (const h of ALL_HEALTH) {
+        expect(groupNeedsAttention([member("x", h)]), h).toBe(needsAttention(h));
+      }
+    });
+  });
+
+  describe("groupTone", () => {
+    it("is ok when nothing in the group ranks warn or bad", () => {
+      expect(groupTone([member("token-health", "never"), member("purge", "fresh")])).toBe(
+        "ok",
+      );
+    });
+
+    it("takes the worst tone across members, bad outranking warn", () => {
+      expect(
+        groupTone([member("token-health", "overdue"), member("purge", "fresh")]),
+      ).toBe("warn");
+      expect(
+        groupTone([member("token-health", "overdue"), member("purge", "failing")]),
+      ).toBe("bad");
+    });
+  });
+
+  describe("groupHealthSummary", () => {
+    it("states a settled word rather than a bare count when the group is clean", () => {
+      expect(
+        groupHealthSummary([member("token-health", "never"), member("purge", "fresh")]),
+      ).toBe("2 jobs · nothing needs attention");
+    });
+
+    it("singularizes the count for a group of one", () => {
+      expect(groupHealthSummary([member("purge", "fresh")])).toBe(
+        "1 job · nothing needs attention",
+      );
+    });
+
+    it("names every flagged member and its own health word, not just that something is wrong", () => {
+      expect(
+        groupHealthSummary([
+          member("token-health", "failing"),
+          member("purge", "missing"),
+        ]),
+      ).toBe("2 jobs · token-health failed, purge not running");
+    });
+
+    it("leaves a clean member out of the flagged list entirely", () => {
+      const summary = groupHealthSummary([
+        member("token-health", "failing"),
+        member("purge", "fresh"),
+      ]);
+      expect(summary).toContain("token-health failed");
+      expect(summary).not.toContain("purge");
+    });
+  });
+});
+
+describe("windowRestatesGroup", () => {
+  const run = (overrides: Partial<CollapsibleRun> = {}): CollapsibleRun => ({
+    id: overrides.id ?? Math.random(),
+    startedAt: at(-10 * MIN),
+    finishedAt: at(-9 * MIN),
+    status: "ok",
+    counts: null,
+    errorSummary: null,
+    ...overrides,
+  });
+
+  it("is true when every run in the window collapsed into one group", () => {
+    const collapsed = collapseRuns([run(), run(), run()]);
+    expect(collapsed).toHaveLength(1);
+    expect(windowRestatesGroup(collapsed)).toBe(true);
+  });
+
+  it("is false for a single run, which collapseRuns never turns into a group of one", () => {
+    const collapsed = collapseRuns([run()]);
+    expect(windowRestatesGroup(collapsed)).toBe(false);
+  });
+
+  it("is false when an in-flight run sits above a collapsed group", () => {
+    const collapsed = collapseRuns([
+      run({ id: 1, status: null, finishedAt: null }),
+      run({ id: 2 }),
+      run({ id: 3 }),
+    ]);
+    expect(collapsed.length).toBeGreaterThan(1);
+    expect(windowRestatesGroup(collapsed)).toBe(false);
+  });
+
+  it("is false when two groups of different outcomes both appear", () => {
+    const collapsed = collapseRuns([
+      run({ id: 1, status: "failed" }),
+      run({ id: 2, status: "ok" }),
+      run({ id: 3, status: "ok" }),
+    ]);
+    expect(collapsed.length).toBeGreaterThan(1);
+    expect(windowRestatesGroup(collapsed)).toBe(false);
+  });
+
+  it("is false for an empty window", () => {
+    expect(windowRestatesGroup(collapseRuns([]))).toBe(false);
+  });
+});
+
+describe("splitCadenceUtc", () => {
+  it("splits the trailing wall-clock clause off, marking it hidden rather than dropped", () => {
+    expect(splitCadenceUtc("daily 03:00 UTC")).toEqual({
+      visible: "daily 03:00",
+      hiddenUtc: true,
+    });
+    expect(splitCadenceUtc("Sun 04:00 UTC")).toEqual({
+      visible: "Sun 04:00",
+      hiddenUtc: true,
+    });
+  });
+
+  it("is a no-op for an interval cadence, which never carries the suffix", () => {
+    expect(splitCadenceUtc("every 30m")).toEqual({
+      visible: "every 30m",
+      hiddenUtc: false,
+    });
+    expect(splitCadenceUtc("hourly :05")).toEqual({
+      visible: "hourly :05",
+      hiddenUtc: false,
+    });
+  });
+
+  it("is a no-op for the on-demand fallback string", () => {
+    expect(splitCadenceUtc("on demand")).toEqual({
+      visible: "on demand",
+      hiddenUtc: false,
+    });
   });
 });
