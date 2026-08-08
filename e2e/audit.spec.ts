@@ -82,9 +82,61 @@ test("resolved names, distinguishable system actor, one-line details, filtered c
   await page.goto("/admin/audit?action=tier.");
   await expect(page.getByRole("heading", { name: "2 matching entries" })).toBeVisible();
 
-  // The example hint must not leak into the field's accessible name: it sits
-  // outside the <label> and is wired up with aria-describedby instead.
-  await expect(page.getByLabel("Action prefix", { exact: true })).toBeVisible();
+  // The hint must not leak into the field's accessible name: it sits outside
+  // the <label> and is wired up with aria-describedby instead.
+  await expect(page.getByLabel("Action", { exact: true })).toBeVisible();
+});
+
+/**
+ * The datalist is inert HTML, not a type-ahead: it ships with the page, the
+ * browser filters it, and the form submits without JavaScript. This asserts
+ * the field is wired to it and that the vocabulary offered is the real one,
+ * not that a browser popup shows them -- see `payouts.spec.ts`'s
+ * identical-purpose test on `AddParticipantForm`.
+ *
+ * The expected list is spelled out here rather than imported from
+ * `ACTION_NAMESPACES`, deliberately. Importing it would make this test read
+ * its expectation off the same object the page renders from, so it could only
+ * ever prove "the page renders whatever that constant holds" -- true even if a
+ * namespace were dropped or misspelled inside `NAMESPACE_TARGET_KIND`. Written
+ * out independently, it is the guard the type system cannot give: there is no
+ * compile-time vocabulary of real action strings anywhere in the repo, so
+ * `"tie."` for `"tier."` type-checks (the `${string}.` constraint on that map
+ * catches a dropped dot, and nothing catches a misspelling). Equality on the
+ * whole array, not membership, is what makes this bite -- it pins the set,
+ * the order the admin reads them in, and the count, so a namespace added on
+ * purpose is meant to fail here once and be added here on purpose too.
+ */
+const EXPECTED_ACTION_NAMESPACES = [
+  "account.",
+  "admin.",
+  "character.",
+  "discord.",
+  "payout.",
+  "status.",
+  "sync.",
+  "tier.",
+  "token.",
+  "wanderer.",
+];
+
+test("the action filter offers the namespace vocabulary via a datalist", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.goto("/admin/audit");
+
+  const input = page.getByLabel("Action", { exact: true });
+  const listId = await input.getAttribute("list");
+  expect(listId).toBeTruthy();
+  await expect(page.locator(`datalist#${listId}`)).toHaveCount(1);
+
+  const options = page.locator(`datalist#${listId} option`);
+  expect(
+    await options.evaluateAll((els) => els.map((e) => e.getAttribute("value"))),
+  ).toEqual(EXPECTED_ACTION_NAMESPACES);
 });
 
 /**
@@ -827,9 +879,7 @@ test("the action is a filter link like actor and target", async ({ page, context
   await expect(page.locator("tbody tr").first().locator("td").nth(2)).toHaveText(
     "status.changed",
   );
-  await expect(page.getByLabel("Action prefix", { exact: true })).toHaveValue(
-    "status.changed",
-  );
+  await expect(page.getByLabel("Action", { exact: true })).toHaveValue("status.changed");
 });
 
 /**

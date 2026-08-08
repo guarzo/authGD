@@ -3,7 +3,12 @@ import type { ReactNode } from "react";
 import { getDb } from "@/db";
 import { getConfig } from "@/config";
 import { requireAdminPage } from "@/lib/admin-guard";
-import { AUDIT_PAGE_SIZE, queryAuditLog, resolveFilterIdentity } from "@/services/audit";
+import {
+  ACTION_NAMESPACES,
+  AUDIT_PAGE_SIZE,
+  queryAuditLog,
+  resolveFilterIdentity,
+} from "@/services/audit";
 import type { FilterResolution, ResolvedAuditRow } from "@/services/audit";
 import { RuleHead, Json, Notice, Scroller } from "@/app/_components/ui";
 import { Submit } from "@/app/_components/submit";
@@ -17,6 +22,14 @@ export const dynamic = "force-dynamic";
 export const metadata: Metadata = {
   title: "Audit log",
 };
+
+/** id linking the action filter's `list` attribute to its `<datalist>` —
+ * see `add-participant-form.tsx`'s `CHARACTER_LIST_ID` for the precedent this
+ * follows: an `<option>` per namespace, no children. The datalist itself needs
+ * no client JS — the browser does the filtering — so it costs this page
+ * nothing to render it server-side. (The page is not JS-free: `Submit` is a
+ * client component. The datalist just isn't why.) */
+const ACTION_NAMESPACE_LIST_ID = "action-namespaces";
 
 /** The exact UTC instant, `2026-08-03 22:19:24`. */
 function stamp(d: Date): string {
@@ -443,8 +456,9 @@ export default async function AdminAuditPage({
       <form method="get" className="filter-form">
         {/* All three cells are a div with an explicit label rather than a
           wrapping <label>: the hint has to live outside the <label> or it gets
-          concatenated into the input's accessible name ("Action prefix e.g.
-          tier."), so it is wired up with aria-describedby instead.
+          concatenated into the input's accessible name ("Action matches the
+          start of an action, like tier.changed"), so it is wired up with
+          aria-describedby instead.
 
           Actor and Target are not symmetrical and nothing on the page said so.
           A member reaches `actor` only for what they did to their own account
@@ -472,17 +486,24 @@ export default async function AdminAuditPage({
         </div>
         <div className="filter-form__cell">
           <label className="filter-form__label" htmlFor="filter-action">
-            Action prefix
+            Action
           </label>
           <input
             id="filter-action"
             className="field"
             name="action"
             defaultValue={params.action ?? ""}
+            list={ACTION_NAMESPACE_LIST_ID}
+            autoComplete="off"
             aria-describedby="filter-action-hint"
           />
+          <datalist id={ACTION_NAMESPACE_LIST_ID}>
+            {ACTION_NAMESPACES.map((n) => (
+              <option key={n} value={n} />
+            ))}
+          </datalist>
           <span className="filter-form__hint" id="filter-action-hint">
-            e.g. tier.
+            matches the start of an action, like tier.changed
           </span>
         </div>
         <div className="filter-form__cell">

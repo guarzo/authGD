@@ -77,7 +77,7 @@ export type ResolvedAuditRow = typeof auditLog.$inferSelect & {
   actorName: string | null;
   actorKind: "system" | "account" | "unresolved";
   targetName: string | null;
-  targetKind: "account" | "character" | "discord" | "payout" | "literal" | "unresolved";
+  targetKind: TargetKind | "literal" | "unresolved";
   /** Account uuids embedded in `details` (not the row's own actor/target),
    * resolved to their main character's name the same way actor/target are.
    * Keyed by the `details` field name so `summarizeDetails` can look one up
@@ -131,6 +131,8 @@ const RESERVED_TARGET_LITERALS: ReadonlySet<string> = new Set([
   ...Object.keys(JOB_CRON),
 ]);
 
+type TargetKind = "account" | "character" | "discord" | "payout";
+
 /**
  * Every target is written by exactly one call site shape in this codebase
  * (grep `logAudit(` across src/), so the *action* namespace is a reliable,
@@ -138,35 +140,50 @@ const RESERVED_TARGET_LITERALS: ReadonlySet<string> = new Set([
  * EVE character id and a Discord snowflake are both bare digit strings, so
  * shape alone (or a magnitude heuristic, since snowflakes are ~18-19 digits
  * and character ids are ~9-10) would work only by coincidence today and
- * silently rot the day either numbering scheme changes. `discord.*` actions
- * only ever target a Discord user id; `character.*` / `token.*` /
- * `wanderer.*` only ever target an EVE character id; `payout.*` actions only
- * ever target a `payout_operation` uuid; everything else (`tier.*`,
- * `status.*`, `account.*`, `admin.*`, `sync.*`) targets an account.
- * The literal targets of `sync.*` (`"all"`, or a job type for a single-job
- * re-run — see RESERVED_TARGET_LITERALS) are short-circuited by the caller
- * before this function is consulted, so `sync.*` reaching here always means
+ * silently rot the day either numbering scheme changes.
+ *
+ * This is the single source of truth for the app's action-namespace
+ * vocabulary: `ACTION_NAMESPACES` (below, for the `/admin/audit` filter UI)
+ * and `targetKindFromAction` both derive from it, so a namespace can only be
+ * added or reclassified in one place. The literal targets of `sync.*`
+ * (`"all"`, or a job type for a single-job re-run — see
+ * RESERVED_TARGET_LITERALS) are short-circuited by the caller before
+ * `targetKindFromAction` is consulted, so `sync.*` reaching it always means
  * the account-uuid form.
  */
-function targetKindFromAction(
-  action: string,
-): "account" | "character" | "discord" | "payout" | null {
-  if (action.startsWith("discord.")) return "discord";
-  if (
-    action.startsWith("character.") ||
-    action.startsWith("token.") ||
-    action.startsWith("wanderer.")
-  )
-    return "character";
-  if (action.startsWith("payout.")) return "payout";
-  if (
-    action.startsWith("tier.") ||
-    action.startsWith("status.") ||
-    action.startsWith("account.") ||
-    action.startsWith("admin.") ||
-    action.startsWith("sync.")
-  )
-    return "account";
+const NAMESPACE_TARGET_KIND = {
+  "account.": "account",
+  "admin.": "account",
+  "character.": "character",
+  "discord.": "discord",
+  "payout.": "payout",
+  "status.": "account",
+  "sync.": "account",
+  "tier.": "account",
+  "token.": "character",
+  "wanderer.": "character",
+} as const satisfies Record<`${string}.`, TargetKind>;
+
+type ActionNamespace = keyof typeof NAMESPACE_TARGET_KIND;
+
+/** Ordered (alphabetically — this is rendered to a human as a `<datalist>`)
+ * list of every action namespace prefix, trailing dot included. Derived from
+ * `NAMESPACE_TARGET_KIND` above, so it cannot drift from that mapping.
+ *
+ * Exported for the `/admin/audit` filter UI, but note it is load-bearing for
+ * classification too: `targetKindFromAction` iterates this array rather than
+ * re-reading the map's keys, which is what makes it impossible for the
+ * vocabulary offered to an admin and the vocabulary the classifier recognizes
+ * to disagree about membership. The `Object.keys` cast is the one TypeScript
+ * forces — it returns `string[]` for every object, however narrow the keys. */
+export const ACTION_NAMESPACES: readonly ActionNamespace[] = (
+  Object.keys(NAMESPACE_TARGET_KIND) as ActionNamespace[]
+).sort();
+
+function targetKindFromAction(action: string): TargetKind | null {
+  for (const namespace of ACTION_NAMESPACES) {
+    if (action.startsWith(namespace)) return NAMESPACE_TARGET_KIND[namespace];
+  }
   return null;
 }
 
