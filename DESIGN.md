@@ -298,9 +298,11 @@ configuration, the other two by overwriting the file.
   a time, it spans the full table width, and nothing is competing with it for
   vertical space, so the density argument that buys the `28px` grade does not
   apply and its controls take `36px`. This is not a new rule so much as the one
-  already in force: `e2e/sync.spec.ts:1095` pins the `/admin/sync` drawer's
-  Re-run control to the standalone grade and has been passing all along, and
-  `payouts/[id]/notes-form.tsx:90-95` reasons the same way for a field in an
+  already in force: `e2e/sync.spec.ts`'s "a drawer's Re-run control sits at the
+  standalone grade, not the in-row one" pins the `/admin/sync` drawer's Re-run
+  control to the standalone grade and has been passing all along, and
+  `payouts/[id]/notes-form.tsx`'s "Full 36px" comment above its `Submit` reasons
+  the same way for a field in an
   operation's own panel. `/admin/accounts` is the surface that diverged.
   (Owner walkthrough 2026-08-07, ruling R1. Supersedes the flat two-grade
   reading recorded in `docs/settled-design-decisions.md`.)
