@@ -193,7 +193,7 @@ test("a press refused mid-flight does not latch the guard: the next press saves"
     const t0 = performance.now();
     const at = () => Math.round(performance.now() - t0);
     w.__probe = { clicks: [], busy: [] };
-    const isSave = (el: Element | null | undefined) =>
+    const isSave = (el: Element | null | undefined): el is Element =>
       !!el && el.getAttribute("aria-label") === "save notes";
 
     new MutationObserver((records) => {
@@ -215,7 +215,7 @@ test("a press refused mid-flight does not latch the guard: the next press saves"
         if (!isSave(btn)) return;
         const entry = {
           at: at(),
-          busy: btn!.getAttribute("aria-busy"),
+          busy: btn.getAttribute("aria-busy"),
           prevented: false,
         };
         w.__probe.clicks.push(entry);
@@ -284,8 +284,12 @@ test("a press refused mid-flight does not latch the guard: the next press saves"
   // The per-press ledger, attached to the run rather than only quoted in an
   // assertion message. This test exists because two previous rounds of this
   // investigation could not be rerun; a green run that keeps no evidence would
-  // repeat that. `npx playwright show-report` has the drop record for every
-  // iteration, including the ones that passed.
+  // repeat that. Retrieving it needs a reporter that keeps attachments —
+  // `--reporter=html` then `npx playwright show-report`, or `--reporter=json`
+  // — because this config sets none, and Playwright's default `list` reporter
+  // discards an inline `body` attachment rather than writing it under
+  // `test-results/`. With one, every iteration's drop record is there,
+  // including the ones that passed.
   await testInfo.attach("press-ledger", {
     body: JSON.stringify(
       { clicks: p.clicks, busy: p.busy, postedTexts: texts.filter((t) => posted(t)) },

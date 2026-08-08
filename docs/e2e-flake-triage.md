@@ -133,6 +133,15 @@ npx playwright test e2e/submit-guard.spec.ts \
   -g "does not latch the guard" --repeat-each=20 --workers=1
 ```
 
+That gives you the pass/fail. To get the per-press ledger the table below is
+built from, add a reporter that keeps attachments — `--reporter=html` and then
+`npx playwright show-report`, or `--reporter=json`. This config sets no
+`reporter`, and Playwright's default `list` discards an inline attachment body
+rather than writing it under `test-results/`, so without the flag the run
+leaves no evidence behind. Note that the JSON reporter writes to stdout, which
+`playwright.config.ts` has already printed a provisioning line to; skip to the
+first `{` before parsing.
+
 `e2e/submit-guard.spec.ts:180` "a press refused mid-flight does not latch the
 guard: the next press saves" presses `Save notes` three times on
 `/payouts/[id]`, the second one immediately after the first with no wait at all,
@@ -154,7 +163,8 @@ Measured, 20 runs at `--repeat-each=20 --workers=1` on machine A:
 | `aria-busy` transitions per run | **4** in every run — exactly two complete cycles for the two presses that fired |
 | press 3 refused after press 2 was dropped (**a leaked latch**) | **0/20** |
 
-A representative ledger:
+A representative run's `clicks` array (the attachment also carries the
+`aria-busy` transition log and which of the three notes reached the server):
 
 ```json
 [{"at":2354,"busy":"false","prevented":false},
