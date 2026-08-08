@@ -32,21 +32,31 @@ export function PaymentHistory({
   participantName: string;
 }) {
   if (payments.length === 0) return null;
+  // `.stack` is a grid, which blockifies the items so no markers render.
+  const list = (
+    <ul className="stack">
+      {payments.map((ev) => (
+        <li key={ev.id}>
+          <span className="mono nowrap">{fmtAt(ev.at)}</span> {ev.kind}{" "}
+          <span className="mono nowrap">{fmtIsk(ev.amount)} ISK</span> by{" "}
+          {ev.actorName ?? "unknown"}
+        </li>
+      ))}
+    </ul>
+  );
+  // Owner walkthrough 2026-08-07, finding 1.6: a `Disclosure` collapsed behind
+  // "payments (1)" makes the operator open a drawer to read the one line it
+  // would have shown anyway — a fold with nothing folded. `payments (3)`
+  // asserted at e2e/payouts.spec.ts:1572 still holds: two or more payments is
+  // still a history worth collapsing, so the drawer stays there and only the
+  // single-payment case renders inline.
+  if (payments.length === 1) return list;
   return (
     <Disclosure
       summary={`payments (${payments.length})`}
       ariaLabel={`payments (${payments.length}) for ${participantName}`}
     >
-      {/* `.stack` is a grid, which blockifies the items so no markers render. */}
-      <ul className="stack">
-        {payments.map((ev) => (
-          <li key={ev.id}>
-            <span className="mono nowrap">{fmtAt(ev.at)}</span> {ev.kind}{" "}
-            <span className="mono nowrap">{fmtIsk(ev.amount)} ISK</span> by{" "}
-            {ev.actorName ?? "unknown"}
-          </li>
-        ))}
-      </ul>
+      {list}
     </Disclosure>
   );
 }

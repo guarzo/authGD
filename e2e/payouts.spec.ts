@@ -2966,3 +2966,401 @@ test("a hand-typed unresolved param renders the plain page", async ({
     page.locator("p.notice--warn", { hasText: UNRESOLVED_NOTICE }),
   ).toHaveCount(0);
 });
+
+/*
+ * Owner walkthrough 2026-08-07, findings 1.1-1.8 (docs/design-walkthrough.md).
+ * Each test below pins one acceptance criterion from that session, plus the
+ * secondary findings folded into the same fixes.
+ */
+
+/**
+ * Finding 1.1: `.btn--quiet`'s transparent, borderless rest state reads fine
+ * among neighbours that already look like a control row, but an `InlineEdit`
+ * trigger stands alone beside plain text — at rest it was indistinguishable
+ * from the label it sits beside, and only painted a border on hover. Battle
+ * report is the case the walkthrough named; this pins it there and confirms
+ * the fix did NOT leak into `.btn--quiet`'s other callers (nav sign out, the
+ * filter `clear`), which chose transparent-at-rest on purpose.
+ */
+test("an InlineEdit trigger reads as a control at rest, not only on hover", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "FC Contrast",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+
+  await page.goto("/payouts/new");
+  await page.getByLabel("Name").fill("Contrast roam");
+  await page.getByLabel("Date").fill("2026-08-01");
+  await page.getByRole("button", { name: "Create operation" }).click();
+  await expect(page.getByRole("heading", { name: "Contrast roam" })).toBeVisible();
+
+  const trigger = page.getByRole("button", { name: "edit battle report URL" });
+  const borderColor = await trigger.evaluate((el) => getComputedStyle(el).borderColor);
+  // `transparent` computes to `rgba(0, 0, 0, 0)`. A control that still reads
+  // that way at rest has not been fixed — the border only exists on hover.
+  expect(borderColor).not.toBe("rgba(0, 0, 0, 0)");
+
+  // Sign out is `.btn--quiet` too, outside `.inline-edit`: it sits among the
+  // nav's own control row, where transparent-at-rest was a deliberate,
+  // unrelated choice this finding never touched.
+  const signOut = page.getByRole("button", { name: "sign out" });
+  await expect(signOut).toHaveCSS("border-color", "rgba(0, 0, 0, 0)");
+});
+
+/**
+ * Finding 1.2: `ConfirmCost`'s `alwaysHidden` mode (now `visibility="hidden"`)
+ * kept Finalize's cost sentence `.visually-hidden` PERMANENTLY — not merely
+ * hidden until armed. No sighted operator ever read it, at any point, which is
+ * an R4 violation and a worse defect than "reveal it sooner". The fix is
+ * `visibility="visible"`: the sentence renders plainly at rest, and arming
+ * changes nothing about its visibility.
+ */
+test("Finalize's cost sentence is readable before arming, not hidden from sighted operators", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "FC Visible",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+
+  await page.goto("/payouts/new");
+  await page.getByLabel("Name").fill("Visible cost roam");
+  await page.getByLabel("Date").fill("2026-08-01");
+  await page.getByRole("button", { name: "Create operation" }).click();
+  await expect(page.getByRole("heading", { name: "Visible cost roam" })).toBeVisible();
+
+  const cost = page.locator("#finalize-cost");
+  // Measured, not `toBeVisible()`: `.visually-hidden` is a 1px clip, which
+  // Playwright still counts as "visible" by design (see the boundingBox
+  // measurement at `e2e/account.spec.ts:439-443` and the mark-paid case
+  // above). A real width is the only thing that tells "on screen" apart from
+  // "clipped to a pixel".
+  const widthAtRest = (await cost.boundingBox())?.width ?? 0;
+  expect(widthAtRest).toBeGreaterThan(1);
+  await expect(cost).toContainText("Closes the pools, roster and shares");
+
+  // Arming changes nothing about visibility — there is no reveal step to
+  // undo, unlike `"reveal"` mode.
+  await page.getByRole("button", { name: "Finalize" }).click();
+  const widthArmed = (await page.locator("#finalize-cost").boundingBox())?.width ?? 0;
+  expect(widthArmed).toBeGreaterThan(1);
+  await expect(page.locator("#finalize-cost")).toContainText(
+    "Closes the pools, roster and shares",
+  );
+});
+
+/**
+ * Finding 1.3: the notes save confirmation used to be `.visually-hidden`
+ * permanently — a sighted operator pressing Save got no feedback at all,
+ * since the controlled textarea already showed what was typed and nothing
+ * else on screen changed. `"· saved"` (the `note-form.tsx` precedent) is now
+ * visible AND is the same `role="status"` node AT hears, so parity runs both
+ * directions rather than swapping one channel for the other.
+ */
+test("saving notes confirms visibly, not only to a screen reader", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "FC Noted Visible",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+
+  await page.goto("/payouts/new");
+  await page.getByLabel("Name").fill("Noted visibly roam");
+  await page.getByLabel("Date").fill("2026-08-01");
+  await page.getByRole("button", { name: "Create operation" }).click();
+  await expect(page.getByRole("heading", { name: "Noted visibly roam" })).toBeVisible();
+
+  const saved = page.locator(".notes-form__saved");
+  await expect(saved).toHaveText("");
+
+  await page.getByRole("textbox", { name: "operation notes" }).fill("Third fleet.");
+  await page.getByRole("button", { name: "Save notes" }).click();
+  await expect(saved).toHaveText("· saved");
+  // Still the visible node, not a separate hidden echo — one region for both
+  // channels, same as `_components/note-form.tsx`.
+  await expect(saved).toHaveAttribute("role", "status");
+
+  // Editing again is a fresh, unsaved draft: the confirmation must clear so it
+  // never claims a save that has not happened yet.
+  await page.getByRole("textbox", { name: "operation notes" }).fill("Third fleet. More.");
+  await expect(saved).toHaveText("");
+
+  // ...and typing the acknowledged text back brings it back, because what gates
+  // the confirmation is "the textarea matches what the server took", not a
+  // dirty flag latched by the first keystroke. A flag cannot express this, and
+  // the case it gets wrong for real is the one this stands in for: typing
+  // through a save's round trip, where the flag clears for a snapshot the
+  // operator has already edited past and leaves "· saved" over unsaved text.
+  await page.getByRole("textbox", { name: "operation notes" }).fill("Third fleet.");
+  await expect(saved).toHaveText("· saved");
+});
+
+/**
+ * Finding 1.4: "Add another paste" named only the appraise path, while the
+ * accessible name (`ariaLabel`) also named the flat-value escape hatch in
+ * `children` — R4's failure the other way round, a sighted operator scanning
+ * the collapsed summary never learned the flat-value path existed. The two
+ * are now the same text, so there is no `ariaLabel` override left to diverge
+ * from what a sighted operator can already read.
+ */
+test("the flat-value path is named in the visible summary, not only for a screen reader", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "FC Flat Named",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+  const opId = await seedDraft(db, operator.id, { pools: 1 });
+
+  await page.goto(`/payouts/${opId}`);
+  const summary = page.locator("summary", { hasText: "Add another paste" });
+  await expect(summary).toHaveText("Add another paste, or a flat value");
+  // No override left to name a path the visible text doesn't: the accessible
+  // name now comes from the summary's own text content. Suffix rather than
+  // exact — `.disc > summary::before` (globals.css) draws the +/- toggle glyph
+  // as generated content, and Chromium folds that into the computed name
+  // ahead of the real text, which is a pre-existing quirk of every `.disc`
+  // summary, not something this fix changed.
+  await expect(summary).toHaveAccessibleName(/Add another paste, or a flat value$/);
+});
+
+/**
+ * Finding 1.5's non-varying column was the items table's "Price source", not
+ * the pool table's Source/Value (both of those genuinely vary). A pool is
+ * appraised as a whole, so every item shared the same source down the column
+ * except the rare row an operator hand-priced or Triff couldn't quote — the
+ * column repeated the pool's own source on every other row for that one row's
+ * benefit. The marker now lives on the row it distinguishes instead, and only
+ * for the two states worth a per-row flag: `manual` and `unresolved`. `triff`
+ * (the common case) gets no badge, which is the point.
+ */
+test("a hand-priced or unresolved item is marked on its own row, not in a page-wide column", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "FC Row Marker",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+
+  const [op] = await db
+    .insert(payoutOperation)
+    .values({
+      name: "Marked items",
+      occurredAt: new Date("2026-08-01"),
+      corpSharePct: "0",
+      createdBy: operator.id,
+    })
+    .returning();
+  const [poolRow] = await db
+    .insert(lootPool)
+    .values({
+      operationId: op.id,
+      valuationSource: "appraised",
+      pricingMode: "sell_best",
+      stationId: 60003760,
+      totalValue: "300.00",
+    })
+    .returning();
+  await db.insert(lootItem).values([
+    {
+      poolId: poolRow.id,
+      typeId: 34,
+      name: "Tritanium",
+      qty: 10,
+      unitPrice: "10.00",
+      totalValue: "100.00",
+      priceSource: "triff",
+    },
+    {
+      poolId: poolRow.id,
+      typeId: 35,
+      name: "Pyerite",
+      qty: 10,
+      unitPrice: "10.00",
+      totalValue: "100.00",
+      priceSource: "manual",
+    },
+    {
+      poolId: poolRow.id,
+      typeId: null,
+      name: "Nyx",
+      qty: 1,
+      unitPrice: "100.00",
+      totalValue: "100.00",
+      priceSource: "unresolved",
+    },
+  ]);
+
+  await page.goto(`/payouts/${op.id}`);
+  // Gone entirely — no column, no header, on a table that still shows three
+  // items with three different sources.
+  await expect(page.getByRole("columnheader", { name: "Price source" })).toHaveCount(0);
+
+  const rowFor = (name: string) => page.getByRole("row").filter({ hasText: name });
+  // The common case earns no badge — a marker on every row is exactly the
+  // noise this finding is about.
+  await expect(rowFor("Tritanium").getByText("manual", { exact: true })).toHaveCount(0);
+  await expect(rowFor("Tritanium").getByText("unresolved", { exact: true })).toHaveCount(
+    0,
+  );
+  await expect(rowFor("Pyerite").getByText("manual", { exact: true })).toBeVisible();
+  await expect(rowFor("Nyx").getByText("unresolved", { exact: true })).toBeVisible();
+});
+
+/**
+ * Finding 1.6: a `Disclosure` collapsed behind "payments (1)" made an operator
+ * open a drawer to read the one line it would have shown anyway. Two or more
+ * stays folded — `payments (3)` at line ~1572 above still passes — only the
+ * single-payment case now renders inline.
+ */
+test("a single payment renders inline, with no disclosure to open", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "FC Single Pay",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+  const opId = await seedFinalizedRoster(db, operator.id, ["Solo Payee"]);
+  await page.goto(`/payouts/${opId}`);
+
+  await page.getByRole("button", { name: "mark paid Solo Payee" }).click();
+  await page.getByRole("button", { name: "confirm mark paid Solo Payee" }).click();
+
+  const row = page.getByRole("row").filter({ hasText: "Solo Payee" });
+  await expect(row.locator("summary")).toHaveCount(0);
+  // The single event's own line, rendered directly rather than behind a
+  // disclosure — "kind, amount ISK by actor" is `payment-history.tsx`'s format.
+  await expect(row).toContainText("ISK by");
+});
+
+/**
+ * Finding 1.8: `primaryStage` was already computed to drive which control
+ * gets the gold `.btn--primary` grade, but nothing on the page ever showed
+ * the word for it — the one-glance summary answered "where does this stand"
+ * but not "what do I do about it". `STAGE_LABEL` surfaces the same value.
+ * "none" (finalized, or a read-only viewer) stays silent on purpose: a viewer
+ * who cannot edit must never be told to act on an operation they cannot
+ * touch.
+ */
+test("the summary line names the next step for whichever stage is live", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "FC Next Step",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+
+  const noLoot = await seedDraft(db, operator.id, {});
+  await page.goto(`/payouts/${noLoot}`);
+  await expect(page.getByText("next: appraise loot")).toBeVisible();
+
+  const noRoster = await seedDraft(db, operator.id, { pools: 1 });
+  await page.goto(`/payouts/${noRoster}`);
+  await expect(page.getByText("next: set roster")).toBeVisible();
+
+  const readyToFinalize = await seedDraft(db, operator.id, {
+    pools: 1,
+    names: ["Ada Ready"],
+  });
+  await page.goto(`/payouts/${readyToFinalize}`);
+  await expect(page.getByText("next: finalize")).toBeVisible();
+});
+
+/**
+ * Findings 1.2+1.7: the "this is frozen now" paragraph used to live in the
+ * Operation section, keyed only on `locked`, explaining a roster consequence
+ * (Revert doesn't reopen editing) nowhere near the roster it constrains. It
+ * moved to the roster heading, as the `firstPayment`/`locked` else-branch of
+ * the pre-freeze warning already there — and `showLifecycle` lost the third
+ * disjunct (`locked`) that used to keep the Operation-section `.lifecycle`
+ * block mounted for no control, only that paragraph. This pins all three at
+ * once: the paragraph is in the roster region (not just present anywhere on
+ * the page, which would pass even in the old location), the pre-freeze and
+ * post-freeze halves are mutually exclusive, and `.lifecycle` is gone once
+ * locked rather than surviving as an empty shell.
+ */
+test("the frozen-roster paragraph lives beside the roster it explains, and the lifecycle block is gone once locked", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "FC Frozen Home",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+  const opId = await seedFinalizedRoster(db, operator.id, ["Ada Home", "Bo Home"]);
+  await page.goto(`/payouts/${opId}`);
+
+  const frozenText = "A payment has been recorded";
+  const preFreezeText = "Marking any row below paid freezes";
+
+  // Before any payment: the pre-freeze half renders, the post-freeze half does
+  // not exist yet, and the lifecycle block (Unlock, in this state) is present.
+  await expect(page.getByText(preFreezeText)).toBeVisible();
+  await expect(page.getByText(frozenText)).toHaveCount(0);
+  await expect(page.locator(".lifecycle")).toHaveCount(1);
+
+  await page.getByRole("button", { name: "mark paid Ada Home" }).click();
+  await page.getByRole("button", { name: "confirm mark paid Ada Home" }).click();
+  await expect(page.getByRole("button", { name: "mark paid Bo Home" })).toBeVisible();
+
+  // After the first payment: the halves swap, mutually exclusively.
+  await expect(page.getByText(preFreezeText)).toHaveCount(0);
+  const frozen = page.getByText(frozenText);
+  await expect(frozen).toBeVisible();
+
+  // Structural, not page-scope: the paragraph must sit after the roster
+  // heading and before the next section (Details) in document order — the
+  // same idiom `login.spec.ts`'s document-position test uses. A page-scope
+  // `getByText` match alone would pass even if this paragraph were still
+  // sitting in the Operation section above, which is exactly the regression
+  // this test exists to catch.
+  const order = await page.evaluate(() => {
+    const rosterHeading = document.getElementById("roster-heading")!;
+    const details = [...document.querySelectorAll("h2")].find(
+      (h) => h.textContent === "Details",
+    )!;
+    const paragraph = [...document.querySelectorAll("p")].find((p) =>
+      p.textContent?.includes("A payment has been recorded"),
+    )!;
+    // Node.compareDocumentPosition bitmask: 4 = "argument follows node".
+    const afterRosterHeading =
+      rosterHeading.compareDocumentPosition(paragraph) & Node.DOCUMENT_POSITION_FOLLOWING;
+    const beforeDetails =
+      paragraph.compareDocumentPosition(details) & Node.DOCUMENT_POSITION_FOLLOWING;
+    return { afterRosterHeading, beforeDetails };
+  });
+  expect(order.afterRosterHeading).toBeGreaterThan(0);
+  expect(order.beforeDetails).toBeGreaterThan(0);
+
+  // And the Operation-section lifecycle block is gone entirely, not merely
+  // emptied: `showLifecycle` is `canFinalize || canRelease`, both false once
+  // locked, so dropping the `locked` disjunct that used to keep this div
+  // mounted for the paragraph alone did not leave a stray empty wrapper.
+  await expect(page.locator(".lifecycle")).toHaveCount(0);
+});

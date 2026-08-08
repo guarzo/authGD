@@ -181,8 +181,25 @@ export function AppraiseForm({
     <Disclosure
       as="details"
       className="disc"
-      summary="Add another paste"
-      ariaLabel="Add another paste: appraise more loot, or enter a flat value"
+      // Owner walkthrough 2026-08-07, finding 1.4: the visible summary used to
+      // say only "Add another paste", while the accessible name (below) named
+      // both paths this disclosure actually holds — appraising more loot, or
+      // the flat-value escape hatch in `children`. A screen-reader user heard
+      // the second path; a sighted one scanning the collapsed summary never
+      // learned it existed unless they opened it to look. R4 runs both
+      // directions, so the visible text now says what the accessible name
+      // already did. With the two now identical there is nothing left for
+      // `ariaLabel` to add, and WCAG 2.5.3 wants the accessible name to START
+      // with the visible label rather than merely contain it — dropping the
+      // override lets the summary text serve as its own accessible name
+      // instead of keeping a second copy of it in sync by hand. Deliberately
+      // NOT "...or enter a flat value" (the previous `ariaLabel`'s exact
+      // wording): `children`'s own nested Disclosure is titled "Or enter a
+      // flat value", and `e2e/helpers`' `openFlatPoolPanel` locates it with a
+      // case-insensitive substring match — restating that exact phrase here
+      // would make both summaries match the same locator once this one is
+      // open. "or a flat value" says the same thing without the collision.
+      summary="Add another paste, or a flat value"
     >
       <div className="form-stack">
         {form}

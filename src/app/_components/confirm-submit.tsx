@@ -60,9 +60,10 @@ export function ConfirmArmScope({ children }: { children: ReactNode }) {
 }
 
 /**
- * What a destructive action costs, shown to sighted users only once that
- * action is armed — unless the call site opts out with `alwaysHidden`, which
- * keeps it `.visually-hidden` permanently instead (see that prop).
+ * What a destructive action costs, shown to sighted users depending on
+ * `visibility` — the default `"reveal"` shows it only once the control is
+ * armed; `"hidden"` and `"visible"` are the two ways a call site opts out of
+ * that dance (see the prop).
  *
  * The cost sentence used to render unconditionally beside the control. That put
  * a permanent explanation of an action almost nobody takes on a page whose job
@@ -77,17 +78,18 @@ export function ConfirmArmScope({ children }: { children: ReactNode }) {
  * the sentence sits AFTER the button in reading order, so a description that
  * only came into existence on the first press would not be there to be spoken
  * ahead of it. `.visually-hidden` is `position: absolute`, so at rest it is also
- * out of flow and adds no gap to the flex row it sits in. That is true whether
- * or not the call site ever reveals it, which is what makes `alwaysHidden` a
- * change in one boolean rather than a different component.
+ * out of flow and adds no gap to the flex row it sits in. That is true for
+ * every `visibility`, which is what makes it a change in one prop rather than a
+ * different component.
  *
- * Reveals for its own control only, matched on `describedBy` rather than on
- * "something in this scope is armed". The scope-wide reading is correct in a
- * scope holding one control and silently wrong in every other one: a scope
- * wrapping a whole table body would reveal one row's sentence when a different
- * row armed. Matching on the id means a scope may hold as many controls and as
- * many cost sentences as it likes, and controls that share a sentence (the same
- * `describedBy`) reveal it together, which is what sharing one is for.
+ * Reveals (`"reveal"` mode) for its own control only, matched on `describedBy`
+ * rather than on "something in this scope is armed". The scope-wide reading is
+ * correct in a scope holding one control and silently wrong in every other one:
+ * a scope wrapping a whole table body would reveal one row's sentence when a
+ * different row armed. Matching on the id means a scope may hold as many
+ * controls and as many cost sentences as it likes, and controls that share a
+ * sentence (the same `describedBy`) reveal it together, which is what sharing
+ * one is for.
  *
  * That makes this component safe to put in a table; it does NOT make revealing
  * on arm a good idea there, and #112 established that empirically before
@@ -95,18 +97,29 @@ export function ConfirmArmScope({ children }: { children: ReactNode }) {
  * moves the armed button out from under a stationary mouse, `pointerLeave`
  * below fires, and the control disarms itself — the reveal undoes the arm. The
  * admin accounts table therefore keeps its own cost sentence hand-rolled and
- * `.visually-hidden` always (#111) rather than using this component at all.
+ * `.visually-hidden` always (#111) rather than using this component at all —
+ * that reflow is `"hidden"`'s case if this component were used there instead.
  *
- * The payout page's Finalize and Unlock controls pass `alwaysHidden` for a
- * different reason, and it is worth not confusing the two: not reflow, but
- * that a sentence appearing under Finalize the moment it arms reads as an
- * error message rather than as a cost. Those two controls are mutually
- * exclusive anyway (`canFinalize` wants a draft, `canRelease` wants a
- * finalized operation), so there is no neighbour to shove; the row simply
- * grows rightward from a fixed left edge and the armed button does not move.
- * The reveal here is a copy decision, not a layout one.
+ * `"visible"` is the third mode, added for a different reason again, and it is
+ * worth not confusing the three. The payout page's Finalize and Unlock
+ * controls (`payouts/[id]/lifecycle-submit.tsx`) used to pass what was then
+ * called `alwaysHidden` — kept permanently `.visually-hidden` — because a
+ * sentence appearing under Finalize the moment it arms reads as an error
+ * message rather than as a cost (still true; `"reveal"` is still wrong here).
+ * But `.visually-hidden` *always* meant no sighted user ever read it at all,
+ * which is R4's failure mode (`DESIGN.md`'s "Disclosure and parity"), not a
+ * layout one — the sentence is good copy that told nobody. `"visible"` is what
+ * that call site actually wants: rendered plainly, at rest, every time, no
+ * reveal step and no `.visually-hidden` toggle. It still needs to be this
+ * component and not hand-rolled prose at the call site, because it is still
+ * the `aria-describedby` target the button points at, and still has to keep
+ * working if a future edit puts Finalize and Unlock back in the same row.
+ * Finalize and Unlock are mutually exclusive anyway (`canFinalize` wants a
+ * draft, `canRelease` wants a finalized operation), so there is no neighbour
+ * for a permanently-visible sentence to shove; the row simply grows downward
+ * from a fixed left edge, same as the account page's Discord row (below).
  *
- * The account page's Discord row still reveals, because a `.page__meta-item`
+ * The account page's Discord row uses `"reveal"`, because a `.page__meta-item`
  * is a place a sentence belongs — but only because `.page__meta-item >
  * .confirm-cost` gives the revealed cost `flex-basis: 100%`, which puts it on
  * its own line and leaves the button where it was. That was not true when this
@@ -118,33 +131,46 @@ export function ConfirmArmScope({ children }: { children: ReactNode }) {
  * The `flex-basis: 100%` is what makes this paragraph true; do not remove it on
  * the grounds that the row "already wraps".
  *
- * Before reaching for the default reveal in a new dense layout, check all
- * three: what it reflows, at every width rather than the two you have open,
- * and whether prose appearing mid-press reads as explanation or as alarm.
+ * Before reaching for `"reveal"` in a new dense layout, check all three: what
+ * it reflows, at every width rather than the two you have open, and whether
+ * prose appearing mid-press reads as explanation or as alarm. If it would read
+ * as either, `"visible"` is very likely the right answer, not `"hidden"` — a
+ * cost nobody presses without a warning is exactly the fact R4 says may not
+ * live only in the assistive-tech channel.
  */
 export function ConfirmCost({
   id,
   children,
-  alwaysHidden = false,
+  visibility = "reveal",
 }: {
   id: string;
   children: ReactNode;
-  /** Skip the reveal and stay `.visually-hidden` permanently. Default false:
-   *  most call sites (the account page's Discord row, and the roster-replace
-   *  and delete-operation controls in `payouts/[id]/page.tsx`) sit in a layout
-   *  the reveal doesn't disturb, and for those the reveal is the point — a
-   *  sighted operator reads the cost only once it is load-bearing. Set true
-   *  where the sentence would reflow its neighbours, or where it would read as
-   *  an error rather than a cost; the lifecycle controls in
-   *  `payouts/[id]/lifecycle-submit.tsx` are the second case and currently the
-   *  only caller. */
-  alwaysHidden?: boolean;
+  /** `"reveal"` (default): hidden at rest, shown once this control's own arm
+   *  matches `id`. Most call sites (the account page's Discord row, and the
+   *  roster-replace and delete-operation controls in `payouts/[id]/page.tsx`)
+   *  sit in a layout the reveal doesn't disturb, and for those the reveal is
+   *  the point — a sighted operator reads the cost only once it is
+   *  load-bearing.
+   *
+   *  `"hidden"`: stays `.visually-hidden` permanently. Reach for this only
+   *  where the sentence would genuinely reflow a neighbour a reveal cannot
+   *  afford to move — the admin accounts table's own hand-rolled version of
+   *  this idea (#111) is the reference case; nothing currently calls this
+   *  component with `"hidden"`.
+   *
+   *  `"visible"`: rendered plainly at rest, every time, never hidden and
+   *  never gated on arming. For a cost that would read as an error if it
+   *  arrived with the arm (`"reveal"`'s failure mode) or that must not be
+   *  AT-only (`"hidden"`'s). The payout page's Finalize and Unlock controls
+   *  (`payouts/[id]/lifecycle-submit.tsx`) are the only caller. */
+  visibility?: "reveal" | "hidden" | "visible";
 }) {
   const ctx = useContext(ArmContext);
   if (!ctx) {
     throw new Error("ConfirmCost must be rendered inside a ConfirmArmScope");
   }
-  const revealed = !alwaysHidden && ctx.armedDescribedBy === id;
+  const revealed =
+    visibility === "visible" || (visibility === "reveal" && ctx.armedDescribedBy === id);
 
   // No `className` passthrough. All four call sites passed exactly `"dim"` and
   // nothing else, which made it a required argument dressed as an optional one:
