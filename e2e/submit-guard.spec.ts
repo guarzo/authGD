@@ -344,3 +344,79 @@ test("a press refused mid-flight does not latch the guard: the next press saves"
   // flake. The drop rate across iterations is read from the attachments.
   expect(posted("bravo two")).toBe(!p.clicks[1].prevented);
 });
+
+/**
+ * The other side of the same refusal: it is correct, and until now it was also
+ * completely silent. A member types, presses Save while the previous save is
+ * still going, and the click does nothing observable — no POST, no error, and
+ * the textarea still holds the text, so there is nothing on screen that differs
+ * from a successful save. `docs/e2e-flake-triage.md` costed this out and the
+ * answer was to tell them, at this one call site, via `useSubmitGuard`'s
+ * `onRefused`.
+ *
+ * The drop is forced with a route delay rather than raced. The test above
+ * deliberately refuses to assert that press 2 was dropped, because whether it
+ * loses the race is the thing it samples; here the drop is the precondition,
+ * not the finding, so holding the first POST open removes the race instead of
+ * sampling it. The guard latches on the synchronous ref in press 1's own
+ * handler, so the refusal does not even depend on React having committed
+ * `pending` yet.
+ *
+ * The notice deliberately outlives the in-flight save. Once press 1 settles the
+ * refused text is still unsaved, so "press Save again" is still the correct
+ * instruction — and it is asserted after the settle for exactly that reason, to
+ * pin behaviour that a "clear it when pending goes false" refactor would look
+ * like a tidy-up while quietly stranding the member's typing.
+ */
+test("a press refused mid-flight says so, and keeps saying so until it is saved", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "FC Refused",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+
+  await page.goto("/payouts/new");
+  await page.getByLabel("Name").fill("Refused roam");
+  await page.getByLabel("Date").fill("2026-08-01");
+  await page.getByRole("button", { name: "Create operation" }).click();
+  await expect(page.getByRole("heading", { name: "Refused roam" })).toBeVisible();
+
+  const notes = page.getByRole("textbox", { name: "operation notes" });
+  const save = page.getByRole("button", { name: "Save notes" });
+  const status = page.locator(".notes-form__saved");
+
+  // Held open, not slowed down for its own sake: this is what guarantees press 2
+  // lands while press 1 is still in flight. Only POSTs are delayed, so the
+  // navigation and RSC fetches around them are untouched.
+  await page.route("**/payouts/**", async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    await new Promise((r) => setTimeout(r, 1000));
+    await route.continue();
+  });
+
+  await notes.fill("alpha one");
+  await save.click();
+
+  await notes.fill("bravo two");
+  await save.click();
+  await expect(status).toHaveText("· still saving — press Save again");
+
+  // Press 1 lands. The notice stays, because "bravo two" is still not saved.
+  await expect(save).toHaveAttribute("aria-busy", "false");
+  await expect(status).toHaveText("· still saving — press Save again");
+
+  // Pressing again is what the notice asked for, and it has to actually work.
+  await save.click();
+  await expect(status).toHaveText("· saved");
+
+  const stored = await db
+    .select()
+    .from(payoutOperation)
+    .where(eq(payoutOperation.name, "Refused roam"))
+    .then(([row]) => row.notes);
+  expect(stored).toBe("bravo two");
+});

@@ -10,7 +10,7 @@ import { useEffect, useRef, type MouseEvent } from "react";
  * the element the member just pressed moves focus to `<body>`, and because
  * every one of these actions ends in a server-action `redirect()` — a client
  * navigation with no document load — there is nothing afterwards that puts it
- * back. `error.tsx:185-189` already refuses `disabled` for exactly this reason.
+ * back. `error.tsx:275-278` already refuses `disabled` for exactly this reason.
  * So the button keeps `aria-busy`, keeps focus, and stops a second submit here
  * instead.
  *
@@ -45,8 +45,20 @@ import { useEffect, useRef, type MouseEvent } from "react";
  * form is still busy and the second press is legitimately swallowed. Gate on
  * whatever the component shows when its own `useActionState` resolves —
  * `e2e/payouts.spec.ts`'s notes test uses `· saved` — and then check the row.
+ *
+ * `onRefused` exists because "no visible trace" is right for the machine and
+ * wrong for the member: the refusal is correct, but a member who typed and
+ * pressed Save watched their click do nothing at all. It fires only from the
+ * re-entry branch — never from the two early returns below, which refuse to
+ * *latch* rather than refusing the press, and where the browser is already
+ * showing its own constraint-validation message. Opting in is per call site
+ * because the right words depend on what the form does; `/payouts/[id]`'s
+ * `NotesForm` is the one wired up so far, and the case for it there is that its
+ * text is the member's own typing, which nothing else on the page preserves.
+ * `e2e/submit-guard.spec.ts` proves the refusal happens; the test named for
+ * that form proves the member is told.
  */
-export function useSubmitGuard(pending: boolean) {
+export function useSubmitGuard(pending: boolean, onRefused?: () => void) {
   const inFlight = useRef(false);
   const started = useRef(false);
 
@@ -62,6 +74,7 @@ export function useSubmitGuard(pending: boolean) {
   return function guard(e: MouseEvent<HTMLButtonElement>): boolean {
     if (inFlight.current || pending) {
       e.preventDefault();
+      onRefused?.();
       return false;
     }
     const form = e.currentTarget.form;

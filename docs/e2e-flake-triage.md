@@ -375,23 +375,58 @@ Recorded here because it is a product question the measurements above raise and
 do not answer.
 
 `Submit` sets `aria-busy` and swaps in `pendingLabel` ("saving…" for notes), so
-the in-flight *state* is visible. The **discarded press produces no feedback of
-its own**: no POST, no error, no message. For `/payouts/new` that is correct and
-deliberate — two clicks must never make two operations. For notes it is weaker:
-the second press can carry different text, and dropping it drops an edit.
+the in-flight *state* is visible. The discarded press, on its own, produces **no
+feedback at all**: no POST, no error, no message. For `/payouts/new` that is
+correct and deliberate — two clicks must never make two operations. For notes it
+is weaker: the second press can carry different text, and dropping it drops an
+edit.
 
 Nothing is destroyed — the controlled textarea still holds the text, and
 pressing Save again saves it. And `NotesForm`'s confirmation is a comparison,
 not a flag, so it correctly declines to claim a save that did not happen. What
-is missing is a *positive* signal that the press did nothing; its absence is
-indistinguishable from the at-rest state, and a screen-reader user gets nothing
-for the press at all.
+was missing is a *positive* signal that the press did nothing; its absence is
+indistinguishable from the at-rest state, and a screen-reader user got nothing
+for the press at all. That is what the section below adds, for notes only.
 
 At the measured ~181 ms mean round trip on machine A this is unreachable by
 hand: you cannot type new text and press again inside 200 ms. The exposure is a
 slow action — cold machine, loaded database — where the window grows to seconds.
 
-Left as-is for now. If it is revisited, the constraints are fixed:
+### What was done about it
+
+`useSubmitGuard` takes an optional `onRefused`, fired **only** from the re-entry
+branch — never from the two early returns that decline to latch, where the
+browser is already showing its own constraint-validation message. `Submit`
+forwards it. `/payouts/[id]`'s `NotesForm` is the one call site wired up, and
+renders `· still saving — press Save again` in the `role="status"` span that
+already carries `· saved`.
+
+Three things about the shape, since each was a decision:
+
+- **Opt-in per call site, not automatic.** The right words depend on what the
+  form does, and most Submits have nothing worth preserving — a refused
+  `Finalize` costs nothing but a second press. Notes are wired up because the
+  text is the member's own typing.
+- **One live region, not two.** The refusal shares the existing `role="status"`
+  node rather than getting its own, for the reason already in `notes-form.tsx`'s
+  docblock: two regions announcing two things about one press is worse than one
+  region announcing the current one. The saved comparison wins when both are
+  true, which happens when Save is pressed twice without an edit.
+- **The notice outlives the in-flight save.** It clears inside the action body —
+  which runs only when a submit actually went through — and not when `pending`
+  goes false. At that moment the refused text is still unsaved, so "press Save
+  again" is still correct. A future "clear it when the save settles" tidy-up
+  would strand the member's typing under a blank status line;
+  `e2e/submit-guard.spec.ts` "a press refused mid-flight says so, and keeps
+  saying so until it is saved" asserts after the settle to stop that.
+
+That test forces the drop with a route delay on the POST rather than racing it —
+the drop is its precondition, not its finding — and passes 20/20 on machine A.
+Disarming the `onRefused` wiring fails it at the notice assertion, so it is not
+vacuous.
+
+The constraints it had to satisfy, all still binding on anything that touches
+this next:
 
 - **Not `disabled`.** Disabling the pressed element moves focus to `<body>`, and
   these actions end in `redirect()` with no document load, so nothing puts it
@@ -407,4 +442,5 @@ Queueing the refused press and replaying it on release is the obvious idea and
 is worse than it looks: it cannot live in the shared guard without turning a
 double-click on `/payouts/new` into two serialized creates, and a replayed
 `setNotes` can throw `PayoutLockedError` and redirect a page the member has
-stopped interacting with.
+stopped interacting with. Telling the member and letting them press again keeps
+the decision with the person who knows whether the text still matters.
