@@ -107,7 +107,10 @@ export default async function PayoutsPage({
 
   // A cursor past the end is not an empty list, and without this the reader
   // lands on "No operations recorded yet" with no way back — the exit-link
-  // lesson from src/app/admin/audit/page.tsx:286-294.
+  // lesson from the audit log's own past-end branch ("Back to the latest
+  // entries", admin/audit/page.tsx). Named rather than cited by line: the
+  // number this comment used to carry had already drifted onto an unrelated
+  // query call.
   const pastEnd = cursor !== undefined && ops.length === 0;
   // A filter that matches nothing is a THIRD empty case, distinct from both of
   // the above: reading it as "no operations recorded yet" tells an operator

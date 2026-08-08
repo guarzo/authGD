@@ -123,9 +123,10 @@ export async function listPayoutOperations(
   const trimmedQ = opts.q?.trim();
 
   // Every filter ANDs onto the cursor predicate rather than replacing it, so
-  // keyset paging keeps working within the narrowed set — the correctness
-  // rule the walkthrough doc pre-wrote at payouts/page.tsx:222-225 ("a filter
-  // must DROP `before`") is about the caller resetting `before` to undefined
+  // keyset paging keeps working within the narrowed set — the walkthrough's
+  // rule that "a filter must DROP `before`" (now carried by the pager comment
+  // in payouts/page.tsx, named rather than cited by line because this diff
+  // already moved it once) is about the CALLER resetting `before` to undefined
   // on a fresh filter, not about this query; here cursor and filters compose.
   const conditions = [];
   if (before) {
