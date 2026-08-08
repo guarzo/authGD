@@ -317,7 +317,7 @@ test("the contacts note describes the column via a table caption, and shows visi
   );
 });
 
-test("unlink is quiet at rest and lands on one vertical with the main control", async ({
+test("unlink is quiet at rest, matching the main control's grade", async ({
   page,
   context,
 }) => {
@@ -329,14 +329,14 @@ test("unlink is quiet at rest and lands on one vertical with the main control", 
   await context.addCookies([await sessionCookieFor(db, acc.id)]);
   await page.goto("/account");
 
-  // The main's row carries only UNLINK; the alt's carries MAKE MAIN + UNLINK.
-  // Both UNLINKs must still share a right edge, or the column stops reading as
-  // a column.
-  const edges = await page
-    .getByRole("button", { name: "unlink" })
-    .evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().right)));
-  expect(edges).toHaveLength(2);
-  expect(edges[0]).toBe(edges[1]);
+  // Walkthrough 3.2 moved MAIN/UNLINK off a permanent column into a per-row
+  // disclosure (ruling R2). The pre-3.2 version of this test asserted both
+  // rows' UNLINK buttons shared one right edge — that claim described a fixed
+  // column and no longer holds once each row's controls live in their own
+  // independently-sized drawer. What survives is the colour grade, so this
+  // opens both drawers and reads it from there.
+  await page.getByRole("button", { name: "Pilot Prime actions" }).click();
+  await page.getByRole("button", { name: "Pilot Alt actions" }).click();
 
   // Demoted from --signal-bad: at rest it matches the neutral quiet grade that
   // "make main" uses, and only takes the red on hover or keyboard focus.
@@ -356,6 +356,14 @@ test("unlink is quiet at rest and lands on one vertical with the main control", 
   ]);
   expect(unlinkColor).toBe(makeMainColor);
 
+  // A keyboard event before `.focus()`, not decorative: the two `.click()`
+  // calls above that opened the drawers left the page's input-modality
+  // tracker on "pointer", so a bare `.focus()` now lands without
+  // `:focus-visible` and the escalation rule below (`.btn--danger-quiet:
+  // focus-visible`, globals.css) never fires — confirmed by hand against
+  // `element.matches(":focus-visible")` before adding this line. A `Tab`
+  // press is a real keyboard event and switches the tracker back.
+  await page.keyboard.press("Tab");
   await page.getByRole("button", { name: "unlink" }).first().focus();
   await expect
     .poll(() =>
@@ -379,11 +387,20 @@ test("unlink arms on the first click, confirms on the second, and Escape disarms
   await context.addCookies([await sessionCookieFor(db, acc.id)]);
   await page.goto("/account");
 
+  // Walkthrough 3.2 moved this control into the alt's own actions drawer
+  // (ruling R2); nothing named "unlink Pilot Alt" mounts until that drawer
+  // opens, so the toggle is the first thing this test has to click. Once
+  // open, the drawer's own controls are addressed by their (page-unique)
+  // accessible name rather than re-scoped to `altRow` — the drawer is a
+  // sibling `<tr>` of the row that text-matched "Pilot Alt", not a descendant
+  // of it.
   const altRow = page.locator("tr", { hasText: "Pilot Alt" });
+  await altRow.getByRole("button", { name: "Pilot Alt actions" }).click();
+
   // Named, not bare "unlink": the character rows carry a `restName` of
   // "unlink <character>" so a screen-reader or speech-input member reaching the
   // control out of visual context is told which character it unlinks.
-  const unlink = altRow.getByRole("button", { name: "unlink Pilot Alt", exact: true });
+  const unlink = page.getByRole("button", { name: "unlink Pilot Alt", exact: true });
   const restBox = await unlink.boundingBox();
 
   // A server action is a POST to the current route. Counting them is the only
@@ -396,7 +413,7 @@ test("unlink arms on the first click, confirms on the second, and Escape disarms
   });
 
   await unlink.click();
-  const confirm = altRow.getByRole("button", { name: /^confirm unlink/ });
+  const confirm = page.getByRole("button", { name: /^confirm unlink/ });
   await expect(confirm).toBeVisible();
   expect(posts).toBe(0);
 
@@ -407,9 +424,9 @@ test("unlink arms on the first click, confirms on the second, and Escape disarms
   // Escape disarms without a reload.
   await confirm.press("Escape");
   await expect(
-    altRow.getByRole("button", { name: "unlink Pilot Alt", exact: true }),
+    page.getByRole("button", { name: "unlink Pilot Alt", exact: true }),
   ).toBeVisible();
-  await expect(altRow.getByRole("button", { name: /^confirm unlink/ })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /^confirm unlink/ })).toHaveCount(0);
   expect(posts).toBe(0);
   // And the roster genuinely still holds both characters, read from the
   // database rather than from the page that would be rendering it. Asserted
@@ -421,7 +438,7 @@ test("unlink arms on the first click, confirms on the second, and Escape disarms
 
   // Arm again and confirm: the second click is the one that actually unlinks.
   await unlink.click();
-  await altRow.getByRole("button", { name: /^confirm unlink/ }).click();
+  await page.getByRole("button", { name: /^confirm unlink/ }).click();
   await expect(page.getByText("Pilot Alt")).toHaveCount(0);
   expect(
     await db.select().from(character).where(eq(character.accountId, acc.id)),
@@ -690,7 +707,10 @@ test("unlinking a character that already left the account lands on a styled noti
   await page.goto("/account");
 
   const altRow = page.locator("tr", { hasText: "Pilot Alt" });
-  const unlink = altRow.getByRole("button", { name: "unlink" });
+  // Walkthrough 3.2: unlink lives in the alt's actions drawer now, mounted
+  // only once that drawer opens.
+  await altRow.getByRole("button", { name: "Pilot Alt actions" }).click();
+  const unlink = page.getByRole("button", { name: "unlink" });
   await expect(unlink).toBeVisible();
 
   // Simulate the race the action's pre-check exists for: the character leaves
@@ -1002,14 +1022,24 @@ test("characters with a location render the location text", async ({ page, conte
   });
   await markTokensHealthy(acc.id);
   const crew = await db.select().from(character).where(eq(character.accountId, acc.id));
+  // The main sits at a different structure than every alt below, deliberately:
+  // walkthrough 3.4 elides an alt's location line when it matches the main's,
+  // and this test's whole claim is that a located row renders its text — a
+  // main-matching seed would make every alt exercise the elision this test is
+  // not about, and assert 1 rendered line instead of 10 for the wrong reason.
+  await placeCrew([acc.mainCharacterId!], 30000144, "Away From The Rest");
   const locatedIds = crew
-    .filter((c) => c.name !== "AAA No-Location Alt")
+    .filter((c) => c.name !== "AAA No-Location Alt" && c.id !== acc.mainCharacterId)
     .map((c) => c.id);
   await placeCrew(locatedIds, 30000142, "Home Astrahus");
   await context.addCookies([await sessionCookieFor(db, acc.id)]);
   await page.goto("/account");
 
-  const rows = manifest(page).locator("tbody tr");
+  // `:not(.drawer-row)`: every character with actions (all eleven here — main
+  // included, since the account has more than one character) now mounts its
+  // own hidden actions-drawer `<tr>` (3.2). A bare `tbody tr` count would be
+  // inflated by those alongside the eleven real rows.
+  const rows = manifest(page).locator("tbody tr:not(.drawer-row)");
   await expect(rows).toHaveCount(11);
   // Fix 1: prove the seed actually put a location on the ten rows this test
   // claims render it — a bare row/column count passes just as well whether or
@@ -1019,7 +1049,11 @@ test("characters with a location render the location text", async ({ page, conte
     .locator(".char__location")
     .allTextContents();
   expect(locationTexts).toHaveLength(10);
-  for (const t of locationTexts) expect(t).toBe("J30000142 — Home Astrahus");
+  // First is main's own line (its structure, not the alts' — the two must
+  // never collapse to the same text or this seed would be exercising 3.4's
+  // elision instead of proving it does not apply here).
+  expect(locationTexts[0]).toBe("J30000144 — Away From The Rest");
+  for (const t of locationTexts.slice(1)) expect(t).toBe("J30000142 — Home Astrahus");
 });
 
 test("a long structure name renders in full at the narrowest viewport", async ({
@@ -1101,13 +1135,13 @@ test("a long structure name does not blow out the forced horizontal scroll at 32
   // so it is not a second independent check. `maxScrollLeft` below is the
   // actual gate.
   //
-  // 0.6, not 0.5: on a ten-character account the main row's ACTIONS cell
-  // holds a lone `unlink` button (no `main` button on main's own row) at
-  // ~155px against this viewport's ~286px region — 0.54 — where the old
-  // one-character seed never rendered `unlink` at all (`view.characters.length
-  // > 1` gates it) and measured a bare STATUS chip instead. Still comfortably
-  // a minority of the region; 0.6 both holds today and would still catch the
-  // cell growing to dominate the row.
+  // 0.6, not 0.5: re-measured after 3.2 replaced the permanent MAIN/UNLINK
+  // column with a per-row disclosure toggle. Main's own ACTIONS cell now
+  // holds just the `actions` toggle button at 113px against this viewport's
+  // 286px region — 0.40, well under 0.6. The bound is kept loose rather than
+  // tightened to the new number: it exists to catch the cell growing to
+  // dominate the row (a permanent control set coming back, say), not to pin
+  // today's exact width.
   expect(pinned.cellWidth / pinned.regionWidth).toBeLessThan(0.6);
   // Rules out "nothing to scroll at all" reading as success (e.g. if the
   // seed silently failed to render a location and the name column shrank
@@ -1115,11 +1149,12 @@ test("a long structure name does not blow out the forced horizontal scroll at 32
   // vacuous as the count-only check Fix 1 above replaced.
   expect(pinned.maxScrollLeft).toBeGreaterThan(0);
   // Measured on a ten-character account, which is the size this gate exists
-  // for — the previous 250 was derived from a one-character seed and never
-  // checked at scale. Today's stacked layout measures 258px before this plan
-  // and ~137px after (STATUS column −82, `make main` → `main` −39). 170 sits
-  // above the latter and far below the 413px the reverted flex row cost, so
-  // this trips if the flex row or either removed column comes back.
+  // for. The stacked layout measured 258px before this plan, ~137px after
+  // Task 3 (STATUS column −82, `make main` → `main` −39), and 134px after
+  // 3.2/3.3 replaced the permanent MAIN/UNLINK pair with the `actions`
+  // toggle. 170 sits above the latest measurement and far below the 413px
+  // the reverted flex row cost, so this trips if the flex row or either
+  // removed column comes back.
   //
   // Not zero, and it cannot be: the floor is a 64px portrait plus a 196px name
   // cell plus a bare unlink cell at ~121px = 381px against a 286px region. No
@@ -1250,13 +1285,15 @@ test("a faulted character does not blow out the forced horizontal scroll at 320p
     return a.getBoundingClientRect().width;
   });
   expect(reauth).toBeLessThan(120);
-  // The member-facing total: 316px before this change, 299px after, against a
-  // 286px region. Note what that does NOT say — 299 is still more than one
-  // region-width, so the worst member-fixable state has not been brought
-  // inside the fold and this line must not be read as claiming it was. 308
-  // brackets before-and-after so the regression is caught; closing the last
-  // 13px is a copy change, described below.
-  expect(pinned.maxScrollLeft).toBeLessThan(308);
+  // The member-facing total: 316px before Task 3's copy work, 299px after it,
+  // 257px after 3.2/3.3 replaced the permanent MAIN/UNLINK column with a
+  // per-row disclosure toggle — against a 286px region. That crossing matters:
+  // 257 is the first measurement of this gate to land under one region-width,
+  // so the worst member-fixable state now clears the forced-scroll fold in a
+  // single swipe, where every prior measurement took more than one. 270
+  // brackets today's number without pinning it exactly, so a small copy or
+  // font change does not fail this line for reasons unrelated to layout.
+  expect(pinned.maxScrollLeft).toBeLessThan(270);
 });
 
 // What the two gates above do NOT claim, recorded so the next person does not
@@ -1264,30 +1301,31 @@ test("a faulted character does not blow out the forced horizontal scroll at 320p
 // where the remaining width is.
 //
 // Measured at a 320px viewport (286px scroll region), ten characters, seeded
-// `needs_reauth` as the gate above is:
+// `needs_reauth` as the gate above is — re-measured after 3.2 replaced the
+// permanent MAIN/UNLINK column with a per-row disclosure toggle:
 //
-//   portrait  56px   the image plus cell padding
-//   name     151px   "J30000142 — Home Astrahus" is the binding string
-//   status   223px   71px label column + 8px gap + 120px value column + 24px padding
-//   actions  155px   `main` + `unlink`
+//   portrait   56px   the image plus cell padding
+//   name      151px   "J30000142 — Home Astrahus" is the binding string
+//   status    223px   71px label column + 8px gap + 120px value column + 24px padding
+//   actions   113px   the `actions` toggle button alone (was 155px: `main` + `unlink`)
 //   -------------
-//   table    585px  ->  299px forced scroll against the 286px region
+//   table     543px  ->  257px forced scroll against the 286px region (was 585px -> 299px)
+//
+// 3.2's disclosure is most of finding 3.3's reclaimed width: the ACTIONS
+// column dropped from 155px to 113px by replacing two permanent controls with
+// one toggle, which is what brought the forced scroll under one region-width
+// (257px < 286px) for the first time — a member on the narrowest supported
+// viewport can now reach the end of a faulted row's content within a single
+// swipe past the fold, where before it took more than one.
 //
 // The 71px is the rendered width of "STANDINGS" (the widest of the three
 // labels, so dropping the two `ok` lines would not narrow it) and the 120px is
 // the rendered width of the "re-auth needed" chip. Both are content, and the
 // 8px is --s-2. That is the whole cell: there is no padding left in it to
-// remove, and deleting the STATUS column outright still leaves 362px of table
+// remove, and deleting the STATUS column outright still leaves 320px of table
 // against a 286px region. Four columns of genuine content do not fit 320px,
-// and no arrangement that keeps a portrait, a name, a status and an unlink
-// will.
-//
-// So the last 13px between 299px and one region-width is the copy. "re-auth
-// needed" is the binding string, not "label needed" — the widest MEMBER_FIXABLE
-// value, and the only one whose row exceeds the region by more than a rounding
-// error. Shortening it is a real lever and is deliberately not taken here,
-// because it changes what a member reads rather than how it is laid out, and
-// the same strings render on the admin members drawer.
+// and no arrangement that keeps a portrait, a name, a status and an actions
+// toggle will.
 //
 // One case is unbounded and no threshold here covers it: an unrecognized result
 // code falls through to `result.replace(/_/g, " ")` (contact-state.tsx) and
@@ -1317,18 +1355,24 @@ test("a located manifest row stays inside the 63px density budget", async ({
 
   // The precondition every row measurement in this file needs: a seed that
   // silently failed to place a location renders a one-line row, which passes
-  // a height ceiling for exactly the wrong reason.
+  // a height ceiling for exactly the wrong reason. `seedNominalCrew` places
+  // every character at the same structure, so under 3.4's elision only main's
+  // own row keeps a `.char__location` — the nine alts match it exactly and
+  // drop theirs. That is the feature working, not the seed failing to place
+  // anyone: see "characters with a location render the location text" for the
+  // positive case where an alt's location differs and is NOT elided.
   const locations = manifest(page).locator(".char__location");
-  await expect(locations).toHaveCount(10);
-  for (const t of await locations.allTextContents()) {
-    expect(t).toBe("J30000142 — Home Astrahus");
-  }
+  await expect(locations).toHaveCount(1);
+  expect(await locations.first().textContent()).toBe("J30000142 — Home Astrahus");
 
-  const heights = await rowHeights(page, `${MANIFEST} tbody tr`);
+  const heights = await rowHeights(page, `${MANIFEST} tbody tr:not(.drawer-row)`);
   expect(heights).toHaveLength(10);
   // 63px budget: padding 8 + name 22 + `.char-line` gap 4 + location 20 +
-  // padding 8 + border 1. 65 leaves margin for platform font variance.
-  for (const h of heights) expect(h).toBeLessThanOrEqual(65);
+  // padding 8 + border 1. 65 leaves margin for platform font variance. Only
+  // main's row (index 0) carries a second line under elision; the nine alts
+  // are one-line rows and land well under the ceiling — measured at 49px.
+  expect(heights[0]).toBeLessThanOrEqual(65);
+  for (const h of heights.slice(1)) expect(h).toBeLessThanOrEqual(65);
 });
 
 // The STATUS column reads "ok" on every row of the common account, costing a
@@ -1464,14 +1508,16 @@ test("arming the Discord unlink does not move it out from under the pointer", as
 // target — its site header is 173px against 61px, and the meta line may wrap
 // there — which is the reason to gate it, not a reason to skip it.
 //
-// Measured with `document.fonts.ready` awaited (see below): 8 / 6 / 5 across
-// three repeats at each viewport, with no run-to-run variance observed. 5,
-// not 4, at 390x844 — the previous floor predates the fonts wait and was
-// slack, passing on a number this gate never actually produced.
+// Measured with `document.fonts.ready` awaited (see below), after 3.2/3.3/3.4
+// (per-row disclosure replacing the permanent actions column, plus location
+// elision): 10 / 9 / 7 across three repeats at each viewport, with no
+// run-to-run variance observed. All ten clear the fold at 1440x900 now — the
+// nine one-line alt rows freed by elision (only main keeps a second, location
+// line) are what buys that back, not a wider table.
 const FOLD_TARGETS = [
-  { width: 1440, height: 900, expected: 8 },
-  { width: 1280, height: 800, expected: 6 },
-  { width: 390, height: 844, expected: 5 },
+  { width: 1440, height: 900, expected: 10 },
+  { width: 1280, height: 800, expected: 9 },
+  { width: 390, height: 844, expected: 7 },
 ];
 
 for (const { width, height, expected } of FOLD_TARGETS) {
@@ -1490,21 +1536,29 @@ for (const { width, height, expected } of FOLD_TARGETS) {
     // moves. The faulted fold test below waits on this for the same reason.
     await page.evaluate(() => document.fonts.ready);
 
-    // The precondition, again: an unlocated row is 24px shorter, so a broken
-    // seed makes this test pass for the wrong reason — the exact way #167's
-    // band assertion passed.
-    await expect(manifest(page).locator(".char__location")).toHaveCount(10);
+    // The precondition, again: `seedNominalCrew` places every character at
+    // the same structure, so under 3.4 elision only main keeps its
+    // `.char__location` — a broken seed (nobody placed, or everybody at a
+    // distinct location) would change this count and make the fold assertion
+    // below pass for the wrong reason.
+    await expect(manifest(page).locator(".char__location")).toHaveCount(1);
 
     const visible = await page.evaluate(
       // Counted from `getBoundingClientRect().bottom` rather than with
       // `toBeInViewport`: that matcher reports any non-zero intersection, so a
       // row with one pixel showing under the fold would count as visible. The
       // criterion is a row a member can actually read.
+      //
+      // `:not(.drawer-row)`: every character with actions now mounts a
+      // hidden `<tr class="drawer-row drawer-row--actions">` (3.2). A hidden
+      // element's `getBoundingClientRect()` is all-zero, so `bottom <= h` is
+      // trivially true for it — left in, this selector would count nine
+      // invisible rows as "cleared the fold" alongside the real ones.
       ({ sel, h }) =>
         Array.from(document.querySelectorAll(sel)).filter(
           (r) => r.getBoundingClientRect().bottom <= h,
         ).length,
-      { sel: `${MANIFEST} tbody tr`, h: height },
+      { sel: `${MANIFEST} tbody tr:not(.drawer-row)`, h: height },
     );
     expect(visible).toBeGreaterThanOrEqual(expected);
   });
@@ -1580,15 +1634,20 @@ test("the crew manifest is wider than the page's prose measure", async ({
   // its neighbours still take, and a bare number would pass just as well if
   // `page--narrow` were deleted from the page wholesale — the change this
   // explicitly is not.
+  //
+  // `.page__meta` (tier + Discord), not `.page__lede` — walkthrough 3.1
+  // deleted the lede and let `.page__head` opt out of the narrow cap too, so
+  // `.page__meta` is the sibling that now carries the cap explicitly
+  // (globals.css) rather than inheriting it from an uncapped parent.
   const widths = await page.evaluate(() => {
     const frame = document.querySelector(".scroller-frame") as HTMLElement;
-    const lede = document.querySelector(".page__lede") as HTMLElement;
+    const meta = document.querySelector(".page__meta") as HTMLElement;
     return {
       manifest: frame.getBoundingClientRect().width,
-      lede: lede.getBoundingClientRect().width,
+      meta: meta.getBoundingClientRect().width,
     };
   });
-  expect(widths.manifest).toBeGreaterThan(widths.lede);
+  expect(widths.manifest).toBeGreaterThan(widths.meta);
   expect(widths.manifest).toBeGreaterThan(960);
 });
 
@@ -1601,7 +1660,13 @@ test("a faulted character's remedy renders in a sub-row under that character", a
   await context.addCookies([await sessionCookieFor(db, acc.id)]);
   await page.goto("/account");
 
-  const subRows = manifest(page).locator("tbody tr.drawer-row");
+  // `:not(.drawer-row--actions)`: walkthrough 3.2 gave every character with a
+  // main/unlink control its own hidden actions-drawer `<tr class="drawer-row
+  // drawer-row--actions">` — a nominal ten-character seed mounts nine of
+  // those regardless of contacts state, and a bare `.drawer-row` count here
+  // would be inflated by them rather than counting the one remedy sub-row
+  // this test is actually about.
+  const subRows = manifest(page).locator("tbody tr.drawer-row:not(.drawer-row--actions)");
   await expect(subRows).toHaveCount(1);
 
   // Adjacency is the whole point of the change: a note that renders anywhere
@@ -1611,8 +1676,21 @@ test("a faulted character's remedy renders in a sub-row under that character", a
     hasText: "Alt Pilot One",
   });
   const followsOwner = await page.evaluate(() => {
-    const sub = document.querySelector("tr.drawer-row") as HTMLElement;
-    const prev = sub.previousElementSibling as HTMLElement;
+    const sub = document.querySelector(
+      "tr.drawer-row:not(.drawer-row--actions)",
+    ) as HTMLElement;
+    // Walk back past the character's own actions-drawer `<tr>` if one sits
+    // between the remedy row and its owner's data row: 3.2 gave every
+    // character with actions a hidden `drawer-row--actions` sibling
+    // immediately after its data row, so a faulted character with actions
+    // (main+unlink, or unlink alone) composes as three `<tr>`s — data,
+    // actions-drawer, remedy — not two. The remedy row's own immediate
+    // previous sibling is that drawer, not the owner's data row, whenever
+    // both exist.
+    let prev = sub.previousElementSibling as HTMLElement;
+    if (prev.classList.contains("drawer-row--actions")) {
+      prev = prev.previousElementSibling as HTMLElement;
+    }
     return prev.textContent?.includes("Alt Pilot One") ?? false;
   });
   expect(followsOwner).toBe(true);
@@ -1657,7 +1735,11 @@ test("a stalled character gets a sub-row too", async ({ page, context }) => {
   await context.addCookies([await sessionCookieFor(db, acc.id)]);
   await page.goto("/account");
 
-  await expect(manifest(page).locator("tbody tr.drawer-row")).toHaveCount(1);
+  // `:not(.drawer-row--actions)`: see the comment on the same selector in "a
+  // faulted character's remedy renders in a sub-row" above.
+  await expect(
+    manifest(page).locator("tbody tr.drawer-row:not(.drawer-row--actions)"),
+  ).toHaveCount(1);
 });
 
 // The fold cost of Decision 4, pinned so it cannot drift further. The block
@@ -1665,13 +1747,13 @@ test("a stalled character gets a sub-row too", async ({ page, context }) => {
 // the prose inside the table is a deliberate regression on this metric — one
 // row at every viewport. Pinned as a floor, not an equality: a future change
 // that gets a row back should not have to edit this number. Values are the
-// observed minimum across five consecutive runs per viewport (stable after
-// the drawer-row margin fix and waiting on `document.fonts.ready` below —
-// both removed sources of run-to-run variance in the raw measurement).
+// measured count per viewport after 3.2/3.3/3.4 (per-row disclosure plus
+// location elision moved every unlocated-relative-to-main alt back to a
+// one-line row, more than paying back the two faulted rows' sub-rows).
 const FAULTED_FOLD_TARGETS = [
-  { width: 1440, height: 900, expected: 7 },
-  { width: 1280, height: 800, expected: 6 },
-  { width: 390, height: 844, expected: 5 },
+  { width: 1440, height: 900, expected: 9 },
+  { width: 1280, height: 800, expected: 7 },
+  { width: 390, height: 844, expected: 6 },
 ];
 
 for (const { width, height, expected } of FAULTED_FOLD_TARGETS) {
@@ -1689,11 +1771,17 @@ for (const { width, height, expected } of FAULTED_FOLD_TARGETS) {
     await page.setViewportSize({ width, height });
     await page.goto("/account");
 
-    // The precondition every row measurement in this file needs: an unlocated
-    // row is 24px shorter, so a broken seed makes this pass for the wrong
-    // reason — the exact way #167's band assertion passed.
-    await expect(manifest(page).locator(".char__location")).toHaveCount(10);
-    await expect(manifest(page).locator("tbody tr.drawer-row")).toHaveCount(2);
+    // The precondition every row measurement in this file needs:
+    // `seedNominalCrew` places every character at the same structure, so
+    // under 3.4 elision only main keeps a `.char__location` — a broken seed
+    // would change this count and make the fold assertion below pass for the
+    // wrong reason.
+    await expect(manifest(page).locator(".char__location")).toHaveCount(1);
+    // `:not(.drawer-row--actions)`: see the comment on the same selector in "a
+    // faulted character's remedy renders in a sub-row" above.
+    await expect(
+      manifest(page).locator("tbody tr.drawer-row:not(.drawer-row--actions)"),
+    ).toHaveCount(2);
 
     // Without this the fold count races font loading: a row measured before
     // its font swaps in reports a shorter (or taller, on a re-layout mid-swap)
@@ -1733,7 +1821,9 @@ test("hovering the manifest's remedy sub-row leaves it untinted", async ({
 
   await page.goto("/account");
 
-  const sub = manifest(page).locator("tbody tr.drawer-row");
+  // `:not(.drawer-row--actions)`: see the comment on the same selector in "a
+  // faulted character's remedy renders in a sub-row" above.
+  const sub = manifest(page).locator("tbody tr.drawer-row:not(.drawer-row--actions)");
   await expect(sub).toHaveCount(1);
 
   // Compared against the row's own unhovered value rather than against a
@@ -1743,4 +1833,166 @@ test("hovering the manifest's remedy sub-row leaves it untinted", async ({
   await sub.hover();
   const after = await sub.evaluate((el) => getComputedStyle(el).backgroundColor);
   expect(after).toBe(before);
+});
+
+// Walkthrough 3.2's own carve-out, asserted directly rather than only relied
+// on by other tests: a single-character account's one row has neither `main`
+// (gated on `!isMain`) nor `unlink` (gated on more than one character), and
+// `CharacterRow`'s `actions === null` branch must render an empty cell — no
+// toggle button and no drawer `<tr>` at all — rather than a control that opens
+// onto nothing.
+test("a single-character account's row has no actions toggle and no drawer", async ({
+  page,
+  context,
+}) => {
+  const acc = await seedMember(db, { name: "Solo Pilot", tier: "member" });
+  await markTokensHealthy(acc.id);
+  const [solo] = await db.select().from(character).where(eq(character.accountId, acc.id));
+  await db.insert(contactSyncState).values({ characterId: solo.id, lastResult: "ok" });
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.goto("/account");
+
+  await expect(manifest(page).locator("tbody tr")).toHaveCount(1);
+  await expect(page.getByRole("button", { name: "Solo Pilot actions" })).toHaveCount(0);
+  await expect(manifest(page).locator("tr.drawer-row")).toHaveCount(0);
+});
+
+// The composition walkthrough 3.2 requires and that "a faulted character's
+// remedy renders in a sub-row" (above) only exercises as a side effect of its
+// adjacency check: a faulted character with a live actions drawer AND a
+// contacts remedy renders THREE sibling `<tr>`s in order — data row,
+// hidden actions-drawer, remedy row — not two. Asserted directly here so the
+// three-row composition itself is the thing under test, not incidental.
+test("a faulted character composes a data row, an actions drawer, and a remedy row", async ({
+  page,
+  context,
+}) => {
+  const acc = await seedNominalCrew();
+  await faultContacts(acc.id, ["Alt Pilot One"], "missing_label");
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.goto("/account");
+
+  const owner = manifest(page).locator("tbody tr:not(.drawer-row)", {
+    hasText: "Alt Pilot One",
+  });
+  await expect(owner).toHaveCount(1);
+
+  const rowKinds = await page.evaluate(() => {
+    const rows = Array.from(
+      document.querySelectorAll("[aria-label='Your characters'] tbody tr"),
+    );
+    const ownerIdx = rows.findIndex((r) => r.textContent?.includes("Alt Pilot One"));
+    return rows
+      .slice(ownerIdx, ownerIdx + 3)
+      .map((r) =>
+        r.classList.contains("drawer-row--actions")
+          ? "actions"
+          : r.classList.contains("drawer-row")
+            ? "remedy"
+            : "data",
+      );
+  });
+  expect(rowKinds).toEqual(["data", "actions", "remedy"]);
+
+  // Opening the drawer must not disturb the remedy row's own adjacency or
+  // visibility — the two disclosures are independent.
+  await owner.getByRole("button", { name: "Alt Pilot One actions" }).click();
+  await expect(
+    manifest(page).getByRole("button", { name: "unlink Alt Pilot One" }),
+  ).toBeVisible();
+  await expect(page.locator('[id^="contact-remedy-"]')).toHaveCount(1);
+  await expect(page.locator('[id^="contact-remedy-"]')).toBeVisible();
+});
+
+// Walkthrough 3.4: an alt is elided only when it reads identically to main's
+// own line, text AND `offline` both. Positive case (elided) is already
+// covered by `seedNominalCrew`-based tests above; these cover the boundary
+// and no-op cases directly.
+test("an alt online where main is offline at the same place is not elided", async ({
+  page,
+  context,
+}) => {
+  const acc = await seedMember(db, {
+    name: "Main Pilot",
+    tier: "alumni",
+    alts: ["Alt Pilot"],
+  });
+  await markTokensHealthy(acc.id);
+  const crew = await db.select().from(character).where(eq(character.accountId, acc.id));
+  await placeCrew(
+    crew.map((c) => c.id),
+    30000142,
+    "Home Astrahus",
+  );
+  // Same text as main, but main is offline and the alt is not — `locationKey`
+  // folds `offline` into the identity specifically so this pair does not
+  // collapse to "the same place" (page.tsx's own comment on the function).
+  await db
+    .update(character)
+    .set({ locationOnline: false })
+    .where(eq(character.id, acc.mainCharacterId!));
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.goto("/account");
+
+  await expect(manifest(page).locator(".char__location")).toHaveCount(2);
+});
+
+test("with no main character, no alt's location is elided", async ({ page, context }) => {
+  const acc = await seedMember(db, {
+    name: "Main Pilot",
+    tier: "alumni",
+    alts: ["Alt Pilot"],
+    mainless: true,
+  });
+  await markTokensHealthy(acc.id);
+  const crew = await db.select().from(character).where(eq(character.accountId, acc.id));
+  await placeCrew(
+    crew.map((c) => c.id),
+    30000142,
+    "Home Astrahus",
+  );
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.goto("/account");
+
+  // `mainCharacter` is undefined with no main set, so `mainLocationKey` is
+  // null and `elideLocation`'s `mainLocationKey !== null` guard keeps every
+  // row's own location line — there is no main to compare against.
+  await expect(manifest(page).locator(".char__location")).toHaveCount(2);
+});
+
+test("main with no location reading elides nothing", async ({ page, context }) => {
+  const acc = await seedMember(db, {
+    name: "Main Pilot",
+    tier: "alumni",
+    alts: ["Alt Pilot"],
+  });
+  await markTokensHealthy(acc.id);
+  const crew = await db.select().from(character).where(eq(character.accountId, acc.id));
+  // Only the alt is placed; main's `location` stays `{ kind: "none" }`, so
+  // `locationKey(mainCharacter.location)` is null and `mainLocationKey !==
+  // null` keeps the alt's own line rather than comparing it to nothing.
+  const alt = crew.find((c) => c.id !== acc.mainCharacterId)!;
+  await placeCrew([alt.id], 30000142, "Home Astrahus");
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.goto("/account");
+
+  await expect(manifest(page).locator(".char__location")).toHaveCount(1);
+});
+
+test("a single-character account's own location is never elided", async ({
+  page,
+  context,
+}) => {
+  const acc = await seedMember(db, { name: "Solo Pilot", tier: "member" });
+  await markTokensHealthy(acc.id);
+  const [solo] = await db.select().from(character).where(eq(character.accountId, acc.id));
+  await db.insert(contactSyncState).values({ characterId: solo.id, lastResult: "ok" });
+  await placeCrew([solo.id], 30000142, "Home Astrahus");
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.goto("/account");
+
+  // Main is gated out of its own elision (`!c.isMain` in `elideLocation`) —
+  // a lone character is always main, so this is the same no-op as the
+  // multi-character seeds above, at the smallest possible crew.
+  await expect(manifest(page).locator(".char__location")).toHaveCount(1);
 });
