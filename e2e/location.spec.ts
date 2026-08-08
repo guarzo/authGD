@@ -66,7 +66,13 @@ test("the compressed manifest keeps four columns and an actionable re-authorize"
   await expect(page.getByText(/locations .* ago/)).toHaveCount(1);
 });
 
-test("a character with no location reading renders no location line", async ({
+// Was "renders no location line". The redesign's P0 replaced that blank with
+// an explicit badge, because a blank was also what an elided "with main" row
+// rendered — two states, one pixel-identical output. `.char__location` is
+// still absent (the badge is a `.st`, not that class), but the row now says
+// something, and asserting only the absence would let the badge be deleted
+// without failing anything.
+test("a character with no location reading says 'not reported'", async ({
   page,
   context,
 }) => {
@@ -75,15 +81,19 @@ test("a character with no location reading renders no location line", async ({
   await page.goto("/account");
   await expect(page.getByText("Unread Pilot")).toBeVisible();
   await expect(page.locator(".char__location")).toHaveCount(0);
+  await expect(manifest(page).getByText("not reported")).toHaveCount(1);
 });
 
-// Task 3 moved "last seen " out of the visible text and into a
-// `.visually-hidden` span (character-location.tsx:29), gated on `offline`
-// alone — a deliberate trade where a screen reader gets more words than a
-// sighted user sees. Nothing exercised the offline branch before this test:
-// every other seed in this file hardcodes `locationOnline: true`, so
-// deleting the span failed zero tests.
-test("an offline character's location gets hidden 'last seen' text; a merely stale one does not", async ({
+// Task 3 put "last seen " in a `.visually-hidden` span, gated on `offline`
+// alone — a deliberate trade where a screen reader got more words than a
+// sighted user saw. The manifest redesign reverses that trade under R4
+// (information may not live only in the assistive-tech channel): both facts
+// are now visible text, "last seen " ahead of an offline reading and a
+// trailing "(stale)" on a stale-but-online one, with `.dim` still shared
+// between them because "true, but not now" is the one thing they have in
+// common. Nothing else in this file exercises the offline branch — every
+// other seed hardcodes `locationOnline: true`.
+test("an offline location says 'last seen'; a merely stale one says '(stale)'", async ({
   page,
   context,
 }) => {
@@ -142,11 +152,18 @@ test("an offline character's location gets hidden 'last seen' text; a merely sta
     .filter({ hasText: "Stale Pilot" })
     .locator(".char__location");
 
-  // Asserted on the hidden span itself, not the cell's aggregate text, so a
-  // deletion of the span (rather than of its content) is what this catches.
-  await expect(offlineLocation.locator(".visually-hidden")).toHaveText("last seen ");
+  // Asserted as visible text, and asserted that no `.visually-hidden` span
+  // survives anywhere in the line: the R4 fix is only done if the fact moved
+  // channels rather than being duplicated into both.
+  await expect(offlineLocation).toContainText("last seen ");
+  await expect(offlineLocation.locator(".visually-hidden")).toHaveCount(0);
+  await expect(offlineLocation).not.toContainText("(stale)");
   await expect(offlineLocation).toHaveClass(/\bdim\b/);
 
+  // "last seen" would assert this character has moved on; it has not, only the
+  // timestamp is old. So the stale-but-online line keeps its own word.
+  await expect(staleLocation).toContainText("(stale)");
+  await expect(staleLocation).not.toContainText("last seen");
   await expect(staleLocation.locator(".visually-hidden")).toHaveCount(0);
   await expect(staleLocation).toHaveClass(/\bdim\b/);
 });

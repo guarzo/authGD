@@ -1159,6 +1159,19 @@ test("a long structure name does not blow out the forced horizontal scroll at 32
   // Not zero, and it cannot be: the floor is a 64px portrait plus a 196px name
   // cell plus a bare unlink cell at ~121px = 381px against a 286px region. No
   // arrangement that keeps a portrait, a name and an unlink fits 320px.
+  //
+  // Re-measured after P0 (the `never`/`unresolved` location states rendering
+  // "not reported" instead of nothing): still 134px. This seed's main is
+  // placed at its own structure and renders a `line`, so nothing in this gate
+  // touches the new states — 170 stays the right tripwire.
+  //
+  // P3: `make main` restored over the bare `main` label this comment's
+  // history describes — measured at 134px with the longer label too, an
+  // exact match, not just "under threshold." The +39px this gate once
+  // charged it belonged to a permanent MAIN column competing for width in
+  // every row; the label now lives inside a per-row disclosure panel that
+  // renders `hidden` and contributes nothing to layout until a member opens
+  // it, so a closed-state gate like this one cannot see its length at all.
   expect(pinned.maxScrollLeft).toBeLessThan(170);
 });
 
@@ -1293,6 +1306,10 @@ test("a faulted character does not blow out the forced horizontal scroll at 320p
   // single swipe, where every prior measurement took more than one. 270
   // brackets today's number without pinning it exactly, so a small copy or
   // font change does not fail this line for reasons unrelated to layout.
+  //
+  // Re-measured after P0: still 257px. This seed's own characters all render
+  // a `line` (`seedNominalCrew` places every one of them), so the new
+  // `never`/`unresolved` states never enter this gate — 270 stays correct.
   expect(pinned.maxScrollLeft).toBeLessThan(270);
 });
 
@@ -1514,6 +1531,13 @@ test("arming the Discord unlink does not move it out from under the pointer", as
 // run-to-run variance observed. All ten clear the fold at 1440x900 now — the
 // nine one-line alt rows freed by elision (only main keeps a second, location
 // line) are what buys that back, not a wider table.
+//
+// Re-measured after P0 ("not reported" replacing the blank for never/
+// unresolved locations): the owner ruled against also adding a conditional
+// explanatory note above the table (it cost a row at two of three viewports
+// on this exact, ordinary fixture — the wrong currency to spend given this
+// suite is about density). With the note gone, the counts return to their
+// pre-P0 values: 10 / 9 / 7.
 const FOLD_TARGETS = [
   { width: 1440, height: 900, expected: 10 },
   { width: 1280, height: 800, expected: 9 },
@@ -1750,6 +1774,11 @@ test("a stalled character gets a sub-row too", async ({ page, context }) => {
 // measured count per viewport after 3.2/3.3/3.4 (per-row disclosure plus
 // location elision moved every unlocated-relative-to-main alt back to a
 // one-line row, more than paying back the two faulted rows' sub-rows).
+//
+// Re-measured after P0, for the same reason given on `FOLD_TARGETS` above:
+// the note was dropped rather than kept, so its cost doesn't stack with the
+// two faulted rows' sub-rows here either. Counts return to their pre-P0
+// values: 9 / 7 / 6.
 const FAULTED_FOLD_TARGETS = [
   { width: 1440, height: 900, expected: 9 },
   { width: 1280, height: 800, expected: 7 },
@@ -1937,6 +1966,40 @@ test("an alt online where main is offline at the same place is not elided", asyn
   await expect(manifest(page).locator(".char__location")).toHaveCount(2);
 });
 
+test("an alt whose matching reading is stale is not elided", async ({
+  page,
+  context,
+}) => {
+  const acc = await seedMember(db, {
+    name: "Main Pilot",
+    tier: "alumni",
+    alts: ["Alt Pilot"],
+  });
+  await markTokensHealthy(acc.id);
+  const crew = await db.select().from(character).where(eq(character.accountId, acc.id));
+  await placeCrew(
+    crew.map((c) => c.id),
+    30000142,
+    "Home Astrahus",
+  );
+  // Identical text and `offline` to the main, so `locationKey` matches — but
+  // this alt's reading is an hour older than the manifest's newest, which is
+  // four cadence intervals (LOCATION_CADENCE_MS is 15 minutes), so
+  // `locationFreshness` puts it in `staleIds`. The blank means "with main, as
+  // of the same reading everyone else got"; this row cannot claim that, so it
+  // keeps its own line and says `(stale)` on it.
+  const altId = crew.find((c) => c.id !== acc.mainCharacterId)!.id;
+  await db
+    .update(character)
+    .set({ locationCheckedAt: new Date(Date.now() - 60 * 60 * 1000) })
+    .where(eq(character.id, altId));
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.goto("/account");
+
+  await expect(manifest(page).locator(".char__location")).toHaveCount(2);
+  await expect(manifest(page).locator(".char__location").nth(1)).toContainText("(stale)");
+});
+
 test("with no main character, no alt's location is elided", async ({ page, context }) => {
   const acc = await seedMember(db, {
     name: "Main Pilot",
@@ -1968,7 +2031,7 @@ test("main with no location reading elides nothing", async ({ page, context }) =
   });
   await markTokensHealthy(acc.id);
   const crew = await db.select().from(character).where(eq(character.accountId, acc.id));
-  // Only the alt is placed; main's `location` stays `{ kind: "none" }`, so
+  // Only the alt is placed; main's `location` stays `{ kind: "never" }`, so
   // `locationKey(mainCharacter.location)` is null and `mainLocationKey !==
   // null` keeps the alt's own line rather than comparing it to nothing.
   const alt = crew.find((c) => c.id !== acc.mainCharacterId)!;
@@ -1995,4 +2058,44 @@ test("a single-character account's own location is never elided", async ({
   // a lone character is always main, so this is the same no-op as the
   // multi-character seeds above, at the smallest possible crew.
   await expect(manifest(page).locator(".char__location")).toHaveCount(1);
+});
+
+// P0, "make the lying blank explicit, keep the understood one": a character
+// with `{ kind: "never" }` used to render nothing at all under that row's
+// name, indistinguishable from an elided alt. It now renders a visible "not
+// reported" state instead — the blank had two meanings and only one of them
+// was "with main".
+test("a character who has never reported a location says so, one line", async ({
+  page,
+  context,
+}) => {
+  const acc = await seedMember(db, {
+    name: "Main Pilot",
+    tier: "alumni",
+    alts: ["Never Reported"],
+  });
+  await markTokensHealthy(acc.id);
+  const crew = await db.select().from(character).where(eq(character.accountId, acc.id));
+  // Only main is placed; the alt's `locationCheckedAt` stays null, which is
+  // exactly `{ kind: "never" }` (formatLocation, src/core/location.ts) — no
+  // scope revoked, no token dead, just a read that has not happened.
+  const main = crew.find((c) => c.id === acc.mainCharacterId)!;
+  await placeCrew([main.id], 30000142, "Home Astrahus");
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.goto("/account");
+
+  const altRow = manifest(page)
+    .locator("tbody tr:not(.drawer-row)")
+    .filter({ hasText: "Never Reported" });
+  await expect(altRow.locator(".st--off", { hasText: "not reported" })).toBeVisible();
+  // Not a second location line: the state renders in place of one, not
+  // alongside it.
+  await expect(altRow.locator(".char__location")).toHaveCount(0);
+
+  // The one-line budget this state is held to: it must cost no more height
+  // than the location line it replaces, which the nine one-line alt rows in
+  // "a located manifest row stays inside the 63px density budget" above
+  // measure at 49px.
+  const heights = await rowHeights(page, `${MANIFEST} tbody tr:not(.drawer-row)`);
+  expect(heights[1]).toBeLessThanOrEqual(65);
 });

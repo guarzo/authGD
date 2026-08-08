@@ -110,7 +110,7 @@ type LocationColumns = {
 /** What a manifest builder attaches to each character row. */
 type LocationCell = { location: LocationDisplay; locationStale: boolean };
 
-const NO_LOCATION: LocationCell = { location: { kind: "none" }, locationStale: false };
+const NO_LOCATION: LocationCell = { location: { kind: "never" }, locationStale: false };
 
 /**
  * Every system, station and structure id a set of characters is sitting at, in
@@ -132,15 +132,34 @@ function locationIds(chars: LocationColumns[]): number[] {
 /**
  * Formats one manifest's worth of locations and derives its single "as of".
  *
- * `asOf` is the OLDEST reading among the characters that actually render a
- * line, which is deliberately unlike `mapObservedAt`
- * (src/app/admin/accounts/page.tsx:540), where the same shape reduces
- * newest-wins. That is safe there and not here: the ACL observation is a single
- * job run, so every character on it shares one timestamp and the reduction is a
- * no-op. Location has a per-character clock — a failed read deliberately does
- * not advance that character's `locationCheckedAt` (src/jobs/location.ts) — so
- * newest-wins would print a freshness that a visible row does not have.
- * Understating freshness is the safe direction; overstating it is not.
+ * `asOf` is the OLDEST reading among the characters that HAVE a reading —
+ * `checkedAt !== null` — not among the ones that render a `line`. Those used
+ * to be the same set, but `LocationDisplay` now also has `unresolved`
+ * (checkedAt set, no system) alongside `never` (no checkedAt at all), and
+ * pre-filtering to `kind === "line"` would have started excluding that
+ * `unresolved` reading from the freshness calculation even though a read
+ * genuinely happened for it. `locationFreshness` already does the right
+ * filtering on `checkedAt` alone, so this passes every row and lets it decide
+ * — a second, narrower filter here couldn't do anything but get that
+ * decision wrong for a kind other than `line`.
+ *
+ * This is deliberately unlike `mapObservedAt` (src/app/admin/accounts/page.tsx,
+ * the `mapObservedAt` reduce at the top of `AccountRow`), where the same shape
+ * reduces newest-wins. That is safe there and not here:
+ * the ACL observation is a single job run, so every character on it shares one
+ * timestamp and the reduction is a no-op. Location has a per-character clock —
+ * a failed read deliberately does not advance that character's
+ * `locationCheckedAt` (src/jobs/location.ts) — so newest-wins would print a
+ * freshness that a visible row does not have. Understating freshness is the
+ * safe direction; overstating it is not.
+ *
+ * A `never`-read character (no `checkedAt` at all) still cannot contribute a
+ * timestamp to `asOf` — there is nothing to take the oldest of — and that is
+ * not the overstatement the paragraph above warns against: `LocationDisplay`
+ * now carries `{ kind: "never" }` for that row and the view renders that fact
+ * plainly instead of a blank, so the single "as of" line is read alongside a
+ * per-row disclosure rather than in place of one, exactly as `staleIds`
+ * already does for a lagging-but-present reading.
  */
 function buildManifestLocations(
   chars: LocationColumns[],
@@ -167,9 +186,7 @@ function buildManifestLocations(
       ),
     };
   });
-  const { asOf, staleIds } = locationFreshness(
-    displays.filter((d) => d.location.kind === "line"),
-  );
+  const { asOf, staleIds } = locationFreshness(displays);
   const stale = new Set(staleIds);
   const byId = new Map<number, LocationCell>(
     displays.map((d) => [d.id, { location: d.location, locationStale: stale.has(d.id) }]),
@@ -222,18 +239,21 @@ export interface AccountView {
      *  case; it is recorded for operators (src/db/schema.ts). */
     contactSyncDetail: string | null;
     onMapAcl: boolean;
-    /** Formatted location line, or `{ kind: "none" }` when this character has
-     *  never been read — a missing scope, a dead token, or a job that has not
-     *  reached them yet all land here, and the row simply carries no line. */
+    /** Formatted location, or `{ kind: "never" }` when this character has
+     *  never had a completed read — a missing scope, a dead token, or a job
+     *  that has not reached them yet all land here. See `LocationDisplay` in
+     *  src/core/location.ts for the full set of states and why `never` is
+     *  kept apart from `unresolved`. */
     location: LocationDisplay;
     /** This character's reading lags the manifest's newest by more than one
      *  cadence interval, so the single "as of" label understates it. */
     locationStale: boolean;
   }>;
   pushes: Record<PushKind, PushStatus>;
-  /** Oldest `locationCheckedAt` among characters that render a line; null when
-   *  none do. See buildManifestLocations for why this is the oldest and not the
-   *  newest. */
+  /** Oldest `locationCheckedAt` among characters that have one at all — keyed
+   *  on the raw column, not on what a row renders. Null when no character has
+   *  ever been read. See buildManifestLocations for why this is the oldest and
+   *  not the newest. */
   locationAsOf: Date | null;
 }
 

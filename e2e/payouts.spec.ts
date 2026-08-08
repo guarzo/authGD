@@ -1991,6 +1991,15 @@ test("deleting an operation with a paid participant is refused on the page", asy
   await page.getByRole("button", { name: "Add flat pool" }).click();
   await page.getByLabel("Paste (names separated by /)").fill("Brain Tartare");
   await page.getByRole("button", { name: "Set roster" }).click();
+  // The roster row is the client-side signal that "Set roster" landed, and
+  // pressing Finalize without it is a measured 7/86 failure on this machine
+  // (docs/e2e-flake-triage.md). Not a lost submit: the arm press and the
+  // confirm press both land, but the revalidation re-renders `ConfirmGroup`
+  // between Playwright resolving "confirm finalize" and the click dispatching,
+  // so the control is back at rest and the second press re-arms it instead of
+  // firing. The operation stays draft with no notice, and "mark paid" — which
+  // only exists once finalized — never appears.
+  await expect(page.getByText("Brain Tartare")).toBeVisible();
 
   await page.getByRole("button", { name: "Finalize" }).click();
   await page.getByRole("button", { name: /^confirm finalize/ }).click();
