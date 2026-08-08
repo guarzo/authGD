@@ -123,9 +123,31 @@ describe("listPayoutOperations — viewerState (finding 2.1)", () => {
     expect(summary).not.toHaveProperty("viewerState");
   });
 
-  it("reads absent when the viewer has no participant row on the operation", async () => {
+  it("reads unresolved when the viewer has no row but a roster name resolved to nobody", async () => {
     const viewer = await seedAccount(ctx.db, { tier: "member", status: "active" });
+    // `roster()` seeds `accountId: null`, the same shape `resolveRosterNames`
+    // produces for a pasted name matching no character. The viewer may BE one
+    // of those names under an unlinked alt, so absence isn't provable here.
     const { operationId } = await seedOperation({ totalValue: "100.00", names: ["A"] });
+    const [summary] = (
+      await listPayoutOperations(ctx.db, { viewerAccountId: viewer.id })
+    ).operations.filter((o) => o.id === operationId);
+    expect(summary.viewerState).toBe("unresolved");
+  });
+
+  it("reads absent only when every roster name resolved and none is the viewer", async () => {
+    const viewer = await seedAccount(ctx.db, { tier: "member", status: "active" });
+    const other = await seedAccount(ctx.db, { tier: "member", status: "active" });
+    const { operationId, byName } = await seedOperation({
+      totalValue: "100.00",
+      names: ["A"],
+    });
+    // Resolve the whole roster to somebody who isn't the viewer: now the
+    // negative is provable, and the page is entitled to state it.
+    await ctx.db
+      .update(payoutParticipant)
+      .set({ accountId: other.id })
+      .where(eq(payoutParticipant.id, byName.get("A")!.id));
     const [summary] = (
       await listPayoutOperations(ctx.db, { viewerAccountId: viewer.id })
     ).operations.filter((o) => o.id === operationId);

@@ -34,24 +34,38 @@ function one(v: string | string[] | undefined): string | undefined {
 
 /** Reads the status filter, discarding anything that isn't one of the two
  *  values the column itself renders — a hand-edited `?status=whatever` reads
- *  as "no filter" rather than reaching Postgres. */
+ *  as "no filter" rather than reaching Postgres. Trimmed for the same reason
+ *  `q` is: a copied link carrying `?status=draft%20` would otherwise fail both
+ *  comparisons and silently render the ENTIRE log, labelled "N total", to a
+ *  reader who asked for drafts. */
 function statusParam(
   v: string | string[] | undefined,
 ): "draft" | "finalized" | undefined {
-  const s = one(v);
+  const s = one(v)?.trim();
   return s === "draft" || s === "finalized" ? s : undefined;
 }
 
-/** The active `q`/`status` filters as a query string, `before` always absent —
- *  the pattern `admin/audit/page.tsx`'s `filterHrefBase` uses for the same
- *  reason: a cursor taken from a wider (or differently filtered) query pages
- *  into the middle of this one. Shared by the pager, which adds its own
- *  `before` back on top, and by the empty-state exit link, which must not. */
-function filterHrefBase(params: { q?: string; status?: string }): string {
+/** The active `q`/`status` filters, `before` always absent — the pattern
+ *  `admin/audit/page.tsx`'s `filterHrefBase` uses for the same reason: a
+ *  cursor taken from a wider (or differently filtered) query pages into the
+ *  middle of this one.
+ *
+ *  The single source for both consumers below (`filterHrefBase` and the
+ *  pager's `olderParams`), so the serialization exists once. Two independent
+ *  copies is exactly the drift this is meant to prevent. */
+function filterParams(params: { q?: string; status?: string }): URLSearchParams {
   const q = new URLSearchParams();
   if (params.q) q.set("q", params.q);
   if (params.status) q.set("status", params.status);
-  return q.toString() ? `/payouts?${q.toString()}` : "/payouts";
+  return q;
+}
+
+/** `filterParams` as an href. Used by the `Latest` link, which carries the
+ *  filter forward and drops only the cursor, and by the empty-state exit
+ *  links, which must not carry a `before` at all. */
+function filterHrefBase(params: { q?: string; status?: string }): string {
+  const q = filterParams(params).toString();
+  return q ? `/payouts?${q}` : "/payouts";
 }
 
 export default async function PayoutsPage({
@@ -119,12 +133,10 @@ export default async function PayoutsPage({
   const noMatches = !pastEnd && filtered && ops.length === 0;
   const hrefBase = filterHrefBase(params);
 
-  // The pager's own params: the active filter, plus `before` on the Older
-  // link only — `Latest` reuses `hrefBase` unchanged, so it carries the
-  // filter forward and drops only the cursor.
-  const olderParams = new URLSearchParams();
-  if (params.q) olderParams.set("q", params.q);
-  if (params.status) olderParams.set("status", params.status);
+  // The pager's own params: the same filter serialization every other link
+  // uses, plus `before` on the Older link only — `Latest` reuses `hrefBase`
+  // unchanged, so it carries the filter forward and drops only the cursor.
+  const olderParams = filterParams(params);
   if (nextCursor) olderParams.set("before", encodePayoutCursor(nextCursor));
 
   return (
@@ -307,10 +319,12 @@ export default async function PayoutsPage({
                       grade is reserved for a finalized roster still unpaid).
                       `excluded` (roster explicitly excludes this viewer) reuses
                       the tone the participant table itself uses for the same
-                      state. `absent` (not on this roster at all) follows the
-                      dash idiom above: `aria-hidden` dash plus visually-hidden
+                      state. `absent` and `unresolved` both follow the dash
+                      idiom above: `aria-hidden` dash plus visually-hidden
                       words, never `aria-label` on a bare span — silently
-                      dropped there, same as the Total cell's comment explains. */}
+                      dropped there, same as the Total cell's comment explains.
+                      Their hidden text differs because the claim differs, and
+                      only one of the two is provable — see `ViewerPayoutState`. */}
                   <td>
                     {op.viewerState === "paid" && <Status tone="ok">paid</Status>}
                     {op.viewerState === "unpaid" &&
@@ -326,6 +340,26 @@ export default async function PayoutsPage({
                       <span className="dim mono">
                         <span aria-hidden="true">&mdash;</span>
                         <span className="visually-hidden">not on this roster</span>
+                      </span>
+                    )}
+                    {op.viewerState === "unresolved" && (
+                      <span className="dim mono">
+                        <span aria-hidden="true">&mdash;</span>
+                        <span className="visually-hidden">
+                          roster has unresolved names
+                        </span>
+                      </span>
+                    )}
+                    {/* Unreachable while `PayoutAccess.accountId` is a
+                        non-nullable string, so this page always asks for a
+                        viewer. Kept because the alternative to a fallthrough
+                        is a blank cell under a header that promises an
+                        answer — a silent one, with no type error to catch it
+                        if the field ever becomes genuinely optional here. */}
+                    {op.viewerState === undefined && (
+                      <span className="dim mono">
+                        <span aria-hidden="true">&mdash;</span>
+                        <span className="visually-hidden">not available</span>
                       </span>
                     )}
                   </td>

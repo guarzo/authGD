@@ -34,13 +34,16 @@ export type PayoutOperationSummary = {
    * ("paid"/"unpaid") carries no such commitment and is honest at any status,
    * which is why this field has no ISK figure beside it.
    *
-   * Inherits the same known limitation as `listAccountPayouts`: a participant
-   * whose name never resolved has `accountId = NULL` and cannot be matched to
-   * any viewer (see the KNOWN LIMITATION paragraph on `listAccountPayouts`
-   * below — named rather than cited by line, since the line moved once
-   * already).
+   * A participant whose name never resolved has `accountId = NULL` and cannot
+   * be matched to any viewer (the KNOWN LIMITATION paragraph on
+   * `listAccountPayouts` below — named rather than cited by line, since the
+   * line moved once already). That limitation is REPORTED here rather than
+   * inherited silently: `listAccountPayouts` omits an unmatched row, and an
+   * omission claims nothing, but this field speaks on every operation, so the
+   * same NULL would otherwise turn into a false sentence. Hence `unresolved`
+   * as a state distinct from `absent` — see `ViewerPayoutState`.
    */
-  viewerState?: "paid" | "unpaid" | "excluded" | "absent";
+  viewerState?: ViewerPayoutState;
 };
 
 export const PAYOUTS_PAGE_SIZE = 50;
@@ -159,11 +162,13 @@ export async function listPayoutOperations(
   // One row past the limit: its presence is the "there is more" signal, and
   // the row itself is trimmed before anything downstream sees it.
   //
-  // Deliberately unindexed: `docs/design-walkthrough.md` scopes this page at
-  // roughly two hundred rows for this session, a migration is out of scope,
-  // and the existing `(occurredAt desc, id desc)` ordering above is already
-  // an unindexed sequential scan at this size. Filtering doesn't change that
-  // budget.
+  // Deliberately unindexed: `docs/design-walkthrough.md` calls the missing
+  // filter "invisible at one row; structural at two hundred" — a statement
+  // about when the UX problem bites, not a stated row budget, so read it as
+  // the order of magnitude this page is being designed against rather than a
+  // ceiling. A migration is out of scope, and the existing `(occurredAt desc,
+  // id desc)` ordering above is already an unindexed sequential scan at that
+  // size. Filtering doesn't change that.
   const page = await dbx
     .select({
       id: payoutOperation.id,
@@ -233,20 +238,22 @@ export async function listPayoutOperations(
     // been paid" — an all-excluded roster reading as 0/0 rather than 0/N.
     const owed = (participantsByOp.get(op.id) ?? []).filter((p) => !p.excluded);
 
-    // Same collapse rule account-payouts.tsx already relies on for the /account
-    // history table (one row per operation, even though an account can hold
-    // more than one participant row there — two of the viewer's characters in
-    // one fleet). `viewerAccountId` is undefined for every caller that didn't
-    // ask for it, in which case `viewerState` stays undefined and the key is
-    // dropped from the returned object entirely, below.
-    let viewerState: PayoutOperationSummary["viewerState"];
+    // One participant row per account per operation is a SERVICE-enforced
+    // invariant, not a schema one: `resolveRosterNames` collapses an account's
+    // alts into a single entry keyed by accountId, and `addParticipant` merges
+    // a second character into the existing `twin` row. There is no unique
+    // constraint on (operation_id, account_id) in schema.ts to back that up,
+    // so the filter/every pair below stays correct if a row ever slips past
+    // the service layer, rather than assuming a shape the database permits.
+    //
+    // `viewerAccountId` is undefined for every caller that didn't ask for it,
+    // in which case `viewerState` stays undefined and the key is dropped from
+    // the returned object entirely, below.
+    let viewerState: ViewerPayoutState | undefined;
     if (opts.viewerAccountId) {
-      const viewerRows = (participantsByOp.get(op.id) ?? []).filter(
-        (p) => p.accountId === opts.viewerAccountId,
-      );
-      if (viewerRows.length === 0) {
-        viewerState = "absent";
-      } else {
+      const roster = participantsByOp.get(op.id) ?? [];
+      const viewerRows = roster.filter((p) => p.accountId === opts.viewerAccountId);
+      if (viewerRows.length > 0) {
         const nonExcluded = viewerRows.filter((p) => !p.excluded);
         viewerState =
           nonExcluded.length === 0
@@ -254,6 +261,11 @@ export async function listPayoutOperations(
             : nonExcluded.every((p) => p.paidAmount !== null)
               ? "paid"
               : "unpaid";
+      } else {
+        // Absence is only a fact when every name on the roster resolved. See
+        // `ViewerPayoutState` for why an unresolved name has to downgrade the
+        // claim rather than read as "not on this roster".
+        viewerState = roster.some((p) => p.accountId === null) ? "unresolved" : "absent";
       }
     }
 
@@ -284,6 +296,26 @@ export type PayoutPoolView = typeof lootPool.$inferSelect & {
 };
 
 export type ParticipantPaymentState = "excluded" | "unpaid" | "paid";
+
+/**
+ * A participant's payment state, plus the two cases that exist only once you
+ * ask about a specific VIEWER rather than about a row.
+ *
+ * `absent` and `unresolved` are both "no row here is yours", split because
+ * only one of them is provable. `payoutParticipant.accountId` is nullable and
+ * NULL is a routine, designed outcome — `resolveRosterNames` emits an entry
+ * with `accountId: null` for any pasted name that matched no character, and
+ * `/payouts/[id]` has a whole `?unresolved=` notice for them. So:
+ *
+ * - `absent` — every name on this roster resolved to an account, and none of
+ *   them is the viewer. A true negative, and safe to state as one.
+ * - `unresolved` — this roster carries at least one name that resolved to
+ *   nobody. The viewer may well be one of those names (an alt they hadn't
+ *   linked when the fleet was pasted; `accountId` is frozen at paste time and
+ *   never backfilled), so absence cannot be claimed. The honest answer is
+ *   "this list can't tell you", not "you weren't there".
+ */
+export type ViewerPayoutState = ParticipantPaymentState | "absent" | "unresolved";
 
 export type PayoutPaymentView = typeof payoutPayment.$inferSelect & {
   /** The operator who recorded this event, resolved to their main character's

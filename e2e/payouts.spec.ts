@@ -3366,20 +3366,28 @@ test("the frozen-roster paragraph lives beside the roster it explains, and the l
 });
 
 /*
- * Walkthrough finding 2.1: "/payouts cannot answer 'was I paid?'". Four
- * operations, one for each `viewerState`, each seeded with a distinct
- * `occurredAt` so ordering is deterministic and each row is found by name.
- * The viewer's participant row is tied to their account by `accountId`
- * (`payout-view.ts`'s viewerState collapse matches on that column, not on
- * display name), which is what makes "paid"/"unpaid"/"excluded" resolvable at
- * all — an unresolved paste can never produce anything but "absent".
+ * Walkthrough finding 2.1: "/payouts cannot answer 'was I paid?'". One
+ * operation per `viewerState`, each seeded with a distinct `occurredAt` so
+ * ordering is deterministic and each row is found by name. The viewer's
+ * participant row is tied to their account by `accountId` (`payout-view.ts`'s
+ * viewerState collapse matches on that column, not on display name), which is
+ * what makes "paid"/"unpaid"/"excluded" resolvable at all.
+ *
+ * "absent" and "unresolved" differ only in whether the OTHER rows resolved:
+ * a roster carrying a null `accountId` cannot prove the viewer wasn't one of
+ * those names, so it must not claim they weren't there.
  */
-test("the Yours column renders paid, unpaid, excluded and absent distinctly", async ({
+test("the Yours column renders paid, unpaid, excluded, absent and unresolved distinctly", async ({
   page,
   context,
 }) => {
   const viewer = await seedMember(db, {
     name: "Viewer Pilot",
+    tier: "member",
+    status: "active",
+  });
+  const other = await seedMember(db, {
+    name: "Other Pilot",
     tier: "member",
     status: "active",
   });
@@ -3389,8 +3397,10 @@ test("the Yours column renders paid, unpaid, excluded and absent distinctly", as
     name: string;
     occurredAt: Date;
     status: "draft" | "finalized";
-    // undefined = viewer has no row at all ("absent")
+    // undefined = viewer has no row; `resolved` then decides whether the
+    // rest of the roster resolved, i.e. "absent" vs "unresolved".
     viewer?: { excluded?: boolean; paid?: boolean };
+    resolved?: boolean;
   }): Promise<void> {
     const [op] = await db
       .insert(payoutOperation)
@@ -3418,10 +3428,11 @@ test("the Yours column renders paid, unpaid, excluded and absent distinctly", as
         paidAmount: opts.viewer.paid ? "100.00" : null,
       });
     } else {
-      // Someone else's roster — the viewer genuinely isn't on it.
+      // Someone else's roster. Resolved to a real account, the viewer's
+      // absence is a fact; left null it is only an unmatched paste.
       await db.insert(payoutParticipant).values({
         operationId: op.id,
-        accountId: null,
+        accountId: opts.resolved ? other.id : null,
         displayName: "Someone Else",
         shares: "1",
         amount: "100.00",
@@ -3457,6 +3468,13 @@ test("the Yours column renders paid, unpaid, excluded and absent distinctly", as
     name: "Absent op",
     occurredAt: new Date("2026-08-01"),
     status: "finalized",
+    resolved: true,
+  });
+  await seedOp({
+    name: "Unresolved op",
+    occurredAt: new Date("2026-07-31"),
+    status: "finalized",
+    resolved: false,
   });
 
   await page.goto("/payouts");
@@ -3490,6 +3508,15 @@ test("the Yours column renders paid, unpaid, excluded and absent distinctly", as
   const absentCell = yoursCellFor("Absent op");
   await expect(absentCell.getByText("not on this roster")).toBeAttached();
   await expect(absentCell.locator(".st")).toHaveCount(0);
+
+  // unresolved: the same dash, a different sentence. The roster carries a name
+  // that matched no character, so the viewer may be on it under an unlinked
+  // alt — stating "not on this roster" here would be a false claim to exactly
+  // the reader this column was added for.
+  const unresolvedCell = yoursCellFor("Unresolved op");
+  await expect(unresolvedCell.getByText("roster has unresolved names")).toBeAttached();
+  await expect(unresolvedCell.getByText("not on this roster")).toHaveCount(0);
+  await expect(unresolvedCell.locator(".st")).toHaveCount(0);
 
   // No ISK figure in the Yours column — the read model deliberately carries
   // no amount (payout-view.ts's viewerState docblock).
