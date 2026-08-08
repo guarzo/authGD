@@ -3718,26 +3718,9 @@ h3.rule-head__label {
   color: var(--ink-faint);
 }
 
-/* A run of the same notes placed *after* the table instead of before it. The
-   caption position needs no top margin, so a .table-note following a table's
-   last row butts straight against the border; this restores the gap without
-   changing the caption case. The last note's own bottom margin is dropped so
-   the group spaces against what follows it, not doubly.
-
-   One consumer left: the "make main" consequence notes. The remediation prose
-   that was the other moved into a spanning sub-row inside the table. */
-.table-notes {
-  margin-top: var(--s-4);
-}
-
-.table-notes .table-note:last-child {
-  margin-bottom: 0;
-}
-
-/* The container rule above only reaches a note inside `.table-notes`, and the
-   drawer row's note is not in one. A `<td>` does not collapse a child's margin
-   out, so without this the drawer row would carry `--s-4` of dead space under
-   prose whose whole point is a minimal row height. */
+/* A `<td>` does not collapse a child's margin out, so without this the drawer
+   row would carry `--s-4` of dead space under prose whose whole point is a
+   minimal row height. */
 .drawer-row .table-note {
   margin-bottom: 0;
 }
