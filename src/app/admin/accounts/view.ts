@@ -96,13 +96,13 @@ export function matchesAccountSearch(
 }
 
 // `ActionOutcome` — the result `confirm-group.tsx`'s `ConfirmingForm` threads
-// through `useActionState` for the four drawer-scoped actions below — moved to
+// through `useActionState` for the five drawer-scoped actions below — moved to
 // `@/app/_components/confirm-group` once `/admin/sync` needed the identical
 // shape for its own job-drawer action; imported from there by `actions.ts`.
 
 /** The nine outcomes `/admin/accounts`'s mutating actions confirm with (all
  *  but `saveNoteAction`, whose own confirmation lives in `NoteForm`) — the
- *  four cell-level actions off the `?done=` query string, the four drawer
+ *  three cell-level actions off the `?done=` query string, the five drawer
  *  actions through `useActionState`, per this file's head docblock. A code
  *  outside this set (hand-typed, or from a build that has since dropped
  *  one) renders no confirmation at all — see `accountsConfirmation`'s
