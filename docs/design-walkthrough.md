@@ -49,9 +49,10 @@ in-row. `Disclosure as="row"` renders a literal second `<tr>`, so the
 The 28px grade exists for *density on rows that each carry a control set*. A
 one-at-a-time full-width panel has no density problem. The drawer takes 36px.
 
-This is precedent, not invention: `payouts/[id]/notes-form.tsx:90-95` already
-reasons exactly this way for a panel field, and takes the 36px grade on those
-grounds.
+This is precedent, not invention: the "Full 36px" comment above the `Submit` in
+`payouts/[id]/notes-form.tsx` already reasons exactly this way for a panel
+field, and takes the 36px grade on those grounds. (Session 1 moved and sharpened
+that comment; it now sits at `notes-form.tsx:120-125`.)
 
 Closing this also retires the 22-line defence at
 `_components/note-form.tsx:55-76`, which names the ruling as "a call for a
@@ -196,16 +197,34 @@ measured and rejected once (413px against a 286px region at 320px).
 
 ### Session 4 — `/admin/accounts`
 
+*Re-verified against `main` at f9004ee (2026-08-08), after Sessions 0, 1, 2, 5
+and 6 merged. Session 3 was still open at that point — see the coordination note
+below before starting 4.2.*
+
 | # | Finding | Where |
 |---|---|---|
-| 4.1 | Apply **R1**: whole drawer to the 36px grade. Retire the defence comment. | `_components/note-form.tsx:55-76` |
-| 4.2 | Apply **R2**: `UNLINK` out of the collapsed row. It is the one rare control on this page not already in the drawer, and it forces every row taller by stacking handle over button. | `admin/accounts/page.tsx` |
-| 4.3 | The tier-lock note is 34 words capped at 34ch, so it renders ~7 lines deep in a control column, and contains a matched em-dash pair (see Session 0). Suggested: *"Locks the tier. The membership job stops changing it, even if they leave the alliance, until you press auto."* | `admin/accounts/page.tsx:1097` |
-| 4.4 | The crew table is a horizontally-scrolling region nested inside the page's own horizontally-scrolling region. A scrollbar inside a scrollbar has no good visual state. `globals.css:3582-3617` is two `min-width: 0` floors documented with measured pixel values, tracking how the overflow escaped one box and reappeared one level in — correct engineering on the premise that a `<tr>` can be a panel. **Structural; stage separately from 4.1.** | `globals.css:3535-3617` |
+| 4.1 | Apply **R1**: whole drawer to the 36px grade. Retire the defence comment. Its internal citations are already stale (it points at `page.tsx:860, 895, 916, 948, 956, 999` for the sibling micros and `page.tsx:972` for the caller; the drawer's `btn--micro` controls now sit at 975, 1039, 1065, 1125, 1133 and 1176, and `NoteForm` is called at 1149) — retiring it is the fix, not re-numbering it. **Measure before committing to 36px:** the comment says the adjacent `.field` *renders* 40px against a `min-height: 2.25rem` floor, so 36px closes 12px of a 12px gap only if that measurement still holds. If the field is really 40px, the drawer at 36px still leaves a 4px step. | `_components/note-form.tsx:55-76` |
+| 4.2 | Apply **R2**: `UNLINK` out of the collapsed row. It is the one rare control on this page not already in the drawer, and it forces every row taller by stacking handle over button. Still at `admin/accounts/page.tsx:755-770`, inside `.discord-cell` in the collapsed row. | `admin/accounts/page.tsx:755-770` |
+| 4.3 | **Narrowed.** Session 0 already removed the em-dash pair; what remains is length. The note is ~40 words capped at `34ch` (`globals.css:3763`), so it still renders many lines deep in a control column. Suggested: *"Locks the tier. The membership job stops changing it, even if they leave the alliance, until you press auto."* | `admin/accounts/page.tsx:1097-1101` |
+| 4.4 | The crew table is a horizontally-scrolling region nested inside the page's own horizontally-scrolling region. A scrollbar inside a scrollbar has no good visual state. The two `min-width: 0` floors are documented with measured pixel values, tracking how the overflow escaped one box and reappeared one level in — correct engineering on the premise that a `<tr>` can be a panel. **Structural; stage separately from 4.1.** | `globals.css:3767` (`.drawer__crew`) and `3798` (`.drawer__crew .scroller-frame`); container at `3720` |
 
 **Constraint:** `0/8 OK` rendered in red alongside `8 re-auth` reads as
 contradictory. Not separately filed because it may resolve under 4.2's
 re-layout; check it after.
+
+**Coordination with Session 3.** Session 3 applies **R2** to `/account`'s
+manifest (`MAIN`/`UNLINK`, finding 3.2) and 4.2 applies it to the same `UNLINK`
+control on the admin table. If Session 3 has merged, read its diff and adopt the
+pattern it established rather than inventing a second one. If it has not, do 4.1,
+4.3 and 4.4 first and hold 4.2 — two independent R2 layouts for the same control
+is worse than either.
+
+**Stale-citation note.** `DESIGN.md`'s "Hit targets" section and the AMENDED row
+in `docs/settled-design-decisions.md` cited `e2e/sync.spec.ts:1095` and
+`payouts/[id]/notes-form.tsx:90-95`; both moved (Session 1 rewrote the second).
+They now cite the test and the comment by name instead of by line, so a future
+move does not re-break them. Session 4 edits both of those rules — keep the
+name-based form.
 
 ---
 
