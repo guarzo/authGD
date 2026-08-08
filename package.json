@@ -20,6 +20,7 @@
     "smoke:wanderer": "tsx --env-file-if-exists=.env --env-file-if-exists=.env.local scripts/wanderer-smoke.ts",
     "typecheck": "tsc --noEmit",
     "test:e2e": "playwright test",
+    "test:e2e:repeat": "playwright test --repeat-each=${E2E_REPEAT:-5}",
     "test:e2e:clean": "tsx scripts/e2e-clean.ts",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",

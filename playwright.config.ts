@@ -75,6 +75,33 @@ const env = {
 export default defineConfig({
   testDir: "e2e",
   workers: 1, // shared test database — never parallelize
+  // Zero, deliberately, and it is the setting most likely to be "fixed" by
+  // someone staring at a red CI run. Do not raise it.
+  //
+  // These specs drive server actions and then assert against the *database*,
+  // so a failure here is a lost write, not a slow paint. Retrying a lost write
+  // does not stabilize anything — it just resamples a real defect until it
+  // comes up green.
+  //
+  // The concrete case: `useSubmitGuard` (src/app/_components/submit-guard.ts)
+  // releases its re-entry latch only after an effect observes `pending` true
+  // and then false. When that transition is swallowed, the latch sticks and
+  // every later press on that button is preventDefault'ed — a silent lost
+  // save. `e2e/payouts.spec.ts` "notes save from an always-open textarea,
+  // twice running" catches it, measured at 4 failures in 10 runs
+  // (`--repeat-each=10`, 2026-08-08). Treating attempts as independent, at
+  // that rate `retries: 2` would report green on 1 - 0.4^3 ≈ 94% of CI runs,
+  // and even `retries: 1` on 84% — the bug would be marked "flaky", filtered
+  // out of the report, and shipped.
+  //
+  // The cost of zero is real and accepted: an infrastructure blip fails the
+  // whole run. That is the cheaper mistake. A red run gets investigated; a
+  // green run with a flaky annotation gets ignored.
+  //
+  // To tell a flake from a regression, resample explicitly instead:
+  //   npm run test:e2e:repeat -- e2e/payouts.spec.ts -g "twice running"
+  // See docs/e2e-flake-triage.md.
+  retries: 0,
   use: { baseURL: BASE_URL },
   webServer: {
     // CI serves a production build; locally it stays `next dev`.
