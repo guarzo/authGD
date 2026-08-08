@@ -182,7 +182,7 @@ export function AppraiseForm({
       as="details"
       className="disc"
       summary="Add another paste"
-      ariaLabel="Add another paste — appraise more loot, or enter a flat value"
+      ariaLabel="Add another paste: appraise more loot, or enter a flat value"
     >
       <div className="form-stack">
         {form}

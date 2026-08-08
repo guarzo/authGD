@@ -230,7 +230,7 @@ test("create, add a flat pool, paste a roster, finalize, mark paid", async ({
   // sit behind their own collapsed panel — open that first.
   await openFlatPoolPanel(page);
   await page.getByLabel("Total value (ISK)").fill("1000000");
-  await page.getByLabel("Note (required — why this number)").fill("sold privately");
+  await page.getByLabel("Note (required): why this number").fill("sold privately");
   await page.getByRole("button", { name: "Add flat pool" }).click();
   // Scoped to the pool row: with one pool, "1,000,000.00 ISK" also appears in
   // the operation's "Total loot" summary, so a bare getByText is ambiguous.
@@ -329,7 +329,7 @@ test("a successful flat pool add clears the form", async ({ page, context }) => 
   await page.goto(`/payouts/${op.id}`);
   await openFlatPoolPanel(page);
   await page.getByLabel("Total value (ISK)").fill("1000000");
-  await page.getByLabel("Note (required — why this number)").fill("sold privately");
+  await page.getByLabel("Note (required): why this number").fill("sold privately");
   await page.getByLabel("What was in it (optional)").fill("a stack of PLEX");
   await page.getByRole("button", { name: "Add flat pool" }).click();
 
@@ -341,7 +341,7 @@ test("a successful flat pool add clears the form", async ({ page, context }) => 
   // banked — the exact hazard the docblock names: a second press with the
   // same numbers still visible would have created a second pool.
   await expect(page.getByLabel("Total value (ISK)")).toHaveValue("");
-  await expect(page.getByLabel("Note (required — why this number)")).toHaveValue("");
+  await expect(page.getByLabel("Note (required): why this number")).toHaveValue("");
   await expect(page.getByLabel("What was in it (optional)")).toHaveValue("");
 });
 
@@ -380,7 +380,7 @@ test("a rejected flat pool submission keeps what was typed in all three fields",
   await page.goto(`/payouts/${op.id}`);
   await openFlatPoolPanel(page);
   await page.getByLabel("Total value (ISK)").fill("1e5");
-  await page.getByLabel("Note (required — why this number)").fill("sold privately");
+  await page.getByLabel("Note (required): why this number").fill("sold privately");
   await page.getByLabel("What was in it (optional)").fill("a stack of PLEX");
   await page.getByRole("button", { name: "Add flat pool" }).click();
 
@@ -392,7 +392,7 @@ test("a rejected flat pool submission keeps what was typed in all three fields",
   // All three fields still hold exactly what was typed — this is the fix the
   // conversion to controlled state must not have traded away.
   await expect(page.getByLabel("Total value (ISK)")).toHaveValue("1e5");
-  await expect(page.getByLabel("Note (required — why this number)")).toHaveValue(
+  await expect(page.getByLabel("Note (required): why this number")).toHaveValue(
     "sold privately",
   );
   await expect(page.getByLabel("What was in it (optional)")).toHaveValue(
@@ -423,7 +423,7 @@ test("pasting two alts of one account collapses them into one participant row", 
 
   await openFlatPoolPanel(page);
   await page.getByLabel("Total value (ISK)").fill("200");
-  await page.getByLabel("Note (required — why this number)").fill("flat test value");
+  await page.getByLabel("Note (required): why this number").fill("flat test value");
   await page.getByRole("button", { name: "Add flat pool" }).click();
 
   // The pasted fleet has two names, one main and one of its own alts.
@@ -805,7 +805,7 @@ test("setting shares, excluding, and removing a participant each recompute exact
 
   await openFlatPoolPanel(page);
   await page.getByLabel("Total value (ISK)").fill("300");
-  await page.getByLabel("Note (required — why this number)").fill("even split test");
+  await page.getByLabel("Note (required): why this number").fill("even split test");
   await page.getByRole("button", { name: "Add flat pool" }).click();
 
   await page
@@ -1104,7 +1104,7 @@ test("finalizing hands focus to the operation heading", async ({ page, context }
 
   await openFlatPoolPanel(page);
   await page.getByLabel("Total value (ISK)").fill("1000000");
-  await page.getByLabel("Note (required — why this number)").fill("sold privately");
+  await page.getByLabel("Note (required): why this number").fill("sold privately");
   await page.getByRole("button", { name: "Add flat pool" }).click();
   await page.getByLabel("Paste (names separated by /)").fill("Brain Tartare");
   await page.getByRole("button", { name: "Set roster" }).click();
@@ -1396,7 +1396,7 @@ test("bad shares land on the page, not the error boundary", async ({ page, conte
 
   await openFlatPoolPanel(page);
   await page.getByLabel("Total value (ISK)").fill("100");
-  await page.getByLabel("Note (required — why this number)").fill("flat");
+  await page.getByLabel("Note (required): why this number").fill("flat");
   await page.getByRole("button", { name: "Add flat pool" }).click();
   await page.getByLabel("Paste (names separated by /)").fill("Alice Pilot");
   await page.getByRole("button", { name: "Set roster" }).click();
@@ -1882,7 +1882,7 @@ test("an admin deletes an operation, and the audit row outlives it", async ({
 
   await openFlatPoolPanel(page);
   await page.getByLabel("Total value (ISK)").fill("1000000");
-  await page.getByLabel("Note (required — why this number)").fill("sold privately");
+  await page.getByLabel("Note (required): why this number").fill("sold privately");
   await page.getByRole("button", { name: "Add flat pool" }).click();
   await page
     .getByLabel("Paste (names separated by /)")
@@ -1962,7 +1962,7 @@ test("deleting an operation with a paid participant is refused on the page", asy
 
   await openFlatPoolPanel(page);
   await page.getByLabel("Total value (ISK)").fill("1000000");
-  await page.getByLabel("Note (required — why this number)").fill("sold privately");
+  await page.getByLabel("Note (required): why this number").fill("sold privately");
   await page.getByRole("button", { name: "Add flat pool" }).click();
   await page.getByLabel("Paste (names separated by /)").fill("Brain Tartare");
   await page.getByRole("button", { name: "Set roster" }).click();
@@ -2183,7 +2183,7 @@ test("exactly one gold primary control renders in each draft state", async ({
 
   await openFlatPoolPanel(page);
   await page.getByLabel("Total value (ISK)").fill("100");
-  await page.getByLabel("Note (required — why this number)").fill("flat test");
+  await page.getByLabel("Note (required): why this number").fill("flat test");
   await page.getByRole("button", { name: "Add flat pool" }).click();
 
   // Stage 2: loot exists, no roster yet — Set roster is the one gold control.

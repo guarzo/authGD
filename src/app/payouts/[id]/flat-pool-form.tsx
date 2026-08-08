@@ -79,7 +79,7 @@ export function FlatPoolForm({ operationId }: { operationId: string }) {
         />
       </label>
       <label className="form-stack__field">
-        Note (required — why this number)
+        Note (required): why this number
         <input
           className="field"
           name="notes"

@@ -53,7 +53,7 @@ function describeScope(scope: string, contactLabel: string): string {
     case "esi-location.read_online.v1":
       return "Checks whether your character is logged in right now, so a location left behind by a character who has since logged off is shown as where they were last seen rather than as where they are.";
     default:
-      return "This deployment requests this scope, but authGD has no description for it — ask whoever runs it what it is for before granting.";
+      return "This deployment requests this scope, but authGD has no description for it. Ask whoever runs it what it is for before granting.";
   }
 }
 

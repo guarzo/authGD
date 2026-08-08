@@ -1096,8 +1096,8 @@ function AccountRow({
           {r.tier !== "pending" && !r.tierLocked && (
             <p className="dim drawer__note" id={tierLockNoteId(r.accountId)}>
               Setting a tier here locks it: the membership job stops raising or lowering
-              it automatically — including moving it to {tierLabel("alumni")} if this
-              member leaves the alliance — until you press auto.
+              it automatically (including moving it to {tierLabel("alumni")} if this
+              member leaves the alliance) until you press auto.
             </p>
           )}
           {r.tierChangedByName && (
