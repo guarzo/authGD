@@ -86,6 +86,9 @@ describe("formatCadence", () => {
     expect(formatCadence("*/20 * * * *")).toBe("every 20m");
     expect(formatCadence("*/60 * * * *")).toBe("every 60m");
     expect([...parseCron("*/60 * * * *").minute]).toEqual([0]);
+    // Rendered from the parsed number rather than the regex capture, so a
+    // zero-padded step reads as a cadence instead of "every 030m".
+    expect(formatCadence("*/030 * * * *")).toBe("every 30m");
   });
 
   it("falls through an evenly-spaced list that leaves the minute range", () => {
@@ -114,6 +117,16 @@ describe("cadenceFor", () => {
       if (name === QUEUES.deadLetter) continue; // not scheduled
       expect(JOB_CRON[name], `${name} has no cron`).toBeTruthy();
       expect(cadenceFor(name)).not.toBeNull();
+      // `not.toBeNull()` alone cannot fail for a scheduled queue: `cadenceFor`
+      // returns null only for a name absent from JOB_CRON, which the line
+      // above already rules out. `formatCadence`'s fallback returns the raw
+      // expression, which is a perfectly truthy string — so an entry the
+      // cadence branches decline to paraphrase passes that check silently.
+      // This is the assertion that fails instead, and it is the seam that
+      // catches a future `*/7` or `0,15,30` added to the table.
+      expect(cadenceFor(name), `${name} renders as its raw cron`).not.toBe(
+        JOB_CRON[name],
+      );
     }
   });
 
