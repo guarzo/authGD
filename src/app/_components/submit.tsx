@@ -48,6 +48,11 @@ export function Submit({
   // this row — see `/account`'s "make main" note and `contactRemedyId` for the
   // pattern this follows.
   "aria-describedby": ariaDescribedBy,
+  // Opt-in only. Called when the guard refuses a press because this form is
+  // already in flight — the case that is otherwise entirely silent. The call
+  // site owns the wording, since what to say depends on what is at stake; see
+  // `submit-guard.ts` for why it fires from the re-entry branch only.
+  onRefused,
 }: {
   className?: string;
   children: ReactNode;
@@ -56,9 +61,10 @@ export function Submit({
   "aria-pressed"?: boolean;
   "aria-label"?: string;
   "aria-describedby"?: string;
+  onRefused?: () => void;
 }) {
   const { pending } = useFormStatus();
-  const guard = useSubmitGuard(pending);
+  const guard = useSubmitGuard(pending, onRefused);
   return (
     <button
       type="submit"

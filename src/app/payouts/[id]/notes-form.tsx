@@ -66,6 +66,20 @@ export function NotesForm({
   initialValue: string;
 }) {
   const [notes, setNotes] = useState(initialValue);
+  // Set when the guard refuses a press because the previous save is still in
+  // flight. That refusal is correct — it is one submit over a live one — but on
+  // its own it is invisible: no POST, no error, and the textarea still shows
+  // the text the member typed, so the press reads as a dead click. This is the
+  // only client state on the page that a member authored and nothing else
+  // preserves, which is why this form opts into `onRefused` and (so far)
+  // nothing else does.
+  //
+  // Cleared inside the action rather than on a timer or an effect, because the
+  // action body runs only when a submit actually went through — which is
+  // exactly when the advice stops being true. It deliberately does NOT clear
+  // when the in-flight save settles: at that moment the refused text is still
+  // unsaved, so "press Save again" is still the correct thing to do.
+  const [refused, setRefused] = useState(false);
   // The text the server last acknowledged — reported by the action itself, from
   // the `FormData` it actually sent, rather than inferred from a flag. `null`
   // until the first save of this mount. "Saved" then becomes a comparison
@@ -86,6 +100,7 @@ export function NotesForm({
   // since the server does hold that text.
   const [saved, formAction] = useActionState<string | null, FormData>(
     async (_prev, formData) => {
+      setRefused(false);
       await action(formData);
       // Narrow rather than coerce: `FormData.get` is typed `string | File |
       // null` for every field, so `String(...)` would quietly turn a `File`
@@ -123,7 +138,12 @@ export function NotesForm({
           2.25rem — wrong twice over: `.form-stack` puts the textarea *above*
           this button, and a `rows={3}` textarea is far past that floor anyway.
           The 36px is DESIGN.md's standalone grade, not a match to a neighbour.) */}
-      <Submit className="btn" aria-label="save notes" pendingLabel="saving…">
+      <Submit
+        className="btn"
+        aria-label="save notes"
+        pendingLabel="saving…"
+        onRefused={() => setRefused(true)}
+      >
         Save
       </Submit>
       {/* `notes-form__saved` carries no style rule of its own — `dim mono` do
@@ -135,9 +155,18 @@ export function NotesForm({
           same argument), and a screen-reader user getting nothing here is
           exactly the dead-click failure finding 1.3 is about. `saved` is `null`
           before the first save, and `notes` is always a string, so the
-          comparison is false at rest without needing its own guard. */}
+          comparison is false at rest without needing its own guard.
+
+          The refusal notice shares this one node rather than getting a live
+          region of its own, for the reason in the docblock: two regions
+          announcing two things about the same press is worse than one region
+          announcing the current one. The saved comparison is checked first
+          because the two are not mutually exclusive — press Save twice without
+          editing and the second press is refused while the first goes on to
+          acknowledge the text that is still on screen. "Saved" is the true
+          statement in that case, and the one worth making. */}
       <span className="notes-form__saved dim mono" role="status">
-        {notes === saved ? "· saved" : ""}
+        {notes === saved ? "· saved" : refused ? "· still saving — press Save again" : ""}
       </span>
     </form>
   );
