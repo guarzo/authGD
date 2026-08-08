@@ -211,13 +211,13 @@ export default async function AdminAccountsPage({
   // for every account just to get thrown away for a length.
   const pendingCount = await countPendingCached();
   const errorMessage = lookupErrorMessage(ADMIN_ACCOUNTS_ERRORS, params.error);
-  // Only the four cell-level actions (unlinkDiscordAction, promoteAdminAction,
-  // demoteAdminAction, syncAccountAction — actions.ts) reach this: they're the
-  // ones that redirect through `doneUrl`, and none of their `done` codes
-  // ("discord", "grant", "revoke", "sync") read the third argument, so this
-  // never carries a tier label. The other four mutating actions build their
-  // own confirmation directly (see view.ts's docblock) and never touch
-  // `?done=` at all.
+  // Only the three cell-level actions (promoteAdminAction, demoteAdminAction,
+  // syncAccountAction — actions.ts) reach this: they're the ones that redirect
+  // through `doneUrl`, and none of their `done` codes ("grant", "revoke",
+  // "sync") read the third argument, so this never carries a tier label. The
+  // other five mutating actions build their own confirmation directly (see
+  // view.ts's docblock) and never touch `?done=` at all — `unlinkDiscordAction`
+  // joined them under ruling R2, which moved its control into the drawer.
   //
   // `params.done` is a raw query-string value — `string | undefined`, with no
   // way for Next.js to know about `AdminAccountsDoneCode` — so it's narrowed
@@ -275,18 +275,16 @@ export default async function AdminAccountsPage({
           mounted unconditionally and carries `live={false}` on purpose, since
           focus rather than the live region does the announcing there.
 
-          `ConfirmNotice`, not a bare `{cond && <Notice>}`: the four cell-level
-          row actions — unlink Discord, grant/revoke admin, sync now — each
-          round-trip through a server action that redirects back here, and
-          each changes the very control that was pressed out from under
-          itself (a Discord unlink turns its button into a bare "none"
-          status; grant/revoke and freeze/wake-adjacent admin controls swap
+          `ConfirmNotice`, not a bare `{cond && <Notice>}`: the three cell-level
+          row actions — grant/revoke admin, sync now — each round-trip through
+          a server action that redirects back here, and each changes the very
+          control that was pressed out from under itself (grant/revoke swaps
           branches; a sync request has nothing left to confirm the press with
           otherwise). Left as a bare conditional, an admin's focus fell to
           `<body>` after every single press — the same defect `/account` and
-          `/admin/sync` each fixed with this component. The other four
-          mutating actions (tier, approve, auto, freeze/wake) live inside the
-          row's drawer and use `ConfirmGroup`/`ConfirmingForm`
+          `/admin/sync` each fixed with this component. The other five
+          mutating actions (tier, approve, auto, freeze/wake, unlink Discord)
+          live inside the row's drawer and use `ConfirmGroup`/`ConfirmingForm`
           (`confirm-group.tsx`) instead — a redirect back to this page would
           reset the drawer's own open/closed state, which this page-level
           notice cannot avoid since it only exists after the navigation that
@@ -715,95 +713,26 @@ function AccountRow({
 
           <td>
             {r.discordLinked ? (
-              // Already inside the tbody-wide ConfirmArmScope (:282), like every
-              // other confirm in this row. Names its row for the same reason the
-              // Actions cell does: "unlink" read out of context says whose Discord
-              // is about to be disconnected to nobody.
+              // Handle only, per ruling R2 (docs/design-walkthrough.md): the
+              // control that used to sit beside it moved into the drawer
+              // below (`.drawer__group` "Discord"), the same move #186's
+              // `/account` page made for MAIN/UNLINK. What is left here is
+              // read, not pressed, so it costs this scanning column nothing —
+              // the row's identity is already the member's EVE name, pinned
+              // in the first column, so the @handle is the one thing this
+              // screen cannot already tell an admin: it is what they need to
+              // go find the person in the guild.
               //
-              // No `linked` token beside it. The else-branch renders `none`
-              // because an unlinked row has no control and the cell would
-              // otherwise be empty; a linked row has the button, and the verb
-              // answers the column's question on its own. Two objects per linked
-              // row against one per unlinked row was the asymmetry that made
-              // this cell read as cluttered — and this column is scanned far
-              // more often than it is used (PRODUCT.md principle 3).
-              <>
-                {/* Handle only. The account page pairs a display name with the
-                    handle; here the row's identity is already the member's EVE
-                    name, pinned in the first column, so a second soft name for
-                    the same person is noise in a column being scanned for
-                    something else. The @handle is the one thing this screen
-                    cannot already tell an admin — it is what they need to go
-                    find the person in the guild, and what tells them the link
-                    points where they think it does before disconnecting it.
-
-                    One line with the button, not stacked above it: two lines
-                    per linked row against one per unlinked row is the same
-                    asymmetry #115 removed from this cell, and it would set the
-                    row height for the whole table. `.discord-cell` wraps rather
-                    than overflowing, so a long handle at 320px drops the button
-                    to a second line for that row alone.
-
-                    Null until a roles sync has seen the member (and forever for
-                    someone who has left the guild), in which case this renders
-                    exactly what shipped in #115: the button alone. */}
-                <div className="discord-cell">
-                  {r.discordUsername && (
-                    <span className="dim mono">@{r.discordUsername}</span>
-                  )}
-                  <form
-                    action={unlinkDiscordAction.bind(
-                      null,
-                      r.accountId,
-                      listSearch,
-                      identity,
-                    )}
-                  >
-                    <ConfirmSubmit
-                      className="btn btn--micro"
-                      armedClassName="btn btn--micro btn--danger"
-                      label="unlink"
-                      restName={`unlink Discord for ${identity}`}
-                      confirmName={`confirm unlink Discord for ${identity}`}
-                      describedBy={`discord-unlink-cost-${r.accountId}`}
-                    />
-                  </form>
-                </div>
-                {/* Hidden always, rather than revealed on arm like the account
-                    page's `ConfirmCost`. That component reads scope-level arm
-                    state, and this scope is the whole tbody — three confirms per
-                    row (unlink, revoke/promote, freeze/wake) times every row.
-                    Arming any one of them would reveal every row's cost. Its own
-                    doc says as much. Switch to it once it takes a per-control
-                    id; giving this one cell its own ConfirmArmScope to get there
-                    would instead break the single-armed-control-per-table
-                    invariant the shared scope exists to hold.
-
-                    Revealing on arm is also wrong for a table row on its own
-                    terms: the hint would reflow the row, and ConfirmSubmit
-                    disarms on pointerleave for mouse users
-                    (confirm-submit.tsx:162-170), so the button sliding out from
-                    under a stationary pointer would disarm the control the
-                    admin just armed. Absolute positioning is no escape —
-                    `.scroller` is a scroll container, so the hint would extend
-                    the scrollable area rather than float clear of it.
-                    `.visually-hidden` is itself `position: absolute`, so this
-                    span costs no row height, which matters when scanning is the
-                    primary act (PRODUCT.md principle 3) and this renders once
-                    per account.
-
-                    "queues removal", not "removes": unlinkDiscord ends in
-                    enqueueSync (services/discord-link.ts:135-138) and the roles
-                    come off in the worker. The account page keeps the same verb
-                    for the same reason. */}
-                <span
-                  className="visually-hidden"
-                  id={`discord-unlink-cost-${r.accountId}`}
-                >
-                  Unlinking queues removal of the Discord roles authGD manages for this
-                  member.
-                </span>
-              </>
+              // `linked`, not a bare span, when there is no handle yet: a
+              // roles sync hasn't seen this member, and an empty cell reads
+              // as "nothing to check" rather than "no data yet".
+              <span className="discord-cell">
+                {r.discordUsername ? (
+                  <span className="dim mono">@{r.discordUsername}</span>
+                ) : (
+                  <Status tone="off">linked</Status>
+                )}
+              </span>
             ) : (
               <Status tone="off">none</Status>
             )}
@@ -972,7 +901,7 @@ function AccountRow({
                       className="inline-form"
                     >
                       <Submit
-                        className="btn btn--micro"
+                        className="btn"
                         pendingLabel="approving…"
                         aria-label={`Approve as ${tierLabel(t)} for ${identity}`}
                       >
@@ -1036,7 +965,7 @@ function AccountRow({
                           reach out of visual context — the exact audience
                           derole-don't-boot exists to protect. */}
                       <ConfirmSubmit
-                        className="btn btn--micro"
+                        className="btn"
                         label={tierLabel(t)}
                         restName={`Set ${identity} to ${tierLabel(t)}`}
                         confirmName={`confirm set ${identity} to ${tierLabel(t)}`}
@@ -1062,7 +991,7 @@ function AccountRow({
                   className="inline-form"
                 >
                   <Submit
-                    className="btn btn--micro"
+                    className="btn"
                     pendingLabel="resetting…"
                     aria-label={`return ${identity} to auto tier`}
                   >
@@ -1095,9 +1024,8 @@ function AccountRow({
               this section's shape. */}
           {r.tier !== "pending" && !r.tierLocked && (
             <p className="dim drawer__note" id={tierLockNoteId(r.accountId)}>
-              Setting a tier here locks it: the membership job stops raising or lowering
-              it automatically (including moving it to {tierLabel("alumni")} if this
-              member leaves the alliance) until you press auto.
+              Locks the tier. The membership job stops changing it, even if they leave the
+              alliance, until you press auto.
             </p>
           )}
           {r.tierChangedByName && (
@@ -1122,7 +1050,7 @@ function AccountRow({
             >
               {r.status === "cryo" ? (
                 <Submit
-                  className="btn btn--micro"
+                  className="btn"
                   pendingLabel="waking…"
                   aria-label={`wake ${identity}`}
                 >
@@ -1130,8 +1058,8 @@ function AccountRow({
                 </Submit>
               ) : (
                 <ConfirmSubmit
-                  className="btn btn--micro"
-                  armedClassName="btn btn--micro btn--danger"
+                  className="btn"
+                  armedClassName="btn btn--danger"
                   label="freeze"
                   restName={`freeze ${identity}`}
                   confirmName={`confirm freeze ${identity}`}
@@ -1143,6 +1071,53 @@ function AccountRow({
             <span className="dim mono nowrap">since {fmt(r.statusChangedAt)}</span>
           )}
         </section>
+
+        {r.discordLinked && (
+          <section className="drawer__group">
+            <span className="drawer__label">Discord</span>
+            {/* `ConfirmGroup`/`ConfirmingForm`, not the redirect-based form
+                this control used to submit before ruling R2 moved it here:
+                this action now lives in the drawer, and a redirect back to
+                this page would reset `Disclosure`'s own open state, the same
+                reasoning the tier/cryo/note groups above already follow. */}
+            <ConfirmGroup>
+              <ConfirmingForm
+                action={unlinkDiscordAction.bind(null, r.accountId, listSearch, identity)}
+              >
+                <ConfirmSubmit
+                  className="btn"
+                  armedClassName="btn btn--danger"
+                  label="unlink"
+                  restName={`unlink Discord for ${identity}`}
+                  confirmName={`confirm unlink Discord for ${identity}`}
+                  describedBy={`discord-unlink-cost-${r.accountId}`}
+                />
+              </ConfirmingForm>
+            </ConfirmGroup>
+            {/* Hidden always, rather than revealed on arm like the account
+                page's `ConfirmCost`. `ConfirmCost` now matches a reveal
+                against its own `describedBy` id rather than scope-wide
+                (confirm-submit.tsx), so the old "arming any control in this
+                tbody-wide scope would reveal every row's cost" objection no
+                longer literally applies — but the walkthrough's ruling R2
+                (DESIGN.md, "Disclosure and parity") settles this control
+                specifically: the cost hint for a rare, destructive control
+                moving into a per-row drawer stays hidden-always, because it
+                is read once before the first press, not on every arm/disarm
+                cycle a mis-click or a changed mind produces, and a `Notice`-
+                style reveal would still cost the drawer's row a reflow this
+                one static line already avoids.
+
+                "queues removal", not "removes": unlinkDiscord ends in
+                enqueueSync (services/discord-link.ts:135-138) and the roles
+                come off in the worker. The account page keeps the same verb
+                for the same reason. */}
+            <span className="visually-hidden" id={`discord-unlink-cost-${r.accountId}`}>
+              Unlinking queues removal of the Discord roles authGD manages for this
+              member.
+            </span>
+          </section>
+        )}
 
         <section className="drawer__group">
           <span className="drawer__label">Note</span>
@@ -1173,7 +1148,7 @@ function AccountRow({
         <section className="drawer__group">
           <span className="drawer__label">History</span>
           <a
-            className="btn btn--micro"
+            className="btn"
             href={`/admin/audit?${new URLSearchParams({
               target: mainName ?? firstName ?? r.accountId,
             }).toString()}`}

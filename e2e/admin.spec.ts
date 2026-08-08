@@ -630,6 +630,11 @@ test("an admin can unlink a member's Discord", async ({ page, context }) => {
   await context.addCookies([await sessionCookieFor(db, admin.id)]);
 
   await page.goto("/admin/accounts");
+  // Ruling R2 (docs/design-walkthrough.md) moved this control off the
+  // collapsed row and into the drawer, the same move #186 made for
+  // `/account`'s MAIN/UNLINK — the drawer has to be open before the button
+  // exists at all (`everOpen` in disclosure.tsx).
+  await toggleOf(rowFor(page, "Pilot")).click();
   // The cost of the unlink is carried as a description, not folded into the
   // accessible name: the name is spoken ahead of every press and has to keep
   // matching the visible label (WCAG 2.5.3). Asserted at rest AND armed because
@@ -660,15 +665,48 @@ test("an admin can unlink a member's Discord", async ({ page, context }) => {
 });
 
 /**
- * The Discord column names the account it is about to disconnect. Before this,
- * a linked row said only `unlink` — the admin could see that a link existed but
- * not where it pointed, which is exactly the fact you want confirmed before
- * severing it.
+ * The unlink control sits in the drawer at the standalone (36px) grade, per
+ * ruling R1 (DESIGN.md's "Hit targets") — the same grade every other control
+ * in this drawer takes, not the 28px `.btn--micro` grade the collapsed row's
+ * own actions (revoke, grant, sync now) correctly keep.
+ */
+test("the Discord unlink control sits at the standalone hit-target grade", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
+  const member = await seedMember(db, { name: "Pilot", tier: "alumni" });
+  await db.insert(discordLink).values({
+    accountId: member.id,
+    discordUserId: "duid-e2e-grade",
+  });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.goto("/admin/accounts");
+  await toggleOf(rowFor(page, "Pilot")).click();
+
+  const unlink = page.getByRole("button", {
+    name: "unlink Discord for Pilot",
+    exact: true,
+  });
+  const box = await unlink.boundingBox();
+  expect(box).not.toBeNull();
+  // 36px, `.btn`'s own `min-height` — not `.btn--micro`'s 28px.
+  expect(box!.height).toBeGreaterThanOrEqual(36);
+});
+
+/**
+ * The Discord column names the account a drawer's unlink control is about to
+ * disconnect. Before #115, a linked row said only `unlink` — the admin could
+ * see that a link existed but not where it pointed; ruling R2 later moved the
+ * control itself into the row's drawer, but the collapsed cell keeps naming
+ * the link for the same reason — it is what tells an admin, scanning the
+ * table, whether the link points where they think it does before ever
+ * opening the row to disconnect it.
  *
  * The null case is the important half. Nothing backfills these columns; they
  * fill in on each account's next roles sync, so on the deploy that ships this
- * every row is null and has to keep working. It renders what shipped before:
- * the control alone, no placeholder standing in for a name.
+ * every row is null and has to keep working. It renders a bare `linked`
+ * status, not a placeholder name.
  */
 test("the Discord column names the account behind the link, when it knows it", async ({
   page,
@@ -693,21 +731,55 @@ test("the Discord column names the account behind the link, when it knows it", a
   await context.addCookies([await sessionCookieFor(db, admin.id)]);
   await page.goto("/admin/accounts");
 
-  // `.discord-cell` rather than the whole `<td>`: the cell also carries the
-  // always-hidden consequence sentence the unlink's aria-describedby points at,
-  // which `toHaveText` reads as content.
   const cellFor = (name: string) => rowFor(page, name).locator(".discord-cell");
 
   await expect(cellFor("Alpha Pilot")).toContainText("@guarzo");
   await expect(cellFor("Alpha Pilot")).not.toContainText("Wardec Wally");
-  // No handle known: the control alone, and no placeholder in its place.
-  await expect(cellFor("Bravo Pilot")).toHaveText("unlink");
+  // No handle known yet: a bare `linked` status, not a placeholder name — and
+  // no control here at all, since ruling R2 moved it into the drawer.
+  await expect(cellFor("Bravo Pilot")).toHaveText("linked");
   await expect(
     rowFor(page, "Bravo Pilot").getByRole("button", {
       name: "unlink Discord for Bravo Pilot",
       exact: true,
     }),
+  ).toHaveCount(0);
+  await toggleOf(rowFor(page, "Bravo Pilot")).click();
+  await expect(
+    rowFor(page, "Bravo Pilot").getByRole("button", {
+      name: "unlink Discord for Bravo Pilot",
+      exact: true,
+    }),
+  ).toHaveCount(0);
+  await expect(
+    drawerOf(rowFor(page, "Bravo Pilot")).getByRole("button", {
+      name: "unlink Discord for Bravo Pilot",
+      exact: true,
+    }),
   ).toBeVisible();
+});
+
+/**
+ * A row with no Discord link at all renders `none` in the column and mounts
+ * no Discord group in its drawer — matching Session 3's judgement for
+ * `/account`'s own empty case (`character-row.tsx`): no dangling label or
+ * empty `.drawer__group` for a control that has nothing to act on.
+ */
+test("a row with no Discord link renders no Discord drawer group", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
+  await seedMember(db, { name: "Solo Pilot", tier: "member" });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.goto("/admin/accounts");
+
+  await expect(rowFor(page, "Solo Pilot").locator(".discord-cell")).toHaveCount(0);
+  await expect(rowFor(page, "Solo Pilot")).toContainText("none");
+  await toggleOf(rowFor(page, "Solo Pilot")).click();
+  await expect(
+    drawerOf(rowFor(page, "Solo Pilot")).getByText("Discord", { exact: true }),
+  ).toHaveCount(0);
 });
 
 /* --- The approval queue --------------------------------------------------- */
@@ -1091,8 +1163,9 @@ test("the note control aligns with the tier and freeze control rows", async ({
     throw new Error("expected all three control rows to be measurable");
   }
   // 4px tolerance for subpixel layout, not a real misalignment: the tier
-  // buttons and freeze sit exactly together already (both are `.btn--micro`),
-  // so the gap under test is only the note row's own offset.
+  // buttons and freeze sit exactly together already (both are `.btn`, the
+  // standalone 36px grade ruling R1 gives every control in this drawer), so
+  // the gap under test is only the note row's own offset.
   expect(Math.abs(tierBox.y - freezeBox.y)).toBeLessThanOrEqual(4);
   expect(Math.abs(tierBox.y - noteBox.y)).toBeLessThanOrEqual(4);
 });
@@ -1736,11 +1809,17 @@ test("an open row drawer keeps the pin, and is not itself pinned", async ({
   // label, so the exact fraction moves with TIER_LABEL_MEMBER. Any large
   // majority makes the point that an x-only measure would get this wrong; an
   // equality here only pinned the length of one word.
+  // 0.7, not 0.8: ruling R1 (docs/design-walkthrough.md) grew every drawer
+  // control from `.btn--micro` to `.btn`, which widens the first tier button
+  // too — measured here at 76.7% overlap post-R1, down from >80% pre-R1. The
+  // property this proves ("an x-only measure gets this wrong") only needs a
+  // large majority, not a specific fraction; 0.7 stays well clear of the
+  // ~50% where that claim would stop holding.
   const rest = await coveredByPin(page, ".scroller", tier, 0);
   expect(
     rest.xOverlap,
     "the drawer's first control shares the pin's x-band",
-  ).toBeGreaterThan(0.8);
+  ).toBeGreaterThan(0.7);
   expect(rest.inRegion, "...and is on screen while it does").toBeCloseTo(1, 1);
 });
 

@@ -139,8 +139,11 @@ export function ConfirmGroup({ children }: { children: ReactNode }) {
 
 /** The result a drawer-scoped action threads back through `useActionState` —
  *  `null` for "nothing to confirm" (the initial render, and any action that
- *  wants the same "don't confirm a no-op" rule `admin/accounts/actions.ts`'s
- *  `unlinkDiscordAction` follows on its cell-level, redirect-shaped sibling). */
+ *  wants the same "don't confirm a no-op" rule `/account`'s own
+ *  `unlinkDiscordAction` follows for a lost race — see
+ *  `admin/accounts/actions.ts`'s own `unlinkDiscordAction`, which now lives in
+ *  this page's drawer too and returns `null` on the identical `not_linked`
+ *  race rather than a confirmation). */
 export type ActionOutcome = { text: string } | null;
 
 export function ConfirmingForm({

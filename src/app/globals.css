@@ -2743,8 +2743,21 @@ h3.rule-head__label {
   margin: 0 var(--s-2);
 }
 
+/* `flex-wrap: wrap`, not the bare row this used to be: ruling R1
+   (docs/design-walkthrough.md) moved Save from `.btn--micro` to `.btn`, and
+   the 16.9px of extra horizontal padding that costs ate the row's whole
+   320px margin — measured on `/admin/accounts`'s drawer at 320px, Save's own
+   right edge moved from 269.5px to 286.4px inside a 276px region, ~9.9px past
+   reachable without a nested scroll. The field's own `min-width: 12rem`
+   already claims most of the row at that width, so there was no room left to
+   give Save without shrinking the field below a usable note-editing measure.
+   Wrapping trades one line of height for the button once nothing else fits —
+   the same trade `.filters` already takes for its inputs above — rather than
+   shrinking the field or leaving R1's 36px grade half-applied. Unaffected
+   above ~330px, where field + button already fit on one line. */
 .note-form {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--s-2);
   align-items: center;
 }
@@ -3920,17 +3933,12 @@ h3.rule-head__label {
   flex-wrap: wrap;
 }
 
-/* Same idea in the admin table's Discord cell, minus the display name. Wraps
-   so a long handle in a column with no width of its own drops the button to a
-   second line for that one row rather than widening the table for every row —
-   the accounts table is already horizontally scrolled at 320px and its column
-   widths are a measured budget (see `.log--dense` above). */
-.discord-cell {
-  display: flex;
-  align-items: center;
-  gap: var(--s-2);
-  flex-wrap: wrap;
-}
+/* `.discord-cell` carries no style rule at all, same as `note-form__saved`
+   below: ruling R2 (docs/design-walkthrough.md) moved the unlink control
+   into the row's drawer, and the cell left behind holds one child (a handle
+   or a status token) with no layout of its own to name here — the class
+   exists only so the e2e suite has a selector that survives a wording
+   change. */
 
 /* `.inline-pair` lived here: a settled status token and the control that
    changes it, on one line. Both call sites were the Discord row, and both now
