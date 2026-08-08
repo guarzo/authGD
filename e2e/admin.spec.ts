@@ -1966,19 +1966,34 @@ test("an open drawer is not clipped by the region's height cap", async ({
   context,
 }) => {
   const admin = await seedDenseWorld();
-  // Enough crew that the drawer is taller than the chrome-subtracted cap: at
-  // 900px tall that cap measures 436px, and eight characters do not fit it.
+  // Enough crew that the drawer is taller than the chrome-subtracted cap, but
+  // not so much that it exceeds the 80svh cap itself — this seed has to land
+  // INSIDE that window for the test to mean anything, and the window is what
+  // the count is calibrated to, not the crew size for its own sake.
+  //
+  // Was seven alts, chosen when a crew row with no location reading rendered
+  // nothing at all. `CharacterLocation` now renders a visible "not reported"
+  // badge for `{kind:"never"}` (src/core/location.ts, widened so the account
+  // manifest could stop showing one blank for two different facts), and this
+  // page is that component's second consumer — so every unplaced alt here got
+  // a line taller, at a measured ~63.7px per alt. Seven alts moved the drawer
+  // to 777.6px against a 718px region: past the cap, which is the one thing
+  // this seed must not do.
+  //
+  // Five, measured at 1280x900: drawer 650.1px, against closed 434px and open
+  // 718px. 216px clear of the lower bound and 68px of the upper, where six
+  // measured 713.8px and left just 4.2px — inside the window, but close enough
+  // that a font-metric change would push it out and the failure would look
+  // like a regression in the cap rather than a seed that was always marginal.
+  //
+  // NOT a relaxed cap and NOT a relaxed assertion. `globals.css`'s 80svh bound
+  // is structural — the sticky header needs a scroll range to travel over, and
+  // its own comment blesses this exact case ("a drawer taller than 80svh still
+  // scrolls in the region — that is the case where a nested scroll is the
+  // honest answer"). The seed is the calibration; the cap is the rule.
   await seedMember(db, {
     name: "Zed Wide",
-    alts: [
-      "Alt One",
-      "Alt Two",
-      "Alt Three",
-      "Alt Four",
-      "Alt Five",
-      "Alt Six",
-      "Alt Seven",
-    ],
+    alts: ["Alt One", "Alt Two", "Alt Three", "Alt Four", "Alt Five"],
   });
   await context.addCookies([await sessionCookieFor(db, admin.id)]);
   await page.setViewportSize({ width: 1280, height: 900 });

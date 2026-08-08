@@ -134,9 +134,20 @@ describe("formatLocation", () => {
     expect(withoutScope).toMatchObject({ offline: false });
   });
 
-  it("renders nothing when the location was never read", () => {
-    expect(formatLocation(snap({ checkedAt: null }), names())).toEqual({ kind: "none" });
-    expect(formatLocation(snap({ systemId: null }), names())).toEqual({ kind: "none" });
+  it("reports never when checkedAt is null, regardless of systemId", () => {
+    expect(formatLocation(snap({ checkedAt: null }), names())).toEqual({ kind: "never" });
+    expect(formatLocation(snap({ checkedAt: null, systemId: null }), names())).toEqual({
+      kind: "never",
+    });
+  });
+
+  // Not reachable through the location job's only writer today (it sets
+  // systemId and checkedAt together), but the columns are independently
+  // nullable and the formatter is honest to whatever snapshot it is given.
+  it("reports unresolved when a read landed with no system", () => {
+    expect(formatLocation(snap({ systemId: null }), names())).toEqual({
+      kind: "unresolved",
+    });
   });
 
   it("falls back to the system id when the name cache has no system", () => {

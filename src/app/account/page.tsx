@@ -552,6 +552,25 @@ export default async function AccountPage({
 
         <Scroller label="Your characters" className="full-measure">
           <table className="log log--manifest">
+            {/* NAME absorbs the leftover width; portrait, STATUS and ACTIONS
+                shrink to content — same `width: 1%` idiom as the admin
+                accounts table (`.log__col--fit`, globals.css). Without this
+                `table-layout: auto` has nowhere to put its slack and hands all
+                of it to whichever column happens to come first in markup,
+                which was NAME purely by accident of column order, not by
+                declaration. Column count follows `manifestColumns()` so a
+                STATUS-less (all-ok) crew still gets the right number of
+                `<col>`s.
+
+                Wide-viewport only: at 320px the table already overflows its
+                scroll region, so there is no leftover width to redistribute
+                and this is a no-op there. */}
+            <colgroup>
+              <col className="log__col--fit" />
+              <col />
+              {showStatusColumn && <col className="log__col--fit" />}
+              <col className="log__col--fit" />
+            </colgroup>
             {/* Always present, unlike the visual copy above: a `<caption>` is
                 announced for the table as a whole, so this is the one place a
                 standing fact about the managed contact label reaches a member
@@ -603,14 +622,28 @@ export default async function AccountPage({
                   // already being the main, `unlink` on there being more than
                   // one character to unlink down to — so `hasActions` is
                   // false only for a single-character account's one row,
-                  // which must render no toggle onto an empty drawer.
+                  // which must render no toggle onto an empty panel.
                   const hasMainAction = !c.isMain;
                   const hasUnlinkAction = view.characters.length > 1;
                   const hasActions = hasMainAction || hasUnlinkAction;
                   // Walkthrough 3.4: elide only an alt whose location reads
                   // identically to the main's (see `locationKey`'s comment).
+                  //
+                  // `!c.locationStale` is part of that identity, not an extra
+                  // condition: the blank is the one location state this page
+                  // still asks a reader to interpret, and what it claims is
+                  // "same as the main, as of the same reading everyone else
+                  // got". A lagging alt whose last reading happened to match
+                  // does not satisfy that — it means "we last saw this one
+                  // with the main, and have not been able to check since",
+                  // which is the ambiguous blank this redesign exists to
+                  // abolish, not an instance of the one it keeps. Such a row
+                  // falls back to its own line, where `(stale)` and `.dim`
+                  // say so out loud. Costs no fold rows on a healthy manifest,
+                  // where nothing is stale by definition.
                   const elideLocation =
                     !c.isMain &&
+                    !c.locationStale &&
                     mainLocationKey !== null &&
                     locationKey(c.location) === mainLocationKey;
                   return (
@@ -765,25 +798,39 @@ export default async function AccountPage({
                                   className="inline-form"
                                 >
                                   <Submit
-                                    // 36px, the drawer grade (ruling R1) — not
-                                    // `.btn--micro`, which this control held
-                                    // while it was still a permanent column
-                                    // entry competing with nine others for row
-                                    // height. One control at a time in a
-                                    // full-width panel has no density problem
-                                    // to trade down for.
+                                    // 36px, the panel grade (ruling R1) — not
+                                    // `.btn--micro`, which the toggle that
+                                    // opens this panel holds instead. One
+                                    // control at a time in a full-width panel
+                                    // has no density problem to trade down
+                                    // for.
                                     className="btn btn--quiet"
                                     pendingLabel="setting…"
                                     // The verb stays in the accessible name
-                                    // rather than the drawer's own toggle
+                                    // rather than the panel's own toggle
                                     // label doing double duty: `unlink` beside
                                     // it makes the same trade (`restName`
                                     // below), and a screen-reader user who
-                                    // opened this drawer still cannot see
+                                    // opened this panel still cannot see
                                     // which row they are on.
                                     aria-label={`make ${c.name} main`}
                                   >
-                                    main
+                                    {/* P3: `make main`, not the bare `main` this
+                                        control shipped with. `make main` was
+                                        tried first and reverted (+39px against
+                                        the 320px gate) back when this sat in a
+                                        permanent MAIN column that competed for
+                                        width on every row. It now lives inside
+                                        a per-row disclosure panel that renders
+                                        `hidden` and costs nothing until a
+                                        member opens it — measured at exactly
+                                        134px / 257px with this label, the same
+                                        as with the bare one (e2e/account.spec.ts's
+                                        two "does not blow out the forced
+                                        horizontal scroll at 320px" gates, long-
+                                        structure and faulted) — so the verb comes
+                                        back for free. */}
+                                    make main
                                   </Submit>
                                 </form>
                               )}

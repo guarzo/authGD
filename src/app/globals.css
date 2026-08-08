@@ -867,13 +867,13 @@ h3.rule-head__label {
    Narrowed with `:has(.drawer)` rather than applied to `.scroller` bare, the
    way `.scroller-frame:has(.log--sticky-col)` below narrows the start fade:
    the class is shared with the audit, sync, account and payouts regions, and
-   only the ones actually holding a drawer want inline-size containment. Two
-   do as of walkthrough 3.2 — the admin accounts table (`Disclosure`,
-   `_components/disclosure.tsx`) and the account page's crew manifest
-   (`CharacterRow`, `account/character-row.tsx`), whose per-row actions drawer
-   depends on this rule firing for its `100cqi` width exactly as the accounts
-   drawer does. The narrowing still earns its keep: the audit and sync
-   regions hold no drawer and get no containment.
+   only the ones actually holding a drawer want inline-size containment. Just
+   the admin accounts table (`Disclosure`, `_components/disclosure.tsx`) — the
+   account page's own per-row actions panel (`.manifest-panel`,
+   `account/character-row.tsx`) is a plain, unpinned block sized to its own
+   `<td>`, not `position: sticky` against a `100cqi` container, so it needs
+   none of this. The narrowing still earns its keep: the audit, sync and
+   account regions hold no `.drawer` and get no containment.
 
    No `@supports` guard, deliberately. Both ways this can go unsupported fail
    soft: an engine without `:has()` drops this rule, leaving `100cqi` with no
@@ -1211,6 +1211,48 @@ h3.rule-head__label {
 .log--manifest th,
 .log--manifest td {
   padding: var(--s-2) var(--s-3);
+}
+
+/* The manifest's own per-row actions panel — same reasoning as the admin
+   accounts table's `.drawer` (ruling R1: one open at a time, spans the full
+   row's width, nothing competing with it for space, so its controls take the
+   36px standalone grade), but not that class. `.drawer` carries
+   `position: sticky` and a `100cqi` width built for an 8-column table that
+   scrolls sideways constantly (see `.scroller:has(.drawer)` above); this
+   table's forced scroll is a 320px edge case, and reusing `.drawer` anyway
+   parked the toggle ~200px from its own row inside a 77px band with a
+   doubled hairline. This panel is a plain block instead: it sizes to its own
+   `<td>` (already the row's own width, via `colSpan`) and needs neither a
+   width declaration nor sticky positioning to stay under its row. */
+.manifest-panel {
+  margin-top: var(--s-3);
+  padding-top: var(--s-3);
+  border-top: 1px solid var(--rule);
+}
+
+.manifest-panel__controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2) var(--s-4);
+  align-items: flex-start;
+}
+
+/* The successor to the `.drawer__controls .btn--quiet` rule this change
+   deletes, not a parallel to it: that rule existed for these same two controls
+   back when they sat in the admin `.drawer`, and nothing else ever matched it
+   (every control inside `.drawer__controls` is `.btn--micro`), so it died with
+   the move. Same buy-back as `.inline-edit--standalone`, and the same reason:
+   `.btn--quiet` alone is the 28px in-row grade, and ruling R1 gives this
+   panel's controls the 36px standalone grade instead. Padding matches bare
+   `.btn` exactly (`var(--s-2) var(--s-4)`), not `.inline-edit--standalone`'s
+   `--s-3` — UNLINK is a `ConfirmSubmit` that swaps this class for plain
+   `.btn.btn--danger` once armed (no `--quiet`), and the two states share one
+   ghost-sized label (`.confirm-submit__label`) specifically so arming never
+   resizes the button. A padding mismatch between the two classes would
+   reintroduce that jitter through the box model instead of the text. */
+.manifest-panel__controls .btn--quiet {
+  min-height: 2.25rem;
+  padding: var(--s-2) var(--s-4);
 }
 
 /* Sync run tables: no fixed layout, and a width floor set by legibility rather
@@ -2301,28 +2343,6 @@ h3.rule-head__label {
 .inline-edit--standalone .btn--quiet {
   min-height: 2.25rem;
   padding: var(--s-2) var(--s-3);
-}
-
-/* Same buy-back as `.inline-edit--standalone` above, for the same reason:
-   the account manifest's per-character MAIN/UNLINK moved out of the table row
-   and into a disclosure drawer (walkthrough finding 3.2), and DESIGN.md
-   ruling R1 settled that a drawer's own controls take the 36px standalone
-   grade — "one drawer is open at a time... spans the full table width...
-   nothing is competing with it for vertical space" is exactly the in-row
-   crowding the 28px grade exists to solve, and a drawer has none of it.
-   `.btn--quiet` still earns MAIN its quiet colouring and UNLINK its
-   `.btn--danger-quiet` escalation; only the size needed buying back.
-
-   Padding matches bare `.btn` exactly (`var(--s-2) var(--s-4)`), not
-   `.inline-edit--standalone`'s `--s-3` — UNLINK is a `ConfirmSubmit` that
-   swaps this class for plain `.btn.btn--danger` once armed (no `--quiet`),
-   and the two states share one ghost-sized label
-   (`.confirm-submit__label`, above) specifically so arming never resizes
-   the button. A padding mismatch between the two classes would reintroduce
-   that jitter through the box model instead of the text. */
-.drawer__controls .btn--quiet {
-  min-height: 2.25rem;
-  padding: var(--s-2) var(--s-4);
 }
 
 /* Owner walkthrough 2026-08-07, finding 1.1. `.btn--quiet`'s transparent,
