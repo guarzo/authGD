@@ -1100,10 +1100,16 @@ h3.rule-head__label {
    dropping the word "paid") totals 200px of saving and still lands at 536px.
    Six columns do not fit 320px by any arrangement, which is the same verdict
    the account manifest reached at `account.spec.ts` ("no arrangement that
-   keeps a portrait, a name and an unlink fits 320px"). Fixing that means
-   pinning a column or dropping some below a breakpoint — a session of its
-   own, like #169/#174 were, and out of scope here. Noted rather than
-   silently shipped. */
+   keeps a portrait, a name and an unlink fits 320px").
+
+   So the table scrolls, and Name is pinned (`log--sticky-col` on the element).
+   The defect was never the scroll itself: it is that panning right to read
+   Total costs the reader the row's identity, which on a corp-wide ledger —
+   ruling R3 — is the one column every other cell is meaningless without.
+   Dropping columns below a breakpoint was the alternative and was rejected:
+   it hides Total, Paid and Status on a phone, turning the ledger into a
+   personal list and collapsing the very /payouts-vs-/account distinction R3
+   draws. A pin hides nothing from anyone. */
 .log--payouts th,
 .log--payouts td {
   padding-top: var(--s-2);
@@ -1121,6 +1127,32 @@ h3.rule-head__label {
 .log--payouts th:first-child,
 .log--payouts td:first-child {
   padding-left: var(--s-5);
+}
+
+/* The pinned column is auto-sized around the operation name, as the accounts
+   table's is around a character name — but an operation name is operator-typed
+   `text` with no length cap in schema.ts, where a character name is bounded by
+   EVE. A single unbroken 60-character token would otherwise set the column's
+   minimum content width and drag the pin across most of a 286px region, which
+   is the one way a pin turns into the problem it was added to solve. Letting
+   the token break puts the column back under the table layout algorithm's
+   control. Measured at 320px with the pin in place, the column is 69px of the
+   286px region — 24%, against the 114px the pre-pin budget above recorded for
+   an unpinned 28-character name. Set this back to `normal` and one 60-char
+   name widens the column to 637px for EVERY row, since a table column is as
+   wide as its widest cell: the pin then exceeds the region it anchors and
+   `payouts.spec.ts` fails on the spot. That test holds the ratio under 60% at
+   both 320px and 390px, so the ceiling is asserted rather than assumed.
+
+   No `scroll-margin-left` companion rule, unlike `.log--audit` and
+   `.log--dense` above. That rule exists for a control in a non-first column
+   that focus can park under the pin; every interactive element in this table
+   is the name link in column 1, so there is no such control to rescue. Adding
+   the rule anyway would be a figure with nothing to keep it honest — the exact
+   drift the audit table's own breakpoint comment warns about. If a control
+   ever lands in a later column, it needs one. */
+.log--payouts td:first-child {
+  overflow-wrap: anywhere;
 }
 
 .log--payouts th:last-child,

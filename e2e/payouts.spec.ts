@@ -12,6 +12,7 @@ import {
 } from "../src/db/schema";
 import { centsToIsk, iskToCents } from "../src/core/payout-split";
 import { OPEN_WINDOW_SCOPE } from "../src/lib/esi/client";
+import { pinGeometry } from "./geometry";
 
 const { db, pool } = testDb();
 test.afterAll(() => pool.end());
@@ -3664,3 +3665,111 @@ test("a filter matching nothing renders its own empty state, not 'no operations'
   await expect(page).toHaveURL(/\/payouts$/);
   await expect(page.getByRole("link", { name: "Real operation" })).toBeVisible();
 });
+
+/**
+ * The pinned Name column, at the widths where the table is forced to scroll.
+ *
+ * Six columns need 736px worst case against a 286px region at 320px (the
+ * budget is measured out in globals.css beside `.log--payouts`), so scrolling
+ * is not the defect — losing the row's identity while panning to Total is.
+ * Under ruling R3 /payouts is a corp-wide ledger, which makes "which operation
+ * is this figure for?" the question every other cell depends on, so these are
+ * correctness tests in the same sense as the accounts table's pin tests, not
+ * cosmetic ones.
+ *
+ * A deliberately unbroken 60-character name is seeded because operation names
+ * are operator-typed `text` with no cap in schema.ts, unlike the EVE-bounded
+ * character names the accounts table pins. That token is the one input that
+ * could grow the pin until it covers the region it is meant to anchor.
+ */
+for (const width of [320, 390]) {
+  test(`payouts at ${width}px: the operation name stays put while Total is reached`, async ({
+    page,
+    context,
+  }) => {
+    const viewer = await seedMember(db, {
+      name: "Pin Viewer",
+      tier: "member",
+      status: "active",
+    });
+    await context.addCookies([await sessionCookieFor(db, viewer.id)]);
+
+    for (const [i, name] of [
+      "Aaa First Operation Name",
+      "B".repeat(60),
+      "Ccc Third Operation",
+    ].entries()) {
+      const [op] = await db
+        .insert(payoutOperation)
+        .values({
+          name,
+          occurredAt: new Date(`2026-08-0${5 - i}`),
+          corpSharePct: "0",
+          status: "finalized",
+        })
+        .returning();
+      await db.insert(lootPool).values({
+        operationId: op.id,
+        valuationSource: "flat",
+        // A 12-digit total is the worst case the column budget was measured
+        // against; a short one would understate how far the row scrolls.
+        totalValue: "123456789012.00",
+        notes: "seeded",
+      });
+      await db.insert(payoutParticipant).values({
+        operationId: op.id,
+        accountId: viewer.id,
+        displayName: "Pin Viewer",
+        shares: "1",
+        amount: "123456789012.00",
+        paidAmount: "123456789012.00",
+      });
+    }
+
+    await page.setViewportSize({ width, height: 720 });
+    await page.goto("/payouts");
+    await page.waitForSelector(".scroller tbody tr");
+
+    const pinned = await pinGeometry(
+      page,
+      ".scroller",
+      "tbody tr:first-child td:first-child",
+      "right",
+    );
+    // Vacuous unless there was something to scroll past in the first place.
+    expect(pinned.maxScrollLeft).toBeGreaterThan(0);
+    expect(pinned.scrolledLeft).toBeGreaterThanOrEqual(
+      pinned.maxScrollLeft - pinned.gutterWidth,
+    );
+    // Fully on screen at the far right, not merely intersecting by a sliver —
+    // the distinction `toBeInViewport` cannot make (see geometry.ts).
+    expect(pinned.overlapX).toBeCloseTo(pinned.cellWidth, 0);
+    expect(pinned.overlapY).toBeGreaterThan(0);
+    expect(pinned.text).toContain("Aaa First Operation Name");
+
+    // The corner cell rides with the column it heads: a NAME column left under
+    // a heading that reads TOTAL is worse than no heading at all.
+    const corner = await pinGeometry(page, ".scroller", "thead th:first-child", "right");
+    expect(corner.overlapX, "the Name heading stays over the pinned column").toBeCloseTo(
+      corner.cellWidth,
+      0,
+    );
+    expect(corner.text).toContain("Name");
+
+    // The pin has to leave most of the region for the columns it exists to let
+    // you reach. The same 60% ceiling the account manifest is held to — and
+    // the reason `overflow-wrap: anywhere` is on this column, since the
+    // 60-character row below would otherwise set its width.
+    const longRow = await pinGeometry(
+      page,
+      ".scroller",
+      "tbody tr:nth-child(2) td:first-child",
+      "right",
+    );
+    expect(longRow.text).toContain("B");
+    expect(
+      longRow.cellWidth / longRow.regionWidth,
+      "an unbroken 60-character name does not turn the pin into the page",
+    ).toBeLessThan(0.6);
+  });
+}

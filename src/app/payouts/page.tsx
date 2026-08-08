@@ -224,7 +224,16 @@ export default async function PayoutsPage({
           Log
         </RuleHead>
         <Scroller label="Operations log">
-          <table className="log log--payouts">
+          {/* `log--sticky-col` pins Name. Six columns do not fit a 320px
+              viewport by any arrangement (the budget is measured out in
+              globals.css beside `.log--payouts`), so this table scrolls — and
+              a row whose identity scrolls away is a ledger you cannot read a
+              figure off. The mechanism is entirely the shared class: the
+              opaque ground, the edge hairline, the corner cell and the
+              flattened hover all come from `.log--sticky-col` in globals.css,
+              and the Scroller's start fade steps aside for it on its own via
+              `:has()`. */}
+          <table className="log log--payouts log--sticky-col">
             <thead>
               <tr>
                 <th scope="col">Name</th>
