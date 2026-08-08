@@ -543,12 +543,36 @@ export default async function AdminSyncPage({
                             {hiddenUtc && <span className="visually-hidden"> UTC</span>}
                             {nextRun && (
                               <>
-                                {/* An explicit space: accessible-name computation
-                              inserts no separator for a <br> in Chromium, and
-                              the row's whole accessible name is this
-                              four-value concatenation, because the column
-                              header above is aria-hidden. Without it the last
-                              two values compute as "every 30mnext 14:30". */}{" "}
+                                {/* The leading space is belt-and-braces, not a
+                              requirement — the same posture as the " UTC"
+                              span above, and measured the same way. The row's
+                              whole accessible name is this four-value
+                              concatenation, because the column header above is
+                              aria-hidden, so what separates the values here is
+                              the only thing a screen reader has to go on.
+
+                              Chromium's accessible-name computation does
+                              insert its own separator at the <br> below: with
+                              this space deleted the row still computes as
+                              "every 30m next 17:30". Delete the <br> as well
+                              and it collapses to "every 30mnext 17:30" — the
+                              line break, not the space, is what holds the two
+                              values apart today.
+
+                              It stays because that separator is an engine
+                              behaviour rather than something this page
+                              controls, and because the <br> is a layout
+                              choice: a future rewrite that sets this cell to
+                              wrap on its own, dropping the break, would make
+                              this space the only thing left doing the job.
+                              The e2e case "an interval row's cadence and its
+                              next-run time stay separate words" catches that
+                              collapse — it distinguishes one space from none,
+                              which is the part that matters. What no test we
+                              run can see is one space versus two, since
+                              `toHaveAccessibleName` normalises whitespace; a
+                              doubled separator is harmless, so that blind spot
+                              is the acceptable side of keeping this. */}{" "}
                                 <br />
                                 next {utcHhmm(nextRun)}
                               </>
