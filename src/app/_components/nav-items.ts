@@ -17,7 +17,7 @@ import type { NavItem } from "./ui";
  * destinations they are currently on.
  *
  *   Your account  — always
- *   Payouts       — iff canReadPayouts (tier === "member"; services/payouts.ts)
+ *   Operations    — iff canReadPayouts (tier === "member"; services/payouts.ts)
  *   Members       — iff isAdmin
  *   Audit log     — iff isAdmin
  *   Sync          — iff isAdmin
@@ -26,9 +26,9 @@ import type { NavItem } from "./ui";
  * necessarily a payouts reader (default tier is `alumni`), and a payouts
  * reader is not necessarily an admin. `navFor` takes both bits explicitly
  * rather than inferring one from the other, so there is no call site left that
- * can render Payouts unconditionally just because the viewer is an admin.
+ * can render Operations unconditionally just because the viewer is an admin.
  *
- * Order is fixed and identical everywhere: Your account, Payouts, Members,
+ * Order is fixed and identical everywhere: Your account, Operations, Members,
  * Audit log, Sync — broadest access first. A member-only reader, a payouts
  * reader, and an admin all see a strict prefix (in membership, not merely in
  * count) of the same five-item list, in the same order, rather than five
@@ -75,7 +75,7 @@ import type { NavItem } from "./ui";
  */
 
 const ACCOUNT: NavItem = { href: "/account", label: "Your account" };
-const PAYOUTS: NavItem = { href: "/payouts", label: "Payouts" };
+const PAYOUTS: NavItem = { href: "/payouts", label: "Operations" };
 const MEMBERS: NavItem = { href: "/admin/accounts", label: "Members" };
 const AUDIT: NavItem = { href: "/admin/audit", label: "Audit log" };
 const SYNC: NavItem = { href: "/admin/sync", label: "Sync" };

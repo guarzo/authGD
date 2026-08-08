@@ -17,7 +17,7 @@ describe("navFor", () => {
 
   // The pair that made the uniform-nav option unworkable: isAdmin and tier are
   // orthogonal columns (db/schema.ts) and the default tier is `alumni`, so an
-  // admin is routinely NOT a payouts reader. Offering Payouts off the admin
+  // admin is routinely NOT a payouts reader. Offering Operations off the admin
   // bit alone would hand that ordinary account a link that redirects it
   // straight back out.
   it("keeps the admin bit and the payouts bit independent", () => {
@@ -29,14 +29,14 @@ describe("navFor", () => {
     ]);
     expect(labels(navFor({ canReadPayouts: true, isAdmin: false }))).toEqual([
       "Your account",
-      "Payouts",
+      "Operations",
     ]);
   });
 
   it("orders every reach the same way, broadest access first", () => {
     expect(labels(navFor({ canReadPayouts: true, isAdmin: true }))).toEqual([
       "Your account",
-      "Payouts",
+      "Operations",
       "Members",
       "Audit log",
       "Sync",
@@ -65,7 +65,7 @@ describe("navFromPath", () => {
   });
 
   it("reads /payouts/* as the payouts bit and nothing about isAdmin", () => {
-    expect(labels(navFromPath("/payouts/abc"))).toEqual(["Your account", "Payouts"]);
+    expect(labels(navFromPath("/payouts/abc"))).toEqual(["Your account", "Operations"]);
   });
 
   it("reads an unguarded path as proving neither", () => {

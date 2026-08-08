@@ -52,7 +52,7 @@ test("a typed-in bad URL renders the app's own 404, not the framework's", async 
   // nothing about this viewer is proven — and `nav-items.ts` renders that as
   // `navFor({canReadPayouts: false, isAdmin: false})`. Pinning the whole list
   // is what would catch a future change that taught this file to guess from
-  // the URL: the seed above is tier `alumni`, so a guessed `Payouts` here
+  // the URL: the seed above is tier `alumni`, so a guessed `Operations` here
   // would be a link that redirects them straight back out.
   await expect(page.locator(".shell__nav").getByRole("link")).toHaveText([
     "Your account",
@@ -121,12 +121,12 @@ test("clicking a since-deleted operation announces the 404 and lands focus in it
   // Exactly two items, and the pair is the point. This boundary is reachable
   // only through `page.tsx`, which calls `requirePayoutReader()` before it
   // calls `notFound()` — so unlike the root 404 above, the payouts bit here is
-  // proven rather than absent, and `Payouts` is offered. `isAdmin` is the bit
+  // proven rather than absent, and `Operations` is offered. `isAdmin` is the bit
   // a payouts-scoped guard never checks, so the three admin destinations stay
   // out even for a viewer who would get them on a live page.
   await expect(page.locator(".shell__nav").getByRole("link")).toHaveText([
     "Your account",
-    "Payouts",
+    "Operations",
   ]);
 
   // The tab agrees with the page. `page.tsx` exports `generateMetadata`, which

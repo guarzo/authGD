@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import * as schema from "@/db/schema";
@@ -111,6 +111,202 @@ describe("listPayoutOperations", () => {
     // only B has been paid.
     expect(summary.participantCount).toBe(2);
     expect(summary.paidCount).toBe(1);
+  });
+});
+
+describe("listPayoutOperations — viewerState (finding 2.1)", () => {
+  it("omits the key entirely when no viewerAccountId is passed", async () => {
+    const { operationId } = await seedOperation({ totalValue: "100.00", names: ["A"] });
+    const [summary] = (await listPayoutOperations(ctx.db)).operations.filter(
+      (o) => o.id === operationId,
+    );
+    expect(summary).not.toHaveProperty("viewerState");
+  });
+
+  it("reads absent when the viewer has no participant row on the operation", async () => {
+    const viewer = await seedAccount(ctx.db, { tier: "member", status: "active" });
+    const { operationId } = await seedOperation({ totalValue: "100.00", names: ["A"] });
+    const [summary] = (
+      await listPayoutOperations(ctx.db, { viewerAccountId: viewer.id })
+    ).operations.filter((o) => o.id === operationId);
+    expect(summary.viewerState).toBe("absent");
+  });
+
+  it("reads excluded when every one of the viewer's rows is excluded", async () => {
+    const viewer = await seedAccount(ctx.db, { tier: "member", status: "active" });
+    const { operator, operationId, byName } = await seedOperation({
+      totalValue: "100.00",
+      names: ["Viewer"],
+    });
+    await ctx.db
+      .update(payoutParticipant)
+      .set({ accountId: viewer.id })
+      .where(eq(payoutParticipant.id, byName.get("Viewer")!.id));
+    await ctx.db.transaction((tx) =>
+      setParticipantExcluded(tx, operator.id, byName.get("Viewer")!.id, true),
+    );
+    const [summary] = (
+      await listPayoutOperations(ctx.db, { viewerAccountId: viewer.id })
+    ).operations.filter((o) => o.id === operationId);
+    expect(summary.viewerState).toBe("excluded");
+  });
+
+  it("reads unpaid before payment and paid once recorded", async () => {
+    const viewer = await seedAccount(ctx.db, { tier: "member", status: "active" });
+    const { operator, operationId, byName } = await seedOperation({
+      totalValue: "100.00",
+      names: ["Viewer"],
+    });
+    await ctx.db
+      .update(payoutParticipant)
+      .set({ accountId: viewer.id })
+      .where(eq(payoutParticipant.id, byName.get("Viewer")!.id));
+
+    const unpaid = (
+      await listPayoutOperations(ctx.db, { viewerAccountId: viewer.id })
+    ).operations.find((o) => o.id === operationId);
+    expect(unpaid!.viewerState).toBe("unpaid");
+
+    await ctx.db.transaction((tx) => finalizeOperation(tx, operator.id, operationId));
+    await ctx.db.transaction((tx) =>
+      recordPayment(tx, operator.id, byName.get("Viewer")!.id),
+    );
+    const paid = (
+      await listPayoutOperations(ctx.db, { viewerAccountId: viewer.id })
+    ).operations.find((o) => o.id === operationId);
+    expect(paid!.viewerState).toBe("paid");
+  });
+
+  it("collapses two of the viewer's own characters in one operation into a single state", async () => {
+    // Same reason src/app/account/account-payouts.tsx:26-29 collapses alts to
+    // one row per operation: a fleet can carry two of the viewer's characters
+    // as separate participant rows, and the viewer has exactly one relevant
+    // question ("was I paid"), not one per character.
+    const viewer = await seedAccount(ctx.db, { tier: "member", status: "active" });
+    const { operator, operationId, byName } = await seedOperation({
+      totalValue: "200.00",
+      names: ["Alt1", "Alt2"],
+    });
+    await ctx.db
+      .update(payoutParticipant)
+      .set({ accountId: viewer.id })
+      .where(
+        inArray(payoutParticipant.id, [byName.get("Alt1")!.id, byName.get("Alt2")!.id]),
+      );
+    await ctx.db.transaction((tx) => finalizeOperation(tx, operator.id, operationId));
+    await ctx.db.transaction((tx) =>
+      recordPayment(tx, operator.id, byName.get("Alt1")!.id),
+    );
+
+    // Only one of the two alt rows is paid — collapse rule says this reads
+    // unpaid, not paid, until every non-excluded viewer row clears.
+    const partial = (
+      await listPayoutOperations(ctx.db, { viewerAccountId: viewer.id })
+    ).operations.find((o) => o.id === operationId);
+    expect(partial!.viewerState).toBe("unpaid");
+
+    await ctx.db.transaction((tx) =>
+      recordPayment(tx, operator.id, byName.get("Alt2")!.id),
+    );
+    const full = (
+      await listPayoutOperations(ctx.db, { viewerAccountId: viewer.id })
+    ).operations.find((o) => o.id === operationId);
+    expect(full!.viewerState).toBe("paid");
+  });
+
+  it("leaves participantCount and paidCount unchanged when viewerAccountId is passed", async () => {
+    const viewer = await seedAccount(ctx.db, { tier: "member", status: "active" });
+    const { operator, operationId, byName } = await seedOperation({
+      totalValue: "300.00",
+      names: ["A", "B", "C"],
+    });
+    await ctx.db
+      .update(payoutParticipant)
+      .set({ accountId: viewer.id })
+      .where(eq(payoutParticipant.id, byName.get("A")!.id));
+    await ctx.db.transaction((tx) => finalizeOperation(tx, operator.id, operationId));
+    await ctx.db.transaction((tx) => recordPayment(tx, operator.id, byName.get("A")!.id));
+
+    const without = (await listPayoutOperations(ctx.db)).operations.find(
+      (o) => o.id === operationId,
+    )!;
+    const withViewer = (
+      await listPayoutOperations(ctx.db, { viewerAccountId: viewer.id })
+    ).operations.find((o) => o.id === operationId)!;
+    expect(withViewer.participantCount).toBe(without.participantCount);
+    expect(withViewer.paidCount).toBe(without.paidCount);
+    expect(withViewer).not.toHaveProperty("amount");
+  });
+});
+
+describe("listPayoutOperations — filters (finding 2.2)", () => {
+  it("matches an operation name case-insensitively by substring", async () => {
+    await seedOps([
+      { name: "Thursday Roam", occurredAt: "2026-08-01T00:00:00Z" },
+      { name: "Sunday Defense Fleet", occurredAt: "2026-08-02T00:00:00Z" },
+    ]);
+    const { operations } = await listPayoutOperations(ctx.db, { q: "roam" });
+    expect(operations.map((o) => o.name)).toEqual(["Thursday Roam"]);
+  });
+
+  it("treats %, _ and the escape character as literal text, not wildcards", async () => {
+    await seedOps([
+      { name: "100% Isk Split", occurredAt: "2026-08-01T00:00:00Z" },
+      { name: "Unrelated Fleet", occurredAt: "2026-08-02T00:00:00Z" },
+    ]);
+    // If % were treated as a SQL wildcard, this would match both operations.
+    const { operations } = await listPayoutOperations(ctx.db, { q: "100%" });
+    expect(operations.map((o) => o.name)).toEqual(["100% Isk Split"]);
+  });
+
+  it("trims q, treating whitespace-only as no filter", async () => {
+    await seedOps([
+      { name: "A", occurredAt: "2026-08-01T00:00:00Z" },
+      { name: "B", occurredAt: "2026-08-02T00:00:00Z" },
+    ]);
+    const trimmed = await listPayoutOperations(ctx.db, { q: "  a  " });
+    expect(trimmed.operations.map((o) => o.name)).toEqual(["A"]);
+
+    const blank = await listPayoutOperations(ctx.db, { q: "   " });
+    expect(blank.operations).toHaveLength(2);
+  });
+
+  it("filters by status", async () => {
+    const draft = await seedOperation({ totalValue: "1.00", names: ["A"] });
+    const { operator, operationId: finalizedId } = await seedOperation({
+      totalValue: "1.00",
+      names: ["B"],
+    });
+    await ctx.db.transaction((tx) => finalizeOperation(tx, operator.id, finalizedId));
+
+    const drafts = await listPayoutOperations(ctx.db, { status: "draft" });
+    expect(drafts.operations.map((o) => o.id)).toEqual([draft.operationId]);
+
+    const finalized = await listPayoutOperations(ctx.db, { status: "finalized" });
+    expect(finalized.operations.map((o) => o.id)).toEqual([finalizedId]);
+  });
+
+  it("composes filters with a cursor, keeping keyset paging correct within the narrowed set", async () => {
+    await seedOps([
+      { name: "Roam One", occurredAt: "2026-08-04T00:00:00Z" },
+      { name: "Roam Two", occurredAt: "2026-08-03T00:00:00Z" },
+      { name: "Roam Three", occurredAt: "2026-08-02T00:00:00Z" },
+      { name: "Defense Fleet", occurredAt: "2026-08-01T00:00:00Z" },
+    ]);
+
+    const first = await listPayoutOperations(ctx.db, { q: "roam", limit: 2 });
+    expect(first.operations.map((o) => o.name)).toEqual(["Roam One", "Roam Two"]);
+    expect(first.nextCursor).not.toBeNull();
+
+    const second = await listPayoutOperations(ctx.db, {
+      q: "roam",
+      before: first.nextCursor!,
+      limit: 2,
+    });
+    // "Defense Fleet" is newer than nothing here, but it doesn't match "roam"
+    // and must not leak into the filtered second page.
+    expect(second.operations.map((o) => o.name)).toEqual(["Roam Three"]);
+    expect(second.nextCursor).toBeNull();
   });
 });
 

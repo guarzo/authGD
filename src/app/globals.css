@@ -1073,12 +1073,35 @@ h3.rule-head__label {
   width: 1%;
 }
 
-/* Payouts list only. The edge columns get more room than the interior ones,
-   so the row's rhythm varies with the step (DESIGN.md: "rhythm comes from
-   varying the step, not from repeating one padding value") instead of
-   spending .log's one padding value identically across all five columns.
-   Name is the row's link and the first thing the eye lands on; Paid is the
-   last fact and sits against the table's own outer rule. */
+/* Payouts list only. Tightened the same way .log--dense tightens the accounts
+   table (s-3/s-4 base padding down to s-2/s-3), not by reusing that class:
+   .log--dense also carries `vertical-align: middle` and a drawer-row override
+   this table has no use for — the same reasoning .log--manifest gives for its
+   own copy rather than borrowing the accounts table's class.
+
+   Added with the Yours column (walkthrough finding 2.1, "was I paid?"): this
+   table's Scroller was already the escape valve for content wider than a
+   narrow viewport (measured 444px against a 288px scroller region at 320px,
+   BEFORE this column existed — five columns already didn't fit unscrolled),
+   and a sixth column pushed that to 517px. This buys back roughly 8px per
+   column; it narrows the gap, it does not close it. Closing it at 320px would
+   mean the kind of column-by-column budget the account manifest went through
+   twice (#169, #174), which is out of scope for this session — noted rather
+   than silently shipped. */
+.log--payouts th,
+.log--payouts td {
+  padding-top: var(--s-2);
+  padding-bottom: var(--s-2);
+  padding-left: var(--s-3);
+  padding-right: var(--s-3);
+}
+
+/* The edge columns still get more room than the interior ones, so the row's
+   rhythm varies with the step (DESIGN.md: "rhythm comes from varying the step,
+   not from repeating one padding value") instead of spending one padding
+   value identically across every column. Name is the row's link and the
+   first thing the eye lands on; Yours is the last fact now and sits against
+   the table's own outer rule. */
 .log--payouts th:first-child,
 .log--payouts td:first-child {
   padding-left: var(--s-5);

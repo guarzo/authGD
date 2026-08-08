@@ -30,7 +30,7 @@ test.beforeEach(() => resetDb(db));
 
 /** `/payouts` reads payout_operation in its body, after `requirePayoutReader`
  *  (which reads neither payouts table), and exports a static
- *  `metadata: { title: "Payouts" }` that resolves either way. `resetDb`
+ *  `metadata: { title: "Operations" }` that resolves either way. `resetDb`
  *  truncates the table, so the rename is always undone.
  *
  *  payout_operation rather than loot_pool: `listPayoutOperations` skips its
@@ -62,7 +62,7 @@ test("the tab stops naming the page that failed", async ({ page, context }) => {
     await page.goto(BROKEN_ROUTE);
     await expect(page.getByRole("heading", { name: "Something broke" })).toBeVisible();
 
-    // `payouts/page.tsx` exports a static `metadata.title = "Payouts"`, which
+    // `payouts/page.tsx` exports a static `metadata.title = "Operations"`, which
     // resolves whether or not the body throws, and this is the assertion that
     // the hoisted <title> beats it. Worth pinning precisely because the
     // segment-scoped `not-found.tsx` was measured going the other way — the
@@ -175,16 +175,18 @@ test("the boundary keeps an admin inside the admin section", async ({
     await expect(nav.getByRole("link", { name: "Members" })).toBeVisible();
     await expect(nav.getByRole("link", { name: "Audit log" })).toBeVisible();
     await expect(nav.getByRole("link", { name: "Sync" })).toBeVisible();
-    // And NOT Payouts — even though this particular admin can read them, being
+    // And NOT Operations — even though this particular admin can read them, being
     // seeded tier `member`. `isAdmin` and `tier` are orthogonal columns, so
     // standing on a route behind the admin guard proves the admin bit and
     // nothing whatever about tier. A boundary that inferred one from the other
     // would hand an alumni admin — the default tier — a link that redirects
-    // them straight back out. The real `/admin/*` header does offer Payouts to
+    // them straight back out. The real `/admin/*` header does offer Operations to
     // this same account, off a tier read the layout performs; that gap between
     // the two is the whole of what "the same rule on weaker evidence" costs,
     // and it is deliberately paid in the safe direction (`nav-items.ts`).
-    await expect(nav.getByRole("link", { name: "Payouts", exact: true })).toHaveCount(0);
+    await expect(nav.getByRole("link", { name: "Operations", exact: true })).toHaveCount(
+      0,
+    );
     await expect(page.locator(".shell__register")).toHaveText("Admin");
     await expect(page.locator("a.shell__mark")).toHaveAttribute(
       "href",
@@ -214,13 +216,13 @@ test("the boundary keeps a payouts reader inside payouts, and offers no admin li
     await expect(page.getByRole("heading", { name: "Something broke" })).toBeVisible();
 
     const nav = page.getByRole("navigation", { name: "Main" });
-    await expect(nav.getByRole("link", { name: "Payouts" })).toBeVisible();
+    await expect(nav.getByRole("link", { name: "Operations" })).toBeVisible();
     // `access.isAdmin` is the one thing the boundary cannot read, so the admin
     // shortcut the real /payouts header offers conditionally is dropped rather
     // than guessed. A plain reader must not be shown a link that bounces.
     await expect(nav.getByRole("link", { name: "Members" })).toHaveCount(0);
 
-    await expect(page.getByRole("link", { name: "Back to Payouts" })).toHaveAttribute(
+    await expect(page.getByRole("link", { name: "Back to Operations" })).toHaveAttribute(
       "href",
       "/payouts",
     );
@@ -229,9 +231,9 @@ test("the boundary keeps a payouts reader inside payouts, and offers no admin li
   // The escape is followed only after the table is back, so this asserts it
   // reaches a *working* list rather than bouncing off the same throw. The link
   // is a plain `<a href>`, so this is a document load.
-  await page.getByRole("link", { name: "Back to Payouts" }).click();
+  await page.getByRole("link", { name: "Back to Operations" }).click();
   await expect(page).toHaveURL(/\/payouts$/);
-  await expect(page.getByRole("heading", { name: "Payouts" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Operations", level: 1 })).toBeVisible();
 });
 
 test("the reference is inside the instruction that asks for it", async ({
