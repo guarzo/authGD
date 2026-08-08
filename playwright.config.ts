@@ -83,17 +83,30 @@ export default defineConfig({
   // Retrying that does not stabilize anything — it resamples a live defect
   // until it comes up green and then files it under "flaky".
   //
-  // The concrete case: `useSubmitGuard` (src/app/_components/submit-guard.ts)
-  // releases its re-entry latch only after an effect observes `pending` true
-  // and then false. When that transition is swallowed, the latch sticks and
-  // every later press on that button is preventDefault'ed — a silent lost
-  // save. `e2e/payouts.spec.ts` "notes save from an always-open textarea,
-  // twice running" catches it — one of the few specs that polls the database
-  // rather than the DOM, so it sees the lost write directly — measured at 4
-  // failures in 10 runs (`--repeat-each=10`, 2026-08-08). Treating attempts as
-  // independent, at that rate `retries: 2` would report green on 1 - 0.4^3 ≈
-  // 94% of CI runs, and even `retries: 1` on 84% — the bug would be marked
-  // "flaky", filtered out of the report, and shipped.
+  // The concrete case: a test presses a control before the previous action has
+  // reached the client. `useSubmitGuard`
+  // (src/app/_components/submit-guard.ts) then refuses the press —
+  // preventDefault, no POST, no visible trace — because it holds a re-entry
+  // latch until an effect observes `pending` true and then false. That is the
+  // guard working; the press was genuinely a second submit over a live one.
+  // `e2e/payouts.spec.ts` "notes save from an always-open textarea, twice
+  // running" caught it as a lost write, because it is one of the few specs that
+  // polls the database rather than the DOM — measured at 4 failures in 10 runs
+  // on one machine, 5-10% on a second, and 0 in 60 on a third. The rate is a
+  // margin between two latency distributions, so it moves by machine; a
+  // non-zero count anywhere is the signal.
+  //
+  // Treating attempts as independent, at 40% `retries: 2` would report green on
+  // 1 - 0.4^3 ≈ 94% of CI runs, and even `retries: 1` on 84% — the defect would
+  // be marked "flaky", filtered out of the report, and shipped.
+  //
+  // An earlier version of this comment said the latch "sticks" permanently once
+  // a `pending` transition is swallowed. That was inferred from the symptom and
+  // is wrong: the swallowed transition has never been observed, and a press
+  // after a dropped one has always gone through.
+  // `e2e/submit-guard.spec.ts` "a press refused mid-flight does not latch the
+  // guard" is the committed regression test for that, and it forces the drop on
+  // every run rather than sampling it.
   //
   // The cost of zero is real and accepted: an infrastructure blip fails the
   // whole run. That is the cheaper mistake. A red run gets investigated; a
