@@ -8,10 +8,13 @@
 
 **Tech Stack:** Next.js 15 App Router (server components + server actions), Drizzle ORM on Postgres, pg-boss via the outbox dispatcher, Zod for every ESI envelope, Vitest for unit and DB-backed tests, Playwright for e2e.
 
-**Design spec:** `docs/specs/2026-08-09-access-list-monitor-design.md` — read it before Task 1. Every task below traces to a section of it.
+**Design spec:** `docs/specs/2026-08-09-access-list-monitor-design.md` — read it before Task 2. Every task below traces to a section of it.
 
 ## Global Constraints
 
+- **Execution order is 2 → 12, then 1.** Task 1 is a live-ESI verification that
+  needs the finished page and a real EVE token; it keeps the number 1 only so
+  every "Task N" cross-reference in this plan stays valid. Start at Task 2.
 - **Migrations are generated, never hand-written.** Run `npm run db:generate` after a schema edit. Never edit a migration already applied in production — `fly.toml` runs migrations as a release command on every deploy.
 - **Stop and ask** before touching persisted data beyond the new tables, an already-applied migration, `TOKEN_ENCRYPTION_KEY` handling, or the OAuth state flow. These are the irreversible surfaces.
 - **Cite test output.** Never claim `npm test`, `npm run typecheck`, `npm run lint`, `npm run test:e2e`, `npm run build`, `docker build .`, or `npm run format:check` passed without running it and quoting the result. Those seven are the whole CI gate, across five jobs (CONTRIBUTING.md:19-38) — `typecheck`, `lint` and `format:check` share one job, so a green typecheck proves a third of it. `format:check` is the cheap one and the one reading a diff cannot substitute for — run it per task, not only at the final gate.
@@ -99,289 +102,81 @@ rather than in a separate read module — they query the same five tables, and a
 split would put two files in the business of knowing that schema.
 
 ---
-### Task 1: ESI spike against a live access list
+### Task 1: Live verification against a real access list (DEFERRED — run last)
 
-The spec's *Assumptions to verify first* makes this the first implementation
-step. It produces **no committed source code** — its only artifact is a findings
-section appended to the spec and committed. Nothing in Tasks 2–14 may be written
-before this task's decision gate is answered, because question 1 changes
-`getAccessLists`'s body and question 4 can change the job's per-list loop.
+**This task is out of order on purpose. Do not execute it first.** It runs
+after Task 12, once the page exists. It keeps the number 1 so every "Task 1"
+reference elsewhere in this plan stays valid.
 
-**Files:**
+The original Task 1 was a throwaway spike script that answered four questions
+against a live token before any code was written. It was dropped: three of its
+four questions are already answered by CCP's published request/response
+examples (recorded below as settled decisions), and the fourth has a safe
+default that is *better* than whatever the spike would have found. Paying for a
+tunnelled OAuth grant, `SYNC_MODE=live` on a local checkout, and a temporary
+edit to the auth route bought less than it cost.
 
-- Create (gitignored, deleted at the end): `tmp/acl-spike.ts`
-- Modify (temporarily, **reverted**, never committed):
-  `src/app/auth/eve/link/route.ts:17`
-- Modify (committed): `docs/specs/2026-08-09-access-list-monitor-design.md`
-  — append a `## Spike findings` section
+**The four questions, and how each is now settled:**
 
-**Interfaces:**
+1. **Pagination.** CCP's documented response for `GET
+   /characters/{id}/access-lists` is `{"access_lists":[{"id":1}]}` — an
+   envelope, single page, no `X-Pages`. Task 2 parses that envelope and does
+   not loop. If a live run ever returns `X-Pages`, add `getAllContacts`'s
+   fail-closed loop (`src/lib/esi/client.ts:239-278`) then.
+2. **The `access` value set.** Settled by design, not by observation: `access`
+   stays `z.string()` regardless of what values exist, per the spec's *envelope
+   closed, `access` open* rule. The documented value is `"Unspecified"`. The
+   page interprets the values it recognizes and renders any other verbatim, so
+   a new CCP value degrades to a bare string instead of failing the read.
+3. **Base URL and compatibility date.** Settled by CCP's own curl example: the
+   versionless `https://esi.evetech.net` base with `X-Compatibility-Date:
+   2026-08-04`, path `/characters/{id}/access-lists` with **no** trailing
+   slash. Task 2 sends the header on both endpoints.
+4. **A watched list the holder cannot read.** Deliberately not relied upon.
+   Task 7 skips any watched id absent from the discovery response and records
+   it as `readStatus: "not_visible"` **without fetching it**. That is correct
+   whether the endpoint answers 403, 404, or 200-with-empty-membership — and
+   the last of those is the dangerous one, because an empty 200 is
+   indistinguishable from "an admin removed everyone" and would otherwise be
+   written as a real observation. Task 7 still classifies a 403/404 on a list
+   discovery *did* return, so a mid-run permission change is not silently
+   dropped either.
 
-- Consumes: `loadConfig()` (`src/config.ts:140`), `createDb(url)`
-  (`src/db/index.ts:25`), `getFreshAccessToken(db, cfg, ch)`
-  (`src/services/tokens.ts:61`), `buildEveAuthorizeUrl(cfg, state, codeChallenge)`
-  (`src/lib/esi/sso.ts:27`)
-- Produces: four recorded answers that Tasks 2 and 7 consume — the pagination
-  shape, the observed `access` value set, the base/header behaviour, and the
-  no-longer-visible-list shape.
+- [ ] **Step 1: Grant the scope to a real character**
 
-**Preconditions:** `SYNC_MODE=live` in `.env.local` (`getFreshAccessToken`
-refuses in dry-run — `src/services/tokens.ts:84-89`), a running local Postgres,
-and an EVE character you can log in with.
+With the feature built, `npm run dev`, sign in, and use the account page's
+`?grant=access-lists` control that Task 8 adds — no scaffold edit is needed,
+because by now the real opt-in flow exists. Pick a character that can see at
+least one access list.
 
-- [ ] **Step 1: Temporarily widen the link route's scope request**
+- [ ] **Step 2: Designate the holder and watch a list**
 
-This edit is a scaffold. It is reverted in Step 8 and must never be committed —
-`EVE_SSO_SCOPES` deliberately does not carry this scope (spec: *The scope is
-opt-in*), and Task 4 adds the real `?grant=access-lists` plumbing.
+On `/admin/access-lists`, designate that character as the ACL holder, run
+**Check now**, and confirm the catalog populates with real list names.
 
-In `src/app/auth/eve/link/route.ts`, replace the final line:
+- [ ] **Step 3: Confirm each settled decision against what actually came back**
 
-```ts
-  return NextResponse.redirect(buildEveAuthorizeUrl(cfg, tx.state, tx.codeChallenge));
-```
+Check all four against the live run:
 
-with a spike-local widening:
+1. Discovery parsed without a schema error, and no `X-Pages` header appeared.
+2. Every observed `access` value rendered — recognized ones interpreted,
+   unrecognized ones verbatim, none causing a failed read.
+3. Both endpoints answered 200 on the versionless base with the compatibility
+   date header.
+4. Watch a list id the holder cannot see (any plausible id it does not hold).
+   The row must read as not visible, and the worker log must show **no** detail
+   fetch for it.
 
-```ts
-  // SPIKE ONLY — reverted before commit. Task 4 replaces this with the real
-  // `extraScopes` parameter gated on ?grant=access-lists.
-  const url = new URL(buildEveAuthorizeUrl(cfg, tx.state, tx.codeChallenge));
-  url.searchParams.set(
-    "scope",
-    `${cfg.eveSso.scopes.join(" ")} esi-access.read_lists.v1`,
-  );
-  return NextResponse.redirect(url.toString());
-```
+- [ ] **Step 4: Record the result**
 
-- [ ] **Step 2: Complete the grant in a browser and confirm the scope landed**
+If all four hold, append a short `## Live verification (<date>)` section to
+`docs/specs/2026-08-09-access-list-monitor-design.md` saying so, and commit.
 
-Run `npm run dev`, sign in, and use the account page's link-character control to
-run the EVE flow with a character that can see at least one access list. Then
-confirm the callback stored the extra scope:
-
-```bash
-psql "$DATABASE_URL" -c \
-  "select id, name, scopes from character where scopes::text like '%read_lists%';"
-```
-
-Expected: at least one row. Record its `id` — it is the spike character id used
-below. If no row comes back, the widening in Step 1 did not take effect (restart
-`npm run dev`) or the character was not the one picked at EVE's picker.
-
-- [ ] **Step 3: Write the spike script**
-
-`tmp/` is gitignored at the repo root (`.gitignore:1`), so this file cannot be
-committed by accident, and living inside the worktree is what makes the `@/`
-tsconfig aliases and the repo's own token handling resolve —
-`scripts/wanderer-smoke.ts` is the existing precedent for a live-API probe.
-
-Create `tmp/acl-spike.ts`:
-
-```ts
-/**
- * SPIKE — throwaway. Answers the four questions in the access-list monitor
- * spec's "Assumptions to verify first" against a live token. Delete after
- * recording findings.
- *
- *   npx tsx --env-file-if-exists=.env --env-file-if-exists=.env.local \
- *     tmp/acl-spike.ts <spike character id> [access list id]
- */
-import { eq } from "drizzle-orm";
-import { loadConfig } from "@/config";
-import { createDb } from "@/db";
-import { character } from "@/db/schema";
-import { getFreshAccessToken } from "@/services/tokens";
-
-const ROOT = "https://esi.evetech.net";
-const COMPATIBILITY_DATE = "2026-08-04";
-
-async function probe(url: string, accessToken: string, label: string) {
-  const res = await fetch(url, {
-    headers: {
-      accept: "application/json",
-      authorization: `Bearer ${accessToken}`,
-      "x-compatibility-date": COMPATIBILITY_DATE,
-    },
-  });
-  const text = await res.text();
-  console.log(`\n=== ${label}`);
-  console.log(`GET ${url}`);
-  console.log(`status: ${res.status}`);
-  console.log(`x-pages: ${res.headers.get("x-pages") ?? "(absent)"}`);
-  console.log(`content-type: ${res.headers.get("content-type") ?? "(absent)"}`);
-  console.log(`body: ${text.slice(0, 4000)}`);
-  return { status: res.status, text };
-}
-
-async function main() {
-  const characterId = Number(process.argv[2]);
-  const listArg = process.argv[3];
-  if (!Number.isSafeInteger(characterId) || characterId <= 0) {
-    console.error("usage: tmp/acl-spike.ts <character id> [access list id]");
-    process.exit(2);
-  }
-  const cfg = loadConfig();
-  if (cfg.syncMode === "dry-run") {
-    console.error("SYNC_MODE=dry-run: getFreshAccessToken refuses. Set live.");
-    process.exit(2);
-  }
-  const { db, pool } = createDb(cfg.databaseUrl, 1);
-  try {
-    const [ch] = await db.select().from(character).where(eq(character.id, characterId));
-    if (!ch) throw new Error(`no character ${characterId}`);
-    console.log(`scopes: ${JSON.stringify(ch.scopes)}`);
-    const tok = await getFreshAccessToken(db, cfg, ch);
-    if (!tok.ok) throw new Error(`token: ${tok.reason} ${tok.detail ?? ""}`);
-
-    // Q1 + Q3: does /access-lists paginate, and does the versionless base plus
-    // X-Compatibility-Date answer at all?
-    const lists = await probe(
-      `${ROOT}/characters/${characterId}/access-lists`,
-      tok.accessToken,
-      "Q1/Q3 discovery",
-    );
-
-    // Q3 control: the same path WITHOUT the compatibility-date header.
-    const bare = await fetch(`${ROOT}/characters/${characterId}/access-lists`, {
-      headers: { accept: "application/json", authorization: `Bearer ${tok.accessToken}` },
-    });
-    console.log(`\n=== Q3 control (no X-Compatibility-Date): ${bare.status}`);
-    console.log((await bare.text()).slice(0, 1000));
-
-    // Q2: the real value set of `access` on a list this character CAN see.
-    const ids = JSON.parse(lists.text) as unknown;
-    const first = listArg ?? (Array.isArray(ids) ? String(ids[0]) : undefined);
-    if (first) {
-      await probe(
-        `${ROOT}/characters/${characterId}/access-lists/${first}`,
-        tok.accessToken,
-        "Q2 detail",
-      );
-    } else {
-      console.log("\n=== Q2 detail SKIPPED: no list ids returned");
-    }
-
-    // Q4: a list id this character does NOT hold. 2^31-1 is not a real list id,
-    // so it stands in for "watched list no longer visible to the holder".
-    await probe(
-      `${ROOT}/characters/${characterId}/access-lists/2147483647`,
-      tok.accessToken,
-      "Q4 not-visible",
-    );
-  } finally {
-    await pool.end();
-  }
-}
-
-void main();
-```
-
-- [ ] **Step 4: Run it and capture the output**
-
-```bash
-npx tsx --env-file-if-exists=.env --env-file-if-exists=.env.local \
-  tmp/acl-spike.ts <spike character id> 2>&1 | tee /tmp/acl-spike-output.txt
-```
-
-Read `/tmp/acl-spike-output.txt` in full. Every number pasted into Step 6 must
-come from this file, not from memory.
-
-- [ ] **Step 5: Probe Q4 a second time with a REAL list id you lost access to**
-
-The `2147483647` probe in Step 4 answers "id that never existed". The dangerous
-case in the spec is "id that exists but the holder cannot see it", which can
-differ. If a second character with the scope is available, run the script as
-character A, note a list id from its output, then run it as character B passing
-that id as the second argument:
-
-```bash
-npx tsx --env-file-if-exists=.env --env-file-if-exists=.env.local \
-  tmp/acl-spike.ts <character B id> <a list id only A can see> 2>&1 \
-  | tee -a /tmp/acl-spike-output.txt
-```
-
-If no second character is available, record that explicitly in Step 6 as
-`not exercised` rather than guessing — an unverified assumption recorded as
-verified is worse than a gap.
-
-- [ ] **Step 6: Append the findings to the spec**
-
-Append exactly this section to
-`docs/specs/2026-08-09-access-list-monitor-design.md`, filling every `<...>`
-from `/tmp/acl-spike-output.txt`:
-
-```markdown
-## Spike findings (2026-08-09)
-
-Run against a live token with `tmp/acl-spike.ts` (throwaway, deleted). Raw
-output was captured at `/tmp/acl-spike-output.txt`; the numbers below are
-transcribed from it.
-
-**Q1 — pagination.** `GET /characters/{id}/access-lists` answered `<status>`
-with `X-Pages: <value or "(absent)">` and a body of `<n>` ids.
-Decision: `<single-page, no X-Pages loop>` / `<paginated — follow
-getAllContacts's fail-closed loop>`.
-
-**Q2 — the `access` value set.** Observed values across `<n>` entries:
-`<comma-separated list>`. Recorded verbatim; `access` stays `z.string()`
-regardless, per the spec's *envelope closed, `access` open* rule — this list
-only tells the page which values to interpret rather than render bare.
-
-**Q3 — base and compatibility date.** With `X-Compatibility-Date:
-2026-08-04` against `https://esi.evetech.net` (no `/latest`): `<status>`.
-Without the header: `<status>`. Decision: `<header required / optional>`.
-Exact path form that answered: `<.../access-lists or .../access-lists/>`.
-
-**Q4 — a list the holder cannot read.** Nonexistent id `2147483647`:
-`<status>`, body `<...>`. Real-but-invisible id: `<status and body, or "not
-exercised — no second scoped character available">`.
-
-**Decision gate.** `<If Q4 returned 403 or 404, no change: the job fetches every
-watched list and classifies the error.>` / `<If Q4 returned 200 with an empty
-membership, Task 7 MUST be amended before it is written: a watched list absent
-from the /access-lists discovery response is unreadable and must be recorded as
-readStatus "not_visible" WITHOUT being fetched, because an empty 200 is
-indistinguishable from "everyone was removed" and would be written as a real
-observation.>`
-```
-
-- [ ] **Step 7: Act on the decision gate**
-
-If Q4 showed an empty membership rather than 403/404, edit Task 7 in this plan
-now — before writing any of it — so its per-watched-list loop reads:
-"skip any watched id not present in the discovery response, writing a snapshot
-with `readStatus: "not_visible"` and leaving its entries intact; fetch only the
-ids discovery confirmed." State in the commit message that the gate fired.
-
-- [ ] **Step 8: Revert the scaffold and delete the script**
-
-```bash
-git checkout src/app/auth/eve/link/route.ts
-/bin/rm -f tmp/acl-spike.ts
-git status --short
-```
-
-`rm` is aliased to an interactive prompt in this environment and exits without
-acting, so `/bin/rm -f` is the form that actually deletes. `git status --short`
-must show only the spec file as modified — if `route.ts` or `tmp/acl-spike.ts`
-still appears, the revert did not take.
-
-- [ ] **Step 9: Format check**
-
-```bash
-npm run format:check
-```
-
-Expected: pass. Quote the real output. If the appended markdown fails, run
-`npx prettier --write docs/specs/2026-08-09-access-list-monitor-design.md`.
-
-- [ ] **Step 10: Commit**
-
-```bash
-git add docs/specs/2026-08-09-access-list-monitor-design.md
-git commit -m "docs(access-lists): record the ESI spike findings against a live token"
-```
+If any differs — a paginated discovery response, a rejected header, a
+membership shape other than the documented one — **stop and report it before
+patching**. A wire format that differs from CCP's published example is a
+finding about the API, not a local bug, and the fix belongs in Task 2's schemas
+with a test that pins the real shape.
 
 ---
 
@@ -396,9 +191,8 @@ git commit -m "docs(access-lists): record the ESI spike findings against a live 
 
 **Interfaces:**
 
-- Consumes: Task 1's answers to Q1 (pagination) and Q3 (exact path form and
-  whether the header is required). `chunk` (`@/core/chunk`), `safeParse`,
-  `classifyEsiError`, all already in the file.
+- Consumes: `chunk` (`@/core/chunk`), `safeParse`, `classifyEsiError`, all
+  already in the file. The wire format is settled — see Step 1.
 - Produces:
 
 ```ts
@@ -424,18 +218,31 @@ getAccessList(characterId: number, accessListId: number, accessToken: string): P
 getUniverseNames(ids: number[]): Promise<EsiEntityName[]>
 ```
 
-- [ ] **Step 1: Apply the spike's path and pagination answers**
+- [ ] **Step 1: Know the wire format before you write a schema**
 
-Before writing anything, re-read the `## Spike findings` section committed in
-Task 1. Two things in the code below are spike-determined and must match it:
+Everything below is written against CCP's published request/response examples
+for these two endpoints. Transcribe the schemas exactly; they are the part of
+this task most likely to be "corrected" into something wrong by intuition.
 
-1. The path form — `/characters/${characterId}/access-lists` below has **no**
-   trailing slash. If Q3 recorded the trailing-slash form, add it in both the
-   client and every MSW handler in the test.
-2. Pagination — the `getAccessLists` body below is the single-page form. If Q1
-   recorded `X-Pages`, replace it with `getAllContacts`'s fail-closed loop
-   (`src/lib/esi/client.ts:239-278`) and add the missing-header test from
-   `tests/esi-client.test.ts:127-148`.
+1. **The base and the header.** Versionless `https://esi.evetech.net`, with
+   `X-Compatibility-Date: 2026-08-04` on both endpoints. Path form is
+   `/characters/${characterId}/access-lists` with **no** trailing slash.
+2. **Discovery returns an envelope of objects, not an int array.** The response
+   to `GET /characters/{id}/access-lists` is `{"access_lists":[{"id":1}]}`. The
+   method still returns `Promise<number[]>` — it maps the envelope down to ids.
+3. **Detail nests membership, and member keys are entity-specific.** The
+   response to `GET /characters/{id}/access-lists/{listId}` puts
+   `allow_everyone`, `characters`, `corporations`, and `alliances` under a
+   `membership` object, and each member is keyed `character_id`,
+   `corporation_id`, or `alliance_id` — never a bare `id`. The method flattens
+   this into the `EsiAccessList` shape above, where every member is `{ access,
+   id }`, so nothing downstream has to know the wire nesting.
+4. **No pagination.** Discovery is a single page and sends no `X-Pages`, so
+   `getAccessLists` does not loop. If a live run ever shows otherwise, replace
+   it with `getAllContacts`'s fail-closed loop (`src/lib/esi/client.ts:239-278`)
+   and add the missing-header test from `tests/esi-client.test.ts:127-148`.
+
+Task 1 — deferred to after Task 12 — re-checks all four against a real token.
 
 - [ ] **Step 2: Write the failing tests**
 
@@ -453,7 +260,7 @@ describe("access lists", () => {
           auth: request.headers.get("authorization"),
           compat: request.headers.get("x-compatibility-date"),
         };
-        return HttpResponse.json([101, 202]);
+        return HttpResponse.json({ access_lists: [{ id: 101 }, { id: 202 }] });
       }),
     );
     const esi = createEsiClient();
@@ -465,16 +272,18 @@ describe("access lists", () => {
     });
   });
 
-  it("maps a list detail and defaults absent membership arrays to empty", async () => {
+  it("flattens nested membership and defaults absent arrays to empty", async () => {
     server.use(
       http.get(`${ROOT}/characters/90000001/access-lists/101`, () =>
         HttpResponse.json({
           id: 101,
           name: "Home ACL",
           description: "the good one",
-          allow_everyone: false,
-          characters: [{ access: "member", id: 90000002 }],
-          corporations: [{ access: "viewer", id: 98000001 }],
+          membership: {
+            allow_everyone: false,
+            characters: [{ access: "member", character_id: 90000002 }],
+            corporations: [{ access: "viewer", corporation_id: 98000001 }],
+          },
         }),
       ),
     );
@@ -490,6 +299,24 @@ describe("access lists", () => {
     });
   });
 
+  it("treats an absent membership object as an empty list, not a read failure", async () => {
+    server.use(
+      http.get(`${ROOT}/characters/90000001/access-lists/101`, () =>
+        HttpResponse.json({ id: 101, name: "Empty ACL", description: null }),
+      ),
+    );
+    const esi = createEsiClient();
+    expect(await esi.getAccessList(90000001, 101, "at")).toEqual({
+      id: 101,
+      name: "Empty ACL",
+      description: "",
+      allowEveryone: false,
+      characters: [],
+      corporations: [],
+      alliances: [],
+    });
+  });
+
   it("keeps an unrecognized access value verbatim rather than failing", async () => {
     server.use(
       http.get(`${ROOT}/characters/90000001/access-lists/101`, () =>
@@ -497,10 +324,14 @@ describe("access lists", () => {
           id: 101,
           name: "Home ACL",
           description: null,
-          allow_everyone: true,
-          characters: [{ access: "some-value-ccp-added-last-tuesday", id: 90000002 }],
-          corporations: [],
-          alliances: [],
+          membership: {
+            allow_everyone: true,
+            characters: [
+              { access: "some-value-ccp-added-last-tuesday", character_id: 90000002 },
+            ],
+            corporations: [],
+            alliances: [],
+          },
         }),
       ),
     );
@@ -642,21 +473,39 @@ export const ACCESS_LISTS_SCOPE = "esi-access.read_lists.v1";
 Beside the other schemas (after line 67):
 
 ```ts
-const accessListIdsSchema = z.array(z.number().int());
-const accessListMemberSchema = z.object({
-  // `access` fails OPEN as a plain string: a z.enum would turn CCP adding one
-  // value into a total read failure for a field nothing branches on.
+const accessListIdsSchema = z.object({
+  access_lists: z.array(z.object({ id: z.number().int() })).nullish(),
+});
+// `access` fails OPEN as a plain string: a z.enum would turn CCP adding one
+// value into a total read failure for a field nothing branches on. The id key
+// is entity-specific on the wire — `character_id`, `corporation_id`,
+// `alliance_id` — so each array gets its own schema and the client flattens
+// all three to `{ access, id }`. Spelled out rather than generated: three
+// literal schemas read better than one clever factory.
+const characterMemberSchema = z.object({
   access: z.string(),
-  id: z.number().int(),
+  character_id: z.number().int(),
+});
+const corporationMemberSchema = z.object({
+  access: z.string(),
+  corporation_id: z.number().int(),
+});
+const allianceMemberSchema = z.object({
+  access: z.string(),
+  alliance_id: z.number().int(),
 });
 const accessListSchema = z.object({
   id: z.number().int(),
   name: z.string(),
   description: z.string().nullish(),
-  allow_everyone: z.boolean(),
-  characters: z.array(accessListMemberSchema).nullish(),
-  corporations: z.array(accessListMemberSchema).nullish(),
-  alliances: z.array(accessListMemberSchema).nullish(),
+  membership: z
+    .object({
+      allow_everyone: z.boolean().nullish(),
+      characters: z.array(characterMemberSchema).nullish(),
+      corporations: z.array(corporationMemberSchema).nullish(),
+      alliances: z.array(allianceMemberSchema).nullish(),
+    })
+    .nullish(),
 });
 const universeNamesSchema = z.array(
   z.object({
@@ -740,7 +589,8 @@ Insert after `getStructureName` (`:403`):
       base: ESI_ROOT,
       compatibilityDate: true,
     });
-    return safeParse(accessListIdsSchema, await res.json(), "GET", path, res.status);
+    const parsed = safeParse(accessListIdsSchema, await res.json(), "GET", path, res.status);
+    return (parsed.access_lists ?? []).map((entry) => entry.id);
   }
 
   /**
@@ -759,14 +609,18 @@ Insert after `getStructureName` (`:403`):
       compatibilityDate: true,
     });
     const parsed = safeParse(accessListSchema, await res.json(), "GET", path, res.status);
+    const m = parsed.membership;
     return {
       id: parsed.id,
       name: parsed.name,
       description: parsed.description ?? "",
-      allowEveryone: parsed.allow_everyone,
-      characters: parsed.characters ?? [],
-      corporations: parsed.corporations ?? [],
-      alliances: parsed.alliances ?? [],
+      allowEveryone: m?.allow_everyone ?? false,
+      characters: (m?.characters ?? []).map((c) => ({ access: c.access, id: c.character_id })),
+      corporations: (m?.corporations ?? []).map((c) => ({
+        access: c.access,
+        id: c.corporation_id,
+      })),
+      alliances: (m?.alliances ?? []).map((a) => ({ access: a.access, id: a.alliance_id })),
     };
   }
 
@@ -2918,6 +2772,37 @@ describe("runAccessListsJob", () => {
     expect(snap.observedAt).toBeNull();
   });
 
+  it("a watched list discovery did not return is not_visible, with no detail call", async () => {
+    await seedHolder();
+    await watch(7);
+    // Seed a good read first, so the test can prove the skip preserves it.
+    const first = fakeEsi({
+      ids: [7],
+      detail: { 7: list(7, { characters: [{ access: "read", id: 42 }] }) },
+    });
+    await runAccessListsJob({ db: ctx.db, cfg, esi: first.esi, fetchImpl: okToken });
+    const before = await snapshotOf(7);
+
+    // The holder loses the list: discovery no longer returns it.
+    const second = fakeEsi({ ids: [] });
+    const result = await runAccessListsJob({
+      db: ctx.db,
+      cfg,
+      esi: second.esi,
+      fetchImpl: okToken,
+    });
+
+    expect(result.status).toBe("partial");
+    // The point of the skip: no detail fetch at all. A 200 with empty
+    // membership would otherwise be written as a real observation and wipe
+    // the entries below.
+    expect(second.calls.details).toEqual([]);
+    const after = await snapshotOf(7);
+    expect(after.readStatus).toBe("not_visible");
+    expect(after.observedAt?.getTime()).toBe(before.observedAt?.getTime());
+    expect((await entriesOf(7)).map((e) => e.entityId)).toEqual([42]);
+  });
+
   it("discards the write when the holder changed mid-run", async () => {
     const acc = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, cfg, {
@@ -3224,7 +3109,16 @@ async function runReads(args: {
     return { status: "ok", counts };
   }
 
-  return readWatched({ db, esi, counts, characterId, accessToken, errors, anyTransient });
+  return readWatched({
+    db,
+    esi,
+    counts,
+    characterId,
+    accessToken,
+    errors,
+    anyTransient,
+    discovered,
+  });
 }
 
 function message(err: unknown): string {
@@ -3256,6 +3150,35 @@ function entryRows(accessListId: number, detail: EsiAccessList) {
   }));
 }
 
+/**
+ * Writes the ATTEMPT columns only, under the stale-holder guard. Returns true
+ * if the holder changed mid-run, in which case the caller abandons the run.
+ * observedAt and the entries are deliberately untouched: "never remove on
+ * unknown state" (src/jobs/wanderer.ts:41-54) — a wiped snapshot renders as
+ * "everyone lost access". Two timestamps, never collapsed.
+ */
+async function writeAttempt(
+  db: Db,
+  characterId: number,
+  accessListId: number,
+  attempt: { lastAttemptAt: Date; readStatus: "not_visible" | "failed"; detail: string },
+): Promise<boolean> {
+  // Without the guard a superseded holder's failure overwrites the current
+  // holder's status, and the page shows "not visible" for a list the real
+  // holder can read.
+  return db.transaction(async (tx) => {
+    if (!(await stillHolder(tx, characterId))) return true;
+    await tx
+      .insert(accessListSnapshot)
+      .values({ accessListId, observedByCharacterId: characterId, ...attempt })
+      .onConflictDoUpdate({
+        target: accessListSnapshot.accessListId,
+        set: attempt,
+      });
+    return false;
+  });
+}
+
 async function readWatched(args: {
   db: Db;
   esi: AccessListsEsi;
@@ -3264,53 +3187,60 @@ async function readWatched(args: {
   accessToken: string;
   errors: string[];
   anyTransient: boolean;
+  discovered: number[];
 }): Promise<JobResult> {
   const { db, esi, counts, characterId, accessToken, errors } = args;
   let anyTransient = args.anyTransient;
   const watched = await getWatchedListIds(db);
   counts.watched = watched.length;
   const observedIds = new Set<number>();
+  const discoveredSet = new Set(args.discovered);
 
   // 5. Per watched list.
   for (const accessListId of watched) {
+    // Discovery is the authority on what this holder can see. A watched id it
+    // did not return is recorded not-visible WITHOUT a detail fetch — the
+    // fetch is not just wasteful, it is unsafe: if ESI answers 200 with empty
+    // membership for a list the holder lost, that is indistinguishable from
+    // "an admin removed everyone" and would be written as a real observation,
+    // wiping the last good entries. Skipping leaves them intact.
+    if (!discoveredSet.has(accessListId)) {
+      counts.failed++;
+      errors.push(`${accessListId}: not in this holder's access lists`);
+      const stale = await writeAttempt(db, characterId, accessListId, {
+        lastAttemptAt: new Date(),
+        readStatus: "not_visible",
+        detail: "Not among the lists this character can see.",
+      });
+      if (stale) {
+        counts.holderChanged = 1;
+        return { status: "ok", counts };
+      }
+      continue;
+    }
+
     let detail: EsiAccessList;
     try {
       detail = await esi.getAccessList(characterId, accessListId, accessToken);
     } catch (err) {
       counts.failed++;
-      // A 403 — or a 404, if Task 1's spike found that shape instead — is a
-      // list the holder cannot see: a normal state, not a token fault,
-      // classified the way contacts classifies its own
-      // (src/jobs/contacts.ts:224-240). Task 1 records which status the live
-      // API actually returns; keep whichever it confirmed and delete the other.
+      // A list discovery DID return can still fail: an admin can revoke
+      // between the two calls. 403 and 404 both mean "no longer visible" — a
+      // normal state, not a token fault — classified the way contacts
+      // classifies its own (src/jobs/contacts.ts:224-240). Both are accepted
+      // because which one ESI returns is not worth a round trip to find out,
+      // and treating either as a fault would flag a benign permission change
+      // as a broken token.
       const notVisible =
         err instanceof EsiError && (err.status === 403 || err.status === 404);
       if (!notVisible && (err instanceof EsiError ? err.kind === "transient" : true)) {
         anyTransient = true;
       }
       errors.push(`${accessListId}: ${message(err)}`);
-      // Failure writes the ATTEMPT only. observedAt and the entries are left
-      // exactly as they were: "never remove on unknown state"
-      // (src/jobs/wanderer.ts:41-54) — a wiped snapshot renders as "everyone
-      // lost access". Two timestamps, never collapsed.
-      const attempt = {
+      const stale = await writeAttempt(db, characterId, accessListId, {
         lastAttemptAt: new Date(),
-        readStatus: notVisible ? ("not_visible" as const) : ("failed" as const),
+        readStatus: notVisible ? "not_visible" : "failed",
         detail: message(err).slice(0, 500),
-      };
-      // Under the same stale-holder guard as the success path. Without it a
-      // superseded holder's 403 overwrites the current holder's status, and
-      // the page shows "not visible" for a list the real holder can read.
-      const stale = await db.transaction(async (tx) => {
-        if (!(await stillHolder(tx, characterId))) return true;
-        await tx
-          .insert(accessListSnapshot)
-          .values({ accessListId, observedByCharacterId: characterId, ...attempt })
-          .onConflictDoUpdate({
-            target: accessListSnapshot.accessListId,
-            set: attempt,
-          });
-        return false;
       });
       if (stale) {
         counts.holderChanged = 1;
@@ -3425,7 +3355,7 @@ git commit -m "feat(jobs): read designated-holder access lists into snapshots"
 for asserting the union.
 
 **Interfaces:**
-- Consumes: `ACCESS_LISTS_SCOPE` from `@/lib/esi/client` (Task 1)
+- Consumes: `ACCESS_LISTS_SCOPE` from `@/lib/esi/client` (Task 2)
 - Produces:
   ```ts
   export function buildEveAuthorizeUrl(
