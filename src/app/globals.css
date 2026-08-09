@@ -706,21 +706,20 @@ a:hover {
    at its own gap rather than forcing the head to scroll at 320px, same call
    `.page__head-row` above makes.
 
-   Explicitly capped at the narrow measure, unlike `.page__head-row` above.
-   `.page__head` is a direct child of `.page--narrow.page--crew`, so on /account
-   it inherits the crew measure rather than the page's — and whatever that
-   measure is reaches every descendant, not just the head row that needed it.
-   Nothing before walkthrough 3.1 gave this element its own cap because it never
-   needed one: its parent's 912px was doing the job by accident.
+   What actually bounds `.page__meta` on /account is the crew measure, not the
+   57rem below. `.page--narrow.page--crew > :where(*)` is a direct-child
+   selector: it caps `.page__head`, and `.page__meta` — a grandchild it does not
+   match — is contained by that capped parent. So this element is at the mercy
+   of a measure derived from the manifest's content, which will move if that
+   content does.
 
-   The cap is not binding today: `--measure-crew` is 48rem, narrower than the
-   57rem restated here, so the head is already tighter than this rule asks for.
-   It stays because it is the crew measure, not the page's, that this element
-   is now at the mercy of — and the whole reason that measure exists is that it
-   is derived from the manifest's content and will move if that content does.
-   Uncapped, a widened head would spread the tier badge and the Discord row
-   apart with open whitespace between them, reading as two unrelated fragments
-   rather than the two-fact line the comment above describes. */
+   The 57rem here is a fallback, not the operative cap: it is looser than the
+   48rem `--measure-crew`, so it binds only where the crew cap is absent (any
+   `.page--narrow` page that is not /account) or where a future crew measure
+   grows past it. It stays because uncapped, a widened head would spread the
+   tier badge and the Discord row apart with open whitespace between them,
+   reading as two unrelated fragments rather than the two-fact line the comment
+   above describes. */
 .page__meta {
   display: flex;
   align-items: center;

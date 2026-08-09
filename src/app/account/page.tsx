@@ -250,8 +250,9 @@ export default async function AccountPage({
             the verdict/health strip below — right-aligned inside
             `.page__head-row` via `justify-content: space-between` — land on the
             same edge as the table of characters it counts. `.page__meta`
-            further down restates a cap explicitly rather than inheriting this
-            one, since tier/Discord are a two-fact line, not a table. */}
+            further down sits inside this head, so it gets the same crew
+            measure by containment; the max-width it declares for itself is a
+            looser fallback for pages without the crew cap. */}
         <div className="page__head">
           <div className="page__head-row">
             <h1>Your account</h1>

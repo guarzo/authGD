@@ -1916,6 +1916,15 @@ test("a long structure name still gets its full measure at the capped width", as
   // Text-advance measurement against a webfont, same as every other geometry
   // gate in this file.
   await page.evaluate(() => document.fonts.ready);
+  // The fault above is load-bearing, so prove it actually mounted the column
+  // before measuring anything. Located by rendered cell, not by header: all
+  // four manifest `<th>` labels are `.visually-hidden` and the visible header
+  // bar was removed, so there is no STATUS heading to find. Exactly one,
+  // because `seedNominalCrew` is otherwise healthy — a second would mean the
+  // seed drifted and the measurement is of a different layout.
+  await expect(
+    page.locator("[aria-label='Your characters'] td[data-state='attention']"),
+  ).toHaveCount(1);
 
   const line = await page.evaluate(() => {
     // By content, not by document order: which row the main occupies is the
@@ -1927,6 +1936,10 @@ test("a long structure name still gets its full measure at the capped width", as
     return {
       lineW: el.getBoundingClientRect().width,
       cellW: cell.getBoundingClientRect().width,
+      // `.char__location`'s own 22rem ceiling, resolved against the live root
+      // font size rather than hardcoded, so the assertion still means "22rem"
+      // if that ever stops being 16px.
+      ceiling: 22 * parseFloat(getComputedStyle(document.documentElement).fontSize),
       // The string is longer than 22rem can show, so it must be ellipsized —
       // without this the test would pass just as well against a short name,
       // which is the case it exists to exclude.
@@ -1937,9 +1950,13 @@ test("a long structure name still gets its full measure at the capped width", as
   // 352px is 22rem, `.char__location`'s own ceiling. This does not discriminate
   // between cap widths — the line keeps rendering at 352 and simply overflows
   // when the cell is too small — so it is not the floor gate. It anchors the
-  // number the floor was derived FROM: lower `.char__location`'s max-width and
-  // 48rem stops being the right answer, silently.
+  // number the floor was derived FROM: move `.char__location`'s max-width in
+  // either direction and 48rem stops being the right answer, silently. Pinned
+  // from both sides for that reason: a lower bound alone would let the ceiling
+  // be *raised* — which invalidates the derivation just as thoroughly, since a
+  // wider location line needs a wider name cell than 48rem gives it.
   expect(line.lineW).toBeGreaterThanOrEqual(351);
+  expect(Math.abs(line.lineW - line.ceiling)).toBeLessThanOrEqual(1);
   // This is the floor gate. Measured at 1280px with STATUS rendered: the name
   // cell is 406px at 48rem and 342px at 44rem, where the line overflows into
   // STATUS. Tightening `--measure-crew` past the floor fails here.
