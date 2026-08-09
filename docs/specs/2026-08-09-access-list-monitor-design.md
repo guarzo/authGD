@@ -142,7 +142,7 @@ Generated with `npm run db:generate`; never hand-written.
 | Table | Shape | Notes |
 |---|---|---|
 | `access_list_holder` | `id integer PK CHECK (id = 1)`, `characterId → character.id ON DELETE CASCADE`, `designatedAt`, `designatedBy` | Singleton: one row or none |
-| `access_list_catalog` | `accessListId PK`, `name`, `discoveredAt`, `observedByCharacterId` | Lists the holder can see; feeds the picker; delete-all/insert-all per discovery |
+| `access_list_catalog` | `accessListId PK`, `name`, `discoveredAt`, `observedByCharacterId` | Lists the holder can see; feeds the picker; reconciled against each discovery, caching names |
 | `access_list_watch` | `accessListId PK`, `addedAt`, `addedBy` | The shared watchlist, curated by admins |
 | `access_list_snapshot` | `accessListId PK`, `observedAt` (nullable), `lastAttemptAt`, `readStatus`, `observedByCharacterId`, `name`, `description`, `allowEveryone`, `detail` | One row per watched list |
 | `access_list_entry` | `accessListId`, `kind` ∈ character\|corporation\|alliance, `entityId`, `access` (verbatim text), unique on the triple | Membership rows |
@@ -179,8 +179,8 @@ the failure.
 a holder that is no longer designated. Outbox execution is explicitly
 at-least-once (`src/worker/dispatcher.ts:124-136`), so a job that started under
 holder A can still be mid-flight when an admin designates holder B — and since
-the catalog is delete-all/insert-all, A's late write would replace B's view of
-the world wholesale.
+the catalog is reconciled against the discovered set, A's late write would
+prune it down to what A can see, discarding B's.
 
 The job therefore re-reads the holder inside the write transaction and skips the
 write when it no longer matches the character it read with, the same
@@ -232,9 +232,13 @@ Order of operations:
    `esi-access.read_lists.v1` returns `ok` + `counts.scopeMissing`, without
    calling ESI. Calling anyway would spend a token refresh to earn a certain 403.
 4. **Discovery** — `GET /characters/{id}/access-lists` returns **ids only**, so
-   each id whose name is not already cached costs a detail call. Catalog
-   replaced delete-all/insert-all in one transaction, under the stale-holder
-   guard.
+   each id whose name is not already cached costs a detail call. The catalog is
+   the cache of those names, so discovery *reconciles* it rather than rebuilding
+   it: ids the holder no longer sees are dropped, the rest keep their cached
+   name. Rebuilding would discard every name and re-buy the whole set each run.
+   One transaction, under the stale-holder guard. An id that cannot be named is
+   left out of the catalog for the next run to retry — `name` is NOT NULL, and a
+   row named "?" in the picker is worse than a row that is not there yet.
 5. **Per watched list** — `GET .../access-lists/{id}`; on success write snapshot
    and replace that list's entries in one transaction. On failure **leave prior
    entries intact**: the wanderer rule, "never remove on unknown state"

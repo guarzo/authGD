@@ -14,7 +14,7 @@
 
 - **Migrations are generated, never hand-written.** Run `npm run db:generate` after a schema edit. Never edit a migration already applied in production — `fly.toml` runs migrations as a release command on every deploy.
 - **Stop and ask** before touching persisted data beyond the new tables, an already-applied migration, `TOKEN_ENCRYPTION_KEY` handling, or the OAuth state flow. These are the irreversible surfaces.
-- **Cite test output.** Never claim `npm test`, `npm run typecheck`, `npm run test:e2e`, `npm run build`, or `npm run format:check` passed without running it and quoting the result. `format:check` is the cheap one and the one reading a diff cannot substitute for — run it per task, not only at the final gate.
+- **Cite test output.** Never claim `npm test`, `npm run typecheck`, `npm run lint`, `npm run test:e2e`, `npm run build`, `docker build .`, or `npm run format:check` passed without running it and quoting the result. Those seven are the whole CI gate, across five jobs (CONTRIBUTING.md:19-38) — `typecheck`, `lint` and `format:check` share one job, so a green typecheck proves a third of it. `format:check` is the cheap one and the one reading a diff cannot substitute for — run it per task, not only at the final gate.
 - **`src/core/` is pure.** No database handle, no `fetch`, no ambient clock (CONTRIBUTING.md:55-58).
 - **The web tier enqueues; the worker executes.** A server action writes an `outbox` row and returns; it never calls ESI and never dispatches to pg-boss.
 - **Every state change writes an audit row** (CONTRIBUTING.md:60-63). The one deliberate exception here is "Check now", which enqueues a job and changes no state.
@@ -984,7 +984,14 @@ export const accessListEntryKindEnum = pgEnum("access_list_entry_kind", [
   "corporation",
   "alliance",
 ]);
+export type AccessListReadStatus =
+  (typeof accessListReadStatusEnum.enumValues)[number];
 ```
+
+`AccessListReadStatus` is exported here, unconditionally, in the same shape
+`SyncRunStatus` already uses (`src/db/schema.ts:39`). Tasks 9, 10 and 12 all
+import it; declaring it at the enum keeps that import from becoming a
+conditional edit inside a later task whose `git add` does not list the schema.
 
 Two enums with identical members is deliberate: `esi_entity_kind` describes what
 a cached name *is* and `access_list_entry_kind` describes what a grant *targets*.
@@ -1050,9 +1057,11 @@ export const accessListHolder = pgTable(
 );
 
 /**
- * Every list the holder can currently see. Replaced delete-all/insert-all on
- * each discovery, so it is a view of one holder's world and never a merge of
- * several — `observedByCharacterId` records whose.
+ * Every list the holder can currently see, and the cache of their names —
+ * `/access-lists` returns ids only, so a name costs its own detail call.
+ * Discovery reconciles this against what the holder sees rather than rebuilding
+ * it, so it stays one holder's world and never a merge of several;
+ * `observedByCharacterId` records whose.
  */
 export const accessListCatalog = pgTable("access_list_catalog", {
   accessListId: bigint("access_list_id", { mode: "number" }).primaryKey(),
@@ -2308,11 +2317,10 @@ export async function getWatchedListIds(dbx: Dbx): Promise<number[]> {
 }
 
 /**
- * The list's name for the audit row. The catalog is the live view of what the
- * holder can see and is replaced wholesale on every discovery, so a list that
- * went invisible has no catalog row — fall back to the last snapshot, then to
- * null. An id with no name anywhere still audits; a missing name must never
- * cost the row.
+ * The list's name for the audit row. The catalog is reconciled against what the
+ * holder can currently see on every discovery, so a list that went invisible
+ * has no catalog row — fall back to the last snapshot, then to null. An id with
+ * no name anywhere still audits; a missing name must never cost the row.
  */
 async function watchedListName(dbx: Dbx, accessListId: number): Promise<string | null> {
   const [cat] = await dbx
@@ -2437,13 +2445,12 @@ git commit -m "feat(services): access-list holder and watchlist, with roster aff
   - `QUEUES.accessLists = "access-lists"`, `JOB_CRON["access-lists"] = "25 * * * *"`, `JOB_GROUP["access-lists"] = "on-demand"`
 
 Counts keys, exactly: `lists`, `watched`, `read`, `failed`, `skipped`, `noHolder`,
-`scopeMissing`, `holderChanged`, `namesResolved`.
+`scopeMissing`, `holderChanged`, `named`, `namesResolved`.
 
-This task lands as two commits — registration (Steps 1–5), then the job body
-(Steps 6–13). It is one task because the registration alone is not
-independently testable: `JOB_QUEUES` without a handler would fail startup, and
-`scheduleJobs` throws for any queue with no `JOB_CRON` entry
-(`src/worker/queues.ts:104`).
+This task lands as ONE commit. An earlier draft split it into registration
+(Steps 1–5) and the job body (Steps 6–13), but the registration commit alone
+does not typecheck: `JOB_HANDLERS` would name a module that does not exist yet.
+Do all thirteen steps, then commit once at Step 13.
 
 ---
 
@@ -2559,22 +2566,19 @@ and the map entry:
 ```
 
 This will not compile until Step 6 creates the module — that is expected, and
-Step 5 runs the queue/cron cross-check that does not depend on it.
+Step 5 runs the queue/cron cross-check that does not depend on it. **Do not
+commit here.** The tree does not typecheck until Step 8, and a commit that
+cannot typecheck breaks `git bisect` and any CI run that lands on it.
 
-- [ ] **Step 5: Prove the registration did not drift, then commit it**
+- [ ] **Step 5: Prove the registration did not drift**
 
 Run: `npx vitest run tests/dispatcher.test.ts`
 Expected: PASS — `RERUNNABLE` now contains `access-lists` from `QUEUES`, and
 `JOB_CRON` gained the matching key, so line 129 still balances. A failure here
 means Step 2 and Step 3 disagree.
 
-Run: `npm run format:check`
-Expected: no files listed.
-
-```bash
-git add src/core/schedules.ts src/worker/queues.ts src/worker/handlers.ts
-git commit -m "feat(jobs): register the access-lists queue, cron and handler"
-```
+`npm run typecheck` is expected to FAIL at this point, on the missing
+`@/jobs/access-lists` import alone. Step 12 is where it must pass.
 
 ---
 
@@ -2794,13 +2798,15 @@ describe("runAccessListsJob", () => {
     expect(result.retry).toBeUndefined();
   });
 
-  it("replaces the catalog and reads each watched list", async () => {
+  it("reconciles the catalog, naming only the ids it has not cached", async () => {
     await seedHolder();
     await watch(7);
-    // A stale catalog row from a previous discovery must not survive.
-    await ctx.db
-      .insert(accessListCatalog)
-      .values({ accessListId: 999, name: "Gone", observedByCharacterId: HOLDER });
+    // 999 is stale — the holder can no longer see it, so it must go. 8 is
+    // already cached, so it must NOT cost a second detail call.
+    await ctx.db.insert(accessListCatalog).values([
+      { accessListId: 999, name: "Gone", observedByCharacterId: HOLDER },
+      { accessListId: 8, name: "Cached", observedByCharacterId: HOLDER },
+    ]);
     const { esi, calls } = fakeEsi({
       ids: [7, 8],
       detail: {
@@ -2820,9 +2826,14 @@ describe("runAccessListsJob", () => {
     expect(result.status).toBe("ok");
     expect(result.counts).toMatchObject({ lists: 2, watched: 1, read: 1, failed: 0 });
     const catalog = await ctx.db.select().from(accessListCatalog);
-    expect(catalog.map((r) => r.accessListId).sort()).toEqual([7, 8]);
-    // Only the WATCHED list costs a detail call.
-    expect(calls.details).toEqual([7]);
+    expect(catalog.map((r) => [r.accessListId, r.name]).sort()).toEqual([
+      [7, "Fleet"],
+      [8, "Cached"],
+    ]);
+    // 7 was uncached AND watched, so it is named by discovery and then read;
+    // 8 was cached, so it costs nothing. `named` counts only the naming call.
+    expect(result.counts?.named).toBe(1);
+    expect(calls.details).toEqual([7, 7]);
     const snap = await snapshotOf(7);
     expect(snap.readStatus).toBe("ok");
     expect(snap.name).toBe("Fleet");
@@ -2832,6 +2843,23 @@ describe("runAccessListsJob", () => {
       ["character", 42, "read"],
       ["corporation", 900, "read"],
     ]);
+  });
+
+  it("leaves an unnameable list out of the catalog rather than inserting a placeholder", async () => {
+    await seedHolder();
+    const { esi } = fakeEsi({
+      ids: [7],
+      detail: { 7: new EsiError("boom", 500, "transient") },
+    });
+    const result = await runAccessListsJob({
+      db: ctx.db,
+      cfg,
+      esi,
+      fetchImpl: okToken,
+    });
+    // `name` is NOT NULL and a "?" row in the picker is worse than no row.
+    expect(await ctx.db.select().from(accessListCatalog)).toEqual([]);
+    expect(result.counts?.named).toBe(0);
   });
 
   it("a failed read leaves the prior entries intact and moves only lastAttemptAt", async () => {
@@ -2969,7 +2997,7 @@ Create `src/jobs/access-lists.ts` with the imports and the first three of the
 job's six numbered steps:
 
 ```ts
-import { eq } from "drizzle-orm";
+import { eq, notInArray } from "drizzle-orm";
 import type { Config } from "@/config";
 import type { Db } from "@/db";
 import {
@@ -2999,6 +3027,7 @@ type Counts = {
   noHolder: number;
   scopeMissing: number;
   holderChanged: number;
+  named: number;
   namesResolved: number;
 };
 
@@ -3019,6 +3048,7 @@ export async function runAccessListsJob(deps: {
       noHolder: 0,
       scopeMissing: 0,
       holderChanged: 0,
+      named: 0,
       namesResolved: 0,
     };
 
@@ -3105,8 +3135,8 @@ Append to `src/jobs/access-lists.ts`:
  *
  * Outbox execution is at-least-once (src/worker/dispatcher.ts:124-136), so a
  * run that started under holder A can still be mid-flight when an admin
- * designates B — and since the catalog is delete-all/insert-all, A's late write
- * would replace B's view of the world wholesale. This is the same
+ * designates B — and A's late write would reconcile the catalog against the
+ * set of lists *A* can see, discarding B's. This is the same
  * compare-and-swap shape the token code uses to discard stale concurrent
  * decisions (src/services/tokens.ts:100-115). Different holders legitimately
  * see different lists, so a miss is a discard, not a merge.
@@ -3130,8 +3160,12 @@ async function runReads(args: {
   const errors: string[] = [];
   let anyTransient = false;
 
-  // 4. Discovery. /access-lists returns ids only; the catalog is replaced
-  //    wholesale in ONE transaction, under the stale-holder guard.
+  // 4. Discovery. /access-lists returns ids ONLY, so every name costs its own
+  //    detail call. `access_list_catalog` is the cache of those names, which is
+  //    why this reconciles against the discovered set instead of deleting and
+  //    rebuilding: a rebuild would throw away every cached name and re-buy the
+  //    whole set every run. The name column is NOT NULL, and an id the job
+  //    cannot name is not worth showing in a picker.
   let discovered: number[];
   try {
     discovered = await esi.getAccessLists(characterId, accessToken);
@@ -3142,16 +3176,45 @@ async function runReads(args: {
   }
   counts.lists = discovered.length;
 
+  const cached = new Map(
+    (await db.select().from(accessListCatalog)).map((r) => [r.accessListId, r.name]),
+  );
+  const named: { accessListId: number; name: string; observedByCharacterId: number }[] = [];
+  for (const accessListId of discovered) {
+    const hit = cached.get(accessListId);
+    if (hit !== undefined) {
+      named.push({ accessListId, name: hit, observedByCharacterId: characterId });
+      continue;
+    }
+    try {
+      const detail = await esi.getAccessList(characterId, accessListId, accessToken);
+      counts.named++;
+      named.push({ accessListId, name: detail.name, observedByCharacterId: characterId });
+    } catch (err) {
+      // Left out of the catalog rather than inserted with a placeholder: the
+      // next run retries it, and a row named "?" in the picker is worse than a
+      // row that is not there yet.
+      errors.push(`naming ${accessListId}: ${message(err)}`);
+      if (err instanceof EsiError ? err.kind === "transient" : true) anyTransient = true;
+    }
+  }
+
   const wrote = await db.transaction(async (tx) => {
     if (!(await stillHolder(tx, characterId))) return false;
-    await tx.delete(accessListCatalog);
-    if (discovered.length > 0) {
-      await tx.insert(accessListCatalog).values(
-        discovered.map((accessListId) => ({
-          accessListId,
-          observedByCharacterId: characterId,
-        })),
-      );
+    // Reconcile, not replace: drop what this holder can no longer see, keep
+    // and refresh the rest.
+    const keep = named.map((r) => r.accessListId);
+    await tx
+      .delete(accessListCatalog)
+      .where(keep.length > 0 ? notInArray(accessListCatalog.accessListId, keep) : undefined);
+    if (named.length > 0) {
+      await tx
+        .insert(accessListCatalog)
+        .values(named)
+        .onConflictDoUpdate({
+          target: accessListCatalog.accessListId,
+          set: { observedByCharacterId: characterId },
+        });
     }
     return true;
   });
@@ -3215,10 +3278,13 @@ async function readWatched(args: {
       detail = await esi.getAccessList(characterId, accessListId, accessToken);
     } catch (err) {
       counts.failed++;
-      // A 403 is a list the holder cannot see — a normal state, not a token
-      // fault, classified the way contacts classifies its own
-      // (src/jobs/contacts.ts:224-240).
-      const notVisible = err instanceof EsiError && err.status === 403;
+      // A 403 — or a 404, if Task 1's spike found that shape instead — is a
+      // list the holder cannot see: a normal state, not a token fault,
+      // classified the way contacts classifies its own
+      // (src/jobs/contacts.ts:224-240). Task 1 records which status the live
+      // API actually returns; keep whichever it confirmed and delete the other.
+      const notVisible =
+        err instanceof EsiError && (err.status === 403 || err.status === 404);
       if (!notVisible && (err instanceof EsiError ? err.kind === "transient" : true)) {
         anyTransient = true;
       }
@@ -3232,13 +3298,24 @@ async function readWatched(args: {
         readStatus: notVisible ? ("not_visible" as const) : ("failed" as const),
         detail: message(err).slice(0, 500),
       };
-      await db
-        .insert(accessListSnapshot)
-        .values({ accessListId, observedByCharacterId: characterId, ...attempt })
-        .onConflictDoUpdate({
-          target: accessListSnapshot.accessListId,
-          set: attempt,
-        });
+      // Under the same stale-holder guard as the success path. Without it a
+      // superseded holder's 403 overwrites the current holder's status, and
+      // the page shows "not visible" for a list the real holder can read.
+      const stale = await db.transaction(async (tx) => {
+        if (!(await stillHolder(tx, characterId))) return true;
+        await tx
+          .insert(accessListSnapshot)
+          .values({ accessListId, observedByCharacterId: characterId, ...attempt })
+          .onConflictDoUpdate({
+            target: accessListSnapshot.accessListId,
+            set: attempt,
+          });
+        return false;
+      });
+      if (stale) {
+        counts.holderChanged = 1;
+        return { status: "ok", counts };
+      }
       continue;
     }
 
@@ -3264,6 +3341,14 @@ async function readWatched(args: {
       await tx.delete(accessListEntry).where(eq(accessListEntry.accessListId, accessListId));
       const rows = entryRows(accessListId, detail);
       if (rows.length > 0) await tx.insert(accessListEntry).values(rows);
+      // A watched list's detail read is the freshest name anyone has, so it
+      // refreshes the catalog cache. Unwatched lists keep the name they were
+      // discovered with until someone watches them — the cost of not buying a
+      // detail call per list per run.
+      await tx
+        .update(accessListCatalog)
+        .set({ name: detail.name })
+        .where(eq(accessListCatalog.accessListId, accessListId));
       return false;
     });
     if (skipped) {
@@ -3294,7 +3379,7 @@ async function readWatched(args: {
 - [ ] **Step 11: Run the test and watch it pass**
 
 Run: `npx vitest run tests/access-lists-job.test.ts`
-Expected: PASS, all twelve cases.
+Expected: PASS, all thirteen cases.
 
 If the "failed read leaves prior entries intact" case fails on `lastAttemptAt`
 not advancing, the two runs landed inside the same millisecond — the assertion
@@ -3315,8 +3400,12 @@ Expected: no files listed.
 
 - [ ] **Step 13: Commit**
 
+One commit for the whole task — the registration edits from Steps 2–4 land
+here, with the module they name.
+
 ```bash
-git add src/jobs/access-lists.ts tests/access-lists-job.test.ts
+git add src/core/schedules.ts src/worker/queues.ts src/worker/handlers.ts \
+  src/jobs/access-lists.ts tests/access-lists-job.test.ts
 git commit -m "feat(jobs): read designated-holder access lists into snapshots"
 ```
 
@@ -4115,10 +4204,10 @@ export function doneNotice(done: string | undefined, at: string | undefined): st
 - [ ] **Step 5: Run the test and watch it pass**
 
 Run: `npx vitest run tests/access-lists-view.test.ts`
-Expected: all describe blocks green. If `AccessListReadStatus` does not exist as
-an exported type, add `export type AccessListReadStatus = (typeof
-accessListReadStatusEnum.enumValues)[number];` to `src/db/schema.ts` beside the
-enum — the same shape `SyncRunStatus` already uses there.
+Expected: all describe blocks green. `AccessListReadStatus` was exported from
+`src/db/schema.ts` in Task 3 Step 3; if the import fails, that step was skipped.
+Go back and do it there — do not add the type here, because this task's commit
+does not include the schema.
 
 - [ ] **Step 6: Format check**
 
@@ -4140,8 +4229,7 @@ git commit -m "feat(access-lists): the monitor page's pure state, tone and remed
 
 - Create: `src/app/admin/access-lists/page.tsx`
 - Create: `src/app/admin/access-lists/actions.ts`
-- Modify: `src/services/access-lists.ts` (add the three page-side reads; see the
-  GAP note at the end of this fragment)
+- Modify: `src/services/access-lists.ts` (add the four page-side reads)
 - Modify: `src/app/_components/nav-items.ts:20-24` (docblock rule list),
   `:31-33` (the order sentence), `:77-81` (the item constants), `:107-113`
   (`navFor`)
@@ -4155,7 +4243,7 @@ git commit -m "feat(access-lists): the monitor page's pure state, tone and remed
   `logAudit` (`@/services/audit`), `enqueueSync` (`@/services/outbox`),
   `getHolder` / `designateHolder` / `getWatchedListIds` / `addWatch` /
   `removeWatch` (`@/services/access-lists`), `compareAccessList`
-  (`@/core/access-list-compare`), `getMemberCharacters` (`@/services/desired`),
+  (`@/core/access-list-compare`), `getMemberCharacters` (`@/services/desired` — for the comparison roster only),
   `lookupEntityNames` (`@/services/entity-names`), `ActionOutcome` /
   `ConfirmGroup` / `ConfirmingForm` (`@/app/_components/confirm-group`),
   `Disclosure`, `Notice` / `RuleHead` / `Scroller` / `Status`, `Submit`,
@@ -4181,7 +4269,7 @@ export type HolderView = {
   designatedAt: Date;
 };
 export async function getHolderView(dbx: Dbx): Promise<HolderView | null>;
-export type CatalogEntry = { accessListId: number; name: string | null };
+export type CatalogEntry = { accessListId: number; name: string };
 export async function getCatalog(dbx: Dbx): Promise<CatalogEntry[]>;
 export type WatchedListView = {
   accessListId: number;
@@ -4194,30 +4282,62 @@ export type WatchedListView = {
   entries: AccessEntry[];
 };
 export async function getWatchedListViews(dbx: Dbx): Promise<WatchedListView[]>;
+export type OwnCharacter = {
+  characterId: number;
+  name: string;
+  scopes: string[];
+};
+export async function getOwnCharacters(
+  dbx: Dbx,
+  accountId: string,
+): Promise<OwnCharacter[]>;
 ```
 
-- [ ] **Step 1: Write the failing test — one audit row per admin action**
+`getOwnCharacters` is deliberately NOT `getMemberCharacters`
+(`src/services/desired.ts:35-47`), which inner-joins `account.tier = 'member'`.
+`isAdmin` and `tier` are orthogonal columns, and the nav docblock
+(`src/app/_components/nav-items.ts:25-29`) says so outright: an admin's default
+tier is `alumni`. An alumni admin has no row in the member roster, so sourcing
+the designate button from it would leave them permanently unable to designate
+anyone — the page would show "Grant access", they would grant it, and the button
+would still not appear. The roster read stays for the *comparison*, which is
+about members by definition; only the viewer's own picker moves.
 
-The repo does not mock `requireAdminAction` or `next/navigation` anywhere, and
-server actions are deliberately thin: the audit write lives in the service the
-action calls. So this test drives the services against the real database, which
-is where the assertions in the spec's actions table actually bite.
+The audited mutations — `designateHolder`, `addWatch`, `removeWatch` — and their
+tests already landed in Task 6, and the holder-FK cascade is covered by Task 3.
+This task adds only what the page itself needs: the three read models, the
+actions, the JSX, and the nav entry.
 
-Create `tests/access-lists-actions.test.ts`:
+- [ ] **Step 1: Write the failing test — the four page-side reads**
+
+The repo does not mock `requireAdminAction` or `next/navigation` anywhere, so
+the actions themselves are covered end-to-end in Task 11. What is worth a unit
+test here is the four reads: each one is a join whose *empty* and *partial*
+shapes are exactly what the page's seven states are built from.
+
+Create `tests/access-lists-reads.test.ts`:
 
 ```ts
-import { desc, eq } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { accessListHolder, accessListWatch, auditLog } from "@/db/schema";
 import {
-  addWatch,
-  designateHolder,
-  getHolder,
-  getWatchedListIds,
-  removeWatch,
+  accessListCatalog,
+  accessListEntry,
+  accessListHolder,
+  accessListSnapshot,
+  accessListWatch,
+} from "@/db/schema";
+import {
+  getCatalog,
+  getHolderView,
+  getOwnCharacters,
+  getWatchedListViews,
 } from "@/services/access-lists";
 import { setupTestDb, truncateAll } from "./helpers/db";
+import { testConfig } from "./helpers/config";
 import { seedAccount, seedCharacter } from "./helpers/seed";
+
+const cfg = testConfig();
+const HOLDER = 90000001;
 
 let ctx: Awaited<ReturnType<typeof setupTestDb>>;
 beforeAll(async () => {
@@ -4226,202 +4346,215 @@ beforeAll(async () => {
 afterAll(() => ctx.cleanup());
 beforeEach(() => truncateAll(ctx.db));
 
-const lastAudit = async () =>
-  (await ctx.db.select().from(auditLog).orderBy(desc(auditLog.id)).limit(1))[0];
-
-async function seedTwoCharacters() {
-  const acc = await seedAccount(ctx.db);
-  const first = await seedCharacter(ctx.db, acc.id, { name: "Vela Kaine" });
-  const second = await seedCharacter(ctx.db, acc.id, { name: "Iris Dune" });
-  return { actor: acc.id, first, second };
+async function seedHolder(
+  opts: { scopes?: string[]; tokenStatus?: "valid" | "needs_reauth" } = {},
+) {
+  const acc = await seedAccount(ctx.db, { tier: "member", isAdmin: true });
+  await seedCharacter(ctx.db, cfg, {
+    id: HOLDER,
+    accountId: acc.id,
+    main: true,
+    name: "Vela Kaine",
+    scopes: opts.scopes ?? [...cfg.eveSso.scopes, "esi-access.read_lists.v1"],
+    tokenStatus: opts.tokenStatus ?? "valid",
+  });
+  await ctx.db
+    .insert(accessListHolder)
+    .values({ id: 1, characterId: HOLDER, designatedBy: acc.id });
+  return acc;
 }
 
-describe("designateHolder", () => {
-  it("writes the singleton row and audits the first designation", async () => {
-    const { actor, first } = await seedTwoCharacters();
-    await designateHolder(ctx.db, first.id, actor);
-
-    expect(await getHolder(ctx.db)).toMatchObject({ characterId: first.id });
-    const rows = await ctx.db.select().from(accessListHolder);
-    expect(rows).toHaveLength(1);
-    expect(rows[0].id).toBe(1);
-
-    const audit = await lastAudit();
-    expect(audit.action).toBe("access_list.holder_designated");
-    expect(audit.actor).toBe(actor);
-    expect(audit.target).toBe(String(first.id));
-    expect(audit.details).toMatchObject({ characterId: first.id });
+describe("getHolderView", () => {
+  it("returns null when nothing is designated", async () => {
+    expect(await getHolderView(ctx.db)).toBeNull();
   });
 
-  it("replacing records BOTH the previous and the new character", async () => {
-    // The `designatedBy`/`characterId` columns only ever hold the CURRENT
-    // state, so without this detail a replacement leaves no record of what it
-    // displaced — and a different holder can see a different set of lists.
-    const { actor, first, second } = await seedTwoCharacters();
-    await designateHolder(ctx.db, first.id, actor);
-    await designateHolder(ctx.db, second.id, actor);
+  it("joins the character's name, scopes and token status onto the designation", async () => {
+    // These four fields ARE the page's first three states: no holder, holder
+    // without the scope, holder whose token went bad. A join that dropped any
+    // of them would make those states unrenderable.
+    await seedHolder({ scopes: ["esi-characters.read_contacts.v1"] });
+    const view = await getHolderView(ctx.db);
+    expect(view).toMatchObject({
+      characterId: HOLDER,
+      name: "Vela Kaine",
+      scopes: ["esi-characters.read_contacts.v1"],
+      tokenStatus: "valid",
+    });
+    expect(view?.designatedAt).toBeInstanceOf(Date);
+  });
+});
 
-    expect(await getHolder(ctx.db)).toMatchObject({ characterId: second.id });
-    expect(await ctx.db.select().from(accessListHolder)).toHaveLength(1);
+describe("getCatalog", () => {
+  it("returns the discovered lists in id order", async () => {
+    await seedHolder();
+    await ctx.db.insert(accessListCatalog).values([
+      { accessListId: 9, name: "Staging", observedByCharacterId: HOLDER },
+      { accessListId: 3, name: "Home", observedByCharacterId: HOLDER },
+    ]);
+    expect(await getCatalog(ctx.db)).toEqual([
+      { accessListId: 3, name: "Home" },
+      { accessListId: 9, name: "Staging" },
+    ]);
+  });
 
-    const audit = await lastAudit();
-    expect(audit.action).toBe("access_list.holder_replaced");
-    expect(audit.target).toBe(String(second.id));
-    expect(audit.details).toMatchObject({
-      previousCharacterId: first.id,
-      characterId: second.id,
+  it("is empty before the job has ever run", async () => {
+    expect(await getCatalog(ctx.db)).toEqual([]);
+  });
+});
+
+describe("getWatchedListViews", () => {
+  it("returns a watched list that has never been read, rather than dropping it", async () => {
+    // A list watched a minute ago has no snapshot row. "Never read" is a state
+    // the page renders; an inner join would silently lose the row instead.
+    const acc = await seedHolder();
+    await ctx.db
+      .insert(accessListWatch)
+      .values({ accessListId: 42, addedBy: acc.id });
+    const views = await getWatchedListViews(ctx.db);
+    expect(views).toHaveLength(1);
+    expect(views[0]).toMatchObject({
+      accessListId: 42,
+      name: null,
+      readStatus: null,
+      observedAt: null,
+      lastAttemptAt: null,
+      allowEveryone: null,
+      entries: [],
     });
   });
 
-  it("unlinking the holder's character takes the designation with it", async () => {
-    // The FK cascades on purpose: a bare reference would make the existing
-    // unlink and transfer-reclaim deletions fail with a constraint violation
-    // for whoever happened to be the holder.
-    const { actor, first } = await seedTwoCharacters();
-    await designateHolder(ctx.db, first.id, actor);
-    await ctx.db.delete(character).where(eq(character.id, first.id));
-    expect(await getHolder(ctx.db)).toBeNull();
+  it("attaches each list's entries and nothing else's", async () => {
+    const acc = await seedHolder();
+    await ctx.db
+      .insert(accessListWatch)
+      .values([
+        { accessListId: 42, addedBy: acc.id },
+        { accessListId: 7, addedBy: acc.id },
+      ]);
+    await ctx.db.insert(accessListSnapshot).values([
+      {
+        accessListId: 42,
+        observedByCharacterId: HOLDER,
+        name: "Home Structures",
+        readStatus: "ok",
+        observedAt: new Date(),
+        lastAttemptAt: new Date(),
+        allowEveryone: false,
+      },
+      {
+        accessListId: 7,
+        observedByCharacterId: HOLDER,
+        name: "Staging",
+        readStatus: "not_visible",
+        lastAttemptAt: new Date(),
+        detail: "403",
+      },
+    ]);
+    await ctx.db.insert(accessListEntry).values([
+      { accessListId: 42, kind: "character", entityId: 1, access: "member" },
+      { accessListId: 42, kind: "corporation", entityId: 500, access: "member" },
+      { accessListId: 7, kind: "alliance", entityId: 900, access: "blocked" },
+    ]);
+
+    const views = await getWatchedListViews(ctx.db);
+    // Ordered by list id, so 7 comes first.
+    expect(views.map((v) => v.accessListId)).toEqual([7, 42]);
+    expect(views[0]).toMatchObject({
+      name: "Staging",
+      readStatus: "not_visible",
+      observedAt: null,
+      detail: "403",
+    });
+    expect(views[0].entries).toEqual([
+      { kind: "alliance", entityId: 900, access: "blocked" },
+    ]);
+    expect(views[1].entries).toHaveLength(2);
+    expect(views[1].entries.map((e) => e.entityId).sort()).toEqual([1, 500]);
+  });
+
+  it("ignores entries for lists nobody is watching", async () => {
+    // The job writes entries for every list it reads; the page shows only the
+    // watched ones. A missing WHERE here would leak unwatched lists onto it.
+    await seedHolder();
+    await ctx.db
+      .insert(accessListEntry)
+      .values({ accessListId: 999, kind: "character", entityId: 1, access: "member" });
+    expect(await getWatchedListViews(ctx.db)).toEqual([]);
   });
 });
 
-describe("addWatch / removeWatch", () => {
-  it("audits an add with the list id as the target", async () => {
-    const { actor } = await seedTwoCharacters();
-    await addWatch(ctx.db, 4001, actor);
-
-    expect(await getWatchedListIds(ctx.db)).toEqual([4001]);
-    const audit = await lastAudit();
-    expect(audit.action).toBe("access_list.watch_added");
-    expect(audit.target).toBe("4001");
+describe("getOwnCharacters", () => {
+  it("returns an alumni admin's own characters", async () => {
+    // The regression this exists for: `getMemberCharacters` joins
+    // `account.tier = 'member'`, and an admin's default tier is `alumni`. Off
+    // that read, this admin has no characters and can never designate a holder.
+    const acc = await seedAccount(ctx.db, { tier: "alumni", isAdmin: true });
+    await seedCharacter(ctx.db, cfg, {
+      id: HOLDER,
+      accountId: acc.id,
+      main: true,
+      name: "Vela Kaine",
+      scopes: [...cfg.eveSso.scopes, "esi-access.read_lists.v1"],
+    });
+    expect(await getOwnCharacters(ctx.db, acc.id)).toEqual([
+      {
+        characterId: HOLDER,
+        name: "Vela Kaine",
+        scopes: [...cfg.eveSso.scopes, "esi-access.read_lists.v1"],
+      },
+    ]);
   });
 
-  it("adding a list already watched is idempotent and does not double-audit", async () => {
-    const { actor } = await seedTwoCharacters();
-    await addWatch(ctx.db, 4001, actor);
-    const before = (await lastAudit()).id;
-    await addWatch(ctx.db, 4001, actor);
-    expect(await ctx.db.select().from(accessListWatch)).toHaveLength(1);
-    expect((await lastAudit()).id).toBe(before);
-  });
-
-  it("audits a removal, and removing an unwatched list is a no-op", async () => {
-    const { actor } = await seedTwoCharacters();
-    await addWatch(ctx.db, 4001, actor);
-    await removeWatch(ctx.db, 4001, actor);
-
-    expect(await getWatchedListIds(ctx.db)).toEqual([]);
-    const audit = await lastAudit();
-    expect(audit.action).toBe("access_list.watch_removed");
-    expect(audit.target).toBe("4001");
-
-    const before = (await lastAudit()).id;
-    await removeWatch(ctx.db, 4001, actor);
-    expect((await lastAudit()).id).toBe(before);
+  it("does not return another account's characters", async () => {
+    const mine = await seedAccount(ctx.db, { tier: "member", isAdmin: true });
+    const theirs = await seedAccount(ctx.db, { tier: "member" });
+    await seedCharacter(ctx.db, cfg, {
+      id: 90000002,
+      accountId: theirs.id,
+      main: true,
+      name: "Someone Else",
+    });
+    expect(await getOwnCharacters(ctx.db, mine.id)).toEqual([]);
   });
 });
 ```
-
-Add the two imports the cascade test needs at the top of the file:
-`character` from `@/db/schema`.
 
 - [ ] **Step 2: Run the test and watch it fail**
 
-Run: `npx vitest run tests/access-lists-actions.test.ts`
-Expected: FAIL. Either the file does not compile (`seedCharacter` missing from
-`tests/helpers/seed.ts` — add it there, mirroring `seedAccount`), or the audit
-assertions fail because Task 8's services write no audit rows. Both are real
-work this step legitimises; do not weaken the assertions to match.
+Run: `npx vitest run tests/access-lists-reads.test.ts`
+Expected: FAIL at import — `getHolderView`, `getCatalog`,
+`getWatchedListViews` and `getOwnCharacters` are not exported by
+`src/services/access-lists.ts` yet.
+Quote the real output.
 
-- [ ] **Step 3: Make the services audit**
+- [ ] **Step 3: Add the four page-side reads to the service**
 
-In `src/services/access-lists.ts`, wrap each mutation in a transaction that
-writes its audit row, reading the previous holder inside the same transaction
-so the replace path can name what it displaced:
+Still in `src/services/access-lists.ts`. Task 6 Step 7 wrote the file's imports
+as `{ asc, eq }` from `drizzle-orm` plus four schema tables; these four reads
+need more, so widen the two existing import statements first — do not add a
+second import of the same module:
 
 ```ts
-export async function designateHolder(
-  db: Db,
-  characterId: number,
-  actor: string,
-): Promise<void> {
-  await db.transaction(async (tx) => {
-    // Read inside the transaction: the details of a replacement name the row
-    // this write is about to overwrite, and reading it outside would let a
-    // concurrent designation make that detail describe a holder that was
-    // already gone.
-    const [previous] = await tx
-      .select({ characterId: accessListHolder.characterId })
-      .from(accessListHolder)
-      .where(eq(accessListHolder.id, 1));
-    if (previous?.characterId === characterId) return;
-    await tx
-      .insert(accessListHolder)
-      .values({ id: 1, characterId, designatedBy: actor })
-      .onConflictDoUpdate({
-        target: accessListHolder.id,
-        set: { characterId, designatedBy: actor, designatedAt: new Date() },
-      });
-    await logAudit(tx, {
-      actor,
-      action: previous ? "access_list.holder_replaced" : "access_list.holder_designated",
-      target: String(characterId),
-      details: previous
-        ? { previousCharacterId: previous.characterId, characterId }
-        : { characterId },
-    });
-  });
-}
-
-export async function addWatch(
-  db: Db,
-  accessListId: number,
-  actor: string,
-): Promise<void> {
-  await db.transaction(async (tx) => {
-    const inserted = await tx
-      .insert(accessListWatch)
-      .values({ accessListId, addedBy: actor })
-      .onConflictDoNothing()
-      .returning({ accessListId: accessListWatch.accessListId });
-    // No row means it was already watched. Auditing anyway would record a
-    // state change that did not happen — the same "don't confirm a no-op" rule
-    // `unlinkDiscordAction` follows.
-    if (inserted.length === 0) return;
-    await logAudit(tx, {
-      actor,
-      action: "access_list.watch_added",
-      target: String(accessListId),
-      details: { accessListId },
-    });
-  });
-}
-
-export async function removeWatch(
-  db: Db,
-  accessListId: number,
-  actor: string,
-): Promise<void> {
-  await db.transaction(async (tx) => {
-    const removed = await tx
-      .delete(accessListWatch)
-      .where(eq(accessListWatch.accessListId, accessListId))
-      .returning({ accessListId: accessListWatch.accessListId });
-    if (removed.length === 0) return;
-    await logAudit(tx, {
-      actor,
-      action: "access_list.watch_removed",
-      target: String(accessListId),
-      details: { accessListId },
-    });
-  });
-}
+import { and, asc, eq, inArray } from "drizzle-orm";
+import {
+  accessListCatalog,
+  accessListEntry,
+  accessListHolder,
+  accessListSnapshot,
+  accessListWatch,
+  character,
+  type AccessListReadStatus,
+} from "@/db/schema";
 ```
 
-Run: `npx vitest run tests/access-lists-actions.test.ts` — expected green.
+and add one new import — Task 6's version of this file has none from `core`:
 
-- [ ] **Step 4: Add the three page-side reads to the service**
+```ts
+import type { AccessEntry } from "@/core/access-list-compare";
+```
 
-Still in `src/services/access-lists.ts`:
+Then append:
 
 ```ts
 export type HolderView = {
@@ -4450,7 +4583,7 @@ export async function getHolderView(dbx: Dbx): Promise<HolderView | null> {
   return row ?? null;
 }
 
-export type CatalogEntry = { accessListId: number; name: string | null };
+export type CatalogEntry = { accessListId: number; name: string };
 
 export async function getCatalog(dbx: Dbx): Promise<CatalogEntry[]> {
   return dbx
@@ -4517,11 +4650,50 @@ export async function getWatchedListViews(dbx: Dbx): Promise<WatchedListView[]> 
       .map(({ kind, entityId, access }) => ({ kind, entityId, access })),
   }));
 }
+
+export type OwnCharacter = {
+  characterId: number;
+  name: string;
+  scopes: string[];
+};
+
+/**
+ * The viewer's own linked characters, for the "Designate as holder" control.
+ *
+ * Tier-independent on purpose. `getMemberCharacters` (`services/desired.ts`)
+ * inner-joins `account.tier = 'member'`, which is right for the desired set and
+ * wrong here: `isAdmin` and `tier` are orthogonal, and an admin's default tier
+ * is `alumni` (`_components/nav-items.ts`). Sourcing this from the member
+ * roster would leave an alumni admin looking at a "Grant access" button that
+ * never becomes "Designate as holder", with nothing on the page to explain it.
+ *
+ * `affiliationInvalid` characters are excluded — ESI rejects them, so one
+ * could never actually hold the designation.
+ */
+export async function getOwnCharacters(
+  dbx: Dbx,
+  accountId: string,
+): Promise<OwnCharacter[]> {
+  return dbx
+    .select({
+      characterId: character.id,
+      name: character.name,
+      scopes: character.scopes,
+    })
+    .from(character)
+    .where(
+      and(eq(character.accountId, accountId), eq(character.affiliationInvalid, false)),
+    )
+    .orderBy(character.id);
+}
 ```
+
+Run: `npx vitest run tests/access-lists-reads.test.ts` — expected green, nine
+cases across the four describe blocks.
 
 Run: `npm run typecheck` — expected clean.
 
-- [ ] **Step 5: Write `actions.ts`**
+- [ ] **Step 4: Write `actions.ts`**
 
 Create `src/app/admin/access-lists/actions.ts`:
 
@@ -4608,9 +4780,13 @@ export async function removeWatchAction(
 }
 ```
 
-- [ ] **Step 6: Write `page.tsx`**
+- [ ] **Step 5: Write `page.tsx`**
 
-Create `src/app/admin/access-lists/page.tsx`:
+Create `src/app/admin/access-lists/page.tsx`. This step writes the imports and
+the default export only; it references `StopWatching` and the detail panel,
+which Step 6 appends to the same file. **The file does not typecheck until Step
+6 lands** — that is expected, do not go looking for a missing module, and do not
+run `npm run typecheck` between the two.
 
 ```tsx
 import type { Metadata } from "next";
@@ -4619,9 +4795,11 @@ import { requireAdminPage } from "@/lib/admin-guard";
 import { compareAccessList, type RosterCharacter } from "@/core/access-list-compare";
 import { getMemberCharacters } from "@/services/desired";
 import { lookupEntityNames } from "@/services/entity-names";
+import { ACCESS_LISTS_SCOPE } from "@/lib/esi/client";
 import {
   getCatalog,
   getHolderView,
+  getOwnCharacters,
   getWatchedListViews,
 } from "@/services/access-lists";
 import { Notice, RuleHead, Scroller, Status } from "@/app/_components/ui";
@@ -4672,17 +4850,19 @@ export default async function AdminAccessListsPage({
   const { done, at } = await searchParams;
   const db = getDb();
 
-  const [holder, catalog, watched, roster] = await Promise.all([
+  const [holder, catalog, watched, roster, mine] = await Promise.all([
     getHolderView(db),
     getCatalog(db),
     getWatchedListViews(db),
     getMemberCharacters(db),
+    getOwnCharacters(db, accountId),
   ]);
 
   // The viewer's own characters decide between "Grant access" and "Designate
   // as holder": there is no point offering designation to an admin who has
-  // nothing to designate.
-  const mine = roster.filter((c) => c.accountId === accountId);
+  // nothing to designate. Read tier-independently — `roster` is the member set
+  // and an admin is often an alumnus, so filtering it by `accountId` would come
+  // back empty for exactly the people who administer this page.
   const grantable = mine.find((c) => c.scopes.includes(ACCESS_LISTS_SCOPE)) ?? null;
 
   const state = monitorState({
@@ -4768,7 +4948,7 @@ export default async function AdminAccessListsPage({
               <select id="add-list" name="accessListId" defaultValue="">
                 {addable.map((c) => (
                   <option key={c.accessListId} value={c.accessListId}>
-                    {c.name ?? `#${c.accessListId}`}
+                    {c.name}
                   </option>
                 ))}
               </select>
@@ -4810,11 +4990,16 @@ export default async function AdminAccessListsPage({
                 );
                 // Only rows with something to report expand. A clean list gets
                 // no disclosure control at all, rather than a toggle that opens
-                // an empty box.
+                // an empty box — but it still gets its own "Stop watching",
+                // inline. Putting that control only inside the drawer would
+                // make a clean or never-read list permanently unremovable,
+                // which is precisely the list an admin is most likely to want
+                // off the page.
                 if (!rowHasDetail(row)) {
                   return (
                     <li key={c.accessListId} className="acl-list__row">
                       {head}
+                      <StopWatching accessListId={c.accessListId} />
                     </li>
                   );
                 }
@@ -4827,22 +5012,7 @@ export default async function AdminAccessListsPage({
                         comparison={c.comparison}
                         names={names}
                       />
-                      {/* `ConfirmGroup`/`ConfirmingForm`, not a bare form:
-                          this control sits inside the `Disclosure` above, and
-                          a redirect would reset its `useState` and close the
-                          drawer on the very press that used it. */}
-                      <ConfirmGroup>
-                        <ConfirmingForm action={removeWatchAction}>
-                          <input
-                            type="hidden"
-                            name="accessListId"
-                            value={c.accessListId}
-                          />
-                          <Submit className="btn btn--quiet" pendingLabel="Removing…">
-                            Stop watching
-                          </Submit>
-                        </ConfirmingForm>
-                      </ConfirmGroup>
+                      <StopWatching accessListId={c.accessListId} />
                     </Disclosure>
                   </li>
                 );
@@ -4856,11 +5026,35 @@ export default async function AdminAccessListsPage({
 }
 ```
 
-- [ ] **Step 7: Write the detail panel**
+- [ ] **Step 6: Write the detail panel**
 
-Still in `page.tsx`, below the default export:
+Still in `page.tsx`, below the default export. First the shared control, so
+both row shapes render exactly the same one:
 
 ```tsx
+/**
+ * The one control every watched row carries, expandable or not.
+ *
+ * `ConfirmGroup`/`ConfirmingForm`, not a bare form, in BOTH placements. Inside
+ * the `Disclosure` that is load-bearing: a redirect would reset the drawer's
+ * `useState` and close it on the very press that used it. Outside, it is
+ * uniformity — one component, one confirm affordance, one label, so the two
+ * branches cannot drift into two different removal experiences. `removeWatch`
+ * is idempotent (Task 6), so a double submit is harmless either way.
+ */
+function StopWatching({ accessListId }: { accessListId: number }) {
+  return (
+    <ConfirmGroup>
+      <ConfirmingForm action={removeWatchAction}>
+        <input type="hidden" name="accessListId" value={accessListId} />
+        <Submit className="btn btn--quiet" pendingLabel="Removing…">
+          Stop watching
+        </Submit>
+      </ConfirmingForm>
+    </ConfirmGroup>
+  );
+}
+
 /**
  * Names lead and ids are secondary throughout: the admin retypes these in-game,
  * where the id is not what the client accepts.
@@ -4961,7 +5155,7 @@ Add the imports these two blocks need at the top of `page.tsx`:
 `ACCESS_LISTS_SCOPE` from `@/lib/esi/client`, `type AccessListComparison` from
 `@/core/access-list-compare`, and `type AccessListReadStatus` from `@/db/schema`.
 
-- [ ] **Step 8: Add the nav entry**
+- [ ] **Step 7: Add the nav entry**
 
 In `src/app/_components/nav-items.ts`:
 
@@ -4981,7 +5175,7 @@ export function navFor({ canReadPayouts, isAdmin }: Reach): NavItem[] {
 }
 ```
 
-- [ ] **Step 9: Update the docblock's rule list — the label must appear exactly once**
+- [ ] **Step 8: Update the docblock's rule list — the label must appear exactly once**
 
 The module docblock enumerates the labels (lines 20-24) and states the fixed
 order (lines 31-33). Both are prose about a list this edit changed, so both are
@@ -5004,7 +5198,7 @@ Run: `grep -c "Access lists" src/app/_components/nav-items.ts`
 Expected: `2` — once in the docblock rule list, once in the `NavItem`. Any other
 count means either the docblock was missed or a second literal crept in.
 
-- [ ] **Step 10: Update `tests/nav-items.test.ts`**
+- [ ] **Step 9: Update `tests/nav-items.test.ts`**
 
 Three label arrays assert the admin-visible set and all three now fail. Add
 `"Access lists"` after `"Sync"` in each:
@@ -5017,7 +5211,7 @@ Run: `npx vitest run tests/nav-items.test.ts`
 Expected: green. If a fourth array fails, it is a case this step missed — add it
 rather than loosening the assertion to a `toContain`.
 
-- [ ] **Step 11: Typecheck and format**
+- [ ] **Step 10: Typecheck and format**
 
 Run: `npm run typecheck && npm run format:check`
 On typecheck failure: the likeliest cause is `getMemberCharacters` not yet
@@ -5025,7 +5219,7 @@ carrying `corporationId`/`allianceId` — that is Task 8's additive change to
 `MemberCharacter`; confirm it landed before editing `page.tsx` around it.
 On format failure: `npm run format`.
 
-- [ ] **Step 12: Commit**
+- [ ] **Step 11: Commit**
 
 ```bash
 git add src/app/admin/access-lists/page.tsx src/app/admin/access-lists/actions.ts \
@@ -5267,7 +5461,7 @@ test("states 4 and 5: a stale authorization and a dead token are different sente
 });
 ```
 
-- [ ] **Step 5: Assert states 6 and 7, and the clean row's missing toggle**
+- [ ] **Step 5: Assert states 6 and 7, the clean row's missing toggle, and that it can still be unwatched**
 
 ```ts
 test("state 6: a healthy holder with an empty catalog offers Check now as the primary", async ({
@@ -5307,8 +5501,22 @@ test("state 7: a clean list is one line with nothing to open", async ({
   // No disclosure control at all — not a closed one. A toggle over an empty
   // box is a promise the row cannot keep.
   await expect(row.locator("summary")).toHaveCount(0);
+
+  // …but it is still removable. The row with no drawer is exactly the row an
+  // admin most wants off the page, and for one revision of this design its
+  // only "Stop watching" lived inside a drawer this row never renders — which
+  // made a clean list permanently unwatchable. Asserted here, on the row that
+  // has no `summary`, because that is the shape the bug hid in.
+  await expect(row.getByRole("button", { name: "Stop watching" })).toBeVisible();
+  await row.getByRole("button", { name: "Stop watching" }).click();
+  await expect(page.locator(".notice")).toContainText("removed from the watchlist");
+  await expect(page.locator(".acl-list__row")).toHaveCount(0);
+  await expect(page.getByText("No lists are being watched yet.")).toBeVisible();
 });
 ```
+
+A never-read row takes the same branch: `rowHasDetail` is false for a row with
+no snapshot too, so this one test covers both non-expanding shapes.
 
 - [ ] **Step 6: Assert the drifted row's disclosure, its tone, and the drawer surviving its own control**
 
@@ -5494,7 +5702,8 @@ git commit -m "test(access-lists): end-to-end coverage for all seven page states
   `access_list.holder_designated` (`{characterId}`),
   `access_list.holder_replaced` (`{characterId, previousCharacterId}`),
   `access_list.watch_added` and `access_list.watch_removed`
-  (`{accessListId, name: string | null}`).
+  (`{accessListId, name: string | null}` — null when the list has left the
+  catalog, which is the usual reason a watch is removed).
 - Produces: nothing code imports.
 
 - [ ] **Step 1: Confirm the doc locations before editing any of them**
@@ -5680,7 +5889,17 @@ On failure: fix at the source. Do not add `as` casts or `@ts-expect-error` to
 clear this gate; a type error here is usually a real disagreement between the
 new tables' inferred types and the view's hand-written unions.
 
-- [ ] **Step 12: Gate — unit tests**
+- [ ] **Step 12: Gate — lint**
+
+Run: `npm run lint`
+
+`typecheck`, `lint` and `format:check` are ONE CI job (CONTRIBUTING.md:31-33) —
+any one of them red fails the whole thing, so a green typecheck proves a third
+of it. The likely findings on this feature are unused imports left behind while
+iterating on `page.tsx`, and a floating promise on an `enqueueSync` call whose
+`await` went missing.
+
+- [ ] **Step 13: Gate — unit tests**
 
 Run: `npm test`
 On failure: read the failing file first. If the failures are broad and land in
@@ -5689,7 +5908,7 @@ rather than this change — run `npm ci` and re-run before debugging. Compare th
 number of test *files* reported against the previous run: a load failure
 silently drops whole files, which looks like a smaller-but-passing suite.
 
-- [ ] **Step 13: Gate — end-to-end**
+- [ ] **Step 14: Gate — end-to-end**
 
 Run: `npm run test:e2e`
 One run at a time in this worktree. On failure, re-run the single failing spec
@@ -5699,7 +5918,7 @@ No `reporter` is configured, so the default `list` discards `testInfo.attach`
 bodies and leaves `test-results/` empty — pass `--reporter=json` (skip to the
 first `{`) or `--reporter=html` when a trace or attachment is needed.
 
-- [ ] **Step 14: Gate — production build**
+- [ ] **Step 15: Gate — production build**
 
 Run: `npm run build`
 This is a separate gate, not a formality after e2e: local e2e runs `next dev`
@@ -5708,14 +5927,14 @@ test:e2e` can still fail the build job. The usual cause on a new page is a
 server/client boundary — a `"use client"` module's export called from a server
 component, or a client component handed a non-serializable prop.
 
-- [ ] **Step 15: Gate — Node version**
+- [ ] **Step 16: Gate — Node version**
 
 Run: `./scripts/check-node-version.sh`
 This file exists at that exact path. On failure, match `.nvmrc` to the major
 `package.json` `engines` declares (`>=24`) — pin the MAJOR only; pinning a minor
 breaks every CI job at `npm ci`.
 
-- [ ] **Step 16: Confirm the tree is clean, and specifically that e2e left nothing behind**
+- [ ] **Step 17: Confirm the tree is clean, and specifically that e2e left nothing behind**
 
 Run:
 
@@ -5732,7 +5951,21 @@ a scratch probe file, `test-results/`) must be removed or committed
 deliberately; note that `cp` and `rm` are aliased to prompt in this environment
 and exit without acting, so use `/bin/rm -f` for scratch files.
 
-- [ ] **Step 17: Commit**
+- [ ] **Step 18: Gate — Docker build**
+
+Run: `docker build .`
+
+The fifth CI job, and one this feature can uniquely fail. `.dockerignore` prunes
+the build context, so a file that reaches into a pruned directory typechecks
+clean on every PR and only breaks at deploy (CONTRIBUTING.md:36-38). This change
+adds a migration under `drizzle/` and a new page tree, both of which must reach
+the image — `fly.toml` runs migrations as a release command on every deploy, so
+a `drizzle/` file missing from the context fails production rather than CI.
+
+On failure, check `.dockerignore` before touching any source: the fix is almost
+always the ignore rule, not the import.
+
+- [ ] **Step 19: Commit**
 
 ```bash
 git add README.md docs/ops.md docs/settled-design-decisions.md \
