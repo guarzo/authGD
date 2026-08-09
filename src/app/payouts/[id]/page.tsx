@@ -177,8 +177,9 @@ export default async function PayoutOperationPage({
   const canUnlock =
     access.isOperator && (operation.createdBy === access.accountId || access.isAdmin);
 
-  // null when there are more people than the datalist cap — the field then
-  // degrades to plain free text (see listCharacterNames).
+  // null when the viewer cannot edit — the field is not rendered at all then —
+  // or when there are more people than the datalist cap, in which case the
+  // field degrades to plain free text (see listCharacterNames).
   const characterNames = canEdit ? await listCharacterNames(getDb()) : null;
 
   const { duplicateUnresolvedNames, crossStateClashes } =
