@@ -27,7 +27,7 @@ async function requireAccount(): Promise<string> {
 export async function setMainAction(characterId: number): Promise<void> {
   const accountId = await requireAccount();
   const result = await getDb().transaction((dbtx) =>
-    setMainCharacter(dbtx, accountId, characterId),
+    setMainCharacter(dbtx, accountId, accountId, characterId),
   );
   if (!result.ok) {
     // The character list can go stale between render and click: a transfer

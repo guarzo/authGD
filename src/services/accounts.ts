@@ -527,10 +527,23 @@ export async function unlinkCharacter(
   return { ok: true };
 }
 
+/**
+ * Set the account's main.
+ *
+ * `actor` is explicit rather than assumed to be the account itself: an admin
+ * repairing a member's main (admin/accounts/actions.ts) is a different act from
+ * a member picking their own, and the audit log has to be able to tell them
+ * apart. `actor === accountId` is NOT that signal — an admin fixing their own
+ * account produces exactly that — so the caller names the action too. Whether
+ * the alliance actually warrants the swap is the caller's business; this
+ * function only enforces ownership.
+ */
 export async function setMainCharacter(
   dbx: DbTx,
+  actor: string,
   accountId: string,
   characterId: number,
+  action: "account.main_changed" | "admin.main_changed" = "account.main_changed",
 ): Promise<{ ok: true; name: string } | { ok: false; error: "not_on_account" }> {
   const rows = await dbx
     .select()
@@ -544,8 +557,8 @@ export async function setMainCharacter(
     .set({ mainCharacterId: characterId })
     .where(eq(account.id, accountId));
   await logAudit(dbx, {
-    actor: accountId,
-    action: "account.main_changed",
+    actor,
+    action,
     target: accountId,
     details: { mainCharacterId: characterId },
   });
