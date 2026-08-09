@@ -177,16 +177,19 @@ export default async function PayoutsPage({
             <label className="filter-form__label" htmlFor="filter-q">
               Name
             </label>
+            {/* No hint. `admin/audit`'s three fields each carry one because
+                Actor, Action and Target are three ways of narrowing the same
+                row and the label alone doesn't say which is which. Here the
+                label is the whole answer — a field called Name under a table
+                whose first column is Name — so a hint restates it, and the
+                one cell carrying it made the row read as two rows deep on the
+                left and one on the right. */}
             <input
               id="filter-q"
               className="field"
               name="q"
               defaultValue={params.q ?? ""}
-              aria-describedby="filter-q-hint"
             />
-            <span className="filter-form__hint" id="filter-q-hint">
-              matches part of the name
-            </span>
           </div>
           <div className="filter-form__cell">
             <label className="filter-form__label" htmlFor="filter-status">
