@@ -240,11 +240,12 @@ export function ConfirmCost({
  * exactly who derole-don't-boot is protecting. Omitted where the visible label
  * already carries its object.
  *
- * `armedClassName` lets a caller upgrade the visual grade only once armed
- * (e.g. FREEZE and UNLINK go to full `.btn--danger` red only on confirm,
- * never at rest) while REVOKE, which is already `.btn--danger` at rest, can
- * omit it and keep the same class in both states — its rest colour and grade
- * are not supposed to change at all.
+ * `armedClassName` lets a caller upgrade the visual grade only once armed:
+ * FREEZE, UNLINK and REVOKE all sit at a quiet grade at rest and go to full
+ * `.btn--danger` red only on confirm. REVOKE was the one exception until the
+ * design pass that followed #193 — it held full `--danger` at rest, which put
+ * four saturated buttons in a four-row admin table and spent the alarm colour
+ * on a recoverable action. No caller now keeps the same class in both states.
  *
  * Width is reserved for the wider of the two labels so the swap never
  * changes the button's own size and reflows the row it sits in — the same

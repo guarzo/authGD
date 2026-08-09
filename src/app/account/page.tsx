@@ -130,6 +130,35 @@ function statusSummary(c: {
 }
 
 /**
+ * The one shape of `statusSummary` that carries no information: a character
+ * authGD manages, whose last contacts run came back `ok`, and which is on the
+ * map ACL. For these, and only these, the sentence is exactly "token ok,
+ * standings ok, map on" — the same words on every such row.
+ *
+ * This exists because the summary was doing two jobs at once. It was added to
+ * close an R4 parity breach (`map on|off` varies while the chip reads `ok`
+ * either way, so a sighted member had nowhere to read what `ok` meant), and
+ * that job is real — but it was paying for it on every row, including the
+ * rows where the sentence is a constant. On a 21-character account with
+ * nothing wrong, that is the same string 21 times under a heading that has
+ * already said "21 characters — all healthy", and the one row that differs has
+ * to be found by reading rather than by looking.
+ *
+ * Gating on this keeps the parity fix exactly where it was earned — a row
+ * whose map or standings state deviates still says so, in both channels — and
+ * spends nothing on the rows that only ever agreed with the heading. Both
+ * channels lose the same sentence on the same rows, which is what R4 asks;
+ * nothing is hidden from one and kept for the other.
+ */
+function isNominal(c: {
+  contactsTarget: boolean;
+  contactSyncResult: string | null;
+  onMapAcl: boolean;
+}) {
+  return c.contactsTarget && c.contactSyncResult === "ok" && c.onMapAcl;
+}
+
+/**
  * One line of the closing telemetry: when authGD last pushed this, and when it
  * will look again.
  *
@@ -432,6 +461,29 @@ export default async function AccountPage({
                         dropping `--micro` is the whole fix, and the heavier
                         rest grade this comment argues for is a colour
                         decision that never depended on the size. */}
+                    {/* Stays the bare word UNLINK, deliberately. The critique
+                        behind this pass flagged it as a twin of each character
+                        row's UNLINK a few hundred pixels away, and putting the
+                        object in the visible label ("unlink Discord") does read
+                        better in isolation — but it was tried here and reverted.
+                        The longer label widens the button by roughly 64px, which
+                        at ~700px is enough that the arming live region no longer
+                        fits beside it; the line box grows on arm, `align-items:
+                        center` re-centres the button out from under a stationary
+                        pointer, and the `pointerLeave` disarms the control the
+                        member just armed. That is the #112 mechanism, and
+                        "arming the Discord unlink does not move it out from
+                        under the pointer" catches it.
+
+                        The twin is also less of a twin than it looked: this one
+                        is `.btn` at 36px, the character's is `.btn--quiet
+                        .btn--danger-quiet` at micro, and the accessible names
+                        already differ ("unlink Discord" vs "unlink <character>").
+                        Only the visible word is shared, and it is shared between
+                        two controls that do not sit in the same glance. Widening
+                        the meta row so the label fits is the real fix if this is
+                        ever worth doing; it is not worth destabilising #112's
+                        geometry for. */}
                     <ConfirmSubmit
                       className="btn"
                       armedClassName="btn btn--danger"
@@ -593,7 +645,7 @@ export default async function AccountPage({
               {showStatusColumn
                 ? " Each character’s STATUS cell summarizes its token, standings and map state, and shows the detail when something needs your attention."
                 : view.characters.length > 0
-                  ? " Every character is healthy, so each row states its own token, standings and map state in place of a STATUS column."
+                  ? " Every character is healthy, so there is no STATUS column; a row states its token, standings and map state only where one of them differs from managed, ok and on."
                   : " No characters are linked yet, so there is no STATUS column to show."}
             </caption>
             {/* Round 3 (team-lead judgment): the visible header bar
@@ -742,8 +794,20 @@ export default async function AccountPage({
                                       is lost to assistive tech below it, only its
                                       visibility changes. Never rendered alongside
                                       the STATUS column: that would say the same
-                                      sentence twice in one row. */}
-                                  {!showStatusColumn && (
+                                      sentence twice in one row.
+
+                                      Also never rendered for a nominal character
+                                      (see `isNominal`): there the sentence is the
+                                      constant "token ok, standings ok, map on", so
+                                      an all-nominal crew got that one string once
+                                      per row under a heading that had already said
+                                      every character was healthy. Gating it means
+                                      the rows that still carry it are exactly the
+                                      rows that deviate, which is what the eye
+                                      should land on. Parity holds: the gate is on
+                                      the element, so the visual and accessible
+                                      channels drop it together. */}
+                                  {!showStatusColumn && !isNominal(c) && (
                                     <span
                                       className="char__status-summary"
                                       data-status-summary
