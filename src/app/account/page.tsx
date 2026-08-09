@@ -58,6 +58,12 @@ const manifestColumns = (showStatus: boolean) => (showStatus ? 4 : 3);
  *  never dangle. */
 const contactRemedyId = (characterId: number) => `contact-remedy-${characterId}`;
 
+/** The id the character-row `unlink` control's `aria-describedby` points at
+ *  (ruling R2/#108-#112). Same pairing discipline as `contactRemedyId` above:
+ *  the `ConfirmCost` it names is gated on the same `hasUnlinkAction` the
+ *  control itself is, so the id can never dangle. */
+const unlinkCostId = (characterId: number) => `unlink-cost-${characterId}`;
+
 // Reads the session cookie and hits the DB on every request; getConfig() also
 // requires env vars that aren't present at build time, so this route must
 // never be statically prerendered.
@@ -589,13 +595,35 @@ export default async function AccountPage({
                   ? " Every character is healthy, so each row states its own token, standings and map state in place of a STATUS column."
                   : " No characters are linked yet, so there is no STATUS column to show."}
             </caption>
+            {/* Round 3 (team-lead judgment): the visible header bar
+                stated almost nothing on this table — three of four `<th>`s
+                were already `.visually-hidden` text, and the fourth ("Name")
+                only restated what a member's eye already reads from the bold
+                name in every row below it; once STATUS renders, that column
+                is likewise just an umbrella over TOKEN/STANDINGS/MAP, each
+                already labelled per row (see the STATUS cell below). All four
+                header labels are `.visually-hidden` here, same convention as
+                Portrait/Actions already used — a screen reader still gets
+                full Portrait/Name/Status/Actions column identity on every
+                cell it visits, `<th scope="col">` and all; only the sighted
+                bar goes (`.log--manifest thead th`, globals.css), buying back
+                its fixed ~33.5px regardless of crew size. `.log th` is
+                untouched for every other table — the admin accounts, audit
+                and sync tables still sort and group by this same header, so
+                theirs still earns its keep. */}
             <thead>
               <tr>
                 <th scope="col">
                   <span className="visually-hidden">Portrait</span>
                 </th>
-                <th scope="col">Name</th>
-                {showStatusColumn && <th scope="col">Status</th>}
+                <th scope="col">
+                  <span className="visually-hidden">Name</span>
+                </th>
+                {showStatusColumn && (
+                  <th scope="col">
+                    <span className="visually-hidden">Status</span>
+                  </th>
+                )}
                 <th scope="col">
                   <span className="visually-hidden">Actions</span>
                 </th>
@@ -678,6 +706,50 @@ export default async function AccountPage({
                                   {c.isMain && (
                                     <strong className="char__main">(main)</strong>
                                   )}
+                                  {/* Only when the STATUS column is gone. `map
+                                      on|off` varies per character while the chip
+                                      reads `ok` either way — deliberately, since
+                                      map membership cannot substantiate a fault
+                                      (account-health.ts:27-35) — so this fact used
+                                      to live only in a `.visually-hidden` span: a
+                                      straight R4 breach on an all-healthy account,
+                                      where the token/standings/map facts existed
+                                      nowhere a sighted member could read them.
+                                      Promoted into visible copy, spending the
+                                      dead width the dropped STATUS column freed up
+                                      (measured ~827px at 1440px against a 214px
+                                      NAME column) on state the page already
+                                      computes. Inline on the name's own line, not
+                                      a third `.char-line` row — a new row costs
+                                      every character ~24px and blows the 63px/49px
+                                      row-pitch budget e2e/account.spec.ts pins
+                                      ("a located manifest row stays inside the
+                                      63px density budget"), and `.char` is already
+                                      `white-space: nowrap`, so the summary shares
+                                      that line for free. `.char__status-summary`
+                                      (globals.css) hides this below its own
+                                      40rem breakpoint rather than unmounting it:
+                                      the 320px forced-scroll gate ("a faulted
+                                      character does not blow out the forced
+                                      horizontal scroll at 320px") is
+                                      bound by the NAME column's content width, and
+                                      this string is wider than that budget has —
+                                      but the element stays in the accessible tree
+                                      at every width (the same `.visually-hidden`
+                                      clip technique, inlined so the query can
+                                      un-clip it above the breakpoint), so nothing
+                                      is lost to assistive tech below it, only its
+                                      visibility changes. Never rendered alongside
+                                      the STATUS column: that would say the same
+                                      sentence twice in one row. */}
+                                  {!showStatusColumn && (
+                                    <span
+                                      className="char__status-summary"
+                                      data-status-summary
+                                    >
+                                      {statusSummary(c)}
+                                    </span>
+                                  )}
                                 </span>
                                 {/* Omitted, not dimmed or hidden, for an alt whose
                                     location reads the same as the main's — R4 runs
@@ -690,22 +762,6 @@ export default async function AccountPage({
                                     location={c.location}
                                     stale={c.locationStale}
                                   />
-                                )}
-                                {/* Only when the STATUS column is gone. `map on|off`
-                                    varies per character while the chip reads `ok`
-                                    either way — deliberately, since map membership
-                                    cannot substantiate a fault
-                                    (account-health.ts:27-35) — so the cell's
-                                    accessible name was the only place a
-                                    screen-reader user could learn it. Visually
-                                    hidden costs no vertical space, which is the
-                                    whole point of dropping the column. Never
-                                    rendered alongside the column: that would say the
-                                    same sentence twice in one row. */}
-                                {!showStatusColumn && (
-                                  <span className="visually-hidden" data-status-summary>
-                                    {statusSummary(c)}
-                                  </span>
                                 )}
                               </div>
                             </td>
@@ -798,13 +854,29 @@ export default async function AccountPage({
                                   className="inline-form"
                                 >
                                   <Submit
-                                    // 36px, the panel grade (ruling R1) — not
-                                    // `.btn--micro`, which the toggle that
-                                    // opens this panel holds instead. One
-                                    // control at a time in a full-width panel
-                                    // has no density problem to trade down
-                                    // for.
-                                    className="btn btn--quiet"
+                                    // Plain `.btn`, not `.btn--quiet` (round 2
+                                    // fix): the panel is "one open at a time,
+                                    // spans the full row's width, nothing
+                                    // competing with it for space" (ruling
+                                    // R1), so it earns the standalone 36px
+                                    // grade either way — `.btn` already carries
+                                    // that height and padding baked in, no
+                                    // buy-back rule needed the way
+                                    // `.btn--quiet` required one (below). What
+                                    // changed is the COLOUR: `--ink-faint` on
+                                    // no ground reads as a table header label,
+                                    // not a control a member can press — the
+                                    // owner's "looks a bit off" complaint,
+                                    // measured against `.log th` next to it in
+                                    // the row above, which shares that ink but
+                                    // pairs it with a `--hull` ground `.btn--quiet`
+                                    // never had. `unlink` beside it stays
+                                    // `--danger-quiet`, deliberately: it is
+                                    // still the routine, non-alarming grade
+                                    // PRODUCT.md principle 4 wants for an
+                                    // ordinary choice a member makes often
+                                    // (DESIGN.md's "quiet destructive").
+                                    className="btn"
                                     pendingLabel="setting…"
                                     // The verb stays in the accessible name
                                     // rather than the panel's own toggle
@@ -835,24 +907,89 @@ export default async function AccountPage({
                                 </form>
                               )}
                               {hasUnlinkAction && (
-                                <form
-                                  action={unlinkAction.bind(null, c.id)}
-                                  className="inline-form"
-                                >
-                                  <ConfirmSubmit
-                                    className="btn btn--quiet btn--danger-quiet"
-                                    armedClassName="btn btn--danger"
-                                    label="unlink"
-                                    // Named, like the Discord unlink above and every
-                                    // unlink on the admin table: three rows each
-                                    // offering a bare "unlink" gives a screen-reader
-                                    // or speech-input member the verb three times
-                                    // with no object, and the manifest is exactly
-                                    // where they cannot see which row they are on.
-                                    restName={`unlink ${c.name}`}
-                                    confirmName={`confirm unlink ${c.name}`}
-                                  />
-                                </form>
+                                <>
+                                  <form
+                                    action={unlinkAction.bind(null, c.id)}
+                                    className="inline-form"
+                                  >
+                                    <ConfirmSubmit
+                                      className="btn btn--quiet btn--danger-quiet"
+                                      armedClassName="btn btn--danger"
+                                      label="unlink"
+                                      // Named, like the Discord unlink above and every
+                                      // unlink on the admin table: three rows each
+                                      // offering a bare "unlink" gives a screen-reader
+                                      // or speech-input member the verb three times
+                                      // with no object, and the manifest is exactly
+                                      // where they cannot see which row they are on.
+                                      restName={`unlink ${c.name}`}
+                                      confirmName={`confirm unlink ${c.name}`}
+                                      describedBy={unlinkCostId(c.id)}
+                                    />
+                                  </form>
+                                  {/* `visibility="visible"`, not `"reveal"` or
+                                      `"hidden"` — and neither of `ConfirmCost`'s
+                                      existing precedents licenses reusing their
+                                      reasoning wholesale. This control sits
+                                      inside a `<td>` (the panel's own
+                                      colSpan'd cell), same as the admin
+                                      accounts drawer: revealing the cost on
+                                      arm would widen that cell, sliding the
+                                      just-armed button out from under a
+                                      stationary pointer and disarming it on
+                                      `pointerLeave` — the exact failure
+                                      #108/#111/#112 found, which is why
+                                      `"reveal"` is off the table here.
+                                      `lifecycle-submit.tsx`'s `"visible"`
+                                      call sits OUTSIDE any table, so a
+                                      permanently-visible sentence there has no
+                                      neighbouring cell to shove — that
+                                      justification does not transfer, but the
+                                      conclusion still holds for a different
+                                      reason: this sentence lives inside a
+                                      disclosure panel that is already, by
+                                      ruling R1, "one open at a time, spans the
+                                      full row's width, nothing competing with
+                                      it for space" — the density argument that
+                                      makes a permanent per-row sentence too
+                                      costly on a scanning admin table (why
+                                      that table chose `"hidden"` instead, per
+                                      confirm-submit.tsx) does not apply to a
+                                      panel nobody sees until they open it.
+                                      `"hidden"` would leave the one sighted
+                                      member who opened this panel to read the
+                                      cost never reading it at all — the same
+                                      R4 breach the promoted status summary
+                                      above also exists to fix.
+                                      `"visible"` is the only shape left that is
+                                      neither. */}
+                                  <ConfirmCost
+                                    id={unlinkCostId(c.id)}
+                                    visibility="visible"
+                                  >
+                                    {/* "Starts a new, separate account" rather
+                                        than "you can relink any time" (the
+                                        Discord unlink's promise below): a fresh
+                                        SSO login with this character does not
+                                        rejoin this account (accounts.ts:497's
+                                        "a fresh SSO login with that character
+                                        creates a NEW account," the same rule
+                                        that keeps a last character from being
+                                        unlinked in the first place). Promising
+                                        an easy relink here would be false.
+
+                                        Round 3 (team-lead): no em dash and no
+                                        third clause. Both existing ConfirmCost
+                                        sentences (payouts/[id]/page.tsx:518-520,
+                                        :544-546) are two plain declaratives, and
+                                        "it does not rejoin this one" only
+                                        restated "a new, separate account" a
+                                        second time. Same fact, matched register. */}
+                                    Drops {c.name} from your account and stops managing
+                                    its contacts and map access. Logging back in with it
+                                    later starts a new, separate account.
+                                  </ConfirmCost>
+                                </>
                               )}
                             </>
                           ) : null

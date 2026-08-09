@@ -162,7 +162,9 @@ export function ConfirmCost({
    *  never gated on arming. For a cost that would read as an error if it
    *  arrived with the arm (`"reveal"`'s failure mode) or that must not be
    *  AT-only (`"hidden"`'s). The payout page's Finalize and Unlock controls
-   *  (`payouts/[id]/lifecycle-submit.tsx`) are the only caller. */
+   *  (`payouts/[id]/lifecycle-submit.tsx`) were the first caller, on the
+   *  grounds above; the account page's character `unlink` (`account/page.tsx`)
+   *  is a second, for a different reason — see the docblock above for both. */
   visibility?: "reveal" | "hidden" | "visible";
 }) {
   const ctx = useContext(ArmContext);
