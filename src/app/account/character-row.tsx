@@ -96,10 +96,13 @@ export function CharacterRow({
    *  with neither. */
   actions: ReactNode | null;
 }) {
-  // Same "throw before any other hook" placement `ConfirmSubmit` uses for its
-  // own scope (confirm-submit.tsx): every render of this component either
-  // throws here or doesn't, so the hooks below always run in the same order
-  // regardless.
+  // Thrown above the remaining hooks, matching `ConfirmCost`
+  // (confirm-submit.tsx) rather than `ConfirmSubmit`: the condition here is
+  // provider presence, which is fixed by this component's JSX position, so
+  // every render either throws or doesn't and the hooks below always run in
+  // the same order. `ConfirmSubmit` deliberately throws BELOW its hooks
+  // because its condition is a prop (`confirm && !ctx`) that can flip between
+  // renders — do not read this as licence to hoist that one.
   const scope = useContext(OpenRowContext);
   if (!scope) {
     throw new Error("CharacterRow must be rendered inside a ManifestOpenScope");

@@ -685,10 +685,12 @@ export default async function AccountPage({
             <tbody>
               {/* `ManifestOpenScope` alongside `ConfirmArmScope`, not inside a
                   wrapper around it: both render no DOM (see each one's own
-                  docblock), which is load-bearing here — `.log--sticky-col`
-                  and the drawer-row selectors below depend on `<tbody>`'s
-                  direct children being `<tr>`s, and a stray element from
-                  either scope would break that. */}
+                  docblock), which is load-bearing here — table structure
+                  requires `<tbody>`'s direct children to be `<tr>`s, and the
+                  open-row binding in globals.css reaches its data row with
+                  `tr:has(+ tr.drawer-row--actions…)`, an ADJACENT-sibling
+                  match that a stray wrapper element from either scope would
+                  break outright. */}
               <ManifestOpenScope>
                 <ConfirmArmScope>
                   {view.characters.map((c) => {
