@@ -598,41 +598,42 @@ a:hover {
   max-width: calc(var(--measure-page-narrow) - 2 * var(--s-5));
 }
 
-/* The crew manifest and the two elements that must share its right edge.
-   `.page--narrow > :where(*)` is (0,1,0) — `:where()` contributes nothing, so
-   the selector weighs only its one class — and this is (0,2,0), so a class on
-   the child is all it takes to override.
+/* /account, whose widest element is the crew manifest. Same shape as the rule
+   above and one class heavier — `.page--narrow > :where(*)` is (0,1,0) since
+   `:where()` contributes nothing, and this is (0,2,0) — so adding `page--crew`
+   to the `<main>` retightens every direct child in one move.
 
-   This replaces `.full-measure`, which took the same two elements the other
-   way: out to the full 1198px page measure, on the argument that the manifest
-   is a data table rather than prose and that the reading measure forced its
-   name column to wrap. The wrapping half of that argument had already stopped
-   being true — `.char__location` is `nowrap` with its own 22rem cap — and what
-   the full measure actually bought was 667px of empty row between a character's
-   name and the STATUS that describes it. `--measure-crew` is the table's own
-   content width, so nothing wraps and nothing strands.
+   This replaces `.full-measure`, which took the manifest the other way: out to
+   the full 1198px page measure, on the argument that the manifest is a data
+   table rather than prose and that the reading measure forced its name column
+   to wrap. The wrapping half of that argument had already stopped being true —
+   `.char__location` is `nowrap` with its own 22rem cap — and what the full
+   measure actually bought was 667px of empty row between a character's name and
+   the STATUS that describes it. `--measure-crew` is the table's own content
+   width, so nothing wraps and nothing strands.
 
-   Three elements, not one, because the page is a flat list of `.page--narrow`
-   children with no wrapping section: the Scroller itself, the "Crew manifest"
-   RuleHead whose rule would otherwise run 146px past the panel it heads, and
-   `.page__head`. The head is here for the reason walkthrough 3.1 first gave it
-   `.full-measure`: its verdict/health strip right-aligns inside
-   `.page__head-row` via `justify-content: space-between`, so its right edge is
-   only ever as far right as `.page__head`'s own content box, and that strip
-   counts the very characters the manifest lists. `.page__head` is the right
-   level to set it at — `.page__head-row` is a grandchild of `.page--narrow`,
-   invisible to the direct-child selector above regardless of what class it
-   carries.
+   The whole column rather than the manifest alone, because the page is a flat
+   list of `.page--narrow` children with no wrapping section, and a per-element
+   cap gives whichever siblings did not get one a right edge ~146px further out
+   than the manifest's. That step was visible between the manifest and the "Sync
+   schedule" rule below it, and capping only that one would have moved the step
+   to "Your payouts" on any account with payout history. One cap on the parent
+   has no such ordering dependency. Measured: nothing on the page needs the
+   width it gives up — the payouts table's `.log` columns are auto-layout and
+   fit inside 766px with zero overflow, and `.page__meta`'s own 57rem cap is
+   looser still.
 
-   Everything else on the page keeps the 912px narrow cap, including the "Sync
-   schedule" block below, which is consequently wider than the manifest. That
-   asymmetry is deliberate: the manifest is a bordered panel sized to its own
-   content, and the alternative — moving `--measure-page-narrow` — would drag
-   /error, /not-found and /payouts/new along with it. Prose keeps the narrow
-   cap either way, which is the entire reason `page--narrow` stays on this page
-   rather than being deleted: removing it wholesale would stretch every
-   remaining narrow-capped child, `.page__meta` among them, to 1248px. */
-.page--narrow > .measure-crew {
+   `.page__head` is a direct child and so is covered; that matters because its
+   verdict/health strip right-aligns inside `.page__head-row` via
+   `justify-content: space-between`, making its right edge exactly
+   `.page__head`'s content box — and that strip counts the very characters the
+   manifest lists.
+
+   Scoped to a page class rather than done by moving `--measure-page-narrow`,
+   which would drag /error, /not-found and /payouts/new along with it.
+   `page--narrow` still earns its place here: it is what caps the descendants
+   this rule cannot reach, and dropping it would stretch them to 1248px. */
+.page--narrow.page--crew > :where(*) {
   max-width: var(--measure-crew);
 }
 
@@ -705,16 +706,16 @@ a:hover {
    at its own gap rather than forcing the head to scroll at 320px, same call
    `.page__head-row` above makes.
 
-   Explicitly capped at the narrow measure, unlike `.page__head-row` above:
-   `.page__head` takes a measure of its own (`.measure-crew`) so the verdict
-   can right-align against the manifest, and whatever that measure is reaches
-   every descendant, not just the row that needed it. Nothing before
-   walkthrough 3.1 gave this element its own cap because it never needed one —
-   its parent's 912px was doing the job by accident.
+   Explicitly capped at the narrow measure, unlike `.page__head-row` above.
+   `.page__head` is a direct child of `.page--narrow.page--crew`, so on /account
+   it inherits the crew measure rather than the page's — and whatever that
+   measure is reaches every descendant, not just the head row that needed it.
+   Nothing before walkthrough 3.1 gave this element its own cap because it never
+   needed one: its parent's 912px was doing the job by accident.
 
    The cap is not binding today: `--measure-crew` is 48rem, narrower than the
    57rem restated here, so the head is already tighter than this rule asks for.
-   It stays because it is the head's measure, not the page's, that this element
+   It stays because it is the crew measure, not the page's, that this element
    is now at the mercy of — and the whole reason that measure exists is that it
    is derived from the manifest's content and will move if that content does.
    Uncapped, a widened head would spread the tier badge and the Discord row

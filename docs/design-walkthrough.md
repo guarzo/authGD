@@ -194,11 +194,19 @@ fix above was "one class on the head row" — put `full-measure` on `.page__head
 so the strip widened to meet the 1198px table. It shipped, and it closed the
 seam by making both sides the wrong width: 3.3's dead space is the same 1198px
 seen from the other end, with STATUS stranded 667px right of the names it
-describes. Both now take `measure-crew` (48rem / 766px) instead, a measure
+describes. Both now take `--measure-crew` (48rem / 766px) instead, a measure
 derived from the manifest's own content rather than from the page — see the
 `--measure-crew` comment in `globals.css` for the derivation and for why 48rem
 is a floor rather than a preference. `.full-measure` had no other users and is
 gone.
+
+It is applied to the whole `<main>` column (`page--crew`), not to the manifest
+and its head alone. A per-element cap leaves the siblings that did not get one
+sitting ~146px further right — visible as a step between the manifest and the
+"Sync schedule" rule below it, and it would simply move to "Your payouts" on
+any account with payout history. Measured before committing to the wider
+scope: nothing on the page needs the width it gives up (the payouts `.log` is
+auto-layout and fits inside 766px with zero overflow).
 
 Note the budget constraint: the manifest's density was already worked twice
 (#169, #174). Re-measure before assuming there is room; the one-line layout was

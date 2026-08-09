@@ -197,7 +197,6 @@ export function RuleHead({
   aside,
   as: As = "span",
   id,
-  className,
 }: {
   children: ReactNode;
   aside?: ReactNode;
@@ -208,14 +207,9 @@ export function RuleHead({
    *  a stop in the tab order on the way to the controls. The two always travel
    *  together, so the call site cannot get one without the other. */
   id?: string;
-  /** Layout only, and only for what the caller owns: a rule head is a direct
-   *  child of the page column, so its width is the caller's to cap when the
-   *  section under it is narrower than the page. `.rule-head`'s own styling is
-   *  never the call site's to override. */
-  className?: string;
 }) {
   return (
-    <div className={className ? `rule-head ${className}` : "rule-head"}>
+    <div className="rule-head">
       <As className="rule-head__label" id={id} tabIndex={id ? -1 : undefined}>
         {children}
       </As>

@@ -1821,7 +1821,7 @@ test("an account with no characters renders no verdict at all", async ({
   await expect(page.locator(".log__empty")).toHaveCount(1);
 });
 
-test("the crew manifest is capped at its own content measure", async ({
+test("the account column is capped at the crew manifest's content measure", async ({
   page,
   context,
 }) => {
@@ -1837,32 +1837,46 @@ test("the crew manifest is capped at its own content measure", async ({
   // STATUS 667px right of the names, so the manifest now takes a tighter
   // measure than the page rather than a looser one.
   //
-  // Compared against a sibling rather than a hardcoded figure, for the same
-  // reason the old test gave: a bare number would pass just as well if
-  // `page--narrow` were deleted from the page wholesale, which this is not.
-  // `.pager` is the "Add character" row directly below the manifest and one of
-  // the plain narrow-capped children the manifest is now narrower than.
+  // Compared against `<main>`'s own content box rather than a hardcoded figure,
+  // for a version of the reason the old test gave: `.page` is the element the
+  // cap is scoped to, so this fails if `page--crew` stops reaching its
+  // children, and it does not quietly re-pass if the page measure is retuned.
   const widths = await page.evaluate(() => {
-    const frame = document.querySelector(".scroller-frame") as HTMLElement;
-    const pager = document.querySelector(".pager") as HTMLElement;
-    const head = document.querySelector(".page__head") as HTMLElement;
+    const box = (el: Element | null) => (el as HTMLElement).getBoundingClientRect();
+    const main = document.querySelector("main.page") as HTMLElement;
+    const style = getComputedStyle(main);
+    const rules = Array.from(document.querySelectorAll(".rule-head"));
     return {
-      manifest: frame.getBoundingClientRect().width,
-      manifestRight: frame.getBoundingClientRect().right,
-      pager: pager.getBoundingClientRect().width,
-      headRight: head.getBoundingClientRect().right,
+      manifest: box(document.querySelector(".scroller-frame")).width,
+      manifestRight: box(document.querySelector(".scroller-frame")).right,
+      headRight: box(document.querySelector(".page__head")).right,
+      pager: box(document.querySelector(".pager")).width,
+      column:
+        main.getBoundingClientRect().width -
+        parseFloat(style.paddingLeft) -
+        parseFloat(style.paddingRight),
+      ruleRights: rules.map((r) => box(r).right),
     };
   });
-  expect(widths.manifest).toBeLessThan(widths.pager);
+  // The cap is doing real work: the column it sits in would otherwise be far
+  // wider, which is the whole complaint this change answers.
+  expect(widths.manifest).toBeLessThan(widths.column - 300);
   // Anti-vacuity: `--measure-crew` is 48rem and the seed is ten characters, so
   // a manifest that had collapsed to something far narrower would satisfy the
   // line above while being a different bug entirely.
   expect(widths.manifest).toBeGreaterThan(700);
-  // The reason `.page__head` carries the same class: the verdict/health strip
-  // right-aligns inside it and counts the characters this table lists, so the
-  // two share an edge. Sub-pixel tolerance, not equality — both are derived
-  // from the same rem value but through different box trees.
+  // One right edge for the whole column, which is the point of capping the
+  // page rather than the manifest alone. `.page__head` matters most — its
+  // verdict/health strip right-aligns inside it and counts the characters this
+  // table lists — but the "Add character" pager and every rule head, "Sync
+  // schedule" included, land there too. Sub-pixel tolerance, not equality:
+  // all are derived from the same rem value through different box trees.
   expect(Math.abs(widths.manifestRight - widths.headRight)).toBeLessThan(1);
+  expect(Math.abs(widths.manifest - widths.pager)).toBeLessThan(1);
+  expect(widths.ruleRights.length).toBeGreaterThan(1);
+  for (const right of widths.ruleRights) {
+    expect(Math.abs(right - widths.manifestRight)).toBeLessThan(1);
+  }
 });
 
 // The measurement that fixed `--measure-crew` at 48rem rather than at any of
