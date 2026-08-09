@@ -243,16 +243,17 @@ export default async function AccountPage({
   return (
     <>
       <SiteHeader items={nav} current="/account" {...brandProps()} />
-      <main id="main" tabIndex={-1} className="page page--narrow">
-        {/* `full-measure`: opts this out of `.page--narrow`'s 912px cap
-            (globals.css) so the verdict/health strip below, which right-aligns
-            inside `.page__head-row` via `justify-content: space-between`, can
-            reach the manifest's own full measure instead of stopping 287px
-            short of it — the seam walkthrough finding 3.1 measured. `.page__meta`
-            further down restates the narrow cap explicitly rather than
-            inheriting this opt-out, since tier/Discord are a two-fact line, not
-            a table. */}
-        <div className="page__head full-measure">
+      <main id="main" tabIndex={-1} className="page page--narrow page--crew">
+        {/* `page--crew` on the `<main>` caps every direct child at the
+            manifest's own content width (globals.css), so the whole column
+            shares one right edge. This head is one of them, which is what makes
+            the verdict/health strip below — right-aligned inside
+            `.page__head-row` via `justify-content: space-between` — land on the
+            same edge as the table of characters it counts. `.page__meta`
+            further down sits inside this head, so it gets the same crew
+            measure by containment; the max-width it declares for itself is a
+            looser fallback for pages without the crew cap. */}
+        <div className="page__head">
           <div className="page__head-row">
             <h1>Your account</h1>
             {/* The verdict shares the h1's line: at 24px against the h1's 40px
@@ -556,7 +557,7 @@ export default async function AccountPage({
           </p>
         )}
 
-        <Scroller label="Your characters" className="full-measure">
+        <Scroller label="Your characters">
           <table className="log log--manifest">
             {/* NAME absorbs the leftover width; portrait, STATUS and ACTIONS
                 shrink to content — same `width: 1%` idiom as the admin
