@@ -1684,7 +1684,7 @@ test("bad unit price lands on the page, not the error boundary", async ({
  * the options are in the document — the browser's own popup is not something
  * Playwright can or should drive.
  */
-test("manual participant entry offers known character names and adds one", async ({
+test("manual participant entry suggests one name per person and adds by alt", async ({
   page,
   context,
 }) => {
@@ -1693,7 +1693,11 @@ test("manual participant entry offers known character names and adds one", async
     tier: "member",
     status: "active",
   });
-  await seedMember(db, { name: "Latecomer Pilot", tier: "alumni" });
+  await seedMember(db, {
+    name: "Latecomer Pilot",
+    tier: "alumni",
+    alts: ["Latecomer Alt"],
+  });
   await context.addCookies([await sessionCookieFor(db, operator.id)]);
 
   const [op] = await db
@@ -1708,8 +1712,16 @@ test("manual participant entry offers known character names and adds one", async
 
   await page.goto(`/payouts/${op.id}`);
   await expect(page.locator("datalist option[value='Latecomer Pilot']")).toHaveCount(1);
+  // The alt is deliberately absent: one suggestion per person. Asserting the
+  // absence is the point — a regression that "restores" the alts would leave
+  // every other assertion here passing.
+  await expect(page.locator("datalist option[value='Latecomer Alt']")).toHaveCount(0);
 
-  await page.getByLabel("Character name").fill("Latecomer Pilot");
+  // Not suggested is not the same as not addable. Typing the alt in full still
+  // resolves through `resolveRosterNames` to the same account, and the row is
+  // labelled with the MAIN — which is exactly why suggesting the alt would
+  // have offered a string the operator never sees again.
+  await page.getByLabel("Character name").fill("Latecomer Alt");
   await page.getByRole("button", { name: "Add participant" }).click();
   await expect(page.getByRole("row").filter({ hasText: "Latecomer Pilot" })).toHaveCount(
     1,
