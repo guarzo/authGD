@@ -590,7 +590,11 @@ export default async function AdminSyncPage({
                           {/* No colgroup: each job now shows only the counters it
                         actually moves, so the tables deliberately no longer
                         share a column set and cannot be aligned to each
-                        other. Widths come from content. */}
+                        other. Widths come from content. The trailing spacer
+                        that brings the drawer flush with the panel edge is a
+                        sibling of this table, not a column of it — see the
+                        `log--runs-fill` div below and the comment on
+                        `.scroller:has(.log--runs)` in globals.css for why. */}
                           <table className="log log--runs">
                             <thead>
                               <tr>
@@ -950,6 +954,34 @@ export default async function AdminSyncPage({
                               })}
                             </tbody>
                           </table>
+                          {/* Fills whatever the table itself doesn't ask for,
+                          so the drawer's visible edge always reaches the
+                          panel's own width — see the comment on
+                          `.scroller:has(.log--runs)` in globals.css. A
+                          sibling of the table, not a column of it: giving a
+                          table's own last column `width: 100%` looked like
+                          the CSS Grid trailing-`1fr`-track idiom
+                          `.strip__head` uses (above), but measured, it isn't
+                          the same trick — auto table layout resolves a
+                          percentage column width against the table's own
+                          width, so a bare last-child at 100% claims almost
+                          all of it and every other column, including this
+                          one's Raw disclosure, gets squeezed to its
+                          minimum-content width on every reflow, not just the
+                          first one. That reproduced as a real regression:
+                          opening a run's Raw payload (which was previously
+                          capped at `.json__full`'s own 40ch) instead wrapped
+                          down to a handful of characters per line and grew
+                          the row to 785px, where the row height above the
+                          disclosure is 52.5px and the "still under half the
+                          old height" e2e assertion caps it at 140px. A plain
+                          flex sibling avoids that: it lives outside the
+                          table, so the table keeps sizing itself exactly as
+                          it always has (shrink-to-fit, min-width 44rem
+                          floor), Raw's disclosure keeps growing freely on its
+                          own reflow, and only the leftover flex-line space —
+                          the actual analogue of Grid's `1fr` — goes here. */}
+                          <div className="log--runs-fill" aria-hidden="true" />
                         </Scroller>
                       )}
                       {/* The window, stated — except when the table above already

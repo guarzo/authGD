@@ -456,9 +456,8 @@ export default async function AdminAuditPage({
       <form method="get" className="filter-form">
         {/* All three cells are a div with an explicit label rather than a
           wrapping <label>: the hint has to live outside the <label> or it gets
-          concatenated into the input's accessible name ("Action matches the
-          start of an action, like tier.changed"), so it is wired up with
-          aria-describedby instead.
+          concatenated into the input's accessible name ("Action what happened,
+          like tier.changed"), so it is wired up with aria-describedby instead.
 
           Actor and Target are not symmetrical and nothing on the page said so.
           A member reaches `actor` only for what they did to their own account
@@ -503,7 +502,7 @@ export default async function AdminAuditPage({
             ))}
           </datalist>
           <span className="filter-form__hint" id="filter-action-hint">
-            matches the start of an action, like tier.changed
+            what happened, like tier.changed
           </span>
         </div>
         <div className="filter-form__cell">
