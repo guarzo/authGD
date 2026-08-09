@@ -9,6 +9,7 @@ import {
   payoutParticipant,
   syncRun,
   universeName,
+  wandererAclObservation,
 } from "../src/db/schema";
 import type { ContactSyncResult } from "../src/core/contact-result";
 import { pinGeometry, rowHeights } from "./geometry";
@@ -1512,12 +1513,89 @@ test("an all-ok account renders no STATUS column and keeps the per-character fac
   // vertical cost (the default viewport here is above `.char__status-summary`'s
   // own 40rem breakpoint, so this is the "revealed" case; the narrow-viewport
   // case below is the other half).
+  //
+  // All ten render it because all ten deviate: `seedNominalCrew` seeds tokens,
+  // contacts and location but never `wandererAclObservation`, so every row here
+  // is `map off`. That is the precondition this count depends on — the summary
+  // is suppressed only for a fully nominal character (`isNominal` in
+  // account/page.tsx: managed, contacts `ok`, AND on the ACL), which no
+  // character in this seed is. The two tests below cover that gate directly.
   const summaries = manifest(page).locator("[data-status-summary]");
   await expect(summaries).toHaveCount(10);
   await expect(summaries.first()).toBeVisible();
   for (const t of await summaries.allTextContents()) {
-    expect(t).toMatch(/token ok, standings ok, map (on|off)/);
+    expect(t).toMatch(/token ok, standings ok, map off/);
   }
+});
+
+/** Puts every character on the map ACL, which is the one thing `seedNominalCrew`
+ *  leaves off and the last term `isNominal` needs. Mirrors `observeCharacters`
+ *  in admin.spec.ts. */
+async function observeCrew(accountId: string) {
+  const rows = await db
+    .select({ id: character.id })
+    .from(character)
+    .where(eq(character.accountId, accountId));
+  expect(rows.length).toBeGreaterThan(0);
+  await db.insert(wandererAclObservation).values(
+    rows.map((c) => ({
+      characterId: c.id,
+      role: "member",
+      observedAt: new Date("2026-08-01T00:00:00Z"),
+    })),
+  );
+  return rows;
+}
+
+// The gate itself. For a character that is managed, contacts-`ok` and on the
+// ACL, `statusSummary` can only ever produce the one string "token ok,
+// standings ok, map on" — so rendering it per row spent a line of the member's
+// attention, ten times, restating a heading that had already said all ten were
+// healthy. R4 is not at stake here the way it is above: the fact is constant,
+// both channels drop it together (the gate is on the element, not on CSS), and
+// the `<caption>` states the rule that makes its absence readable.
+test("a fully nominal character states no status summary at all", async ({
+  page,
+  context,
+}) => {
+  const acc = await seedNominalCrew();
+  await observeCrew(acc.id);
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.goto("/account");
+
+  // Precondition: still the no-STATUS-column branch, so absence here is the
+  // gate firing and not the column having taken the string back.
+  await expect(page.getByRole("columnheader", { name: "Status" })).toHaveCount(0);
+  await expect(manifest(page).locator("[data-status-summary]")).toHaveCount(0);
+
+  // The rule has to be legible somewhere, or a blank row is indistinguishable
+  // from a row whose state was never computed.
+  await expect(manifest(page).locator("caption")).toContainText(
+    "only where one of them differs",
+  );
+});
+
+// The half that proves the gate discriminates rather than just deletes: one
+// character off the ACL among nine on it. This is the shape the change is FOR —
+// before it, the deviating row said the same length of sentence as its nine
+// neighbours and had to be found by reading; now it is the only annotated row
+// on the page.
+test("only the character that deviates carries the status summary", async ({
+  page,
+  context,
+}) => {
+  const acc = await seedNominalCrew();
+  const rows = await observeCrew(acc.id);
+  await db
+    .delete(wandererAclObservation)
+    .where(eq(wandererAclObservation.characterId, rows[0].id));
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.goto("/account");
+
+  await expect(page.getByRole("columnheader", { name: "Status" })).toHaveCount(0);
+  const summaries = manifest(page).locator("[data-status-summary]");
+  await expect(summaries).toHaveCount(1);
+  await expect(summaries.first()).toHaveText("token ok, standings ok, map off");
 });
 
 // The other half of the rule above: below `.char__status-summary`'s own 40rem
@@ -1557,7 +1635,7 @@ test("the status summary stays in the accessible tree but is not rendered below 
   // Still readable by name, i.e. still in the accessible tree — a 1px box
   // proves the clip, not that the text is still there for AT to reach.
   expect(await summaries.first().textContent()).toMatch(
-    /token ok, standings ok, map (on|off)/,
+    /token ok, standings ok, map off/,
   );
 });
 

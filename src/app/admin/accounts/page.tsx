@@ -692,8 +692,16 @@ function AccountRow({
 
           <td>
             <div className="stack">
+              {/* "healthy", not "ok". `tokenState` above turns this badge red
+                  when `tokens.healthy === 0`, and the old wording rendered that
+                  worst case as "0/8 ok" — a red marker and the word OK arguing
+                  with each other in the one cell built to be glanced at. The
+                  numerator needs a word it can be zero *of*; "ok" is a verdict
+                  and reads as one no matter what precedes it. This also stops
+                  colliding with the literal `ok` status word the sync page uses
+                  for a different thing. */}
               <Status tone={tokenBadgeTone}>
-                {tokens.healthy}/{tokens.total} ok
+                {tokens.healthy}/{tokens.total} healthy
               </Status>
               {/* First, and undimmed. This is the severe case — the account is
                   cut off, not merely ragged — so it leads the sub-lines, and it
@@ -791,8 +799,24 @@ function AccountRow({
                 <form
                   action={demoteAdminAction.bind(null, r.accountId, listSearch, identity)}
                 >
+                  {/* Quiet at rest, full danger once armed — the same pairing
+                      the account page's UNLINK uses, and for the reason
+                      `globals.css`'s `.btn--danger-quiet` block already
+                      records: full `--danger` on a per-row control "made it
+                      the most saturated thing on the account page,
+                      permanently, which reads as a warning against an ordinary
+                      choice". This table is admin-only, so every row can be an
+                      admin, and four rows of resting red is red as furniture —
+                      it spends the alarm channel the token badge two cells left
+                      needs when an account actually goes dark. The action
+                      itself is recoverable (press `grant` again, per the note
+                      on that button below), which is exactly the condition
+                      DESIGN.md gives for the quiet destructive grade. Arming
+                      still paints it: `armedClassName` restores the full grade
+                      at the moment the press becomes real. */}
                   <ConfirmSubmit
-                    className="btn btn--micro btn--danger"
+                    className="btn btn--micro btn--danger-quiet"
+                    armedClassName="btn btn--micro btn--danger"
                     label="revoke"
                     restName={`revoke admin for ${identity}`}
                     confirmName={`confirm revoke admin for ${identity}`}
