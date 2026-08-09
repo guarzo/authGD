@@ -28,6 +28,12 @@ export const MANAGED_TABLES = [
   "loot_item",
   "payout_participant",
   "payout_payment",
+  "access_list_holder",
+  "access_list_catalog",
+  "access_list_watch",
+  "access_list_snapshot",
+  "access_list_entry",
+  "esi_entity_name",
 ] as const;
 
 /** Bare table names, unquoted — for comparing against information_schema. */

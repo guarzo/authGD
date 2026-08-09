@@ -85,6 +85,13 @@
       "when": 1786052105356,
       "tag": "0011_cold_gargoyle",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1786316312652,
+      "tag": "0012_old_richard_fisk",
+      "breakpoints": true
     }
   ]
 }
