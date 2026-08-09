@@ -1918,7 +1918,20 @@ h3.rule-head__label {
    below) rather than introducing a second one just for this string.
    Monospaced past the breakpoint, not proportional: this is state
    ("token ok, standings ok, map on"), and the register this file already
-   keeps is "prose is proportional, state is monospaced" (DESIGN.md). */
+   keeps is "prose is proportional, state is monospaced" (DESIGN.md).
+
+   Making it visible below the breakpoint too was tried and measured, because
+   clipping it here is the same R4 shape in a narrower viewport — a healthy
+   account has no STATUS column at any width, so below 40rem these facts are
+   again in the assistive-tech channel alone. It does not fit. Any visible
+   narrow rendering costs a whole LINE per row, not just width: at 390px the
+   NAME column cannot carry the summary on the name's own `nowrap` line, so it
+   wraps to its own. Measured that way, "at least 7 characters clear the fold
+   at 390x844" drops to 5. The width gates were never the binding constraint —
+   both 320px forced-scroll tests passed with it visible — the mobile fold is.
+   Restoring visibility here means either shortening the string for narrow
+   viewports specifically or relaxing that fold budget; both are design calls,
+   not a CSS fix. */
 .char__status-summary {
   position: absolute;
   width: 1px;
