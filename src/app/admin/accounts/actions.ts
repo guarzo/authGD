@@ -23,24 +23,26 @@ import { accountsConfirmation, type AdminAccountsDoneCode } from "./view";
 /**
  * `/admin/accounts?[<listSearch>&]done=<code>&name=<name>&at=<instant>`.
  *
- * Four of this page's nine actions redirect through this on success —
- * `unlinkDiscordAction`, `promoteAdminAction`, `demoteAdminAction`,
- * `syncAccountAction`. Their controls sit in the row's always-visible
- * `cells`, not the `Disclosure` drawer, so a redirect back to this same route
- * costs nothing: nothing stateful the admin cares about lives in a control
- * that isn't there. `ConfirmNotice` (mounted once, at the top of the page) is
- * where focus lands — same shape as `/account`'s `setMainAction` and
- * `/admin/sync`'s `queuedNotice`, and the same `?done=&name=&at=` triple
- * `/account` uses.
+ * Three of this page's nine actions redirect through this on success —
+ * `promoteAdminAction`, `demoteAdminAction`, `syncAccountAction`. Their
+ * controls sit in the row's always-visible `cells`, not the `Disclosure`
+ * drawer, so a redirect back to this same route costs nothing: nothing
+ * stateful the admin cares about lives in a control that isn't there.
+ * `ConfirmNotice` (mounted once, at the top of the page) is where focus
+ * lands — same shape as `/account`'s `setMainAction` and `/admin/sync`'s
+ * `queuedNotice`, and the same `?done=&name=&at=` triple `/account` uses.
  *
- * The other four mutating actions (`setTierAction`, `approveAction`,
- * `returnToAutoAction`, `setStatusAction`) do NOT use this — they live inside
- * the drawer, where a redirect resets the drawer's own open/closed
- * `useState` (`disclosure.tsx`) by replacing the route tree. They call
- * `accountsConfirmation` (`view.ts`) directly and return it through
- * `useActionState` instead; see `view.ts`'s docblock for the full account,
- * including the failing e2e run that found the drawer-reset problem, and
- * `confirm-group.tsx` for how that half lands focus without navigating.
+ * The other five mutating actions (`setTierAction`, `approveAction`,
+ * `returnToAutoAction`, `setStatusAction`, `unlinkDiscordAction`) do NOT use
+ * this — they live inside the drawer, where a redirect resets the drawer's
+ * own open/closed `useState` (`disclosure.tsx`) by replacing the route tree.
+ * They call `accountsConfirmation` (`view.ts`) directly and return it
+ * through `useActionState` instead; see `view.ts`'s docblock for the full
+ * account, including the failing e2e run that found the drawer-reset
+ * problem, and `confirm-group.tsx` for how that half lands focus without
+ * navigating. `unlinkDiscordAction` moved into this group under
+ * docs/design-walkthrough.md's ruling R2, which moved its control off the
+ * row's always-visible cells and into the drawer alongside them.
  *
  * `name` is the row's own `identity` — page.tsx's mainName-or-firstName-or-id
  * pick — bound in by the caller below rather than looked up here, so this
@@ -49,13 +51,13 @@ import { accountsConfirmation, type AdminAccountsDoneCode } from "./view";
  * sorted list, and a row a mutation just changed may no longer be in the
  * admin's own view (a tier change can drop it straight out of a `?tier=`
  * filter), so the confirmation naming the account by name is the only trace
- * of the change left on screen. None of the four codes that still reach this
- * function (`discord`, `grant`, `revoke`, `sync`) need a tier label —
+ * of the change left on screen. None of the three codes that still reach
+ * this function (`grant`, `revoke`, `sync`) need a tier label —
  * `accountsConfirmation`'s `tier` argument is only ever read for `tier` and
- * `approve`, both handled by the other four actions above — so this no
+ * `approve`, both handled by actions in the drawer group above — so this no
  * longer carries a `doneTier`; the earlier version of this fix did, and
  * dropping it here is what stopped it from being dead weight on every one of
- * these four redirects.
+ * these redirects.
  *
  * Drops `error`, `queued`, `done`, `name` and `at` from the inherited search
  * before setting them again — same one-shot-notice reasoning as
@@ -136,10 +138,10 @@ function redirectOnMutationError(
   }
 }
 
-// These four (through `setStatusAction`, below) live in the row's
-// `Disclosure` drawer, unlike their six siblings — and that is why they don't
-// `redirect()` on success. A drawer row holds its open/closed state in a
-// plain `useState` (`disclosure.tsx`) with nowhere else to live; navigating,
+// These five (through `unlinkDiscordAction`, below) live in the row's
+// `Disclosure` drawer, unlike their four siblings — and that is why they
+// don't `redirect()` on success. A drawer row holds its open/closed state in
+// a plain `useState` (`disclosure.tsx`) with nowhere else to live; navigating,
 // even back to this exact URL, replaces the route tree and resets it,
 // closing the very drawer the admin had open to press the button (an e2e run
 // of the first, all-redirect version of this fix caught this: the drawer
@@ -341,15 +343,20 @@ export async function demoteAdminAction(
  *  stale tab: the cell renders the control only when the row says linked, and
  *  a second admin clearing it first is not an error worth a notice.
  *
- *  Takes `listSearch` like every other mutation on this page, unlike the
- *  brief's sketch: `redirectOnMutationError` here is the same one every other
- *  action calls, and it has required the admin's current filter/sort since
- *  #89 — passing only the error code would not compile. */
+ *  Moved into the drawer group above (docs/design-walkthrough.md, ruling R2):
+ *  this control used to sit in the row's always-visible cells and redirect
+ *  through `doneUrl` like `promoteAdminAction`/`demoteAdminAction` still do,
+ *  but it is now the rare, destructive control ruling R2 moves behind
+ *  per-row disclosure, so it takes this file's other shape — `ActionOutcome`
+ *  through `useActionState`, no redirect — for the same reason
+ *  `setTierAction` and its three siblings already do. */
 export async function unlinkDiscordAction(
   accountId: string,
   listSearch: string,
   identity: string,
-): Promise<void> {
+  _prevState: ActionOutcome,
+  _formData: FormData,
+): Promise<ActionOutcome> {
   const { accountId: actor } = await requireAdminAction();
   const result = await getDb().transaction((tx) =>
     unlinkDiscord(tx, actor, accountId, "admin"),
@@ -368,7 +375,7 @@ export async function unlinkDiscordAction(
       // `/account`'s own unlinkDiscordAction follows for the identical race.
       case "not_linked":
         revalidatePath("/admin/accounts");
-        return;
+        return null;
       default: {
         const unhandled: never = result.error;
         throw new Error(`unhandled unlinkDiscord error: ${String(unhandled)}`);
@@ -376,7 +383,11 @@ export async function unlinkDiscordAction(
     }
   }
   revalidatePath("/admin/accounts");
-  // The button unmounts into the column's bare "none" status the instant a
-  // genuine unlink succeeds.
-  redirect(doneUrl("discord", listSearch, identity));
+  // The Discord drawer group unmounts entirely the instant a genuine unlink
+  // succeeds — `r.discordLinked` is what gates it (page.tsx). This sentence
+  // survives that only because the `ConfirmGroup` hosting it is hoisted above
+  // that conditional; nested inside, it would be returned into a subtree
+  // already being removed and never paint. Anything else this action wants to
+  // say after a success has the same constraint.
+  return { text: accountsConfirmation("discord", identity, undefined) };
 }

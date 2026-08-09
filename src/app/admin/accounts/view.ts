@@ -11,25 +11,28 @@
  * shapes, discovered by running the e2e suite against the first (all-redirect)
  * version of this fix and watching it fail:
  *
- * - Four actions live in the row's always-visible `cells`
- *   (`unlinkDiscordAction`, `promoteAdminAction`, `demoteAdminAction`,
- *   `syncAccountAction`). These still redirect back here through `doneUrl`
- *   (same file), carrying `done`/`name`/`at` off the query string —
- *   untrusted input reaching copy, same posture `accountConfirmation` already
- *   has for `/account` — and land on `ConfirmNotice` (`_components`),
- *   page-level.
- * - Four live INSIDE the row's `Disclosure` drawer (`setTierAction`,
- *   `approveAction`, `returnToAutoAction`, `setStatusAction`). A redirect —
- *   even one that lands back on this same route — replaces the whole route
- *   tree on navigation, and the drawer's open/closed state is a plain
- *   `useState` in `disclosure.tsx` with nowhere else to live; a redirect
- *   resets it, closing the very drawer the admin had open to press the
- *   button. These four instead call `accountsConfirmation` directly, with
- *   values the action already has (no query string involved), and return the
- *   result through `useActionState` for `confirm-group.tsx`'s
- *   `ConfirmingForm`/`ConfirmGroup` to focus — no navigation, so the drawer
- *   is never touched. See `confirm-group.tsx`'s own docblock for the full
- *   account of why, including the failing e2e run that found it.
+ * - Three actions live in the row's always-visible `cells`
+ *   (`promoteAdminAction`, `demoteAdminAction`, `syncAccountAction`). These
+ *   still redirect back here through `doneUrl` (same file), carrying
+ *   `done`/`name`/`at` off the query string — untrusted input reaching copy,
+ *   same posture `accountConfirmation` already has for `/account` — and land
+ *   on `ConfirmNotice` (`_components`), page-level.
+ * - Five live INSIDE the row's `Disclosure` drawer (`setTierAction`,
+ *   `approveAction`, `returnToAutoAction`, `setStatusAction`,
+ *   `unlinkDiscordAction`). A redirect — even one that lands back on this
+ *   same route — replaces the whole route tree on navigation, and the
+ *   drawer's open/closed state is a plain `useState` in `disclosure.tsx` with
+ *   nowhere else to live; a redirect resets it, closing the very drawer the
+ *   admin had open to press the button. These five instead call
+ *   `accountsConfirmation` directly, with values the action already has (no
+ *   query string involved), and return the result through `useActionState`
+ *   for `confirm-group.tsx`'s `ConfirmingForm`/`ConfirmGroup` to focus — no
+ *   navigation, so the drawer is never touched. See `confirm-group.tsx`'s own
+ *   docblock for the full account of why, including the failing e2e run that
+ *   found it. `unlinkDiscordAction` joined this group under
+ *   docs/design-walkthrough.md's ruling R2, which moved its control off the
+ *   row's always-visible cells and into a drawer group of its own
+ *   (`page.tsx`) — it used to sit in the cell-level group above.
  *
  * Both shapes end at the same sentence-building function below, so there is
  * one copy of "what does 'tier' outcome say" rather than two.
@@ -40,7 +43,11 @@
  * all), `approveAction`'s pending-only buttons unmount into the ordinary tier
  * row, `setStatusAction`'s freeze/wake button swaps branches,
  * `promoteAdminAction`/`demoteAdminAction`'s grant/revoke button does the
- * same, `unlinkDiscordAction`'s button turns into a bare "none" status, and
+ * same, `unlinkDiscordAction`'s whole drawer group unmounts outright once
+ * `discordLinked` flips false — the one case where the notice that focus is
+ * meant to land on would go with it, which is why that action's
+ * `ConfirmGroup` is hoisted above the conditional rather than sitting inside
+ * the group like the rest (page.tsx), and
  * `returnToAutoAction`'s "auto" button disappears outright once the tier it
  * exists to unlock is unlocked. Left alone, the admin's focus falls to
  * `<body>` and a keyboard or screen-reader admin working a long roster has to
@@ -92,13 +99,13 @@ export function matchesAccountSearch(
 }
 
 // `ActionOutcome` — the result `confirm-group.tsx`'s `ConfirmingForm` threads
-// through `useActionState` for the four drawer-scoped actions below — moved to
+// through `useActionState` for the five drawer-scoped actions below — moved to
 // `@/app/_components/confirm-group` once `/admin/sync` needed the identical
 // shape for its own job-drawer action; imported from there by `actions.ts`.
 
 /** The nine outcomes `/admin/accounts`'s mutating actions confirm with (all
  *  but `saveNoteAction`, whose own confirmation lives in `NoteForm`) — the
- *  four cell-level actions off the `?done=` query string, the four drawer
+ *  three cell-level actions off the `?done=` query string, the five drawer
  *  actions through `useActionState`, per this file's head docblock. A code
  *  outside this set (hand-typed, or from a build that has since dropped
  *  one) renders no confirmation at all — see `accountsConfirmation`'s

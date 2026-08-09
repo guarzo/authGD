@@ -303,7 +303,11 @@ configuration, the other two by overwriting the file.
   control to the standalone grade and has been passing all along, and
   `payouts/[id]/notes-form.tsx`'s "Full 36px" comment above its `Submit` reasons
   the same way for a field in an
-  operation's own panel. `/admin/accounts` is the surface that diverged.
+  operation's own panel. `/admin/accounts` was the surface that diverged, and
+  no longer does: its drawer controls — the tier and status buttons, the
+  approve pair, the Discord unlink R2 moved in, and `note-form.tsx`'s Save —
+  all take `.btn` now, pinned by "the Discord unlink control sits at the
+  standalone hit-target grade" in `e2e/admin.spec.ts`.
   (Owner walkthrough 2026-08-07, ruling R1. Supersedes the flat two-grade
   reading recorded in `docs/settled-design-decisions.md`.)
 

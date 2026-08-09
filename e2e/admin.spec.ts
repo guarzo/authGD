@@ -3,6 +3,7 @@ import { eq, inArray } from "drizzle-orm";
 import {
   account,
   character,
+  contactSyncState,
   discordLink,
   wandererAclObservation,
 } from "../src/db/schema";
@@ -630,6 +631,11 @@ test("an admin can unlink a member's Discord", async ({ page, context }) => {
   await context.addCookies([await sessionCookieFor(db, admin.id)]);
 
   await page.goto("/admin/accounts");
+  // Ruling R2 (docs/design-walkthrough.md) moved this control off the
+  // collapsed row and into the drawer, the same move #186 made for
+  // `/account`'s MAIN/UNLINK — the drawer has to be open before the button
+  // exists at all (`everOpen` in disclosure.tsx).
+  await toggleOf(rowFor(page, "Pilot")).click();
   // The cost of the unlink is carried as a description, not folded into the
   // accessible name: the name is spoken ahead of every press and has to keep
   // matching the visible label (WCAG 2.5.3). Asserted at rest AND armed because
@@ -656,19 +662,63 @@ test("an admin can unlink a member's Discord", async ({ page, context }) => {
   await expect(
     page.getByRole("button", { name: "unlink Discord for Pilot", exact: true }),
   ).toHaveCount(0);
+  // The half the button's disappearance says nothing about. A success here
+  // unmounts the section the control lived in, so the confirmation only paints
+  // if its `ConfirmGroup` host is outside that conditional (page.tsx) — nested
+  // inside, this sentence is returned into a subtree already being removed and
+  // the assertion above still passes. Focus follows it: `ConfirmGroup` focuses
+  // its own host on every report, and a host that unmounted could not be
+  // focused, so an admin who pressed this by keyboard would be dropped to
+  // `<body>` with the drawer's remaining controls behind a full re-traverse.
+  const notice = page.getByText("Discord unlinked for Pilot.", { exact: true });
+  await expect(notice).toBeVisible();
+  await expect(notice.locator("xpath=ancestor::div[@tabindex='-1'][1]")).toBeFocused();
   expect(await db.select().from(discordLink)).toHaveLength(0);
 });
 
 /**
- * The Discord column names the account it is about to disconnect. Before this,
- * a linked row said only `unlink` — the admin could see that a link existed but
- * not where it pointed, which is exactly the fact you want confirmed before
- * severing it.
+ * The unlink control sits in the drawer at the standalone (36px) grade, per
+ * ruling R1 (DESIGN.md's "Hit targets") — the same grade every other control
+ * in this drawer takes, not the 28px `.btn--micro` grade the collapsed row's
+ * own actions (revoke, grant, sync now) correctly keep.
+ */
+test("the Discord unlink control sits at the standalone hit-target grade", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
+  const member = await seedMember(db, { name: "Pilot", tier: "alumni" });
+  await db.insert(discordLink).values({
+    accountId: member.id,
+    discordUserId: "duid-e2e-grade",
+  });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.goto("/admin/accounts");
+  await toggleOf(rowFor(page, "Pilot")).click();
+
+  const unlink = page.getByRole("button", {
+    name: "unlink Discord for Pilot",
+    exact: true,
+  });
+  const box = await unlink.boundingBox();
+  expect(box).not.toBeNull();
+  // 36px, `.btn`'s own `min-height` — not `.btn--micro`'s 28px.
+  expect(box!.height).toBeGreaterThanOrEqual(36);
+});
+
+/**
+ * The Discord column names the account a drawer's unlink control is about to
+ * disconnect. Before #115, a linked row said only `unlink` — the admin could
+ * see that a link existed but not where it pointed; ruling R2 later moved the
+ * control itself into the row's drawer, but the collapsed cell keeps naming
+ * the link for the same reason — it is what tells an admin, scanning the
+ * table, whether the link points where they think it does before ever
+ * opening the row to disconnect it.
  *
  * The null case is the important half. Nothing backfills these columns; they
  * fill in on each account's next roles sync, so on the deploy that ships this
- * every row is null and has to keep working. It renders what shipped before:
- * the control alone, no placeholder standing in for a name.
+ * every row is null and has to keep working. It renders a bare `linked`
+ * status, not a placeholder name.
  */
 test("the Discord column names the account behind the link, when it knows it", async ({
   page,
@@ -693,21 +743,61 @@ test("the Discord column names the account behind the link, when it knows it", a
   await context.addCookies([await sessionCookieFor(db, admin.id)]);
   await page.goto("/admin/accounts");
 
-  // `.discord-cell` rather than the whole `<td>`: the cell also carries the
-  // always-hidden consequence sentence the unlink's aria-describedby points at,
-  // which `toHaveText` reads as content.
   const cellFor = (name: string) => rowFor(page, name).locator(".discord-cell");
 
   await expect(cellFor("Alpha Pilot")).toContainText("@guarzo");
   await expect(cellFor("Alpha Pilot")).not.toContainText("Wardec Wally");
-  // No handle known: the control alone, and no placeholder in its place.
-  await expect(cellFor("Bravo Pilot")).toHaveText("unlink");
+  // No handle known yet: a bare `linked` status, not a placeholder name — and
+  // no control here at all, since ruling R2 moved it into the drawer.
+  await expect(cellFor("Bravo Pilot")).toHaveText("linked");
   await expect(
     rowFor(page, "Bravo Pilot").getByRole("button", {
       name: "unlink Discord for Bravo Pilot",
       exact: true,
     }),
+  ).toHaveCount(0);
+  await toggleOf(rowFor(page, "Bravo Pilot")).click();
+  await expect(
+    rowFor(page, "Bravo Pilot").getByRole("button", {
+      name: "unlink Discord for Bravo Pilot",
+      exact: true,
+    }),
+  ).toHaveCount(0);
+  await expect(
+    drawerOf(rowFor(page, "Bravo Pilot")).getByRole("button", {
+      name: "unlink Discord for Bravo Pilot",
+      exact: true,
+    }),
   ).toBeVisible();
+});
+
+/**
+ * A row with no Discord link at all renders `none` in the column and mounts
+ * no Discord group in its drawer — matching Session 3's judgement for
+ * `/account`'s own empty case (`character-row.tsx`): no dangling label or
+ * empty `.drawer__group` for a control that has nothing to act on.
+ */
+test("a row with no Discord link renders no Discord drawer group", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
+  await seedMember(db, { name: "Solo Pilot", tier: "member" });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.goto("/admin/accounts");
+
+  await expect(rowFor(page, "Solo Pilot").locator(".discord-cell")).toHaveCount(0);
+  await expect(rowFor(page, "Solo Pilot")).toContainText("none");
+  await toggleOf(rowFor(page, "Solo Pilot")).click();
+  const drawer = drawerOf(rowFor(page, "Solo Pilot"));
+  // The absence assertion below is `toHaveCount(0)`, which is also true of a
+  // drawer that never opened and of a locator that resolved to nothing. Anchor
+  // it first on something this drawer always renders, so "no Discord section"
+  // can only be read off a drawer that is actually there.
+  await expect(
+    drawer.getByRole("textbox", { name: "Note for Solo Pilot" }),
+  ).toBeVisible();
+  await expect(drawer.getByText("Discord", { exact: true })).toHaveCount(0);
 });
 
 /* --- The approval queue --------------------------------------------------- */
@@ -1091,8 +1181,9 @@ test("the note control aligns with the tier and freeze control rows", async ({
     throw new Error("expected all three control rows to be measurable");
   }
   // 4px tolerance for subpixel layout, not a real misalignment: the tier
-  // buttons and freeze sit exactly together already (both are `.btn--micro`),
-  // so the gap under test is only the note row's own offset.
+  // buttons and freeze sit exactly together already (both are `.btn`, the
+  // standalone 36px grade ruling R1 gives every control in this drawer), so
+  // the gap under test is only the note row's own offset.
   expect(Math.abs(tierBox.y - freezeBox.y)).toBeLessThanOrEqual(4);
   expect(Math.abs(tierBox.y - noteBox.y)).toBeLessThanOrEqual(4);
 });
@@ -1433,181 +1524,321 @@ test("a control scrolled to the top of the pinned region stays clear of the head
 });
 
 /**
- * The crew table scrolls inside its own Scroller instead of escaping the drawer
- * panel. `.drawer__crew` zeroes its own `min-width` so the drawer's grid column
- * can be the 262px the panel asked for — but that section is a grid too, and
- * the `min-width: auto` floor simply moved down onto its grid item, the crew
- * Scroller's `.scroller-frame`. Measured at 320px before the second floor was
- * zeroed: a 264.5px section holding a 397.8px frame holding a 395.8px table, so
- * a 396px crew table sat inside a 262px panel and the region it was supposed to
- * scroll in never overflowed at all.
+ * Finding 4.4 (docs/design-walkthrough.md, Session 4). This replaces the two
+ * specs that used to sit here — "the crew table scrolls inside its region
+ * rather than escaping the drawer" and "the crew region scrolled to the top of
+ * the pinned table stays clear of the header" — both of which asserted that
+ * the crew Scroller overflowed at 320px and held a keyboard tab stop there.
+ * That was true of the fix those specs were guarding (the two `min-width: 0`
+ * floors, `.drawer__crew` and `.drawer__crew .scroller-frame` in globals.css):
+ * it made the crew table scroll in its own region instead of escaping the
+ * drawer panel. But a scroller nested inside the page's own horizontally
+ * scrolling region has no good visual state either way, which is finding 4.4:
+ * below 30rem the crew table now reflows into one labelled block per
+ * character instead of scrolling, and above it the Name column is bounded
+ * (`.log--crew .char` in globals.css, guarded by the long-name spec below),
+ * so there is nothing left in that region to overflow at any width. The old
+ * specs' premise — tabIndex 0, a real scroll range at 320px — is exactly the
+ * state this fix removes, which is why they're gone rather than updated in
+ * place. Deleting the second one is the load-bearing call: it was a WCAG 2.2
+ * 2.4.11 guard, and a WCAG guard is only safe to delete when the scenario
+ * cannot occur, not when the current fixture happens not to reach it. It is
+ * safe here because a region that never takes a tab stop can never be the
+ * target of a sequential-focus scroll — which is what the long-name spec
+ * below pins, at the widths where a long name used to keep the scroll range
+ * alive.
  *
- * Three assertions, because any one of them alone is satisfiable without the
- * fix. Containment says the frame stops at its section; the scroll range says
- * the table is genuinely wider than the box holding it rather than merely
- * shrunk; and the tab stop is the consequence that matters — scroller.tsx
- * withdraws `tabIndex` from a region with nothing to scroll, so an escaped
- * table costs the crew list its keyboard reachability, not just its edge fades.
- *
- * Containment is asserted against `.drawer__crew` and not against `.drawer`:
- * the panel computes to 262px while the grid column inside it measures 264.5px,
- * a 2.5px overflow that predates this rule and comes from `.drawer__controls`'
- * own min-content. The frame following its section is the property this fix
- * owns; the 2.5px is a separate question and not this test's.
+ * Five widths, matching the measurements in the `.log--crew` comment in
+ * globals.css. Re-measured on this repo's own `seedDenseWorld` fixture rather
+ * than trusting the walkthrough's quoted figures verbatim: the walkthrough put
+ * the boundary at 440px (370.45px min-content against a 370px scrollport), but
+ * on this fixture the table's min-content is 395.77px and 440px still
+ * overflows by 26px — the true boundary is 465px. 320/390/420 sit inside the
+ * old overflowing band; 479px is just under the chosen 30rem breakpoint
+ * (still reflowed, with margin above the measured 465px); 480px and 768px are
+ * comfortably at and above it.
  */
-test("the crew table scrolls inside its region rather than escaping the drawer", async ({
-  page,
-  context,
-}) => {
-  const admin = await seedDenseWorld();
-  await context.addCookies([await sessionCookieFor(db, admin.id)]);
-  await page.setViewportSize({ width: 320, height: 720 });
-  await page.goto("/admin/accounts");
+for (const { width, reflowed } of [
+  { width: 320, reflowed: true },
+  { width: 390, reflowed: true },
+  { width: 420, reflowed: true },
+  { width: 479, reflowed: true },
+  { width: 480, reflowed: false },
+  { width: 768, reflowed: false },
+]) {
+  test(`the crew table is ${
+    reflowed ? "reflowed into blocks" : "still tabular"
+  } at ${width}px`, async ({ page, context }) => {
+    const admin = await seedDenseWorld();
+    await context.addCookies([await sessionCookieFor(db, admin.id)]);
+    await page.setViewportSize({ width, height: 720 });
+    await page.goto("/admin/accounts");
 
-  const row = page.locator(ROWS).nth(12);
-  await toggleOf(row).click();
-  await expect(drawerOf(row)).toBeVisible();
-  // The stop is granted by a ResizeObserver measurement after hydration, not by
-  // the server render, so wait for the measured state rather than reading
-  // tabIndex the instant the drawer appears.
-  await expect(drawerOf(row).locator(".scroller")).toHaveAttribute("tabindex", "0");
+    const row = page.locator(ROWS).nth(12);
+    await toggleOf(row).click();
+    await expect(drawerOf(row)).toBeVisible();
 
-  const geom = await drawerOf(row).evaluate((tr) => {
-    const width = (sel: string) => {
-      const el = tr.querySelector<HTMLElement>(sel);
-      return el ? el.getBoundingClientRect().width : null;
-    };
-    const region = tr.querySelector<HTMLElement>(".drawer__crew .scroller");
-    if (!region) return null;
-    return {
-      section: width(".drawer__crew"),
-      frame: width(".drawer__crew .scroller-frame"),
-      table: width(".log--crew"),
-      scrollWidth: region.scrollWidth,
-      clientWidth: region.clientWidth,
-      tabIndex: region.tabIndex,
-    };
+    const region = drawerOf(row).locator(".drawer__crew .scroller");
+    // Settles after a ResizeObserver measurement post-hydration, not on the
+    // server render — wait for the measured state rather than reading
+    // tabIndex the instant the drawer appears (same discipline the specs
+    // above this one use).
+    await expect(region).toHaveAttribute("tabindex", "-1");
+
+    const geom = await drawerOf(row).evaluate((tr) => {
+      const r = tr.querySelector<HTMLElement>(".drawer__crew .scroller");
+      const thead = tr.querySelector<HTMLElement>(".log--crew thead");
+      const label = tr.querySelector<HTMLElement>(".log--crew .crew__label");
+      if (!r || !thead || !label) return null;
+      return {
+        scrollWidth: r.scrollWidth,
+        clientWidth: r.clientWidth,
+        theadDisplay: getComputedStyle(thead).display,
+        labelDisplay: getComputedStyle(label).display,
+      };
+    });
+
+    expect(geom, "the crew scroller, its thead and a label all resolved").not.toBeNull();
+    // At every one of these six widths the crew scroller now has nothing to
+    // scroll — reflowed widths because the table is no longer laid out wide,
+    // tabular widths because the drawer has room for this fixture's short
+    // names. Short names are the floor, not the whole story: the long-name
+    // case is the next spec's, because it is what decided the breakpoint.
+    expect(
+      geom!.scrollWidth,
+      "the crew scroller has no scroll range left to overflow",
+    ).toBeLessThanOrEqual(geom!.clientWidth + 1);
+    expect(
+      geom!.theadDisplay,
+      reflowed
+        ? "the thead is hidden below the breakpoint, its th scope=col job taken over by .crew__label"
+        : "the thead stays visible at and above the breakpoint",
+    ).toBe(reflowed ? "none" : "table-header-group");
+    expect(
+      geom!.labelDisplay,
+      reflowed
+        ? "the per-cell label shows below the breakpoint"
+        : "the per-cell label stays hidden where the thead is doing the naming",
+    ).toBe(reflowed ? "block" : "none");
   });
-
-  expect(
-    geom,
-    "the drawer's crew section, frame, region and table all resolved",
-  ).not.toBeNull();
-  // The crew table has to be wider than the panel for any of this to mean
-  // anything — at a viewport where it fits there is no overflow to place and
-  // nothing to assert. 395.8px against a 264.5px section as measured.
-  expect(
-    geom!.table!,
-    "the crew table is wider than the section holding it",
-  ).toBeGreaterThan(geom!.section!);
-  expect(
-    geom!.frame!,
-    "the crew Scroller's frame stays within its grid section instead of flooring at the table's min-content",
-  ).toBeLessThanOrEqual(geom!.section!);
-  expect(
-    geom!.scrollWidth,
-    "the region has a scroll range, so the overflow is inside it",
-  ).toBeGreaterThan(geom!.clientWidth);
-  expect(geom!.tabIndex, "a region with a scroll range keeps its tab stop").toBe(0);
-});
+}
 
 /**
- * WCAG 2.2 2.4.11 again, for the one tab stop in this table that is not an
- * interactive element: the crew Scroller the spec above just gave a scroll
- * range. It is a `div[role="region"]` that takes `tabIndex={0}` while it
- * overflows, so it is reached by Tab like anything else and scrolled into view
- * like anything else — but it matches none of the hand-enumerated selectors the
- * scroll-margin rule lists, so it alone lands flush under the sticky header,
- * ring invisible and the first crew rows it was about to show painted over.
+ * The other axis of finding 4.4, and the one that makes the 30rem breakpoint
+ * defensible. A crew table's min-content is text-driven, and `.char` sets
+ * `white-space: nowrap`, so a character name is a single unbreakable word:
+ * the fixture above measures 395.77px because its names are short, but EVE
+ * allows 37 characters and at that length the same table measures 616px. That
+ * still overflows by 206px at 480px, 86px at 600px and 2px at 700px — the
+ * whole tabular band the spec above declares clear, on a name a real alliance
+ * can have. Covering it by breakpoint alone would mean reflowing to blocks at
+ * ~44rem, where three of the four columns fit side by side perfectly well, so
+ * `.log--crew .char` unbinds `nowrap` for this table instead (and only this
+ * table — the account manifest's identity block wants its name on one line).
  *
- * 320px, and it has to be narrow: the tab stop is conditional. The drawer sizes
- * to the scrollport (262px here) while the crew table is 395.8px, so the region
- * overflows and earns a stop. Widen the viewport and the crew table fits,
- * `tabIndex` goes to -1, and there is nothing here to obscure — which is why a
- * desktop pass never found this.
+ * These are the three widths where the unbounded name still overflowed. The
+ * assertion is the same pair the spec above makes, for the reason the header
+ * comment there gives: a region that never takes a tab stop can never be
+ * scrolled into view by sequential focus navigation, which is what retires
+ * the deleted WCAG 2.2 2.4.11 spec rather than the fixture simply not
+ * reaching that state.
  *
- * Same measurement discipline as the `.row-toggle` spec above, for the same
- * reasons: rects via getBoundingClientRect inside one evaluate rather than
- * through boundingBox(), which scrolls the element into view itself; and
- * nearest-edge alignment rather than focus() as the trigger, because Chromium's
- * programmatic focus scroll centres an off-screen element and so never
- * reproduces the obscured case.
+ * The name is one of two texts in this table that needed bounding; the quoted
+ * contact label in the Standings cell is the other, pinned by the spec below.
+ * `.char__location` is the third player-supplied string in a crew row —
+ * structure names run past 150 characters — but `globals.css` already caps it
+ * at `max-width: 22rem` with `overflow: hidden`, and that caps its intrinsic
+ * contribution too: a 200-character location injected into an open drawer
+ * clips at 352px and moves the scroller's `scrollWidth` not at all, at 480
+ * through 1000px. Not pinned here because the cap is `.char__location`'s own
+ * contract, not this table's, and a spec here would fail for whoever
+ * legitimately changes it.
  */
-test("the crew region scrolled to the top of the pinned table stays clear of the header", async ({
+for (const width of [480, 600, 700]) {
+  test(`a 37-character crew name leaves the crew scroller nothing to scroll at ${width}px`, async ({
+    page,
+    context,
+  }) => {
+    const admin = await seedMember(db, {
+      name: "Aaa Boss",
+      tier: "member",
+      isAdmin: true,
+    });
+    // 37 characters, EVE's ceiling, with no space to break at — the worst
+    // case for a `nowrap` cell, not merely a long one.
+    const longName = "Aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    expect(longName).toHaveLength(37);
+    await seedMember(db, { name: longName, tier: "member" });
+    await context.addCookies([await sessionCookieFor(db, admin.id)]);
+    await page.setViewportSize({ width, height: 720 });
+    await page.goto("/admin/accounts");
+
+    const row = rowFor(page, longName);
+    await toggleOf(row).click();
+    await expect(drawerOf(row)).toBeVisible();
+
+    const region = drawerOf(row).locator(".drawer__crew .scroller");
+    // Post-hydration ResizeObserver measurement, as above — wait for the
+    // settled attribute rather than reading it on the first paint.
+    await expect(region).toHaveAttribute("tabindex", "-1");
+
+    const geom = await region.evaluate((r) => ({
+      scrollWidth: r.scrollWidth,
+      clientWidth: r.clientWidth,
+    }));
+    expect(
+      geom.scrollWidth,
+      "a 37-character name no longer holds the crew table open past its scrollport",
+    ).toBeLessThanOrEqual(geom.clientWidth + 1);
+  });
+}
+
+/**
+ * The second unbounded text, and the one that nearly shipped as a hole.
+ *
+ * The Standings cell renders `ContactRemedy`, which on a `label_mismatch`
+ * result quotes the member's own label back inside `code.literal` — and
+ * `code.literal` is `white-space: pre`, which suppresses wrapping exactly as
+ * the name cell's `nowrap` did. The quoted text is unbounded from two
+ * directions: `STANDINGS_LABEL` has no maximum length (`z.string().min(1)`,
+ * src/config.ts) and is operator-set, and the candidate labels are raw
+ * player-set EVE contact labels.
+ *
+ * Bounding the name alone left this open at EVERY width, not only in the
+ * reflow band — measured before the fix, `.drawer__crew .scroller` reported
+ * scrollWidth/clientWidth of 976/250 at 320px, 976/409 at 479px, 1205/410 at
+ * 480px and 1205/530 at 600px. That is the tab stop the deleted WCAG 2.2
+ * 2.4.11 spec used to guard, reachable through ordinary content, so this is
+ * pinned rather than merely recorded: it is the premise the deletion rests on.
+ *
+ * Both bands are covered because the bug spanned both, and no earlier spec
+ * seeded a contact result at all.
+ */
+for (const width of [320, 480, 600]) {
+  test(`a long quoted contact label leaves the crew scroller nothing to scroll at ${width}px`, async ({
+    page,
+    context,
+  }) => {
+    const admin = await seedMember(db, {
+      name: "Aaa Boss",
+      tier: "member",
+      isAdmin: true,
+    });
+    const target = await seedMember(db, { name: "Label Holder", tier: "member" });
+    const [ch] = await db
+      .select()
+      .from(character)
+      .where(eq(character.accountId, target.id));
+    // One unbroken 120-character label: the worst case for `pre`, not merely a
+    // long one. EVE imposes no length here that this table can rely on.
+    await db.insert(contactSyncState).values({
+      characterId: ch.id,
+      lastResult: "label_mismatch",
+      lastDetail: JSON.stringify([`${"L".repeat(120)}`]),
+    });
+    await context.addCookies([await sessionCookieFor(db, admin.id)]);
+    await page.setViewportSize({ width, height: 720 });
+    await page.goto("/admin/accounts");
+
+    const row = rowFor(page, "Label Holder");
+    await toggleOf(row).click();
+    await expect(drawerOf(row)).toBeVisible();
+
+    // Fail loudly if the fixture stops producing the remedy at all: without
+    // this the geometry assertion below would pass on an empty cell and the
+    // spec would guard nothing.
+    await expect(drawerOf(row).locator(".log--crew code.literal").first()).toBeVisible();
+
+    const region = drawerOf(row).locator(".drawer__crew .scroller");
+    await expect(region).toHaveAttribute("tabindex", "-1");
+
+    const geom = await region.evaluate((r) => ({
+      scrollWidth: r.scrollWidth,
+      clientWidth: r.clientWidth,
+    }));
+    expect(
+      geom.scrollWidth,
+      "a 120-character quoted label no longer holds the crew table open past its scrollport",
+    ).toBeLessThanOrEqual(geom.clientWidth + 1);
+  });
+}
+
+/**
+ * The accessibility-tree half of finding 4.4: `display: grid`/`block` on a
+ * `<tr>`/`<td>` strips the table's own semantics in every browser tested, so
+ * hiding the `<thead>` below the breakpoint would silently drop the column
+ * names from the a11y tree if nothing stood in for them — which is why
+ * `.crew__label` exists as a real DOM element rather than `content:
+ * attr(data-label)` (generated content is inconsistently exposed to
+ * assistive tech). This measures the actual a11y tree at both widths rather
+ * than assuming the CSS `display` toggle above is enough.
+ */
+test("the crew column names reach the accessibility tree at both widths, never doubled", async ({
   page,
   context,
 }) => {
   const admin = await seedDenseWorld();
   await context.addCookies([await sessionCookieFor(db, admin.id)]);
+
+  // Narrow: the thead is display:none (removed from the a11y tree with it),
+  // so "columnheader" roles for the crew table disappear and the label spans
+  // are the only surviving carrier of the column names.
   await page.setViewportSize({ width: 320, height: 720 });
   await page.goto("/admin/accounts");
+  const narrowRow = page.locator(ROWS).nth(12);
+  await toggleOf(narrowRow).click();
+  const narrowDrawer = drawerOf(narrowRow);
+  await expect(narrowDrawer.locator(".drawer__crew .scroller")).toHaveAttribute(
+    "tabindex",
+    "-1",
+  );
+  await expect(narrowDrawer.getByRole("columnheader", { name: "Token" })).toHaveCount(0);
+  await expect(narrowDrawer.getByRole("columnheader", { name: "Standings" })).toHaveCount(
+    0,
+  );
+  // Scoped to the table, not to `.drawer__crew`: that section also renders a
+  // sibling `Map observed <timestamp>` line outside the table, and a snapshot
+  // taken over the section would satisfy `toContain("Map")` from that line
+  // alone — the one column name here whose assertion could pass with its label
+  // span deleted.
+  const narrowSnapshot = await narrowDrawer.locator(".log--crew").ariaSnapshot();
+  for (const name of ["Name", "Token", "Standings", "Map"]) {
+    expect(
+      narrowSnapshot,
+      `"${name}" reaches the a11y tree below the breakpoint`,
+    ).toContain(name);
+  }
 
-  // A row well down the list, so there is scroll range above the drawer to put
-  // it out of sight — the same reason the spec above it uses row 12.
-  const ROW = 12;
-  const row = page.locator(ROWS).nth(ROW);
-  await toggleOf(row).click();
-  await expect(drawerOf(row)).toBeVisible();
-  await expect(drawerOf(row).locator(".scroller")).toHaveAttribute("tabindex", "0");
-
-  const geom = await page.evaluate((r) => {
-    const sc = document.querySelector(".scroller") as HTMLElement;
-    const rows = sc.querySelectorAll(".log--dense > tbody > tr:not(.drawer-row)");
-    const tr = rows[r] as HTMLElement | undefined;
-    const drawer = tr?.nextElementSibling as HTMLElement | undefined;
-    const region = drawer?.querySelector<HTMLElement>(".drawer__crew .scroller");
-    const th = sc.querySelector<HTMLElement>(".log--dense > thead th");
-    if (!tr || !drawer || !region || !th) return null;
-
-    // One short scroll past the drawer, so revealing the crew region scrolls
-    // *up* by less than a screenful. From the very bottom the browser would run
-    // the region back to 0 instead, landing the target below the header for a
-    // reason that has nothing to do with scroll-margin.
-    sc.scrollTop = drawer.offsetTop + drawer.offsetHeight + 40;
-    const scrolled = sc.scrollTop > 0 && sc.scrollTop >= region.offsetTop;
-    const before = region.getBoundingClientRect().top;
-    const headTop = th.getBoundingClientRect().top;
-
-    region.scrollIntoView({ block: "nearest" });
-    // After the scroll, not before: focusing an off-screen element centres it
-    // in Chromium, which would make the alignment above a no-op. On an element
-    // already in view, focus() scrolls nothing.
-    region.focus();
-
-    const head = th.getBoundingClientRect();
-    return {
-      scrolled,
-      startedAbove: before < headTop,
-      // -1 is the state where the crew table fits its region and the stop is
-      // withdrawn. The whole case would be vacuous there, so it is asserted
-      // rather than assumed — an earlier draft of this test, written before the
-      // frame's min-width floor was zeroed, reported exactly that.
-      tabIndex: region.tabIndex,
-      focused: document.activeElement === region,
-      regionTop: region.getBoundingClientRect().top,
-      headBottom: head.bottom,
-    };
-  }, ROW);
-
+  // Wide: the thead is back, so the columnheader roles are exposed again —
+  // and the label spans are display:none, so the names aren't read twice.
+  await page.setViewportSize({ width: 768, height: 720 });
+  await page.goto("/admin/accounts");
+  const wideRow = page.locator(ROWS).nth(12);
+  await toggleOf(wideRow).click();
+  const wideDrawer = drawerOf(wideRow);
+  // Each of these resolves to exactly one element (Playwright's strict mode
+  // throws otherwise on a plain `.toBeVisible()`), which already proves the
+  // column name isn't exposed twice under two different roles.
+  await expect(wideDrawer.getByRole("columnheader", { name: "Token" })).toBeVisible();
+  await expect(wideDrawer.getByRole("columnheader", { name: "Standings" })).toBeVisible();
+  // The label span still exists in the DOM (so no re-render is needed at the
+  // breakpoint) but is display:none, so a cell's own accessible content is
+  // just its value — not "Token missing" the way the narrow cell's is. A raw
+  // substring count over the whole snapshot isn't a safe way to check this:
+  // the table row's own computed name is the concatenation of every column
+  // header's text ("Name Token Standings Map"), so "Token" legitimately
+  // appears in that row-level string once even with no duplication at all.
+  // Scoping to the one cell that would carry a duplicate is what actually
+  // tests it.
+  const wideSnapshot = await wideDrawer.locator(".drawer__crew").ariaSnapshot();
   expect(
-    geom,
-    "the dense table, its header, row 12's drawer and the crew region all resolved",
-  ).not.toBeNull();
-  // The same three guards the spec above uses, plus the tab stop: without them
-  // this passes when the region never scrolled, when the target was on screen
-  // all along so nothing moved, or when the target was never focusable.
+    wideSnapshot,
+    "the Token cell's own value has no label text mixed in at a wide viewport",
+  ).toContain('cell "missing"');
   expect(
-    geom!.scrolled,
-    "the outer region scrolled far enough to put the crew region above it",
-  ).toBe(true);
-  expect(geom!.startedAbove, "the crew region starts above the sticky header").toBe(true);
-  expect(geom!.tabIndex, "the crew region overflows, so it holds a tab stop").toBe(0);
-  expect(geom!.focused, "the crew region actually took focus").toBe(true);
-
-  expect(
-    geom!.regionTop,
-    "the focused crew region's top edge is below the sticky header's bottom edge",
-  ).toBeGreaterThanOrEqual(geom!.headBottom);
+    wideSnapshot,
+    "a label-prefixed cell value would mean the hidden .crew__label leaked into the accessible name",
+  ).not.toContain('cell "Token missing"');
 });
 
 /**
@@ -1736,11 +1967,17 @@ test("an open row drawer keeps the pin, and is not itself pinned", async ({
   // label, so the exact fraction moves with TIER_LABEL_MEMBER. Any large
   // majority makes the point that an x-only measure would get this wrong; an
   // equality here only pinned the length of one word.
+  // 0.7, not 0.8: ruling R1 (docs/design-walkthrough.md) grew every drawer
+  // control from `.btn--micro` to `.btn`, which widens the first tier button
+  // too — measured here at 76.7% overlap post-R1, down from >80% pre-R1. The
+  // property this proves ("an x-only measure gets this wrong") only needs a
+  // large majority, not a specific fraction; 0.7 stays well clear of the
+  // ~50% where that claim would stop holding.
   const rest = await coveredByPin(page, ".scroller", tier, 0);
   expect(
     rest.xOverlap,
     "the drawer's first control shares the pin's x-band",
-  ).toBeGreaterThan(0.8);
+  ).toBeGreaterThan(0.7);
   expect(rest.inRegion, "...and is on screen while it does").toBeCloseTo(1, 1);
 });
 
@@ -1864,22 +2101,6 @@ test("accounts at 320px: an open drawer wraps to the scroll region, not to the t
   await toggleOf(zedRow).click();
   await expect(drawerOf(zedRow)).toBeVisible();
 
-  // The region is height-capped against the chrome above it now
-  // (`.scroller--tall:has(.log--dense)`), so on a 720px viewport the third
-  // row's drawer opens below the region's own vertical fold. Everything this
-  // test asserts is horizontal — `inRegion` is only here to stop `covered: 0`
-  // being vacuously true of an off-screen control — so scroll the region down
-  // to the drawer once and leave scrollLeft alone, which `coveredByPin` and
-  // `geometry` set for themselves.
-  await page.evaluate(() => {
-    const sc = document.querySelector(".scroller") as HTMLElement;
-    const drawer = sc.querySelector(".drawer-row:not([hidden])") as HTMLElement;
-    drawer.scrollIntoView({ block: "center" });
-    // scrollIntoView on a sticky-headed region can leave the row under the
-    // header; nudge back by its height so the top of the drawer is clear.
-    const head = sc.querySelector("thead") as HTMLElement;
-    sc.scrollTop = Math.max(0, sc.scrollTop - head.getBoundingClientRect().height);
-  });
   // The drawer no longer contributes to the table's width: it sizes off the
   // scrollport via a container query rather than off the cell it lives in, so
   // opening one adds no horizontal scroll at all.
@@ -1935,6 +2156,21 @@ test("accounts at 320px: an open drawer wraps to the scroll region, not to the t
 
   const offsets = [0, Math.round(open.maxScrollLeft / 2), open.maxScrollLeft];
   for (const [name, sel] of Object.entries(DRAWER_CONTROLS)) {
+    // Vertical, per control, immediately before measuring — not once for the
+    // whole drawer. The region is height-capped against the chrome above it
+    // (`.scroller--tall:has(.log--dense)`), and at 320px this drawer is taller
+    // than the cap: 786.6px against a 576px region, of which ~157px is the
+    // crew table's reflow to stacked blocks and the rest was already there.
+    // globals.css blesses exactly that ("a drawer taller than 80svh still
+    // scrolls in the region — that is the case where a nested scroll is the
+    // honest answer"), so no single scrollTop puts every control on screen at
+    // once, and centering the drawer left `set tier` 12px above the region's
+    // top edge — a vertical clip failing a test whose every claim is
+    // horizontal. `inRegion` is only here to stop `covered: 0` being vacuously
+    // true of an off-screen control, so give each control its own scroll.
+    // This may move scrollLeft too, which costs nothing: `coveredByPin` sets
+    // scrollLeft itself, to the offset under test, on the very next line.
+    await page.locator(sel).scrollIntoViewIfNeeded();
     for (const at of offsets) {
       const m = await coveredByPin(page, ".scroller", sel, at);
       expect(m.covered, `${name} is not under the pin at scrollLeft ${at}`).toBe(0);
