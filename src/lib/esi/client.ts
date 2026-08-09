@@ -8,6 +8,16 @@ const WRITE_CHUNK = 100; // ESI POST/PUT contacts body limit
 const DELETE_CHUNK = 20; // ESI DELETE contacts query limit
 const AFFILIATION_MAX = 500;
 const RESOLVE_IDS_CHUNK = 500; // ESI POST /universe/ids/ body limit
+const NAMES_CHUNK = 1000; // ESI POST /universe/names/ body limit
+
+/**
+ * The access-list endpoints are not under the versioned `/latest` base — they
+ * are served from the root and select their shape with X-Compatibility-Date
+ * instead. First use of that convention in this repo; expect it to spread as
+ * CCP retires `/latest`.
+ */
+const ESI_ROOT = "https://esi.evetech.net";
+const COMPATIBILITY_DATE = "2026-08-04";
 
 /**
  * The scope belongs to the token making the call, i.e. the paying operator's
@@ -16,6 +26,14 @@ const RESOLVE_IDS_CHUNK = 500; // ESI POST /universe/ids/ body limit
  * rather than fail.
  */
 export const OPEN_WINDOW_SCOPE = "esi-ui.open_window.v1";
+
+/**
+ * Deliberately NOT in EVE_SSO_SCOPES: adding it there would flip every
+ * character to needs_reauth at the next token-health run. Opt-in per character,
+ * read back from `character.scopes`. Exported so the link route, the job's
+ * scope check and the page's re-grant prompt spell it identically.
+ */
+export const ACCESS_LISTS_SCOPE = "esi-access.read_lists.v1";
 
 export class EsiError extends Error {
   status: number;
@@ -66,6 +84,48 @@ const locationSchema = z.object({
 const onlineSchema = z.object({ online: z.boolean() });
 const namedSchema = z.object({ name: z.string() });
 
+const accessListIdsSchema = z.object({
+  access_lists: z.array(z.object({ id: z.number().int() })).nullish(),
+});
+// `access` fails OPEN as a plain string: a z.enum would turn CCP adding one
+// value into a total read failure for a field nothing branches on. The id key
+// is entity-specific on the wire — `character_id`, `corporation_id`,
+// `alliance_id` — so each array gets its own schema and the client flattens
+// all three to `{ access, id }`. Spelled out rather than generated: three
+// literal schemas read better than one clever factory.
+const characterMemberSchema = z.object({
+  access: z.string(),
+  character_id: z.number().int(),
+});
+const corporationMemberSchema = z.object({
+  access: z.string(),
+  corporation_id: z.number().int(),
+});
+const allianceMemberSchema = z.object({
+  access: z.string(),
+  alliance_id: z.number().int(),
+});
+const accessListSchema = z.object({
+  id: z.number().int(),
+  name: z.string(),
+  description: z.string().nullish(),
+  membership: z
+    .object({
+      allow_everyone: z.boolean().nullish(),
+      characters: z.array(characterMemberSchema).nullish(),
+      corporations: z.array(corporationMemberSchema).nullish(),
+      alliances: z.array(allianceMemberSchema).nullish(),
+    })
+    .nullish(),
+});
+const universeNamesSchema = z.array(
+  z.object({
+    id: z.number().int(),
+    name: z.string(),
+    category: z.string(),
+  }),
+);
+
 export type Affiliation = {
   characterId: number;
   corporationId: number;
@@ -82,6 +142,18 @@ export type CharacterLocation = {
   stationId: number | null;
   structureId: number | null;
 };
+
+export type EsiAccessListMember = { access: string; id: number };
+export type EsiAccessList = {
+  id: number;
+  name: string;
+  description: string;
+  allowEveryone: boolean;
+  characters: EsiAccessListMember[];
+  corporations: EsiAccessListMember[];
+  alliances: EsiAccessListMember[];
+};
+export type EsiEntityName = { id: number; name: string; category: string };
 
 export interface EsiClientOptions {
   fetchImpl?: typeof fetch;
@@ -131,20 +203,28 @@ export function createEsiClient(opts: EsiClientOptions = {}) {
 
   async function request(
     path: string,
-    init: RequestInit & { accessToken?: string } = {},
+    init: RequestInit & {
+      accessToken?: string;
+      /** Endpoints served from the root rather than the /latest base. */
+      base?: string;
+      /** Send X-Compatibility-Date; the versionless endpoints need it. */
+      compatibilityDate?: boolean;
+    } = {},
   ): Promise<Response> {
     if (remain <= floor && resetAt > now()) {
       await sleep(resetAt - now());
       remain = Number.POSITIVE_INFINITY;
     }
+    const { base, compatibilityDate, ...rest } = init;
     const headers: Record<string, string> = {
       accept: "application/json",
       ...(init.headers as Record<string, string> | undefined),
     };
     if (init.accessToken) headers.authorization = `Bearer ${init.accessToken}`;
     if (opts.userAgent) headers["user-agent"] = opts.userAgent;
-    const res = await fetchImpl(`${ESI_BASE}${path}`, {
-      ...init,
+    if (compatibilityDate) headers["x-compatibility-date"] = COMPATIBILITY_DATE;
+    const res = await fetchImpl(`${base ?? ESI_BASE}${path}`, {
+      ...rest,
       headers,
       signal: AbortSignal.timeout(30_000),
     });
@@ -402,6 +482,93 @@ export function createEsiClient(opts: EsiClientOptions = {}) {
     return safeParse(namedSchema, await res.json(), "GET", path, res.status).name;
   }
 
+  /**
+   * Ids only — each list's name costs a separate detail call, which is why the
+   * job caches the catalog rather than re-reading names every run.
+   */
+  async function getAccessLists(
+    characterId: number,
+    accessToken: string,
+  ): Promise<number[]> {
+    const path = `/characters/${characterId}/access-lists`;
+    const res = await request(path, {
+      accessToken,
+      base: ESI_ROOT,
+      compatibilityDate: true,
+    });
+    const parsed = safeParse(
+      accessListIdsSchema,
+      await res.json(),
+      "GET",
+      path,
+      res.status,
+    );
+    return (parsed.access_lists ?? []).map((entry) => entry.id);
+  }
+
+  /**
+   * A 403 here is a normal state, not a fault: it means the holder can no
+   * longer see this list. The caller classifies it; nothing is swallowed.
+   */
+  async function getAccessList(
+    characterId: number,
+    accessListId: number,
+    accessToken: string,
+  ): Promise<EsiAccessList> {
+    const path = `/characters/${characterId}/access-lists/${accessListId}`;
+    const res = await request(path, {
+      accessToken,
+      base: ESI_ROOT,
+      compatibilityDate: true,
+    });
+    const parsed = safeParse(accessListSchema, await res.json(), "GET", path, res.status);
+    const m = parsed.membership;
+    return {
+      id: parsed.id,
+      name: parsed.name,
+      description: parsed.description ?? "",
+      allowEveryone: m?.allow_everyone ?? false,
+      characters: (m?.characters ?? []).map((c) => ({
+        access: c.access,
+        id: c.character_id,
+      })),
+      corporations: (m?.corporations ?? []).map((c) => ({
+        access: c.access,
+        id: c.corporation_id,
+      })),
+      alliances: (m?.alliances ?? []).map((a) => ({
+        access: a.access,
+        id: a.alliance_id,
+      })),
+    };
+  }
+
+  /**
+   * Unauthenticated batch id→name resolve, chunked like resolveIds. Ids ESI
+   * does not recognize are simply absent from the result; the caller renders
+   * those bare rather than failing the run.
+   */
+  async function getUniverseNames(ids: number[]): Promise<EsiEntityName[]> {
+    const out: EsiEntityName[] = [];
+    for (const idsChunk of chunk(ids, NAMES_CHUNK)) {
+      const res = await request("/universe/names/", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(idsChunk),
+      });
+      out.push(
+        ...safeParse(
+          universeNamesSchema,
+          await res.json(),
+          "POST",
+          "/universe/names/",
+          res.status,
+        ),
+      );
+    }
+    return out;
+  }
+
   return {
     postAffiliation,
     resolveIds,
@@ -413,6 +580,9 @@ export function createEsiClient(opts: EsiClientOptions = {}) {
     getSystemName,
     getStationName,
     getStructureName,
+    getAccessLists,
+    getAccessList,
+    getUniverseNames,
     addContacts: (
       characterId: number,
       accessToken: string,
@@ -451,3 +621,9 @@ export function createEsiClient(opts: EsiClientOptions = {}) {
 }
 
 export type EsiClient = ReturnType<typeof createEsiClient>;
+
+/** The job's narrow view, per ContactsEsi: reads only, no writes reachable. */
+export type AccessListsEsi = Pick<
+  EsiClient,
+  "getAccessLists" | "getAccessList" | "getUniverseNames"
+>;
