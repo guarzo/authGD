@@ -1385,20 +1385,48 @@ h3.rule-head__label {
 .manifest-panel__controls .btn--quiet {
   min-height: 2.25rem;
   padding: var(--s-2) var(--s-4);
+  /* The same resting-affordance buy-back `.inline-edit .btn--quiet` documents
+     further down, for the same reason and against a harder ground. UNLINK is
+     the only control this panel opens with on a main character's row, and at
+     rest it was `--ink-faint` text on `--hull` with no border and no ground —
+     beside `make main`'s bordered `.btn` it read as that button's caption, and
+     alone it read as a column label, from the same `.log th` register it
+     borrows its ink from. The owner's production screenshot is the evidence:
+     the main's open drawer shows one faint word floating in an empty band.
+
+     Border only, colour untouched: UNLINK stays `--ink-faint` at rest and
+     still takes `--signal-bad` on row hover and focus (`.btn--danger-quiet`),
+     so this remains the quiet destructive grade PRODUCT.md principle 4 asks
+     for — a quiet control that looks like a control, not a louder one.
+     `--rule-strong` rather than `--rule` because it is DESIGN.md's
+     control-edge token, chosen there to clear WCAG 1.4.11 against every ground
+     it can sit on, `--hull` included. Arming does not fight this rule:
+     `ConfirmSubmit` swaps the class set for `.btn.btn--danger`, so this
+     selector stops matching entirely and the armed border comes from
+     `.btn--danger` — the edge changes colour rather than appearing from
+     nothing, which is what makes the arm read as a state change. */
+  border-color: var(--rule-strong);
 }
 
-/* `ConfirmCost`'s `"visible"` sentence (page.tsx's character unlink) is a
-   flex item in the same row as the two controls it describes; without its
-   own basis it would try to squeeze onto the end of that line instead of
-   reading as a caption underneath both. `flex-basis: 100%` is the same
-   device the Discord row's own revealed cost uses (`.page__meta-item >
-   .confirm-cost`, near the top of this file). Neither rule is width-gated;
-   what differs is when the basis bites. There, the sentence is
-   `.visually-hidden` at rest and out of flow, so the declaration "costs
-   nothing at rest" and only takes a line once arming reveals it. This
-   sentence is never hidden, so the line it claims is permanent — which is
-   the intent, not a cost: an always-visible cost that sat inline would
-   push the controls it describes around. */
+/* `ConfirmCost`'s sentence (page.tsx's character unlink) is a flex item in the
+   same row as the two controls it describes; without its own basis it would
+   try to squeeze onto the end of that line instead of reading as a caption
+   underneath both. `flex-basis: 100%` is the same device the Discord row's own
+   revealed cost uses (`.page__meta-item > .confirm-cost`, near the top of this
+   file), and it is load-bearing for the same reason: at rest the sentence is
+   `.visually-hidden` and out of flow, so revealing it on arm claims a whole
+   new line rather than joining the line the buttons are on. With
+   `align-items: flex-start` above, that means the panel grows DOWNWARD and the
+   armed button does not move — which is what makes `"reveal"` safe inside a
+   `<td>` here at all, against #112's finding that a reveal which widens a cell
+   slides the armed control out from under the pointer and disarms it.
+
+   Do not delete this on the grounds that the panel "already wraps": measured,
+   it wraps on its own at 800px and 390px and NOT at 1280px, where without this
+   declaration the sentence sits beside the buttons. That is precisely the
+   width-dependent shape #112 shipped once already.
+   e2e/account.spec.ts's "arming unlink inside the actions drawer does not move
+   the button" runs at all three widths for that reason. */
 .manifest-panel__controls .confirm-cost {
   flex-basis: 100%;
 }

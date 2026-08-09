@@ -2208,6 +2208,79 @@ test("opening the actions drawer does not resize the toggle's own column", async
   expect(openBox?.width).toBe(restBox?.width);
 });
 
+// The gate the actions drawer's `ConfirmCost visibility="reveal"` rests on.
+// #108/#111/#112 found that revealing a cost sentence inside a `<td>` widens
+// the cell, which slides the just-armed button out from under a stationary
+// pointer, fires `pointerLeave` and disarms the control — the reveal undoing
+// the arm. That failure is horizontal growth, and this panel is supposed to be
+// immune to it: `.manifest-panel__controls .confirm-cost` sets
+// `flex-basis: 100%` inside an `align-items: flex-start` row, so the sentence
+// takes a fresh line and the panel grows downward from a fixed top edge.
+// "Supposed to" is the reason this test exists — the immunity is a measured
+// property of one CSS declaration, not a structural one.
+//
+// Three widths, not one, because #112's disarm only appeared between roughly
+// 641px and 851px: a sentence short enough to fit beside its button at some
+// widths and not others is exactly the bug, and a single-width gate is how it
+// got shipped the first time.
+for (const width of [1280, 800, 390]) {
+  test(`arming unlink inside the actions drawer does not move the button at ${width}px`, async ({
+    page,
+    context,
+  }) => {
+    const acc = await seedMember(db, {
+      name: "Pilot Prime",
+      tier: "alumni",
+      alts: ["Pilot Alt"],
+    });
+    await markTokensHealthy(acc.id);
+    await context.addCookies([await sessionCookieFor(db, acc.id)]);
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto("/account");
+    await page.evaluate(() => document.fonts.ready);
+
+    await page.getByRole("button", { name: "Pilot Alt actions" }).click();
+    const unlink = page.getByRole("button", { name: "unlink Pilot Alt" });
+    await expect(unlink).toBeVisible();
+
+    // Scoped to the drawer that is actually open: every row renders its own
+    // `.manifest-panel` inside a `hidden` `<tr>`, so an unscoped locator
+    // matches all of them.
+    const openDrawer = page.locator("tr.drawer-row--actions:not([hidden])");
+    const panel = openDrawer.locator(".manifest-panel");
+    const cost = openDrawer.locator(".confirm-cost");
+    // Hidden at rest is the whole point of the change: the drawer opens as a
+    // control strip, not as a paragraph about an action nobody is taking.
+    await expect(cost).toHaveClass(/visually-hidden/);
+    const restBox = (await unlink.boundingBox())!;
+    const restPanel = (await panel.boundingBox())!;
+
+    await unlink.click();
+
+    // The arm survived. This is the assertion #112 would have failed: a
+    // Playwright click leaves the pointer where it pressed, so a button that
+    // moved out from under it disarms itself before this line runs.
+    await expect(
+      page.getByRole("button", { name: "confirm unlink Pilot Alt" }),
+    ).toBeVisible();
+    await expect(cost).not.toHaveClass(/visually-hidden/);
+
+    // Not one pixel, in any direction. Width and height included: the armed
+    // and rest labels share one ghost-sized box (`.confirm-submit__label`), so
+    // a change here would mean the reveal reflowed the button rather than the
+    // label outgrowing it.
+    const armedBox = (await unlink.boundingBox())!;
+    expect(armedBox).toEqual(restBox);
+
+    // And the reveal did something, so the assertion above is not passing on
+    // an empty change: the panel is taller, and only taller.
+    const armedPanel = (await panel.boundingBox())!;
+    expect(armedPanel.height).toBeGreaterThan(restPanel.height);
+    expect(armedPanel.y).toBe(restPanel.y);
+    expect(armedPanel.width).toBe(restPanel.width);
+  });
+}
+
 // The composition walkthrough 3.2 requires and that "a faulted character's
 // remedy renders in a sub-row" (above) only exercises as a side effect of its
 // adjacency check: a faulted character with a live actions drawer AND a

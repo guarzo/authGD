@@ -928,46 +928,43 @@ export default async function AccountPage({
                                       describedBy={unlinkCostId(c.id)}
                                     />
                                   </form>
-                                  {/* `visibility="visible"`, not `"reveal"` or
-                                      `"hidden"` — and neither of `ConfirmCost`'s
-                                      existing precedents licenses reusing their
-                                      reasoning wholesale. This control sits
-                                      inside a `<td>` (the panel's own
-                                      colSpan'd cell), same as the admin
-                                      accounts drawer: revealing the cost on
-                                      arm would widen that cell, sliding the
-                                      just-armed button out from under a
-                                      stationary pointer and disarming it on
-                                      `pointerLeave` — the exact failure
-                                      #108/#111/#112 found, which is why
-                                      `"reveal"` is off the table here.
-                                      `lifecycle-submit.tsx`'s `"visible"`
-                                      call sits OUTSIDE any table, so a
-                                      permanently-visible sentence there has no
-                                      neighbouring cell to shove — that
-                                      justification does not transfer, but the
-                                      conclusion still holds for a different
-                                      reason: this sentence lives inside a
-                                      disclosure panel that is already, by
-                                      ruling R1, "one open at a time, spans the
-                                      full row's width, nothing competing with
-                                      it for space" — the density argument that
-                                      makes a permanent per-row sentence too
-                                      costly on a scanning admin table (why
-                                      that table chose `"hidden"` instead, per
-                                      confirm-submit.tsx) does not apply to a
-                                      panel nobody sees until they open it.
-                                      `"hidden"` would leave the one sighted
-                                      member who opened this panel to read the
-                                      cost never reading it at all — the same
-                                      R4 breach the promoted status summary
-                                      above also exists to fix.
-                                      `"visible"` is the only shape left that is
-                                      neither. */}
-                                  <ConfirmCost
-                                    id={unlinkCostId(c.id)}
-                                    visibility="visible"
-                                  >
+                                  {/* `visibility="reveal"`, reversing round 3's
+                                      `"visible"` on the owner's evidence: in
+                                      production every open drawer is one
+                                      control strip over a two-line paragraph
+                                      about an action nobody is taking, and the
+                                      prose is the tallest thing in the panel.
+                                      That is `"reveal"`'s own brief — the
+                                      sentence becomes load-bearing when the
+                                      member arms, and not before.
+
+                                      The round-3 note reasoned that `"reveal"`
+                                      was off the table because this sits in a
+                                      `<td>` and #108/#111/#112 found that
+                                      revealing inside a cell widens it, slides
+                                      the armed button out from under a
+                                      stationary pointer and disarms it on
+                                      `pointerLeave`. That failure is
+                                      HORIZONTAL growth, and it does not reach
+                                      this panel:
+                                      `.manifest-panel__controls .confirm-cost`
+                                      gives the sentence `flex-basis: 100%`, so
+                                      it claims a new line under a flex-start
+                                      row rather than joining the button's, and
+                                      the panel grows downward from a fixed top
+                                      edge. Measured, not assumed —
+                                      e2e/account.spec.ts's "arming unlink
+                                      inside the actions drawer does not move
+                                      the button" pins the button's whole box
+                                      across the arm.
+
+                                      `"hidden"` is still wrong for the reason
+                                      round 3 gave: it would leave the sighted
+                                      member who opened this panel never
+                                      reading the cost at all (R4). Revealing
+                                      it on arm shows it to everyone who is
+                                      about to need it. */}
+                                  <ConfirmCost id={unlinkCostId(c.id)}>
                                     {/* "Starts a new, separate account" rather
                                         than "you can relink any time" (the
                                         Discord unlink's promise below): a fresh

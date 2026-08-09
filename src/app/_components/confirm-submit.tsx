@@ -92,13 +92,24 @@ export function ConfirmArmScope({ children }: { children: ReactNode }) {
  * one is for.
  *
  * That makes this component safe to put in a table; it does NOT make revealing
- * on arm a good idea there, and #112 established that empirically before
- * reverting the attempt. Revealing inside a `td` widens the cell, the widening
- * moves the armed button out from under a stationary mouse, `pointerLeave`
- * below fires, and the control disarms itself — the reveal undoes the arm. The
- * admin accounts table therefore keeps its own cost sentence hand-rolled and
- * `.visually-hidden` always (#111) rather than using this component at all —
- * that reflow is `"hidden"`'s case if this component were used there instead.
+ * on arm a good idea there by default, and #112 established that empirically
+ * before reverting the attempt. Revealing inside a `td` widens the cell, the
+ * widening moves the armed button out from under a stationary mouse,
+ * `pointerLeave` below fires, and the control disarms itself — the reveal
+ * undoes the arm. The admin accounts table therefore keeps its own cost
+ * sentence hand-rolled and `.visually-hidden` always (#111) rather than using
+ * this component at all — that reflow is `"hidden"`'s case if this component
+ * were used there instead.
+ *
+ * The account page's character `unlink` is the one in-table `"reveal"`, and it
+ * is worth being precise about why it escapes #112 rather than treating it as
+ * a counter-example: what disarms the control there is HORIZONTAL growth of
+ * the cell. `.manifest-panel__controls .confirm-cost` gives that sentence
+ * `flex-basis: 100%` inside an `align-items: flex-start` row, so the reveal
+ * claims a fresh line and the panel grows downward from a fixed top edge,
+ * leaving the button's box untouched. That is a measured claim, not a
+ * structural guarantee — e2e/account.spec.ts's "arming unlink inside the
+ * actions drawer does not move the button" is what keeps it true.
  *
  * `"visible"` is the third mode, added for a different reason again, and it is
  * worth not confusing the three. The payout page's Finalize and Unlock
@@ -146,11 +157,11 @@ export function ConfirmCost({
   id: string;
   children: ReactNode;
   /** `"reveal"` (default): hidden at rest, shown once this control's own arm
-   *  matches `id`. Most call sites (the account page's Discord row, and the
-   *  roster-replace and delete-operation controls in `payouts/[id]/page.tsx`)
-   *  sit in a layout the reveal doesn't disturb, and for those the reveal is
-   *  the point — a sighted operator reads the cost only once it is
-   *  load-bearing.
+   *  matches `id`. Most call sites (the account page's Discord row and its
+   *  character `unlink`, and the roster-replace and delete-operation controls
+   *  in `payouts/[id]/page.tsx`) sit in a layout the reveal doesn't disturb,
+   *  and for those the reveal is the point — a sighted operator reads the cost
+   *  only once it is load-bearing.
    *
    *  `"hidden"`: stays `.visually-hidden` permanently. Reach for this only
    *  where the sentence would genuinely reflow a neighbour a reveal cannot
@@ -162,9 +173,10 @@ export function ConfirmCost({
    *  never gated on arming. For a cost that would read as an error if it
    *  arrived with the arm (`"reveal"`'s failure mode) or that must not be
    *  AT-only (`"hidden"`'s). The payout page's Finalize and Unlock controls
-   *  (`payouts/[id]/lifecycle-submit.tsx`) were the first caller, on the
-   *  grounds above; the account page's character `unlink` (`account/page.tsx`)
-   *  is a second, for a different reason — see the docblock above for both. */
+   *  (`payouts/[id]/lifecycle-submit.tsx`) are the only caller, on the grounds
+   *  above. The account page's character `unlink` was briefly a second and is
+   *  back on `"reveal"` — see the docblock for why the in-table argument that
+   *  put it here does not survive `flex-basis: 100%`. */
   visibility?: "reveal" | "hidden" | "visible";
 }) {
   const ctx = useContext(ArmContext);
