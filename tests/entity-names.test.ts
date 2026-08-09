@@ -70,6 +70,30 @@ describe("resolveEntityNames", () => {
     expect(names.get(2)).toBe("Bravo Corp");
   });
 
+  it("falls through to ESI when the initial cache read itself throws", async () => {
+    // A stub dbx whose `select` chain rejects, simulating a dropped connection
+    // or timeout on the read — as opposed to every other test here, which
+    // fails ESI, not the database. `insert` (and everything else) is left
+    // pointing at the real test db so the fetch-and-cache path still works.
+    const brokenReadDbx = new Proxy(ctx.db, {
+      get(target, prop, receiver) {
+        if (prop === "select") {
+          return () => ({
+            from: () => ({
+              where: () => Promise.reject(new Error("connection reset")),
+            }),
+          });
+        }
+        const value: unknown = Reflect.get(target, prop, receiver);
+        return value;
+      },
+    });
+    const { esi, calls } = fakeEsi({ 9: { name: "Foxtrot", category: "character" } });
+    const names = await resolveEntityNames(brokenReadDbx, esi, [9]);
+    expect(names.get(9)).toBe("Foxtrot");
+    expect(calls).toEqual([[9]]);
+  });
+
   it("upserts what it resolves, so the next call needs no ESI", async () => {
     const { esi, calls } = fakeEsi({ 7: { name: "Charlie", category: "character" } });
     await resolveEntityNames(ctx.db, esi, [7]);
