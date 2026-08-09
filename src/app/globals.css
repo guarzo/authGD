@@ -300,9 +300,17 @@ a:hover {
    a technical reader needs to actually recognise rather than read in forced
    caps. "Scopes requested" itself moved to its own `<p>` above the list,
    which is the register's new member. See `.launch__scopes` below for the
-   inverted structure. */
+   inverted structure.
+
+   `.crew__label` is `.log th` under another name: below 29.9375rem the crew
+   table reflows to stacked blocks, the real `<thead>` goes `display: none`,
+   and these per-cell spans become the only thing naming the columns. Same
+   job, so the same register — it carries only its own `letter-spacing` and
+   `color` down there, the way every other member carries its own. It stays
+   `display: none` above the breakpoint because this list sets no `display`. */
 .rule-head__label,
 .log th,
+.crew__label,
 .strip__name,
 .strip__head,
 .strip__group,
@@ -3877,6 +3885,36 @@ h3.rule-head__label {
   display: grid;
   gap: var(--s-2);
   justify-items: start;
+}
+
+/* The wrapper the Discord unlink group needs, and only that one: both its
+   `ConfirmingForm` (which reports the confirmation) and its `ConfirmGroup`
+   (which hosts it) must outlive the `discordLinked` conditional that a
+   successful unlink flips false, so the gate sits inside the form and the form
+   needs something to be hoisted into (admin/accounts/page.tsx).
+   `display: contents` keeps this wrapper out of the layout entirely — the form
+   inside stays a direct flex item of `.drawer__controls`, wrapping at exactly
+   the widths measured above, which a real box would not.
+
+   The two rules below are the other half. Both the emptied form and
+   `ConfirmGroup`'s always-rendered focus host are 0×0 when there is nothing to
+   show, but a 0×0 flex item still takes a `--s-6` (2rem) column gap — so on
+   the rows this hoist exists for (never linked, or just unlinked) two gaps
+   would open between Cryo and Note for two boxes with nothing in them. Taking
+   them out of flow removes the items. `.notice-slot` is what `Notice` renders
+   with no text and is already `position: absolute` itself; when text arrives
+   it renders `.notice` instead, `:has` stops matching, and the host returns to
+   flow to carry the sentence. */
+.drawer__confirm {
+  display: contents;
+}
+
+.drawer__confirm > form:empty {
+  position: absolute;
+}
+
+.drawer__confirm > div:has(> .notice-slot) {
+  position: absolute;
 }
 
 /* Prose inside a control group (the tier-lock consequence sentence,

@@ -662,6 +662,17 @@ test("an admin can unlink a member's Discord", async ({ page, context }) => {
   await expect(
     page.getByRole("button", { name: "unlink Discord for Pilot", exact: true }),
   ).toHaveCount(0);
+  // The half the button's disappearance says nothing about. A success here
+  // unmounts the section the control lived in, so the confirmation only paints
+  // if its `ConfirmGroup` host is outside that conditional (page.tsx) — nested
+  // inside, this sentence is returned into a subtree already being removed and
+  // the assertion above still passes. Focus follows it: `ConfirmGroup` focuses
+  // its own host on every report, and a host that unmounted could not be
+  // focused, so an admin who pressed this by keyboard would be dropped to
+  // `<body>` with the drawer's remaining controls behind a full re-traverse.
+  const notice = page.getByText("Discord unlinked for Pilot.", { exact: true });
+  await expect(notice).toBeVisible();
+  await expect(notice.locator("xpath=ancestor::div[@tabindex='-1'][1]")).toBeFocused();
   expect(await db.select().from(discordLink)).toHaveLength(0);
 });
 
@@ -778,9 +789,15 @@ test("a row with no Discord link renders no Discord drawer group", async ({
   await expect(rowFor(page, "Solo Pilot").locator(".discord-cell")).toHaveCount(0);
   await expect(rowFor(page, "Solo Pilot")).toContainText("none");
   await toggleOf(rowFor(page, "Solo Pilot")).click();
+  const drawer = drawerOf(rowFor(page, "Solo Pilot"));
+  // The absence assertion below is `toHaveCount(0)`, which is also true of a
+  // drawer that never opened and of a locator that resolved to nothing. Anchor
+  // it first on something this drawer always renders, so "no Discord section"
+  // can only be read off a drawer that is actually there.
   await expect(
-    drawerOf(rowFor(page, "Solo Pilot")).getByText("Discord", { exact: true }),
-  ).toHaveCount(0);
+    drawer.getByRole("textbox", { name: "Note for Solo Pilot" }),
+  ).toBeVisible();
+  await expect(drawer.getByText("Discord", { exact: true })).toHaveCount(0);
 });
 
 /* --- The approval queue --------------------------------------------------- */
@@ -1779,7 +1796,12 @@ test("the crew column names reach the accessibility tree at both widths, never d
   await expect(narrowDrawer.getByRole("columnheader", { name: "Standings" })).toHaveCount(
     0,
   );
-  const narrowSnapshot = await narrowDrawer.locator(".drawer__crew").ariaSnapshot();
+  // Scoped to the table, not to `.drawer__crew`: that section also renders a
+  // sibling `Map observed <timestamp>` line outside the table, and a snapshot
+  // taken over the section would satisfy `toContain("Map")` from that line
+  // alone — the one column name here whose assertion could pass with its label
+  // span deleted.
+  const narrowSnapshot = await narrowDrawer.locator(".log--crew").ariaSnapshot();
   for (const name of ["Name", "Token", "Standings", "Map"]) {
     expect(
       narrowSnapshot,
@@ -2079,22 +2101,6 @@ test("accounts at 320px: an open drawer wraps to the scroll region, not to the t
   await toggleOf(zedRow).click();
   await expect(drawerOf(zedRow)).toBeVisible();
 
-  // The region is height-capped against the chrome above it now
-  // (`.scroller--tall:has(.log--dense)`), so on a 720px viewport the third
-  // row's drawer opens below the region's own vertical fold. Everything this
-  // test asserts is horizontal — `inRegion` is only here to stop `covered: 0`
-  // being vacuously true of an off-screen control — so scroll the region down
-  // to the drawer once and leave scrollLeft alone, which `coveredByPin` and
-  // `geometry` set for themselves.
-  await page.evaluate(() => {
-    const sc = document.querySelector(".scroller") as HTMLElement;
-    const drawer = sc.querySelector(".drawer-row:not([hidden])") as HTMLElement;
-    drawer.scrollIntoView({ block: "center" });
-    // scrollIntoView on a sticky-headed region can leave the row under the
-    // header; nudge back by its height so the top of the drawer is clear.
-    const head = sc.querySelector("thead") as HTMLElement;
-    sc.scrollTop = Math.max(0, sc.scrollTop - head.getBoundingClientRect().height);
-  });
   // The drawer no longer contributes to the table's width: it sizes off the
   // scrollport via a container query rather than off the cell it lives in, so
   // opening one adds no horizontal scroll at all.
@@ -2150,6 +2156,21 @@ test("accounts at 320px: an open drawer wraps to the scroll region, not to the t
 
   const offsets = [0, Math.round(open.maxScrollLeft / 2), open.maxScrollLeft];
   for (const [name, sel] of Object.entries(DRAWER_CONTROLS)) {
+    // Vertical, per control, immediately before measuring — not once for the
+    // whole drawer. The region is height-capped against the chrome above it
+    // (`.scroller--tall:has(.log--dense)`), and at 320px this drawer is taller
+    // than the cap: 786.6px against a 576px region, of which ~157px is the
+    // crew table's reflow to stacked blocks and the rest was already there.
+    // globals.css blesses exactly that ("a drawer taller than 80svh still
+    // scrolls in the region — that is the case where a nested scroll is the
+    // honest answer"), so no single scrollTop puts every control on screen at
+    // once, and centering the drawer left `set tier` 12px above the region's
+    // top edge — a vertical clip failing a test whose every claim is
+    // horizontal. `inRegion` is only here to stop `covered: 0` being vacuously
+    // true of an off-screen control, so give each control its own scroll.
+    // This may move scrollLeft too, which costs nothing: `coveredByPin` sets
+    // scrollLeft itself, to the offset under test, on the very next line.
+    await page.locator(sel).scrollIntoViewIfNeeded();
     for (const at of offsets) {
       const m = await coveredByPin(page, ".scroller", sel, at);
       expect(m.covered, `${name} is not under the pin at scrollLeft ${at}`).toBe(0);

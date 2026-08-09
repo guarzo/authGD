@@ -44,7 +44,10 @@
  * row, `setStatusAction`'s freeze/wake button swaps branches,
  * `promoteAdminAction`/`demoteAdminAction`'s grant/revoke button does the
  * same, `unlinkDiscordAction`'s whole drawer group unmounts outright once
- * `discordLinked` flips false, and
+ * `discordLinked` flips false — the one case where the notice that focus is
+ * meant to land on would go with it, which is why that action's
+ * `ConfirmGroup` is hoisted above the conditional rather than sitting inside
+ * the group like the rest (page.tsx), and
  * `returnToAutoAction`'s "auto" button disappears outright once the tier it
  * exists to unlock is unlocked. Left alone, the admin's focus falls to
  * `<body>` and a keyboard or screen-reader admin working a long roster has to

@@ -384,6 +384,10 @@ export async function unlinkDiscordAction(
   }
   revalidatePath("/admin/accounts");
   // The Discord drawer group unmounts entirely the instant a genuine unlink
-  // succeeds — `r.discordLinked` is what gates it (page.tsx).
+  // succeeds — `r.discordLinked` is what gates it (page.tsx). This sentence
+  // survives that only because the `ConfirmGroup` hosting it is hoisted above
+  // that conditional; nested inside, it would be returned into a subtree
+  // already being removed and never paint. Anything else this action wants to
+  // say after a success has the same constraint.
   return { text: accountsConfirmation("discord", identity, undefined) };
 }

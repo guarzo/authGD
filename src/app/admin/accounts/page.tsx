@@ -1072,52 +1072,82 @@ function AccountRow({
           )}
         </section>
 
-        {r.discordLinked && (
-          <section className="drawer__group">
-            <span className="drawer__label">Discord</span>
-            {/* `ConfirmGroup`/`ConfirmingForm`, not the redirect-based form
-                this control used to submit before ruling R2 moved it here:
-                this action now lives in the drawer, and a redirect back to
-                this page would reset `Disclosure`'s own open state, the same
-                reasoning the tier/cryo/note groups above already follow. */}
-            <ConfirmGroup>
-              <ConfirmingForm
-                action={unlinkDiscordAction.bind(null, r.accountId, listSearch, identity)}
-              >
-                <ConfirmSubmit
-                  className="btn"
-                  armedClassName="btn btn--danger"
-                  label="unlink"
-                  restName={`unlink Discord for ${identity}`}
-                  confirmName={`confirm unlink Discord for ${identity}`}
-                  describedBy={`discord-unlink-cost-${r.accountId}`}
-                />
-              </ConfirmingForm>
-            </ConfirmGroup>
-            {/* Hidden always, rather than revealed on arm like the account
-                page's `ConfirmCost`. `ConfirmCost` now matches a reveal
-                against its own `describedBy` id rather than scope-wide
-                (confirm-submit.tsx), so the old "arming any control in this
-                tbody-wide scope would reveal every row's cost" objection no
-                longer literally applies — but the walkthrough's ruling R2
-                (DESIGN.md, "Disclosure and parity") settles this control
-                specifically: the cost hint for a rare, destructive control
-                moving into a per-row drawer stays hidden-always, because it
-                is read once before the first press, not on every arm/disarm
-                cycle a mis-click or a changed mind produces, and a `Notice`-
-                style reveal would still cost the drawer's row a reflow this
-                one static line already avoids.
+        {/* Everything down to `</div>` is outside the `discordLinked` gate and
+            only the controls are inside it, which reads backwards until you
+            follow what a successful unlink does. `revalidatePath` flips
+            `discordLinked` false in the same response that carries the action's
+            return value, so React commits both together: a `ConfirmGroup`
+            nested in that conditional would unmount in the very commit that
+            produced its confirmation, and — measured, not reasoned — so would
+            the `ConfirmingForm` whose effect is what reports the text upward.
+            Hoisting the host alone is not enough; the first attempt did exactly
+            that and "Discord unlinked for Pilot." still never painted, because
+            the reporter went down with the section. Both halves have to outlive
+            the press, so the form IS the group here and the gate sits inside
+            it, holding only what should actually disappear.
 
-                "queues removal", not "removes": unlinkDiscord ends in
-                enqueueSync (services/discord-link.ts:135-138) and the roles
-                come off in the worker. The account page keeps the same verb
-                for the same reason. */}
-            <span className="visually-hidden" id={`discord-unlink-cost-${r.accountId}`}>
-              Unlinking queues removal of the Discord roles authGD manages for this
-              member.
-            </span>
-          </section>
-        )}
+            `.drawer__confirm` is `display: contents` (globals.css), so the form
+            below stays a direct flex item of `.drawer__controls` and wraps at
+            the widths measured there, exactly as the `<section>` it replaces
+            did. That section carried no accessible name and no landmark role,
+            so nothing was lost by folding it into the form. The two rules
+            beside `.drawer__confirm` take the form and the notice host back out
+            of flow while they are empty — otherwise every never-linked row's
+            drawer pays a `--s-6` flex gap for two boxes with nothing in
+            them. */}
+        <div className="drawer__confirm">
+          <ConfirmGroup>
+            {/* `ConfirmingForm`, not the redirect-based form this control used
+                to submit before ruling R2 moved it here: this action now lives
+                in the drawer, and a redirect back to this page would reset
+                `Disclosure`'s own open state, the same reasoning the
+                tier/cryo/note groups above already follow. */}
+            <ConfirmingForm
+              className="drawer__group"
+              action={unlinkDiscordAction.bind(null, r.accountId, listSearch, identity)}
+            >
+              {r.discordLinked && (
+                <>
+                  <span className="drawer__label">Discord</span>
+                  <ConfirmSubmit
+                    className="btn"
+                    armedClassName="btn btn--danger"
+                    label="unlink"
+                    restName={`unlink Discord for ${identity}`}
+                    confirmName={`confirm unlink Discord for ${identity}`}
+                    describedBy={`discord-unlink-cost-${r.accountId}`}
+                  />
+                  {/* Hidden always, rather than revealed on arm like the
+                      account page's `ConfirmCost`. `ConfirmCost` now matches a
+                      reveal against its own `describedBy` id rather than
+                      scope-wide (confirm-submit.tsx), so the old "arming any
+                      control in this tbody-wide scope would reveal every row's
+                      cost" objection no longer literally applies — but the
+                      walkthrough's ruling R2 (DESIGN.md, "Disclosure and
+                      parity") settles this control specifically: the cost hint
+                      for a rare, destructive control moving into a per-row
+                      drawer stays hidden-always, because it is read once before
+                      the first press, not on every arm/disarm cycle a mis-click
+                      or a changed mind produces, and a `Notice`-style reveal
+                      would still cost the drawer's row a reflow this one static
+                      line already avoids.
+
+                      "queues removal", not "removes": unlinkDiscord ends in
+                      enqueueSync (services/discord-link.ts:135-138) and the
+                      roles come off in the worker. The account page keeps the
+                      same verb for the same reason. */}
+                  <span
+                    className="visually-hidden"
+                    id={`discord-unlink-cost-${r.accountId}`}
+                  >
+                    Unlinking queues removal of the Discord roles authGD manages for this
+                    member.
+                  </span>
+                </>
+              )}
+            </ConfirmingForm>
+          </ConfirmGroup>
+        </div>
 
         <section className="drawer__group">
           <span className="drawer__label">Note</span>
