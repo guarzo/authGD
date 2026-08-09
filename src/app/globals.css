@@ -1261,6 +1261,50 @@ h3.rule-head__label {
   padding: var(--s-2) var(--s-3);
 }
 
+/* Round 4 (owner critique): binds an open drawer to the data row it belongs
+   to, so the two read as one object instead of a row with a same-coloured
+   but detached band beneath it. `:has(+ tr…)` reaches the data row from its
+   drawer sibling's own state — `hidden` on `tr.drawer-row--actions` already
+   is that state, so nothing new has to be threaded through from React.
+
+   `--hull`, the same ground `.manifest-panel`'s `<td>` paints below —
+   deliberately not `--hull-hi`: raising this row's ground to `--hull-hi`
+   would change what `--ink-faint` sits on, and globals.css's `.manifest-panel`
+   comment records that pairing was chosen to clear WCAG 4.5:1. A layout
+   change binding a row to its panel is not licence to revisit that.
+
+   Specificity, not luck: `.log tbody tr:not(:has(.log__empty)):hover` (below)
+   weighs (0,3,2), and `:has()`'s own specificity is that of its most specific
+   argument — here `tr.drawer-row--actions:not([hidden])`, itself (0,2,1) — so
+   this selector totals (0,3,3) and wins outright rather than by source order.
+   The explicit `:hover` variant below exists anyway, pinned rather than
+   inherited from the plain rule's win: with `--void: 0.17`, `--hull: 0.22`
+   and `--hull-hi: 0.27`, the general row-hover composite
+   (`color-mix(in oklab, var(--hull-hi) 55%, transparent)` over `--hull`)
+   lands within a hair of `--hull` itself, so a silent loss of this rule would
+   read as "barely broken" on a screenshot rather than obviously wrong — worth
+   stating outright instead of leaving to a specificity calculation nobody
+   re-derives on sight. */
+.log--manifest tbody tr:has(+ tr.drawer-row--actions:not([hidden])) {
+  background: var(--hull);
+}
+
+.log--manifest tbody tr:has(+ tr.drawer-row--actions:not([hidden])):hover {
+  background: var(--hull);
+}
+
+/* The seam between an open row and its panel: `.log td`'s own `border-top`
+   (above) draws a hairline above every cell, including the drawer row's,
+   which put a rule between two `<td>`s now sharing one background — a stripe
+   of `--rule` cutting a solid block in half. Suppressed only while the row is
+   open (`:not([hidden])`): a closed drawer row is invisible either way, but a
+   bare, unconditional override here would be true by accident rather than by
+   reading as "no seam because these are bound", which is the thing this rule
+   exists to state. */
+.log--manifest tr.drawer-row--actions:not([hidden]) > td {
+  border-top: 0;
+}
+
 /* Round 3 (team-lead judgment): collapses the header bar's own
    chrome — `.log th`'s `background`, `border-bottom` and block padding — for
    this table only. Every label in this `<thead>` is now `.visually-hidden`
@@ -1307,19 +1351,34 @@ h3.rule-head__label {
    var(--rule)`, floating it in its own band below a SECOND hairline — `.log
    td`'s own `border-top` (:1020) already draws one 1px above this one, so
    the drawer row read as two rules and a gap rather than as an extension of
-   the row it belongs to. Measured: 78px against a 49px alt data row. Binding
-   upward instead of opening a new band: no rule and no top spacing of its
-   own, `--hull` for a background so the panel visually attaches to the row
-   above rather than floating on the page ground, and the weight kept only
-   as `padding-bottom` so the panel still has room before the NEXT row's own
-   hairline. Measured after: ~57px. `--hull` does not resurrect the hover
-   flash `.log tbody tr.drawer-row:hover { background: none }` (:1060) exists
-   to suppress — that rule targets the row's hover state specifically, and
-   this is a static background on the `<td>`'s content, not a hover ground.
-   `--ink-faint` (`.manifest-panel__controls .btn--quiet`'s rest ink, and the
-   status-line labels this panel can carry) measures 5.58:1 against `--hull`,
-   clear of WCAG's 4.5:1 text floor — the same pairing `.log th` already uses
-   for its own `--hull` background.
+   the row it belongs to. Measured: 78px against a 49px alt data row. Round 2
+   bound the panel upward instead by dropping the rule and top spacing, and
+   giving `--hull` to this `<div>` so it read as attached to the row above.
+   That div sat inside the `<td>`'s own padding, though, so the coloured band
+   was inset 8px/12px from the cell — a `--void` gutter around the panel and
+   between it and the row above, the opposite of "attached" once you looked
+   for the seam rather than just the missing rule. Round 4 (owner critique,
+   again) fixed the actual cause: `--hull` moved onto
+   `tr.drawer-row--actions > td` (above), which paints full-bleed to the
+   cell's own edges since a `<td>`'s background extends under its padding by
+   default, and the OPEN DATA ROW gets the same `--hull` (also above), so
+   panel and row now share one ground with no `--void` gap on any side. The
+   asymmetric `padding-bottom`-only spacing Round 2 used to fake "binds
+   upward" is gone too — see `.manifest-panel` below — now that the shared
+   background does the real binding, the fake one earns nothing but an
+   off-centre button.
+
+   `--hull` does not resurrect the hover flash
+   `.log tbody tr.drawer-row:hover { background: none }` (:1060) exists to
+   suppress — that rule targets the drawer row's OWN hover state, and the
+   background lives on its `<td>` and on the separate data row above, neither
+   of which that selector matches. `--ink-faint`
+   (`.manifest-panel__controls .btn--quiet`'s rest ink, and the status-line
+   labels this panel can carry) measures 5.58:1 against `--hull`, clear of
+   WCAG's 4.5:1 text floor — the same pairing `.log th` already uses for its
+   own `--hull` background. Do not raise the shared ground to `--hull-hi` to
+   make an open row "pop" more: that would change what `--ink-faint` sits on
+   and break this measurement.
 
    56px left indent: measured live, the panel's own `<td>` starts 37px from
    the viewport edge and the NAME column's GLYPHS (not the column boundary)
@@ -1329,9 +1388,21 @@ h3.rule-head__label {
    padding = 56px) minus this panel's own 12px padding, which lines the panel
    up with the column BOUNDARY at 81px instead — nothing is drawn at a
    boundary, so that left a 12px gap between the panel's controls and the
-   name text above them. 56px (93 - 37) puts `controlsLeft === nameLeft`. */
-.manifest-panel {
+   name text above them. 56px (93 - 37) puts `controlsLeft === nameLeft`. This
+   indent is unaffected by the background move above: it is about where the
+   CONTENT starts, not where the colour starts, and the colour moving to the
+   `<td>` changed only the latter. */
+.log--manifest tr.drawer-row--actions > td {
   background: var(--hull);
+}
+
+.manifest-panel {
+  /* Symmetric top/bottom — Round 2's `padding-bottom`-only spacing (see the
+     comment above) was a stand-in for the binding the shared row/panel
+     background now does for real; keeping it asymmetric after that fix is
+     what put the owner's "the button isn't centred in its block" complaint
+     on this panel specifically. */
+  padding-top: var(--s-3);
   padding-bottom: var(--s-3);
   padding-left: 56px;
 }

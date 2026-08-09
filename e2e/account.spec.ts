@@ -369,8 +369,15 @@ test("unlink is quiet at rest and escalates only on hover or focus", async ({
   // rows' UNLINK buttons shared one right edge — that claim described a fixed
   // column and no longer holds once each row's controls live in their own
   // independently-sized drawer. What survives is that UNLINK opens quiet, so
-  // this opens both drawers and reads it from there.
-  await page.getByRole("button", { name: "Pilot Prime actions" }).click();
+  // this reads it from Pilot Alt's drawer, where both assertions below
+  // resolve — Pilot Prime is main, so its own drawer holds UNLINK alone.
+  //
+  // This used to open Pilot Prime's drawer too, on the grounds that opening
+  // both was harmless and closer to how a member would actually browse the
+  // table. It wasn't harmless once the manifest went single-open (only one
+  // drawer stays open at a time): a second open() call here would close the
+  // first rather than add to it, so clicking Prime first is dead weight that
+  // asserts nothing — every button this test reads is Pilot Alt's.
   await page.getByRole("button", { name: "Pilot Alt actions" }).click();
 
   // Round 2 (owner's "looks a bit off") moved `make main` off this grade onto
@@ -395,8 +402,8 @@ test("unlink is quiet at rest and escalates only on hover or focus", async ({
   ]);
   expect(unlinkColor).not.toBe(makeMainColor);
 
-  // A keyboard event before `.focus()`, not decorative: the two `.click()`
-  // calls above that opened the drawers left the page's input-modality
+  // A keyboard event before `.focus()`, not decorative: the `.click()` call
+  // above that opened Pilot Alt's drawer left the page's input-modality
   // tracker on "pointer", so a bare `.focus()` now lands without
   // `:focus-visible` and the escalation rule below (`.btn--danger-quiet:
   // focus-visible`, globals.css) never fires — confirmed by hand against
@@ -412,6 +419,43 @@ test("unlink is quiet at rest and escalates only on hover or focus", async ({
         .evaluate((e) => getComputedStyle(e).color),
     )
     .not.toBe(unlinkColor);
+});
+
+test("opening a second character's drawer closes the first", async ({
+  page,
+  context,
+}) => {
+  const acc = await seedMember(db, {
+    name: "Pilot Prime",
+    tier: "alumni",
+    alts: ["Pilot Alt"],
+  });
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.goto("/account");
+
+  // `tbody tr:not(.drawer-row)`, not a bare `hasText` "tr": the UNLINK
+  // control's `ConfirmCost` sentence names the character too ("Drops Pilot
+  // Prime from your account…"), so an unscoped match resolves to both the
+  // data row AND its own drawer row and Playwright's strict mode rejects it.
+  const primeDrawer = manifest(page)
+    .locator("tbody tr:not(.drawer-row)", { hasText: "Pilot Prime" })
+    // Sibling row, not a descendant — same reasoning the tests around it use.
+    .locator("xpath=following-sibling::tr[contains(@class, 'drawer-row--actions')][1]");
+  const altDrawer = manifest(page)
+    .locator("tbody tr:not(.drawer-row)", { hasText: "Pilot Alt" })
+    .locator("xpath=following-sibling::tr[contains(@class, 'drawer-row--actions')][1]");
+
+  await page.getByRole("button", { name: "Pilot Prime actions" }).click();
+  await expect(primeDrawer).toBeVisible();
+  await expect(altDrawer).toBeHidden();
+
+  // Opening Alt's must close Prime's — not just leave it be. This is the
+  // behaviour `hidden`'s hover/focus/Escape disarm handling can't cover on
+  // its own: nothing about arming or disarming a control decides which
+  // DRAWER is open, only which control inside one is armed.
+  await page.getByRole("button", { name: "Pilot Alt actions" }).click();
+  await expect(altDrawer).toBeVisible();
+  await expect(primeDrawer).toBeHidden();
 });
 
 test("unlink arms on the first click, confirms on the second, and Escape disarms", async ({

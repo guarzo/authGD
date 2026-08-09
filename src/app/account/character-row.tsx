@@ -1,6 +1,37 @@
 "use client";
 
-import { useId, useState, type ReactNode } from "react";
+import { createContext, useContext, useId, useState, type ReactNode } from "react";
+
+/**
+ * At most one character's actions drawer open at a time, the same shape as
+ * `ConfirmArmScope` (`_components/confirm-submit.tsx`) and for a related
+ * reason: two open panels read as two unrelated objects on the page, not one
+ * table with one thing currently expanded. Renders no DOM of its own — this
+ * sits directly inside `<tbody>` (page.tsx), beside `ConfirmArmScope`, and a
+ * stray wrapper element between `tbody` and its `<tr>`s breaks table
+ * semantics outright (the same constraint `ConfirmArmScope`'s own docblock
+ * states).
+ *
+ * Holds only `openId`, never the drawer contents: `everOpen` stays a
+ * per-row `useState` below, not lifted here, because its whole reason for
+ * existing — don't ship every panel's contents in server HTML — would be
+ * defeated by mounting all of them the moment any one row opens.
+ */
+const OpenRowContext = createContext<{
+  openId: string | null;
+  setOpenId: (id: string | null) => void;
+} | null>(null);
+
+/** Wraps the manifest's `<tbody>` rows so their actions drawers share the
+ *  "one open at a time" rule above. */
+export function ManifestOpenScope({ children }: { children: ReactNode }) {
+  const [openId, setOpenId] = useState<string | null>(null);
+  return (
+    <OpenRowContext.Provider value={{ openId, setOpenId }}>
+      {children}
+    </OpenRowContext.Provider>
+  );
+}
 
 /**
  * The crew manifest's per-character row, plus the disclosure that replaced
@@ -65,14 +96,26 @@ export function CharacterRow({
    *  with neither. */
   actions: ReactNode | null;
 }) {
-  const [open, setOpen] = useState(false);
+  // Same "throw before any other hook" placement `ConfirmSubmit` uses for its
+  // own scope (confirm-submit.tsx): every render of this component either
+  // throws here or doesn't, so the hooks below always run in the same order
+  // regardless.
+  const scope = useContext(OpenRowContext);
+  if (!scope) {
+    throw new Error("CharacterRow must be rendered inside a ManifestOpenScope");
+  }
   // Latches open on first toggle and never clears, same reasoning as
   // `Disclosure`'s `everOpen`: an armed-but-unmounted `ConfirmSubmit` would
   // lose its arm state on close/reopen, and shipping every row's panel
   // contents eagerly in the server HTML is the cost of two controls nobody
-  // opened, times every character on every account.
+  // opened, times every character on every account. Per-row, unlike `open`
+  // below: lifting this too would mount every row's panel contents the
+  // moment any one of them opened.
   const [everOpen, setEverOpen] = useState(false);
   const id = useId();
+  // Whether THIS row's `id` is the one the scope currently holds open — not
+  // its own state, so opening one row closes whichever other row held it.
+  const open = scope.openId === id;
 
   return (
     <>
@@ -95,7 +138,7 @@ export function CharacterRow({
               aria-controls={id}
               aria-label={`${name} actions`}
               onClick={() => {
-                setOpen((o) => !o);
+                scope.setOpenId(open ? null : id);
                 setEverOpen(true);
               }}
             >
@@ -122,10 +165,14 @@ export function CharacterRow({
             {/* `.manifest-panel`/`.manifest-panel__controls`: a purpose-built
                 panel, not `.drawer` — see the docblock above for why. R1's
                 reasoning still governs even though the class doesn't: this
-                is still "one open at a time, spans the full row's width,
-                nothing competing with it for space", which is what earns the
+                is "one open at a time, spans the full row's width, nothing
+                competing with it for space", which is what earns the
                 controls inside it the 36px standalone grade rather than
-                `.btn--micro`. */}
+                `.btn--micro`. "One open at a time" used to be aspirational
+                here — nothing enforced it, and multiple rows could be open
+                together (e2e/account.spec.ts caught it). `ManifestOpenScope`
+                above makes it true: `open` is derived from the scope's single
+                `openId`, so a second row opening is what closes this one. */}
             <div className="manifest-panel">
               <div className="manifest-panel__controls">{everOpen && actions}</div>
             </div>
