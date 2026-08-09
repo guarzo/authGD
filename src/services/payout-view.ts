@@ -487,14 +487,16 @@ export async function getPayoutOperationDetail(
 }
 
 /**
- * How many character names the add-participant `<datalist>` ships inside the
- * page.
+ * How many names the add-participant `<datalist>` ships inside the page.
  *
  * The list is inert HTML the browser filters, which is what buys "no endpoint,
  * no client component, no new authorization surface, works without
  * JavaScript". The price is bytes on every operator's page load.
  *
- * ASSUMPTION, flagged rather than relied on silently: this alliance's character
+ * The cap counts ACCOUNTS, not characters: `listCharacterNames` emits one name
+ * per person, so a pilot with a main and three alts costs one entry.
+ *
+ * ASSUMPTION, flagged rather than relied on silently: this alliance's member
  * count is in the hundreds, not tens of thousands. At a few hundred names this
  * is a few kilobytes. Past the cap the field degrades to plain free text —
  * still fully usable, just without suggestions — rather than breaking. If
@@ -504,18 +506,56 @@ export async function getPayoutOperationDetail(
 export const CHARACTER_NAME_CAP = 500;
 
 /**
- * Every known character name for the add-participant datalist, or `null` when
- * there are more of them than the cap.
+ * One character name per account for the add-participant datalist, or `null`
+ * when there are more accounts than the cap.
+ *
+ * One name per PERSON, not per character: the main's name where
+ * `account.main_character_id` is set, otherwise that account's
+ * alphabetically-first character. Mainless accounts are real and payable —
+ * `unlinkCharacter` and `reclaimCharacter` both null the main through
+ * `applyNoMainRule` (`src/services/accounts.ts:167`), and nothing auto-promotes
+ * a replacement — so this falls back rather than filtering to mains, which
+ * would hide those pilots from suggestions entirely.
+ *
+ * Do NOT "restore" the alt names. They are absent for two reasons. PRIVACY:
+ * this shipped every member's alt names to every operator on page load. TRUTH:
+ * `resolveRosterNames` (`src/services/payouts.ts:363`) labels the participant
+ * row with the main, so suggesting an alt offers a string the operator will
+ * never see again. Typing an alt by hand still resolves to the same person and
+ * the same row — only the suggestion is narrowed, nothing became unaddable.
  *
  * `limit(CAP + 1)` answers both "are there too many?" and "what are they?" in
  * one query; a separate `count(*)` would be a second round trip to learn what
  * the first row set already implies.
  */
 export async function listCharacterNames(dbx: Dbx): Promise<string[] | null> {
-  const rows = await dbx
-    .select({ name: character.name })
+  // `DISTINCT ON` keeps the first row of each account under this ORDER BY, so
+  // the sort key IS the preference rule: main first, then name.
+  //
+  // `IS NOT DISTINCT FROM` rather than `eq`: for a mainless account
+  // `character.id = NULL` is NULL, not false, for every row. That happens to
+  // sort correctly — the rows all tie and fall through to the name — but only
+  // by a NULL-comparison subtlety a reader has to re-derive. This yields a
+  // real boolean and the same plan.
+  const oneNamePerAccount = dbx
+    .selectDistinctOn([character.accountId], { name: character.name })
     .from(character)
-    .orderBy(asc(character.name))
+    .innerJoin(account, eq(account.id, character.accountId))
+    .orderBy(
+      asc(character.accountId),
+      desc(sql`${character.id} IS NOT DISTINCT FROM ${account.mainCharacterId}`),
+      asc(character.name),
+    )
+    .as("one_name_per_account");
+
+  // The wrapper is required, not stylistic: `DISTINCT ON` forces ORDER BY to
+  // lead with the distinct expression, so alphabetical ordering across accounts
+  // can only be applied outside it. Sorting in JS instead would silently swap
+  // Postgres' collation for UTF-16 code-unit order.
+  const rows = await dbx
+    .select({ name: oneNamePerAccount.name })
+    .from(oneNamePerAccount)
+    .orderBy(asc(oneNamePerAccount.name))
     .limit(CHARACTER_NAME_CAP + 1);
   if (rows.length > CHARACTER_NAME_CAP) return null;
   return rows.map((r) => r.name);
