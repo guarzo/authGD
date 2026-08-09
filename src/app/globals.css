@@ -1232,6 +1232,35 @@ h3.rule-head__label {
   padding: var(--s-2) var(--s-3);
 }
 
+/* Round 3 (team-lead judgment): collapses the header bar's own
+   chrome — `.log th`'s `background`, `border-bottom` and block padding — for
+   this table only. Every label in this `<thead>` is now `.visually-hidden`
+   text (page.tsx), so the bar drew a background and a rule around content a
+   sighted member could no longer see; zeroing padding/border/background lets
+   the row collapse to the height of its own (invisible) content instead of
+   the fixed ~33.5px `.log th` reserves elsewhere. `.log th` itself is
+   untouched: the admin accounts, audit and sync tables still show and sort by
+   their own header text, so theirs still earns the chrome. `scope="col"` on
+   every `<th>` here is unaffected by any of this — screen readers announce
+   column identity from the element and its accessible name, neither of which
+   this touches.
+
+   `height: 1px`, not 0: the only in-flow content left is nothing (every
+   label is now an absolutely-positioned `.visually-hidden` span, which does
+   not contribute to this cell's own height), so a bare `padding: 0` collapses
+   the `<th>` to a true 0×0 box — and 0×0 is not the same as `.visually-hidden`
+   itself, which deliberately keeps a 1px×1px footprint so it reads as present
+   rather than absent to a testing tool or AT stack that treats a zero-area
+   element as hidden. `.log--manifest thead th:has(.visually-hidden)` would be
+   more surgical, but every `<th>` in this table's header carries one, so the
+   bare selector says the same thing without depending on that staying true. */
+.log--manifest thead th {
+  padding: 0;
+  border-bottom: 0;
+  background: none;
+  height: 1px;
+}
+
 /* The manifest's own per-row actions panel — same reasoning as the admin
    accounts table's `.drawer` (ruling R1: one open at a time, spans the full
    row's width, nothing competing with it for space, so its controls take the
@@ -1242,11 +1271,40 @@ h3.rule-head__label {
    parked the toggle ~200px from its own row inside a 77px band with a
    doubled hairline. This panel is a plain block instead: it sizes to its own
    `<td>` (already the row's own width, via `colSpan`) and needs neither a
-   width declaration nor sticky positioning to stay under its row. */
+   width declaration nor sticky positioning to stay under its row.
+
+   Round 2 (owner critique, "looks a bit off"): the panel used to open with
+   `margin-top: var(--s-3); padding-top: var(--s-3); border-top: 1px solid
+   var(--rule)`, floating it in its own band below a SECOND hairline — `.log
+   td`'s own `border-top` (:1020) already draws one 1px above this one, so
+   the drawer row read as two rules and a gap rather than as an extension of
+   the row it belongs to. Measured: 78px against a 49px alt data row. Binding
+   upward instead of opening a new band: no rule and no top spacing of its
+   own, `--hull` for a background so the panel visually attaches to the row
+   above rather than floating on the page ground, and the weight kept only
+   as `padding-bottom` so the panel still has room before the NEXT row's own
+   hairline. Measured after: ~57px. `--hull` does not resurrect the hover
+   flash `.log tbody tr.drawer-row:hover { background: none }` (:1060) exists
+   to suppress — that rule targets the row's hover state specifically, and
+   this is a static background on the `<td>`'s content, not a hover ground.
+   `--ink-faint` (`.manifest-panel__controls .btn--quiet`'s rest ink, and the
+   status-line labels this panel can carry) measures 5.58:1 against `--hull`,
+   clear of WCAG's 4.5:1 text floor — the same pairing `.log th` already uses
+   for its own `--hull` background.
+
+   56px left indent: measured live, the panel's own `<td>` starts 37px from
+   the viewport edge and the NAME column's GLYPHS (not the column boundary)
+   start at 93px — the name `<td>` carries its own 12px left padding beyond
+   the column edge, so a member's eye aligns to 93px, not to 81px. An earlier
+   pass derived 44px from the portrait `<td>`'s width (32px image + 12px/12px
+   padding = 56px) minus this panel's own 12px padding, which lines the panel
+   up with the column BOUNDARY at 81px instead — nothing is drawn at a
+   boundary, so that left a 12px gap between the panel's controls and the
+   name text above them. 56px (93 - 37) puts `controlsLeft === nameLeft`. */
 .manifest-panel {
-  margin-top: var(--s-3);
-  padding-top: var(--s-3);
-  border-top: 1px solid var(--rule);
+  background: var(--hull);
+  padding-bottom: var(--s-3);
+  padding-left: 56px;
 }
 
 .manifest-panel__controls {
@@ -1254,6 +1312,23 @@ h3.rule-head__label {
   flex-wrap: wrap;
   gap: var(--s-2) var(--s-4);
   align-items: flex-start;
+}
+
+/* Doubles the safe/destructive seam to 32px: the 16px column-gap
+   `.manifest-panel__controls` already sets, plus another 16px here. The
+   doubling is the point, not an oversight — measure this seam and expect 32px.
+   At one bare flex gap a destructive control reads as part of the same group
+   as the safe one, which was fine when both were `.btn--quiet`-faint, and less
+   fine once `make main` (below) took the louder plain `.btn` grade and UNLINK
+   stayed quiet: contrast now does most of the work of telling them apart, and
+   16px is a short distance for an eye tracking off `make main` to land on the
+   one action in this panel that isn't reversible. `margin-left` on every
+   non-first control rather than raising the flex `gap`, so a future third
+   control added to this panel doesn't automatically inherit extra breathing
+   room it may not need — this is specifically the safe/destructive seam, not
+   a general density change. */
+.manifest-panel__controls > .inline-form + .inline-form {
+  margin-left: var(--s-4);
 }
 
 /* The successor to the `.drawer__controls .btn--quiet` rule this change
@@ -1268,10 +1343,35 @@ h3.rule-head__label {
    `.btn.btn--danger` once armed (no `--quiet`), and the two states share one
    ghost-sized label (`.confirm-submit__label`) specifically so arming never
    resizes the button. A padding mismatch between the two classes would
-   reintroduce that jitter through the box model instead of the text. */
+   reintroduce that jitter through the box model instead of the text.
+
+   Only UNLINK matches this selector now. `make main` moved off `.btn--quiet`
+   onto plain `.btn` (round 2, the owner's "looks a bit off" — `--ink-faint`
+   with no ground read as a table header rather than a control), and bare
+   `.btn` already carries this exact height and padding on its own account,
+   so nothing needed buying back for it. Left in place rather than folded
+   into `.btn` directly: `.btn--quiet` still needs the 36px floor wherever
+   ELSE it appears in this panel, and a future third quiet control here
+   should get it without anyone having to remember to re-add this rule. */
 .manifest-panel__controls .btn--quiet {
   min-height: 2.25rem;
   padding: var(--s-2) var(--s-4);
+}
+
+/* `ConfirmCost`'s `"visible"` sentence (page.tsx's character unlink) is a
+   flex item in the same row as the two controls it describes; without its
+   own basis it would try to squeeze onto the end of that line instead of
+   reading as a caption underneath both. `flex-basis: 100%` is the same
+   device the Discord row's own revealed cost uses (`.page__meta-item >
+   .confirm-cost`, near the top of this file). Neither rule is width-gated;
+   what differs is when the basis bites. There, the sentence is
+   `.visually-hidden` at rest and out of flow, so the declaration "costs
+   nothing at rest" and only takes a line once arming reveals it. This
+   sentence is never hidden, so the line it claims is permanent — which is
+   the intent, not a cost: an always-visible cost that sat inline would
+   push the controls it describes around. */
+.manifest-panel__controls .confirm-cost {
+  flex-basis: 100%;
 }
 
 /* Sync run tables: no fixed layout, and a width floor set by legibility rather
@@ -1826,6 +1926,63 @@ h3.rule-head__label {
   font-weight: 600;
   letter-spacing: var(--track-value);
   color: var(--ink-dim);
+}
+
+/* The token/standings/map facts an all-healthy account's row used to state
+   only in a `.visually-hidden` span next to the name — ruling R4 runs in
+   both directions, and a sighted member scanning an all-ok row had nowhere
+   to read what "ok" meant, only a screen-reader user did. Below its own
+   breakpoint this rule reproduces `.visually-hidden` (defined near the foot of
+   this file) property-for-property rather than composing that class alongside
+   this one: composing it would mean this element's PRESENCE in the accessible
+   tree depends on `.visually-hidden` never changing shape independently of
+   this rule, where inlining the clip means this rule alone owns both
+   states and the media query below only ever toggles between them — the
+   node and its text are never removed, only re-drawn.
+
+   `@media (min-width: 40rem)` reverses the clip rather than un-hiding
+   unconditionally, because this string doesn't fit the 320px forced-scroll
+   budget `e2e/account.spec.ts` pins (~257px today): this rule's own
+   breakpoint is the mechanism that keeps that number from moving. 40rem
+   reuses the file's existing narrow/wide cutoff (see "--- Narrow ---"
+   below) rather than introducing a second one just for this string.
+   Monospaced past the breakpoint, not proportional: this is state
+   ("token ok, standings ok, map on"), and the register this file already
+   keeps is "prose is proportional, state is monospaced" (DESIGN.md).
+
+   Making it visible below the breakpoint too was tried and measured, because
+   clipping it here is the same R4 shape in a narrower viewport — a healthy
+   account has no STATUS column at any width, so below 40rem these facts are
+   again in the assistive-tech channel alone. It does not fit. Any visible
+   narrow rendering costs a whole LINE per row, not just width: at 390px the
+   NAME column cannot carry the summary on the name's own `nowrap` line, so it
+   wraps to its own. Measured that way, "at least 7 characters clear the fold
+   at 390x844" drops to 5. The width gates were never the binding constraint —
+   both 320px forced-scroll tests passed with it visible — the mobile fold is.
+   Restoring visibility here means either shortening the string for narrow
+   viewports specifically or relaxing that fold budget; both are design calls,
+   not a CSS fix. */
+.char__status-summary {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+@media (min-width: 40rem) {
+  .char__status-summary {
+    position: static;
+    width: auto;
+    height: auto;
+    overflow: visible;
+    clip-path: none;
+    margin-left: var(--s-2);
+    font-family: var(--font-mono), ui-monospace, monospace;
+    font-size: var(--t-detail);
+    color: var(--ink-faint);
+  }
 }
 
 /* The location line under a character's name in either manifest. Declared here,
@@ -3429,10 +3586,44 @@ h3.rule-head__label {
   content: "+";
   font-family: var(--font-mono), ui-monospace, monospace;
   color: var(--ink-faint);
+  width: 1ch;
+  flex-shrink: 0;
 }
 
 .row-toggle--actions[aria-expanded="true"]::before {
   content: "\2212"; /* minus */
+}
+
+/* Decoration only, not disclosure: the toggle is already fully visible and
+   operable at rest (`.btn--quiet .btn--micro`, no hover-gated affordance),
+   so this raises its ink on the row's hover/focus-within rather than
+   revealing anything a mouse-less or touch member couldn't otherwise find.
+   `:focus-within` alongside `:hover` so a keyboard user tabbing onto the
+   toggle itself gets the same lift a mouse hover gives — the row, not just
+   the button, since `:focus-within` on the button alone would just restate
+   `:focus-visible`.
+
+   No width reservation on the ACTIONS column itself: `hasActions` (page.tsx)
+   is uniform across every row of a given account's table today — either
+   every row has this toggle or none do, gated on `characters.length > 1` for
+   the whole table — so there is no per-row PRESENCE change this class needs
+   to guard the column against.
+
+   The marker glyph itself DOES change, on open/close (`[aria-expanded="true"]`
+   swaps `+` for `\2212`, above) — that's the axis that could actually resize
+   a `.log__col--fit` shrink-to-content column, not hover. What keeps it
+   stable is `width: 1ch; flex-shrink: 0` on `.row-toggle--actions::before`
+   (same idiom as `.row-toggle::before` above) plus the monospace face this
+   marker already sets: `+` and `−` share one advance width in any mono font,
+   so the swap never changes the button's own layout size, and `1ch`/
+   `flex-shrink: 0` makes that a structural guarantee rather than one resting
+   on the font choice never changing. A future switch to a non-monospace
+   glyph here would need to bring its own width back. */
+.log--manifest tbody tr:hover .row-toggle--actions,
+.log--manifest tbody tr:focus-within .row-toggle--actions,
+.log--manifest tbody tr:hover .row-toggle--actions::before,
+.log--manifest tbody tr:focus-within .row-toggle--actions::before {
+  color: var(--ink-dim);
 }
 
 /* --- Sync status strip -------------------------------------------------- */
