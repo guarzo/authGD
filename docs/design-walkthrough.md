@@ -189,6 +189,17 @@ deliberately renders a draft mid-payment as neutral rather than amber.
 | 3.3 | Dead horizontal space in the manifest, downstream of 3.2. | — |
 | 3.4 | The location column is 20 mostly-identical strings. Owner's proposal, adopted: show only locations that differ from the main character's. | `account/page.tsx` |
 
+**3.1 and 3.3, resolved together and differently from what 3.1 proposed.** The
+fix above was "one class on the head row" — put `full-measure` on `.page__head`
+so the strip widened to meet the 1198px table. It shipped, and it closed the
+seam by making both sides the wrong width: 3.3's dead space is the same 1198px
+seen from the other end, with STATUS stranded 667px right of the names it
+describes. Both now take `measure-crew` (48rem / 766px) instead, a measure
+derived from the manifest's own content rather than from the page — see the
+`--measure-crew` comment in `globals.css` for the derivation and for why 48rem
+is a floor rather than a preference. `.full-measure` had no other users and is
+gone.
+
 Note the budget constraint: the manifest's density was already worked twice
 (#169, #174). Re-measure before assuming there is room; the one-line layout was
 measured and rejected once (413px against a 286px region at 320px).

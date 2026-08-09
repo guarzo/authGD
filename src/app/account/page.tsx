@@ -244,15 +244,14 @@ export default async function AccountPage({
     <>
       <SiteHeader items={nav} current="/account" {...brandProps()} />
       <main id="main" tabIndex={-1} className="page page--narrow">
-        {/* `full-measure`: opts this out of `.page--narrow`'s 912px cap
+        {/* `measure-crew`: caps this at the manifest's own content width
             (globals.css) so the verdict/health strip below, which right-aligns
-            inside `.page__head-row` via `justify-content: space-between`, can
-            reach the manifest's own full measure instead of stopping 287px
-            short of it — the seam walkthrough finding 3.1 measured. `.page__meta`
-            further down restates the narrow cap explicitly rather than
-            inheriting this opt-out, since tier/Discord are a two-fact line, not
-            a table. */}
-        <div className="page__head full-measure">
+            inside `.page__head-row` via `justify-content: space-between`, lands
+            on the same right edge as the table of characters it counts.
+            `.page__meta` further down restates the narrow cap explicitly rather
+            than inheriting this one, since tier/Discord are a two-fact line,
+            not a table. */}
+        <div className="page__head measure-crew">
           <div className="page__head-row">
             <h1>Your account</h1>
             {/* The verdict shares the h1's line: at 24px against the h1's 40px
@@ -526,6 +525,7 @@ export default async function AccountPage({
 
         <RuleHead
           as="h2"
+          className="measure-crew"
           aside={
             view.locationAsOf && (
               <span className="dim mono">
@@ -556,7 +556,7 @@ export default async function AccountPage({
           </p>
         )}
 
-        <Scroller label="Your characters" className="full-measure">
+        <Scroller label="Your characters" className="measure-crew">
           <table className="log log--manifest">
             {/* NAME absorbs the leftover width; portrait, STATUS and ACTIONS
                 shrink to content — same `width: 1%` idiom as the admin

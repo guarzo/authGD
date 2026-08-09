@@ -1821,7 +1821,7 @@ test("an account with no characters renders no verdict at all", async ({
   await expect(page.locator(".log__empty")).toHaveCount(1);
 });
 
-test("the crew manifest is wider than the page's prose measure", async ({
+test("the crew manifest is capped at its own content measure", async ({
   page,
   context,
 }) => {
@@ -1830,26 +1830,106 @@ test("the crew manifest is wider than the page's prose measure", async ({
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/account");
 
-  // Compared against a sibling that keeps the narrow cap rather than against a
-  // hardcoded pixel figure: the point is that the manifest opts OUT of a cap
-  // its neighbours still take, and a bare number would pass just as well if
-  // `page--narrow` were deleted from the page wholesale — the change this
-  // explicitly is not.
+  // The inverse of what this test asserted before. It used to prove the
+  // manifest opted OUT of the cap its neighbours take, by measuring it against
+  // `.page__meta` and requiring it to be wider. That opt-out is gone: at the
+  // full page measure the table held ~430px of content in 1198px and stranded
+  // STATUS 667px right of the names, so the manifest now takes a tighter
+  // measure than the page rather than a looser one.
   //
-  // `.page__meta` (tier + Discord), not `.page__lede` — walkthrough 3.1
-  // deleted the lede and let `.page__head` opt out of the narrow cap too, so
-  // `.page__meta` is the sibling that now carries the cap explicitly
-  // (globals.css) rather than inheriting it from an uncapped parent.
+  // Compared against a sibling rather than a hardcoded figure, for the same
+  // reason the old test gave: a bare number would pass just as well if
+  // `page--narrow` were deleted from the page wholesale, which this is not.
+  // `.pager` is the "Add character" row directly below the manifest and one of
+  // the plain narrow-capped children the manifest is now narrower than.
   const widths = await page.evaluate(() => {
     const frame = document.querySelector(".scroller-frame") as HTMLElement;
-    const meta = document.querySelector(".page__meta") as HTMLElement;
+    const pager = document.querySelector(".pager") as HTMLElement;
+    const head = document.querySelector(".page__head") as HTMLElement;
     return {
       manifest: frame.getBoundingClientRect().width,
-      meta: meta.getBoundingClientRect().width,
+      manifestRight: frame.getBoundingClientRect().right,
+      pager: pager.getBoundingClientRect().width,
+      headRight: head.getBoundingClientRect().right,
     };
   });
-  expect(widths.manifest).toBeGreaterThan(widths.meta);
-  expect(widths.manifest).toBeGreaterThan(960);
+  expect(widths.manifest).toBeLessThan(widths.pager);
+  // Anti-vacuity: `--measure-crew` is 48rem and the seed is ten characters, so
+  // a manifest that had collapsed to something far narrower would satisfy the
+  // line above while being a different bug entirely.
+  expect(widths.manifest).toBeGreaterThan(700);
+  // The reason `.page__head` carries the same class: the verdict/health strip
+  // right-aligns inside it and counts the characters this table lists, so the
+  // two share an edge. Sub-pixel tolerance, not equality — both are derived
+  // from the same rem value but through different box trees.
+  expect(Math.abs(widths.manifestRight - widths.headRight)).toBeLessThan(1);
+});
+
+// The measurement that fixed `--measure-crew` at 48rem rather than at any of
+// the narrower values that would have closed more of the empty row. The name
+// column has to stay wide enough for `.char__location`'s own 22rem ceiling,
+// or a member-supplied structure name starts truncating earlier than it did
+// at the full page measure — trading one complaint for a worse one.
+//
+// Measured at 1280px against a name long enough to reach the ceiling: the
+// location line renders at 352px with a 375px name cell at 48rem, and at
+// 52rem and above. At 44rem the cell is 311px and the line overflows it into
+// the STATUS column. This asserts the line, not the cell, because the line is
+// what a member reads.
+test("a long structure name still gets its full measure at the capped width", async ({
+  page,
+  context,
+}) => {
+  const acc = await seedNominalCrew();
+  // A fault, because STATUS is an exception-only column: on an all-healthy
+  // manifest it is not rendered at all, NAME absorbs its 223px, and the name
+  // cell is wide enough that no cap in the plausible range binds. Measured
+  // that way this test passes at 44rem — vacuously, against a layout no
+  // member with a problem ever sees. The faulted crew is the constraint case,
+  // and the one `--measure-crew` was derived against.
+  await faultOneAlt(acc.id, "Alt Pilot Seven");
+  // Re-places the main only. A distinct system id because `placeCrew` inserts
+  // its universe names with `onConflictDoNothing`, so reusing the seed's
+  // 30000142 would silently keep the short "Home Astrahus" name.
+  await placeCrew(
+    [acc.mainCharacterId!],
+    30000199,
+    "Home Astrahus Of The Very Long Structure Name Indeed Forever And Ever",
+  );
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto("/account");
+  // Text-advance measurement against a webfont, same as every other geometry
+  // gate in this file.
+  await page.evaluate(() => document.fonts.ready);
+
+  const line = await page.evaluate(() => {
+    // By content, not by document order: which row the main occupies is the
+    // manifest's sort order to decide, and this test is not about that.
+    const el = [
+      ...document.querySelectorAll("[aria-label='Your characters'] .char__location"),
+    ].find((n) => n.textContent?.includes("Indeed Forever")) as HTMLElement;
+    const cell = el.closest("td") as HTMLElement;
+    return {
+      lineW: el.getBoundingClientRect().width,
+      cellW: cell.getBoundingClientRect().width,
+      // The string is longer than 22rem can show, so it must be ellipsized —
+      // without this the test would pass just as well against a short name,
+      // which is the case it exists to exclude.
+      clipped: el.scrollWidth > el.clientWidth + 1,
+    };
+  });
+  expect(line.clipped).toBe(true);
+  // 352px is 22rem, `.char__location`'s own ceiling. This does not discriminate
+  // between cap widths — the line keeps rendering at 352 and simply overflows
+  // when the cell is too small — so it is not the floor gate. It anchors the
+  // number the floor was derived FROM: lower `.char__location`'s max-width and
+  // 48rem stops being the right answer, silently.
+  expect(line.lineW).toBeGreaterThanOrEqual(351);
+  // This is the floor gate. Measured at 1280px with STATUS rendered: the name
+  // cell is 406px at 48rem and 342px at 44rem, where the line overflows into
+  // STATUS. Tightening `--measure-crew` past the floor fails here.
+  expect(line.cellW).toBeGreaterThanOrEqual(line.lineW);
 });
 
 test("a faulted character's remedy renders in a sub-row under that character", async ({
