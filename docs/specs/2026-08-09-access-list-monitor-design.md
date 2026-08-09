@@ -22,7 +22,7 @@ per-admin watchlists.
 
 ## Decisions
 
-### The scope is opt-in and sticky, not global
+### The scope is opt-in, and its loss is made visible
 
 `esi-access.read_lists.v1` is **not** added to `EVE_SSO_SCOPES`. Doing so would
 flip every character to `needs_reauth` at the next 03:00 UTC token-health run
@@ -40,11 +40,30 @@ Two mechanisms already support opt-in with no schema change:
 The only change needed: `buildEveAuthorizeUrl` (`src/lib/esi/sso.ts:36`) gains an
 optional `extraScopes` parameter, and `/auth/eve/link` accepts `?grant=access-lists`.
 
-**Sticky:** the link route unions in whatever scopes the character already holds.
-Without this, an admin who granted the scope and later clicks the ordinary
-re-auth link (`src/app/account/page.tsx:799,1090`; `contact-state.tsx:223` — all
-plain `<a href="/auth/eve/link">`) is silently downgraded and the monitor goes
-dark with no visible cause.
+**The grant is not sticky, and cannot be.** An earlier draft of this design had
+the link route union in "whatever scopes the character already holds". That is
+unimplementable: EVE's own character picker runs *after* the authorize URL is
+built, so at the moment `/auth/eve/link` constructs the scope string there is no
+"the character" yet. Identity is learned only from the callback JWT
+(`src/app/auth/eve/link/route.ts:8-17`,
+`src/app/auth/eve/callback/route.ts:76-83`).
+
+Two escapes were considered and rejected. **Account-wide union** — request the
+union of every scope any of the account's characters holds — would make every
+future alt link start asking for the ACL scope, broadening an opt-in grant to
+characters nobody opted in for. **Character-targeted state** — carry the intended
+character through the transaction — touches the OAuth state flow, which CLAUDE.md
+names as a stop-and-ask surface, and would still be a guess, since the member can
+pick a different character at the EVE picker regardless.
+
+So the scope **can** be dropped: an admin who granted it and later clicks the
+ordinary re-auth link (`src/app/account/page.tsx:799,1090`;
+`contact-state.tsx:223` — all plain `<a href="/auth/eve/link">`) loses it.
+Rather than prevent that, the monitor **detects and announces** it. The page
+already reads the holder's `character.scopes`; a holder missing
+`esi-access.read_lists.v1` renders the same re-grant call to action as a holder
+that never had it. A silent failure becomes a loud one, with no change to the
+state flow, matching the existing `needs_reauth` → one-click-re-auth idiom.
 
 ### The OAuth state flow is not touched
 
@@ -65,9 +84,11 @@ A single character reads all lists. Whoever completes the grant flow and clicks
 an explicit confirm, because a different holder may see a different set of lists
 and watched rows can go "not visible to holder".
 
-This is a single point of failure by design: if the holder's token goes bad, the
-whole page goes dark. The page therefore names the holder and its token state
-prominently rather than merely rendering zero rows.
+This is a single point of failure by design: if the holder's token goes bad, its
+grant is dropped, or its character is unlinked, the whole page goes dark. That is
+four distinct ways to fail, so the page treats them as first-class states rather
+than rendering zero rows — see *States, in priority order*, and the
+*Stale-holder guard* for what happens when designation changes mid-run.
 
 ### Discrepancy means effective access
 
@@ -120,14 +141,26 @@ Generated with `npm run db:generate`; never hand-written.
 
 | Table | Shape | Notes |
 |---|---|---|
-| `access_list_holder` | `id integer PK CHECK (id = 1)`, `characterId → character.id`, `designatedAt`, `designatedBy` | Singleton: one row or none |
-| `access_list_catalog` | `accessListId PK`, `name`, `discoveredAt` | Lists the holder can see; feeds the picker; delete-all/insert-all per discovery |
+| `access_list_holder` | `id integer PK CHECK (id = 1)`, `characterId → character.id ON DELETE CASCADE`, `designatedAt`, `designatedBy` | Singleton: one row or none |
+| `access_list_catalog` | `accessListId PK`, `name`, `discoveredAt`, `observedByCharacterId` | Lists the holder can see; feeds the picker; delete-all/insert-all per discovery |
 | `access_list_watch` | `accessListId PK`, `addedAt`, `addedBy` | The shared watchlist, curated by admins |
-| `access_list_snapshot` | `accessListId PK`, `observedAt` (nullable), `lastAttemptAt`, `readStatus`, `name`, `description`, `allowEveryone`, `detail` | One row per watched list |
+| `access_list_snapshot` | `accessListId PK`, `observedAt` (nullable), `lastAttemptAt`, `readStatus`, `observedByCharacterId`, `name`, `description`, `allowEveryone`, `detail` | One row per watched list |
 | `access_list_entry` | `accessListId`, `kind` ∈ character\|corporation\|alliance, `entityId`, `access` (verbatim text), unique on the triple | Membership rows |
 | `esi_entity_name` | `id PK`, `kind`, `name`, `fetchedAt` | Character/corp/alliance name cache |
 
-Two design points that are load-bearing:
+Three design points that are load-bearing:
+
+**The holder FK cascades.** A bare `.references(() => character.id)` defaults to
+`NO ACTION`, which would make `delete(character)` fail with a constraint
+violation for whoever happens to be the holder — breaking both existing deletion
+flows: unlink (`src/services/accounts.ts:198-205`) and transfer reclaim
+(`:482-505`, `:583-609`). The repo already specifies this explicitly where it
+matters; `payoutParticipant.recipientCharacterId` uses `onDelete: "set null"`
+(`src/db/schema.ts:386-388`). `set null` is not available here — the singleton's
+`characterId` is NOT NULL — so **cascade**: the holder row disappears and the
+page falls back to the "no holder" state it already defines. Losing the holder
+by unlinking a character is a real event an admin should see, and the page says
+so rather than erroring.
 
 **Snapshot split from entries** is what distinguishes "read succeeded, list is
 empty" (snapshot row, zero entries) from "never read" (no snapshot row) from
@@ -140,36 +173,80 @@ global list; we do not.
 Collapsing them forces a choice between lying about freshness and discarding
 the failure.
 
+### Stale-holder guard
+
+`observedByCharacterId` on both observation tables exists to reject writes from
+a holder that is no longer designated. Outbox execution is explicitly
+at-least-once (`src/worker/dispatcher.ts:124-136`), so a job that started under
+holder A can still be mid-flight when an admin designates holder B — and since
+the catalog is delete-all/insert-all, A's late write would replace B's view of
+the world wholesale.
+
+The job therefore re-reads the holder inside the write transaction and skips the
+write when it no longer matches the character it read with, the same
+compare-and-swap shape the token code uses to discard stale concurrent decisions
+(`src/services/tokens.ts:100-115`). A skipped write counts as
+`counts.holderChanged` and returns `ok` — the next run, under the new holder,
+produces the correct state. Different holders may see different lists, so this
+is not a merge; it is a discard.
+
 ## The job
 
 `src/jobs/access-lists.ts`, job type `access-lists`, cron `25 * * * *`
 (a free slot: `:00/:30` membership, `:05` contacts, `:10` wanderer, `:15`
-discord-roles, `:02,17,32,47` location), group `sweep`. Wrapped in `runJob` for
-a `syncRun` row, `/admin/sync` visibility, and pg-boss retry/backoff.
+discord-roles, `:02,17,32,47` location — `src/core/schedules.ts:10-21`). Wrapped
+in `runJob` for a `syncRun` row, `/admin/sync` visibility, and pg-boss
+retry/backoff.
 
-Registration is four compile-enforced edits: `JOB_CRON` + `JOB_GROUP`
-(a `Record`, so a missing group is a compile error), `QUEUES` + `JOB_QUEUES`,
-the handler map with a strict Zod payload, and `RERUNNABLE` — a cron key absent
-from `RERUNNABLE` renders a re-run button whose outbox row is silently dropped.
+Group is **`on-demand`**, not `sweep`. `sweep` is defined as "the four jobs the
+primary 'sync everything' fan-out enqueues" (`src/core/schedules.ts:44-50`), and
+that fan-out is a hardcoded list in `jobsFor({kind:"all"})`
+(`src/core/dispatch-plan.ts:67-73`) — so labelling this job `sweep` without
+editing that list would make the group name a lie. `on-demand` means "reachable
+from a dedicated control other than the fan-out", which is exactly what the
+"Check now" button is, alongside `membership-recheck`'s "Recheck invalid
+affiliations". **`jobsFor` is therefore left untouched**: a read-only monitor has
+no business being triggered by "sync everything", which exists to push member
+state outward.
+
+Registration is three edits, all compile-enforced: `JOB_CRON` + `JOB_GROUP`
+(a `Record<JobType, JobGroup>`, so a cron key with no group is a compile error),
+`QUEUES` + `JOB_QUEUES`, and the handler map with a strict Zod payload.
+`RERUNNABLE` needs **no** edit — it derives from `QUEUES`
+(`src/worker/dispatcher.ts:22-24`), and `isJobType` is the actual runtime gate
+(`src/core/dispatch-plan.ts:74-81`).
 
 Order of operations:
 
 1. **No holder** → `ok` with `counts.noHolder = 1`. An unconfigured optional
    feature must not paint `/admin/sync` red; the monitor page explains it.
-2. **Token** via `getFreshAccessToken`. `dry_run` → `ok` + `counts.skipped`
-   (as `contacts.ts:105-114`). `transient` → `{ retry: true }`.
-   `invalid`/`needs_reauth` → CAS `tokenStatus` guarded on the token blob
-   (as `contacts.ts:230-239`), then `failed` without retry.
-3. **Discovery** — `GET /characters/{id}/access-lists` returns **ids only**, so
+2. **Token** via `getFreshAccessToken`, whose four outcomes are
+   `no_token | invalid | transient | dry_run` (`src/services/tokens.ts:17-23`) —
+   there is no `needs_reauth` arm, and the service performs invalidation
+   internally (`:92-98`, `:126-133`), so the job must **not** repeat the CAS:
+   - `dry_run` → `ok` + `counts.skipped` (as `src/jobs/contacts.ts:105-114`).
+   - `transient` → `{ retry: true }`.
+   - `no_token` / `invalid` → `failed` without retry. The page explains it; see
+     the dark-monitor state below.
+3. **Scope check** — a holder whose `character.scopes` lacks
+   `esi-access.read_lists.v1` returns `ok` + `counts.scopeMissing`, without
+   calling ESI. Calling anyway would spend a token refresh to earn a certain 403.
+4. **Discovery** — `GET /characters/{id}/access-lists` returns **ids only**, so
    each id whose name is not already cached costs a detail call. Catalog
-   replaced delete-all/insert-all in one transaction.
-4. **Per watched list** — `GET .../access-lists/{id}`; on success write snapshot
+   replaced delete-all/insert-all in one transaction, under the stale-holder
+   guard.
+5. **Per watched list** — `GET .../access-lists/{id}`; on success write snapshot
    and replace that list's entries in one transaction. On failure **leave prior
    entries intact**: the wanderer rule, "never remove on unknown state"
    (`src/jobs/wanderer.ts:41-54`), applies verbatim — a wiped snapshot renders
    as "everyone lost access".
-5. **Names** — batch unresolved ids through `getUniverseNames`, upsert the
+6. **Names** — batch unresolved ids through `getUniverseNames`, upsert the
    cache. Never throws; unresolved ids render bare.
+
+A 403 from either endpoint is classified as a scope/permission failure the way
+contacts classifies its own (`src/jobs/contacts.ts:224-240`) — recorded on the
+snapshot's `readStatus` as "not visible to holder" rather than treated as a token
+fault, since a list the holder simply cannot see is a normal state, not an error.
 
 ## The comparison
 
@@ -205,14 +282,26 @@ in `_components/nav-items.ts`, label string appearing exactly once (WCAG 3.2.4).
 
 ### States, in priority order
 
-Each is a distinct sentence, never a bare empty table:
+Each is a distinct sentence, never a bare empty table. States 3–5 are the
+**dark-monitor** cases: the single-holder design makes them the most likely way
+this feature fails, so each names the holder, says plainly that no reads are
+happening, and gives the one action that fixes it.
 
 1. No holder, your character lacks the scope → what the page is for, "Grant access".
 2. Your character has the scope, no holder set → "Designate as holder".
-3. Holder set, token `needs_reauth` → names the holder, says the monitor is dark
-   until re-granted. The single-point-of-failure state, so it is loud.
-4. Holder healthy, catalog empty → "No lists discovered yet", "Check now".
-5. Normal.
+3. Holder set, but its `character.scopes` no longer contains
+   `esi-access.read_lists.v1` → the grant was dropped by an ordinary re-auth
+   (see *The scope is opt-in*); "Re-grant access".
+4. Holder set, `tokenStatus` is `needs_reauth` → the standard one-click re-auth.
+5. Holder set, `tokenStatus` is `invalid` or `missing` → `getFreshAccessToken`
+   returns `no_token` for both (`src/services/tokens.ts:67-73`), so no read can
+   ever succeed until the character re-authenticates. Distinct from 4 because
+   the remedy differs: `missing` means no stored token at all.
+6. Holder healthy, catalog empty → "No lists discovered yet", "Check now".
+7. Normal.
+
+States 3–6 all render the last successful observation alongside the problem,
+with its age — a stale answer plus its date beats a blank page.
 
 ### Normal view
 
@@ -246,13 +335,38 @@ Names lead and ids are secondary: the admin retypes these in-game.
 
 ### Actions
 
-`addWatchAction` and `checkNowAction` sit outside any drawer and redirect with
-the usual `?done=&at=` markers. `removeWatchAction` sits inside a row and must
-**return** an `ActionOutcome` through `useActionState` — a redirect replaces the
-route tree, resets `Disclosure`'s `useState`, and closes the drawer the admin
-opened (`src/app/admin/sync/actions.ts:35-66`).
+Four admin actions: `designateHolderAction`, `addWatchAction`,
+`removeWatchAction`, `checkNowAction`. All enqueue; none call ESI.
 
-All three enqueue; none call ESI.
+`removeWatchAction` sits inside a row and must **return** an `ActionOutcome`
+through `useActionState` — a redirect replaces the route tree, resets
+`Disclosure`'s `useState`, and closes the drawer the admin opened
+(`src/app/admin/sync/actions.ts:35-66`). The other three sit outside any drawer
+and redirect with the usual `?done=&at=` markers.
+
+**Every one writes an audit row.** CONTRIBUTING.md:60-63 — "Every state change
+writes an audit row. Tier changes, links, unlinks, admin actions, sync outcomes
+— with the actor and the cause." The `designatedBy` and `addedBy` columns record
+only the *current* state, so without audit rows a holder replacement or a watch
+removal leaves no history of who did it or what it displaced.
+
+| Action | Audit | Details |
+|---|---|---|
+| Designate holder (first time) | `access_list.holder_designated` | new character id |
+| Designate holder (replacing) | `access_list.holder_replaced` | previous and new character id |
+| Add watch | `access_list.watch_added` | list id and name |
+| Remove watch | `access_list.watch_removed` | list id and name |
+
+`target` is the character id for the holder actions and the access-list id for
+the watch actions. `checkNowAction` writes none: enqueuing a read changes no
+state, and `runJob` already records the run in `syncRun` — the same reason
+`/admin/sync`'s re-run buttons audit `sync.requested` at the *request*, not the
+execution.
+
+These are the first audit actions whose noun carries an underscore
+(`access_list.`, against `account.` / `character.` / `payout.`). The alternative,
+`accesslist.`, reads worse; the convention is `noun.verb_past` and the noun is
+genuinely two words.
 
 ## ESI client changes
 
@@ -283,12 +397,23 @@ verbatim.
   grant paths, both buckets, `allow_everyone`, corp grants with the partial
   covered-member count, empty list. Shape follows `acl-diff.test.ts`.
 - `tests/access-lists-job.test.ts` — fake ESI, real DB, following
-  `contacts-job.test.ts`: no holder, dry-run, transient retry, **a failed read
-  leaving prior entries intact**, and the two-timestamp behaviour.
+  `contacts-job.test.ts`: no holder, holder missing the scope, each of
+  `getFreshAccessToken`'s four outcomes, **a failed read leaving prior entries
+  intact**, the two-timestamp behaviour, and **a write discarded because the
+  holder changed mid-run**.
+- `tests/access-lists-actions.test.ts` — an audit row per admin action, and the
+  replace path recording both the previous and the new character id.
+- **A migration test that deleting the holder character succeeds** and leaves no
+  holder row, exercising the cascade against the real unlink path rather than
+  trusting the FK declaration.
+- `tests/dispatcher.test.ts` — already asserts `RERUNNABLE` equals `JOB_CRON`'s
+  keys, so adding the queue and the cron entry is covered by an existing test
+  rather than a new one. Confirm it still passes; a failure there means the two
+  edits drifted.
 - `tests/esi-client.test.ts` additions — new base and `X-Compatibility-Date`,
   `getUniverseNames` batching.
 - `e2e/access-lists.spec.ts` — seeds holder/watch/snapshot rows **directly**,
-  since dry-run forbids live reads, and asserts all five page states plus the
+  since dry-run forbids live reads, and asserts all seven page states plus the
   drifted-row disclosure. Same approach as `sync.spec.ts`.
 - Gates: `npm test`, `npm run typecheck`, `npm run format:check`,
   `npm run test:e2e`, `npm run build`.
@@ -305,6 +430,12 @@ implementation step is a spike with a real token against one list**, settling:
 2. The real value set of `access`.
 3. That the `/latest`-less base plus `X-Compatibility-Date` behaves as the
    documented curl implies.
+4. What a watched list the holder can no longer see returns — 403, 404, or an
+   empty membership. The third is the dangerous one: it is indistinguishable
+   from "everyone was removed", and the job would record a real-looking
+   observation of an empty list. If the spike shows that shape, the job must
+   treat a watched list absent from `/access-lists` as unreadable and skip it
+   rather than fetch it.
 
 If the spike contradicts any of these, revisit before generating migrations.
 
@@ -319,3 +450,10 @@ If the spike contradicts any of these, revisit before generating migrations.
   explicit pick among several granted characters is the upgrade path if it
   proves annoying.
 - The grant flow returns to `/account`, not back to the monitor page.
+- The scope can be dropped by an ordinary re-auth and nothing prevents it. The
+  page detects the loss and asks for a re-grant; it cannot stop it happening
+  (see *The scope is opt-in, and its loss is made visible*).
+- Unlinking the holder's character silently deletes the designation, by cascade.
+  The audit row for the unlink records the character; nothing separately records
+  that a holder designation went with it, so the page's recovery signal is
+  "no holder designated" rather than "your holder was unlinked on X".
