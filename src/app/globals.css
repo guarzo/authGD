@@ -4343,6 +4343,16 @@ h3.rule-head__label {
   flex-wrap: wrap;
 }
 
+/* An ungated `ConfirmingForm` in the crew table renders empty for every
+   character that is not a main-fix candidate — which is most of them. The form
+   has to stay mounted so its effect can report the confirmation after a
+   successful press (see admin/accounts/page.tsx), but an empty flex box still
+   costs its parent `.stack` a gap. Same treatment, same reason, as
+   `.inline-form__err:empty` below. */
+.inline-form:empty {
+  display: none;
+}
+
 /* The rejection message for an in-place editor. Phrasing content rather than
    the shared `.notice` block, because `InlineEdit`'s form is mounted inside an
    `<h1>`, a `<dd>` and a `<td>` depending on the call site and a `<p>` is
