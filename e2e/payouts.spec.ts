@@ -920,15 +920,76 @@ test("an empty name is refused with a specific message", async ({ page, context 
   await context.addCookies([await sessionCookieFor(db, operator.id)]);
   await page.goto("/payouts/new");
   await page.getByLabel("Date").fill("2026-08-01");
-  // The Name field is `required`, so the browser's own validation blocks a
-  // truly empty submit before it ever reaches the server — reaching this
-  // rejection at all means going around the client guard, same as the date
-  // and shares/price tests above.
+  // Kept as a belt-and-braces removal rather than relied on: the form carries
+  // `noValidate` now, so an empty submit reaches the server on its own and the
+  // attribute is inert. It used to be the only way in — native validation ran
+  // ahead of the `submit` event React's `<form action>` fires from, so this
+  // message was a scripted-request backstop. The test below
+  // ("...through the form, with no client guard removed") is the one that pins
+  // the new route; this one keeps covering the server check itself.
   await page.getByLabel("Name").evaluate((el) => el.removeAttribute("required"));
   await page.getByRole("button", { name: "Create operation" }).click();
   await expect(page.locator("p.notice--bad")).toContainText("needs a name");
   await expect(page.getByText("Something broke")).toHaveCount(0);
 });
+
+/*
+ * The rejection has to stay attached to the form it is about.
+ *
+ * `.form-stack` reserves the notice slot so the live region exists before the
+ * message does, and `.notice-slot` is out of flow so the empty reservation
+ * costs nothing — that part was already right, and already measured at 0px.
+ * But a populated `Notice` renders `.notice`, a different class, so the reset
+ * that flattened `.rule-head`'s 48px top margin stopped matching at exactly the
+ * moment there was something to say. Three spacings then stacked — the
+ * notice's own 24px bottom margin, the grid's 16px gap, and the header's 48px
+ * — and the measured distance went 0px empty, 88px populated. On the one
+ * screen where an operator has just been refused, the error floated alone with
+ * the form pushed a third of a phone screen below it.
+ *
+ * Asserted as a distance rather than as a computed style, because the defect
+ * was the sum and no single declaration was wrong on its own. The expected
+ * value is `.form-stack`'s own row gap: after the fix the notice is spaced from
+ * the header exactly the way every other pair of siblings in the form is.
+ */
+test("a rejection notice sits against the form, not a screen above it", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "FC Spacing",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+  await page.goto("/payouts/new");
+
+  const notice = page.locator("#new-operation-error");
+  const head = page.locator(".form-stack .rule-head").first();
+
+  // The empty case, so a regression that "fixes" the populated gap by
+  // reintroducing the reserved slot's own spacing fails here instead.
+  const gapEmpty = await gapBetween(notice, head);
+  expect(gapEmpty).toBe(0);
+
+  await page.getByRole("button", { name: "Create operation" }).click();
+  await expect(notice).toContainText("needs a name");
+
+  const gapFull = await gapBetween(notice, head);
+  const rowGap = await head.evaluate(
+    (el) => parseFloat(getComputedStyle(el.parentElement!).rowGap) || 0,
+  );
+  expect(rowGap).toBeGreaterThan(0);
+  expect(Math.abs(gapFull - rowGap)).toBeLessThanOrEqual(1);
+});
+
+/** Vertical distance from the bottom of `above` to the top of `below`. */
+async function gapBetween(above: Locator, below: Locator): Promise<number> {
+  const a = await above.boundingBox();
+  const b = await below.boundingBox();
+  if (!a || !b) throw new Error("both elements must be laid out to be measured");
+  return b.y - (a.y + a.height);
+}
 
 test("an invalid date is refused with a specific message", async ({ page, context }) => {
   const operator = await seedMember(db, {
@@ -939,8 +1000,9 @@ test("an invalid date is refused with a specific message", async ({ page, contex
   await context.addCookies([await sessionCookieFor(db, operator.id)]);
   await page.goto("/payouts/new");
   await page.getByLabel("Name").fill("Bad date roam");
-  // type="date" stops free text in the browser, so reaching the server check
-  // at all means going around the client guard.
+  // `type="date"` still refuses to hold free text whatever the form says about
+  // validation, so this one genuinely does need the bypass — `noValidate`
+  // switches off constraint *reporting*, not the input's own value sanitising.
   await bypassClientGuard(page.getByLabel("Date"), "not-a-date");
   await page.getByRole("button", { name: "Create operation" }).click();
   await expect(page.locator("p.notice--bad")).toContainText("real calendar date");
@@ -971,6 +1033,91 @@ test("a date that does not exist is refused rather than rolled forward", async (
   await page.getByRole("button", { name: "Create operation" }).click();
   await expect(page).toHaveURL(/\/payouts\/new$/);
   await expect(page.locator("p.notice--bad")).toContainText("real calendar date");
+  await expect(page.getByText("Something broke")).toHaveCount(0);
+});
+
+/*
+ * The point of `noValidate`, stated as a test: an operator typing a plausible
+ * wrong thing gets the app's own sentence, in the page, where it stays.
+ *
+ * Every other rejection test on this form removes an attribute or writes the
+ * value past the input first. This one touches nothing — it fills the field the
+ * way a person does and presses the button. Before `noValidate` it could not
+ * have passed: the browser blocked the submit with a transient "Please enter a
+ * URL." bubble that never named the scheme, and the sentence asserted below was
+ * unreachable through the form at all.
+ *
+ * Measured, not assumed: a scheme-less paste lands on `url_invalid`, NOT
+ * `url_scheme`. `zkillboard.com/related/…` fails `new URL()` outright, so it
+ * never reaches the scheme check — `url_scheme` fires only for something that
+ * already parses and is the wrong kind, like `javascript:`. That makes
+ * `url_invalid` the message an operator actually meets, which is why its copy
+ * (errors.ts) names the missing `https://` rather than stopping at "not a URL",
+ * and why this asserts the remedy half specifically instead of just checking
+ * that some notice appeared.
+ */
+test("a bare-hostname battle report is refused through the form, with no client guard removed", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "FC NoValidate",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+  await page.goto("/payouts/new");
+  await page.getByLabel("Name").fill("Scheme-less roam");
+  await page.getByLabel("Date").fill("2026-08-01");
+  await page
+    .getByLabel("Battle report (optional)")
+    .fill("zkillboard.com/related/30000142/");
+  await page.getByRole("button", { name: "Create operation" }).click();
+
+  await expect(page).toHaveURL(/\/payouts\/new$/);
+  await expect(page.locator("p.notice--bad")).toContainText(
+    "needs an https:// on the front",
+  );
+  // The other half of what the message promises, and the reason the composer
+  // returns state instead of redirecting: nothing the operator typed is gone.
+  await expect(page.getByLabel("Name")).toHaveValue("Scheme-less roam");
+  await expect(page.getByLabel("Battle report (optional)")).toHaveValue(
+    "zkillboard.com/related/30000142/",
+  );
+  await expect(page.getByText("Something broke")).toHaveCount(0);
+});
+
+/*
+ * `max={today}` was enforced by the browser and nothing else. Switching off
+ * native validation would have turned that attribute into decoration and let a
+ * future-dated operation through, so `createOperationAction` now checks it —
+ * this is the test that says so, and the one that fails if either half is
+ * removed without the other.
+ *
+ * The date is built from the run's own clock rather than hard-coded, so this
+ * does not quietly stop testing anything when a fixed "future" date becomes
+ * the past. Two days out, not one: the action compares against UTC midnight of
+ * the instant it runs, so a run that fills the form at 23:59 and submits after
+ * the boundary would be posting today's date and get it accepted.
+ */
+test("an operation cannot be dated into the future", async ({ page, context }) => {
+  const operator = await seedMember(db, {
+    name: "FC Tomorrow",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+  const future = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+  await page.goto("/payouts/new");
+  await page.getByLabel("Name").fill("Tomorrow's roam");
+  await page.getByLabel("Date").fill(future);
+  await page.getByRole("button", { name: "Create operation" }).click();
+
+  await expect(page).toHaveURL(/\/payouts\/new$/);
+  await expect(page.locator("p.notice--bad")).toContainText(
+    "cannot be dated in the future",
+  );
   await expect(page.getByText("Something broke")).toHaveCount(0);
 });
 
@@ -1030,6 +1177,84 @@ test("a battle report link is stored, and a bad scheme is refused without losing
     .from(payoutOperation)
     .where(eq(payoutOperation.name, "Roam with a link"));
   expect(created.battleReportUrl).toBe("https://zkillboard.com/related/1/");
+});
+
+/**
+ * This page renders 70 pressable things and 62 of them are the identical 28px
+ * quiet chip, against a single gold button. At that ratio nothing directs the
+ * eye: an operator opening a payout scans a field of interchangeable `edit`
+ * marks with no way to tell which one changes the record's identity from which
+ * one changes a line item's unit price.
+ *
+ * Two triggers are raised out of the quiet grade — the operation's name and its
+ * date, which *are* the record's identity and are the only two above the fold.
+ * The raise is deliberately not extended to the other three standalone uses
+ * (corp share, notes, battle report): promoting five of 62 does not create a
+ * focal point, it creates a second uniform tier.
+ *
+ * So the assertion runs in both directions. Checking only that name and date
+ * are prominent would pass just as well if every trigger on the page had been
+ * raised, which is the failure this scoping exists to avoid.
+ */
+test("the two identity triggers are raised, and the other standalone ones are not", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "FC Grade",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+
+  await page.goto("/payouts/new");
+  await page.getByLabel("Name").fill("Grade check roam");
+  await page.getByLabel("Date").fill("2026-08-01");
+  await page.getByRole("button", { name: "Create operation" }).click();
+  await expect(page.getByRole("heading", { name: "Grade check roam" })).toBeVisible();
+
+  const raised = ["edit operation name", "edit operation date"];
+  // Battle report only. The other two unraised standalone triggers are corp
+  // share, which needs a loot pool before its row renders at all, and notes —
+  // neither is on a freshly created operation, and seeding a pool here to
+  // reach them would test the fixture rather than the grade. One counterweight
+  // is enough to catch the failure this direction exists for: a raise applied
+  // to every trigger instead of the two scoped ones.
+  const notRaised = ["edit battle report URL"];
+
+  for (const name of raised) {
+    const trigger = page.getByRole("button", { name });
+    // Anti-vacuity: a renamed label would make every class assertion below run
+    // against an empty locator and pass.
+    await expect(trigger, `${name} is missing`).toHaveCount(1);
+    await expect(trigger).not.toHaveClass(/btn--quiet/);
+    await expect(trigger).not.toHaveClass(/btn--micro/);
+    await expect(trigger).toHaveClass(/\bbtn\b/);
+  }
+
+  for (const name of notRaised) {
+    const trigger = page.getByRole("button", { name });
+    await expect(trigger, `${name} is missing`).toHaveCount(1);
+    await expect(trigger).toHaveClass(/btn--quiet/);
+  }
+
+  // The raise costs no layout: bare `.btn` already carries the same
+  // `min-height: 2.25rem` that `.inline-edit--standalone .btn--quiet` buys
+  // back for the quiet ones, so this changes fill and border only. Measured
+  // rather than asserted from the stylesheet, because that equality is the
+  // whole reason the change was affordable.
+  const heights = await page.evaluate(() => {
+    const by = (label: string) => document.querySelector(`button[aria-label="${label}"]`);
+    const h = (el: Element | null) =>
+      el ? Math.round(el.getBoundingClientRect().height) : null;
+    return {
+      name: h(by("edit operation name")),
+      report: h(by("edit battle report URL")),
+    };
+  });
+  expect(heights.name).not.toBeNull();
+  expect(heights.report).not.toBeNull();
+  expect(heights.name).toBe(heights.report);
 });
 
 /*
@@ -2667,6 +2892,54 @@ test("the notes Save control sits at the page's standalone hit-target grade", as
 });
 
 /**
+ * The same ruling, one control type over. R1 scopes the 28px grade by the
+ * reason for it — rows carrying a control set, read many at a time — and says
+ * so outright: "A disclosure drawer is not in-row for this purpose and takes
+ * 36px." These four summaries are page-level sections of a draft operation,
+ * not table rows, and they were taking the in-row ration.
+ *
+ * Every `.disc` on the page rather than a named one: the class has exactly
+ * four call sites, all here, and a per-summary assertion would pass while a
+ * fifth was added at the wrong grade. Compared against `Finalize` for the same
+ * reason the test above does it — the number has to mean "this page's own
+ * standalone grade", not a constant restated.
+ */
+test("the page-level disclosures sit at the standalone hit-target grade", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "Disc FC",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+
+  await page.goto("/payouts/new");
+  await page.getByLabel("Name").fill("Disclosure roam");
+  await page.getByLabel("Date").fill("2026-08-01");
+  await page.getByRole("button", { name: "Create operation" }).click();
+  await expect(page.getByRole("heading", { name: "Disclosure roam" })).toBeVisible();
+
+  const finalizeBox = await page.getByRole("button", { name: "Finalize" }).boundingBox();
+  expect(Math.round(finalizeBox!.height)).toBe(36);
+
+  const summaries = page.locator("details.disc > summary");
+  const count = await summaries.count();
+  // A draft with no pools and no participants still renders more than one, so
+  // a zero here would mean the locator stopped matching rather than that the
+  // grade holds.
+  expect(count).toBeGreaterThan(1);
+  for (let i = 0; i < count; i++) {
+    const box = await summaries.nth(i).boundingBox();
+    expect(
+      Math.round(box!.height),
+      await summaries.nth(i).innerText(),
+    ).toBeGreaterThanOrEqual(Math.round(finalizeBox!.height));
+  }
+});
+
+/**
  * Seeds a *draft* operation — pools, participants, or both. `seedFinalizedRoster`
  * above cannot stand in for this: `canEdit` is
  * `access.isOperator && operation.status === "draft" && !locked`
@@ -3712,23 +3985,146 @@ test("a filter matching nothing renders its own empty state, not 'no operations'
 });
 
 /**
- * The pinned Name column, at the widths where the table is forced to scroll.
+ * Seeds three finalized operations, one of them named with an unbroken
+ * 60-character token, each carrying the 12-digit total the column budget in
+ * globals.css was measured against. Operation names are operator-typed `text`
+ * with no cap in schema.ts, unlike the EVE-bounded character names the accounts
+ * table pins, so that token is the one input that could grow the Name column
+ * until it covers the region it is meant to anchor. A short name and a small
+ * total would understate how far the row runs and make every width below pass
+ * for the wrong reason.
+ */
+async function seedWidePayoutList(viewerId: string) {
+  for (const [i, name] of [
+    "Aaa First Operation Name",
+    "B".repeat(60),
+    "Ccc Third Operation",
+  ].entries()) {
+    const [op] = await db
+      .insert(payoutOperation)
+      .values({
+        name,
+        occurredAt: new Date(`2026-08-0${5 - i}`),
+        corpSharePct: "0",
+        status: "finalized",
+      })
+      .returning();
+    await db.insert(lootPool).values({
+      operationId: op.id,
+      valuationSource: "flat",
+      totalValue: "123456789012.00",
+      notes: "seeded",
+    });
+    await db.insert(payoutParticipant).values({
+      operationId: op.id,
+      accountId: viewerId,
+      displayName: "Pin Viewer",
+      shares: "1",
+      amount: "123456789012.00",
+      paidAmount: "123456789012.00",
+    });
+  }
+}
+
+/**
+ * The pinned Name column, at a width where the table is still a table and is
+ * still forced to scroll.
  *
- * Six columns need 736px worst case against a 286px region at 320px (the
- * budget is measured out in globals.css beside `.log--payouts`), so scrolling
- * is not the defect — losing the row's identity while panning to Total is.
- * Under ruling R3 /payouts is a corp-wide ledger, which makes "which operation
- * is this figure for?" the question every other cell depends on, so these are
- * correctness tests in the same sense as the accounts table's pin tests, not
- * cosmetic ones.
+ * Six columns need 736px worst case (the budget is measured out in globals.css
+ * beside `.log--payouts`), so scrolling is not the defect — losing the row's
+ * identity while panning to Total is. Under ruling R3 /payouts is a corp-wide
+ * ledger, which makes "which operation is this figure for?" the question every
+ * other cell depends on, so these are correctness tests in the same sense as
+ * the accounts table's pin tests, not cosmetic ones.
  *
- * A deliberately unbroken 60-character name is seeded because operation names
- * are operator-typed `text` with no cap in schema.ts, unlike the EVE-bounded
- * character names the accounts table pins. That token is the one input that
- * could grow the pin until it covers the region it is meant to anchor.
+ * 560px, not the 320px and 390px this asserted at previously. Below 30rem the
+ * row now reflows to labelled blocks and there is no horizontal scroll left to
+ * pin anything out of, so `maxScrollLeft > 0` cannot hold there — the guard on
+ * the first assertion is doing its job, not reporting a regression. The reflow
+ * is covered by its own test below. 560px is the narrowest round width above
+ * the 30rem breakpoint where the 736px budget still exceeds the region, so the
+ * pin is under real load rather than nominally present.
+ */
+test("payouts at 560px: the operation name stays put while Total is reached", async ({
+  page,
+  context,
+}) => {
+  const viewer = await seedMember(db, {
+    name: "Pin Viewer",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, viewer.id)]);
+  await seedWidePayoutList(viewer.id);
+
+  await page.setViewportSize({ width: 560, height: 720 });
+  await page.goto("/payouts");
+  await page.waitForSelector(".scroller tbody tr");
+
+  const pinned = await pinGeometry(
+    page,
+    ".scroller",
+    "tbody tr:first-child td:first-child",
+    "right",
+  );
+  // Vacuous unless there was something to scroll past in the first place.
+  expect(pinned.maxScrollLeft).toBeGreaterThan(0);
+  expect(pinned.scrolledLeft).toBeGreaterThanOrEqual(
+    pinned.maxScrollLeft - pinned.gutterWidth,
+  );
+  // Fully on screen at the far right, not merely intersecting by a sliver —
+  // the distinction `toBeInViewport` cannot make (see geometry.ts).
+  expect(pinned.overlapX).toBeCloseTo(pinned.cellWidth, 0);
+  expect(pinned.overlapY).toBeGreaterThan(0);
+  expect(pinned.text).toContain("Aaa First Operation Name");
+
+  // The corner cell rides with the column it heads: a NAME column left under
+  // a heading that reads TOTAL is worse than no heading at all.
+  const corner = await pinGeometry(page, ".scroller", "thead th:first-child", "right");
+  expect(corner.overlapX, "the Name heading stays over the pinned column").toBeCloseTo(
+    corner.cellWidth,
+    0,
+  );
+  expect(corner.text).toContain("Name");
+
+  // The pin has to leave most of the region for the columns it exists to let
+  // you reach. The same 60% ceiling the account manifest is held to — and
+  // the reason `overflow-wrap: anywhere` is on this column, since the
+  // 60-character row below would otherwise set its width.
+  const longRow = await pinGeometry(
+    page,
+    ".scroller",
+    "tbody tr:nth-child(2) td:first-child",
+    "right",
+  );
+  expect(longRow.text).toContain("B");
+  expect(
+    longRow.cellWidth / longRow.regionWidth,
+    "an unbroken 60-character name does not turn the pin into the page",
+  ).toBeLessThan(0.6);
+});
+
+/**
+ * Below 30rem the row stops being a row. The pin was the previous answer at
+ * these widths and it defeated itself: measured at 69px of a 286px region —
+ * 24% — which is a column too narrow to read an operation name out of and
+ * still the only thing kept while panning across five more. The 60% ceiling
+ * above is a ceiling with no floor, so 24% passed it exactly as 55% would.
+ *
+ * The three assertions are the three ways the reflow can be wrong, and none of
+ * them can pass while the bug they describe is present:
+ *
+ *   - it did not happen at all (cells still laid out in a row, table still
+ *     scrolling sideways);
+ *   - it happened and dropped facts, which would collapse the /payouts-vs-
+ *     /account distinction ruling R3 draws;
+ *   - it happened and left the columns unnamed, which is ruling R4's
+ *     both-channels requirement — the `<thead>` is `display: none` down here,
+ *     so a `.payouts__label` in each cell is the only thing naming them, in
+ *     the visual channel and the accessibility tree alike.
  */
 for (const width of [320, 390]) {
-  test(`payouts at ${width}px: the operation name stays put while Total is reached`, async ({
+  test(`payouts at ${width}px: each row reflows to labelled blocks, nothing dropped`, async ({
     page,
     context,
   }) => {
@@ -3738,83 +4134,119 @@ for (const width of [320, 390]) {
       status: "active",
     });
     await context.addCookies([await sessionCookieFor(db, viewer.id)]);
+    await seedWidePayoutList(viewer.id);
 
-    for (const [i, name] of [
-      "Aaa First Operation Name",
-      "B".repeat(60),
-      "Ccc Third Operation",
-    ].entries()) {
-      const [op] = await db
-        .insert(payoutOperation)
-        .values({
-          name,
-          occurredAt: new Date(`2026-08-0${5 - i}`),
-          corpSharePct: "0",
-          status: "finalized",
-        })
-        .returning();
-      await db.insert(lootPool).values({
-        operationId: op.id,
-        valuationSource: "flat",
-        // A 12-digit total is the worst case the column budget was measured
-        // against; a short one would understate how far the row scrolls.
-        totalValue: "123456789012.00",
-        notes: "seeded",
-      });
-      await db.insert(payoutParticipant).values({
-        operationId: op.id,
-        accountId: viewer.id,
-        displayName: "Pin Viewer",
-        shares: "1",
-        amount: "123456789012.00",
-        paidAmount: "123456789012.00",
-      });
-    }
-
-    await page.setViewportSize({ width, height: 720 });
+    await page.setViewportSize({ width, height: 900 });
     await page.goto("/payouts");
     await page.waitForSelector(".scroller tbody tr");
 
-    const pinned = await pinGeometry(
-      page,
-      ".scroller",
-      "tbody tr:first-child td:first-child",
-      "right",
-    );
-    // Vacuous unless there was something to scroll past in the first place.
-    expect(pinned.maxScrollLeft).toBeGreaterThan(0);
-    expect(pinned.scrolledLeft).toBeGreaterThanOrEqual(
-      pinned.maxScrollLeft - pinned.gutterWidth,
-    );
-    // Fully on screen at the far right, not merely intersecting by a sliver —
-    // the distinction `toBeInViewport` cannot make (see geometry.ts).
-    expect(pinned.overlapX).toBeCloseTo(pinned.cellWidth, 0);
-    expect(pinned.overlapY).toBeGreaterThan(0);
-    expect(pinned.text).toContain("Aaa First Operation Name");
+    // The 60-character row: the widest thing this table can be asked to hold.
+    const row = page.locator(".scroller tbody tr").nth(1);
 
-    // The corner cell rides with the column it heads: a NAME column left under
-    // a heading that reads TOTAL is worse than no heading at all.
-    const corner = await pinGeometry(page, ".scroller", "thead th:first-child", "right");
-    expect(corner.overlapX, "the Name heading stays over the pinned column").toBeCloseTo(
-      corner.cellWidth,
-      0,
-    );
-    expect(corner.text).toContain("Name");
+    const geometry = await row.evaluate((tr) => {
+      const scroller = tr.closest(".scroller") as HTMLElement;
+      const cells = Array.from(tr.querySelectorAll("td"));
+      return {
+        maxScrollLeft: scroller.scrollWidth - scroller.clientWidth,
+        // Distinct `top` values means the cells stack. One shared `top` is
+        // the unreflowed table, and is what this asserts against.
+        distinctTops: new Set(
+          cells.map((td) => Math.round(td.getBoundingClientRect().top)),
+        ).size,
+        cellCount: cells.length,
+        headVisible: getComputedStyle(tr.closest("table")!.querySelector("thead")!)
+          .display,
+        firstCellPosition: getComputedStyle(cells[0]).position,
+      };
+    });
 
-    // The pin has to leave most of the region for the columns it exists to let
-    // you reach. The same 60% ceiling the account manifest is held to — and
-    // the reason `overflow-wrap: anywhere` is on this column, since the
-    // 60-character row below would otherwise set its width.
-    const longRow = await pinGeometry(
-      page,
-      ".scroller",
-      "tbody tr:nth-child(2) td:first-child",
-      "right",
+    expect(geometry.cellCount, "no column is dropped on a phone").toBe(6);
+    expect(geometry.distinctTops, "the six cells stack instead of running across").toBe(
+      6,
     );
-    expect(longRow.text).toContain("B");
-    expect(
-      longRow.cellWidth / longRow.regionWidth,
-      "an unbroken 60-character name does not turn the pin into the page",
-    ).toBeLessThan(0.6);
+    expect(geometry.headVisible).toBe("none");
+    // `.log--sticky-col` is still on the element; its `position: sticky` has to
+    // lose to the reflow or the first cell pins against a table that no longer
+    // scrolls.
+    expect(geometry.firstCellPosition).toBe("static");
+    expect(geometry.maxScrollLeft, "nothing left to pan sideways").toBe(0);
+
+    // Both channels, per R4: the label is a real element, so it is in the
+    // accessibility tree as well as on screen. Checked on the Total cell,
+    // whose figure is the one the reader panned right for under the old
+    // layout and the one most likely to end up unlabelled.
+    const totalCell = row.locator("td").nth(3);
+    await expect(totalCell.locator(".payouts__label")).toBeVisible();
+    await expect(totalCell).toContainText("Total");
+    await expect(totalCell).toContainText("123,456,789,012");
   });
 }
+
+/**
+ * The roster at 390px. Measured before the fix: 253px of a 339px region spent
+ * on Shares and Amount, leaving State and every row control off the right
+ * edge. State is the cell answering the question a member opened the page to
+ * ask, so the column a phone dropped was the most important one on the table.
+ *
+ * The assertion is positional rather than a visibility check, because the
+ * fix's whole content is where the cells land: State has to sit on the same
+ * line as the name it describes, and above the numbers rather than after them.
+ * A `toBeVisible()` here would have passed before the fix too — the cell was
+ * rendered and scrollable-to, just unreachable without panning.
+ */
+test("the roster at 390px puts state beside the name, with nothing scrolled off", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "Narrow FC",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+  const opId = await seedFinalizedRoster(db, operator.id, ["Ada Narrow", "Bo Narrow"]);
+
+  await page.setViewportSize({ width: 390, height: 900 });
+  await page.goto(`/payouts/${opId}`);
+  await page.waitForSelector(".log--roster tbody tr");
+
+  const box = await page
+    .locator(".log--roster tbody tr")
+    .first()
+    .evaluate((tr) => {
+      const cells = Array.from(tr.querySelectorAll("td")).map((td) => {
+        const r = td.getBoundingClientRect();
+        return { top: Math.round(r.top), right: Math.round(r.right) };
+      });
+      const scroller = tr.closest(".scroller") as HTMLElement;
+      return {
+        name: cells[0],
+        shares: cells[1],
+        state: cells[3],
+        actions: cells[4],
+        regionRight: Math.round(scroller.getBoundingClientRect().right),
+        maxScrollLeft: scroller.scrollWidth - scroller.clientWidth,
+      };
+    });
+
+  // State shares the name's line: same question, same answer.
+  expect(box.state.top, "state sits beside the name it describes").toBe(box.name.top);
+  // And the numbers have moved below both.
+  expect(box.shares.top).toBeGreaterThan(box.name.top);
+  expect(box.actions.top).toBeGreaterThan(box.shares.top);
+
+  // Nothing is off the right edge any more — the defect, stated directly.
+  expect(box.state.right).toBeLessThanOrEqual(box.regionRight);
+  expect(box.actions.right).toBeLessThanOrEqual(box.regionRight);
+  // Measured at 390px: the table lays out at exactly the scroller's 356px client
+  // width and every cell sits inside it, but the scroller still reports 357px of
+  // scroll range. That last pixel is a scroller-level rounding artifact, not a
+  // column parked off-screen, and `Scroller` already discounts it — the
+  // `scrollWidth > clientWidth + 1` test at `scroller.tsx:53` leaves the region
+  // at `tabIndex={-1}` with no edge fades. Assert against the same threshold the
+  // component uses rather than a stricter one it was never held to.
+  expect(
+    box.maxScrollLeft,
+    "no sideways pan left to lose a column behind",
+  ).toBeLessThanOrEqual(1);
+});

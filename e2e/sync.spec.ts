@@ -283,6 +283,49 @@ test("a fixed-hour cadence keeps UTC in its accessible name, and an interval one
  * whitespace, so this distinguishes one space from none — the whole question —
  * but not one from two.
  */
+/**
+ * The same defect as `/admin/access-lists`, on the denser of the two surfaces.
+ * A `<summary>`'s accessible name is computed from its contents, and one of
+ * these contents is `RelativeTime` — a client component on a shared 30s ticker
+ * — so every job row's toggle renamed itself twice a minute with nothing about
+ * the job having changed: SC 4.1.2 for a screen reader that re-announces a
+ * control it sees renamed, SC 3.2.4 for a voice user whose remembered phrase
+ * stops matching the page.
+ *
+ * Stability only. What the name *contains* is pinned by the three
+ * `toHaveAccessibleName` cases above, which is the half that catches the
+ * pre-built label drifting away from the visible content — the standing risk
+ * of fixing this with `aria-label`, since the label replaces the computed name
+ * outright and anything not restated leaves the assistive channel (R4).
+ */
+test("a job row's toggle does not rename itself as its timestamp ages", async ({
+  page,
+  context,
+}) => {
+  await asAdmin(context);
+  await seedRuns();
+  // Before `goto`: the clock has to be in place while the page's scripts load,
+  // or the ticker captures the real timers on the way past.
+  await page.clock.install();
+  await page.goto("/admin/sync");
+
+  const summary = summaryFor(page, "membership");
+  const nameOf = () => summary.evaluate((el) => el.getAttribute("aria-label") ?? "");
+  const before = await nameOf();
+  // Non-empty, or the two reads would agree vacuously.
+  expect(before).not.toBe("");
+  expect(before).toContain("membership");
+
+  // The visible "ago" moving is what proves the tick landed; without it this
+  // would pass on a page where nothing ticked at all.
+  const stamp = summary.locator(".ago");
+  const stampBefore = await stamp.innerText();
+  await page.clock.fastForward("05:00");
+  await expect(stamp).not.toHaveText(stampBefore);
+
+  expect(await nameOf(), "the toggle renamed itself as the clock moved").toBe(before);
+});
+
 test("an interval row's cadence and its next-run time stay separate words", async ({
   page,
   context,
@@ -433,6 +476,89 @@ test("housekeeping's collapsed line states health when nothing needs attention",
   const summary = group.locator("> summary");
   await expect(summary).toHaveText("2 jobs · nothing needs attention");
   await expect(summary.locator(".st--ok")).toHaveCount(1);
+});
+
+/**
+ * The collapsed line is the only place the flagged member names appear while
+ * the group is shut, and it is a sentence rendered as a `Status` — so it
+ * inherited `.st`'s `white-space: nowrap`, which is written for a one-word
+ * token in a table cell. At 320px that held ~41 unbreakable characters on one
+ * line and pushed them out of the panel.
+ *
+ * Both jobs faulted, because that is the longest the sentence gets and the
+ * state in which it matters most: an admin who cannot read past "token-health
+ * fai…" has to open the group to learn what the line exists to tell them.
+ * Wrapping, never truncating — the names are the payload.
+ */
+test("housekeeping's collapsed line wraps inside the panel at 320px", async ({
+  page,
+  context,
+}) => {
+  await asAdmin(context);
+  await db.insert(syncRun).values([
+    {
+      jobType: "token-health",
+      startedAt: ago(2 * MIN),
+      finishedAt: ago(2 * MIN - 300),
+      status: "failed",
+      errorSummary: "token refresh failed for 3 accounts",
+      counts: null,
+    },
+    {
+      jobType: "purge",
+      startedAt: ago(3 * MIN),
+      finishedAt: ago(3 * MIN - 300),
+      status: "failed",
+      errorSummary: "purge could not acquire its lock",
+      counts: null,
+    },
+  ]);
+  await page.setViewportSize({ width: 320, height: 720 });
+  await page.goto("/admin/sync");
+
+  const summary = page.locator(".strip__group-disc > summary");
+  // Whole sentence, both names, nothing elided.
+  await expect(summary).toHaveText("2 jobs · token-health failed, purge failed");
+
+  // The measurement, not the rule: the sentence's own painted box stays inside
+  // the strip that contains it. Measured on the `.st`, not on the `<summary>`
+  // — an overflowing flex item spills past its container's edge without
+  // growing it, so the summary's own right edge sits at the panel boundary
+  // whether the line fits or not, and asserting on it passes vacuously.
+  const fit = await summary.locator(".st").evaluate((el) => ({
+    right: el.getBoundingClientRect().right,
+    limit: el.closest(".strip")!.getBoundingClientRect().right,
+  }));
+  expect(fit.right, "collapsed line overflows the strip at 320px").toBeLessThanOrEqual(
+    Math.ceil(fit.limit),
+  );
+
+  // And it wrapped to get there rather than being narrow enough all along.
+  // Measured against the rule it overrides: put `.st`'s own `white-space:
+  // nowrap` back on the element and the line demands more width than it was
+  // given. That comparison is what makes this a test of the media-query rule
+  // rather than of the seed happening to be short — it fails if the rule is
+  // dropped, and it also fails if the rule never did anything.
+  const width = await summary.locator(".st").evaluate((el) => {
+    const wrapped = el.getBoundingClientRect().width;
+    const prev = el.style.whiteSpace;
+    el.style.whiteSpace = "nowrap";
+    const nowrap = el.getBoundingClientRect().width;
+    el.style.whiteSpace = prev;
+    return { wrapped, nowrap };
+  });
+  expect(width.nowrap, "the line fits at 320px even unwrapped").toBeGreaterThan(
+    width.wrapped,
+  );
+
+  // The page itself still does not scroll sideways (WCAG 1.4.10).
+  const doc = await page.evaluate(() => ({
+    scroll: document.documentElement.scrollWidth,
+    client: document.documentElement.clientWidth,
+  }));
+  expect(doc.scroll, "page-level horizontal scroll at 320px").toBeLessThanOrEqual(
+    doc.client,
+  );
 });
 
 /**
@@ -832,6 +958,46 @@ test("a wedged run reads stuck, with its elapsed time, and opens", async ({
 });
 
 /* --- Controls ------------------------------------------------------------ */
+
+// Refresh changes nothing on the server. `Recheck invalid affiliations` puts a
+// job on the queue. They were both plain `.btn`, 8px apart, in the same control
+// row at the foot of the page — identical weight, identical box, and nothing
+// but the label to tell an admin that one of them is free and the other is not.
+//
+// The grade axis was unavailable: `.btn--quiet` carries `min-height: 1.75rem`,
+// and DESIGN.md R1 scopes that 28px grade by the reason for it, to rows that
+// each carry a control set and are read many at a time. A single control is not
+// that. So this is fixed by adjacency instead — Refresh moved to the strip's
+// section header, beside the "checked … UTC" stamp, which is the thing it
+// actually replaces.
+//
+// Asserted structurally rather than by coordinates: the header wraps at narrow
+// widths and the stamp is `--ink-faint` mono, so a geometric assertion would
+// either be brittle or pass on a control that had merely drifted near.
+test("Refresh sits with the stamp it replaces, not with the controls that queue work", async ({
+  page,
+  context,
+}) => {
+  await asAdmin(context);
+  await seedRuns();
+  await page.goto("/admin/sync");
+
+  const aside = page.locator(".rule-head__aside");
+  // Anti-vacuity: every containment check below would pass against an empty
+  // locator, and `.rule-head__aside` only exists if `RuleHead` got an `aside`.
+  await expect(aside).toHaveCount(1);
+  await expect(aside.locator(".btn-row__stamp")).toContainText("checked");
+  await expect(aside.getByRole("link", { name: "Refresh" })).toBeVisible();
+
+  // The other half of the finding: it is no longer a peer of the two controls
+  // that enqueue. Both of those stay, so this is not asserting on an empty row.
+  const controls = page.locator(".btn-row--controls");
+  await expect(controls.getByRole("button", { name: "Sync now" })).toBeVisible();
+  await expect(
+    controls.getByRole("button", { name: "Recheck invalid affiliations" }),
+  ).toBeVisible();
+  await expect(controls.getByRole("link", { name: "Refresh" })).toHaveCount(0);
+});
 
 test("the fan-out reports back, moves focus to the confirmation, and Refresh clears the flag", async ({
   page,

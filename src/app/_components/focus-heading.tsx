@@ -54,8 +54,29 @@ export function FocusHeading({ children }: { children: ReactNode }) {
     ref.current?.focus();
   }, []);
 
-  // No focus ring appears: the global ring is `:focus-visible` (globals.css),
-  // which a programmatic focus on a non-input element does not match.
+  // A focus ring DOES appear. This comment used to claim the opposite — that
+  // the global `:focus-visible` ring (globals.css:288-293) cannot match a
+  // programmatic focus on a non-input element — and that is simply not how
+  // Chromium's heuristic works: measured here, `h1.matches(":focus-visible")`
+  // is `true` immediately after the effect above runs, and a 2px solid gold
+  // outline is painted. The belief had also been copied into
+  // `confirm-notice.tsx`, so both are corrected.
+  //
+  // The ring is kept, not suppressed. It is the only visible confirmation that
+  // focus moved, and on a soft navigation into a boundary that move is the
+  // whole point of this component — a sighted keyboard user gets the same
+  // information the screen-reader user gets from the heading announcing itself.
+  // Removing it would leave focus somewhere with nothing marking it.
+  //
+  // What was wrong was its *size*. An `h1` is a block, so the ring spanned the
+  // full column: measured at 912px around 377px of text, a page-wide gold band
+  // that reads as decoration rather than as "focus is here".
+  // `h1[tabindex="-1"] { width: fit-content }` (globals.css) hugs the text
+  // instead. Applied unconditionally rather than on `:focus` so nothing shifts
+  // at the moment focus lands, and it costs no wrapping: `fit-content` is
+  // `min(max-content, max(min-content, available))`, so at any width narrow
+  // enough for the heading to wrap it still resolves to the available width and
+  // `text-wrap: balance` behaves exactly as before.
   return (
     <h1 ref={ref} tabIndex={-1}>
       {children}

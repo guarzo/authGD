@@ -11,7 +11,6 @@ import {
 } from "@/services/audit";
 import type { FilterResolution, ResolvedAuditRow } from "@/services/audit";
 import { RuleHead, Json, Notice, Scroller } from "@/app/_components/ui";
-import { Submit } from "@/app/_components/submit";
 import { formatAgo } from "@/app/_components/format-ago";
 import { renderedAt } from "@/app/_components/utc-time";
 import { summarizeDetails, isFailureAction } from "@/app/admin/audit/summarize";
@@ -19,21 +18,97 @@ import { tierLabel } from "@/app/_components/labels";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = {
-  title: "Audit log",
-};
+/**
+ * The title states which page of the log this is, because on this surface the
+ * title is the announcement. Every control that changes the result set here is
+ * a document load — the filter is a `<form method="get">` and both pagers are
+ * plain `<a href>` — so a screen reader's response to "Filter" or "Older" is
+ * to announce the new document by its title and stop. With a constant "Audit
+ * log" that announcement is byte-identical whether the press did something or
+ * nothing, and the only text that distinguishes page 1 from page 7 is an `<h2>`
+ * the admin now has to go and find.
+ *
+ * A live region cannot do this job, which is worth writing down because it is
+ * the obvious fix and it fails silently: `aria-live` announces *mutations* to a
+ * region that was already there, and a region that arrives with the document is
+ * never a mutation. It would test green under any assertion that checks the
+ * attribute is present.
+ *
+ * Deliberately coarse — filtered or not, paged or not. The exact filter values
+ * are the `<h2>` and the chips' job; a title reciting them would be read in
+ * full on every load, ahead of the thing the admin actually asked for.
+ */
+export async function generateMetadata({
+  searchParams,
+}: {
+  searchParams: Promise<{
+    actor?: string | string[];
+    action?: string | string[];
+    target?: string | string[];
+    before?: string | string[];
+  }>;
+}): Promise<Metadata> {
+  const sp = await searchParams;
+  // The module's own `one`, not a local copy: a repeated param resolves
+  // last-wins here exactly as it does in the page body. A private helper that
+  // took the FIRST value disagreed with the body on `?before=a&before=b` --
+  // the body paged on `b` while the title described `a` -- so the title
+  // described a page the admin was not on, which is the one thing the `paged`
+  // guard below exists to prevent.
+  const val = (v: string | string[] | undefined) => one(v)?.trim() ?? "";
+  const filtered = val(sp.actor) !== "" || val(sp.action) !== "" || val(sp.target) !== "";
+  // Same guard the page body applies to the cursor, for the same reason: a
+  // junk `before` is ignored there and must not make the title claim a page
+  // the admin is not on.
+  const paged = Number.isFinite(Number(val(sp.before))) && val(sp.before) !== "";
+  const qualifier = [filtered && "filtered", paged && "older"].filter(Boolean).join(", ");
+  return { title: qualifier === "" ? "Audit log" : `Audit log — ${qualifier}` };
+}
 
 /** id linking the action filter's `list` attribute to its `<datalist>` —
  * see `add-participant-form.tsx`'s `CHARACTER_LIST_ID` for the precedent this
  * follows: an `<option>` per namespace, no children. The datalist itself needs
  * no client JS — the browser does the filtering — so it costs this page
- * nothing to render it server-side. (The page is not JS-free: `Submit` is a
+ * nothing to render it server-side. (The page is not JS-free: `Scroller` is a
  * client component. The datalist just isn't why.) */
 const ACTION_NAMESPACE_LIST_ID = "action-namespaces";
 
 /** The exact UTC instant, `2026-08-03 22:19:24`. */
 function stamp(d: Date): string {
   return d.toISOString().replace("T", " ").slice(0, 19);
+}
+
+/** Just the clock, for rows whose calendar day is stated once above the table. */
+function clock(d: Date): string {
+  return d.toISOString().slice(11, 19);
+}
+
+/**
+ * The calendar day every rendered row shares, or null when they span more than
+ * one. `crewNorms`' shape from `account/page.tsx`: measure the deviation
+ * against the set, state once what the whole set agrees on, and leave the rows
+ * carrying only what actually differs between them.
+ *
+ * Audit traffic arrives in bursts, and a full page is AUDIT_PAGE_SIZE rows, so
+ * the ordinary case is a column reading `2026-08-03 22:19:24`, `2026-08-03
+ * 22:19:31`, `2026-08-03 22:19:31`, ... — eleven of nineteen characters
+ * restating a date, in the column that is pinned and therefore paints over
+ * whatever the horizontal scroll has brought alongside it.
+ *
+ * Two rows minimum: one row is not a set, and "All 1 entries on ..." states a
+ * norm over nothing while costing the reader the instant it replaced.
+ *
+ * Both channels lose exactly the same characters. `.only-wide` is a display
+ * toggle, so the trimmed span is what assistive tech reads at this width too,
+ * and the day is restored in the flow above the table rather than in a per-row
+ * `visually-hidden` — which would put the fact in one channel and not the
+ * other, which is the breach R4 exists to name. The narrow branch is untouched:
+ * it renders elapsed time and already carries its own full-instant restoration.
+ */
+function sharedDay(rows: ResolvedAuditRow[]): string | null {
+  if (rows.length < 2) return null;
+  const first = rows[0].at.toISOString().slice(0, 10);
+  return rows.every((r) => r.at.toISOString().slice(0, 10) === first) ? first : null;
 }
 
 /** Collapses a possibly-repeated query param to one value, last wins: a
@@ -305,6 +380,7 @@ export default async function AdminAuditPage({
         targetIds: idsOf(targetRes),
         beforeId: hasCursor ? beforeId : undefined,
       });
+  const day = sharedDay(rows);
 
   // The active filters, cursor dropped. Shared by the pager (which then adds
   // its own `before`) and the past-the-end exit link (which must not), so the
@@ -414,28 +490,37 @@ export default async function AdminAuditPage({
       <a href={filterHrefBase}>Back to the latest entries</a>
     </>
   ) : filtered ? (
-    // The actor/target asymmetry bites hardest here: a member appears as an
-    // actor only for what they did to their own account, so "no results" for
-    // an actor filter usually means the filter was pointed at the wrong
-    // column, not that the log is silent about that person. The nudge only
-    // appears when it can actually help -- when actor is set and target is
-    // not.
-    <>
-      Nothing matches this filter.
-      {params.actor && !params.target && (
-        <>
-          {" "}
-          Members are usually the target of an entry, not the actor.{" "}
-          <a href={filterHref({ action: params.action }, "target", params.actor)}>
-            Search {params.actor} as a target
-          </a>
-          .
-        </>
-      )}
-    </>
+    "Nothing matches this filter."
   ) : (
     "Nothing has happened yet."
   );
+
+  // The actor/target asymmetry, said where it can still prevent the wrong
+  // answer rather than only where the wrong answer was harmless.
+  //
+  // A member reaches `actor` only for what they did to their own account;
+  // everything done TO them is written with `system` or an admin as actor and
+  // the member as `target`, and that is most of the log. This nudge used to
+  // live inside `emptyMessage`'s `filtered` branch, so it fired on the one
+  // outcome that already told the admin something was wrong -- zero rows --
+  // and stayed silent on the outcome that does the damage: an actor filter
+  // that returns the member's four self-service entries, reads as a complete
+  // history, and is not one. Same sentence, hoisted to where both cases see
+  // it.
+  //
+  // Still gated on actor-set-and-target-unset, which is the only shape it can
+  // help: with both set the admin has already crossed the columns, and with
+  // neither there is nothing to re-point.
+  const actorNudge =
+    params.actor && !params.target ? (
+      <p className="page__lede">
+        Members are usually the target of an entry, not the actor.{" "}
+        <a href={filterHref({ action: params.action }, "target", params.actor)}>
+          Search {params.actor} as a target
+        </a>
+        .
+      </p>
+    ) : null;
 
   return (
     <main id="main" tabIndex={-1} className="page">
@@ -523,8 +608,16 @@ export default async function AdminAuditPage({
         <div className="filter-form__cell filter-form__cell--actions">
           <div className="filter-form__actions">
             {/* Filter is routine and reversible, not the page's primary act —
-                gold (btn--primary) is rationed for the one thing that is. */}
-            <Submit className="btn">Filter</Submit>
+                gold (btn--primary) is rationed for the one thing that is.
+
+                A plain button rather than `<Submit>`, because this form is
+                `method="get"`: see `submit.tsx` for why that pairing is wrong
+                in both directions. Nothing about the rendered control changes
+                — `<Submit>` was passed the same `className` and its only other
+                output here was an `aria-busy` fixed at "false". */}
+            <button type="submit" className="btn">
+              Filter
+            </button>
             {filtered && (
               <a className="btn btn--quiet" href="/admin/audit">
                 clear
@@ -550,6 +643,20 @@ export default async function AdminAuditPage({
       <Notice tone="warn">
         {ambiguityNotes.length > 0 ? ambiguityNotes.join(" · ") : null}
       </Notice>
+      {/* Under the count, above the rows: the sentence has to be readable
+          while the admin is looking at a result they believe, not only after
+          the page has already come up empty. Not a `Notice` — nothing here is
+          wrong, the filter is simply pointed at the column that answers a
+          different question, and a warn band would say otherwise. */}
+      {actorNudge}
+      {/* The day the whole page agrees on, said once so the pinned column does
+          not say it on every row. Same slot and same treatment as the actor
+          nudge above: a fact about the rows below, not a warning about them. */}
+      {day !== null && (
+        <p className="page__lede">
+          All {rows.length} entries on {day} (UTC).
+        </p>
+      )}
       {/* Also above the table. The bottom pager is roughly 300 tab stops past
           the top of a full page, so on a keyboard the only way to reach the
           next page was to traverse every link in every row. */}
@@ -615,7 +722,9 @@ export default async function AdminAuditPage({
                       "as of HH:MM UTC", so the reading is dated in the same
                       way the rest of the page is. */}
                   <td className="mono nowrap">
-                    <span className="only-wide">{stamp(r.at)}</span>
+                    <span className="only-wide">
+                      {day === null ? stamp(r.at) : clock(r.at)}
+                    </span>
                     <span className="only-narrow">
                       <time className="ago dim mono" dateTime={iso}>
                         {formatAgo(iso, now)}

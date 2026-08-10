@@ -139,6 +139,69 @@ test("a retry that fails again re-announces instead of looking like a dead click
   });
 });
 
+/*
+ * The other outcome, and the one that had no announcement at all: the retry
+ * works. `reset()` unmounts the boundary, so the button holding focus goes with
+ * it, the URL never changes, and nothing is left mounted to run a focus effect
+ * — focus fell to `<body>` and a screen-reader user heard silence on the single
+ * press that succeeded.
+ *
+ * Note the shape of the setup: the table is restored BEFORE the click, by
+ * letting `breakPayoutsList` exit while the broken page is still on screen.
+ * That is what makes the retry deterministically succeed, and it is the only
+ * difference from the failing-retry test above.
+ *
+ * Writing it that way is also what exposed the larger defect this test now
+ * guards. With the table repaired and the press made, the boundary came back
+ * anyway: `reset()` alone re-runs the segment from the client router cache,
+ * which is still holding the payload that threw, so for a server-side failure
+ * the button could not recover anything at all. The fix pairs it with
+ * `router.refresh()` (see error.tsx). So the first assertion below — that the
+ * page is actually back — is the load-bearing one; the focus assertions ride
+ * on top of a retry that now works.
+ */
+test("a retry that succeeds hands focus to the recovered page", async ({
+  page,
+  context,
+}) => {
+  const member = await seedMember(db, {
+    name: "Retry Winner",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, member.id)]);
+
+  await breakPayoutsList(async () => {
+    await page.goto(BROKEN_ROUTE);
+    await expect(page.getByRole("heading", { name: "Something broke" })).toBeVisible();
+  });
+
+  // The table is back; this press repairs the page.
+  const retry = page.getByRole("button", { name: /Try again|Trying/ });
+  await retry.focus();
+  await retry.click();
+
+  await expect(page.getByRole("heading", { name: "Operations" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Something broke" })).toHaveCount(0);
+
+  // Focus is on the recovered page's own main — the skip link's target, and
+  // where a member skipping to content would have landed. Asserting the
+  // boundary marker is absent as well as the tag: both mains carry
+  // `id="main"`, and `data-error-boundary` is the attribute the fix uses to
+  // tell them apart, so a regression that focuses the wrong one still fails
+  // here rather than passing on the tag alone.
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => ({
+          tag: document.activeElement?.tagName,
+          boundary: document.activeElement?.hasAttribute("data-error-boundary"),
+        })),
+      { timeout: 10_000 },
+    )
+    .toEqual({ tag: "MAIN", boundary: false });
+});
+
 test("the boundary keeps an admin inside the admin section", async ({
   page,
   context,
@@ -195,6 +258,25 @@ test("the boundary keeps an admin inside the admin section", async ({
 
     // And the escape goes back to the section, not to /account.
     await expect(page.getByRole("link", { name: "Back to Members" })).toBeVisible();
+
+    // The escape comes first. Both controls are the plain grade and sit 8px
+    // apart, so position is the only thing separating them — and the lede
+    // above has just told this member their action may already have taken
+    // effect and to check before sending it again. Offering the re-send as
+    // the first and visually equal choice contradicts the sentence directly
+    // above it.
+    //
+    // Asserted on DOM order rather than on x-coordinates: `.btn-row` wraps at
+    // narrow widths, so the leftmost control is not stably the first one, and
+    // the tab order this also fixes follows the DOM either way.
+    const escapeFirst = await page.evaluate(() => {
+      const row = document.querySelector(".btn-row")!;
+      const back = row.querySelector("a.btn")!;
+      const retry = row.querySelector("button.btn")!;
+      // Node.DOCUMENT_POSITION_FOLLOWING — retry comes after back.
+      return (back.compareDocumentPosition(retry) & 4) !== 0;
+    });
+    expect(escapeFirst, "Try again sits before the escape route").toBe(true);
   } finally {
     await db.execute(sql`ALTER TABLE sync_run_probe RENAME TO sync_run`);
   }
@@ -259,6 +341,34 @@ test("the reference is inside the instruction that asks for it", async ({
     const digest = alert.locator("code.mono");
     await expect(digest).toBeVisible();
     expect((await digest.innerText()).trim()).not.toBe("");
+
+    // And it sits *in* the sentence, not beside it. `.notice` is `display:
+    // flex` so the glyph in `::before` can hold its own column, which makes
+    // every top-level child of the notice a flex item laid out in the row box
+    // — the `<code>` became item 2 and the text runs around it items 1 and 3,
+    // each separated by the container's `gap: var(--s-3)`. The DOM order was
+    // right and the reading was not: "quote reference  4292868890  ." with the
+    // digest floated off the words that name it and the period stranded past
+    // it. `toContainText` cannot see that, because the text is all present and
+    // in order in the DOM; only the painted boxes disagree. So measure them.
+    //
+    // The trailing period, ranged rather than located — it is a bare text node
+    // with no element to address. Two pixels of slack for subpixel layout; the
+    // gap this guards against is `--s-3`, an order of magnitude wider.
+    const stranded = await alert.evaluate((el) => {
+      const code = el.querySelector("code")!;
+      const tail = code.nextSibling!;
+      const range = document.createRange();
+      range.selectNodeContents(tail);
+      return {
+        codeRight: code.getBoundingClientRect().right,
+        tailLeft: range.getBoundingClientRect().left,
+      };
+    });
+    expect(
+      stranded.tailLeft - stranded.codeRight,
+      "the period after the digest is stranded across a flex gap",
+    ).toBeLessThan(2);
 
     // Only the value is monospaced. The prose around it, "reference" included,
     // stays proportional — DESIGN.md's split, which the old `dim mono` line ran

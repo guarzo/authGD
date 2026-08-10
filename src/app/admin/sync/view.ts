@@ -350,12 +350,19 @@ export function queuedStamp(at: string | undefined): string | null {
  * counter, not on this string, so a second press of "Re-run wanderer"
  * producing the identical sentence still moves focus again.
  *
- * "reload this page", not "use Refresh": Refresh is the last control below
- * seven job rows and however many open drawers, while this text renders at the
- * top of the page, and nothing in the copy said which direction to go. The
- * browser reload is what an admin reaches for anyway, and naming it costs the
- * page nothing — the anchor's `?queued=`-dropping behaviour still matters, but
- * only for the canonical URL, which a reload of *this* URL is not.
+ * "reload this page", not "use Refresh". The original reason was distance —
+ * Refresh sat at the foot of the page below seven job rows and however many
+ * open drawers, while this text renders at the top — and that reason is gone:
+ * Refresh now sits beside the "checked …" stamp in the strip's section header,
+ * a few lines below this notice.
+ *
+ * The copy stays as it is on the surviving reason. A browser reload is what an
+ * admin reaches for regardless, it needs no lookup of what a named control
+ * does, and it is the one gesture guaranteed to work whether or not the
+ * anchor rendered. Naming the control instead would trade a universal
+ * instruction for a page-specific one and buy nothing: the anchor's
+ * `?queued=`-dropping behaviour still matters, but only for the canonical URL,
+ * which a reload of *this* URL is not.
  */
 export function queuedNotice(
   queued: string | undefined,

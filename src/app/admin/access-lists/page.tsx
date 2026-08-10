@@ -38,6 +38,7 @@ import {
   rowHasDetail,
   rowSummary,
   rowTone,
+  sharedCorporation,
   showsObservations,
   type WatchedRow,
 } from "./view";
@@ -130,8 +131,35 @@ export default async function AdminAccessListsPage({
   // client's first tick agree on what "now" meant when the page was built.
   const now = Date.now();
 
+  // Whether the watched-lists region has anything to put in the page. Narrower
+  // than `showsObservations`, deliberately: that predicate asks "is there a
+  // stale answer worth showing", and its answer is yes for the three holder
+  // faults — correct when rows exist, and an empty promise when they do not.
+  // With no rows and nothing addable, the region is a heading over a notice
+  // saying the heading has nothing under it.
+  const showsRegion =
+    showsObservations(state) && (compared.length > 0 || addable.length > 0);
+
   return (
-    <main id="main" className="page page--wide">
+    // `tabIndex={-1}` so the skip link lands here rather than merely scrolling
+    // here. A fragment link moves focus only to elements the platform already
+    // considers focusable, and `<main>` is not one — without it the viewport
+    // jumps and the caret stays in the header, so the next Tab walks back
+    // through the nav the member just skipped (SC 2.4.1). Ten of the app's
+    // eleven `id="main"` elements carry it; this was the one that didn't,
+    // because it landed after the sweep that added the rest.
+    // `page--wide` only once there is a table to be wide for. The fault states
+    // put one sentence and one link on the page, and a 78rem column turns that
+    // into a ribbon across an otherwise empty field — the measure the prose
+    // needs is the one `.page--narrow` sets. It caps CONTENTS rather than the
+    // page box, so the `h1`'s left edge and every rule's origin stay on the
+    // same vertical as the other admin routes either way; only the line length
+    // changes.
+    <main
+      id="main"
+      tabIndex={-1}
+      className={`page ${showsRegion ? "page--wide" : "page--narrow"}`}
+    >
       <div className="page__head">
         <h1>Access lists</h1>
         <p className="page__lede">{monitorSentence(state)}</p>
@@ -153,83 +181,111 @@ export default async function AdminAccessListsPage({
             </Submit>
           </form>
         )}
-        <form action={checkNowAction}>
-          <Submit
-            className={remedy.kind === "check-now" ? "btn btn--primary" : "btn"}
-            pendingLabel="Queueing…"
-          >
-            Check now
-          </Submit>
-        </form>
+        {/*
+          Only where a check can actually read something. The button used to
+          render in every state, including the one a fresh deployment opens on:
+          no holder, so `runAccessListsJob` returns at its first branch having
+          read nothing (src/jobs/access-lists.ts:59-62) — and the admin was told
+          "Check queued at 09:41:22.418 UTC. Reload this page once the worker
+          has run." They reload to a byte-identical page, with no way to tell a
+          dead worker from a stuck queue from a feature that was never
+          configured. The confirmation was true about the enqueue and false
+          about everything the admin cared about.
+
+          Gated on the remedy rather than on `showsObservations(state)`, which
+          is the wider predicate this page already uses for the table below.
+          The two differ on the three holder-fault states, and the job cannot
+          read in those either: a dropped scope returns at branch 2
+          (`access-lists.ts:80-83`) and both token faults return `failed`
+          without a read (`:101-121`). `showsObservations` asks "is there a
+          stale answer worth showing" — true there, which is why the table
+          stays. This asks "can a check change anything", and the honest answer
+          in all three is no; the link beside it is the action that helps.
+
+          Since the form now renders only when `remedy.kind === "check-now"`,
+          the class is unconditionally primary — it is the state's one remedy,
+          not a secondary sitting next to a link.
+        */}
+        {remedy.kind === "check-now" && (
+          <form action={checkNowAction}>
+            <Submit className="btn btn--primary" pendingLabel="Queueing…">
+              Check now
+            </Submit>
+          </form>
+        )}
       </div>
 
       {showsObservations(state) && (
         <>
-          <RuleHead as="h2">Watched lists</RuleHead>
+          {showsRegion && (
+            <>
+              <RuleHead as="h2">Watched lists</RuleHead>
 
-          {/* Its own class rather than `.btn-row`: same four declarations
-              today, but the two answer to different things — `.btn-row` is
-              the shape of a row of buttons, and a change to it should not
-              have to reason about a label bound to a control. No `aside` on
-              the `RuleHead` above either — `aside` is a metadata slot (every
-              other user in `src/app` carries a fact: an ISK total, a
-              "checked … UTC" stamp, a filter summary — never an action name),
-              so the affordance's name was rendering as inert prose at the
-              rule's trailing edge rather than owning a control.
+              {/* Its own class rather than `.btn-row`: same four declarations
+                  today, but the two answer to different things — `.btn-row` is
+                  the shape of a row of buttons, and a change to it should not
+                  have to reason about a label bound to a control. No `aside` on
+                  the `RuleHead` above either — `aside` is a metadata slot (every
+                  other user in `src/app` carries a fact: an ISK total, a
+                  "checked … UTC" stamp, a filter summary — never an action name),
+                  so the affordance's name was rendering as inert prose at the
+                  rule's trailing edge rather than owning a control.
 
-              Not `.btn--primary`: this form renders in four of the five
-              states `showsObservations` admits (every one but `catalog-empty`,
-              which by definition has nothing addable), and in the three
-              dark-monitor ones the gold is already spent on `monitorRemedy`'s
-              link — re-granting a dropped scope outranks adding a list when
-              nothing is being read at all. Rather than paint it gold in
-              `normal` and plain elsewhere, which would make the emphasis a
-              function of an unrelated fault, it stays plain everywhere and
-              earns its place by sitting directly under the section it adds
-              to. */}
-          {addable.length > 0 && (
-            <form action={addWatchAction} className="acl-add">
-              <label className="acl-add__label" htmlFor="add-list">
-                Catalog
-              </label>
-              <select
-                id="add-list"
-                name="accessListId"
-                className="field"
-                defaultValue=""
-                required
-              >
-                {/* A real option for the default, not an absent one: every
-                    option below comes from `addable`, so with no placeholder
-                    the browser's ask-for-reset step selected the first list in
-                    the catalog and an untouched submit added a list the admin
-                    never chose, which the redirect then confirmed as a
-                    deliberate act.
+                  Not `.btn--primary`: this form renders in four of the five
+                  states `showsObservations` admits (every one but `catalog-empty`,
+                  which by definition has nothing addable), and in the three
+                  dark-monitor ones the gold is already spent on `monitorRemedy`'s
+                  link — re-granting a dropped scope outranks adding a list when
+                  nothing is being read at all. Rather than paint it gold in
+                  `normal` and plain elsewhere, which would make the emphasis a
+                  function of an unrelated fault, it stays plain everywhere and
+                  earns its place by sitting directly under the section it adds
+                  to. */}
+              {addable.length > 0 && (
+                <form action={addWatchAction} className="acl-add">
+                  <label className="acl-add__label" htmlFor="add-list">
+                    Catalog
+                  </label>
+                  <select
+                    id="add-list"
+                    name="accessListId"
+                    className="field"
+                    defaultValue=""
+                    required
+                  >
+                    {/* A real option for the default, not an absent one: every
+                        option below comes from `addable`, so with no placeholder
+                        the browser's ask-for-reset step selected the first list in
+                        the catalog and an untouched submit added a list the admin
+                        never chose, which the redirect then confirmed as a
+                        deliberate act.
 
-                    `required` is what makes the placeholder a guard rather
-                    than a label. `disabled` alone only stops the option being
-                    re-chosen; it does NOT stop the form submitting, and a
-                    disabled selected option contributes no entry at all — so
-                    an untouched submit sent no `accessListId`, `parseId` threw
-                    `invalid_id` on the resulting `null`, and an ordinary
-                    mis-click landed on the "Something broke" boundary
-                    (measured: the form's entry list held only `$ACTION_ID_…`).
-                    With `required` the browser refuses the submit and points
-                    at the field, and `parseId` goes back to being what its own
-                    docblock says it is — the backstop for a hand-crafted POST,
-                    not the only thing between a mis-click and the error
-                    page. */}
-                <option value="" disabled>
-                  Choose a list…
-                </option>
-                {addable.map((c) => (
-                  <option key={c.accessListId} value={c.accessListId}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
-              <Submit pendingLabel="Adding…">Add to watchlist</Submit>
-            </form>
+                        `required` is what makes the placeholder a guard rather
+                        than a label. `disabled` alone only stops the option being
+                        re-chosen; it does NOT stop the form submitting, and a
+                        disabled selected option contributes no entry at all — so
+                        an untouched submit sent no `accessListId`, `parseId` threw
+                        `invalid_id` on the resulting `null`, and an ordinary
+                        mis-click landed on the "Something broke" boundary
+                        (measured: the form's entry list held only `$ACTION_ID_…`).
+                        With `required` the browser refuses the submit and points
+                        at the field, and `parseId` goes back to being what its own
+                        docblock says it is — the backstop for a hand-crafted POST,
+                        not the only thing between a mis-click and the error
+                        page. */}
+                    <option value="" disabled>
+                      Choose a list…
+                    </option>
+                    {addable.map((c) => (
+                      <option key={c.accessListId} value={c.accessListId}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+                  <Submit pendingLabel="Adding…">Add to watchlist</Submit>
+                </form>
+              )}
+            </>
           )}
 
           {/* One `ConfirmingForm` for the whole region, not one per row: both
@@ -242,11 +298,20 @@ export default async function AdminAccessListsPage({
               survive `compared` shrinking to zero. Each row's "Stop watching"
               is a plain submit button carrying its own `accessListId`, not a
               form of its own — the button's job ends at the press, and
-              submitting a shared form by name/value is ordinary HTML. */}
+              submitting a shared form by name/value is ordinary HTML.
+
+              Which is also why this pair sits OUTSIDE the `showsRegion` gate
+              above while everything visible sits inside it. Removing the last
+              watched list can empty `compared` and `addable` in the same
+              commit — a list dropped from the catalog is watched but not
+              addable — so gating the pair on `showsRegion` would unmount the
+              reporter on exactly the press it exists to report. Empty, it
+              renders a `<form>` with nothing in it and costs the page
+              nothing. */}
           <ConfirmGroup>
             <ConfirmingForm action={removeWatchAction}>
               {compared.length === 0 ? (
-                <Notice>No lists are being watched yet.</Notice>
+                showsRegion && <Notice>No lists are being watched yet.</Notice>
               ) : (
                 <ul className="acl-list">
                   {compared.map((c) => {
@@ -298,7 +363,35 @@ export default async function AdminAccessListsPage({
                     }
                     return (
                       <li key={c.accessListId} className="acl-list__row">
-                        <Disclosure summary={head} className="acl-list__disc">
+                        <Disclosure
+                          summary={head}
+                          className="acl-list__disc"
+                          // A pre-built name, because the computed one would not
+                          // hold still. The summary's accessible name is derived
+                          // from its contents, and one of those contents is
+                          // `RelativeTime` — a client component on a shared 30s
+                          // ticker. So the control renamed itself twice a minute
+                          // ("Alliance ACL 3 to add, 2 minutes ago" → "… 3
+                          // minutes ago") without any state having changed. That
+                          // is SC 4.1.2 in the announcement channel, where a
+                          // screen reader re-reads a control whose name it
+                          // notices has changed, and SC 3.2.4 for a voice user,
+                          // whose "click Alliance ACL 3 to add 2 minutes ago"
+                          // stops matching whatever the page now calls it.
+                          //
+                          // Starts with the visible name, so 2.5.3 label-in-name
+                          // still matches on the word a voice user would say,
+                          // and restates the row's status after it — an
+                          // `aria-label` on a summary replaces the computed name
+                          // outright, so anything stable that the contents were
+                          // contributing has to be put back by hand or it leaves
+                          // the assistive channel entirely (R4). Everything here
+                          // is server-computed and holds still for the life of
+                          // the render. The one thing deliberately not restated
+                          // is the timestamp, which is the whole reason this
+                          // prop is here.
+                          ariaLabel={`${label} ${rowSummary(row)} — findings and controls`}
+                        >
                           <AccessListDetail
                             detail={c.detail}
                             readStatus={c.readStatus}
@@ -324,10 +417,13 @@ export default async function AdminAccessListsPage({
  * Names lead and ids are secondary throughout: the admin retypes these in-game,
  * where the id is not what the client accepts.
  *
- * Broad grants always carry the "plus an unknown number of others" clause. We
- * store a corporation per character and hold no corp or alliance roster, so the
- * covered-member count is OUR members only — the page must never imply a
- * corp-granted list is fully accounted for.
+ * Broad grants carry the "plus an unknown number of others" clause once, above
+ * the list rather than on every line. We store a corporation per character and
+ * hold no corp or alliance roster, so the covered-member count is OUR members
+ * only — the page must never imply a corp-granted list is fully accounted for.
+ * Stating it per line said the identical sentence up to N times to make one
+ * point about how the count is computed, which is a property of the counting
+ * and not of any particular grant.
  */
 export function AccessListDetail({
   detail,
@@ -340,6 +436,9 @@ export function AccessListDetail({
   comparison: AccessListComparison;
   names: Map<number, string>;
 }) {
+  // See `sharedCorporation`. Null means the rows genuinely differ, and only
+  // then is a Corporation column earning its width.
+  const missingCorp = sharedCorporation(comparison.missingAccess);
   return (
     <div className="acl-detail">
       {readStatus !== null && readStatus !== "ok" && (
@@ -353,28 +452,41 @@ export function AccessListDetail({
       {comparison.missingAccess.length > 0 && (
         <>
           <RuleHead as="h3">Missing access ({comparison.missingAccess.length})</RuleHead>
-          <Scroller label="Members missing access">
-            <table>
-              <thead>
-                <tr>
-                  <th scope="col">Character</th>
-                  <th scope="col">Corporation</th>
-                </tr>
-              </thead>
-              <tbody>
-                {comparison.missingAccess.map((m) => (
-                  <tr key={m.characterId}>
-                    <td>{m.name}</td>
-                    <td>
-                      {m.corporationId === null
-                        ? "—"
-                        : (names.get(m.corporationId) ?? `#${m.corporationId}`)}
-                    </td>
+          {missingCorp === null ? (
+            <Scroller label="Members missing access">
+              <table>
+                <thead>
+                  <tr>
+                    <th scope="col">Character</th>
+                    <th scope="col">Corporation</th>
                   </tr>
+                </thead>
+                <tbody>
+                  {comparison.missingAccess.map((m) => (
+                    <tr key={m.characterId}>
+                      <td>{m.name}</td>
+                      <td>
+                        {m.corporationId === null
+                          ? "—"
+                          : (names.get(m.corporationId) ?? `#${m.corporationId}`)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </Scroller>
+          ) : (
+            <>
+              <p className="acl-detail__norm">
+                All of them are in {names.get(missingCorp) ?? `#${missingCorp}`}.
+              </p>
+              <ul className="acl-detail__names">
+                {comparison.missingAccess.map((m) => (
+                  <li key={m.characterId}>{m.name}</li>
                 ))}
-              </tbody>
-            </table>
-          </Scroller>
+              </ul>
+            </>
+          )}
         </>
       )}
 
@@ -394,6 +506,10 @@ export function AccessListDetail({
       {comparison.broadGrants.length > 0 && (
         <>
           <RuleHead as="h3">Broad grants ({comparison.broadGrants.length})</RuleHead>
+          <p className="table-note">
+            Counts are our members only — each grant covers those, plus an unknown number
+            of others.
+          </p>
           <ul className="acl-detail__names">
             {comparison.broadGrants.map((g) => (
               <li key={`${g.kind}:${g.entityId ?? "all"}`}>
@@ -405,7 +521,7 @@ export function AccessListDetail({
                         : (names.get(g.entityId) ?? `#${g.entityId}`)
                     }`}
                 {" — covers "}
-                {g.coveredMembers} of our members, plus an unknown number of others
+                {g.coveredMembers} of our members
               </li>
             ))}
           </ul>

@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
-import { usePathname } from "next/navigation";
+import { useEffect, useRef, useState, useTransition } from "react";
+import { usePathname, useRouter } from "next/navigation";
 import { FocusHeading } from "@/app/_components/focus-heading";
 import { utcHhmm } from "@/app/_components/utc-time";
 import {
@@ -111,6 +111,7 @@ export default function Error({
   reset: () => void;
 }) {
   const pathname = usePathname();
+  const router = useRouter();
   const section = sectionFor(pathname);
   // A client component cannot read config; the root layout's provider carries
   // the values down. `useBrand()` falls back to the generic defaults rather
@@ -118,6 +119,61 @@ export default function Error({
   // to fail for a second reason.
   const brand = useBrand();
   const [retrying, startRetry] = useTransition();
+
+  /**
+   * A retry that WORKS was, until now, the one outcome this page did not
+   * announce. `reset()` unmounts this boundary and the recovered page renders
+   * in its place — so the button holding focus disappears, focus falls to
+   * `<body>`, the URL does not change, and no boundary is left to run an
+   * effect. A screen-reader user pressed a button and heard nothing, on the one
+   * press that actually succeeded. The failing path was already covered (the
+   * remount re-runs `FocusHeading`; e2e/error-boundary.spec.ts pins it), which
+   * is what made the gap easy to miss: the louder half was the one handled.
+   *
+   * Nothing inside this component can act after it unmounts, so the handoff is
+   * observed rather than scheduled — no rAF count, no timeout guess about when
+   * React commits. Watch for THIS main leaving the document, then focus
+   * whatever now answers to `#main`, which is the skip link's own target and so
+   * exactly where a member skipping to content would have landed.
+   *
+   * `data-error-boundary` is what keeps this off the failing path. A failed
+   * retry also removes this main and mounts another one carrying the same
+   * `id="main"`, and focusing that would race `FocusHeading` for the h1 and
+   * make the existing announcement nondeterministic. The attribute makes the
+   * two cases distinguishable at the moment of the swap: marked means the
+   * boundary came back and its own focus effect owns the announcement.
+   */
+  const mainRef = useRef<HTMLElement>(null);
+  function retry() {
+    const leaving = mainRef.current;
+    if (leaving) {
+      const observer = new MutationObserver(() => {
+        if (leaving.isConnected) return;
+        observer.disconnect();
+        const arrived = document.getElementById("main");
+        if (arrived && !arrived.hasAttribute("data-error-boundary")) arrived.focus();
+      });
+      observer.observe(document.body, { childList: true, subtree: true });
+      // Bounded so a retry that never resolves cannot leave an observer running
+      // over the rest of the session. Ten seconds is far longer than the swap
+      // and far shorter than a member's patience.
+      window.setTimeout(() => observer.disconnect(), 10_000);
+    }
+    startRetry(() => {
+      // `router.refresh()` BEFORE `reset()`, and the button does not work
+      // without it. Measured, on `/payouts` with its list query broken and then
+      // repaired before the press: `reset()` alone re-rendered the boundary and
+      // the boundary came back, every time. It re-runs the segment from the
+      // client router cache, and that cache is still holding the payload that
+      // failed — so for a server-side throw, which this boundary's own doc
+      // names as the case it exists for, "Try again" could never have recovered
+      // anything. It was reliably a no-op dressed as the page's only action.
+      // `refresh()` is what discards that cache entry and refetches; `reset()`
+      // then tears down the boundary so the refetched segment can render.
+      router.refresh();
+      reset();
+    });
+  }
 
   // Set after mount rather than during render. This boundary renders on the
   // server for a server-side throw, and a clock read in the render body would
@@ -159,7 +215,15 @@ export default function Error({
         brandTagline={brand.tagline}
         brandMarkUrl={brand.markUrl}
       />
-      <main id="main" tabIndex={-1} className="page page--narrow">
+      <main
+        id="main"
+        tabIndex={-1}
+        className="page page--narrow"
+        ref={mainRef}
+        // Read at swap time by `retry()` above, to tell "the boundary came
+        // back" from "the page recovered" when both mains share an id.
+        data-error-boundary=""
+      >
         <div className="page__head">
           {/* Same mechanism and the same reason as the two 404 boundaries: the
               subtree is swapped in place with no document load, the control
@@ -263,6 +327,34 @@ export default function Error({
         </pre>
 
         <div className="btn-row">
+          {/* The escape route first, and that ordering is the whole of this
+              change. Both controls are the plain grade and 8px apart, so
+              nothing but position separates them — and the one that sat first,
+              in the position a reader takes as the offered answer, was the one
+              the lede directly above had just warned about. "Your action may
+              already have taken effect; check before sending it again", and
+              then, as the first and visually equal choice, the control that
+              sends it again.
+
+              Differentiated downward rather than upward: gold is the page's one
+              emphasis ration and a boundary has no action it can recommend, so
+              spending it on either control would be a claim this page cannot
+              make. The obvious downward move — `.btn--quiet` on Try again — is
+              wrong for a different reason: that class carries
+              `min-height: 1.75rem`, and DESIGN.md R1 scopes the 28px grade by
+              the reason for it, to rows that carry a control set and are read
+              many at a time. Two buttons read once are not that. Order is the
+              one axis here that is free.
+
+              This also puts the safe control first in the tab order, which is
+              the same argument in the keyboard channel.
+
+              Stays an `<a href>`, not a `<Link>`: a full document load is the
+              one escape guaranteed to work from a client tree that has already
+              thrown once, and it is the arrival the browser announces itself. */}
+          <a className="btn" href={section.back.href}>
+            Back to {section.back.label}
+          </a>
           {/* Plain grade, not `btn--primary`. The lede directly above warns that
               a submitted action may have taken effect and to check before
               sending it again — and pressing this is that second send. Gold is
@@ -292,24 +384,9 @@ export default function Error({
               is the thing that was missing. The visual half is the busy state
               in flight; it is brief against a local failure and grows with the
               round trip, which is the right way round. */}
-          <button
-            type="button"
-            className="btn"
-            aria-busy={retrying}
-            onClick={() =>
-              startRetry(() => {
-                reset();
-              })
-            }
-          >
+          <button type="button" className="btn" aria-busy={retrying} onClick={retry}>
             {retrying ? "Trying…" : "Try again"}
           </button>
-          {/* Stays an `<a href>`, not a `<Link>`: a full document load is the
-              one escape guaranteed to work from a client tree that has already
-              thrown once, and it is the arrival the browser announces itself. */}
-          <a className="btn" href={section.back.href}>
-            Back to {section.back.label}
-          </a>
         </div>
       </main>
     </>

@@ -57,9 +57,17 @@ import type { NavItem } from "./ui";
  * thing the page's own H1 does and collides with nothing else in the bar.
  *
  * `navFor` is the rule. `navFromPath` is the same rule run with weaker
- * evidence, for the three surfaces that cannot read a session at all
- * (`error.tsx`, `not-found.tsx`, `payouts/[id]/not-found.tsx`) and have only
- * the URL to go on. It is written as calls to `navFor`, not as a second
+ * evidence, for a surface that cannot read a session at all and has only the
+ * URL to go on. That is `error.tsx`, and only `error.tsx` — this used to say
+ * "the three surfaces", naming both `not-found.tsx` files alongside it, and
+ * neither of them calls this function: each passes a hardcoded `navFor(...)`
+ * literal instead (not-found.tsx:48, payouts/[id]/not-found.tsx:80), because a
+ * 404 knows its own route statically in a way a shared error boundary does not.
+ * The count mattered enough to correct: a reader trusting "three" would go
+ * looking for two call sites that have never existed, and anyone changing the
+ * rule here would believe they were changing three surfaces' behaviour.
+ *
+ * It is written as calls to `navFor`, not as a second
  * literal list, so that "the boundary is the same rule under weaker evidence"
  * is a fact about the code rather than a claim in a comment:
  *

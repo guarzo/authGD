@@ -297,6 +297,7 @@ export default async function PayoutOperationPage({
                 fieldName="name"
                 value={operation.name}
                 label="operation name"
+                prominentTrigger
               />
             </h1>
           ) : (
@@ -317,6 +318,7 @@ export default async function PayoutOperationPage({
                 type="date"
                 mono
                 max={today}
+                prominentTrigger
               />
             ) : (
               <span className="mono">{fmtDate(operation.occurredAt)}</span>
@@ -505,12 +507,22 @@ export default async function PayoutOperationPage({
           <LifecycleAnnouncer>
             {showLifecycle && (
               <div className="lifecycle">
-                <div className="btn-row btn-row--tight">
+                {/* Plain `.btn-row`, deliberately. `--tight` exists to stop a
+                    table's row actions stacking inside a narrow column, and it
+                    buys that with `white-space: nowrap` — which inherits into
+                    the cost sentence each `LifecycleSubmit` carries, rendering
+                    a 137-character explanation as one unbreakable 754px line
+                    and pushing the whole document past a phone's width. There
+                    are no row actions to keep on one line here: `canFinalize`
+                    wants `draft` and `canRelease` wants `finalized`, so this
+                    row holds exactly one button by construction. */}
+                <div className="btn-row">
                   {canFinalize && (
                     <LifecycleSubmit
                       action={finalizeAction.bind(null, operation.id)}
                       className={primaryStage === "finalize" ? "btn btn--primary" : "btn"}
                       label="Finalize"
+                      pendingLabel="Finalizing…"
                       confirmName="confirm finalize"
                       costId="finalize-cost"
                       announcement="Operation finalized."
@@ -537,6 +549,7 @@ export default async function PayoutOperationPage({
                       action={unlockAction.bind(null, operation.id)}
                       className="btn"
                       label="Unlock"
+                      pendingLabel="Unlocking…"
                       confirmName="confirm unlock"
                       costId="unlock-cost"
                       announcement="Operation unlocked."
@@ -950,6 +963,12 @@ export default async function PayoutOperationPage({
                             )}
                           </td>
                           <td className="num">
+                            {/* Hidden above 40rem, where the `<thead>` names
+                                this column. Below it the row reflows to a
+                                grid and the `<thead>` is gone, and a bare
+                                number sitting beside a currency figure is
+                                ambiguous without it. */}
+                            <span className="roster__label">Shares</span>
                             {canEdit ? (
                               <InlineEdit
                                 action={setParticipantSharesAction.bind(
@@ -1174,6 +1193,7 @@ export default async function PayoutOperationPage({
                         label="Replace roster"
                         confirmName="confirm replace roster"
                         describedBy="replace-roster-cost"
+                        pendingLabel="Replacing…"
                       />
                       <ConfirmCost id="replace-roster-cost">
                         Replaces all {participants.length} participant
@@ -1264,6 +1284,7 @@ export default async function PayoutOperationPage({
                     restName="Delete operation"
                     confirmName="confirm delete operation"
                     describedBy="delete-operation-cost"
+                    pendingLabel="Deleting…"
                   />
                 </form>
               </div>

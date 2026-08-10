@@ -383,8 +383,13 @@ export default async function AdminAccountsPage({
               row, and the tier and status chips beside it (`:338` onward) are
               already bare `.btn`. `clear` additionally needs the
               `.filters .btn--quiet` buy-back in globals.css — dropping
-              `--micro` alone leaves it at `.btn--quiet`'s own 1.75rem. */}
-          <Submit className="btn">Find</Submit>
+              `--micro` alone leaves it at `.btn--quiet`'s own 1.75rem.
+
+              A plain button rather than `<Submit>`, because this form is
+              `method="get"` — see `submit.tsx`. */}
+          <button type="submit" className="btn">
+            Find
+          </button>
           {q && (
             <a className="btn btn--quiet" href={qs({ q: undefined })}>
               clear

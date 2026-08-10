@@ -58,7 +58,7 @@ lighter structure token carries a little more, up to `--rule-strong`. Do not "re
 a tint to `--void` for consistency with the rest of the ramp: the ramp *is* the rule.
 
 Every text token below was measured against all three grounds rather than asserted;
-the worst case is `--ink-faint` at 4.63:1 on a hovered row, and nothing sits under
+the worst case is `--ink-faint` at 4.61:1 on a hovered row, and nothing sits under
 4.5:1. Two of these values exist *because* of that measurement rather than taste:
 `--signal-bad` is `0.66` because `0.64` measured 4.42 against `--hull-hi` (under the
 floor exactly when the pointer is on the row), and `--rule-strong` holds its lightness
@@ -84,7 +84,7 @@ OKLCH is the right space to *tune* in and the wrong one to *judge* in.
 | `--hull` | `oklch(0.195 0.001 56)` | Panels, table headers, inset regions. |
 | `--hull-hi` | `oklch(0.245 0.002 54)` | Row hover, raised controls, pressed states. |
 | `--rule` | `oklch(0.33 0.004 55)` | Hairlines. The primary structural device. |
-| `--rule-strong` | `oklch(0.56 0.008 58)` | Section boundaries, control borders. Lightness is set by WCAG 1.4.11: it measures 4.24 / 3.92 / 3.48 against `--void`, `--hull`, and `--hull-hi`, so a control's edge is identifiable on every ground it can sit on. |
+| `--rule-strong` | `oklch(0.56 0.008 58)` | Section boundaries, control borders. Lightness is set by WCAG 1.4.11: it measures 4.23 / 3.90 / 3.47 against `--void`, `--hull`, and `--hull-hi`, so a control's edge is identifiable on every ground it can sit on. |
 
 ### Ink
 
@@ -102,7 +102,7 @@ Gold is identity and emphasis. The three signals are semantic and never decorati
 |---|---|---|
 | `--gold` | `oklch(0.83 0.155 88)` | Brand mark, active nav, primary action, Member tier. |
 | `--gold-dim` | `oklch(0.72 0.14 84)` | Gold borders, hover on gold surfaces. |
-| `--signal-ok` | `oklch(0.74 0.09 150)` | Reserved for where health is genuinely the subject (`.notice--ok`). **Not** the default `ok` status token, which takes `--ink-dim` — see "Status token" below. |
+| `--signal-ok` | `oklch(0.74 0.09 150)` | **Declared, documented, and used by nothing.** It was meant for where health is genuinely the subject, and the class this row used to name as that place — `.notice--ok` — has never existed. Kept rather than deleted because the notice family (`--warn`, `--bad`) has an obvious gap where it would sit, and because `--tier-alumni` is the same value: deleting the token would leave the next `ok` notice reaching for the alumni tier's colour, which is worse than an unused declaration. **Not** the default `ok` status token, which takes `--ink-dim` — see "Status token" below. |
 | `--signal-warn` | `oklch(0.80 0.15 50)` | Needs re-auth, scope shortfall, cryo (admin table only — an admin scans for it; the member's own account page reads cryo in `--ink-dim` instead, since it's a pause the member asked for, not a fault). Hue 50 rather than the 70 this started at: at 70 the warn signal sat 18° from `--gold`/`--tier-member` at near-identical chroma and lightness — 0.057 apart in OKLab, not enough to tell a gold Member badge from an amber CRYO token two columns away in the same mono uppercase. 50 nearly doubles that to 0.104 while holding 0.146 from `--signal-bad`. Warn remains nearer to gold than to bad, deliberately: equalising the two means rotating to about hue 37, buying separation from identity by spending it on failure, and mistaking a warning for an error is the worse confusion. The bar is legibility against gold, not equidistance. |
 | `--signal-bad` | `oklch(0.66 0.19 26)` | Dead token, failed sync, destructive action. |
 
@@ -128,8 +128,23 @@ a real tier's colour.
 
 - Colour is never the only carrier of meaning.
 - Saturated colour occupies well under 10% of any screen. The gold in particular is
-  rationed: one primary action per view, plus the mark.
-- No gradients on text, ever. No decorative gradients at all.
+  rationed: one primary action per view, plus the mark, plus the active nav item
+  and the Member tier badge where those appear — the four uses the `--gold` row
+  above lists, not the two this line used to name. The short version selected for
+  the wrong repair: a reader auditing a screen against "one action plus the mark"
+  finds gold on the nav and on a tier badge and has to decide which of the two is
+  the mistake, when neither is. The focus ring is gold as well and is not part of
+  the ration at all — WCAG 2.4.7 says it appears wherever focus lands, and a
+  budget is not a thing an indicator can be held to.
+- No gradients on text, ever, and none used as decoration. Two `linear-gradient`s
+  exist and both are load-bearing rather than ornamental: the scroller edge fades
+  (`.scroller-fade--start` / `--end`), which are the only rest-state cue that a
+  table has more to the side, and `.status__dot`'s neutral bar, which is a
+  gradient of one colour against itself — a flat fill, used because painting the
+  0.15em bar into a constant-height box keeps every tone's geometry identical.
+  This line used to read "no decorative gradients at all", which is the intent
+  and reads as a ban; someone enforcing it literally would delete a scroll
+  affordance and misalign a status baseline.
 
 ## Typography
 
@@ -235,8 +250,8 @@ you what it holds.
   below in a single measured column; admin tables are allowed to run wider.
 - **Nav membership is keyed to the viewer, not the section.** The bar offers every
   destination this viewer is *provably authorized* to reach — `Your account` always,
-  `Operations` when they can read payouts, `Members`/`Audit log`/`Sync` when they are an
-  admin — in one fixed order, broadest access first. Membership does not change as you
+  `Operations` when they can read payouts, `Members`/`Audit log`/`Sync`/`Access lists`
+  when they are an admin — in one fixed order, broadest access first. Membership does not change as you
   walk between sections, so no destination is ever two hops away from a viewer who is
   entitled to it in one. Note that `isAdmin` and `tier` are independent, so an admin is
   not automatically a payouts reader and `Operations` is never unconditional in the admin
@@ -307,6 +322,14 @@ you what it holds.
 
 - Transitions are 140ms on colour and border, 220ms on transforms, both on
   `cubic-bezier(0.22, 1, 0.36, 1)` (ease-out-quint). No bounce, no elastic, no spring.
+  The 220ms half of that is a reservation rather than a description. `--dur-move`
+  has no consumers: all ten `transition` declarations in `globals.css` animate a
+  colour, a border or an opacity, and every one of them takes `--dur-color`. The
+  transforms that do exist are `@keyframes` — `seal-settle` at 620ms,
+  `btn-pulse` and `link-pending-pulse` at 900ms — and each names its own duration
+  rather than reading the scale, because a loop and a settle are not the same
+  kind of thing as a hover. Worth knowing before adding a transform transition
+  and finding the token has never been exercised.
 - Layout properties are never animated. Transform and opacity only.
 - The only entrance animation in the system is the login seal, and it is a single
   opacity-and-scale settle.
@@ -346,7 +369,7 @@ configuration, the other two by overwriting the file.
 - Disabled controls keep `opacity: 1` and take an explicit `--ink-faint`, rather than
   fading. An opacity fade moves with whatever ground it lands on: at 65% the disabled
   text measured 3.24:1 on `--void` but 2.88:1 on a hovered admin table row, under the
-  3:1 floor exactly when the pointer is on the row. The explicit colour is 4.85:1 on
+  3:1 floor exactly when the pointer is on the row. The explicit colour is 4.61:1 on
   `--hull-hi` and does not move. **Do not "simplify" this back to an opacity.**
 - Hit targets: `36px` for standalone controls (`.btn`), `28px` for the in-row controls
   of the admin tables (`.btn--micro`, `.btn--quiet`, `.row-toggle`). Both clear the

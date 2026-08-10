@@ -15,7 +15,16 @@
      feedback this palette answers. Warm ground also lets the seal's navy ring
      separate from the header bar by hue, which it could not do on navy.
      Measured, not asserted: every text token below clears 4.5:1 on all three
-     grounds, worst case 4.63 (--ink-faint on a hovered row).
+     grounds, worst case 4.61 (--ink-faint on a hovered row).
+
+     Every ratio quoted in this file was re-measured on 2026-08-10 by painting
+     each token to a 1x1 canvas and reading the pixel back. That indirection is
+     the point: `getComputedStyle` hands these back as `oklch(...)`, still in
+     their authoring space, so a probe that parses the string reads L, a and b
+     as if they were r, g and b — which is a probe that reports `--ink`, a
+     near-white, as a dark maroon, and does it without failing. Rasterizing is
+     the only reading here that is actually sRGB. Several of the numbers below
+     were wrong before that pass; none of the arguments they support were.
 
      THE TINT SCALES WITH LIGHTNESS, and that is the whole rule here. It took
      three passes to get right, so the failed ones are worth recording.
@@ -40,7 +49,7 @@
   --hull: oklch(0.195 0.001 56);
   --hull-hi: oklch(0.245 0.002 54);
   --rule: oklch(0.33 0.004 55);
-  /* Lightness fixed by WCAG 1.4.11: 4.24 / 3.92 / 3.48 against void, hull and
+  /* Lightness fixed by WCAG 1.4.11: 4.23 / 3.90 / 3.47 against void, hull and
      hull-hi, so a control's edge is identifiable on every ground it can sit
      on. */
   --rule-strong: oklch(0.56 0.008 58);
@@ -165,6 +174,14 @@
 
   --ease: cubic-bezier(0.22, 1, 0.36, 1); /* ease-out-quint */
   --dur-color: 140ms;
+  /* No consumers. All ten `transition` declarations in this file animate a
+     colour, a border or an opacity, and every one takes --dur-color. The
+     transforms that exist are @keyframes (seal-settle 620ms, btn-pulse and
+     link-pending-pulse 900ms) and each names its own duration, since a settle
+     and a loop are not paced like a hover. Kept as the declared answer for the
+     first transform *transition*, so it picks from the scale rather than
+     inventing a number — but it is a reservation, not a description of the
+     shipped UI, and DESIGN.md's motion section says the same. */
   --dur-move: 220ms;
 }
 
@@ -292,6 +309,22 @@ a:hover {
   border-radius: 1px;
 }
 
+/* The three boundary headings (`FocusHeading` — error.tsx and both
+   not-found.tsx) take focus on mount, which draws the ring above. An `h1` is a
+   block, so that ring spanned the whole column: measured at 912px around 377px
+   of text, which reads as a page-wide gold band rather than as a focus
+   indicator. This is the only selector that matches those three, since
+   `FocusHeading` is the app's only producer of a `tabindex="-1"` heading.
+
+   Unconditional rather than `:focus`-scoped, so nothing shifts at the moment
+   focus lands. It costs no wrapping: `fit-content` resolves to
+   `min(max-content, max(min-content, available))`, so at any width narrow
+   enough for the heading to wrap it is still the available width, and
+   `text-wrap: balance` is unaffected. */
+h1[tabindex="-1"] {
+  width: fit-content;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -369,10 +402,18 @@ a:hover {
    and these per-cell spans become the only thing naming the columns. Same
    job, so the same register — it carries only its own `letter-spacing` and
    `color` down there, the way every other member carries its own. It stays
-   `display: none` above the breakpoint because this list sets no `display`. */
+   `display: none` above the breakpoint because this list sets no `display`.
+
+   `.payouts__label` is the same idiom on `/payouts`, and it is a sibling class
+   rather than a reuse of `.crew__label` for the reason `.log--manifest` gives
+   for keeping its own copy of `.log--dense`'s padding: the two tables reflow at
+   the same breakpoint today, and a shared class quietly welds that together.
+   The register entry is the part worth sharing, and it is shared here. */
 .rule-head__label,
 .log th,
 .crew__label,
+.payouts__label,
+.roster__label,
 .strip__name,
 .strip__head,
 .strip__group,
@@ -384,6 +425,7 @@ a:hover {
 .launch__scopes-head,
 .shell__register,
 .acl-detail th,
+.status-line__label,
 .shell__nav a {
   font-family: var(--font-mono), ui-monospace, monospace;
   font-size: var(--t-label);
@@ -1017,8 +1059,11 @@ h3.rule-head__label {
   /* --rule-strong, not --rule. This border is the only thing telling a reader
      where the scrollable region begins and ends, which makes it a control
      boundary under WCAG 1.4.11 rather than decoration — and --rule measures
-     1.76:1 on --void, 1.59:1 on --hull and 1.39:1 on --hull-hi. --rule-strong
-     clears 3:1 on every ground the frame can sit on (4.11 / 3.72 / 3.24). */
+     1.62:1 on --void, 1.50:1 on --hull and 1.33:1 on --hull-hi. --rule-strong
+     clears 3:1 on every ground the frame can sit on (4.23 / 3.90 / 3.47 —
+     these used to read 4.11 / 3.72 / 3.24 here while the token's own
+     definition claimed a third set, 4.24 / 3.92 / 3.48; all three sites now
+     quote the same measurement). */
   border: 1px solid var(--rule-strong);
   border-radius: var(--radius);
 }
@@ -1309,7 +1354,13 @@ h3.rule-head__label {
    Dropping columns below a breakpoint was the alternative and was rejected:
    it hides Total, Paid and Status on a phone, turning the ledger into a
    personal list and collapsing the very /payouts-vs-/account distinction R3
-   draws. A pin hides nothing from anyone. */
+   draws. A pin hides nothing from anyone.
+
+   All of the above now describes the table from 30rem up only. Below that the
+   pin was measured at 24% of the region and the row reflows to labelled blocks
+   instead — see the `@media (max-width: 29.9375rem)` block at the foot of this
+   file, beside `.log--crew`'s. The budget figures here are unchanged and still
+   the reason a phone cannot have this as a table; what changed is the answer. */
 .log--payouts th,
 .log--payouts td {
   padding-top: var(--s-2);
@@ -1342,7 +1393,9 @@ h3.rule-head__label {
    name widens the column to 637px for EVERY row, since a table column is as
    wide as its widest cell: the pin then exceeds the region it anchors and
    `payouts.spec.ts` fails on the spot. That test holds the ratio under 60% at
-   both 320px and 390px, so the ceiling is asserted rather than assumed.
+   560px, where the pin still runs. It used to assert at 320px and 390px, and
+   was moved when those widths stopped having a pin to measure — a `<td>` laid
+   out as a block has no scroll range and `maxScrollLeft > 0` cannot hold.
 
    No `scroll-margin-left` companion rule, unlike `.log--audit` and
    `.log--dense` above. That rule exists for a control in a non-first column
@@ -1358,6 +1411,25 @@ h3.rule-head__label {
 .log--payouts th:last-child,
 .log--payouts td:last-child {
   padding-right: var(--s-5);
+}
+
+/* The per-cell label the narrow media query on `.log--payouts` turns on, off
+   up here where the real `<thead>` already names the columns. Same
+   construction and same reasoning as `.crew__label`. The media block that
+   pairs with this one is not here but at the foot of the file, beside
+   `.log--crew`'s: `.log--sticky-col`'s `position: sticky` rule sits at equal
+   specificity further down, so an override written next to this rule would
+   lose the cascade and the first cell would still try to pin. */
+.payouts__label {
+  display: none;
+}
+
+/* Same idiom again on the /payouts/[id] roster, which reflows at 40rem rather
+   than 30rem — the roster carries a row of controls the payouts list does not,
+   and runs out of width sooner. Only the Shares cell gets one; the block that
+   turns this on says why. */
+.roster__label {
+  display: none;
 }
 
 /* Ten columns of state per row: the standard cell padding pushes the accounts
@@ -1394,8 +1466,8 @@ h3.rule-head__label {
    deliberately not `--hull-hi`: raising this row's ground to `--hull-hi`
    would change what `--ink-faint` sits on, and the `tr.drawer-row--actions >
    td` comment below records that pairing was chosen to clear WCAG 4.5:1
-   (`--ink-faint` on `--hull` measures 5.58:1; on `--hull-hi` it drops to
-   4.85:1). A layout change binding a row to its panel is not licence to
+   (`--ink-faint` on `--hull` measures 5.18:1; on `--hull-hi` it drops to
+   4.61:1). A layout change binding a row to its panel is not licence to
    revisit that.
 
    Specificity, not luck: `.log tbody tr:not(:has(.log__empty)):hover` (below)
@@ -1510,7 +1582,7 @@ h3.rule-head__label {
    background lives on its `<td>` and on the separate data row above, neither
    of which that selector matches. `--ink-faint`
    (`.manifest-panel__controls .btn--quiet`'s rest ink, and the status-line
-   labels this panel can carry) measures 5.58:1 against `--hull`, clear of
+   labels this panel can carry) measures 5.18:1 against `--hull`, clear of
    WCAG's 4.5:1 text floor — the same pairing `.log th` already uses for its
    own `--hull` background. Do not raise the shared ground to `--hull-hi` to
    make an open row "pop" more: that would change what `--ink-faint` sits on
@@ -2018,7 +2090,7 @@ h3.rule-head__label {
 /* The pinned edge has to read as an edge once content is sliding under it, and
    a hairline is what this system draws edges with. --rule-strong rather than
    --rule for the same reason as .scroller: this line is the boundary of the
-   frozen region, so it carries meaning, and --rule's 1.39:1 against the hovered
+   frozen region, so it carries meaning, and --rule's 1.33:1 against the hovered
    row it most often sits on is not a line most people can see at 1px. */
 .log--sticky-col th:first-child,
 .log--sticky-col tr:not(.drawer-row) > td:first-child:not(.log__empty) {
@@ -2391,11 +2463,11 @@ h3.rule-head__label {
   display: contents;
 }
 
+/* Register member, so the three shared properties come from the list above.
+   What stays here is what every other member also keeps for itself: its own
+   `letter-spacing` and `color`. */
 .status-line__label {
-  font-family: var(--font-mono), ui-monospace, monospace;
-  font-size: var(--t-label);
   letter-spacing: var(--track-value);
-  text-transform: uppercase;
   color: var(--ink-faint);
 }
 
@@ -2492,9 +2564,15 @@ h3.rule-head__label {
    A screen of green dots reporting that nothing needs doing is the
    generic-dashboard signature, and it spends the eye's attention on exactly
    the rows that have no claim on it.
-   --signal-ok is not deleted — it is still right where health is genuinely
-   the subject rather than the default (see .notice--ok) — but the default
-   `ok` token is now as quiet as what it reports. */
+   --signal-ok is not deleted, but do not read that as "it is in use
+   somewhere else". It has no consumers at all, and the `.notice--ok` this
+   comment used to cite as the somewhere-else has never existed — an editor
+   who went looking for it to copy would find two comments naming it and no
+   rule. The token stays because the notice family has a visible gap where an
+   ok variant would go, and because --tier-alumni carries the same value: with
+   the token gone, the next ok notice reaches for a tier colour instead.
+   What matters here is only that the default `ok` token is now as quiet as
+   what it reports. */
 .st--ok {
   color: var(--ink-dim);
 }
@@ -2641,7 +2719,7 @@ h3.rule-head__label {
 .tier--lead {
   font-size: var(--t-data);
   padding: 0.3em 0.65em;
-  letter-spacing: 0.12em;
+  letter-spacing: var(--track-label);
 }
 
 /* Replaces a literal 🔒 emoji, which rendered in the vendor's own colour
@@ -2693,7 +2771,7 @@ h3.rule-head__label {
      row to --hull-hi; the same 65% opacity measures 2.88:1 there, under the
      3:1 DESIGN.md promises, right when an admin's pointer is on the row.
      An opacity fade moves with whatever ground it sits on, so set the
-     disabled colour explicitly instead: --ink-faint on --hull-hi is 4.85:1,
+     disabled colour explicitly instead: --ink-faint on --hull-hi is 4.61:1,
      clearing text AA rather than only the 3:1 floor, and it no longer
      depends on which ground the control happens to be resting on.
      Higher specificity than .btn--primary/.btn--danger (one class each), so
@@ -2974,9 +3052,20 @@ h3.rule-head__label {
   justify-content: flex-end;
 }
 
-/* A control row that follows the data it operates on rather than heading the
-   page. It carries the top margin the page__head would otherwise have given
-   it. */
+/* A control row that carries the top margin a `page__head` would otherwise
+   have given it.
+
+   This used to describe its position as well — "follows the data it operates
+   on rather than heading the page" — and that is true of only one of its two
+   users. On /admin/sync it does sit below the job strip (page.tsx:1179), and
+   two docblocks over there reason from that placement. On
+   /admin/access-lists (page.tsx:146) it is the first thing under the H1 and
+   lede, above the data entirely, because the control it holds is a remedy for
+   a list that may not have rendered at all.
+
+   The margin is the rule; the placement is the call site's. Stated the other
+   way round, the next person to reach for this class on a third page inherits
+   a positional claim the class does not enforce. */
 .btn-row--controls {
   margin-top: var(--s-6);
 }
@@ -3173,17 +3262,34 @@ h3.rule-head__label {
    /payouts/new that is `.form-panel`'s own 48px of top padding, so the panel
    opened with 96px of empty ground above the word OPERATION.
 
-   Two branches because the two forms that open with a header disagree about
+   Three branches because the two forms that open with a header disagree about
    what comes first in the DOM. `appraise-form.tsx` puts its `RuleHead` first
    outright, so `:first-child` catches it. `new-operation-form.tsx` puts the
    reserved `Notice` ahead of the header — that slot is out of flow, so the
    header is still the first thing anyone sees, but `:first-child` cannot know
-   that and would miss it. Only the always-mounted reserved slot needs the
-   second branch; a `Notice` rendered behind `&&` (as appraise-form's is)
-   isn't in the DOM to be skipped over in the first place. */
+   that and would miss it.
+
+   The third branch is the same slot once it has something to say. A populated
+   `Notice` renders `.notice`, not `.notice-slot`, so the branch above stops
+   matching at exactly the moment the form is being rejected: measured, the
+   header sat 0px below the slot while empty and 88px below it once populated.
+   Which is backwards — the one state where the error and the form it is about
+   need to read as one thing is the state that pushed them apart. */
 .form-stack > .rule-head:first-child,
-.form-stack > .notice-slot + .rule-head {
+.form-stack > .notice-slot + .rule-head,
+.form-stack > .notice + .rule-head {
   margin-top: 0;
+}
+
+/* `.notice`'s own bottom margin is written for flow layout, where it is the
+   only thing separating the notice from what follows. Inside `.form-stack` the
+   grid's row gap already does that job, so the two add: 24px of margin on top
+   of 16px of gap put the notice 40px from the next field where every other
+   sibling pair in the form sits at 16px. All four of these forms mount their
+   `Notice` unconditionally, so all four had it — the header case above was just
+   the loudest, because `.rule-head`'s 48px stacked on as well. */
+.form-stack > .notice {
+  margin-bottom: 0;
 }
 
 /* One field: its label, its control, and optionally a hint below (the
@@ -3600,6 +3706,21 @@ h3.rule-head__label {
   text-align: left;
 }
 
+/* `.notice` carries `margin-bottom` and no `margin-top`, which is right
+   everywhere it follows a `.page__head` — and wrong here, where it follows the
+   emblem/title/motto stack directly and sat flush against the motto with 0px
+   between them. A returning member bounced back by an expired session met the
+   reason for it welded to the brand mark.
+
+   Scoped to the child of `.launch__panel` rather than fixed on `.notice`
+   itself: that class is load-bearing on six other surfaces, all of which sit
+   below a head that already provides the space. `.notice-slot` is a different
+   class, so the empty reservation this page mounts unconditionally is
+   untouched and still draws nothing. */
+.launch__panel > .notice {
+  margin-top: var(--s-5);
+}
+
 /* No font-size override: this is prose, and DESIGN.md sets prose at --t-body.
    Matches .page__lede, which distinguishes secondary copy by colour alone. */
 .launch__disclosure-note {
@@ -3618,6 +3739,27 @@ h3.rule-head__label {
 
 .launch__scopes {
   margin-top: var(--s-2);
+}
+
+/* The shared fact for the list below it: what every scope in this group has in
+   common, said once, so the rows can carry only what differs. See
+   `SCOPE_GROUPS` in `login/page.tsx`.
+
+   Deliberately NOT a member of the label register above, though it sits
+   between two things that are (`.launch__scopes-head`, and `.launch__scopes
+   dt`'s mono treatment). The register is for fixed field names — a word or
+   two, uppercased, naming a slot. These are sentences, and sentences in forced
+   caps at `--track-furniture` are the thing this codebase keeps taking out.
+   Weight and colour are what separate it instead: `--ink`, the only full-value
+   ink in this block, against the `--ink-dim` of the descriptions and the
+   `--ink-faint` of the identifiers. That ordering is the point — the reader
+   deciding whether to grant should hit "the only thing authGD writes" before
+   any identifier, and it is now the brightest text in the disclosure. */
+.launch__scope-group {
+  margin-top: var(--s-5);
+  font-weight: 600;
+  color: var(--ink);
+  font-size: var(--t-caption);
 }
 
 /* Inverted from the original structure: dt is now the raw scope identifier
@@ -3644,8 +3786,15 @@ h3.rule-head__label {
    same grade as `.launch__disclosure-note` above it, so the sentence a member
    actually needs is not quieter than the identifier it explains. A scope the
    description map does not recognise (a fork's own EVE_SSO_SCOPES addition)
-   renders no dd at all rather than a placeholder — the identifier is still
-   shown, honestly, as the one thing known about it. */
+   still gets a dd — `describeScope`'s default branch (login/page.tsx) says
+   that this deployment asks for the scope, that authGD has no description for
+   it, and to ask whoever runs it. This comment used to claim it "renders no dd
+   at all rather than a placeholder", which is both false and backwards about
+   which behaviour is honest: an empty row leaves a reader to guess whether the
+   scope is undescribed or harmless, while the default sentence tells them what
+   is actually known — that nobody here can vouch for it. The correction
+   matters because login/page.tsx points readers at this comment by name, so
+   the false claim was signposted rather than buried. */
 .launch__scopes dd {
   margin-top: var(--s-1);
   font-size: var(--t-caption);
@@ -3687,7 +3836,7 @@ h3.rule-head__label {
   border-top: 1px solid var(--rule);
   font-family: var(--font-mono), ui-monospace, monospace;
   font-size: 0.625rem;
-  letter-spacing: 0.12em;
+  letter-spacing: var(--track-label);
   text-transform: uppercase;
   color: var(--ink-faint);
 }
@@ -3793,7 +3942,18 @@ h3.rule-head__label {
   display: flex;
   align-items: center;
   gap: var(--s-2);
-  min-height: 1.75rem;
+  /* R1's standalone grade, not the in-row one. The 28px grade is scoped by the
+     reason for it — rows carrying a control set, read many at a time — and
+     DESIGN.md states the consequence outright: "A disclosure drawer is not
+     in-row for this purpose and takes 36px." All four `.disc` call sites are
+     page-level sections of `/payouts/[id]` (`page.tsx:135`, `:844`, `:1165`,
+     `appraise-form.tsx:183`); nothing wearing this class sits in a table row.
+
+     `PaymentHistory`'s "payments (N)" toggle is unaffected and should be:
+     `Disclosure` passes `className` through with no default, that call site
+     passes none, and it is styled by `.log summary` above — where it is
+     genuinely in-row and the 28px grade is the right one. */
+  min-height: 2.25rem;
 }
 
 .disc > summary::-webkit-details-marker {
@@ -4029,7 +4189,7 @@ h3.rule-head__label {
   margin: var(--s-6) 0 0;
   /* The strip's outer edge, like .scroller's, bounds a region of interactive
      rows rather than decorating one — so --rule-strong, which clears 3:1 on
-     --void, --hull and --hull-hi, instead of --rule's 1.39-1.76:1. */
+     --void, --hull and --hull-hi, instead of --rule's 1.33-1.62:1. */
   border: 1px solid var(--rule-strong);
   border-radius: var(--radius);
 }
@@ -4403,6 +4563,33 @@ h3.rule-head__label {
   .strip__name {
     flex: 1 1 100%;
   }
+
+  /* The housekeeping group's collapsed line is a sentence wearing a status
+     token's clothes, and `.st`'s `white-space: nowrap` is written for the
+     token: one uppercase word in a table cell, which must not break. Here the
+     same rule holds `2 jobs · discord.sweep overdue, wanderer.sweep overdue`
+     on one line in a region ~233px wide at 320, so the group's own summary —
+     the only place those member names appear while the group is collapsed —
+     leaves the panel. Not truncated: the names are the payload, and a group
+     that cannot say which of its jobs is overdue is a group there is no
+     reason to collapse.
+
+     Scoped to this summary rather than relaxed on `.st`, which is correct
+     everywhere else it lands.
+
+     `align-items: baseline` on the summary, replacing the base rule's
+     `center`: once the sentence occupies three lines, centring puts the `+`
+     marker halfway down the block instead of beside the line it opens. The
+     absolute-gutter treatment `.strip__disc > summary` takes above is not
+     needed here — that one exists because `.strip__name` claims a 100%
+     basis and strands the marker on a line of its own; nothing here does. */
+  .strip__group-disc > summary {
+    align-items: baseline;
+  }
+
+  .strip__group-disc > summary .st {
+    white-space: normal;
+  }
 }
 
 /* The row drawer. Set tier / cryo / note come first since the admin opened
@@ -4573,7 +4760,10 @@ h3.rule-head__label {
    all — this one and `.pool-items` on the payout detail page. The rest hang off
    `.page` or a plain `<div>`, where `min-width: auto` and `0` are the same
    number, so a global rule would be inert on eight surfaces and load-bearing on
-   a ninth nobody measured.
+   a ninth nobody measured. (`.pool-items` was named here and left unfixed for
+   exactly one release; it now carries the same floor as
+   `grid-template-columns: minmax(0, 1fr)`, which bounds the track rather than
+   the item and reaches the Scroller in one rule instead of two.)
 
    Both floors are kept but are no longer reproducibly load-bearing, and that
    is measured, not assumed: finding 4.4 (`.log--crew` below) stops the crew
@@ -4791,6 +4981,40 @@ h3.rule-head__label {
   gap: var(--s-2);
 }
 
+/* The one fact every "missing access" row shared, lifted out of the table the
+   way `crewNorms` lifts the account manifest's — see `.crew-fact` above and
+   `sharedCorporation` in access-lists/view.ts. When the whole set sits in one
+   corporation, the Corporation column told the rows apart not at all and
+   charged each of them for the repetition; this says it once instead.
+
+   Full `--ink`, deliberately not `.table-note`'s caption grade. This is the
+   data that column used to carry, and the detail panel's own rule is that
+   names lead because the admin retypes them in-game — a string you have to
+   read character by character does not belong at the de-emphasised weight
+   reserved for standing explanations. The broad-grants note directly below it
+   IS such an explanation, and does use `.table-note`. */
+.acl-detail__norm {
+  margin: 0 0 var(--s-3);
+  color: var(--ink);
+}
+
+/* "Stop watching" is the only control inside a watched row, and `.btn--quiet`
+   strips the border that says so: at --ink-faint with no outline it lands on
+   exactly the weight of `.acl-list__head`'s labels and the rule heads around
+   it, so the one thing on the row a press can change reads as another caption.
+   Keep `.btn--quiet`'s restraint — no fill, no gold at rest, the 28px in-row
+   grade — and put back the outline, which is what separates a control from a
+   label here without spending a second gold or a colour token.
+
+   Descendant rather than child: the button sits directly in the `<li>` on a
+   clean row and inside `Disclosure`'s drawer on a row that has one, and it
+   has to read the same in both. Two classes, so `.btn--quiet:hover` (a class
+   plus a pseudo-class plus `:not(:disabled)`) still escalates over it. */
+.acl-list__row .btn--quiet {
+  border-color: var(--rule);
+  color: var(--ink-dim);
+}
+
 /* --- Utility ------------------------------------------------------------ */
 
 /* A `.field` plus a micro `Submit`, meant to sit inline with the prose around
@@ -4869,6 +5093,13 @@ h3.rule-head__label {
    gap, grid's default stretch. */
 .pool-items {
   display: grid;
+  /* The implicit track is `auto`, which sizes to the item table's intrinsic
+     width and lets the `.scroller` inside escape the grid entirely — taking
+     the edge fades and the region's keyboard tab stop with it, and widening
+     the document past the viewport. `.drawer__crew` above is the other of the
+     two at-risk Scroller parents the comment at `.scroller-frame` names; it
+     got its floor and this one did not. */
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--s-2);
 }
 
@@ -4941,8 +5172,10 @@ h3.rule-head__label {
   color: var(--ink-faint);
 }
 
-/* The closing beat: the lander, drawn at the size it was cut for. Nothing
-   below it, so the page ends on the artwork rather than on a control. */
+/* The closing beat: the lander, drawn well under its master's 1120px so it has
+   pixels to spare at 2x. Nothing below it, so the page ends on the artwork
+   rather than on a control. (This used to say "drawn at the size it was cut
+   for", which it is not and should not be — see PRODUCT.md's fifth principle.) */
 .closing {
   margin: var(--s-8) 0 0;
 }
@@ -5481,6 +5714,157 @@ h3.rule-head__label {
   }
 
   .crew__label {
+    display: block;
+    letter-spacing: var(--track-label);
+    color: var(--ink-faint);
+  }
+}
+
+/* `.log--payouts` reflows at the same breakpoint, for the reason the block
+   above spends its docblock establishing — the argument for hiding the
+   `<thead>` rather than dropping columns, and for a real element over
+   `content: attr(data-label)`, is there and is not repeated here. What is
+   specific to this table is why it needed the treatment at all.
+
+   The pin defeats itself down here. `.log--payouts td:first-child`'s comment
+   records the pinned Name column at 69px of a 286px region at 320px — 24% —
+   which is a column too narrow to read an operation name out of and still the
+   only thing the reader keeps while panning right across five more. The 60%
+   ceiling `payouts.spec.ts` asserts is a ceiling with no floor, so 24% passed
+   it exactly as 55% would have. And `.log--crew`'s own comment cites this
+   table as the precedent for reflowing; the precedent had not actually done
+   it. This is that debt paid back.
+
+   Nothing is dropped, which is the property that kept the pin through two
+   earlier passes: all six columns still render, so the corp-wide-ledger
+   distinction ruling R3 draws between `/payouts` and `/account` survives. The
+   row runs down instead of across, which is the one axis a phone has spare. */
+@media (max-width: 29.9375rem) {
+  .log--payouts thead {
+    display: none;
+  }
+
+  .log--payouts tbody tr {
+    display: grid;
+    gap: var(--s-2);
+    padding: var(--s-3) 0;
+    border-top: 1px solid var(--rule);
+  }
+
+  .log--payouts tbody tr:first-child {
+    border-top: none;
+  }
+
+  /* The second selector is `.log--sticky-col`'s own, repeated verbatim so it
+     matches at equal specificity and wins on source order — this file's
+     sticky-column rules sit ~3500 lines above and would otherwise keep
+     pinning a cell that is now block-level, against a table with no scroll
+     range left to pin it out of. `border-right` is the frozen region's edge
+     and there is no frozen region here. */
+  .log--payouts td,
+  .log--payouts tbody tr:not(.drawer-row) > td:first-child:not(.log__empty) {
+    display: block;
+    position: static;
+    padding: 0;
+    border-top: none;
+    border-right: none;
+    background-color: transparent;
+  }
+
+  .payouts__label {
+    display: block;
+    letter-spacing: var(--track-label);
+    color: var(--ink-faint);
+  }
+}
+
+/* The roster on /payouts/[id], below 40rem. Measured at 390px: 253px of a
+   339px region on Shares and Amount, which pushes State and every row control
+   off the right edge. A member's whole reason to open this page is "was I
+   paid?", and State is the cell that answers it — so the roster's most
+   important column is the one a phone never shows, while two numeric columns
+   the reader mostly scans keep the room.
+
+   Reflowed rather than pinned, same as `.log--payouts` above, and rather than
+   dropped, same as everything else in this file. What differs is the shape:
+   this table's five cells do not want to be a flat stack, because Name and
+   State are one question and answer and Shares and Amount are the arithmetic
+   behind it. So the row becomes a small grid with the pairs on their own
+   lines, and the action cell spans the foot where a row of buttons has the
+   full width it was designed for.
+
+   The areas are assigned by `nth-child` against DOM order (Name, Shares,
+   Amount, State, actions) — the DOM order is the reading order the desktop
+   table has and the accessibility tree keeps, and only the visual placement
+   changes. `grid-template-areas` is what makes State climb to line 1 without
+   moving a node, which is the whole point: R4 wants both channels populated,
+   not a second copy of the state written into the name cell. */
+@media (max-width: 40rem) {
+  .log--roster thead {
+    display: none;
+  }
+
+  .log--roster tbody tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "name  state"
+      "shares amount"
+      "act   act";
+    gap: var(--s-2) var(--s-3);
+    padding: var(--s-3) 0;
+    border-top: 1px solid var(--rule);
+  }
+
+  .log--roster tbody tr:first-child {
+    border-top: none;
+  }
+
+  /* The second selector is `.log--sticky-col`'s own, repeated verbatim so it
+     matches at equal specificity and wins on source order — see the identical
+     note on `.log--payouts` above. */
+  .log--roster td,
+  .log--roster tbody tr:not(.drawer-row) > td:first-child:not(.log__empty) {
+    display: block;
+    position: static;
+    padding: 0;
+    border-top: none;
+    border-right: none;
+    background-color: transparent;
+  }
+
+  .log--roster td:nth-child(1) {
+    grid-area: name;
+  }
+
+  /* `.num`'s right alignment is for reading a column of figures down a shared
+     vertical, and there is no column here — Shares now starts the second line,
+     so it reads from the left like the name above it. Amount keeps its right
+     edge, which is the row's one remaining vertical. */
+  .log--roster td:nth-child(2) {
+    grid-area: shares;
+    text-align: left;
+  }
+
+  .log--roster td:nth-child(3) {
+    grid-area: amount;
+  }
+
+  /* State sits on the first line beside the name it describes, and stops
+     being right-aligned there — it is an answer, not a figure. */
+  .log--roster td:nth-child(4) {
+    grid-area: state;
+    text-align: right;
+  }
+
+  .log--roster td:nth-child(5) {
+    grid-area: act;
+  }
+
+  /* Shares keeps its own label because a bare number beside a currency figure
+     is ambiguous once the `<thead>` naming them is gone. Amount does not: it
+     carries the word ISK, and State and the action row are self-describing. */
+  .roster__label {
     display: block;
     letter-spacing: var(--track-label);
     color: var(--ink-faint);

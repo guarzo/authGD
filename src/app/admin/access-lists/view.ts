@@ -177,6 +177,30 @@ export function showsObservations(state: MonitorState): boolean {
   return state.kind !== "grant-needed" && state.kind !== "designate-needed";
 }
 
+/**
+ * The one corporation shared by every member missing access, or null when they
+ * do not share one.
+ *
+ * Same shape and same argument as `crewNorms` in `src/app/account/page.tsx`:
+ * the Corporation column exists to tell rows apart, and on the common case —
+ * one corp's members left off an alliance list — it tells them apart not at
+ * all while charging every row for the repetition. Measure the norm against
+ * the set, state it once above the list, and let the rows carry only what
+ * differs.
+ *
+ * A single unknown corporation (`corporationId === null`) defeats the norm
+ * rather than being folded into it. The sentence this feeds says "all of
+ * them", and it has to be true of all of them; a row we cannot place is
+ * exactly the row that sentence would be lying about.
+ */
+export function sharedCorporation(
+  rows: { corporationId: number | null }[],
+): number | null {
+  const first = rows[0]?.corporationId ?? null;
+  if (first === null) return null;
+  return rows.every((r) => r.corporationId === first) ? first : null;
+}
+
 export type WatchedRow = {
   accessListId: number;
   name: string | null;

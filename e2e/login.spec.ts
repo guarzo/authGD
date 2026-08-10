@@ -8,24 +8,35 @@ import { expect, test } from "@playwright/test";
  * deployed set (see there) — no session, no seed, needed to see it.
  */
 
-/** In `EVE_SSO_SCOPES` order — the page renders `cfg.eveSso.scopes` as given. */
+/**
+ * In render order, which is `SCOPE_GROUPS`' order and NOT `EVE_SSO_SCOPES`'.
+ * The page groups the scopes by what they let authGD do — see `SCOPE_GROUPS`
+ * in `login/page.tsx` for why config order is deliberately not preserved.
+ */
 const SCOPES = [
   "esi-characters.read_contacts.v1",
   "esi-characters.write_contacts.v1",
-  "esi-ui.open_window.v1",
   "esi-location.read_location.v1",
   "esi-universe.read_structures.v1",
   "esi-location.read_online.v1",
+  "esi-ui.open_window.v1",
 ];
 
 /** One distinctive fragment of each scope's own sentence, in the same order. */
 const DESCRIPTIONS = [
-  "Reads the contacts",
-  "Adds, updates, and removes contacts",
-  "open a character's info window",
-  "which solar system",
-  "name of the structure",
+  "Reads what is already there",
+  "Adds, updates and removes contacts",
+  "solar system",
+  "structure's name",
   "logged in right now",
+  "info window",
+];
+
+/** Each group's head, in render order. */
+const GROUP_HEADS = [
+  "the only thing authGD writes",
+  "Where your characters are",
+  "Your running EVE client",
 ];
 
 test("each requested scope shows a plain-English description, not just the identifier", async ({
@@ -35,6 +46,17 @@ test("each requested scope shows a plain-English description, not just the ident
 
   const heading = page.locator(".launch__scopes-head");
   await expect(heading).toHaveText("Scopes requested");
+
+  // The shared fact per group, said once above the rows it covers. This is the
+  // half of the fix that the per-row assertions below cannot see: the
+  // descriptions were trimmed on the assumption that the group head carries
+  // what they dropped, so a head that stopped rendering would leave six
+  // sentences that no longer say what they are for.
+  const heads = page.locator(".launch__scope-group");
+  await expect(heads).toHaveCount(GROUP_HEADS.length);
+  for (const [i, head] of GROUP_HEADS.entries()) {
+    await expect(heads.nth(i)).toContainText(head);
+  }
 
   const rows = page.locator(".launch__scopes dt");
   await expect(rows).toHaveCount(SCOPES.length);
@@ -78,6 +100,12 @@ test("the description outranks the identifier in the reading order that matters:
     .evaluate((el) => {
       return getComputedStyle(el).color;
     });
+  const headColor = await page
+    .locator(".launch__scope-group")
+    .first()
+    .evaluate((el) => {
+      return getComputedStyle(el).color;
+    });
 
   const luminance = (rgb: string) => {
     const [r, g, b] = rgb.match(/[\d.]+/g)!.map(Number);
@@ -87,6 +115,11 @@ test("the description outranks the identifier in the reading order that matters:
   // --ink-dim (the description) renders lighter than --ink-faint (the
   // identifier) in this system's dark theme — see DESIGN.md's colour table.
   expect(luminance(ddColor)).toBeGreaterThan(luminance(dtColor));
+  // And the group head — --ink, the shared fact, the answer to "does this
+  // change my stuff" — outranks both. It is deliberately not a member of the
+  // uppercase label register, so weight and colour are the only thing marking
+  // it as the line to read first; this is the assertion that keeps that true.
+  expect(luminance(headColor)).toBeGreaterThan(luminance(ddColor));
 });
 
 test("the sign-in control renders before the scope disclosure in document order", async ({
@@ -111,7 +144,9 @@ test("the sign-in control renders before the scope disclosure in document order"
   // is not a case of "press the button to see it": it asserts the paragraph
   // and the scope list are both attached and visible, just later in the page.
   await expect(page.locator(".launch__disclosure-note")).toBeVisible();
-  await expect(page.locator(".launch__scopes")).toBeVisible();
+  // `.first()`: the disclosure renders one <dl> per scope group now, so this
+  // class matches three elements rather than one.
+  await expect(page.locator(".launch__scopes").first()).toBeVisible();
 });
 
 test("the sign-in control is reachable without scrolling on a short viewport", async ({
@@ -132,7 +167,7 @@ test("the scope list stays readable at a narrow width", async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 700 });
   await page.goto("/login");
 
-  const list = page.locator(".launch__scopes");
+  const list = page.locator(".launch__scopes").first();
   await expect(list).toBeVisible();
 
   // No horizontal scroll: the panel's own overflow-wrap: anywhere on dt is

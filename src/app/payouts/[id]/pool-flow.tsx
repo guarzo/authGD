@@ -152,6 +152,7 @@ export function DeletePoolForm({
         label="delete"
         restName={`delete pool ${poolNumber}`}
         confirmName={`confirm delete pool ${poolNumber}`}
+        pendingLabel="deleting…"
       />
     </form>
   );

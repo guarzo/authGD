@@ -334,7 +334,46 @@ export default async function AdminSyncPage({
       <RuleHead
         as="h2"
         aside={
-          <span className="btn-row__stamp">checked {utcHhmmss(renderedAt)} UTC</span>
+          <>
+            <span className="btn-row__stamp">checked {utcHhmmss(renderedAt)} UTC</span>
+            {/* Refresh lives beside the stamp it replaces, not in the control
+                row at the foot of the page. Down there it was an `<a href>`
+                with no pending state drawn identically to `Recheck invalid
+                affiliations`, which enqueues a job — two controls at the same
+                weight, 8px apart, one of which changes nothing and one of
+                which puts work on the queue. Nothing but the label separated
+                them.
+
+                Differentiated by adjacency rather than by grade, because the
+                grade axis is closed here: `.btn--quiet` carries
+                `min-height: 1.75rem`, and DESIGN.md R1 scopes that 28px grade
+                by the reason for it — rows that each carry a control set and
+                are read many at a time. A single control in a section header
+                is not that. Gold is already spent on `Sync now` and a second
+                one would flatten the first.
+
+                Adjacency is the stronger argument anyway: this control's
+                subject is the timestamp, not the queue. "Checked 14:02:11 UTC"
+                followed by the control that re-checks reads as one statement,
+                and an admin who wants a newer number now finds the control
+                while looking at the stale one instead of scrolling past seven
+                rows and however many open drawers.
+
+                A plain anchor, not a router link: this page is the only thing
+                on screen that can answer "did the run land", and a soft
+                navigation to the URL you are already on is exactly the case a
+                client router is entitled to serve from its own cache. It drops
+                `?queued=` and `?at=` on the way, which is still worth having
+                now that the notice stamps itself: the canonical URL is the one
+                an admin leaves open, and it should not carry a press from an
+                hour ago at all.
+
+                No polling behind it: an admin reading an expanded failed row
+                must not have the page move under them. */}
+            <a className="btn" href="/admin/sync">
+              Refresh
+            </a>
+          </>
         }
       >
         {groups.length} job{groups.length === 1 ? "" : "s"}
@@ -424,6 +463,37 @@ export default async function AdminSyncPage({
                   cadence ?? "on demand",
                 );
                 const nextRun = nextRunFor(g.jobType, renderedAt);
+                // A pre-built accessible name for the toggle, because the
+                // computed one would not hold still. `<summary>`'s name comes
+                // from its contents, and one of those contents is
+                // `RelativeTime` — a client component on a shared 30s ticker —
+                // so this control renamed itself twice a minute with no state
+                // having changed. A screen reader re-announces a control whose
+                // name it sees change (SC 4.1.2), and a voice user's "click
+                // discord.sweep healthy 2 minutes ago" stops matching the page
+                // a minute later (SC 3.2.4).
+                //
+                // Every other piece is restated here rather than left to the
+                // contents, because `aria-label` replaces the computed name
+                // outright: anything not repeated leaves the assistive channel
+                // entirely, which is the R4 parity failure inverted. All of it
+                // is safe to freeze — `renderedAt` is one server-side instant
+                // for the whole render, so the queued age and the next-run time
+                // are as fixed as the cadence is. Only the "ago" is dropped,
+                // which is the entire reason this exists; the drawer under it
+                // carries every run's own timestamp.
+                //
+                // Assembled to match what the contents computed to, separator
+                // for separator: `queuedMarkerText` supplies its own leading
+                // comma, ` UTC` is the span `splitCadenceUtc` strips off the
+                // visible text, and the space before "next" is the one the
+                // `<br>` was contributing. The three `toHaveAccessibleName`
+                // cases in `e2e/sync.spec.ts` pin those joins.
+                const summaryName =
+                  `${g.jobType} ${healthLabel(health)}` +
+                  `${g.queued ? queuedMarkerText(g.queuedSince, renderedAt) : ""}` +
+                  ` ${cadenceVisible}${hiddenUtc ? " UTC" : ""}` +
+                  `${nextRun ? ` next ${utcHhmm(nextRun)}` : ""}`;
                 const cols = countColumns(g.jobType, g.runs);
                 const span = cols.length || 1;
                 // Shared between the runs table below and the window
@@ -434,6 +504,7 @@ export default async function AdminSyncPage({
                   <li key={g.jobType} className="strip__job">
                     <Disclosure
                       className="strip__disc"
+                      ariaLabel={summaryName}
                       defaultOpen={needsAttention(health)}
                       summary={
                         <>
@@ -1121,22 +1192,10 @@ export default async function AdminSyncPage({
             Recheck invalid affiliations
           </Submit>
         </form>
-        {/* A plain anchor, not a router link: this page is the only thing on
-            screen that can answer "did the run land", and a soft navigation to
-            the URL you are already on is exactly the case a client router is
-            entitled to serve from its own cache. It drops `?queued=` and
-            `?at=` on the way, which is still worth having even now that the
-            notice stamps itself: the canonical URL is the one an admin leaves
-            open, and it should not carry a press from an hour ago at all.
-
-            No polling behind it: an admin reading an expanded failed row must
-            not have the page move under them. The notice copy names the
-            browser reload rather than this control, because the notice renders
-            at the top of the page and this sits below seven rows and however
-            many open drawers. */}
-        <a className="btn" href="/admin/sync">
-          Refresh
-        </a>
+        {/* Refresh used to sit here as a third peer. It moved up beside the
+            "checked …" stamp in the strip's section header — see the docblock
+            there. What is left in this row is exactly the two controls that
+            put work on the queue, which is what the row is for. */}
       </div>
     </main>
   );

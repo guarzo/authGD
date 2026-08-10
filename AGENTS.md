@@ -45,3 +45,30 @@ until it comes up green. The rationale is written next to the setting.
 `docs/e2e-flake-triage.md` has the full triage workflow and lists the tests
 currently exposed to the `useSubmitGuard` latch defect.
 
+## A test written to prove a fix must be shown to fail without it
+
+A passing new test is not evidence that it tests anything. Assertions written
+alongside a fix pass for two indistinguishable reasons — the fix works, or the
+assertion cannot fail — and a green run reports both identically. This is not a
+rare slip: six assertions written during one sweep of this repo turned out to be
+vacuous, each caught only by this check and none by review.
+
+So, before a test that exists to prove a fix is committed: **take the fix out,
+leave the test in, and watch it fail.** Then put the fix back and watch it pass.
+If the failure message does not describe the defect you set out to fix, the test
+is measuring something else.
+
+The instrument matters as much as the discipline. Reverting *everything*
+uncommitted is not a control when the test is part of the same uncommitted
+change — stashing removes the test alongside the fix, nothing runs, and the
+green result is read as confirmation. Revert only the code under test, by hand,
+and leave the assertion standing.
+
+The failures this catches are the quiet kind. `toBeVisible()` against a
+`.visually-hidden` element passes either way, because a 1px clipped box still
+has a bounding box. A row-count assertion on a table whose empty state is itself
+one `<tr>` passes whether or not the filter ran. A colour assertion parsing
+`getComputedStyle` output passes on garbage, because these tokens serialize as
+`oklch(...)` and a naive parse reads lightness as red without erroring. None of
+those announce themselves; all of them fail loudly the moment the fix is removed.
+

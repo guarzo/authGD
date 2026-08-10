@@ -331,6 +331,15 @@ export function MarkPaidForm({
         confirmName={`confirm mark paid ${displayName}`}
         describedBy={arm ? describedBy : undefined}
         confirm={arm}
+        // The in-flight state, said on the control rather than nowhere. These
+        // actions end in `revalidateOperation` and do not redirect, so a press
+        // moves nothing on screen until the server answers — and
+        // `useSubmitGuard` silently refuses every press in that window. With no
+        // `ConfirmGroup` on this route there is no channel for the refusal
+        // (`useConfirmReport()` is null here), so the label is the whole of the
+        // feedback: it changes on the press that worked, which is what stops
+        // the operator making the press that gets swallowed.
+        pendingLabel="paying…"
       />
     </form>
   );
@@ -356,6 +365,7 @@ export function RevertForm({
         label="revert"
         restName={`revert payment for ${displayName}`}
         confirmName={`confirm revert payment for ${displayName}`}
+        pendingLabel="reverting…"
       />
     </form>
   );
@@ -399,6 +409,7 @@ export function RemoveParticipantForm({
         label="remove"
         restName={`remove ${displayName}`}
         confirmName={`confirm remove ${displayName}`}
+        pendingLabel="removing…"
       />
     </form>
   );

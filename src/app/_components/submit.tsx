@@ -20,6 +20,21 @@ import { useSubmitGuard } from "./submit-guard";
  * prop is still honoured for the other meaning of the word: a control the call
  * site knows is unavailable before anyone presses it.
  *
+ * Not for a `<form method="get">`, and the mismatch runs both ways. Nothing it
+ * offers can arrive: a native GET submit is a document navigation, not a
+ * server action, so `useFormStatus()` reports `pending` false for the whole
+ * life of the document and the button's `aria-busy` is a promise fixed at
+ * "false". And the guard's latch, taken synchronously on the first click, is
+ * released only by watching `pending` go true and then false again — a
+ * transition that never happens here. In the ordinary path the document is
+ * replaced before that matters, but a document that outlives its own
+ * navigation (a stop press, a back into the bfcache) comes back with the latch
+ * still set and the button permanently refusing every press, with no visible
+ * trace. The three GET filter forms — `/admin/audit`, `/payouts`,
+ * `/admin/accounts` — use a plain `<button type="submit">` instead. They lose
+ * nothing: re-running a filter is idempotent, which is the whole reason the
+ * guard has no work to do there.
+ *
  * `className` defaults to `"btn"` rather than staying free-form or moving to
  * a closed `grade` union: real call sites stack a colour grade, a size
  * modifier and an occasional layout utility together in one string

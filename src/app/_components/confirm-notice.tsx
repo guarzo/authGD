@@ -99,9 +99,16 @@ export function ConfirmNotice({
   }, [at, text]);
 
   return (
-    // No focus ring: same reasoning as `FocusHeading` — the global ring is
-    // `:focus-visible`, which a programmatic focus on a non-input element
-    // does not match.
+    // A focus ring appears, and is meant to. This used to say "no focus ring:
+    // same reasoning as `FocusHeading`" — and that reasoning was wrong in both
+    // places (Chromium does match `:focus-visible` on a programmatic focus of a
+    // `tabindex="-1"` element; measured). The ring is the sighted counterpart
+    // of the announcement this div exists to make.
+    //
+    // No `fit-content` here, unlike `FocusHeading`. This wraps a `Notice`,
+    // which is a full-width panel, so a full-width ring is the right size — it
+    // is drawn around the thing it is pointing at rather than around a column
+    // of mostly nothing.
     <div ref={ref} tabIndex={-1}>
       <Notice live={false}>{text}</Notice>
     </div>

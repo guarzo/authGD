@@ -19,3 +19,7 @@ playwright-report/
 # anyone running a fork. Keep them local; put anything durable in README.md,
 # CONTRIBUTING.md, or docs/ops.md instead.
 docs/superpowers/
+
+# Design-sweep screenshots: regenerable from docs/design-sweep-2/capture.spec.ts.txt
+# and several megabytes of PNG. The prose reports beside them are tracked.
+docs/design-sweep-2/shots/

@@ -23,38 +23,102 @@ import { LOGIN_ERRORS, loginErrorTone, lookupErrorMessage } from "@/lib/error-re
  * means. On the one page whose job is to say what is being granted, an
  * unknown scope wearing its neighbour's description is the failure worth
  * spending a line of copy to avoid.
+ *
+ * Each sentence now says only what distinguishes its scope from its
+ * neighbours; whatever the whole group has in common is stated once, in the
+ * group's own head (`SCOPE_GROUPS`). That is `crewNorms`' shape from
+ * `account/page.tsx`, and the reason is the same: six sentences that each
+ * re-established "so authGD can show your location" taught the reader that
+ * these lines do not differ, on the one screen where the differences are the
+ * entire point.
  */
 function describeScope(scope: string, contactLabel: string): string {
   switch (scope) {
     // src/jobs/contacts.ts:14 — CONTACT_SCOPES[0]. getAllContacts() only.
     case "esi-characters.read_contacts.v1":
-      return "Reads the contacts already on your characters, to check what's there before changing anything.";
+      return "Reads what is already there, before anything is changed.";
     // src/jobs/contacts.ts:15 — CONTACT_SCOPES[1]. The writes themselves are
     // esi.addContacts / editContacts / deleteContacts in that same job, driven
     // by `diffContacts`' return value, gated to the configured label only.
     case "esi-characters.write_contacts.v1":
-      return `Adds, updates, and removes contacts under the "${contactLabel}" label on your characters, to keep them matching your standing.`;
+      return `Adds, updates and removes contacts under the "${contactLabel}" label, to keep them matching your standing. Nothing outside that label is touched.`;
     // src/lib/esi/client.ts:18,332 — OPEN_WINDOW_SCOPE, used from
     // payouts/actions.ts:861 to open a character's info window in the client.
     case "esi-ui.open_window.v1":
-      return "Lets authGD open a character's info window in your EVE client from the payouts page.";
+      return "Opens a character's info window in your running client, from the payouts page.";
     // src/jobs/location.ts — LOCATION_SCOPE_REQUIRED, the only scope
     // `canReadLocation` gates on; `runLocationJob` reads esi.getLocation with
     // it. No line number: that file is added later in this same plan.
     case "esi-location.read_location.v1":
-      return "Reads which solar system your character is in, and the station or structure it is docked in, so authGD can show that on your own account page and to admins.";
+      return "The solar system, and the station or structure the character is docked in.";
     // src/jobs/location.ts — LOCATION_SCOPES_OPTIONAL[0]. esi.getStructureName,
     // resolved with the docked character's own token. Missing or refused, the
     // line still renders — just without a name on the structure.
     case "esi-universe.read_structures.v1":
-      return "Looks up the name of the structure your character is docked in, so the location names a place instead of a number. Without it a docked character reads only as docked.";
+      return "The structure's name, so a docked character reads as a place instead of a number. Without it, docked is all it says.";
     // src/jobs/location.ts — LOCATION_SCOPES_OPTIONAL[1]. esi.getOnline, used
     // only to choose between a current reading and a "last seen" one.
     case "esi-location.read_online.v1":
-      return "Checks whether your character is logged in right now, so a location left behind by a character who has since logged off is shown as where they were last seen rather than as where they are.";
+      return "Whether the character is logged in right now, so a reading left behind by one who has since logged off is shown as where they were last seen, not where they are.";
     default:
       return "This deployment requests this scope, but authGD has no description for it. Ask whoever runs it what it is for before granting.";
   }
+}
+
+/**
+ * The six scopes are three facts, and the flat list said so nowhere: six rows
+ * at one identical weight, of which exactly one — `write_contacts` — writes
+ * anything at all, sitting second of six with nothing marking it out.
+ *
+ * So the shared fact per group is stated once, in the group's head, and the
+ * `<dd>`s below carry only what differs. The head is also where the reader
+ * gets the answer they actually came for ("does this thing change my stuff"),
+ * ahead of any identifier.
+ *
+ * Grouping deliberately reorders relative to `EVE_SSO_SCOPES`. Config order
+ * is an ops concern and carries no meaning for the person deciding; a scope
+ * this list does not know about still renders, last, under a head that admits
+ * the deployment added it. Groups with nothing in them do not render at all,
+ * so a fork requesting only contact scopes gets one group rather than three
+ * heads over two lists and an empty one.
+ */
+const SCOPE_GROUPS: { head: string; scopes: string[] }[] = [
+  {
+    head: "Contacts on your characters — the only thing authGD writes.",
+    scopes: ["esi-characters.read_contacts.v1", "esi-characters.write_contacts.v1"],
+  },
+  {
+    head: "Where your characters are, shown on your own account page and to admins.",
+    scopes: [
+      "esi-location.read_location.v1",
+      "esi-universe.read_structures.v1",
+      "esi-location.read_online.v1",
+    ],
+  },
+  {
+    head: "Your running EVE client.",
+    scopes: ["esi-ui.open_window.v1"],
+  },
+];
+
+/** `SCOPE_GROUPS` intersected with what this deployment actually requests,
+ *  plus a trailing group for anything the list above does not place. */
+function groupScopes(requested: string[]): { head: string; scopes: string[] }[] {
+  const placed = new Set<string>();
+  const groups = SCOPE_GROUPS.map(({ head, scopes }) => {
+    const present = scopes.filter((s) => requested.includes(s));
+    present.forEach((s) => placed.add(s));
+    return { head, scopes: present };
+  }).filter((g) => g.scopes.length > 0);
+
+  const rest = requested.filter((s) => !placed.has(s));
+  if (rest.length > 0) {
+    groups.push({
+      head: "Also requested by this deployment, and not described here.",
+      scopes: rest,
+    });
+  }
+  return groups;
 }
 
 // `await searchParams` below already forces dynamic rendering, so the
@@ -95,6 +159,20 @@ export default async function LoginPage({
             the brand twice before reaching anything actionable — on the one
             page an unauthenticated visitor can get to. The emblem adds nothing
             the heading does not already say, which is what `alt=""` is for. */}
+        {/* `fetchPriority="low"`, stated rather than left implied. This mark is
+            79.8 KB of decorative WebP with `alt=""`, and the control below it —
+            the entry point the whole page exists for — is 2,248 bytes carrying
+            an explicit `high`. Left unset, the emblem contends for the same
+            connection as that control on a first visit over a bad link, and the
+            page's one actionable thing waits behind its own background. Saying
+            `low` costs the emblem nothing a visitor can perceive (it is drawn
+            at 180px, below the fold of nothing, and announces nothing to AT)
+            and takes it out of the race.
+
+            This block sits above the disable directive, not between it and the
+            `<img>`. "Next line" means the next line, and a comment is a line —
+            inserting anything there retargets the directive at the comment and
+            silently unguards the element. Keep the directive adjacent. */}
         {/* eslint-disable-next-line @next/next/no-img-element -- what next/image
             would add here is a re-encode at its default quality 75, and
             PRODUCT.md principle 5 asks for this artwork at "full quality" or not
@@ -111,6 +189,7 @@ export default async function LoginPage({
           alt=""
           width={180}
           height={180}
+          fetchPriority="low"
         />
         <h1 className="launch__title">{brand.name}</h1>
         {/* Omitted entirely when unset rather than rendered empty: an empty
@@ -189,20 +268,32 @@ export default async function LoginPage({
           {scopes.length > 0 && (
             <>
               <p className="launch__scopes-head">Scopes requested</p>
-              {/* dt is the raw identifier, dd is the one sentence it buys —
+              {/* One <dl> per group rather than one for the lot: the group's
+                  head is a statement about every row under it, and a <p>
+                  interleaved inside a single <dl> is neither a <dt> nor a
+                  <dd> and has no defined relationship to either. Separate
+                  lists keep each head adjacent to exactly the rows it
+                  describes, in both channels.
+
+                  dt is the raw identifier, dd is the one sentence it buys —
                   see describeScope above and the CSS comment on
                   .launch__scopes for why this runs the opposite way from a
                   plain "list of identifiers under one heading". A <Fragment>
                   per scope keeps each dt/dd pair a real boundary: still one
                   row per scope, never a joined string. */}
-              <dl className="launch__scopes">
-                {scopes.map((scope) => (
-                  <Fragment key={scope}>
-                    <dt>{scope}</dt>
-                    <dd>{describeScope(scope, label)}</dd>
-                  </Fragment>
-                ))}
-              </dl>
+              {groupScopes(scopes).map((group) => (
+                <Fragment key={group.head}>
+                  <p className="launch__scope-group">{group.head}</p>
+                  <dl className="launch__scopes">
+                    {group.scopes.map((scope) => (
+                      <Fragment key={scope}>
+                        <dt>{scope}</dt>
+                        <dd>{describeScope(scope, label)}</dd>
+                      </Fragment>
+                    ))}
+                  </dl>
+                </Fragment>
+              ))}
             </>
           )}
         </div>

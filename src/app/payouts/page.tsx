@@ -9,7 +9,6 @@ import {
 } from "@/services/payout-view";
 import { navFor } from "@/app/_components/nav-items";
 import { RuleHead, Scroller, SiteHeader, Status } from "@/app/_components/ui";
-import { Submit } from "@/app/_components/submit";
 import { brandProps } from "@/app/_components/brand-server";
 import { fmtIsk } from "@/app/_components/format-isk";
 import { PendingLink } from "./pending-link";
@@ -209,8 +208,13 @@ export default async function PayoutsPage({
           <div className="filter-form__cell filter-form__cell--actions">
             <div className="filter-form__actions">
               {/* Filter is routine and reversible, not the page's primary act
-                  — gold (btn--primary) is rationed for New operation. */}
-              <Submit className="btn">Filter</Submit>
+                  — gold (btn--primary) is rationed for New operation.
+
+                  A plain button rather than `<Submit>`, because this form is
+                  `method="get"` — see `submit.tsx`. */}
+              <button type="submit" className="btn">
+                Filter
+              </button>
               {filtered && (
                 <Link className="btn btn--quiet" href="/payouts">
                   clear
@@ -252,11 +256,29 @@ export default async function PayoutsPage({
             <tbody>
               {ops.map((op) => (
                 <tr key={op.id}>
+                  {/* Each cell leads with a `.payouts__label`, hidden above
+                      30rem where the real `<thead>` is naming the columns and
+                      shown below it where the row has reflowed to blocks and
+                      the `<thead>` is gone. Same construction as
+                      `.crew__label` on the accounts drawer, and the reasoning
+                      — why a real element rather than `content: attr()`, and
+                      why the label is in the DOM at every width rather than
+                      swapped in — is in that rule's docblock in globals.css.
+                      These stay `<td>`, not `<th scope="row">`: `.log th`
+                      carries `white-space: nowrap`, which would inherit into
+                      the Name cell and defeat the `overflow-wrap: anywhere`
+                      that keeps a 60-character operation name from setting the
+                      column's width. */}
                   <td>
+                    <span className="payouts__label">Name</span>
                     <PendingLink href={`/payouts/${op.id}`}>{op.name}</PendingLink>
                   </td>
-                  <td className="mono nowrap">{fmtDate(op.occurredAt)}</td>
+                  <td className="mono nowrap">
+                    <span className="payouts__label">Date</span>
+                    {fmtDate(op.occurredAt)}
+                  </td>
                   <td>
+                    <span className="payouts__label">Status</span>
                     {op.status === "finalized" ? (
                       <Status tone="ok">finalized</Status>
                     ) : (
@@ -278,6 +300,7 @@ export default async function PayoutsPage({
                       unexplained punctuation mark. `.visually-hidden` is the
                       pattern `<Tier>` already uses for exactly this. */}
                   <td className="mono nowrap num">
+                    <span className="payouts__label">Total</span>
                     {op.status === "draft" && Number(op.totalValue) === 0 ? (
                       <span className="dim">
                         <span aria-hidden="true">&mdash;</span>
@@ -293,6 +316,7 @@ export default async function PayoutsPage({
                       done it, and carries the glyph and the word so the hue is
                       never the only signal. */}
                   <td>
+                    <span className="payouts__label">Paid</span>
                     {op.participantCount === 0 ? (
                       <span className="dim mono">
                         <span aria-hidden="true">&mdash;</span>
@@ -338,6 +362,7 @@ export default async function PayoutsPage({
                       Their hidden text differs because the claim differs, and
                       only one of the two is provable — see `ViewerPayoutState`. */}
                   <td>
+                    <span className="payouts__label">Yours</span>
                     {op.viewerState === "paid" && <Status tone="ok">paid</Status>}
                     {op.viewerState === "unpaid" &&
                       (op.status === "finalized" ? (

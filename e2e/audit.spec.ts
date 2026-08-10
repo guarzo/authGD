@@ -622,6 +622,66 @@ test("a paged view offers a way back to the newest entries", async ({
   await expect(page.locator("tbody tr")).toHaveCount(AUDIT_PAGE_SIZE);
 });
 
+/**
+ * Every control on this page that changes the result set is a document load —
+ * the filter is a `<form method="get">` and both pagers are plain `<a href>` —
+ * so a screen reader's entire response to "Filter" or "Older entries" is to
+ * announce the new document by its title. With a constant "Audit log" that
+ * announcement was byte-identical whether the press had done something or
+ * nothing, and the only text distinguishing page one from page seven was an
+ * `<h2>` the admin then had to go and find.
+ *
+ * Note what cannot fix this: `aria-live`. A live region announces *mutations*
+ * to a region that was already present, and a region arriving with its
+ * document is not a mutation — so the obvious remedy would test green under
+ * any assertion that checks the attribute exists, and announce nothing.
+ *
+ * Deliberately coarse. The exact filter values belong to the `<h2>` and the
+ * chips; a title reciting them is read out in full, ahead of the thing the
+ * admin actually asked for, on every single load.
+ */
+test("the page title says which slice of the log this is", async ({ page, context }) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
+  await db.insert(auditLog).values(
+    Array.from({ length: AUDIT_PAGE_SIZE + 5 }, () => ({
+      actor: admin.id,
+      action: "tier.changed",
+      target: admin.id,
+      details: { to: "alumni" },
+    })),
+  );
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+
+  await page.goto("/admin/audit");
+  await expect(page).toHaveTitle("Audit log · Test Corp");
+
+  // Paging: the announcement now differs from the one before it.
+  await page.getByRole("link", { name: "Older entries" }).first().click();
+  await expect(page).toHaveTitle("Audit log — older · Test Corp");
+
+  // Filtering, from the newest page, is its own distinct announcement.
+  await page.goto("/admin/audit?actor=Boss");
+  await expect(page).toHaveTitle("Audit log — filtered · Test Corp");
+
+  // Both at once, and in that order.
+  await page.getByRole("link", { name: "Older entries" }).first().click();
+  await expect(page).toHaveTitle("Audit log — filtered, older · Test Corp");
+
+  // A cursor the page itself discards must not make the title claim a page the
+  // admin is not on — the same rule the `<h2>` follows for `?before=abc`.
+  await page.goto("/admin/audit?before=abc");
+  await expect(page).toHaveTitle("Audit log · Test Corp");
+
+  // A repeated param resolves last-wins in the body, so the title has to read
+  // the same end of the array. Written both ways round because only one of
+  // them fails when the title picks the first value: with the junk cursor
+  // LAST, both readings agree that nothing is paged.
+  await page.goto("/admin/audit?before=abc&before=99999999");
+  await expect(page).toHaveTitle("Audit log — older · Test Corp");
+  await page.goto("/admin/audit?before=99999999&before=abc");
+  await expect(page).toHaveTitle("Audit log · Test Corp");
+});
+
 test("a filtered paged view keeps its filter on the way back", async ({
   page,
   context,
@@ -900,8 +960,16 @@ test("the action is a filter link like actor and target", async ({ page, context
  * tier change, derole and token event puts them in `target` with `system` or an
  * admin acting. Filtering the wrong column returns "no results", which is true
  * and says nothing about the log actually being silent on that person.
+ *
+ * The nudge sits above the results rather than inside the empty state, and the
+ * second half of this test is why: an actor filter that returns the member's
+ * own self-service entries is the dangerous outcome, because it reads as a
+ * complete history and is not one. An empty result at least announces itself.
  */
-test("an empty actor filter points at the target column", async ({ page, context }) => {
+test("an actor filter points at the target column, full or empty", async ({
+  page,
+  context,
+}) => {
   const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
   const member = await seedMember(db, { name: "Zed", tier: "alumni" });
   await db.insert(auditLog).values([
@@ -919,17 +987,49 @@ test("an empty actor filter points at the target column", async ({ page, context
   await expect(page.getByLabel("Actor", { exact: true })).toBeVisible();
   await expect(page.locator("#filter-actor-hint")).toHaveText("who did it");
   await expect(page.locator("#filter-target-hint")).toHaveText("who it happened to");
+  // Nothing to re-point when no filter is set.
+  await expect(page.getByText("target of an entry, not the actor")).toHaveCount(0);
 
   await page.goto("/admin/audit?actor=Zed");
-  const empty = page.locator(".log__empty");
-  await expect(empty).toContainText("Nothing matches this filter.");
-  await expect(empty).toContainText("target of an entry, not the actor");
+  const nudge = page.locator("p.page__lede", {
+    hasText: "target of an entry, not the actor",
+  });
+  await expect(nudge).toBeVisible();
+  await expect(page.locator(".log__empty")).toContainText("Nothing matches this filter.");
 
-  const retry = empty.getByRole("link");
+  // Now give Zed something they did themselves, so the actor filter returns a
+  // row. The filter now looks answered, which is exactly when the sentence has
+  // to still be on screen.
+  await db.insert(auditLog).values([
+    {
+      actor: member.id,
+      action: "character.linked",
+      target: member.id,
+      details: {},
+    },
+  ]);
+  await page.goto("/admin/audit?actor=Zed");
+  // Which row, not how many: a count alone passes on any single row, and the
+  // point of this half is specifically that the actor filter returns Zed's own
+  // self-service entry and NOT the tier change done to them.
+  const rows = page.locator("tbody tr");
+  await expect(rows).toHaveCount(1);
+  await expect(rows).toContainText("character.linked");
+  await expect(rows).not.toContainText("tier.changed");
+  await expect(page.locator(".log__empty")).toHaveCount(0);
+  await expect(nudge).toBeVisible();
+
+  const retry = nudge.getByRole("link");
   await expect(retry).toHaveAttribute("href", "/admin/audit?target=Zed");
   await retry.click();
-  await expect(page.locator("tbody tr")).toHaveCount(1);
-  await expect(page.locator(".log__empty")).toHaveCount(0);
+  // The target column returns both: the one Zed did to themselves and the one
+  // the system did to them. The second is the entry the actor filter hid, and
+  // recovering it is the whole reason the nudge exists.
+  await expect(rows).toHaveCount(2);
+  await expect(rows.first()).toContainText("character.linked");
+  await expect(rows.last()).toContainText("tier.changed");
+  // Both columns crossed: there is nothing left to suggest.
+  await expect(page.getByText("target of an entry, not the actor")).toHaveCount(0);
 });
 
 test("linking the system actor does not un-dim it", async ({ page, context }) => {
@@ -969,6 +1069,13 @@ test("linking the system actor does not un-dim it", async ({ page, context }) =>
 
 /* --- Pinned edges --------------------------------------------------------- */
 
+/**
+ * The wide cell's own text: a bare clock when the page's rows all fall on one
+ * calendar day and the date has been hoisted above the table, or the full
+ * stamp when they span more than one and every row has to carry its own.
+ */
+const INSTANT = /^(\d{4}-\d{2}-\d{2} )?\d{2}:\d{2}:\d{2}$/;
+
 /** Enough entries that the table overflows the capped scroll region. */
 async function seedDenseLog() {
   const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
@@ -1005,10 +1112,17 @@ for (const width of [320, 390]) {
     // Two renderings of the instant, one shown per width. The exact stamp is
     // 19ch of a 286px region and the pinned column is where it lands, so below
     // 40rem it reads as elapsed time instead.
+    //
+    // `INSTANT` and not the full stamp: when every row on the page falls on one
+    // calendar day the date is hoisted out of the column and stated once above
+    // the table, so the wide cell is a bare clock. `seedDenseLog` writes all 40
+    // rows at once, so that is the branch these take — the hoist itself is
+    // pinned by its own test below, and here the point is only which of the two
+    // renderings is shown.
     const cell = page.locator("tbody tr:first-child td:first-child");
     const exact = cell.locator("span.only-wide");
     const relative = cell.locator("span.only-narrow time");
-    await expect(exact).toHaveText(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+    await expect(exact).toHaveText(INSTANT);
     await expect(relative).toHaveText(/^\d+[smhd] ago$/);
     if (narrow) {
       await expect(exact).toBeHidden();
@@ -1112,7 +1226,7 @@ for (const width of [768, 1025, 1056, 1057, 1280]) {
     const exact = cell.locator("span.only-wide");
     const relative = cell.locator("span.only-narrow time");
     // Both renderings are in the markup at every width; only one is shown.
-    await expect(exact).toHaveText(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+    await expect(exact).toHaveText(INSTANT);
     await expect(relative).toHaveText(/^\d+[smhd] ago$/);
     await expect(narrow ? relative : exact).toBeVisible();
     await expect(narrow ? exact : relative).toBeHidden();
@@ -1140,6 +1254,70 @@ for (const width of [768, 1025, 1056, 1057, 1280]) {
     expect(detailsWidth, "the Details column has room to open into").toBeGreaterThan(100);
   });
 }
+
+/**
+ * Pattern 2 of the design sweep: a value repeated identically on every row when
+ * it is one fact about the whole set. Both branches, because the interesting
+ * failure is not the hoist — it is the hoist firing on a page whose rows do NOT
+ * agree, which would delete a date the admin needs and state a false one above.
+ */
+test("the shared calendar day is stated once, and only when every row agrees", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+
+  // Two rows, one day. Explicit instants rather than seedDenseLog's defaults:
+  // a test about which day the rows fall on cannot let the clock decide, and
+  // "now" straddles midnight once a day.
+  await db.insert(auditLog).values([
+    {
+      actor: "system",
+      action: "tier.changed",
+      target: "char:1",
+      at: new Date("2026-03-04T09:15:00Z"),
+      details: {},
+    },
+    {
+      actor: "system",
+      action: "tier.changed",
+      target: "char:2",
+      at: new Date("2026-03-04T21:40:30Z"),
+      details: {},
+    },
+  ]);
+
+  await page.goto("/admin/audit");
+  await page.waitForSelector(".scroller tbody tr");
+  await expect(page.getByText("All 2 entries on 2026-03-04 (UTC).")).toBeVisible();
+  // Said once above the table and dropped from both channels in the rows —
+  // `.only-wide` is a display toggle, so this span is what AT reads at this
+  // width too. R4: neither channel keeps what the other lost.
+  const wide = page.locator("tbody tr td:first-child span.only-wide");
+  await expect(wide.first()).toHaveText("21:40:30");
+  await expect(wide.nth(1)).toHaveText("09:15:00");
+
+  // One more row, one day earlier. Now nothing is shared, the line goes away,
+  // and every row carries its own date again. It sorts to the top because the
+  // log is keyset-ordered by id — insertion order — not by `at`; a backdated
+  // entry lands where it was written, which is what makes the multi-day case
+  // reachable at all.
+  await db.insert(auditLog).values([
+    {
+      actor: "system",
+      action: "tier.changed",
+      target: "char:3",
+      at: new Date("2026-03-03T11:00:00Z"),
+      details: {},
+    },
+  ]);
+  await page.reload();
+  await page.waitForSelector(".scroller tbody tr");
+  await expect(page.getByText(/^All \d+ entries on /)).toHaveCount(0);
+  await expect(wide.first()).toHaveText("2026-03-03 11:00:00");
+  await expect(wide.nth(1)).toHaveText("2026-03-04 21:40:30");
+});
 
 /**
  * The exact instant is what an audit log is for, and the narrow rendering

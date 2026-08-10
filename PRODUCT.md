@@ -95,10 +95,19 @@ what is true. Never exclaims. Never apologizes twice.
    ordinary states, not failures. Reserve alarm colour for things the user can and
    should fix.
 5. **Earn the artwork.** Faoble's illustrations are shown properly or not at all:
-   full quality, from an asset cut for the size it is drawn at, never a large file
-   scaled down or a fragment cropped out for decoration. The login ground is the
-   deliberate exception, where the lander is held far enough back to be texture
-   rather than picture.
+   full quality, from a master with pixels to spare, never a fragment cropped out
+   for decoration and never an asset stretched past the size it was cut for. The
+   login ground is the deliberate exception, where the lander is held far enough
+   back to be texture rather than picture.
+
+   This principle used to say "never a large file scaled down", which the app has
+   never obeyed and should not: `hero-account.webp` is a 1120px master rendered at
+   420px, or at 260px when `.closing--compact` applies on a one-character account.
+   Rendering a high-resolution master smaller is what protects the artwork —
+   oversampling is why it stays crisp on a 2x display. What degrades it is the
+   opposite direction, and that is what the rule is for. Stated as a ban on
+   downscaling, the principle condemned the correct implementation and left the
+   actual failure mode unnamed.
 
 ## Accessibility & Inclusion
 

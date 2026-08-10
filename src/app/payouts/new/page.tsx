@@ -48,7 +48,18 @@ export default async function NewPayoutPage() {
             DESIGN.md names for an inset region, and a `--void` field inset into
             it is the contrast the field spec already assumes. The H1 and lede
             stay on the page ground; only the form itself is boxed, and it
-            wears no registration ticks (those are the login panel's alone). */}
+            wears no registration ticks (those are the login panel's alone).
+
+            The ground is not what makes it read as boxed, though, and this
+            comment used to imply it was. `--hull` on `--void` measures 1.08:1 —
+            a difference an eye can find only by looking for it. The visible
+            edge is `.form-panel`'s `1px solid var(--rule-strong)`
+            (globals.css), at 4.23:1 on the page ground. That is worth stating
+            because the two are load-bearing in opposite directions: the ground
+            is deliberately almost nothing (it sets the field contrast without
+            competing with the form's own content), and the border is the whole
+            boundary. Dropping the border to "flatten" the panel does not soften
+            the box, it deletes it. */}
         <div className="form-panel">
           <NewOperationForm today={today} />
         </div>

@@ -308,6 +308,11 @@ export default async function AccountPage({
   // to say, not each row's. See `crewNorms`.
   const norms = crewNorms(view.characters);
 
+  // The closing artwork's frame, decided here because both the class and the
+  // `sizes` hint below have to agree about it — a `sizes` that outran the CSS
+  // would quietly undo the whole point of narrowing the frame.
+  const closingCompact = view.characters.length <= 1;
+
   return (
     <>
       <SiteHeader items={nav} current="/account" {...brandProps()} />
@@ -1376,21 +1381,41 @@ export default async function AccountPage({
               </>
             )}
 
-            {/* The closing beat. Decorative, so alt is empty; drawn from a
-                1120px asset cut for exactly this, never a scaled-down master.
-                A single-character account has little content above it, and the
-                full-size artwork dwarfed it; `.closing--compact` asks the same
-                asset for a smaller frame rather than cropping or downscaling it,
-                same technique the full size already uses, just a smaller target.
+            {/* The closing beat. Decorative, so alt is empty. A 1120px master
+                drawn at 420, or at 260 when `.closing--compact` applies: a
+                single-character account has little content above this, and at
+                full size the artwork dwarfed it. Oversampling is deliberate and
+                is what keeps it crisp at 2x — this comment used to say the asset
+                was "cut for exactly this, never a scaled-down master" and that
+                the compact variant asked for "a smaller frame rather than
+                downscaling", which described the mechanism backwards. It is a
+                downscale in both sizes, and that is the good direction.
+                PRODUCT.md's fifth principle now says so; it used to ban this.
                 Moved into the rail by this pass (composition finding 3): the
                 mission-patch identity used to be a mark in the header and an
                 illustration parked at the very bottom of a long page: putting
                 it beside the manifest instead makes it structural to the page's
                 shape rather than a footer no one scrolls to. */}
-            <p
-              className={`closing${view.characters.length <= 1 ? " closing--compact" : ""}`}
-            >
-              <Image src="/brand/hero-account.webp" alt="" width={1120} height={711} />
+            <p className={`closing${closingCompact ? " closing--compact" : ""}`}>
+              {/* `sizes` is what makes the oversampling above a choice rather
+                  than an accident. Without it `next/image` assumes the image
+                  spans the viewport and hands a phone the 1120px master for a
+                  260px frame — the largest asset on the page, fetched at four
+                  times the width it is drawn at. The two values track
+                  `.closing img` and `.closing--compact img` in globals.css;
+                  the `100vw` branches cover the widths where the CSS `100%`
+                  clamp, not the pixel cap, is the one deciding. */}
+              <Image
+                src="/brand/hero-account.webp"
+                alt=""
+                width={1120}
+                height={711}
+                sizes={
+                  closingCompact
+                    ? "(max-width: 320px) 100vw, 260px"
+                    : "(max-width: 480px) 100vw, 420px"
+                }
+              />
             </p>
           </div>
         </div>

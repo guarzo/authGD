@@ -112,6 +112,7 @@ export function LifecycleAnnouncer({ children }: { children: ReactNode }) {
 export function LifecycleSubmit({
   action,
   label,
+  pendingLabel,
   confirmName,
   costId,
   cost,
@@ -122,6 +123,13 @@ export function LifecycleSubmit({
    *  (`finalizeAction.bind(null, operation.id)`). */
   action: (formData: FormData) => Promise<void>;
   label: string;
+  /** What the button says while the press is in flight, e.g. "Finalizing…".
+   *  Required rather than optional: this control's action does not redirect,
+   *  so without it the button is inert-looking for the whole round trip and
+   *  the second press an operator makes is refused in silence — there is no
+   *  `ConfirmGroup` on this route for `ConfirmSubmit` to report a refusal to.
+   *  A new lifecycle control should have to answer this, not inherit a gap. */
+  pendingLabel: string;
   confirmName: string;
   costId: string;
   cost: ReactNode;
@@ -147,6 +155,7 @@ export function LifecycleSubmit({
       <ConfirmSubmit
         className={className}
         label={label}
+        pendingLabel={pendingLabel}
         confirmName={confirmName}
         describedBy={costId}
       />
