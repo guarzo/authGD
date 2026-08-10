@@ -43,13 +43,11 @@ import { AccountPayouts } from "./account-payouts";
 import { ConfirmNotice } from "@/app/_components/confirm-notice";
 import { accountConfirmation } from "./view";
 
-/** Columns in the crew manifest table: portrait, name, [status], [actions].
- *  Derived rather than constant because both STATUS and ACTIONS are exception
- *  columns — see `showStatusColumn` and `showActionsColumn` in the page body —
- *  and the empty-state row's `colSpan` has to follow them or a no-character
- *  account renders a short row. */
-const manifestColumns = (showStatus: boolean, showActions: boolean) =>
-  2 + (showStatus ? 1 : 0) + (showActions ? 1 : 0);
+/** Columns in the crew manifest table: portrait, name, [status].
+ *  Derived rather than constant because STATUS is an exception column — see
+ *  `showStatusColumn` in the page body — and the empty-state row's `colSpan`
+ *  has to follow it or a no-character account renders a short row. */
+const manifestColumns = (showStatus: boolean) => 2 + (showStatus ? 1 : 0);
 
 /** The id a contacts cell's `aria-describedby` points at when — and only
  *  when — `ContactRemedy` has something to say about that character. Unlike
@@ -280,28 +278,6 @@ export default async function AccountPage({
   // better signal than the column being permanently present. A pure function of
   // `classifyCharacter` over the crew, so the manifest stays a server component.
   const showStatusColumn = view.characters.some((c) => classifyCharacter(c) !== "ok");
-
-  // ACTIONS is an exception column for the same reason, and was the one place
-  // that rule was stated in the markup but not applied: a single-character
-  // account has no `main` (gated on `!isMain`) and no `unlink` (gated on more
-  // than one character), so every row's actions cell was empty while the header
-  // and `<col>` stayed — a column reporting that there is nothing to do. AT and
-  // sighted parity (walkthrough ruling R4) wants the same treatment STATUS
-  // already gets.
-  //
-  // The per-row `hasActions` predicate below, hoisted, NOT `characters.length >
-  // 1`: `applyNoMainRule` (`services/accounts.ts`) clears `mainCharacterId` when
-  // a member unlinks their main, so a lone survivor has `isMain === false` and
-  // still carries a live `make main` button. The naive predicate would elide the
-  // column out from under it.
-  //
-  // Uniform across the table by construction, which is what lets
-  // `CharacterRow` gate its own `<td>` on `actions` alone rather than taking a
-  // second prop: when `length > 1` every row is true, and when `length === 1`
-  // there is only one row to disagree with.
-  const showActionsColumn = view.characters.some(
-    (c) => !c.isMain || view.characters.length > 1,
-  );
 
   // Walkthrough 3.4: an alt's location line is elided when it reads the same
   // as the main's. The main keeps its own line unconditionally — it is the
@@ -698,29 +674,33 @@ export default async function AccountPage({
 
             <Scroller label="Your characters">
               <table className="log log--manifest">
-                {/* NAME absorbs the leftover width; portrait, STATUS and ACTIONS
+                {/* NAME absorbs the leftover width; portrait and STATUS
                 shrink to content — same `width: 1%` idiom as the admin
                 accounts table (`.log__col--fit`, globals.css). Without this
                 `table-layout: auto` has nowhere to put its slack and hands all
                 of it to whichever column happens to come first in markup,
                 which was NAME purely by accident of column order, not by
-                declaration. The `<col>`s follow the same two exception gates
-                the `<thead>` does, so a STATUS-less (all-ok) crew and an
-                ACTIONS-less (lone main) crew each still get the right number of
-                them. Gated inline rather than through `manifestColumns()`:
-                that helper returns a count, and this needs the individual
-                columns, so the two agree by sharing the gates rather than by
-                one deriving from the other.
+                declaration. The `<col>`s follow the same exception gate the
+                `<thead>` does, so a STATUS-less (all-ok) crew still gets the
+                right number of them. Gated inline rather than through
+                `manifestColumns()`: that helper returns a count, and this
+                needs the individual columns, so the two agree by sharing the
+                gate rather than by one deriving from the other.
 
                 Wide-viewport only: at 320px the table already overflows its
                 scroll region, so there is no leftover width to redistribute
                 and this is a no-op there. */}
                 <colgroup>
-                  {/* NAME stays the elastic column and ACTIONS stays fit-width
-                      at the end. Two cheaper ways to stop the disclosure
-                      marker stranding at the table's right edge were built and
-                      measured against this layout, and both cost more than the
-                      defect:
+                  {/* Three columns, not four: the per-row disclosure toggle
+                      used to hold a trailing `.log__col--fit` column of its
+                      own, where NAME being the elastic column left the bare
+                      `+` marker ~490px from the name it expands. It now lives
+                      inside the NAME cell (character-row.tsx), immediately
+                      after the character's name.
+
+                      Two cheaper repairs were built and measured against this
+                      layout first, and both cost more than the defect — don't
+                      re-derive either:
 
                       - Moving ACTIONS to the FRONT (`+ [portrait] Name`, the
                         shape /admin/accounts uses) added 52px of forced
@@ -734,14 +714,18 @@ export default async function AccountPage({
                         because a fit column lets the location line wrap
                         instead of widening.
 
-                      The remaining fix is to move the toggle inside the NAME
-                      cell, which needs `leadCells` split so this file can hand
-                      the name content to character-row.tsx separately. Not
-                      done here. */}
+                      Dropping the column outright is what shipped, and where
+                      the table's own width is what forces the scroll it made
+                      that budget better rather than worse: the faulted
+                      `needs_reauth` gate went 257px -> 180px at 320px. The
+                      healthy gate did not move (134px either way) — there the
+                      table already fits and the overflow is
+                      `.char__location`'s own span, which no column count
+                      reaches. See the `.row-toggle--actions` docblock in
+                      globals.css and the two gates in e2e/account.spec.ts. */}
                   <col className="log__col--fit" />
                   <col />
                   {showStatusColumn && <col className="log__col--fit" />}
-                  {showActionsColumn && <col className="log__col--fit" />}
                 </colgroup>
                 {/* Always present, unlike the visual copy above: a `<caption>` is
                 announced for the table as a whole, so this is the one place a
@@ -770,21 +754,25 @@ export default async function AccountPage({
                       : " No characters are linked yet, so there is no STATUS column to show."}
                 </caption>
                 {/* Round 3 (team-lead judgment): the visible header bar
-                stated almost nothing on this table — three of four `<th>`s
-                were already `.visually-hidden` text, and the fourth ("Name")
+                stated almost nothing on this table — every `<th>` but "Name"
+                was already `.visually-hidden` text, and "Name" itself
                 only restated what a member's eye already reads from the bold
                 name in every row below it; once STATUS renders, that column
                 is likewise just an umbrella over TOKEN/STANDINGS/MAP, each
-                already labelled per row (see the STATUS cell below). All four
-                header labels are `.visually-hidden` here, same convention as
-                Portrait/Actions already used — a screen reader still gets
-                full Portrait/Name/Status/Actions column identity on every
-                cell it visits, `<th scope="col">` and all; only the sighted
-                bar goes (`.log--manifest thead th`, globals.css), buying back
-                its fixed ~33.5px regardless of crew size. `.log th` is
-                untouched for every other table — the admin accounts, audit
-                and sync tables still sort and group by this same header, so
-                theirs still earns its keep. */}
+                already labelled per row (see the STATUS cell below). Every
+                header label is `.visually-hidden` here, same convention as
+                Portrait already used — a screen reader still gets full
+                Portrait/Name/Status column identity on every cell it visits,
+                `<th scope="col">` and all; only the sighted bar goes
+                (`.log--manifest thead th`, globals.css), buying back its fixed
+                ~33.5px regardless of crew size. `.log th` is untouched for
+                every other table — the admin accounts, audit and sync tables
+                still sort and group by this same header, so theirs still earns
+                its keep.
+
+                There is no ACTIONS header any more: the per-row disclosure
+                toggle moved into the NAME cell and its column went with it
+                (see the `<colgroup>` above). */}
                 <thead>
                   <tr>
                     <th scope="col">
@@ -796,11 +784,6 @@ export default async function AccountPage({
                     {showStatusColumn && (
                       <th scope="col">
                         <span className="visually-hidden">Status</span>
-                      </th>
-                    )}
-                    {showActionsColumn && (
-                      <th scope="col">
-                        <span className="visually-hidden">Actions</span>
                       </th>
                     )}
                   </tr>
@@ -841,9 +824,10 @@ export default async function AccountPage({
                         // (`services/accounts.ts`) clears `mainCharacterId` when a
                         // member unlinks their main, so a lone survivor has
                         // `isMain === false` and keeps a live `make main`. That row
-                        // still gets a toggle, and `showActionsColumn` above is
-                        // hoisted from this same expression so the column follows it
-                        // rather than a crew-size shortcut.
+                        // still gets a toggle — and since the toggle now lives inside
+                        // the NAME cell, that is the whole of it: no column follows
+                        // this predicate any more, so a row with actions and a row
+                        // without have identical cell counts.
                         const hasMainAction = !c.isMain;
                         const hasUnlinkAction = view.characters.length > 1;
                         const hasActions = hasMainAction || hasUnlinkAction;
@@ -871,38 +855,47 @@ export default async function AccountPage({
                           <Fragment key={c.id}>
                             <CharacterRow
                               name={c.name}
-                              colSpan={manifestColumns(
-                                showStatusColumn,
-                                showActionsColumn,
-                              )}
-                              leadCells={
-                                <>
-                                  <td>
-                                    {/* The EVE image server is a third party serving one
+                              colSpan={manifestColumns(showStatusColumn)}
+                              portraitCell={
+                                <td>
+                                  {/* The EVE image server is a third party serving one
                                   small thumbnail per row; running each through the
                                   image optimizer would add a proxy hop and a
                                   dependency on their uptime per row of an admin's
                                   scan, for no visible gain on a 32x32 avatar — not
                                   adding images.evetech.net to remotePatterns for
                                   this. */}
-                                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                                    <img
-                                      className="portrait"
-                                      src={`https://images.evetech.net/characters/${c.id}/portrait?size=64`}
-                                      alt=""
-                                      width={32}
-                                      height={32}
-                                      loading="lazy"
-                                    />
-                                  </td>
-                                  <td>
-                                    <div className="char-line">
-                                      <span className="char">
-                                        {c.name}{" "}
-                                        {c.isMain && (
-                                          <strong className="char__main">(main)</strong>
-                                        )}
-                                        {/* Only when the STATUS column is gone. `map
+                                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                                  <img
+                                    className="portrait"
+                                    src={`https://images.evetech.net/characters/${c.id}/portrait?size=64`}
+                                    alt=""
+                                    width={32}
+                                    height={32}
+                                    loading="lazy"
+                                  />
+                                </td>
+                              }
+                              nameLead={
+                                <>
+                                  {c.name}
+                                  {/* The space belongs to the badge, not to the
+                                      name: the toggle follows this slot and takes
+                                      its own gap from `margin-left`
+                                      (`.row-toggle--actions`), so a trailing space
+                                      here would make an alt's gap ~4px wider than
+                                      a main's for no reason a reader could name. */}
+                                  {c.isMain && (
+                                    <>
+                                      {" "}
+                                      <strong className="char__main">(main)</strong>
+                                    </>
+                                  )}
+                                </>
+                              }
+                              nameTrail={
+                                <>
+                                  {/* Only when the STATUS column is gone. `map
                                       on|off` varies per character while the chip
                                       reads `ok` either way — deliberately, since
                                       map membership cannot substantiate a fault
@@ -950,29 +943,34 @@ export default async function AccountPage({
                                       should land on. Parity holds: the gate is on
                                       the element, so the visual and accessible
                                       channels drop it together. */}
-                                        {!showStatusColumn && !isNominal(c, norms) && (
-                                          <span
-                                            className="char__status-summary"
-                                            data-status-summary
-                                          >
-                                            {statusSummary(c, norms)}
-                                          </span>
-                                        )}
-                                      </span>
-                                      {/* Omitted, not dimmed or hidden, for an alt whose
+                                  {!showStatusColumn && !isNominal(c, norms) && (
+                                    <span
+                                      className="char__status-summary"
+                                      data-status-summary
+                                    >
+                                      {statusSummary(c, norms)}
+                                    </span>
+                                  )}
+                                </>
+                              }
+                              nameBelow={
+                                <>
+                                  {/* Omitted, not dimmed or hidden, for an alt whose
                                     location reads the same as the main's — R4 runs
                                     in both directions, so a fact the visual channel
                                     doesn't state does not get compensated for with
                                     a `.visually-hidden` string either; the AT
                                     channel loses exactly what the screen does. */}
-                                      {!elideLocation && (
-                                        <CharacterLocation
-                                          location={c.location}
-                                          stale={c.locationStale}
-                                        />
-                                      )}
-                                    </div>
-                                  </td>
+                                  {!elideLocation && (
+                                    <CharacterLocation
+                                      location={c.location}
+                                      stale={c.locationStale}
+                                    />
+                                  )}
+                                </>
+                              }
+                              trailingCells={
+                                <>
                                   {showStatusColumn && (
                                     <td
                                       data-state={state}
@@ -1232,12 +1230,7 @@ export default async function AccountPage({
                           disarms (#108/#111/#112). */}
                             {hasContactRemedy(c.contactSyncResult, c.contactsTarget) && (
                               <tr className="drawer-row">
-                                <td
-                                  colSpan={manifestColumns(
-                                    showStatusColumn,
-                                    showActionsColumn,
-                                  )}
-                                >
+                                <td colSpan={manifestColumns(showStatusColumn)}>
                                   <p id={contactRemedyId(c.id)} className="table-note">
                                     {/* The prose used to be prefixed `{c.name}:` when it
                                   lived in a footnote block below the table, far
@@ -1279,7 +1272,7 @@ export default async function AccountPage({
                         <tr>
                           <td
                             className="log__empty"
-                            colSpan={manifestColumns(showStatusColumn, showActionsColumn)}
+                            colSpan={manifestColumns(showStatusColumn)}
                           >
                             <span className="log__empty-text">
                               No characters linked yet. Add one to start pushing
