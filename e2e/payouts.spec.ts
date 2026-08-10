@@ -933,6 +933,64 @@ test("an empty name is refused with a specific message", async ({ page, context 
   await expect(page.getByText("Something broke")).toHaveCount(0);
 });
 
+/*
+ * The rejection has to stay attached to the form it is about.
+ *
+ * `.form-stack` reserves the notice slot so the live region exists before the
+ * message does, and `.notice-slot` is out of flow so the empty reservation
+ * costs nothing — that part was already right, and already measured at 0px.
+ * But a populated `Notice` renders `.notice`, a different class, so the reset
+ * that flattened `.rule-head`'s 48px top margin stopped matching at exactly the
+ * moment there was something to say. Three spacings then stacked — the
+ * notice's own 24px bottom margin, the grid's 16px gap, and the header's 48px
+ * — and the measured distance went 0px empty, 88px populated. On the one
+ * screen where an operator has just been refused, the error floated alone with
+ * the form pushed a third of a phone screen below it.
+ *
+ * Asserted as a distance rather than as a computed style, because the defect
+ * was the sum and no single declaration was wrong on its own. The expected
+ * value is `.form-stack`'s own row gap: after the fix the notice is spaced from
+ * the header exactly the way every other pair of siblings in the form is.
+ */
+test("a rejection notice sits against the form, not a screen above it", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "FC Spacing",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+  await page.goto("/payouts/new");
+
+  const notice = page.locator("#new-operation-error");
+  const head = page.locator(".form-stack .rule-head").first();
+
+  // The empty case, so a regression that "fixes" the populated gap by
+  // reintroducing the reserved slot's own spacing fails here instead.
+  const gapEmpty = await gapBetween(notice, head);
+  expect(gapEmpty).toBe(0);
+
+  await page.getByRole("button", { name: "Create operation" }).click();
+  await expect(notice).toContainText("needs a name");
+
+  const gapFull = await gapBetween(notice, head);
+  const rowGap = await head.evaluate(
+    (el) => parseFloat(getComputedStyle(el.parentElement!).rowGap) || 0,
+  );
+  expect(rowGap).toBeGreaterThan(0);
+  expect(Math.abs(gapFull - rowGap)).toBeLessThanOrEqual(1);
+});
+
+/** Vertical distance from the bottom of `above` to the top of `below`. */
+async function gapBetween(above: Locator, below: Locator): Promise<number> {
+  const a = await above.boundingBox();
+  const b = await below.boundingBox();
+  if (!a || !b) throw new Error("both elements must be laid out to be measured");
+  return b.y - (a.y + a.height);
+}
+
 test("an invalid date is refused with a specific message", async ({ page, context }) => {
   const operator = await seedMember(db, {
     name: "FC Codes",

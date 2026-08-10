@@ -3272,17 +3272,34 @@ h3.rule-head__label {
    /payouts/new that is `.form-panel`'s own 48px of top padding, so the panel
    opened with 96px of empty ground above the word OPERATION.
 
-   Two branches because the two forms that open with a header disagree about
+   Three branches because the two forms that open with a header disagree about
    what comes first in the DOM. `appraise-form.tsx` puts its `RuleHead` first
    outright, so `:first-child` catches it. `new-operation-form.tsx` puts the
    reserved `Notice` ahead of the header — that slot is out of flow, so the
    header is still the first thing anyone sees, but `:first-child` cannot know
-   that and would miss it. Only the always-mounted reserved slot needs the
-   second branch; a `Notice` rendered behind `&&` (as appraise-form's is)
-   isn't in the DOM to be skipped over in the first place. */
+   that and would miss it.
+
+   The third branch is the same slot once it has something to say. A populated
+   `Notice` renders `.notice`, not `.notice-slot`, so the branch above stops
+   matching at exactly the moment the form is being rejected: measured, the
+   header sat 0px below the slot while empty and 88px below it once populated.
+   Which is backwards — the one state where the error and the form it is about
+   need to read as one thing is the state that pushed them apart. */
 .form-stack > .rule-head:first-child,
-.form-stack > .notice-slot + .rule-head {
+.form-stack > .notice-slot + .rule-head,
+.form-stack > .notice + .rule-head {
   margin-top: 0;
+}
+
+/* `.notice`'s own bottom margin is written for flow layout, where it is the
+   only thing separating the notice from what follows. Inside `.form-stack` the
+   grid's row gap already does that job, so the two add: 24px of margin on top
+   of 16px of gap put the notice 40px from the next field where every other
+   sibling pair in the form sits at 16px. All four of these forms mount their
+   `Notice` unconditionally, so all four had it — the header case above was just
+   the loudest, because `.rule-head`'s 48px stacked on as well. */
+.form-stack > .notice {
+  margin-bottom: 0;
 }
 
 /* One field: its label, its control, and optionally a hint below (the
