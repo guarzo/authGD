@@ -474,7 +474,8 @@ is a PNG text-extraction artifact.
 
 ## What the sweep could not see
 
-Five capture gaps. `capture.spec.ts.txt` is preserved for a re-shoot.
+Five capture gaps, **of which 3 and 5 are now closed** — see the section below.
+`capture.spec.ts.txt` is preserved for a re-shoot of the remaining three.
 
 1. **A weighted payout split.** The fixture writes `amount` directly
    (`capture.spec.ts.txt:210-222`) and never runs `recalculate`, so every share is
@@ -482,11 +483,9 @@ Five capture gaps. `capture.spec.ts.txt` is preserved for a re-shoot.
    bug — but item 12's roster fix needs re-checking against a real split.
 2. **`/admin/audit`'s Details column at real density** — the fixture seeds action
    names absent from `PARTS`.
-3. **`/login?error=…`** in its three tones. Every error state on that surface is
-   unevaluated.
+3. ~~**`/login?error=…`** in its three tones.~~ **Closed** — shots `16`–`20`.
 4. **`/payouts/new`** with a populated `Notice`, and at 320px.
-5. **Six of `/admin/access-lists`' seven states.** Only `grant-needed` was shot;
-   four findings there are markup-reasoned and say so.
+5. ~~**Six of `/admin/access-lists`' seven states.**~~ **Closed** — shots `21`–`28`.
 
 Also: the Next dev overlay reported **real console/hydration errors** — `1 Issue`
 on shots `08` and `11`, `2 Issues` on `13`. Worth one click if a fix pass has the
@@ -494,6 +493,71 @@ dev server up.
 
 And: **the `/account` reference surface is not proven at narrow**, and item 17
 shows it breaks the one typographic rule DESIGN.md states in absolute terms.
+
+---
+
+## Re-shoot: gaps 3 and 5 (shots `16`–`28`)
+
+One temporary spec, twelve cases, 26 PNGs at 1440x900 and 390x844. `git status`
+before the boot was empty; after it, exactly the PNGs plus the spec — no
+`tsconfig.json` or `AGENTS.md` rewrite this time. Spec deleted.
+
+### Gap 3 closes clean — no finding
+
+`/login?error=` renders as `loginErrorTone` argues it should, and the pixels are
+the evidence the docblock could not be.
+
+- `oauth_failed`, `oauth_expired` → red-bordered notice, `!` glyph, between the
+  motto and the sign-in button.
+- `oauth_denied`, `session_expired` → neutral box, `·` glyph, same slot.
+- `?error=not-a-real-code` → **no box at all**, not an empty bordered region.
+
+That is PRODUCT.md principle 4 honoured: a cancelled sign-in and an expired
+session are not painted as faults the user must fix. **Nothing to work here.**
+
+### Gap 5 produces four findings, three of them the brief's own patterns
+
+**A. Every fault state is an unshaped field** (pattern 1). Shots `22`–`26`. All
+six non-`normal` states share one silhouette: lede, one gold button, a
+full-width `WATCHED LISTS` rule (~1200px), and beneath it a ~545px notice, with
+the lower ~500px of a 900px viewport void. The rule is the widest object on the
+page and it labels the emptiest.
+
+**B. The empty watched-lists region renders during holder faults.**
+`showsObservations` (`view.ts:160-162`) excludes only `grant-needed` and
+`designate-needed`, so `scope-dropped`, both `holder-no-token` variants,
+`holder-needs-reauth` and `catalog-empty` all print a section heading plus *"No
+lists are being watched yet."* directly under a lede that already said why
+nothing is happening. It restates the fault in weaker words and takes the fold
+to do it. Cost: the admin's eye goes to the largest structure on the screen and
+learns nothing. Fix: gate the region on the same predicate as the remedy —
+if the monitor cannot read, the observation region has nothing to say.
+
+**C. Total enumeration in the missing-access table** (pattern 2), shot `28`.
+"Null Harvest Inc" appears identically on 8 of 10 rows; the other two are `—`.
+Four broad-grant lines all end in the identical clause *"plus an unknown number
+of others"*. `crewNorms` is the fixing pattern: state the shared fact once
+(*"all but two are in Null Harvest Inc"*), show only the deviation per row.
+At 390px this table is two columns of which one is a constant.
+
+**D. `STOP WATCHING` is the quietest thing on the row** (pattern 3). It renders
+at the same weight and colour as the `BROAD GRANTS (1)` rule labels above it,
+bottom-left of each drawer, identical on every row — a caption, not a control,
+and it is the only destructive action on the page. Nothing directs the eye, and
+what little direction exists points away from it.
+
+### And one plain defect, not a design finding
+
+**The never-read row renders as `#4104` with no name** (shots `27`, `28`), even
+though the catalog holds "Capital umbrella" and `catalog` is already in scope at
+`page.tsx:67`. `getWatchedListViews` (`access-lists.ts:215`) takes `name` from
+the snapshot alone, and a list watched but never read has no snapshot row.
+
+The service layer already contains the fix: `watchedListName`
+(`access-lists.ts:88-103`) tries the catalog first and the snapshot second, with
+the docblock *"a missing name must never cost the row"* — and it is wired only
+to the two audit writes (`:127`, `:142`), never to the display path. The rule is
+written, implemented, and not applied where a human reads it.
 
 ---
 
