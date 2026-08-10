@@ -3291,3 +3291,36 @@ test("a character who has never reported a location says so, one line", async ({
   const heights = await rowHeights(page, `${MANIFEST} tbody tr:not(.drawer-row)`);
   expect(heights[1]).toBeLessThanOrEqual(65);
 });
+
+/**
+ * The closing artwork is the heaviest asset on the page, and `next/image`
+ * decides what to fetch from `sizes` alone — a missing one means "assume this
+ * spans the viewport", which on the widest layouts hands the browser a
+ * candidate several times the width the frame actually draws at.
+ *
+ * Asserted as the width the browser *chose* out of the srcset rather than as
+ * the `sizes` attribute itself, because the attribute is the input and the
+ * fetch is the cost. Measured at a wide viewport on purpose: that is where the
+ * two behaviours separate. A `100vw` assumption at 1440 selects a candidate at
+ * least 1440 wide; the frame draws at 420 CSS px, so anything at or under 640
+ * is a candidate chosen for the frame and not for the window.
+ */
+test("the closing artwork is fetched for its frame, not for the viewport", async ({
+  page,
+  context,
+}) => {
+  const acc = await seedNominalCrew();
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/account");
+
+  const art = page.locator(".closing img");
+  await expect(art).toBeVisible();
+  const chosen = await art.evaluate((el) => {
+    const src = (el as HTMLImageElement).currentSrc;
+    const w = new URL(src, location.href).searchParams.get("w");
+    return w === null ? null : Number(w);
+  });
+  expect(chosen).not.toBeNull();
+  expect(chosen).toBeLessThanOrEqual(640);
+});

@@ -308,6 +308,11 @@ export default async function AccountPage({
   // to say, not each row's. See `crewNorms`.
   const norms = crewNorms(view.characters);
 
+  // The closing artwork's frame, decided here because both the class and the
+  // `sizes` hint below have to agree about it — a `sizes` that outran the CSS
+  // would quietly undo the whole point of narrowing the frame.
+  const closingCompact = view.characters.length <= 1;
+
   return (
     <>
       <SiteHeader items={nav} current="/account" {...brandProps()} />
@@ -1391,10 +1396,26 @@ export default async function AccountPage({
                 illustration parked at the very bottom of a long page: putting
                 it beside the manifest instead makes it structural to the page's
                 shape rather than a footer no one scrolls to. */}
-            <p
-              className={`closing${view.characters.length <= 1 ? " closing--compact" : ""}`}
-            >
-              <Image src="/brand/hero-account.webp" alt="" width={1120} height={711} />
+            <p className={`closing${closingCompact ? " closing--compact" : ""}`}>
+              {/* `sizes` is what makes the oversampling above a choice rather
+                  than an accident. Without it `next/image` assumes the image
+                  spans the viewport and hands a phone the 1120px master for a
+                  260px frame — the largest asset on the page, fetched at four
+                  times the width it is drawn at. The two values track
+                  `.closing img` and `.closing--compact img` in globals.css;
+                  the `100vw` branches cover the widths where the CSS `100%`
+                  clamp, not the pixel cap, is the one deciding. */}
+              <Image
+                src="/brand/hero-account.webp"
+                alt=""
+                width={1120}
+                height={711}
+                sizes={
+                  closingCompact
+                    ? "(max-width: 320px) 100vw, 260px"
+                    : "(max-width: 480px) 100vw, 420px"
+                }
+              />
             </p>
           </div>
         </div>
