@@ -7,24 +7,58 @@
 /* --- Tokens ------------------------------------------------------------- */
 
 :root {
-  /* Ground and structure. Every neutral is tinted toward the patch navy. */
-  --void: oklch(0.17 0.035 264);
-  --hull: oklch(0.22 0.04 264);
-  --hull-hi: oklch(0.27 0.042 264);
-  --rule: oklch(0.36 0.035 264);
-  /* Lightness fixed by WCAG 1.4.11: clears 3:1 on void, hull and hull-hi,
-     so a control's edge is identifiable on every ground it can sit on. */
-  --rule-strong: oklch(0.56 0.05 264);
+  /* Ground and structure. A neutral near-black, warming as it lightens.
+     Hue 54-58 where any hue applies at all, NOT the blue-slate axis this used
+     to sit on: navy-with-a-gold-
+     accent is the single most-generated "premium dark tool" palette in
+     circulation, and the ground reading as templated was the substance of the
+     feedback this palette answers. Warm ground also lets the seal's navy ring
+     separate from the header bar by hue, which it could not do on navy.
+     Measured, not asserted: every text token below clears 4.5:1 on all three
+     grounds, worst case 4.63 (--ink-faint on a hovered row).
+
+     THE TINT SCALES WITH LIGHTNESS, and that is the whole rule here. It took
+     three passes to get right, so the failed ones are worth recording.
+
+     "Tint every neutral toward the brand hue" is sound advice that silently
+     assumes mid-to-light neutrals. At near-black it inverts: a warm hue reads
+     as BROWN, not as a tinted grey, and the eye judges it by the red-to-blue
+     RATIO rather than the difference. Pass one copied the old navy's chroma
+     (0.035) down to 0.012, which looked conservative in OKLCH and rendered
+     #0e0906 — blue at 57% of red, unmistakably brown, and the first thing
+     anyone said about it. Pass two halved it to 0.006: #0c0a08, R/B still
+     1.50, still visibly brown. The absolute gap was only 4 by then, which is
+     why "R-B is small" was the wrong reassurance — 4 is nothing at rgb(200)
+     and a 50% cast at rgb(12).
+
+     So the ramp below: --void is neutral outright, and each lighter token
+     carries a little more hue, because that is where a tint reads as a tint.
+     The system's warmth lives in --ink, the gold, and the artwork — none of
+     which are near-black, all of which read warm without dragging the page
+     brown. Judge these by R/B in sRGB, never by chroma in OKLCH. */
+  --void: oklch(0.145 0 58);
+  --hull: oklch(0.195 0.001 56);
+  --hull-hi: oklch(0.245 0.002 54);
+  --rule: oklch(0.33 0.004 55);
+  /* Lightness fixed by WCAG 1.4.11: 4.24 / 3.92 / 3.48 against void, hull and
+     hull-hi, so a control's edge is identifiable on every ground it can sit
+     on. */
+  --rule-strong: oklch(0.56 0.008 58);
 
   /* Ink. Warm cream, tinted toward the patch gold. */
-  --ink: oklch(0.94 0.012 85);
-  --ink-dim: oklch(0.78 0.015 85);
-  --ink-faint: oklch(0.66 0.02 264);
+  --ink: oklch(0.93 0.014 85);
+  --ink-dim: oklch(0.77 0.016 80);
+  --ink-faint: oklch(0.63 0.018 70);
 
   /* Signal. Gold is identity; the three signals are semantic, never decor. */
   --gold: oklch(0.83 0.155 88);
   --gold-dim: oklch(0.72 0.14 84);
-  --signal-ok: oklch(0.76 0.13 158);
+  /* Chroma pulled from 0.13 to 0.09. `ok` is the state nobody needs to act on
+     (see the .st--ok rule below, which now spends --ink-dim on it), so the
+     token is kept only for the few places health is genuinely the subject
+     rather than the default. A full-chroma green there is the dashboard
+     signature the palette is getting away from. */
+  --signal-ok: oklch(0.74 0.09 150);
   /* Hue 50, not the 70 this started at. At 70 the warn signal sat 18 degrees
      from --gold / --tier-member with near-identical chroma and 0.03 of
      lightness between them — 0.057 apart in OKLab, which is not enough to
@@ -41,17 +75,22 @@
      0.104 clears it, and colour is never the only carrier anyway (the token
      carries its own word and glyph).
 
-     Contrast is unchanged in kind: 9.43 / 8.54 / 7.44 / 8.41 against --void /
-     --hull / --hull-hi / a hovered row, all far above the 4.5:1 it needs as
-     text and the 3:1 it needs as the .notice--warn border. */
+     Contrast on the neutral ground: 9.75 / 9.01 / 8.00 against --void /
+     --hull / --hull-hi, all far above the 4.5:1 it needs as text and the 3:1
+     it needs as the .notice--warn border. */
   --signal-warn: oklch(0.8 0.15 50);
-  --signal-bad: oklch(0.68 0.19 25);
+  /* 0.66, not the 0.68 of the navy palette and not the 0.64 the first dark probe
+     used. 0.64 measured 4.42 against --hull-hi — under the 4.5 floor exactly
+     when the pointer is on the row, which is the same class of bug as the
+     disabled-opacity one recorded further down. 0.66 measures 5.83 / 5.39 /
+     4.79. Do not darken this to match the ground. */
+  --signal-bad: oklch(0.66 0.19 26);
 
   /* Tiers separate by lightness as well as hue, so they survive
      deuteranopia and protanopia. Always paired with the name in text. */
   --tier-member: oklch(0.83 0.155 88);
-  --tier-associate: oklch(0.72 0.13 245);
-  --tier-alumni: oklch(0.76 0.13 158);
+  --tier-associate: oklch(0.72 0.115 235);
+  --tier-alumni: oklch(0.74 0.09 150);
 
   /* Space: 4 8 12 16 24 32 48 64 96. Rhythm comes from varying the step. */
   --s-1: 0.25rem;
@@ -2348,8 +2387,18 @@ h3.rule-head__label {
   border-radius: 1px;
 }
 
+/* Healthy is not an event. DESIGN.md's status-token rule has always said
+   "colour only when the state is actionable; neutral states stay --ink-dim",
+   and this rule was the place the shipped UI contradicted it: every `ok`
+   chip, every LINKED, every "all healthy" count rendered full-chroma green.
+   A screen of green dots reporting that nothing needs doing is the
+   generic-dashboard signature, and it spends the eye's attention on exactly
+   the rows that have no claim on it.
+   --signal-ok is not deleted — it is still right where health is genuinely
+   the subject rather than the default (see .notice--ok) — but the default
+   `ok` token is now as quiet as what it reports. */
 .st--ok {
-  color: var(--signal-ok);
+  color: var(--ink-dim);
 }
 
 .st--ok::before {
