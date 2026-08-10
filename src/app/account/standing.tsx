@@ -27,8 +27,9 @@ import type { Tier as TierValue } from "@/core/tier";
  *
  * `canFixMain` (core/main-fix.ts, via AccountView) overrides both the pending
  * and alumni sentences with one that names the actual, fixable problem: a
- * linked character is in the alliance and the account's main is not, so
- * `decideTier` (core/tier.ts) is reading the wrong character's affiliation.
+ * linked character is in the alliance and the account's main isn't counting
+ * for it — either the main is elsewhere or there is no main at all — so
+ * `decideTier` (core/tier.ts) is not reading that character's affiliation.
  * Neither displaced sentence stays true in this state — pending's promised
  * review never arrives (`decideTier` returns `null` while the main is broken)
  * and alumni's "reverts on its own" never fires (nothing changes about the
@@ -42,18 +43,23 @@ export function StandingTier({
   canFixMain: boolean;
 }) {
   // One sentence for both tiers: the member's situation is identical in
-  // pending and alumni here (a linked alt is in-alliance, the main isn't), and
-  // the remedy is identical too. Written against the effect (the main isn't
-  // counted) rather than the three causes core/main-fix.ts distinguishes
+  // pending and alumni here (a linked character is in-alliance and the main
+  // isn't counting), and the remedy is identical too. Written against the
+  // effect (the main isn't counted) rather than the three causes
+  // core/main-fix.ts distinguishes
   // (missing main, out-of-alliance main, stale affiliation read) — a member
-  // can't tell those apart from here and doesn't need to. Points at the
+  // can't tell those apart from here and doesn't need to. For the same reason
+  // it says "one of your characters" rather than "one of your *other*
+  // characters": in the missing-main case there is no main for the in-alliance
+  // character to be other than, and the shorter phrasing is true in all three.
+  // Points at the
   // self-service selector already on this page (page.tsx's per-row `make
   // main` action, gated only on `!c.isMain`) rather than an admin: the member
   // can fix this themselves in one press without leaving `/account`.
   const mainFix = (
     <span className="dim">
-      One of your other characters is in the alliance, but it isn&rsquo;t set as your main
-      — open that character below and press &ldquo;make main&rdquo;.
+      One of your characters is in the alliance, but it isn&rsquo;t set as your main —
+      open that character below and press &ldquo;make main&rdquo;.
     </span>
   );
   if (tier === "pending") {

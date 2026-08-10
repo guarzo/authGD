@@ -3224,7 +3224,7 @@ test("pressing make main in the drawer reports the confirmation, surviving its o
   const row = rowFor(page, "Out Main");
   await toggleOf(row).click();
   const drawer = drawerOf(row);
-  await drawer.getByRole("button", { name: "make In Alt the main for Out Main" }).click();
+  await drawer.getByRole("button", { name: "make main — In Alt for Out Main" }).click();
 
   await expect(page.getByText("is now the main")).toBeVisible();
 });
@@ -3278,7 +3278,7 @@ test("the pinned-tier note and confirmation survive a make main press on a locke
   );
 
   await drawer
-    .getByRole("button", { name: "make Pinned Alt the main for Pinned Main" })
+    .getByRole("button", { name: "make main — Pinned Alt for Pinned Main" })
     .click();
 
   // After: the locked wording, NOT the unlocked sentence's reconvergence promise.
