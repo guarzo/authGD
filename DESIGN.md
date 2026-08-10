@@ -289,7 +289,12 @@ configuration, the other two by overwriting the file.
   `24px` WCAG 2.5.8 (AA) minimum. The tables carry a control set on every row and
   cannot reach the `44px` AAA target without growing past a screenful, so density wins
   there and nowhere else. There are **two** sizes and no others: `quiet` is a colour
-  grade, like `primary` and `default`, and does not carry a size of its own.
+  grade, like `primary` and `default`, not a third size. `.btn--quiet` does carry
+  its own `min-height: 1.75rem` (the `28px` grade) as its base rule, but that is
+  not the last word wherever it lands — the manifest drawer's controls sit on
+  the `36px` R1 grade instead, because `.manifest-panel__controls .btn--quiet`
+  sets `min-height: 2.25rem` and wins there on both specificity and source
+  order.
 
   The `28px` grade is scoped by the *reason* for it, not by the tag it lands in:
   it applies to rows that each carry a control set and are read many at a time.

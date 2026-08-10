@@ -45,8 +45,28 @@ export function accountConfirmation(
 ): string {
   if (!isDoneCode(done)) return "";
   switch (done) {
+    // Second sentence for the same reason `"wake"` below has one, and worded
+    // to match it: `setMainCharacter` (services/accounts.ts:552) ends in
+    // `enqueueSync`, which fans out via `core/dispatch-plan.ts` to membership,
+    // contacts, wanderer and discord-roles. What that does with the new main is
+    // not a formality — the membership job derives the account's tier from the
+    // MAIN character's alliance ("main joined alliance", jobs/membership.ts:65),
+    // so this press can change the account's tier and always re-pushes its
+    // Discord roles. Neither lands on this render: the row moves to the top of
+    // the manifest immediately, the tier and roles change whenever the worker
+    // gets to it.
+    //
+    // Said here rather than as a `ConfirmCost` on the button, unlike unlink's
+    // cost sentence (page.tsx): `make main` is one press with no armed state
+    // to reveal prose on, and permanent prose in the drawer is the thing that
+    // panel's own `visibility="reveal"` note argues against — it would be the
+    // tallest element in every open drawer, describing an action most members
+    // opening it aren't taking. This is the cheaper half of the same fact and
+    // it is `"wake"`'s established shape.
     case "main":
-      return name ? `Main character set to ${name}.` : "Main character updated.";
+      return name
+        ? `Main character set to ${name}. Sync queued.`
+        : "Main character updated. Sync queued.";
     case "unlink":
       return "Character unlinked.";
     // wakeSelf (services/accounts.ts) does two things at once — clears cryo

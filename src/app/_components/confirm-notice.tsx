@@ -53,22 +53,33 @@ import { Notice } from "@/app/_components/ui";
  *
  * That "reconciles in place" assumption holds only for a redirect target with
  * no client-side state of its own sitting between this component and the
- * pressed control. It is FALSE the moment that control lives inside a
- * `Disclosure` (`_components/disclosure.tsx`): `Disclosure` holds its own
- * open/closed state in a plain `useState`, and `redirect()` — even back to
- * the exact route it started from — replaces the whole route tree on
- * navigation, resetting every `useState` in it along with it. Two admin pages
- * hit this the same way, independently: `/admin/accounts`'s per-row drawer
- * and `/admin/sync`'s per-job drawer each had a control that used to redirect
+ * pressed control. It was observed FALSE for two controls that live inside a
+ * `Disclosure` (`_components/disclosure.tsx`), which holds its own open/closed
+ * state in a plain `useState`: `/admin/accounts`'s per-row drawer and
+ * `/admin/sync`'s per-job drawer each had a control that used to redirect
  * through this component, and each one closed its own drawer on the very
  * first press because of it. Neither uses `ConfirmNotice` for that control
  * anymore — both use `_components/confirm-group.tsx`'s `ConfirmingForm`/
  * `ConfirmGroup` instead, which threads the confirmation back through
- * `useActionState` with no navigation at all. A control that does NOT sit
- * inside a `Disclosure` (or any other client-state boundary between here and
- * there) is exactly the case this component still covers correctly — see
- * `/admin/sync`'s `syncAllAction`/`recheckInvalidAction`, both below the
- * strip entirely.
+ * `useActionState` with no navigation at all.
+ *
+ * Read that as two measured cases, NOT as "a redirect resets every `useState`
+ * below it" — that broader claim is false, and this file's own caller list is
+ * the counter-example. `/account`'s `setMainAction` and `unlinkAction` sit
+ * inside the crew manifest's per-row actions drawer (`account/character-row.tsx`),
+ * and the drawer measurably survives their redirect: it stays open, and on
+ * `setMainAction` it follows the character to its new position as main. That
+ * table's rows are keyed, so React moves the existing row instance rather than
+ * remounting it, and the `useId` its open-state is matched on is stable for an
+ * instance's lifetime.
+ *
+ * The practical rule is therefore empirical, not deductive in either
+ * direction: a control with a client-state boundary between here and the
+ * redirect target has to be MEASURED before being wired to this component.
+ * Structural similarity to either the admin drawers or the manifest is
+ * evidence, not proof. A control with no such boundary is the plain case this
+ * component still covers correctly — see `/admin/sync`'s `syncAllAction`/
+ * `recheckInvalidAction`, both below the strip entirely.
  */
 export function ConfirmNotice({
   text,

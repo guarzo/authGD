@@ -34,7 +34,7 @@ export async function placeCrew(accountId: string) {
 // payouts table on the same page also carries.
 const manifest = (page: Page) => page.locator("[aria-label='Your characters']");
 
-test("the compressed manifest keeps four columns and an actionable re-authorize", async ({
+test("the compressed manifest drops its dead columns and keeps an actionable re-authorize", async ({
   page,
   context,
 }) => {
@@ -43,10 +43,19 @@ test("the compressed manifest keeps four columns and an actionable re-authorize"
   await context.addCookies([await sessionCookieFor(db, acc.id)]);
   await page.goto("/account");
 
+  // Three, not the four this test asserted when ACTIONS was an unconditional
+  // column: `seedMember` gives one character, who is the main, so that row has
+  // neither `make main` (gated on `!isMain`) nor `unlink` (gated on crew size),
+  // and the header is elided along with the empty cells. Asserted below by name
+  // as well as by count, so a future column arriving under a different name
+  // can't quietly restore the four.
   const head = manifest(page).locator("thead > tr > th");
-  await expect(head).toHaveCount(4);
+  await expect(head).toHaveCount(3);
   await expect(head.nth(1)).toHaveText("Name");
   await expect(head.nth(2)).toHaveText("Status");
+  await expect(manifest(page).getByRole("columnheader", { name: "Actions" })).toHaveCount(
+    0,
+  );
 
   // The location line sits in the NAME cell, under the name.
   const nameCell = manifest(page).locator("tbody > tr > td").nth(1);
