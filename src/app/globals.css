@@ -676,6 +676,57 @@ a:hover {
   max-width: var(--measure-crew);
 }
 
+/* /account's own composition: the crew manifest is the subject and keeps the
+   48rem measure above; "Sync schedule" and the closing illustration are
+   material a member reads but does not operate, so from a sensible width
+   they sit beside the manifest in a rail rather than stacked under it. Both
+   `.account-layout__main` and `.account-layout__rail` are matched by
+   `.page--narrow.page--crew > :where(*)` above (a `:where()` selector
+   contributes no specificity), so without this rule the rail would also be
+   capped to 48rem and there would be no room left beside the manifest for
+   it — this un-caps the wrapper on class specificity and re-caps its two
+   children below. `.page`'s own 78rem `--measure-page` still bounds the
+   whole thing; this only gives back the width `--measure-crew` would
+   otherwise take from the wrapper.
+
+   Grid, not flex: the two columns start at the same top edge
+   (`align-items: start`) whatever their own content heights are, which is
+   what keeps the manifest's row pitch — and the fold-count budget measured
+   against it — independent of how tall the rail happens to be. */
+.page--narrow.page--crew > .account-layout {
+  max-width: none;
+  display: grid;
+  grid-template-columns: var(--measure-crew) minmax(16rem, 1fr);
+  align-items: start;
+  gap: var(--s-4) var(--s-7);
+}
+
+/* `min-width: 0` on both: a grid column's implicit minimum is its content's
+   intrinsic width, and the manifest's `Scroller` and the payouts table
+   underneath it would otherwise refuse to shrink below that and force the
+   grid wider than `.page` allows. The manifest column keeps its own 48rem
+   ceiling explicitly — the grid track above already sizes it, but a bare
+   `1fr` sibling makes `minmax`'s auto side track the wider column too
+   without it. */
+.account-layout__main {
+  min-width: 0;
+  max-width: var(--measure-crew);
+}
+
+.account-layout__rail {
+  min-width: 0;
+}
+
+/* Below this, the rail's own width stops being useful — 16rem is already the
+   floor `minmax` above holds it to — and a member scanning a stacked page is
+   a better read than a manifest and a rail both fighting for a narrow
+   screen. One column, manifest first (source order), rail below it. */
+@media (max-width: 64rem) {
+  .page--narrow.page--crew > .account-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
 .page__head {
   margin-bottom: var(--s-6);
 }
@@ -729,14 +780,23 @@ a:hover {
    removed, since a future `.verdict` rendered outside that row — its own row
    again, say — would want the top margin back without anyone having to
    reconstruct why it was there. */
-.verdict {
+/* `.crew-fact` is a crew-wide reading that is NOT a health verdict — the fact
+   every row shares, lifted out of the manifest by `crewNorms` so it is said
+   once (account/page.tsx). It shares the box because it sits on the same head
+   line, and stays a separate class because it makes a different claim, and
+   because `p.verdict .st` is a selector several specs use to mean "the health
+   verdict" specifically. Shared here rather than duplicated so the two cannot
+   drift apart. */
+.verdict,
+.crew-fact {
   margin-top: var(--s-3);
 }
 
 /* The verdict shares the H1's line rather than taking one of its own. The
    token's own top margin is what made it a row; inside the head row it is a
    flex item and the margin only pushes it off the h1's baseline. */
-.page__head-row > .verdict {
+.page__head-row > .verdict,
+.page__head-row > .crew-fact {
   margin-top: 0;
 }
 
@@ -3780,7 +3840,46 @@ h3.rule-head__label {
    control that opens a panel, the same standing as a `<details>` summary, so
    it dims like one. `.btn--quiet .btn--micro` already supplies the button's
    type, colour and 28px height; this only adds the marker `<button>` doesn't
-   get for free the way `<summary>` does. */
+   get for free the way `<summary>` does.
+
+   Icon-only, deliberately: the button used to also carry the visible word
+   "actions" — every row's own, identical, in a table read ten rows at a
+   time, which made the one repeated word the loudest pattern in the manifest
+   (composition pass finding 2). The marker alone is the disclosure
+   affordance everywhere else in this app already uses it (`.row-toggle`,
+   `.disc > summary`), so this is not a new idiom, just this control losing
+   the caption it never needed — `aria-label="${name} actions"`
+   (character-row.tsx) still names the control for assistive tech, unchanged,
+   so nothing moves out of the accessible channel; the sighted channel drops
+   a word that was pure repetition, not a fact (R4 governs facts, and "there
+   is more here" is exactly what the marker already states visually). The
+   alternative this pass considered and rejected — making the row's own name
+   the trigger, `Disclosure as="row"`'s own shape — would fold the whole
+   NAME cell's content (main badge, status summary, location line) into the
+   button's accessible name, which is a real regression for a screen-reader
+   user; the marker stays a control of its own.
+
+   OPEN DEFECT, recorded rather than fixed. As the trailing column the bare
+   marker sits against the table's right edge, ~490px from the name it
+   expands, so ten of them float in an empty column with no visible anchor —
+   which IS the R4 failure the paragraph above claims to avoid, because "there
+   is more here" only reads as a statement about THIS row if it is near this
+   row. Caption-less is fine; caption-less and stranded is not.
+
+   Two fixes were built and measured against this table, and both cost more
+   than the defect (page.tsx's `<colgroup>` carries the numbers): leading the
+   row with ACTIONS costs 52px of the 320px forced-scroll budget, and making
+   NAME fit-width so ACTIONS takes the slack starves the long-location case.
+   The fix that works is moving this control inside the NAME cell, which needs
+   `leadCells` split so page.tsx can pass the name content separately. */
+.row-toggle--actions {
+  /* A square target now that the label is gone — `.btn--micro`'s 28px
+     min-height paired with content-width padding alone would leave this
+     narrower than tall. `min-width` matches it so the WCAG 2.5.8 (AA) 24px
+     floor holds on both axes, not just height. */
+  min-width: 1.75rem;
+}
+
 .row-toggle--actions::before {
   content: "+";
   font-family: var(--font-mono), ui-monospace, monospace;
