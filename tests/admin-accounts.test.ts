@@ -5,11 +5,15 @@ import {
   approveAccount,
   returnTierToAuto,
   setAccountStatus,
+  setMainCharacterAsAdmin,
   setStatusNote,
   setTierManual,
 } from "@/services/admin-accounts";
 import { setupTestDb, truncateAll } from "./helpers/db";
-import { seedAccount } from "./helpers/seed";
+import { testConfig } from "./helpers/config";
+import { seedAccount, seedCharacter } from "./helpers/seed";
+
+const cfg = testConfig();
 
 let ctx: Awaited<ReturnType<typeof setupTestDb>>;
 beforeAll(async () => {
@@ -345,5 +349,110 @@ describe("approveAccount", () => {
     expect(rows[0].target).toBe(target.id);
     expect(rows[0].details).toEqual({ to: "alumni", locked: false });
     expect(await ctx.db.select().from(outbox)).toHaveLength(1);
+  });
+});
+
+describe("setMainCharacterAsAdmin", () => {
+  it("refuses a non-admin actor", async () => {
+    const member = await seedAccount(ctx.db);
+    const target = await seedAccount(ctx.db);
+    await seedCharacter(ctx.db, cfg, { id: 90000001, accountId: target.id, main: true });
+    const alt = await seedCharacter(ctx.db, cfg, { id: 90000002, accountId: target.id });
+    const result = await ctx.db.transaction((tx) =>
+      setMainCharacterAsAdmin(tx, member.id, target.id, alt.id),
+    );
+    expect(result).toEqual({ ok: false, error: "not_authorized" });
+  });
+
+  it("refuses a character that isn't on the account", async () => {
+    const admin = await seedAdmin();
+    const target = await seedAccount(ctx.db);
+    await seedCharacter(ctx.db, cfg, { id: 90000003, accountId: target.id, main: true });
+    const other = await seedAccount(ctx.db);
+    const stranger = await seedCharacter(ctx.db, cfg, {
+      id: 90000004,
+      accountId: other.id,
+    });
+    const result = await ctx.db.transaction((tx) =>
+      setMainCharacterAsAdmin(tx, admin.id, target.id, stranger.id),
+    );
+    expect(result).toEqual({ ok: false, error: "not_found" });
+  });
+
+  it("promotes the alt, names it, and logs the admin action", async () => {
+    const admin = await seedAdmin();
+    const target = await seedAccount(ctx.db);
+    await seedCharacter(ctx.db, cfg, { id: 90000005, accountId: target.id, main: true });
+    const alt = await seedCharacter(ctx.db, cfg, {
+      id: 90000006,
+      accountId: target.id,
+      name: "Alt Two",
+    });
+    const result = await ctx.db.transaction((tx) =>
+      setMainCharacterAsAdmin(tx, admin.id, target.id, alt.id),
+    );
+    expect(result).toEqual({ ok: true, name: "Alt Two", tierLocked: false });
+    const [acc] = await ctx.db.select().from(account).where(eq(account.id, target.id));
+    expect(acc.mainCharacterId).toBe(alt.id);
+    const rows = await ctx.db
+      .select()
+      .from(auditLog)
+      .where(eq(auditLog.target, target.id));
+    expect(rows.some((r) => r.action === "admin.main_changed")).toBe(true);
+  });
+
+  // The confirmation shown after this press (accountsConfirmation's "main"
+  // case, admin/accounts/view.ts) has to know whether the tier will actually
+  // follow the new main — a locked account's tier does not move, and this
+  // is the field that tells the caller so, read off the same `FOR UPDATE`
+  // row `setMainCharacter` already locks (no extra query).
+  it("reports the account's tier lock so the caller can word the confirmation honestly", async () => {
+    const admin = await seedAdmin();
+    const target = await seedAccount(ctx.db, { tier: "associate", tierLocked: true });
+    await seedCharacter(ctx.db, cfg, { id: 90000011, accountId: target.id, main: true });
+    const alt = await seedCharacter(ctx.db, cfg, {
+      id: 90000012,
+      accountId: target.id,
+      name: "Alt Three",
+    });
+    const result = await ctx.db.transaction((tx) =>
+      setMainCharacterAsAdmin(tx, admin.id, target.id, alt.id),
+    );
+    expect(result).toEqual({ ok: true, name: "Alt Three", tierLocked: true });
+  });
+
+  // actor === target here, which is exactly why the action discriminator exists
+  // rather than a comparison of the two.
+  it("an admin fixing their own account still writes the admin action", async () => {
+    const admin = await seedAdmin();
+    await seedCharacter(ctx.db, cfg, { id: 90000007, accountId: admin.id, main: true });
+    const adminAlt = await seedCharacter(ctx.db, cfg, {
+      id: 90000008,
+      accountId: admin.id,
+    });
+    const result = await ctx.db.transaction((tx) =>
+      setMainCharacterAsAdmin(tx, admin.id, admin.id, adminAlt.id),
+    );
+    expect(result.ok).toBe(true);
+    const rows = await ctx.db
+      .select()
+      .from(auditLog)
+      .where(eq(auditLog.target, admin.id));
+    expect(rows.some((r) => r.action === "admin.main_changed")).toBe(true);
+    expect(rows.some((r) => r.action === "account.main_changed")).toBe(false);
+  });
+
+  it("enqueues a sync so the tier re-decides", async () => {
+    const admin = await seedAdmin();
+    const target = await seedAccount(ctx.db);
+    await seedCharacter(ctx.db, cfg, { id: 90000009, accountId: target.id, main: true });
+    const alt = await seedCharacter(ctx.db, cfg, { id: 90000010, accountId: target.id });
+    await ctx.db.transaction((tx) =>
+      setMainCharacterAsAdmin(tx, admin.id, target.id, alt.id),
+    );
+    const rows = await ctx.db.select().from(outbox);
+    expect(
+      rows.some((r) => r.payload.kind === "account" && r.payload.accountId === target.id),
+    ).toBe(true);
   });
 });

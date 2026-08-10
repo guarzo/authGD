@@ -389,7 +389,7 @@ export default async function AccountPage({
                   answers nothing without "Tier" in front of it. The `.facts`
                   grid's `<dt>` was doing this job; nothing else was. */}
               <span className="visually-hidden">Tier</span>
-              <StandingTier tier={view.tier} />
+              <StandingTier tier={view.tier} canFixMain={view.canFixMain} />
               {/* Cryo's copy and its "wake me" control, unchanged from the dd
                   they used to share. The old comment here argued they could not
                   have a row of their own because a `.visually-hidden` dt is

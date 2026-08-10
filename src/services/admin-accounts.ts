@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import type { DbTx } from "@/db";
 import { account } from "@/db/schema";
+import { setMainCharacter } from "@/services/accounts";
 import { logAudit } from "@/services/audit";
 import { enqueueSync } from "@/services/outbox";
 
@@ -204,4 +205,49 @@ export async function setStatusNote(
     details: { had: acc.statusNote !== null, has: value !== null },
   });
   return { ok: true, changed: true };
+}
+
+/**
+ * Its own result type rather than `AdminMutationResult`: the caller needs the
+ * promoted character's NAME to word the confirmation, and `setMainCharacter`
+ * already has it in hand from the row it locked. `tierLocked` follows the
+ * same `SetTierResult` shape above for the same reason — a locked account's
+ * tier does not move on this press, and `accountsConfirmation`'s "main" case
+ * needs to know that to avoid promising a convergence that will not happen.
+ */
+export type SetMainResult =
+  | { ok: true; name: string; tierLocked: boolean }
+  | { ok: false; error: "not_authorized" | "not_found" };
+
+/**
+ * Promote one of an account's own characters to main, on an admin's behalf.
+ *
+ * The alliance is deliberately NOT re-checked here. The condition that surfaces
+ * this control (core/main-fix.ts) is presentational: it decides what to show,
+ * not what is permitted. An admin who has a reason to move a main that authGD
+ * would not have suggested is not doing anything the tier machine can't undo —
+ * the next membership run re-decides from the new main either way, and the
+ * audit row says who did it. What IS enforced is ownership: `setMainCharacter`
+ * rejects a character that isn't on the account, and that rejection surfaces
+ * here as `not_found` so `redirectOnMutationError` needs no new case.
+ *
+ * `lockTarget` is not called: `setMainCharacter` takes `FOR UPDATE` on both the
+ * character and the account itself.
+ */
+export async function setMainCharacterAsAdmin(
+  dbx: DbTx,
+  actor: string,
+  accountId: string,
+  characterId: number,
+): Promise<SetMainResult> {
+  if (!(await isAuthorized(dbx, actor))) return { ok: false, error: "not_authorized" };
+  const result = await setMainCharacter(
+    dbx,
+    actor,
+    accountId,
+    characterId,
+    "admin.main_changed",
+  );
+  if (!result.ok) return { ok: false, error: "not_found" };
+  return { ok: true, name: result.name, tierLocked: result.tierLocked };
 }

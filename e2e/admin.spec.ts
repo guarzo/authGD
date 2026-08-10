@@ -3183,3 +3183,107 @@ test("the Map column separates a healthy account from every way it can drift", a
     page.locator(`${ROWS} > td:nth-child(${MAP_CELL + 1}) .st--bad`),
   ).toHaveCount(0);
 });
+
+/**
+ * The point of this test is the assertion at the end, not the press before it.
+ * `setMainAction` promotes the alt in the same revalidation that flips its own
+ * `mainFixCandidate` false — see the comment above the crew table's
+ * `ConfirmingForm` in page.tsx — so a form gated from outside the `<td>`, or a
+ * `ConfirmGroup` nested inside the row rather than hoisted above the whole
+ * crew table, would unmount in the very commit that produced this
+ * confirmation and it would never paint. That is the failure mode this
+ * feature is most likely to hit, and the only thing that catches it is
+ * actually reading the sentence off the page after the press.
+ */
+test("pressing make main in the drawer reports the confirmation, surviving its own row's re-render", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
+  await seedMember(db, { name: "Out Main", tier: "alumni", alts: ["In Alt"] });
+  // Out of alliance: anything other than cfg.allianceId (99000001, see
+  // playwright.config.ts) makes `mainFixCandidates` treat the main as broken.
+  await db.update(character).set({ allianceId: 5 }).where(eq(character.name, "Out Main"));
+  await db
+    .update(character)
+    .set({ allianceId: 99000001 })
+    .where(eq(character.name, "In Alt"));
+
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.goto("/admin/accounts");
+
+  // The row marker: exactly one, naming the real problem. Shortened visible
+  // text ("·main out"), per page.tsx's own comment on why the full phrase
+  // doesn't survive the row-height budget at 320/390px — the accessible name
+  // still carries the unabbreviated "·main out of alliance" via `aria-label`.
+  await expect(rowFor(page, "Out Main")).toContainText("·main out");
+  await expect(toggleOf(rowFor(page, "Out Main"))).toHaveAccessibleName(
+    /·main out of alliance/,
+  );
+
+  const row = rowFor(page, "Out Main");
+  await toggleOf(row).click();
+  const drawer = drawerOf(row);
+  await drawer.getByRole("button", { name: "make In Alt the main for Out Main" }).click();
+
+  await expect(page.getByText("is now the main")).toBeVisible();
+});
+
+/**
+ * The locked half of the same control. A pinned account still gets the button —
+ * that was the deliberate choice over hiding it — so the only thing keeping the
+ * press honest is copy: the note before it saying the tier won't move, and the
+ * confirmation after it repeating that instead of the unlocked sentence's
+ * promise that membership reconverges in a few seconds. Both strings are
+ * unit-tested where they are built (view.ts's `accountsConfirmation`, and its
+ * tests at admin-accounts-view.test.ts), but neither had anything asserting it
+ * reaches the screen: the note is rendered under `r.mainBroken && r.tierLocked`
+ * in page.tsx and nothing else reads that pair, so dropping the condition would
+ * have been caught by no test at any layer.
+ */
+test("the pinned-tier note and confirmation survive a make main press on a locked account", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedMember(db, {
+    name: "Lock Boss",
+    tier: "member",
+    isAdmin: true,
+  });
+  await seedMember(db, {
+    name: "Pinned Main",
+    tier: "associate",
+    tierLocked: true,
+    alts: ["Pinned Alt"],
+  });
+  await db
+    .update(character)
+    .set({ allianceId: 5 })
+    .where(eq(character.name, "Pinned Main"));
+  await db
+    .update(character)
+    .set({ allianceId: 99000001 })
+    .where(eq(character.name, "Pinned Alt"));
+
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.goto("/admin/accounts");
+
+  const row = rowFor(page, "Pinned Main");
+  await toggleOf(row).click();
+  const drawer = drawerOf(row);
+
+  // Before the press: the warning that the tier is pinned, and how to unpin it.
+  await expect(drawer).toContainText(
+    "tier is pinned, so changing the main won’t move it",
+  );
+
+  await drawer
+    .getByRole("button", { name: "make Pinned Alt the main for Pinned Main" })
+    .click();
+
+  // After: the locked wording, NOT the unlocked sentence's reconvergence promise.
+  await expect(
+    page.getByText("Pinned Alt is now the main, but the tier stays pinned."),
+  ).toBeVisible();
+  await expect(page.getByText("Press auto to unpin.")).toBeVisible();
+});

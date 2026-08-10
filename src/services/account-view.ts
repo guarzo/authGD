@@ -1,6 +1,7 @@
 import { and, count, desc, eq, inArray, isNotNull, or } from "drizzle-orm";
 import type { Config } from "@/config";
 import { formatLocation, locationFreshness, type LocationDisplay } from "@/core/location";
+import { mainFixCandidates } from "@/core/main-fix";
 import { nextRunAt } from "@/core/schedules";
 import type { Dbx } from "@/db";
 import {
@@ -199,6 +200,10 @@ export interface AccountView {
   status: "active" | "cryo";
   isAdmin: boolean;
   mainCharacterId: number | null;
+  /** The main can't hold the account's tier (missing, out of alliance, or
+   *  affiliation-invalid) AND a linked character could. Drives the /account
+   *  hint; the fix itself is an admin action. See core/main-fix.ts. */
+  canFixMain: boolean;
   discordLinked: boolean;
   /** @handle and guild display name, both null until a roles sync has seen the
    *  member — and permanently null for anyone who has left the guild. Every
@@ -309,12 +314,22 @@ export async function getAccountView(
   const aclSet = new Set(aclObs.map((o) => o.characterId));
   const required = new Set(cfg.eveSso.scopes);
   const locations = buildManifestLocations(chars, names);
+  // `chars` are the raw rows, so `allianceId` and `affiliationInvalid` are both
+  // in hand here — neither reaches the projection below, and neither should:
+  // the page needs the verdict, not the inputs.
+  const canFixMain =
+    mainFixCandidates({
+      mainCharacterId: acc.mainCharacterId,
+      characters: chars,
+      allianceId: cfg.allianceId,
+    }).length > 0;
 
   return {
     tier: acc.tier,
     status: acc.status,
     isAdmin: acc.isAdmin,
     mainCharacterId: acc.mainCharacterId,
+    canFixMain,
     discordLinked: links.length > 0,
     discordUsername: links[0]?.username ?? null,
     discordDisplayName: links[0]?.displayName ?? null,
@@ -345,6 +360,10 @@ export interface AdminCharacterRow {
   tokenStatus: "valid" | "invalid" | "needs_reauth" | "missing";
   needsReauthForScopes: boolean;
   affiliationInvalid: boolean;
+  /** This character is in the alliance and the account's main is not, so
+   *  promoting it repairs the tier. False on every character of a healthy
+   *  account. See core/main-fix.ts. */
+  mainFixCandidate: boolean;
   /** Widened from `ContactSyncResult` for the reason given on the member-facing
    *  field above: this value crossed the database boundary. */
   contactSyncResult: string | null;
@@ -366,6 +385,9 @@ export interface AdminAccountRow {
   statusNote: string | null;
   lastLoginAt: Date | null;
   mainName: string | null;
+  /** At least one character could be promoted to repair a broken main. A broken
+   *  main with no usable alt is NOT flagged: there is nothing to press. */
+  mainBroken: boolean;
   discordLinked: boolean;
   discordUsername: string | null;
   characters: AdminCharacterRow[];
@@ -441,6 +463,13 @@ export async function getAdminAccountsList(
 
   let rows: AdminAccountRow[] = accounts.map((acc) => {
     const accChars = charsByAccount.get(acc.id) ?? [];
+    const fixIds = new Set(
+      mainFixCandidates({
+        mainCharacterId: acc.mainCharacterId,
+        characters: accChars,
+        allianceId: cfg.allianceId,
+      }).map((c) => c.id),
+    );
     const locations = buildManifestLocations(accChars, names);
     const characters: AdminCharacterRow[] = accChars.map((c) => ({
       id: c.id,
@@ -449,6 +478,7 @@ export async function getAdminAccountsList(
       tokenStatus: c.tokenStatus,
       needsReauthForScopes: required.some((s) => !c.scopes.includes(s)),
       affiliationInvalid: c.affiliationInvalid,
+      mainFixCandidate: fixIds.has(c.id),
       contactSyncResult: syncByChar.get(c.id)?.lastResult ?? null,
       contactSyncDetail: syncByChar.get(c.id)?.lastDetail ?? null,
       mapObservedAt: obsByChar.get(c.id)?.observedAt ?? null,
@@ -480,6 +510,7 @@ export async function getAdminAccountsList(
       statusNote: acc.statusNote,
       lastLoginAt: acc.lastLoginAt,
       mainName: mainNameOf.get(acc.id) ?? null,
+      mainBroken: fixIds.size > 0,
       discordLinked: linked.has(acc.id),
       // Handle only. The guild display name is the account page's business —
       // this table already carries the member's EVE identity in the pinned

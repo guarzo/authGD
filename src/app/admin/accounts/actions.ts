@@ -11,6 +11,7 @@ import {
   approveAccount,
   returnTierToAuto,
   setAccountStatus,
+  setMainCharacterAsAdmin,
   setStatusNote,
   setTierManual,
 } from "@/services/admin-accounts";
@@ -29,7 +30,7 @@ import {
 /**
  * `/admin/accounts?[<listSearch>&]done=<code>&name=<name>&at=<instant>`.
  *
- * Three of this page's nine actions redirect through this on success —
+ * Three of this page's ten actions redirect through this on success —
  * `promoteAdminAction`, `demoteAdminAction`, `syncAccountAction`. Their
  * controls sit in the row's always-visible `cells`, not the `Disclosure`
  * drawer, so a redirect back to this same route costs nothing: nothing
@@ -38,9 +39,10 @@ import {
  * lands — same shape as `/account`'s `setMainAction` and `/admin/sync`'s
  * `queuedNotice`, and the same `?done=&name=&at=` triple `/account` uses.
  *
- * The other five mutating actions (`setTierAction`, `approveAction`,
- * `returnToAutoAction`, `setStatusAction`, `unlinkDiscordAction`) do NOT use
- * this — they live inside the drawer, where a redirect resets the drawer's
+ * The other six mutating actions (`setTierAction`, `approveAction`,
+ * `returnToAutoAction`, `setStatusAction`, `unlinkDiscordAction`,
+ * `setMainAction`) do NOT use this — they live inside the drawer, where a
+ * redirect resets the drawer's
  * own open/closed `useState` (`disclosure.tsx`) by replacing the route tree.
  * They call `accountsConfirmation` (`view.ts`) directly and return it
  * through `useActionState` instead; see `view.ts`'s docblock for the full
@@ -144,7 +146,7 @@ function redirectOnMutationError(
   }
 }
 
-// These five (through `unlinkDiscordAction`, below) live in the row's
+// These six (through `setMainAction`, below) live in the row's
 // `Disclosure` drawer, unlike their four siblings — and that is why they
 // don't `redirect()` on success. A drawer row holds its open/closed state in
 // a plain `useState` (`disclosure.tsx`) with nowhere else to live; navigating,
@@ -426,4 +428,33 @@ export async function unlinkDiscordAction(
   // already being removed and never paint. Anything else this action wants to
   // say after a success has the same constraint.
   return { text: accountsConfirmation("discord", identity, undefined) };
+}
+
+/**
+ * Promote a character to main from the drawer's crew table.
+ *
+ * `characterId` is bound at render time from the row's own crew list, so it is
+ * not user input in the way a form field would be — but the service still
+ * verifies the character belongs to the account, which is what makes a forged
+ * request land on `not_found` rather than on someone else's account.
+ *
+ * Returns an `ActionOutcome` rather than redirecting: the control lives inside
+ * the drawer, and a redirect would collapse it.
+ */
+export async function setMainAction(
+  accountId: string,
+  characterId: number,
+  listSearch: string,
+  _prevState: ActionOutcome,
+  _formData: FormData,
+): Promise<ActionOutcome> {
+  const { accountId: actor } = await requireAdminAction();
+  const result = await getDb().transaction((tx) =>
+    setMainCharacterAsAdmin(tx, actor, accountId, characterId),
+  );
+  if (!result.ok) redirectOnMutationError(result.error, listSearch);
+  revalidatePath("/admin/accounts");
+  return {
+    text: accountsConfirmation("main", result.name, undefined, result.tierLocked),
+  };
 }

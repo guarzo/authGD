@@ -5,8 +5,8 @@
  * outcome, exactly the kind of thing that wants a test per case rather than a
  * browser.
  *
- * Nine actions mutate a row on this page (`actions.ts`); eight of them build
- * their confirmation through `accountsConfirmation`, but NOT all eight reach
+ * Ten actions mutate a row on this page (`actions.ts`); nine of them build
+ * their confirmation through `accountsConfirmation`, but NOT all nine reach
  * it the same way — this page turned out to need two different plumbing
  * shapes, discovered by running the e2e suite against the first (all-redirect)
  * version of this fix and watching it fail:
@@ -17,13 +17,13 @@
  *   `done`/`name`/`at` off the query string — untrusted input reaching copy,
  *   same posture `accountConfirmation` already has for `/account` — and land
  *   on `ConfirmNotice` (`_components`), page-level.
- * - Five live INSIDE the row's `Disclosure` drawer (`setTierAction`,
+ * - Six live INSIDE the row's `Disclosure` drawer (`setTierAction`,
  *   `approveAction`, `returnToAutoAction`, `setStatusAction`,
- *   `unlinkDiscordAction`). A redirect — even one that lands back on this
- *   same route — replaces the whole route tree on navigation, and the
- *   drawer's open/closed state is a plain `useState` in `disclosure.tsx` with
- *   nowhere else to live; a redirect resets it, closing the very drawer the
- *   admin had open to press the button. These five instead call
+ *   `unlinkDiscordAction`, `setMainAction`). A redirect — even one that lands
+ *   back on this same route — replaces the whole route tree on navigation, and
+ *   the drawer's open/closed state is a plain `useState` in `disclosure.tsx`
+ *   with nowhere else to live; a redirect resets it, closing the very drawer
+ *   the admin had open to press the button. These six instead call
  *   `accountsConfirmation` directly, with values the action already has (no
  *   query string involved), and return the result through `useActionState`
  *   for `confirm-group.tsx`'s `ConfirmingForm`/`ConfirmGroup` to focus — no
@@ -32,13 +32,15 @@
  *   found it. `unlinkDiscordAction` joined this group under
  *   docs/design-walkthrough.md's ruling R2, which moved its control off the
  *   row's always-visible cells and into a drawer group of its own
- *   (`page.tsx`) — it used to sit in the cell-level group above.
+ *   (`page.tsx`) — it used to sit in the cell-level group above. `setMainAction`
+ *   joined it directly: the control it confirms lives in the drawer's crew
+ *   table from the start (Task 6).
  *
  * Both shapes end at the same sentence-building function below, so there is
  * one copy of "what does 'tier' outcome say" rather than two.
  *
- * The pressed control is exactly what each of those eight changes out from
- * under itself — `setTierAction`'s own matching button locks (a locked
+ * In eight of those nine, the pressed control is exactly what the action
+ * changes out from under itself — `setTierAction`'s own matching button locks (a locked
  * tier's button is `disabled`, and a disabled element cannot hold focus at
  * all), `approveAction`'s pending-only buttons unmount into the ordinary tier
  * row, `setStatusAction`'s freeze/wake button swaps branches,
@@ -47,12 +49,18 @@
  * `discordLinked` flips false — the one case where the notice that focus is
  * meant to land on would go with it, which is why that action's
  * `ConfirmGroup` is hoisted above the conditional rather than sitting inside
- * the group like the rest (page.tsx), and
- * `returnToAutoAction`'s "auto" button disappears outright once the tier it
- * exists to unlock is unlocked. Left alone, the admin's focus falls to
+ * the group like the rest (page.tsx), `returnToAutoAction`'s "auto" button
+ * disappears outright once the tier it exists to unlock is unlocked, and
+ * `setMainAction`'s pressed `Submit` unmounts while its own `ConfirmingForm`
+ * deliberately does not, which is what lets the effect report at all (Task 6).
+ * Left alone, the admin's focus falls to
  * `<body>` and a keyboard or screen-reader admin working a long roster has to
- * re-traverse the document to find out whether the press even landed. The
- * ninth, `saveNoteAction`, already sits inside `NoteForm`'s `useActionState` —
+ * re-traverse the document to find out whether the press even landed.
+ * `syncAccountAction` is the ninth and the exception: a sync button is still a
+ * sync button afterwards, so nothing moves out from under the press, and its
+ * confirmation lands page-level on `ConfirmNotice` with no focus target to
+ * lose. The
+ * tenth, `saveNoteAction`, already sits inside `NoteForm`'s `useActionState` —
  * the note field's own form never unmounts or disables itself on a save, so
  * its focus was never at risk, and it already carries its own live-region
  * confirmation (`· saved`) beside the button rather than a redirect. It has
@@ -103,9 +111,9 @@ export function matchesAccountSearch(
 // `@/app/_components/confirm-group` once `/admin/sync` needed the identical
 // shape for its own job-drawer action; imported from there by `actions.ts`.
 
-/** The nine outcomes `/admin/accounts`'s mutating actions confirm with (all
+/** The ten outcomes `/admin/accounts`'s mutating actions confirm with (all
  *  but `saveNoteAction`, whose own confirmation lives in `NoteForm`) — the
- *  three cell-level actions off the `?done=` query string, the five drawer
+ *  three cell-level actions off the `?done=` query string, the six drawer
  *  actions through `useActionState`, per this file's head docblock. A code
  *  outside this set (hand-typed, or from a build that has since dropped
  *  one) renders no confirmation at all — see `accountsConfirmation`'s
@@ -113,8 +121,8 @@ export function matchesAccountSearch(
  *
  *  The list is the tuple, and the type is derived from it, rather than the
  *  two being written out separately: the runtime guard and the exhaustive
- *  switch have to agree about the same nine strings, and two hand-kept
- *  copies agree only until someone adds a tenth to one of them. Adding it to
+ *  switch have to agree about the same ten strings, and two hand-kept
+ *  copies agree only until someone adds an eleventh to one of them. Adding it to
  *  the tuple alone is enough — the switch stops compiling until it handles
  *  the new case. Same shape in `/account`'s `view.ts`. */
 const DONE_CODES = [
@@ -127,6 +135,7 @@ const DONE_CODES = [
   "revoke",
   "discord",
   "sync",
+  "main",
 ] as const;
 
 export type AdminAccountsDoneCode = (typeof DONE_CODES)[number];
@@ -216,7 +225,11 @@ const PINNED = "Press auto to unpin.";
  * page.
  *
  * `name` is the row's own `identity` (page.tsx's mainName-or-firstName-or-id
- * pick), echoed straight through with no further validation — same posture as
+ * pick) for every case but `"main"`, which names the PROMOTED CHARACTER
+ * instead — the row's identity there is the old, broken main, and saying
+ * "<old main> is now the main" would be exactly backwards (actions.ts's
+ * `setMainAction`, which is why it takes no `identity` parameter). Either
+ * way it is echoed straight through with no further validation — same posture as
  * `/account`'s `accountConfirmation` echoing `?name=`: it travels off a
  * redirect this same request wrote, so a hand-edited query string is the
  * only way to make it disagree with reality, and the cost of that is a wrong
@@ -235,6 +248,12 @@ const PINNED = "Press auto to unpin.";
  * Missing `name`/`tier` (a stripped query string, not a real redirect) falls
  * back to the bare verb rather than a sentence with a hole in it, same
  * fallback shape as `accountConfirmation`'s `"main"` case.
+ *
+ * `tierLocked` is not query-string-derived like the other three — the
+ * `"main"` case is one of the six drawer actions that calls this function
+ * directly with in-memory values (see the plumbing-shapes note above), so it
+ * arrives straight off `SetMainResult` with no missing/hand-edited case to
+ * default against.
  */
 // `done` is `AdminAccountsDoneCode | undefined`, not `string | undefined` —
 // every call site in `actions.ts` passes a literal (`"tier"`, `"approve"`,
@@ -253,6 +272,12 @@ export function accountsConfirmation(
   done: AdminAccountsDoneCode | undefined,
   name: string | undefined,
   tier: string | undefined,
+  // Only the "main" case reads this — whether the press's OWN account was
+  // already locked, straight off `SetMainResult.tierLocked`
+  // (services/admin-accounts.ts), not re-derived here. Optional and ignored
+  // by every other case, the same posture `tier` already has for the cases
+  // that don't need it.
+  tierLocked?: boolean,
 ): string {
   // Still load-bearing, not merely defensive: the switch below has no
   // `default` and every case returns, so this is what strips `undefined` —
@@ -296,6 +321,30 @@ export function accountsConfirmation(
       return name ? `Discord unlinked for ${name}.` : "Discord unlinked.";
     case "sync":
       return `Sync queued${name ? ` for ${name}` : ""}. The worker picks it up within a few seconds.`;
+    case "main":
+      // No tier named either way: the tier itself is the membership job's to
+      // decide from the new main, not this action's to guess. What DOES
+      // change between the two branches is whether that job will run at all.
+      //
+      // A locked account's tier does not move on this press — `decideTier`
+      // (core/tier.ts) returns `null` for it and the membership job's own
+      // query filters `tierLocked` out entirely (jobs/membership.ts) — so the
+      // unconditional "follows within a few seconds" sentence below is false
+      // here. The drawer's pre-press warning (`page.tsx`, gated on
+      // `r.mainBroken && r.tierLocked`) used to be the only place this was
+      // said, but a successful promotion clears `mainBroken` in the same
+      // revalidation that delivers this confirmation, unmounting that warning
+      // — leaving the false sentence as the only one left on screen. `PINNED`
+      // (above) is reused rather than a new string invented here, so the two
+      // places an admin can learn "this account is pinned" say it identically.
+      if (tierLocked) {
+        return name
+          ? `${name} is now the main, but the tier stays pinned. ${PINNED}`
+          : `Main updated, but the tier stays pinned. ${PINNED}`;
+      }
+      return name
+        ? `${name} is now the main. The tier follows within a few seconds.`
+        : "Main updated. The tier follows within a few seconds.";
   }
 }
 

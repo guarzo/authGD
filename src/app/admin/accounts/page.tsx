@@ -37,6 +37,7 @@ import {
   promoteAdminAction,
   returnToAutoAction,
   saveNoteAction,
+  setMainAction,
   setStatusAction,
   setTierAction,
   syncAccountAction,
@@ -653,7 +654,9 @@ function AccountRow({
   // voice-control user reading "Sam Alt no main plus one" off the screen
   // matches nothing, since the spoken name stops before the count.
   const altCount = r.characters.length > 1 ? ` (+${r.characters.length - 1})` : "";
-  const pinLabel = `${firstName ? `${identity} ·no main` : identity}${altCount}`;
+  const pinLabel = `${firstName ? `${identity} ·no main` : identity}${altCount}${
+    mainName && r.mainBroken ? " ·main out of alliance" : ""
+  }`;
 
   return (
     <Disclosure
@@ -672,6 +675,17 @@ function AccountRow({
             </>
           )}
           {r.characters.length > 1 && ` (+${r.characters.length - 1})`}
+          {/* Shortened from the accessible "·main out of alliance" (still the
+              full string in `pinLabel`, which `Disclosure` puts on the toggle
+              as `aria-label` — a superset of the visible label survives
+              shortening the visible half, not the accessible one, per WCAG
+              2.5.3). Measured, not guessed: the full phrase wraps this
+              column's toggle onto a third line and grows the row past every
+              sibling row's height at 320/390px — the same "extra line per
+              row costs the fold" trap the narrow-status-summary work already
+              paid for once. This shorter form still reads as "broken", and
+              the drawer's own crew table and lock note say the rest. */}
+          {mainName && r.mainBroken && <span className="mono dim-ink"> ·main out</span>}
         </>
       }
       cells={
@@ -1231,87 +1245,147 @@ function AccountRow({
           </span>
         )}
         <Scroller label={`${identity} crew`}>
-          <table className="log log--crew">
-            <thead>
-              <tr>
-                <th scope="col">Name</th>
-                <th scope="col">Token</th>
-                <th scope="col">Standings</th>
-                <th scope="col">Map</th>
-              </tr>
-            </thead>
-            <tbody>
-              {r.characters.map((c) => (
-                <tr key={c.id}>
-                  <td>
-                    {/* Below 30rem the thead (globals.css, ".log--crew" media
-                        query) is hidden and this row becomes a block, so the
-                        <th scope="col"> association it relied on for its
-                        accessible name is gone. This label stands in for it —
-                        see the finding-4.4 comment on .log--crew in
-                        globals.css for why it's a real element and not
-                        generated content, and for the boundary measurement. */}
-                    <span className="crew__label">Name</span>
-                    <div className="stack">
-                      <span className="char">
-                        {c.name}{" "}
-                        {c.isMain && <strong className="char__main">(main)</strong>}
-                      </span>
-                      <CharacterLocation location={c.location} stale={c.locationStale} />
-                    </div>
-                  </td>
-                  <td>
-                    <span className="crew__label">Token</span>
-                    <div className="stack">
-                      <TokenState c={c} />
-                      {c.affiliationInvalid && (
-                        <span className="dim">affiliation invalid</span>
-                      )}
-                    </div>
-                  </td>
-                  <td>
-                    <span className="crew__label">Standings</span>
-                    <div className="stack">
-                      <ContactState
-                        result={c.contactSyncResult}
-                        target={isContactsTarget({
-                          tier: r.tier,
-                          affiliationInvalid: c.affiliationInvalid,
-                        })}
-                      />
-                      {/* Gated on the same predicate the token is: splitting the
-                          prose out of ContactState moved its `!target` early
-                          return with it, and a non-target character holding a
-                          stale result from when it was a target would otherwise
-                          read "— not managed" and then explain how to fix it. */}
-                      {hasContactRemedy(
-                        c.contactSyncResult,
-                        isContactsTarget({
-                          tier: r.tier,
-                          affiliationInvalid: c.affiliationInvalid,
-                        }),
-                      ) && (
-                        <ContactRemedy
-                          result={c.contactSyncResult}
-                          detail={c.contactSyncDetail}
-                          label={cfg.standings.label}
-                        />
-                      )}
-                    </div>
-                  </td>
-                  <td>
-                    <span className="crew__label">Map</span>
-                    {c.mapObservedAt ? (
-                      <Status tone="ok">on</Status>
-                    ) : (
-                      <Status tone="off">off</Status>
-                    )}
-                  </td>
+          {/* One group for the whole crew table, not one per row: `setMainAction`
+              is bound per character below, but `ReportContext` is read by
+              whichever form fires, and only one press can be in flight at a
+              time. Hoisted above the table for the same reason the Discord
+              group above is hoisted above its own conditional — the crew row a
+              press targets is not guaranteed to survive the revalidation the
+              press causes (the promoted character's `isMain` flips, its own
+              `mainFixCandidate` flips, and the row it was in may re-sort), so
+              the notice needs a host that outlives the row rather than one
+              nested inside it. */}
+          <ConfirmGroup>
+            <table className="log log--crew">
+              <thead>
+                <tr>
+                  <th scope="col">Name</th>
+                  <th scope="col">Token</th>
+                  <th scope="col">Standings</th>
+                  <th scope="col">Map</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {r.characters.map((c) => (
+                  <tr key={c.id}>
+                    <td>
+                      {/* Below 30rem the thead (globals.css, ".log--crew" media
+                          query) is hidden and this row becomes a block, so the
+                          <th scope="col"> association it relied on for its
+                          accessible name is gone. This label stands in for it —
+                          see the finding-4.4 comment on .log--crew in
+                          globals.css for why it's a real element and not
+                          generated content, and for the boundary measurement. */}
+                      <span className="crew__label">Name</span>
+                      <div className="stack">
+                        <span className="char">
+                          {c.name}{" "}
+                          {c.isMain && <strong className="char__main">(main)</strong>}
+                        </span>
+                        <CharacterLocation
+                          location={c.location}
+                          stale={c.locationStale}
+                        />
+                        {/* Rendered for EVERY character, not gated by
+                            `c.mainFixCandidate` — only the `Submit` inside is.
+                            `ConfirmingForm` reports its result from a
+                            `useEffect` (confirm-group.tsx), and a successful
+                            press flips this character's own
+                            `mainFixCandidate` false in the same revalidation
+                            that carries the return value. A form gated from
+                            outside would unmount in the commit that produced
+                            its own confirmation and the effect would never
+                            run — the exact failure the first attempt at
+                            `unlinkDiscordAction` hit above (see the comment
+                            over `<div className="drawer__confirm">`). Binding
+                            the action for a
+                            non-candidate is harmless: there is no submit
+                            control inside to press, and the action
+                            re-authorizes server-side regardless.
+
+                            No `ConfirmSubmit` here either: revealing a cost
+                            hint would widen this `<td>` and move the armed
+                            button out from under a stationary mouse, the same
+                            reveal-disarms-itself trap `confirm-submit.tsx`'s
+                            docblock already rules out for a `td`. This press
+                            is reversible and non-destructive, unlike the
+                            unlink it sits near, so a plain `Submit` is
+                            enough. */}
+                        <ConfirmingForm
+                          className="inline-form"
+                          action={setMainAction.bind(null, r.accountId, c.id, listSearch)}
+                        >
+                          {c.mainFixCandidate && (
+                            <Submit
+                              className="btn"
+                              pendingLabel="setting…"
+                              aria-label={`make ${c.name} the main for ${identity}`}
+                            >
+                              make main
+                            </Submit>
+                          )}
+                        </ConfirmingForm>
+                      </div>
+                    </td>
+                    <td>
+                      <span className="crew__label">Token</span>
+                      <div className="stack">
+                        <TokenState c={c} />
+                        {c.affiliationInvalid && (
+                          <span className="dim">affiliation invalid</span>
+                        )}
+                      </div>
+                    </td>
+                    <td>
+                      <span className="crew__label">Standings</span>
+                      <div className="stack">
+                        <ContactState
+                          result={c.contactSyncResult}
+                          target={isContactsTarget({
+                            tier: r.tier,
+                            affiliationInvalid: c.affiliationInvalid,
+                          })}
+                        />
+                        {/* Gated on the same predicate the token is: splitting the
+                            prose out of ContactState moved its `!target` early
+                            return with it, and a non-target character holding a
+                            stale result from when it was a target would otherwise
+                            read "— not managed" and then explain how to fix it. */}
+                        {hasContactRemedy(
+                          c.contactSyncResult,
+                          isContactsTarget({
+                            tier: r.tier,
+                            affiliationInvalid: c.affiliationInvalid,
+                          }),
+                        ) && (
+                          <ContactRemedy
+                            result={c.contactSyncResult}
+                            detail={c.contactSyncDetail}
+                            label={cfg.standings.label}
+                          />
+                        )}
+                      </div>
+                    </td>
+                    <td>
+                      <span className="crew__label">Map</span>
+                      {c.mapObservedAt ? (
+                        <Status tone="ok">on</Status>
+                      ) : (
+                        <Status tone="off">off</Status>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </ConfirmGroup>
         </Scroller>
+        {r.mainBroken && r.tierLocked && (
+          <p className="dim drawer__note">
+            This account&rsquo;s tier is pinned, so changing the main won&rsquo;t move it.
+            Press auto above to let the membership job take over again.
+          </p>
+        )}
       </section>
     </Disclosure>
   );

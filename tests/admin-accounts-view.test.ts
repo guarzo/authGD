@@ -8,19 +8,21 @@ import {
   type AdminAccountsDoneCode,
 } from "@/app/admin/accounts/view";
 
-// The success confirmation eight of this page's nine server actions carry
+// The success confirmation nine of this page's ten server actions carry
 // back, by one of two routes — setTierAction, approveAction, returnToAutoAction,
-// setStatusAction (both directions) and unlinkDiscordAction call this directly
-// and return the sentence through `useActionState`, because their controls
-// live in the row drawer where a redirect would close it; syncAccountAction,
-// promoteAdminAction and demoteAdminAction redirect with a `?done=` code and
-// `page.tsx` calls this on the way back out. Either way it is the only
-// evidence an admin gets that the press landed, since the pressed control ends
-// up unmounted or (setTierAction) disabled. On the redirecting three, `done`,
-// `name` and `tier` arrive off the query string, exactly like
-// `accountConfirmation`'s own `done`/`name` in account/view.ts, so an
-// unrecognized or missing value is untrusted input reaching copy and has to
-// degrade rather than throw or print garbage.
+// setStatusAction (both directions), unlinkDiscordAction and setMainAction call
+// this directly and return the sentence through `useActionState`, because their
+// controls live in the row drawer where a redirect would close it;
+// syncAccountAction, promoteAdminAction and demoteAdminAction redirect with a
+// `?done=` code and `page.tsx` calls this on the way back out. Either way it is
+// the only evidence an admin gets that the press landed, since the pressed
+// control ends up unmounted or (setTierAction) disabled. setMainAction is the
+// one case where that unmounting is deliberately partial: its pressed `Submit`
+// goes, its `ConfirmingForm` stays, which is what leaves something mounted to
+// report through. On the redirecting three, `done`, `name` and `tier` arrive off
+// the query string, exactly like `accountConfirmation`'s own `done`/`name` in
+// account/view.ts, so an unrecognized or missing value is untrusted input
+// reaching copy and has to degrade rather than throw or print garbage.
 describe("accountsConfirmation", () => {
   it("names the account and the tier for a manual tier change", () => {
     expect(accountsConfirmation("tier", "Aiden Sol", "Alumni")).toBe(
@@ -136,6 +138,37 @@ describe("accountsConfirmation", () => {
     expect(accountsConfirmation("sync", undefined, undefined)).toBe(
       "Sync queued. The worker picks it up within a few seconds.",
     );
+  });
+
+  it("names the promoted character for a main change", () => {
+    expect(accountsConfirmation("main", "Aiden Sol", undefined)).toBe(
+      "Aiden Sol is now the main. The tier follows within a few seconds.",
+    );
+  });
+
+  it("degrades to the bare verb with no name", () => {
+    expect(accountsConfirmation("main", undefined, undefined)).toBe(
+      "Main updated. The tier follows within a few seconds.",
+    );
+  });
+
+  // A locked account's tier does not move on this press (decideTier holds
+  // it, the membership job's query filters it out) — the "follows within a
+  // few seconds" sentence above is only true when `tierLocked` is false.
+  it("does not promise a tier follow-up on a locked account", () => {
+    expect(accountsConfirmation("main", "Aiden Sol", undefined, true)).toBe(
+      "Aiden Sol is now the main, but the tier stays pinned. Press auto to unpin.",
+    );
+  });
+
+  it("degrades to the bare verb for a locked account with no name", () => {
+    expect(accountsConfirmation("main", undefined, undefined, true)).toBe(
+      "Main updated, but the tier stays pinned. Press auto to unpin.",
+    );
+  });
+
+  it("recognizes the main code", () => {
+    expect(isDoneCode("main")).toBe(true);
   });
 
   it("renders nothing for a missing done code", () => {
