@@ -3645,6 +3645,21 @@ h3.rule-head__label {
   text-align: left;
 }
 
+/* `.notice` carries `margin-bottom` and no `margin-top`, which is right
+   everywhere it follows a `.page__head` — and wrong here, where it follows the
+   emblem/title/motto stack directly and sat flush against the motto with 0px
+   between them. A returning member bounced back by an expired session met the
+   reason for it welded to the brand mark.
+
+   Scoped to the child of `.launch__panel` rather than fixed on `.notice`
+   itself: that class is load-bearing on six other surfaces, all of which sit
+   below a head that already provides the space. `.notice-slot` is a different
+   class, so the empty reservation this page mounts unconditionally is
+   untouched and still draws nothing. */
+.launch__panel > .notice {
+  margin-top: var(--s-5);
+}
+
 /* No font-size override: this is prose, and DESIGN.md sets prose at --t-body.
    Matches .page__lede, which distinguishes secondary copy by colour alone. */
 .launch__disclosure-note {
@@ -3663,6 +3678,27 @@ h3.rule-head__label {
 
 .launch__scopes {
   margin-top: var(--s-2);
+}
+
+/* The shared fact for the list below it: what every scope in this group has in
+   common, said once, so the rows can carry only what differs. See
+   `SCOPE_GROUPS` in `login/page.tsx`.
+
+   Deliberately NOT a member of the label register above, though it sits
+   between two things that are (`.launch__scopes-head`, and `.launch__scopes
+   dt`'s mono treatment). The register is for fixed field names — a word or
+   two, uppercased, naming a slot. These are sentences, and sentences in forced
+   caps at `--track-furniture` are the thing this codebase keeps taking out.
+   Weight and colour are what separate it instead: `--ink`, the only full-value
+   ink in this block, against the `--ink-dim` of the descriptions and the
+   `--ink-faint` of the identifiers. That ordering is the point — the reader
+   deciding whether to grant should hit "the only thing authGD writes" before
+   any identifier, and it is now the brightest text in the disclosure. */
+.launch__scope-group {
+  margin-top: var(--s-5);
+  font-weight: 600;
+  color: var(--ink);
+  font-size: var(--t-caption);
 }
 
 /* Inverted from the original structure: dt is now the raw scope identifier
