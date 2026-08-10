@@ -174,6 +174,14 @@
 
   --ease: cubic-bezier(0.22, 1, 0.36, 1); /* ease-out-quint */
   --dur-color: 140ms;
+  /* No consumers. All ten `transition` declarations in this file animate a
+     colour, a border or an opacity, and every one takes --dur-color. The
+     transforms that exist are @keyframes (seal-settle 620ms, btn-pulse and
+     link-pending-pulse 900ms) and each names its own duration, since a settle
+     and a loop are not paced like a hover. Kept as the declared answer for the
+     first transform *transition*, so it picks from the scale rather than
+     inventing a number — but it is a reservation, not a description of the
+     shipped UI, and DESIGN.md's motion section says the same. */
   --dur-move: 220ms;
 }
 
@@ -2566,9 +2574,15 @@ h3.rule-head__label {
    A screen of green dots reporting that nothing needs doing is the
    generic-dashboard signature, and it spends the eye's attention on exactly
    the rows that have no claim on it.
-   --signal-ok is not deleted — it is still right where health is genuinely
-   the subject rather than the default (see .notice--ok) — but the default
-   `ok` token is now as quiet as what it reports. */
+   --signal-ok is not deleted, but do not read that as "it is in use
+   somewhere else". It has no consumers at all, and the `.notice--ok` this
+   comment used to cite as the somewhere-else has never existed — an editor
+   who went looking for it to copy would find two comments naming it and no
+   rule. The token stays because the notice family has a visible gap where an
+   ok variant would go, and because --tier-alumni carries the same value: with
+   the token gone, the next ok notice reaches for a tier colour instead.
+   What matters here is only that the default `ok` token is now as quiet as
+   what it reports. */
 .st--ok {
   color: var(--ink-dim);
 }
@@ -2715,7 +2729,7 @@ h3.rule-head__label {
 .tier--lead {
   font-size: var(--t-data);
   padding: 0.3em 0.65em;
-  letter-spacing: 0.12em;
+  letter-spacing: var(--track-label);
 }
 
 /* Replaces a literal 🔒 emoji, which rendered in the vendor's own colour
@@ -3815,7 +3829,7 @@ h3.rule-head__label {
   border-top: 1px solid var(--rule);
   font-family: var(--font-mono), ui-monospace, monospace;
   font-size: 0.625rem;
-  letter-spacing: 0.12em;
+  letter-spacing: var(--track-label);
   text-transform: uppercase;
   color: var(--ink-faint);
 }
@@ -5096,8 +5110,10 @@ h3.rule-head__label {
   color: var(--ink-faint);
 }
 
-/* The closing beat: the lander, drawn at the size it was cut for. Nothing
-   below it, so the page ends on the artwork rather than on a control. */
+/* The closing beat: the lander, drawn well under its master's 1120px so it has
+   pixels to spare at 2x. Nothing below it, so the page ends on the artwork
+   rather than on a control. (This used to say "drawn at the size it was cut
+   for", which it is not and should not be — see PRODUCT.md's fifth principle.) */
 .closing {
   margin: var(--s-8) 0 0;
 }

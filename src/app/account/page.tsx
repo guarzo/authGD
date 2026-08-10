@@ -1376,12 +1376,16 @@ export default async function AccountPage({
               </>
             )}
 
-            {/* The closing beat. Decorative, so alt is empty; drawn from a
-                1120px asset cut for exactly this, never a scaled-down master.
-                A single-character account has little content above it, and the
-                full-size artwork dwarfed it; `.closing--compact` asks the same
-                asset for a smaller frame rather than cropping or downscaling it,
-                same technique the full size already uses, just a smaller target.
+            {/* The closing beat. Decorative, so alt is empty. A 1120px master
+                drawn at 420, or at 260 when `.closing--compact` applies: a
+                single-character account has little content above this, and at
+                full size the artwork dwarfed it. Oversampling is deliberate and
+                is what keeps it crisp at 2x — this comment used to say the asset
+                was "cut for exactly this, never a scaled-down master" and that
+                the compact variant asked for "a smaller frame rather than
+                downscaling", which described the mechanism backwards. It is a
+                downscale in both sizes, and that is the good direction.
+                PRODUCT.md's fifth principle now says so; it used to ban this.
                 Moved into the rail by this pass (composition finding 3): the
                 mission-patch identity used to be a mark in the header and an
                 illustration parked at the very bottom of a long page: putting
