@@ -334,7 +334,46 @@ export default async function AdminSyncPage({
       <RuleHead
         as="h2"
         aside={
-          <span className="btn-row__stamp">checked {utcHhmmss(renderedAt)} UTC</span>
+          <>
+            <span className="btn-row__stamp">checked {utcHhmmss(renderedAt)} UTC</span>
+            {/* Refresh lives beside the stamp it replaces, not in the control
+                row at the foot of the page. Down there it was an `<a href>`
+                with no pending state drawn identically to `Recheck invalid
+                affiliations`, which enqueues a job — two controls at the same
+                weight, 8px apart, one of which changes nothing and one of
+                which puts work on the queue. Nothing but the label separated
+                them.
+
+                Differentiated by adjacency rather than by grade, because the
+                grade axis is closed here: `.btn--quiet` carries
+                `min-height: 1.75rem`, and DESIGN.md R1 scopes that 28px grade
+                by the reason for it — rows that each carry a control set and
+                are read many at a time. A single control in a section header
+                is not that. Gold is already spent on `Sync now` and a second
+                one would flatten the first.
+
+                Adjacency is the stronger argument anyway: this control's
+                subject is the timestamp, not the queue. "Checked 14:02:11 UTC"
+                followed by the control that re-checks reads as one statement,
+                and an admin who wants a newer number now finds the control
+                while looking at the stale one instead of scrolling past seven
+                rows and however many open drawers.
+
+                A plain anchor, not a router link: this page is the only thing
+                on screen that can answer "did the run land", and a soft
+                navigation to the URL you are already on is exactly the case a
+                client router is entitled to serve from its own cache. It drops
+                `?queued=` and `?at=` on the way, which is still worth having
+                now that the notice stamps itself: the canonical URL is the one
+                an admin leaves open, and it should not carry a press from an
+                hour ago at all.
+
+                No polling behind it: an admin reading an expanded failed row
+                must not have the page move under them. */}
+            <a className="btn" href="/admin/sync">
+              Refresh
+            </a>
+          </>
         }
       >
         {groups.length} job{groups.length === 1 ? "" : "s"}
@@ -1153,22 +1192,10 @@ export default async function AdminSyncPage({
             Recheck invalid affiliations
           </Submit>
         </form>
-        {/* A plain anchor, not a router link: this page is the only thing on
-            screen that can answer "did the run land", and a soft navigation to
-            the URL you are already on is exactly the case a client router is
-            entitled to serve from its own cache. It drops `?queued=` and
-            `?at=` on the way, which is still worth having even now that the
-            notice stamps itself: the canonical URL is the one an admin leaves
-            open, and it should not carry a press from an hour ago at all.
-
-            No polling behind it: an admin reading an expanded failed row must
-            not have the page move under them. The notice copy names the
-            browser reload rather than this control, because the notice renders
-            at the top of the page and this sits below seven rows and however
-            many open drawers. */}
-        <a className="btn" href="/admin/sync">
-          Refresh
-        </a>
+        {/* Refresh used to sit here as a third peer. It moved up beside the
+            "checked …" stamp in the strip's section header — see the docblock
+            there. What is left in this row is exactly the two controls that
+            put work on the queue, which is what the row is for. */}
       </div>
     </main>
   );

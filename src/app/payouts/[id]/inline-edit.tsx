@@ -66,6 +66,7 @@ export function InlineEdit({
   step,
   rows,
   standalone = true,
+  prominentTrigger = false,
 }: {
   /** The server action, already bound to whatever ids it needs
    *  (`setItemPriceAction.bind(null, operationId, item.id)`). */
@@ -104,6 +105,28 @@ export function InlineEdit({
    *  28px `.btn--quiet` floor back to 36px without giving up the quiet
    *  colouring. */
   standalone?: boolean;
+  /** Raises the *trigger* out of the quiet grade to a plain `.btn`, filled and
+   *  bordered. Defaults to false, and only the two page-head uses set it.
+   *
+   *  This page has 70 pressable things and 62 of them are the identical 28px
+   *  quiet chip, with a single gold button. At that ratio nothing directs the
+   *  eye: an operator opening a payout scans a field of interchangeable
+   *  `edit` marks and has no way to tell which of them changes the record's
+   *  identity from which changes one line item's unit price.
+   *
+   *  Scoped to the operation's name and date because those two *are* the
+   *  record's identity — everything else edits a field of it — and because
+   *  they are the only two above the fold. Deliberately not extended to all
+   *  five `standalone` uses: promoting five of 62 does not create a focal
+   *  point, it creates a second uniform tier, which is the same defect one
+   *  notch up.
+   *
+   *  Costs no CSS and no layout. Bare `.btn` already carries
+   *  `min-height: 2.25rem` — the identical box `.inline-edit--standalone
+   *  .btn--quiet` buys back — so this changes fill, border and nothing else.
+   *  It also adds no second gold: `.btn--primary` stays the page's one
+   *  emphasis ration, spent on Finalize. */
+  prominentTrigger?: boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const [announcement, setAnnouncement] = useState("");
@@ -173,7 +196,7 @@ export function InlineEdit({
         <button
           type="button"
           ref={triggerRef}
-          className="btn btn--quiet btn--micro"
+          className={prominentTrigger ? "btn" : "btn btn--quiet btn--micro"}
           onClick={() => {
             setShowError(false);
             setEditing(true);

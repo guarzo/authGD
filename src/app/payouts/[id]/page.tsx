@@ -297,6 +297,7 @@ export default async function PayoutOperationPage({
                 fieldName="name"
                 value={operation.name}
                 label="operation name"
+                prominentTrigger
               />
             </h1>
           ) : (
@@ -317,6 +318,7 @@ export default async function PayoutOperationPage({
                 type="date"
                 mono
                 max={today}
+                prominentTrigger
               />
             ) : (
               <span className="mono">{fmtDate(operation.occurredAt)}</span>

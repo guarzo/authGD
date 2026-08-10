@@ -959,6 +959,46 @@ test("a wedged run reads stuck, with its elapsed time, and opens", async ({
 
 /* --- Controls ------------------------------------------------------------ */
 
+// Refresh changes nothing on the server. `Recheck invalid affiliations` puts a
+// job on the queue. They were both plain `.btn`, 8px apart, in the same control
+// row at the foot of the page — identical weight, identical box, and nothing
+// but the label to tell an admin that one of them is free and the other is not.
+//
+// The grade axis was unavailable: `.btn--quiet` carries `min-height: 1.75rem`,
+// and DESIGN.md R1 scopes that 28px grade by the reason for it, to rows that
+// each carry a control set and are read many at a time. A single control is not
+// that. So this is fixed by adjacency instead — Refresh moved to the strip's
+// section header, beside the "checked … UTC" stamp, which is the thing it
+// actually replaces.
+//
+// Asserted structurally rather than by coordinates: the header wraps at narrow
+// widths and the stamp is `--ink-faint` mono, so a geometric assertion would
+// either be brittle or pass on a control that had merely drifted near.
+test("Refresh sits with the stamp it replaces, not with the controls that queue work", async ({
+  page,
+  context,
+}) => {
+  await asAdmin(context);
+  await seedRuns();
+  await page.goto("/admin/sync");
+
+  const aside = page.locator(".rule-head__aside");
+  // Anti-vacuity: every containment check below would pass against an empty
+  // locator, and `.rule-head__aside` only exists if `RuleHead` got an `aside`.
+  await expect(aside).toHaveCount(1);
+  await expect(aside.locator(".btn-row__stamp")).toContainText("checked");
+  await expect(aside.getByRole("link", { name: "Refresh" })).toBeVisible();
+
+  // The other half of the finding: it is no longer a peer of the two controls
+  // that enqueue. Both of those stay, so this is not asserting on an empty row.
+  const controls = page.locator(".btn-row--controls");
+  await expect(controls.getByRole("button", { name: "Sync now" })).toBeVisible();
+  await expect(
+    controls.getByRole("button", { name: "Recheck invalid affiliations" }),
+  ).toBeVisible();
+  await expect(controls.getByRole("link", { name: "Refresh" })).toHaveCount(0);
+});
+
 test("the fan-out reports back, moves focus to the confirmation, and Refresh clears the flag", async ({
   page,
   context,

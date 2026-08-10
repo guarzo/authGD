@@ -49,7 +49,19 @@ export function generateMetadata(): Metadata {
 }
 
 export const viewport = {
-  themeColor: "#080f1f",
+  // Must equal the rendered value of `--void` (globals.css), which is what
+  // `body` paints. This is a hardcoded duplicate of that token — the viewport
+  // meta cannot read a custom property — so it has to be updated by hand
+  // whenever the ground moves, and it was not: it still held `#080f1f`, a
+  // navy from a palette the app no longer uses, while `--void` is
+  // `oklch(0.145 0 58)`, chroma 0. On mobile that painted a blue browser
+  // chrome directly above a neutral page.
+  //
+  // `oklch(0.145 0 58)` is achromatic, so all three channels are equal:
+  // 0.145³ = 0.00304862 in linear light, which is below the 0.0031308 sRGB
+  // gamma knee, so the linear segment applies — 12.92 × 0.00304862 × 255 =
+  // 10.04, i.e. 0x0a.
+  themeColor: "#0a0a0a",
   colorScheme: "dark" as const,
 };
 

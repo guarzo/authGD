@@ -1119,6 +1119,84 @@ test("a battle report link is stored, and a bad scheme is refused without losing
   expect(created.battleReportUrl).toBe("https://zkillboard.com/related/1/");
 });
 
+/**
+ * This page renders 70 pressable things and 62 of them are the identical 28px
+ * quiet chip, against a single gold button. At that ratio nothing directs the
+ * eye: an operator opening a payout scans a field of interchangeable `edit`
+ * marks with no way to tell which one changes the record's identity from which
+ * one changes a line item's unit price.
+ *
+ * Two triggers are raised out of the quiet grade — the operation's name and its
+ * date, which *are* the record's identity and are the only two above the fold.
+ * The raise is deliberately not extended to the other three standalone uses
+ * (corp share, notes, battle report): promoting five of 62 does not create a
+ * focal point, it creates a second uniform tier.
+ *
+ * So the assertion runs in both directions. Checking only that name and date
+ * are prominent would pass just as well if every trigger on the page had been
+ * raised, which is the failure this scoping exists to avoid.
+ */
+test("the two identity triggers are raised, and the other standalone ones are not", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "FC Grade",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+
+  await page.goto("/payouts/new");
+  await page.getByLabel("Name").fill("Grade check roam");
+  await page.getByLabel("Date").fill("2026-08-01");
+  await page.getByRole("button", { name: "Create operation" }).click();
+  await expect(page.getByRole("heading", { name: "Grade check roam" })).toBeVisible();
+
+  const raised = ["edit operation name", "edit operation date"];
+  // Battle report only. The other two unraised standalone triggers are corp
+  // share, which needs a loot pool before its row renders at all, and notes —
+  // neither is on a freshly created operation, and seeding a pool here to
+  // reach them would test the fixture rather than the grade. One counterweight
+  // is enough to catch the failure this direction exists for: a raise applied
+  // to every trigger instead of the two scoped ones.
+  const notRaised = ["edit battle report URL"];
+
+  for (const name of raised) {
+    const trigger = page.getByRole("button", { name });
+    // Anti-vacuity: a renamed label would make every class assertion below run
+    // against an empty locator and pass.
+    await expect(trigger, `${name} is missing`).toHaveCount(1);
+    await expect(trigger).not.toHaveClass(/btn--quiet/);
+    await expect(trigger).not.toHaveClass(/btn--micro/);
+    await expect(trigger).toHaveClass(/\bbtn\b/);
+  }
+
+  for (const name of notRaised) {
+    const trigger = page.getByRole("button", { name });
+    await expect(trigger, `${name} is missing`).toHaveCount(1);
+    await expect(trigger).toHaveClass(/btn--quiet/);
+  }
+
+  // The raise costs no layout: bare `.btn` already carries the same
+  // `min-height: 2.25rem` that `.inline-edit--standalone .btn--quiet` buys
+  // back for the quiet ones, so this changes fill and border only. Measured
+  // rather than asserted from the stylesheet, because that equality is the
+  // whole reason the change was affordable.
+  const heights = await page.evaluate(() => {
+    const by = (label: string) => document.querySelector(`button[aria-label="${label}"]`);
+    const h = (el: Element | null) =>
+      el ? Math.round(el.getBoundingClientRect().height) : null;
+    return {
+      name: h(by("edit operation name")),
+      report: h(by("edit battle report URL")),
+    };
+  });
+  expect(heights.name).not.toBeNull();
+  expect(heights.report).not.toBeNull();
+  expect(heights.name).toBe(heights.report);
+});
+
 /*
  * The other half of the same rule, on the other entry point. Both the create
  * form and this inline edit go through `battleReportUrlProblem`
