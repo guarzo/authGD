@@ -1073,6 +1073,20 @@ test("the collapsed chip names token, standings and map", async ({ page, context
   // chip that correctly does not exist — and its `.status-line` count of 0
   // would pass for want of a cell rather than for want of expansion.
   await faultOneAlt(acc.id, "Faulted Alt");
+  // The chip can only be expected to NAME map on an account where map varies.
+  // `crewNorms` (account/page.tsx) drops the fact from every row when the whole
+  // crew shares it — a uniformly off-map account says so once in the head
+  // instead — so observing one of the two characters is what makes `map off`
+  // this row's own fact rather than the account's.
+  const observed = await db
+    .select()
+    .from(character)
+    .where(and(eq(character.accountId, acc.id), eq(character.name, "Faulted Alt")));
+  await db.insert(wandererAclObservation).values({
+    characterId: observed[0].id,
+    role: "member",
+    observedAt: new Date("2026-08-01T00:00:00Z"),
+  });
   await context.addCookies([await sessionCookieFor(db, acc.id)]);
   await page.goto("/account");
   const chip = page.locator("table tbody tr").first().locator("[data-state='ok']");
@@ -1095,6 +1109,14 @@ test("a stalled chip's accessible name also carries the standings fact", async (
   await db.insert(contactSyncState).values({
     characterId: acc.mainCharacterId!,
     lastResult: "dry_run",
+  });
+  // On the map, so `map on` is this character's own fact and stays in the
+  // chip's name. A lone off-map character is a uniform crew as far as
+  // `crewNorms` is concerned, and the head would carry the fact instead.
+  await db.insert(wandererAclObservation).values({
+    characterId: acc.mainCharacterId!,
+    role: "member",
+    observedAt: new Date("2026-08-01T00:00:00Z"),
   });
   await context.addCookies([await sessionCookieFor(db, acc.id)]);
   await page.goto("/account");
@@ -1270,9 +1292,10 @@ test("a long structure name does not blow out the forced horizontal scroll at 32
   const pinned = await pinGeometry(
     page,
     MANIFEST,
-    // Third cell, which is now ACTIONS: the STATUS column renders only on
-    // exception and this seed is all-ok. The ratio below is a shape check
-    // either way; `maxScrollLeft` is the actual gate.
+    // Third cell, which is ACTIONS: the STATUS column renders only on
+    // exception and this seed is all-ok. ACTIONS is the elastic column now
+    // rather than NAME (page.tsx's `<colgroup>`), which is why the ratio bound
+    // below is the assertion that moved — see its own comment.
     "tbody tr:first-child td:nth-child(3)",
     "right",
   );
@@ -1556,27 +1579,22 @@ test("an all-ok account renders no STATUS column and keeps the per-character fac
   await expect(page.getByRole("columnheader", { name: "Status" })).toHaveCount(0);
   await expect(manifest(page).locator("[data-state]")).toHaveCount(0);
 
-  // `map on|off` varies per character while the chip reads `ok` either way, so
-  // the cell's accessible name was the only place it lived — a straight R4
-  // breach (DESIGN.md's "Disclosure and parity"): a sighted member scanning an
-  // all-ok row had nowhere to read what `ok` meant. Dropping the cell must not
-  // drop the fact: it moves into the NAME cell as visible copy, at zero
-  // vertical cost (the default viewport here is above `.char__status-summary`'s
-  // own 40rem breakpoint, so this is the "revealed" case; the narrow-viewport
-  // case below is the other half).
+  // The R4 parity rule this test was written for still holds, but it is now
+  // satisfied one level up. `seedNominalCrew` seeds tokens, contacts and
+  // location and never `wandererAclObservation`, so every character here is
+  // `map off` — which `crewNorms` (account/page.tsx) reads as one fact about
+  // the account rather than ten deviations. Ten rows saying "token ok,
+  // standings ok, map off" under a head already reading "10 characters — all
+  // healthy" was the repetition `isNominal` existed to prevent and could not
+  // see, because it compared each character to "on the map" instead of to its
+  // siblings.
   //
-  // All ten render it because all ten deviate: `seedNominalCrew` seeds tokens,
-  // contacts and location but never `wandererAclObservation`, so every row here
-  // is `map off`. That is the precondition this count depends on — the summary
-  // is suppressed only for a fully nominal character (`isNominal` in
-  // account/page.tsx: managed, contacts `ok`, AND on the ACL), which no
-  // character in this seed is. The two tests below cover that gate directly.
-  const summaries = manifest(page).locator("[data-status-summary]");
-  await expect(summaries).toHaveCount(10);
-  await expect(summaries.first()).toBeVisible();
-  for (const t of await summaries.allTextContents()) {
-    expect(t).toMatch(/token ok, standings ok, map off/);
-  }
+  // So: nothing per row, and the fact stated once in the head. The head
+  // assertion is the load-bearing half — without it this test would pass for a
+  // regression that simply dropped the fact from the page entirely, which is
+  // the R4 breach the original guarded against.
+  await expect(manifest(page).locator("[data-status-summary]")).toHaveCount(0);
+  await expect(page.locator(".crew-fact")).toHaveText("no characters on the map");
 });
 
 /** Puts every character on the map ACL, which is the one thing `seedNominalCrew`
@@ -1666,12 +1684,20 @@ test("the status summary stays in the accessible tree but is not rendered below 
   context,
 }) => {
   const acc = await seedNominalCrew();
+  // One character off the map against nine on it, so exactly one row carries a
+  // summary for this test to measure. A uniformly off-map crew renders none at
+  // all now (`crewNorms`, account/page.tsx), which would leave the clip
+  // assertions below passing for want of an element.
+  const rows = await observeCrew(acc.id);
+  await db
+    .delete(wandererAclObservation)
+    .where(eq(wandererAclObservation.characterId, rows[0].id));
   await context.addCookies([await sessionCookieFor(db, acc.id)]);
   await page.setViewportSize({ width: NARROWEST, height: 800 });
   await page.goto("/account");
 
   const summaries = manifest(page).locator("[data-status-summary]");
-  await expect(summaries).toHaveCount(10);
+  await expect(summaries).toHaveCount(1);
   const box = await summaries.first().boundingBox();
   // Both bounds, and a non-null box, because each one alone passes on the
   // regression this test exists to catch. A `display: none` regression returns
@@ -1955,6 +1981,30 @@ test("the account column is capped at the crew manifest's content measure", asyn
   context,
 }) => {
   const acc = await seedNominalCrew();
+  // Seeded so the main column holds TWO rule heads, not one. The alignment
+  // claim below is that several headings share a single right edge with the
+  // manifest; with one heading in scope the loop still runs but proves only
+  // that one element lines up with itself, so the count guard had to drop to
+  // `> 0` and the "they all agree" half of the assertion quietly stopped being
+  // tested. Paying one payout row to keep `> 1` honest is cheaper than losing
+  // it.
+  const [op] = await db
+    .insert(payoutOperation)
+    .values({
+      name: "Thursday roam",
+      occurredAt: new Date("2026-08-01"),
+      corpSharePct: "0",
+      status: "finalized",
+      createdBy: acc.id,
+    })
+    .returning();
+  await db.insert(payoutParticipant).values({
+    operationId: op.id,
+    accountId: acc.id,
+    displayName: "Pilot Prime",
+    shares: "1",
+    amount: "450000.00",
+  });
   await context.addCookies([await sessionCookieFor(db, acc.id)]);
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/account");
@@ -1970,11 +2020,24 @@ test("the account column is capped at the crew manifest's content measure", asyn
   // for a version of the reason the old test gave: `.page` is the element the
   // cap is scoped to, so this fails if `page--crew` stops reaching its
   // children, and it does not quietly re-pass if the page measure is retuned.
+  //
+  // `ruleRights` is scoped to `.account-layout__main` rather than every
+  // `.rule-head` on the page: the composition pass moved "Sync schedule" into
+  // `.account-layout__rail`, a second grid column beside the manifest rather
+  // than a sibling section under it (globals.css's `.account-layout`
+  // docblock), so its rule head earns its OWN right edge now — the whole
+  // point of giving it a column is that it is not on the manifest's column
+  // any more. Asserting it still landed there would be asserting the rail
+  // never shipped. The main column's own headings ("Crew manifest", and
+  // "Your payouts" when the seed has payout history) still share one right
+  // edge with the manifest, which is what this test is actually about.
   const widths = await page.evaluate(() => {
     const box = (el: Element | null) => (el as HTMLElement).getBoundingClientRect();
     const main = document.querySelector("main.page") as HTMLElement;
     const style = getComputedStyle(main);
-    const rules = Array.from(document.querySelectorAll(".rule-head"));
+    const rules = Array.from(
+      document.querySelectorAll(".account-layout__main .rule-head"),
+    );
     return {
       manifest: box(document.querySelector(".scroller-frame")).width,
       manifestRight: box(document.querySelector(".scroller-frame")).right,
@@ -1985,6 +2048,7 @@ test("the account column is capped at the crew manifest's content measure", asyn
         parseFloat(style.paddingLeft) -
         parseFloat(style.paddingRight),
       ruleRights: rules.map((r) => box(r).right),
+      railRight: box(document.querySelector(".account-layout__rail")).right,
     };
   });
   // The cap is doing real work: the column it sits in would otherwise be far
@@ -1994,18 +2058,80 @@ test("the account column is capped at the crew manifest's content measure", asyn
   // a manifest that had collapsed to something far narrower would satisfy the
   // line above while being a different bug entirely.
   expect(widths.manifest).toBeGreaterThan(700);
-  // One right edge for the whole column, which is the point of capping the
+  // One right edge for the main column, which is the point of capping the
   // page rather than the manifest alone. `.page__head` matters most — its
   // verdict/health strip right-aligns inside it and counts the characters this
-  // table lists — but the "Add character" pager and every rule head, "Sync
-  // schedule" included, land there too. Sub-pixel tolerance, not equality:
-  // all are derived from the same rem value through different box trees.
+  // table lists — but the "Add character" pager and every rule head still in
+  // the main column land there too. Sub-pixel tolerance, not equality: all
+  // are derived from the same rem value through different box trees.
   expect(Math.abs(widths.manifestRight - widths.headRight)).toBeLessThan(1);
   expect(Math.abs(widths.manifest - widths.pager)).toBeLessThan(1);
   expect(widths.ruleRights.length).toBeGreaterThan(1);
   for (const right of widths.ruleRights) {
     expect(Math.abs(right - widths.manifestRight)).toBeLessThan(1);
   }
+  // The rail's own right edge is a SEPARATE claim: it sits further right than
+  // the manifest column, on the page's own measure — the width the "empty
+  // desert" complaint this pass answers used to leave unclaimed. Not
+  // asserted equal to anything; just proven to exist past the manifest, so a
+  // regression that collapsed the rail back under the manifest (both columns
+  // reporting the same right edge) fails here.
+  expect(widths.railRight).toBeGreaterThan(widths.manifestRight + 100);
+});
+
+// The composition pass (item 1 of the design brief): "Sync schedule" and the
+// closing illustration read as reference material, not as the manifest, so
+// wide viewports put them beside it instead of stacking them underneath — and
+// the whole point is the two columns start at the same top edge whatever
+// their own content heights are, which is what keeps the manifest's own row
+// pitch independent of the rail.
+test("the sync schedule and closing illustration sit in a rail beside the manifest at wide widths, and collapse to one column under it", async ({
+  page,
+  context,
+}) => {
+  const acc = await seedNominalCrew();
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/account");
+
+  const wide = await page.evaluate(() => {
+    const box = (el: Element | null) => (el as HTMLElement).getBoundingClientRect();
+    return {
+      // The two grid ITEMS, not their first rendered content: `.account-layout__main`
+      // opens with the same `.rule-head` shape `.account-layout__rail` does, so
+      // comparing `.scroller-frame` (which sits below the manifest's own
+      // heading) against the rail's outer box would charge the rail extra top
+      // margin no regression put there.
+      mainTop: box(document.querySelector(".account-layout__main")).top,
+      railTop: box(document.querySelector(".account-layout__rail")).top,
+      manifestLeft: box(document.querySelector(".scroller-frame")).left,
+      railLeft: box(document.querySelector(".account-layout__rail")).left,
+    };
+  });
+  // Same top edge (grid's `align-items: start`), so the manifest's fold
+  // budget never depends on how tall "Sync schedule" plus the illustration
+  // happen to render.
+  expect(Math.abs(wide.mainTop - wide.railTop)).toBeLessThan(1);
+  // Beside, not under: the rail's left edge is to the right of the
+  // manifest's own content, which a stacked (one-column) layout would not be.
+  expect(wide.railLeft).toBeGreaterThan(wide.manifestLeft + 300);
+
+  // Below the rail's own breakpoint, the two stack — a member scanning a
+  // narrow screen is a better read than a manifest and a rail both fighting
+  // for the width. Manifest first in source order, so it stays first in
+  // reading order too.
+  await page.setViewportSize({ width: 800, height: 1200 });
+  const narrow = await page.evaluate(() => {
+    const box = (el: Element | null) => (el as HTMLElement).getBoundingClientRect();
+    return {
+      manifestBottom: box(document.querySelector(".scroller-frame")).bottom,
+      railTop: box(document.querySelector(".account-layout__rail")).top,
+      manifestLeft: box(document.querySelector(".scroller-frame")).left,
+      railLeft: box(document.querySelector(".account-layout__rail")).left,
+    };
+  });
+  expect(narrow.railTop).toBeGreaterThanOrEqual(narrow.manifestBottom);
+  expect(Math.abs(narrow.railLeft - narrow.manifestLeft)).toBeLessThan(1);
 });
 
 // The measurement that fixed `--measure-crew` at 48rem rather than at any of

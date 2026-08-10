@@ -184,6 +184,17 @@ export function CharacterRow({
               // deliberately undimmed because it carries the admin table's
               // row IDENTITY, and this button carries no identity — it is a
               // secondary control, same standing as a `<details>` summary.
+              //
+              // Icon-only (globals.css's `.row-toggle--actions` docblock has
+              // the full account): the visible word "actions" used to repeat
+              // on every row of a ten-row table, identically, which made it
+              // the loudest pattern in the manifest. The +/- marker
+              // (`::before`) is the same disclosure affordance `.row-toggle`
+              // and `.disc > summary` already use with no caption elsewhere
+              // in this app. `aria-label` still names the control for
+              // assistive tech — the row's own name, so a screen-reader user
+              // never hears a bare "actions" three times with no row to tell
+              // them apart.
               className="btn btn--quiet btn--micro row-toggle--actions"
               aria-expanded={open}
               aria-controls={id}
@@ -193,9 +204,7 @@ export function CharacterRow({
                 setEverOpen(true);
               }}
               onKeyDown={onEscape}
-            >
-              actions
-            </button>
+            />
           </td>
         )}
       </tr>

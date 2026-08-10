@@ -3,6 +3,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ContactRemedy } from "@/app/account/contact-state";
 import { StandingTier } from "@/app/account/standing";
+import { crewNorms } from "@/app/account/page";
 import { accountConfirmation } from "@/app/account/view";
 import type { Tier } from "@/core/tier";
 
@@ -349,5 +350,36 @@ describe("accountConfirmation", () => {
     // A hand-typed `?done=` (or one a future rollback no longer emits) must
     // not silently pass through to become copy on the page.
     expect(accountConfirmation("delete_account", undefined)).toBe("");
+  });
+});
+
+// `crewNorms` decides whether a fact belongs to a row or to the account, and
+// its edge cases are otherwise only reachable through DB-backed e2e specs.
+// The rule it encodes: map membership cannot substantiate a fault
+// (src/core/account-health.ts:27-35), so a crew that uniformly lacks it has
+// one fact about the account rather than N deviations, and the manifest stops
+// reciting it per row (DESIGN.md ruling R4's parity is kept by the page head
+// saying it once instead).
+describe("crewNorms", () => {
+  const crew = (...onMap: boolean[]) => onMap.map((onMapAcl) => ({ onMapAcl }));
+
+  it("treats an empty crew as no fact at all, so an account with no characters says nothing", () => {
+    expect(crewNorms([])).toEqual({ mapUniformOff: false });
+  });
+
+  it("reads a wholly off-map crew as one account-level fact", () => {
+    expect(crewNorms(crew(false, false, false)).mapUniformOff).toBe(true);
+  });
+
+  it("reads a single off-map character the same way — one character is still a uniform crew", () => {
+    expect(crewNorms(crew(false)).mapUniformOff).toBe(true);
+  });
+
+  it("leaves a mixed crew alone, so the row that differs keeps saying so", () => {
+    expect(crewNorms(crew(true, false, true)).mapUniformOff).toBe(false);
+  });
+
+  it("does not fire when every character IS on the map — that case was never repetitive", () => {
+    expect(crewNorms(crew(true, true)).mapUniformOff).toBe(false);
   });
 });
