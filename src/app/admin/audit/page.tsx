@@ -791,6 +791,7 @@ export default async function AdminAuditPage({
                           roleNames,
                           tierLabels,
                           new Map(Object.entries(r.detailAccountNames)),
+                          new Map(Object.entries(r.detailCharacterNames)),
                         )}
                       />
                     ) : (

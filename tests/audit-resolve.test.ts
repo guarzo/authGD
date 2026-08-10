@@ -251,6 +251,111 @@ describe("resolveAuditIdentities / queryAuditLog resolution", () => {
     expect(row.detailAccountNames).toEqual({});
   });
 
+  it("resolves a detail character id (account.main_changed's mainCharacterId)", async () => {
+    const acc = await seedAccount(ctx.db);
+    await seedCharacter(ctx.db, cfg, {
+      id: 90008,
+      accountId: acc.id,
+      name: "New Main",
+      main: true,
+    });
+    await logAudit(ctx.db, {
+      actor: acc.id,
+      action: "account.main_changed",
+      target: acc.id,
+      details: { mainCharacterId: 90008 },
+    });
+    const [row] = await queryAuditLog(ctx.db);
+    expect(row.detailCharacterNames).toEqual({ mainCharacterId: "New Main" });
+  });
+
+  it("resolves both characterId and previousCharacterId on a holder_replaced row to distinct names", async () => {
+    const acc1 = await seedAccount(ctx.db);
+    const acc2 = await seedAccount(ctx.db);
+    await seedCharacter(ctx.db, cfg, {
+      id: 90009,
+      accountId: acc1.id,
+      name: "New Holder",
+    });
+    await seedCharacter(ctx.db, cfg, {
+      id: 90010,
+      accountId: acc2.id,
+      name: "Old Holder",
+    });
+    await logAudit(ctx.db, {
+      actor: "system",
+      action: "access_list.holder_replaced",
+      target: "some-list",
+      details: { characterId: 90009, previousCharacterId: 90010 },
+    });
+    const [row] = await queryAuditLog(ctx.db);
+    expect(row.detailCharacterNames).toEqual({
+      characterId: "New Holder",
+      previousCharacterId: "Old Holder",
+    });
+  });
+
+  it("leaves detailCharacterNames empty when the detail character id doesn't exist", async () => {
+    await logAudit(ctx.db, {
+      actor: "system",
+      action: "account.main_changed",
+      target: "all",
+      details: { mainCharacterId: 424242 },
+    });
+    const [row] = await queryAuditLog(ctx.db);
+    expect(row.detailCharacterNames).toEqual({});
+  });
+
+  it("leaves detailCharacterNames empty for actions that don't declare a character-id detail key", async () => {
+    await logAudit(ctx.db, {
+      actor: "system",
+      action: "tier.changed",
+      target: "all",
+      details: { from: "member", to: "alumni" },
+    });
+    const [row] = await queryAuditLog(ctx.db);
+    expect(row.detailCharacterNames).toEqual({});
+  });
+
+  it("resolves a character id the payload carried as a digit string", async () => {
+    const acc = await seedAccount(ctx.db);
+    await seedCharacter(ctx.db, cfg, {
+      id: 90011,
+      accountId: acc.id,
+      name: "String Main",
+      main: true,
+    });
+    await logAudit(ctx.db, {
+      actor: acc.id,
+      action: "account.main_changed",
+      target: acc.id,
+      details: { mainCharacterId: "90011" },
+    });
+    const [row] = await queryAuditLog(ctx.db);
+    expect(row.detailCharacterNames).toEqual({ mainCharacterId: "String Main" });
+  });
+
+  it("refuses a digit string that is not this id's own decimal form", async () => {
+    const acc = await seedAccount(ctx.db);
+    await seedCharacter(ctx.db, cfg, {
+      id: 90012,
+      accountId: acc.id,
+      name: "Zero Padded",
+      main: true,
+    });
+    // `Number("0090012")` is 90012, so a naive coercion would render the
+    // summary as "main → Zero Padded" for a payload that never held that id.
+    // Naming the wrong character is worse than showing the raw value.
+    await logAudit(ctx.db, {
+      actor: acc.id,
+      action: "account.main_changed",
+      target: acc.id,
+      details: { mainCharacterId: "0090012" },
+    });
+    const [row] = await queryAuditLog(ctx.db);
+    expect(row.detailCharacterNames).toEqual({});
+  });
+
   it("resolves a full page of 200+ rows with a small, constant number of queries (no N+1)", async () => {
     const accounts = await Promise.all(
       Array.from({ length: 20 }, () => seedAccount(ctx.db)),
