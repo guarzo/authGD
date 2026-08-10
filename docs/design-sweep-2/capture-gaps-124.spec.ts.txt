@@ -1,0 +1,268 @@
+/**
+ * TEMPORARY — design-sweep re-shoot for capture gaps 1, 2 and 4. Preserved as
+ * `.txt` beside `capture.spec.ts.txt` so a later sweep can re-run it; copy to
+ * `e2e/` to use. Same contract as that file: not a test, just a renderer with
+ * assertions that fail loudly when a page did not draw what the shot is
+ * supposed to show.
+ */
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
+import { expect, test, type Page } from "@playwright/test";
+import {
+  auditLog,
+  character,
+  lootPool,
+  payoutOperation,
+  payoutParticipant,
+} from "../src/db/schema";
+import { recalculate } from "../src/services/payouts";
+import { resetDb, seedMember, sessionCookieFor, testDb } from "./helpers";
+import { WORKTREE_ROOT } from "./env";
+
+const { db } = testDb();
+
+const SHOTS = join(WORKTREE_ROOT, "docs", "design-sweep-2", "shots");
+mkdirSync(SHOTS, { recursive: true });
+
+const WIDE = { width: 1440, height: 900 };
+const NARROW = { width: 390, height: 844 };
+const TINY = { width: 320, height: 800 };
+
+async function shoot(page: Page, name: string) {
+  await page.setViewportSize(WIDE);
+  await page.waitForTimeout(250);
+  await page.screenshot({ path: join(SHOTS, `${name}.wide.png`), fullPage: true });
+  await page.setViewportSize(NARROW);
+  await page.waitForTimeout(250);
+  await page.screenshot({ path: join(SHOTS, `${name}.narrow.png`), fullPage: true });
+  await page.setViewportSize(WIDE);
+}
+
+test.beforeEach(async () => {
+  await resetDb(db);
+});
+
+/* ---------------------------------------------------------------- gap 1 --
+   A genuinely weighted split. The original fixture wrote `amount` by hand and
+   never ran `recalculate`, so every share came out flat and the roster's
+   deviation channel had nothing to show. Here the shares vary, one participant
+   is excluded, and the real service computes the money. */
+
+const CREW: [name: string, shares: string, excluded: boolean][] = [
+  ["Fleet Commander", "2", false],
+  ["Hurricane Main", "1", false],
+  ["Rifter Pilot", "1", false],
+  ["Logi Alt", "1.5", false],
+  ["Second Logi", "1.5", false],
+  ["Dictor Bunny", "1", false],
+  ["Falcon Andy", "0.5", false],
+  ["Sabre Dancer", "1", false],
+  ["Vexor Navy Guy", "1", false],
+  ["Probe Kid", "0.25", false],
+  ["Tackle Frigate", "0.5", false],
+  ["Booster Alt", "1", false],
+  ["Hauler Toon", "3", false],
+  ["Kikimora Kid", "1", false],
+  ["Cyno Alt", "1", false],
+  ["Bad Scout", "1", true],
+];
+
+test("payout detail — weighted split (gap 1)", async ({ page, context }) => {
+  const admin = await seedMember(db, {
+    name: "Fleet Commander",
+    tier: "member",
+    isAdmin: true,
+  });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+
+  const [op] = await db
+    .insert(payoutOperation)
+    .values({
+      name: "Wormhole eviction — J155843",
+      occurredAt: new Date("2026-08-06"),
+      corpSharePct: "10.00",
+      createdBy: admin.id,
+      status: "finalized",
+      battleReportUrl: "https://br.evetools.org/br/68a1c0f2e4b0a1",
+      notes:
+        "Third night of the eviction. Logi and the hauler carry extra shares; " +
+        "the scout sat this one out.",
+    })
+    .returning();
+
+  await db.insert(lootPool).values({
+    operationId: op.id,
+    valuationSource: "appraised",
+    pricingMode: "sell_p05",
+    regionId: 10000002,
+    totalValue: "4210000000.00",
+    appraisedAt: new Date("2026-08-06T22:14:00Z"),
+  });
+
+  await db.insert(payoutParticipant).values(
+    CREW.map(([displayName, shares, excluded], i) => ({
+      operationId: op.id,
+      displayName,
+      accountId: i === 0 ? admin.id : null,
+      shares,
+      excluded,
+      amount: "0.00",
+    })),
+  );
+
+  // The point of the shot: real money, from the real function.
+  await recalculate(db, op.id);
+
+  await page.goto(`/payouts/${op.id}`);
+  await expect(
+    page.getByRole("heading", { level: 2, name: "Split / Roster" }),
+  ).toBeVisible();
+  await shoot(page, "29-payout-weighted-split");
+});
+
+/* ---------------------------------------------------------------- gap 2 --
+   `/admin/audit`'s Details column at real density. The original fixture seeded
+   action names absent from `PARTS` in `summarize.ts`, so every row fell through
+   to the generic key=value fallback — which is exactly the rendering the column
+   was rebuilt to avoid, and so the shot proved nothing about the column that
+   ships. These are declared actions with the payload shapes their writers
+   actually emit. */
+
+test("admin audit — declared actions (gap 2)", async ({ page, context }) => {
+  const admin = await seedMember(db, {
+    name: "Fleet Commander",
+    tier: "member",
+    isAdmin: true,
+    alts: ["Cyno Alt"],
+  });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+
+  const others = [];
+  for (const name of ["Rifter Pilot", "Bad Scout", "Logi Alt", "Probe Kid"]) {
+    others.push(await seedMember(db, { name, tier: "member" }));
+  }
+  const chars = await db.select().from(character);
+  const charId = String(chars[0].id);
+
+  const ROWS: [action: string, details: Record<string, unknown>][] = [
+    ["tier.changed", { from: "associate", to: "member", cause: "alliance affiliation" }],
+    [
+      "tier.changed",
+      { from: "member", to: "alumni", cause: "left alliance", locked: true },
+    ],
+    ["tier.approved", { to: "alumni", locked: false }],
+    ["status.changed", { from: "active", to: "cryo", self: true }],
+    ["status.note_changed", { had: true, has: true }],
+    ["account.created", { mainCharacterId: charId }],
+    ["account.main_changed", { mainCharacterId: charId }],
+    ["admin.main_changed", { mainCharacterId: charId }],
+    ["account.merged", { sourceAccountId: others[1].id, characterId: charId }],
+    ["character.unlinked", { name: "Cyno Alt", wasMain: false }],
+    ["character.reclaimed", { fromAccount: others[2].id }],
+    ["character.owner_mismatch", { detectedBy: "token-health" }],
+    ["token.invalidated", { reason: "refresh rejected by SSO" }],
+    ["token.verify_failed", { error: "jwt signature mismatch" }],
+    [
+      "token.needs_reauth",
+      { missingScopes: ["esi-location.read_location.v1"], detectedBy: "token-health" },
+    ],
+    ["discord.unlinked", { reason: "member left the guild" }],
+    [
+      "discord.role_changed",
+      {
+        added: ["1284410981234567890"],
+        removed: [],
+        tier: "member",
+        cause: "tier.changed",
+      },
+    ],
+    [
+      "discord.role_sync_failed",
+      {
+        error: "Missing Permissions",
+        op: "add",
+        roleId: "1284410981234567890",
+        tier: "member",
+      },
+    ],
+    ["discord.role_strip_failed", { error: "Unknown Member", roleId: "1284410981234567890" }],
+    ["access_list.watch_added", { name: "Alliance Standing", accessListId: "acl-7f21" }],
+    ["access_list.holder_designated", { characterId: charId }],
+    [
+      "payout.item_repriced",
+      {
+        name: "Sleeper Data Library",
+        unitPrice: "12500000.00",
+        itemId: "i-1",
+        poolId: "p-1",
+      },
+    ],
+    [
+      "payout.deleted",
+      {
+        name: "Tama gatecamp",
+        occurredAt: "2026-07-30",
+        participantCount: 14,
+        totalValue: "820000000.00",
+        payableCount: 13,
+      },
+    ],
+    ["payout.name_changed", { name: "Nullsec roam — Pure Blind" }],
+    ["payout.notes_changed", { had: false, has: true }],
+    ["wanderer.removed", { role: "viewer" }],
+    ["tier.unlocked", { tier: "member" }],
+  ];
+
+  await db.insert(auditLog).values(
+    Array.from({ length: 62 }, (_, i) => {
+      const [action, details] = ROWS[i % ROWS.length];
+      return {
+        at: new Date(Date.UTC(2026, 7, 9, 22, 19, 24) - i * 1_700_000),
+        actor: i % 5 === 0 ? "system" : others[i % others.length].id,
+        action,
+        target: i % 7 === 0 ? charId : others[(i + 2) % others.length].id,
+        details,
+      };
+    }),
+  );
+
+  await page.goto("/admin/audit");
+  await expect(page.getByRole("heading", { name: "Audit log", level: 1 })).toBeVisible();
+  await shoot(page, "30-audit-declared-actions");
+});
+
+/* ---------------------------------------------------------------- gap 4 --
+   `/payouts/new` with its rejection `Notice` actually holding text, and at
+   320px. The form is `noValidate`, so an empty submit reaches the action and
+   comes back with `name_required` — the state no earlier shot captured. */
+
+test("payouts new — populated notice and 320px (gap 4)", async ({ page, context }) => {
+  const admin = await seedMember(db, {
+    name: "Fleet Commander",
+    tier: "member",
+    isAdmin: true,
+  });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+
+  await page.goto("/payouts/new");
+  await expect(page.getByRole("heading", { name: "New operation" })).toBeVisible();
+
+  // A realistic half-filled form, so the shot shows the notice sitting above
+  // content the operator still has rather than above an empty form.
+  await page
+    .getByLabel("Loot paste")
+    .fill("Sleeper Data Library\t42\nMelted Nanoribbons\t55\nNanite Repair Paste\t1200");
+  await page.getByLabel("Roster paste").fill("Hurricane Main\nLogi Alt\nDictor Bunny");
+  await page.getByRole("button", { name: "Create operation" }).click();
+
+  const notice = page.locator("#new-operation-error");
+  await expect(notice).not.toBeEmpty();
+  await shoot(page, "31-payouts-new-notice");
+
+  await page.setViewportSize(TINY);
+  await page.waitForTimeout(250);
+  await page.screenshot({
+    path: join(SHOTS, "31-payouts-new-notice.tiny.png"),
+    fullPage: true,
+  });
+});

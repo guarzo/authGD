@@ -1,7 +1,8 @@
 # Design sweep 2 — synthesis and ranked backlog
 
 Sweep of 2026-08-10. Eight in-scope surfaces plus one reviewed unrequested.
-Eighteen reports in `reports/`, thirty screenshots in `shots/`.
+Eighteen reports in `reports/`, 63 screenshots in `shots/` (30 from the sweep
+proper, 33 from the two re-shoots that closed the capture gaps).
 
 **Nothing in `src/` has been modified.** This document is the Phase 3 output and
 the Phase 4 gate: the owner chooses what gets worked before any edit.
@@ -474,17 +475,20 @@ is a PNG text-extraction artifact.
 
 ## What the sweep could not see
 
-Five capture gaps, **of which 3 and 5 are now closed** — see the section below.
-`capture.spec.ts.txt` is preserved for a re-shoot of the remaining three.
+Five capture gaps, **all now closed** — see the two sections below.
+`capture.spec.ts.txt` and `capture-gaps-124.spec.ts.txt` are preserved so any of
+it can be re-shot.
 
-1. **A weighted payout split.** The fixture writes `amount` directly
+1. ~~**A weighted payout split.** The fixture writes `amount` directly
    (`capture.spec.ts.txt:210-222`) and never runs `recalculate`, so every share is
    flat. `core/payout-split.ts:73` is correct — this is a fixture artifact, not a
-   bug — but item 12's roster fix needs re-checking against a real split.
-2. **`/admin/audit`'s Details column at real density** — the fixture seeds action
-   names absent from `PARTS`.
+   bug — but item 12's roster fix needs re-checking against a real split.~~
+   **Closed** — shot `29`.
+2. ~~**`/admin/audit`'s Details column at real density** — the fixture seeds action
+   names absent from `PARTS`.~~ **Closed** — shot `30`.
 3. ~~**`/login?error=…`** in its three tones.~~ **Closed** — shots `16`–`20`.
-4. **`/payouts/new`** with a populated `Notice`, and at 320px.
+4. ~~**`/payouts/new`** with a populated `Notice`, and at 320px.~~ **Closed** —
+   shot `31`.
 5. ~~**Six of `/admin/access-lists`' seven states.**~~ **Closed** — shots `21`–`28`.
 
 Also: the Next dev overlay reported **real console/hydration errors** — `1 Issue`
@@ -622,3 +626,75 @@ out-of-scope banner and every finding lifts out cleanly. Items **8**, **11**, an
 parts of **13**, **18** and **19** are its. Two are strong enough to be worth
 taking anyway: the inert skip link (one attribute, WCAG 2.4.1) and the fault
 sentence rendered at boilerplate weight on a monitor page.
+
+---
+
+## Re-shoot: gaps 1, 2 and 4 (shots `29`–`31`)
+
+`capture-gaps-124.spec.ts.txt`, three cases, seven PNGs at 1440x900, 390x844 and
+one at 320x800. Deleted after the run; the tree was clean before and after
+(`docs/design-sweep-2/shots/` is gitignored at `.gitignore:25`).
+
+Two fixture corrections did the work. Gap 1's split now goes through the real
+`recalculate` from `src/services/payouts.ts:670` with shares varying 0.25 → 3.00
+and one participant excluded, instead of `amount` written by hand. Gap 2's rows
+now use only action names declared in `PARTS` (`src/app/admin/audit/summarize.ts:253`),
+so the Details column renders through the declarative path that ships rather than
+the generic key=value fallback the old fixture forced it into.
+
+### Gap 1 closes clean on its stated question — no finding
+
+With a genuinely weighted split — 8 rows at par 1.00, 7 deviating — the roster's
+deviation channel is doing what item 12 wanted it to. Enumeration is warranted
+here; there is no shared fact being recited. **Nothing to work.**
+
+Three secondary observations, report-only, none of them defects:
+- AMOUNT prints `219,652,173.91 ISK` identically on 8 of 15 rows. It is
+  mechanically derived from shares, and eliding the money each person is owed
+  would be a worse page than repeating it.
+- `- UNPAID` + `COPY AMOUNT` + `MARK PAID` repeat on all 15 payable rows while the
+  header already says `0/15 paid` — pattern 3, but every one of those buttons acts
+  on a different person, so nothing here is a shared fact stated fifteen times.
+- The excluded participant sorts first alphabetically, so the one person getting
+  nothing sits at the top of the roster.
+
+### Gap 4 produces one finding
+
+**F1 — the rejection `Notice` pushes the form 88px away, and only when it has
+something to say.** Measured at the DOM: `#new-operation-error` bottom to
+`.form-stack .rule-head` top is **0px** when the slot is empty and **88px** when
+it is populated. The empty case was already handled — `.notice-slot` is
+`position: absolute` (`globals.css:3551`) and `globals.css:3284` resets the
+following `.rule-head`'s margin — but a populated notice carries class `.notice`,
+which that selector does not match, so three spacings stack: `.notice`
+`margin-bottom: var(--s-5)` 24px + `.form-stack` `gap: var(--s-4)` 16px +
+`.rule-head` `margin-top: var(--s-7)` 48px.
+
+Cost: on a rejection — the one moment the operator most needs the error tied to
+the form it is about — the error floats alone with the form pushed below it.
+Worst at 320px, where the vertical space is scarcest.
+
+Fix: extend the existing reset at `globals.css:3283-3285` to `.form-stack >
+.notice + .rule-head`, and add `.form-stack > .notice { margin-bottom: 0 }` so
+the grid gap alone spaces it, matching every other sibling pair in the form.
+
+### Gap 2 produces three findings
+
+**F2 — the Details column prints raw character IDs.** `account.created`,
+`account.main_changed` and `admin.main_changed` render `main → 90000002` /
+`main 90000002`. The Target column, three cells to the left, resolves the same
+class of referent to `Probe Kid` on the same row. `resolveAuditIdentities`
+(`src/services/audit.ts:~300-415`) already builds `nameByCharacterId`, and already
+has a `DETAIL_ACCOUNT_KEYS` mechanism for account uuids appearing inside
+`details` — there is simply no character equivalent. Fix is a parallel
+`DETAIL_CHARACTER_KEYS` plus a resolving part helper in `summarize.ts`. Real
+scope: new key map, new part, widened fetch, tests.
+
+**F3 — `payout.deleted` clips mid-number.** Renders `deleted Tama gatecamp,
+occurred 2026-07-30, roster 1…` at 1440px — four declared parts exceed the
+column. Not data loss (the `+` disclosure recovers it), but truncating inside a
+numeral reads as broken rather than deliberate.
+
+**F4 — at 390px the Details column is entirely off-screen** behind the `Scroller`,
+and action names truncate mid-word (`account.main_chang`, `payout.item_repric`).
+The column gap 2 existed to prove out is unreachable on a phone.
