@@ -421,6 +421,7 @@ h1[tabindex="-1"] {
 .facts dt,
 .filters__label,
 .filter-form__label,
+.acl-add__label,
 .launch__scopes-head,
 .shell__register,
 .acl-detail th,
@@ -797,17 +798,6 @@ h1[tabindex="-1"] {
 }
 
 .page__lede {
-  max-width: var(--measure);
-  color: var(--ink-dim);
-  margin-top: var(--s-2);
-}
-
-/* The access-list monitor's own lede: same treatment as `.page__lede`, but
-   the page has no `.page__head` wrapper around its `<h1>` — `AdminAccessListsPage`
-   sits the summary sentence directly after it (and, when there is one, the
-   redirect-carried `ConfirmNotice`), so the class has to stand on its own
-   rather than as a child selector. */
-.lede {
   max-width: var(--measure);
   color: var(--ink-dim);
   margin-top: var(--s-2);
@@ -4811,6 +4801,27 @@ h3.rule-head__label {
    fixed-width grid tracks; and a clean row carries its own "Stop watching"
    with no drawer at all (`rowHasDetail`, page.tsx), which `.strip`'s jobs
    never need to. */
+
+/* The catalog-to-watchlist control: a label, a select, a submit, on one line
+   above the list it adds to. The four declarations are `.btn-row`'s today,
+   but the two names answer to different things — `.btn-row` describes a row
+   of buttons, and a change to how buttons sit together should not have to
+   reason about a label bound to a control — so this keeps its own class and
+   `.acl-add__label` joins the register (near the top of this file) rather
+   than rendering as an unregistered proportional label beside this section's
+   mono uppercase `RuleHead`. */
+.acl-add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  align-items: center;
+}
+
+.acl-add__label {
+  letter-spacing: var(--track-label);
+  color: var(--ink-faint);
+  margin-right: var(--s-1);
+}
 
 .acl-list {
   list-style: none;

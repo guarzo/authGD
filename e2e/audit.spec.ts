@@ -982,7 +982,9 @@ test("an actor filter points at the target column, full or empty", async ({
   await expect(page.getByText("target of an entry, not the actor")).toHaveCount(0);
 
   await page.goto("/admin/audit?actor=Zed");
-  const nudge = page.locator("p.lede", { hasText: "target of an entry, not the actor" });
+  const nudge = page.locator("p.page__lede", {
+    hasText: "target of an entry, not the actor",
+  });
   await expect(nudge).toBeVisible();
   await expect(page.locator(".log__empty")).toContainText("Nothing matches this filter.");
 

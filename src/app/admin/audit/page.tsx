@@ -508,7 +508,7 @@ export default async function AdminAuditPage({
   // neither there is nothing to re-point.
   const actorNudge =
     params.actor && !params.target ? (
-      <p className="lede">
+      <p className="page__lede">
         Members are usually the target of an entry, not the actor.{" "}
         <a href={filterHref({ action: params.action }, "target", params.actor)}>
           Search {params.actor} as a target
@@ -648,7 +648,7 @@ export default async function AdminAuditPage({
           not say it on every row. Same slot and same treatment as the actor
           nudge above: a fact about the rows below, not a warning about them. */}
       {day !== null && (
-        <p className="lede">
+        <p className="page__lede">
           All {rows.length} entries on {day} (UTC).
         </p>
       )}

@@ -121,7 +121,7 @@ test("state 1: no holder and no scope asks for the grant, and shows no table", a
   await page.goto("/admin/access-lists");
 
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Access lists");
-  await expect(page.locator(".lede")).toContainText("Nobody has granted");
+  await expect(page.locator(".page__lede")).toContainText("Nobody has granted");
   await expect(page.getByRole("link", { name: "Grant access" })).toHaveAttribute(
     "href",
     "/auth/eve/link?grant=access-lists",
@@ -143,7 +143,7 @@ test("state 2: a granted character with no holder gets the designate button", as
   await asAdmin(context);
   await page.goto("/admin/access-lists");
 
-  await expect(page.locator(".lede")).toContainText("Designate it as the holder");
+  await expect(page.locator(".page__lede")).toContainText("Designate it as the holder");
   await expect(page.getByRole("button", { name: "Designate as holder" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Grant access" })).toHaveCount(0);
 });
@@ -161,12 +161,14 @@ test("state 3: a holder whose scope was dropped is offered the GRANTING link, no
   await seedWatched(characterId);
   await page.goto("/admin/access-lists");
 
-  await expect(page.locator(".lede")).toContainText("no longer carries the access-list");
+  await expect(page.locator(".page__lede")).toContainText(
+    "no longer carries the access-list",
+  );
   // Lowercase mid-sentence ("...it, so no reads are happening.") — this state's
   // sentence is one clause, unlike holder-needs-reauth/holder-no-token's
   // separate "No reads are happening." sentence — so the case must match the
   // actual copy rather than the brief's shorthand.
-  await expect(page.locator(".lede")).toContainText("no reads are happening");
+  await expect(page.locator(".page__lede")).toContainText("no reads are happening");
   await expect(page.getByRole("link", { name: "Re-grant access" })).toHaveAttribute(
     "href",
     "/auth/eve/link?grant=access-lists",
@@ -189,7 +191,7 @@ test("states 4 and 5: a stale authorization and a dead token are different sente
   await seedHolder(reauth.characterId);
   await seedCatalog(reauth.characterId);
   await page.goto("/admin/access-lists");
-  await expect(page.locator(".lede")).toContainText("authorization has gone stale");
+  await expect(page.locator(".page__lede")).toContainText("authorization has gone stale");
   await expect(page.getByRole("link", { name: "Re-authenticate" })).toBeVisible();
 
   await resetDb(db);
@@ -197,7 +199,7 @@ test("states 4 and 5: a stale authorization and a dead token are different sente
   await seedHolder(dead.characterId);
   await seedCatalog(dead.characterId);
   await page.goto("/admin/access-lists");
-  await expect(page.locator(".lede")).toContainText("no stored token");
+  await expect(page.locator(".page__lede")).toContainText("no stored token");
   await expect(
     page.getByRole("link", { name: "Add this character again" }),
   ).toBeVisible();
@@ -211,7 +213,9 @@ test("state 6: a healthy holder with an empty catalog offers Check now as the pr
   await seedHolder(characterId);
   await page.goto("/admin/access-lists");
 
-  await expect(page.locator(".lede")).toContainText("No lists have been discovered");
+  await expect(page.locator(".page__lede")).toContainText(
+    "No lists have been discovered",
+  );
   await expect(page.getByRole("button", { name: "Check now" })).toHaveClass(
     /btn--primary/,
   );
@@ -506,7 +510,7 @@ test("a page with no table is narrow and says nothing about watched lists", asyn
   await seedHolder(characterId);
   await page.goto("/admin/access-lists");
 
-  await expect(page.locator(".lede")).toContainText("gone stale");
+  await expect(page.locator(".page__lede")).toContainText("gone stale");
   await expect(page.getByRole("heading", { name: "Watched lists" })).toHaveCount(0);
   await expect(page.getByText("No lists are being watched yet.")).toHaveCount(0);
   // One sentence and one link do not want a 78rem column.
@@ -524,24 +528,43 @@ test("a page with a table is wide", async ({ page, context }) => {
   await expect(page.locator("main#main")).toHaveClass(/page--wide/);
 });
 
-test("a list watched before its first read is named from the catalog, not by id", async ({
+/**
+ * The never-read row is the ONLY row whose name cannot come from a snapshot,
+ * because it has no snapshot — `seedWatched` always writes one, so this test
+ * inserts the watch row bare. It is also the row an admin sees at the moment
+ * they care most: the seconds between adding a list and the job first reading
+ * it. `getWatchedListViews` used to select the name from the snapshot alone,
+ * so this row rendered as `#4001` — a number chosen by CCP, shown to a person
+ * who picked that list BY NAME out of the dropdown one click earlier. The
+ * catalog knew the name the entire time.
+ */
+test("a list added but never read is still named, not reduced to its id", async ({
   page,
   context,
 }) => {
   const { characterId } = await asAdmin(context);
   await seedHolder(characterId);
-  await seedCatalog(characterId);
-  // Deliberately NOT `seedWatched`: the watch row alone, with no snapshot,
-  // which is the state every list is in between "Add to watchlist" and the
-  // worker's next run. The snapshot is where the name used to come from, so
-  // the row printed a bare `#4001` for a list the catalog could name all along.
+  await seedCatalog(characterId, { name: "Fleet staging" });
+  // No snapshot row: watched, never read.
   await db.insert(accessListWatch).values({ accessListId: LIST_ID, addedBy: "e2e" });
   await page.goto("/admin/access-lists");
 
   const row = page.locator(".acl-list__row");
   await expect(row).toContainText("Fleet staging");
+  // The assertion that would have failed before the catalog join, kept
+  // separate from the positive one: a row can contain both, and "the name is
+  // present" is not the same claim as "the id is not standing in for it".
   await expect(row).not.toContainText(`#${LIST_ID}`);
   await expect(row).toContainText("not read yet");
+
+  // The confirmation names it too, which takes `removeWatch`'s return value
+  // rather than the id the action already had in hand: the row said "Fleet
+  // staging" a moment ago, and a notice answering "#4001 removed" would leave
+  // the admin matching a number against a name they never saw here.
+  await row.getByRole("button", { name: "Stop watching" }).click();
+  await expect(page.locator(".notice").last()).toContainText(
+    "Fleet staging removed from the watchlist",
+  );
 });
 
 /** Two members of one corporation, neither on the list. */
@@ -610,6 +633,51 @@ test("missing members from different corporations keep the column that tells the
   await expect(detail.locator(".acl-detail__norm")).toHaveCount(0);
 });
 
+/**
+ * The dropdown's default is a real option rather than an absent one, and the
+ * select is `required`. Without the placeholder, `defaultValue=""` matched
+ * nothing rendered, so the browser selected the first list in the catalog and
+ * an untouched submit added a list the admin never chose. Without `required`,
+ * the placeholder alone only stopped the browser re-selecting it: a disabled
+ * selected option contributes no entry at all, so the submit still went, with
+ * no `accessListId` in it, and `parseId` threw `invalid_id` — an ordinary
+ * mis-click landing on the error boundary. Both halves are asserted below,
+ * because either one alone leaves a bad outcome.
+ */
+test("the add control cannot submit a list the admin never chose", async ({
+  page,
+  context,
+}) => {
+  const { characterId } = await asAdmin(context);
+  await seedHolder(characterId);
+  await seedCatalog(characterId, { accessListId: 4001, name: "Fleet staging" });
+  await seedCatalog(characterId, { accessListId: 4002, name: "Home defence" });
+  await page.goto("/admin/access-lists");
+
+  const select = page.locator("#add-list");
+  await expect(select).toHaveValue("");
+  await expect(select.locator("option[value='']")).toBeDisabled();
+
+  // Count the POSTs rather than inspecting the page afterwards. "Nothing was
+  // added" is the weaker claim — a server action that throws adds nothing
+  // either, and the admin is then looking at "Something broke". The claim
+  // worth pinning is that the mis-click never leaves the browser.
+  const posts: string[] = [];
+  page.on("request", (r) => {
+    if (r.method() === "POST") posts.push(r.url());
+  });
+  await page.getByRole("button", { name: "Add to watchlist" }).click();
+
+  // Read the validity state before asserting on `posts`: it is a round trip to
+  // the browser, so a submit that DID fire has been observed by the time the
+  // count is read.
+  expect(await select.evaluate((el: HTMLSelectElement) => el.validity.valueMissing)).toBe(
+    true,
+  );
+  expect(posts).toEqual([]);
+  expect(await db.select().from(accessListWatch)).toHaveLength(0);
+});
+
 test("the only control in a watched row does not read as another caption", async ({
   page,
   context,
@@ -634,4 +702,77 @@ test("the only control in a watched row does not read as another caption", async
     .getByRole("button", { name: "Stop watching" })
     .evaluate((el) => getComputedStyle(el).borderTopColor);
   expect(outline).not.toBe("rgba(0, 0, 0, 0)");
+});
+
+/**
+ * The two stale-page presses. Neither is reachable by clicking alone — the
+ * `<select>` never offers a watched list, and a removed row takes its button
+ * with it — so both are reached the only way a real admin reaches them: the
+ * page renders, the table changes underneath it (another admin, another tab),
+ * and the press lands against a world that has moved. The seeds below make
+ * that change directly, between the render and the click.
+ *
+ * The copy is what is asserted, because the copy is the whole of the fix: both
+ * presses used to answer with the ordinary success sentence, crediting this
+ * admin with an act that had already happened without them.
+ */
+test("a removal whose row is already gone says so, and does not claim a removal", async ({
+  page,
+  context,
+}) => {
+  const { characterId } = await asAdmin(context);
+  await seedHolder(characterId);
+  await seedCatalog(characterId, { name: "Fleet staging" });
+  await seedWatched(characterId);
+  await page.goto("/admin/access-lists");
+
+  const row = page.locator(".acl-list__row");
+  await expect(row).toContainText("Fleet staging");
+  // Seeded with no entries against a one-member roster, so this row drifts and
+  // therefore expands: its "Stop watching" lives inside the drawer, and the
+  // drawer has to be open for the press to reach it.
+  await row.locator("summary").click();
+  // The other tab's removal, after this page has rendered its button.
+  await db.delete(accessListWatch).where(eq(accessListWatch.accessListId, LIST_ID));
+
+  await row.getByRole("button", { name: "Stop watching" }).click();
+  const notice = page.locator(".notice").last();
+  // Named, not numbered: the catalog row outlives the watch row, so the
+  // sentence about the press that did nothing can still say which list.
+  await expect(notice).toContainText("Fleet staging was already off the watchlist");
+  await expect(notice).not.toContainText("removed from the watchlist");
+  // `warn`, not the untoned success rendering — this action returns an
+  // `ActionOutcome`, so unlike the redirecting controls it has a tone channel
+  // and uses it.
+  await expect(notice).toHaveClass(/notice--warn/);
+  // No audit row: nothing was removed, so nothing in the history says it was.
+  // The audit table is why the boolean lives at the service layer rather than
+  // only in the copy.
+  expect(await db.select().from(auditLog)).toHaveLength(0);
+});
+
+test("an add of a list someone else already watched says nothing was added", async ({
+  page,
+  context,
+}) => {
+  const { characterId } = await asAdmin(context);
+  await seedHolder(characterId);
+  await seedCatalog(characterId, { name: "Fleet staging" });
+  await page.goto("/admin/access-lists");
+
+  await page.locator("#add-list").selectOption(String(LIST_ID));
+  // The other tab's add, after this page built its `<select>` from a catalog
+  // with nothing watched in it.
+  await db.insert(accessListWatch).values({ accessListId: LIST_ID, addedBy: "other" });
+
+  await page.getByRole("button", { name: "Add to watchlist" }).click();
+  const notice = page.locator(".notice").last();
+  await expect(notice).toContainText("already on the watchlist");
+  // The assertion that fails without the split marker: `doneNotice("watch")`
+  // is a perfectly good sentence to render here, and a wrong one.
+  await expect(notice).not.toContainText("List added to the watchlist");
+  // One watch row, and no audit row — the other tab wrote the row without
+  // going through `addWatch`, and this press wrote nothing at all.
+  expect(await db.select().from(accessListWatch)).toHaveLength(1);
+  expect(await db.select().from(auditLog)).toHaveLength(0);
 });

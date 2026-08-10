@@ -38,9 +38,18 @@ export async function designateHolderAction(formData: FormData): Promise<void> {
 export async function addWatchAction(formData: FormData): Promise<void> {
   const { accountId: actor } = await requireAdminAction();
   const accessListId = parseId(formData.get("accessListId"));
-  await addWatch(getDb(), accessListId, actor);
+  const added = await addWatch(getDb(), accessListId, actor);
   revalidatePath("/admin/access-lists");
-  redirect(`/admin/access-lists?done=watch&at=${Date.now()}`);
+  // Two markers, because a press that inserted nothing is not the press the
+  // admin thinks they made: the `<select>` only offers lists that were not
+  // watched when the page rendered, so landing here means someone else added
+  // it first (or this tab is a stale back-button). Unlike `removeWatchAction`
+  // below there is no tone channel — this control redirects, so its copy comes
+  // back through `doneNotice`/`ConfirmNotice`, which carry a sentence and
+  // nothing else — so the wording is the whole of the correction.
+  redirect(
+    `/admin/access-lists?done=${added ? "watch" : "watch-already"}&at=${Date.now()}`,
+  );
 }
 
 /**
@@ -74,7 +83,20 @@ export async function removeWatchAction(
 ): Promise<ActionOutcome> {
   const { accountId: actor } = await requireAdminAction();
   const accessListId = parseId(formData.get("accessListId"));
-  await removeWatch(getDb(), accessListId, actor);
+  const { removed, name } = await removeWatch(getDb(), accessListId, actor);
   revalidatePath("/admin/access-lists");
-  return { text: `Access list ${accessListId} removed from the watchlist.` };
+  // Same `#id` fallback the page itself uses for a name-less row
+  // (`page.tsx`'s `label`), so the confirmation and the row it described can
+  // never disagree about what an unnamed list was called.
+  const label = name ?? `#${accessListId}`;
+  // A press that deleted no row gets a `warn` outcome rather than the ordinary
+  // confirmation, the same shape and for the same reason as
+  // `admin/accounts/actions.ts`'s `not_linked` branch: the admin pressed a
+  // button on a row that another tab (or another admin) had already removed,
+  // and `revalidatePath` above is what makes the row disappear. Confirming it
+  // as a removal would credit this press with someone else's act.
+  if (!removed) {
+    return { text: `${label} was already off the watchlist.`, tone: "warn" };
+  }
+  return { text: `${label} removed from the watchlist.` };
 }

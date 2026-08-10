@@ -117,7 +117,7 @@ export function PaymentHistory({
   if (single) return list;
   const body = (
     <>
-      {shared === null ? null : <p className="lede">{shared}</p>}
+      {shared === null ? null : <p className="page__lede">{shared}</p>}
       {list}
     </>
   );

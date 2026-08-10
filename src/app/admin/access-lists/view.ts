@@ -77,6 +77,19 @@ export function monitorState(input: MonitorInput): MonitorState {
  * holder makes these the likeliest way the feature dies quietly, and a page
  * that renders zero rows without saying why is indistinguishable from a page
  * saying everything is fine.
+ *
+ * `normal` used to be the one exception: five words naming the holder and
+ * nothing else, on the theory that a healthy state needs no explaining. It is
+ * also the state scanned most, by the admin who arrives when nothing is wrong
+ * and is never told what this page even compares. It now says that much.
+ *
+ * What it deliberately does NOT say is that reads are healthy. `monitorState`
+ * reaches `normal` on a designated holder with the scope, a valid token, and a
+ * non-empty catalog — it never looks at any row's `readStatus`, which lives on
+ * the snapshot and is per-list. Every watched row can be `failed` or
+ * `not_visible` in this state, both of which `rowTone` turns warn. A summary claiming reads are fine, printed directly above the rows
+ * disproving it, is the failure this docblock's first paragraph exists to
+ * prevent, so the sentence stays limited to what the state actually knows.
  */
 export function monitorSentence(state: MonitorState): string {
   switch (state.kind) {
@@ -109,7 +122,10 @@ export function monitorSentence(state: MonitorState): string {
     case "catalog-empty":
       return `${state.holder.name} is the holder. No lists have been discovered yet.`;
     case "normal":
-      return `${state.holder.name} is the holder.`;
+      return (
+        `${state.holder.name} is the holder. This page compares the alliance ` +
+        "roster against the in-game access lists watched below."
+      );
   }
 }
 
@@ -277,9 +293,11 @@ export function doneStamp(at: string | undefined): string | null {
 
 /**
  * The outcome of the press that produced this render, for the three actions
- * that redirect. An unrecognized marker yields the empty string rather than
- * being echoed — `Notice` renders an empty slot for it, which is the shape
- * that keeps its live region announcing changes rather than being born full.
+ * that redirect. Four markers rather than three: `addWatchAction` splits on
+ * whether it inserted anything. An unrecognized marker yields the empty string
+ * rather than being echoed — `Notice` renders an empty slot for it, which is
+ * the shape that keeps its live region announcing changes rather than being
+ * born full.
  */
 export function doneNotice(done: string | undefined, at: string | undefined): string {
   const stamp = doneStamp(at);
@@ -289,6 +307,13 @@ export function doneNotice(done: string | undefined, at: string | undefined): st
   }
   if (done === "watch") {
     return `List added to the watchlist${when}. It is read on the next run.`;
+  }
+  // The idempotent add. Reached only from a stale page — the `<select>` offers
+  // nothing already watched — so it says what the press did (nothing) rather
+  // than repeating the success sentence above. `ConfirmNotice` renders a
+  // sentence and no tone, so the wording carries the correction alone.
+  if (done === "watch-already") {
+    return `That list was already on the watchlist${when}. Nothing was added.`;
   }
   if (done === "check") {
     return `Check queued${when}. Reload this page once the worker has run.`;

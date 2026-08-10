@@ -132,8 +132,16 @@ goes slower than 90 minutes, change it there too.
   stateless — sessions and OAuth PKCE state are both in Postgres — so extra
   instances are safe. Machine count is not a `fly.toml` field; set it with
   `fly scale count`, after the headroom check below.
-- **`worker=1`, deliberately.** The Wanderer reconcile is destructive; a second
-  worker is not a change to make casually.
+- **`worker=1`, deliberately.** Two independent reasons now, either sufficient:
+  the Wanderer reconcile is destructive, and the Discord client's rate-limit
+  pacing is per-process. `createDiscordClient` holds its bucket state, its
+  per-route mutex, and its global-backoff deadline in one closure
+  (`src/lib/discord/rest.ts`), constructed once per worker process. A second
+  worker gets its own view of every bucket, so the two would burst into the
+  same per-guild limit without coordinating — reintroducing the 429s that
+  pacing was added to fix, silently and with no error to point at. There is no
+  cross-process coordination (Redis, Postgres advisory locks) for this today.
+  A second worker is not a change to make casually.
 - **Single-node Postgres, deliberately.** HA adds real operational weight to an
   unmanaged `postgres-flex` cluster you already patch yourself.
 
