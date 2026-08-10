@@ -224,6 +224,39 @@ describe("summarizeDetails, declared fields and role rendering", () => {
     ).toBe("—");
   });
 
+  // Both writers stamp `partial` on every row (jobs/discord-roles.ts:143 on the
+  // deprovision path, :369 on the main sweep), so leaving it undeclared made
+  // EVERY role-change row claim a hidden key it did not have.
+  it("says a role change was partial", () => {
+    expect(
+      summarizeDetails(
+        "discord.role_changed",
+        { added: ["300"], removed: [], partial: true },
+        ROLE_NAMES,
+      ),
+    ).toBe("+alumni, partial");
+  });
+
+  it("stays silent, not hidden, when a role change was complete", () => {
+    expect(
+      summarizeDetails(
+        "discord.role_changed",
+        { added: ["300"], removed: [], partial: false },
+        ROLE_NAMES,
+      ),
+    ).toBe("+alumni");
+  });
+
+  it("counts a genuinely undeclared key on a role change", () => {
+    expect(
+      summarizeDetails(
+        "discord.role_changed",
+        { added: ["300"], removed: [], partial: false, somethingNew: 1 },
+        ROLE_NAMES,
+      ),
+    ).toBe("+alumni, +1 more");
+  });
+
   it("surfaces the cause a tier change was written with", () => {
     expect(
       summarizeDetails("tier.changed", {
