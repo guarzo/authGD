@@ -43,11 +43,12 @@ test("the compressed manifest drops its dead columns and keeps an actionable re-
   await context.addCookies([await sessionCookieFor(db, acc.id)]);
   await page.goto("/account");
 
-  // Three, not the four this test asserted when ACTIONS was an unconditional
-  // column: `seedMember` gives one character, who is the main, so that row has
-  // neither `make main` (gated on `!isMain`) nor `unlink` (gated on crew size),
-  // and the header is elided along with the empty cells. Asserted below by name
-  // as well as by count, so a future column arriving under a different name
+  // Three, and three is now the manifest's full width rather than this seed's
+  // own: the table is portrait / name / [status], and ACTIONS is not a column
+  // at any crew size — its toggle lives inside the NAME cell. (This assertion
+  // read 4 further back, when ACTIONS was unconditional, and 3 for a different
+  // reason in between, when a lone main elided it.) Asserted below by name as
+  // well as by count, so a future column arriving under a different name
   // can't quietly restore the four.
   const head = manifest(page).locator("thead > tr > th");
   await expect(head).toHaveCount(3);

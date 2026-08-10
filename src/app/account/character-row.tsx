@@ -53,17 +53,61 @@ export function ManifestOpenScope({ children }: { children: ReactNode }) {
  * machinery below mirrors it exactly. That component's row shape puts the
  * toggle in the FIRST cell and takes the rest as `cells` — built for the
  * admin table, whose first column already **is** the row's identity. This
- * table's first column is the portrait, and the toggle belongs in the
- * actions cell at the end, not the front: reusing `as="row"` here would mean
+ * table's first column is the portrait, so reusing `as="row"` here would mean
  * either reordering the row (moving the portrait after the toggle) or
  * displacing the identity a screen-reader user scans for first. Hand-rolled
- * instead, with `leadCells` standing in for the columns that stay exactly
- * where they were.
+ * instead, with the surrounding cells passed straight through.
+ *
+ * The toggle sits INSIDE the name cell, immediately after the character's
+ * name, and there is no ACTIONS column at all. It used to hold a trailing
+ * `.log__col--fit` column of its own, where a bare `+` marker floated ~490px
+ * from the name it expands on a wide viewport — "there is more here" only
+ * reads as a statement about THIS row if it is near this row, so the stranded
+ * marker was the R4 failure the icon-only design exists to avoid. Two cheaper
+ * repairs were built and measured first and both cost more than the defect:
+ * leading the row with ACTIONS added 52px of forced horizontal scroll at
+ * 320px (134 -> 186 against a 170 tripwire), and making NAME fit-width so
+ * ACTIONS could take the slack starved the long-location case (>= 352px
+ * wanted, 151px measured). Moving the control into the cell is what shipped;
+ * it also drops a whole column, which took the faulted 320px gate from 257px
+ * of forced scroll to 180px (the healthy one is set by `.char__location`'s
+ * own overflow and did not move). See `.row-toggle--actions` in globals.css
+ * for the full account.
+ *
+ * Why the name cell arrives in three pieces rather than as one `nameCell`
+ * node: the toggle has to land at an exact position inside it, and this is a
+ * client component so page.tsx cannot hand down a render function to place it.
+ * The position is not cosmetic —
+ *
+ *   - `.char-line` is a GRID with `justify-items: start`, so a button that is
+ *     its direct child gets its own grid row: a whole extra line per
+ *     character. That is the same failure that clipped the status summary
+ *     below 40rem (the 390x844 fold gate fell 7 rows to 5). So the button goes
+ *     inside `.char`, which is `white-space: nowrap`, on the name's own line.
+ *   - Inside `.char` it must come AFTER the `(main)` badge and BEFORE
+ *     `.char__status-summary`. The summary is visible at >= 40rem, so a toggle
+ *     placed after it would sit at the far end of a long mono string and
+ *     re-strand the marker at exactly the widths the defect was about.
+ *
+ * That second constraint costs something, and the cost is accepted rather
+ * than unnoticed: in reading order a screen reader now hears "Pilot Alt,
+ * <name> actions, collapsed, button, token ok standings ok map off" — the
+ * status summary is separated from the name it qualifies by a control. The
+ * summary is still inside the same cell and still reached by the same
+ * `<th>`-derived column identity, so nothing is unreachable; it is one extra
+ * object to pass. Traded for sighted proximity at >= 40rem, which is the
+ * entire point of this change, and for the alternative being the marker
+ * stranded ~490px from its name for everyone.
+ *
+ * Hence `nameLead` / `nameTrail` / `nameBelow`: the three slots that ordering
+ * carves out, named for where they sit rather than for what page.tsx happens
+ * to put in them.
  *
  * The panel it opens is `.manifest-panel`, not the admin table's `.drawer`.
  * An owner walkthrough on a first cut of this row (which rendered MAIN/
- * UNLINK directly in the ACTIONS cell, no disclosure at all) found that
- * approach regressed a real budget — a faulted account's forced-horizontal-
+ * UNLINK directly in the since-removed ACTIONS cell, no disclosure at all)
+ * found that approach regressed a real budget — a faulted account's
+ * forced-horizontal-
  * scroll region grew from ~257px to 299px at 320px, because a table column's
  * width is shared by every row in it, so main's single-button row paid for
  * an alt row's two-button content. Reusing `.drawer` to fix that would have
@@ -75,25 +119,27 @@ export function ManifestOpenScope({ children }: { children: ReactNode }) {
  * row inside a narrow band with a doubled hairline. `.manifest-panel`
  * (globals.css) is the plain, unpinned panel that replaced it.
  *
- * `actions === null` renders no toggle, no panel, and no `<td>` at all, rather
- * than a control that opens on nothing. That is deliberate, not a missed case:
- * a single-character account's row has neither `main` (gated on `!isMain`) nor
+ * `actions === null` renders no toggle and no panel row at all, rather than a
+ * control that opens on nothing. That is deliberate, not a missed case: a
+ * single-character account's row has neither `main` (gated on `!isMain`) nor
  * `unlink` (gated on more than one character), and the account page has to be
  * able to say so.
  *
- * Dropping the cell rather than emptying it is what keeps this row aligned with
- * `showActionsColumn` (page.tsx), which elides the matching `<col>` and `<th>`
- * on the same condition. The two agree without a second prop because the
- * predicate is uniform across a given table — when the crew is larger than one
- * every row has actions, and when it is exactly one there is no other row to
- * disagree with. A future gate that varies row-to-row breaks that and would
- * have to pass the column's own decision down, because nothing throws when body
- * cells outnumber header cells.
+ * Nothing about the table's SHAPE follows from that any more. The toggle used
+ * to bring a `<td>` with it, which had to agree with a matching `<col>` and
+ * `<th>` gated on the same predicate in page.tsx; inlining it into the name
+ * cell means a row with actions and a row without have identical cell counts,
+ * so the two files no longer have anything to keep in sync. A future gate that
+ * varies row-to-row is now free to do so.
  */
 export function CharacterRow({
   name,
   colSpan,
-  leadCells,
+  portraitCell,
+  nameLead,
+  nameTrail,
+  nameBelow,
+  trailingCells,
   actions,
 }: {
   /** The character's name, folded into the toggle's accessible name — the
@@ -105,10 +151,22 @@ export function CharacterRow({
    *  passed through rather than recomputed here so this component stays
    *  agnostic to the table's own column logic. */
   colSpan: number;
-  /** The portrait/name/[status] `<td>`s, unchanged from before this row
-   *  gained a disclosure — passed through rather than rebuilt here so this
-   *  component owns only the toggle and the panel it opens. */
-  leadCells: ReactNode;
+  /** The portrait `<td>`, whole and unchanged — this component adds nothing to
+   *  it, so it crosses as one node rather than as more slots. */
+  portraitCell: ReactNode;
+  /** Inside `.char`, before the toggle: the name itself and the `(main)`
+   *  badge. See the docblock above for why this cell arrives in pieces. */
+  nameLead: ReactNode;
+  /** Inside `.char`, after the toggle: the status summary, which is visible
+   *  at >= 40rem and would re-strand the marker if the toggle followed it. */
+  nameTrail: ReactNode;
+  /** Inside `.char-line`, after `.char`: the location line, which is a second
+   *  grid row on purpose (the one thing here that is). */
+  nameBelow: ReactNode;
+  /** Whole `<td>`s rendered after the name cell — today only [STATUS], which
+   *  is an exception column. Passed through rather than rebuilt here so this
+   *  component owns only the name cell and the panel it opens. */
+  trailingCells: ReactNode;
   /** MAIN and/or UNLINK, already gated by the caller, or `null` for a row
    *  with neither. */
   actions: ReactNode | null;
@@ -170,43 +228,59 @@ export function CharacterRow({
   return (
     <>
       <tr>
-        {leadCells}
-        {actions && (
-          <td>
-            <button
-              type="button"
-              ref={toggleRef}
-              // `.btn--micro`: this toggle is the in-row control now, not the
-              // buttons it opens — DESIGN.md's 28px grade for "rows that each
-              // carry a control set and are read many at a time" describes
-              // this button, not the panel beneath it (ruling R1). `.disc`'s
-              // dim/hover/marker language, not `.row-toggle`'s: that class is
-              // deliberately undimmed because it carries the admin table's
-              // row IDENTITY, and this button carries no identity — it is a
-              // secondary control, same standing as a `<details>` summary.
-              //
-              // Icon-only (globals.css's `.row-toggle--actions` docblock has
-              // the full account): the visible word "actions" used to repeat
-              // on every row of a ten-row table, identically, which made it
-              // the loudest pattern in the manifest. The +/- marker
-              // (`::before`) is the same disclosure affordance `.row-toggle`
-              // and `.disc > summary` already use with no caption elsewhere
-              // in this app. `aria-label` still names the control for
-              // assistive tech — the row's own name, so a screen-reader user
-              // never hears a bare "actions" three times with no row to tell
-              // them apart.
-              className="btn btn--quiet btn--micro row-toggle--actions"
-              aria-expanded={open}
-              aria-controls={id}
-              aria-label={`${name} actions`}
-              onClick={() => {
-                scope.setOpenId(open ? null : id);
-                setEverOpen(true);
-              }}
-              onKeyDown={onEscape}
-            />
-          </td>
-        )}
+        {portraitCell}
+        <td>
+          <div className="char-line">
+            <span className="char">
+              {nameLead}
+              {actions && (
+                <button
+                  type="button"
+                  ref={toggleRef}
+                  // `.btn--micro`: this toggle is the in-row control now, not
+                  // the buttons it opens — DESIGN.md's 28px grade for "rows
+                  // that each carry a control set and are read many at a time"
+                  // describes this button, not the panel beneath it (ruling
+                  // R1). `.disc`'s dim/hover/marker language, not
+                  // `.row-toggle`'s: that class is deliberately undimmed
+                  // because it carries the admin table's row IDENTITY, and
+                  // this button carries no identity — it is a secondary
+                  // control, same standing as a `<details>` summary.
+                  //
+                  // Icon-only (globals.css's `.row-toggle--actions` docblock
+                  // has the full account): the visible word "actions" used to
+                  // repeat on every row of a ten-row table, identically, which
+                  // made it the loudest pattern in the manifest. The +/-
+                  // marker (`::before`) is the same disclosure affordance
+                  // `.row-toggle` and `.disc > summary` already use with no
+                  // caption elsewhere in this app.
+                  //
+                  // `aria-label` still names the control for assistive tech —
+                  // the row's own name, so a screen-reader user never hears a
+                  // bare "actions" three times with no row to tell them apart.
+                  // Unchanged by the move into this cell, and it has to be:
+                  // `<button>` computes its accessible name from `aria-label`
+                  // alone, so the name, the `(main)` badge, the status summary
+                  // and the location line beside it are NOT folded in. Making
+                  // the whole cell the trigger — `Disclosure as="row"`'s shape
+                  // — was considered and rejected for exactly that reason.
+                  className="btn btn--quiet btn--micro row-toggle--actions"
+                  aria-expanded={open}
+                  aria-controls={id}
+                  aria-label={`${name} actions`}
+                  onClick={() => {
+                    scope.setOpenId(open ? null : id);
+                    setEverOpen(true);
+                  }}
+                  onKeyDown={onEscape}
+                />
+              )}
+              {nameTrail}
+            </span>
+            {nameBelow}
+          </div>
+        </td>
+        {trailingCells}
       </tr>
       {actions && (
         // `drawer-row`: the same "not a data row" convention class the

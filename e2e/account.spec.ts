@@ -1149,8 +1149,10 @@ const NARROWEST = 320;
 // instead of the stacked layout's `max(name, location)`, and at 320px that
 // cost 203-267px of additional forced horizontal scroll against a 286px-wide
 // scroll region — close to a full extra screen of blind scrolling to reach
-// STATUS/ACTIONS. The plan's documented fallback was taken: `.char-line` is
-// now the same stacked layout `.stack` is, two lines per character.
+// STATUS (and ACTIONS, which was a column of its own then and is not one now:
+// its toggle lives in the NAME cell). The plan's documented fallback was
+// taken: `.char-line` is now the same stacked layout `.stack` is, two lines
+// per character.
 //
 // The one-line prohibition is now guarded by two properties instead of a
 // height band: the pitch ceiling at the end of this file (a flex row is one
@@ -1292,27 +1294,43 @@ test("a long structure name does not blow out the forced horizontal scroll at 32
   const pinned = await pinGeometry(
     page,
     MANIFEST,
-    // Third cell, which is ACTIONS: the STATUS column renders only on
-    // exception and this seed is all-ok. ACTIONS is the elastic column now
-    // rather than NAME (page.tsx's `<colgroup>`), which is why the ratio bound
-    // below is the assertion that moved — see its own comment.
-    "tbody tr:first-child td:nth-child(3)",
+    // Second cell, which is NAME, and it is the LAST cell: the STATUS column
+    // renders only on exception and this seed is all-ok, and ACTIONS is no
+    // longer a column at all — its toggle moved inside this very cell
+    // (page.tsx's `<colgroup>`). So the right edge pinned here is the table's
+    // own right edge, which is what `maxScrollLeft` below is about.
+    "tbody tr:first-child td:nth-child(2)",
     "right",
   );
-  // House style (e2e/audit.spec.ts:1124), kept for shape — but this holds
-  // just as true under the flex row (the ACTIONS cell's width and the
-  // region's clientWidth are both unaffected by what the name column does),
-  // so it is not a second independent check. `maxScrollLeft` below is the
-  // actual gate.
+  // The cell/region ratio this line used to carry measured the ACTIONS cell,
+  // on the argument that a cell growing to dominate the row (a permanent
+  // control set coming back) is worth catching separately from the total. That
+  // cell is gone, and the same ratio against NAME says nothing — at 320px NAME
+  // *is* the row, deliberately, since it carries a 22rem-capped location line
+  // against a 286px region. The intent is re-pointed at the control rather
+  // than dropped: the toggle now lives inside NAME, so what "a permanent
+  // control set coming back" would look like today is that control taking a
+  // large share of the cell it sits in. Measured at 0.12 (a 28px control in a
+  // 230px cell); the bound is loose for the same reason the 0.6 was.
   //
-  // 0.6, not 0.5: re-measured after 3.2 replaced the permanent MAIN/UNLINK
-  // column with a per-row disclosure toggle. Main's own ACTIONS cell now
-  // holds just the `actions` toggle button at 113px against this viewport's
-  // 286px region — 0.40, well under 0.6. The bound is kept loose rather than
-  // tightened to the new number: it exists to catch the cell growing to
-  // dominate the row (a permanent control set coming back, say), not to pin
-  // today's exact width.
-  expect(pinned.cellWidth / pinned.regionWidth).toBeLessThan(0.6);
+  // Read as "did the control grow", not "did a cell come to dominate the row":
+  // at this width the denominator is pinned by `.char__location`'s 22rem cap,
+  // so the ratio moves almost entirely with the numerator.
+  //
+  // Returns null rather than dereferencing, so a future seed whose first row
+  // has no actions (a one-character account renders no toggle) fails as a
+  // readable assertion instead of a TypeError from inside `page.evaluate`.
+  const toggleShare = await page.evaluate((sel) => {
+    const cell = document.querySelector(`${sel} tbody tr:first-child td:nth-child(2)`);
+    const btn = cell?.querySelector(".row-toggle--actions");
+    if (!cell || !btn) return null;
+    return btn.getBoundingClientRect().width / cell.getBoundingClientRect().width;
+  }, MANIFEST);
+  expect(
+    toggleShare,
+    "first row should carry an actions toggle to measure",
+  ).not.toBeNull();
+  expect(toggleShare).toBeLessThan(0.2);
   // Rules out "nothing to scroll at all" reading as success (e.g. if the
   // seed silently failed to render a location and the name column shrank
   // enough that nothing forces scroll) — a passing 0 would be exactly as
@@ -1326,9 +1344,10 @@ test("a long structure name does not blow out the forced horizontal scroll at 32
   // the reverted flex row cost, so this trips if the flex row or either
   // removed column comes back.
   //
-  // Not zero, and it cannot be: the floor is a 64px portrait plus a 196px name
-  // cell plus a bare unlink cell at ~121px = 381px against a 286px region. No
-  // arrangement that keeps a portrait, a name and an unlink fits 320px.
+  // Not zero, and it cannot be: the floor is a 56px portrait cell plus a NAME
+  // cell whose location line is capped at 22rem, which alone is wider than
+  // this viewport's 286px region. No arrangement that keeps a portrait beside
+  // a full-measure structure name fits 320px.
   //
   // Re-measured after P0 (the `never`/`unresolved` location states rendering
   // "not reported" instead of nothing): still 134px. This seed's main is
@@ -1342,14 +1361,29 @@ test("a long structure name does not blow out the forced horizontal scroll at 32
   // every row; the label now lives inside a per-row disclosure panel that
   // renders `hidden` and contributes nothing to layout until a member opens
   // it, so a closed-state gate like this one cannot see its length at all.
+  //
+  // Dropping the ACTIONS column and inlining its toggle into the NAME cell
+  // moved this gate by exactly ZERO: still 134px, tripwire still 170. That is
+  // worth stating rather than leaving as an unexplained non-event, because the
+  // obvious prediction ("a column fewer must be narrower") is wrong here while
+  // the faulted gate below did move by 77px. What forces the scroll on a
+  // HEALTHY crew is not the table's column count — the table measures 286px,
+  // exactly the region, and fits. It is `.char__location`: `max-width: 22rem`
+  // on a `nowrap` span inside a 206px cell content box, so the span overflows
+  // its own cell and the scroller's `scrollWidth` is that span's right edge,
+  // 420px. Dropping a column redistributes width inside a table that already
+  // fits and cannot touch a figure the span alone sets. This is also why
+  // "make NAME fit-width so ACTIONS takes the slack" measured as free at 320px
+  // and was still rejected (page.tsx's `<colgroup>`): at this viewport the
+  // NAME column's own width is not what this gate reads.
   expect(pinned.maxScrollLeft).toBeLessThan(170);
 });
 
 // The gate above measures a healthy crew, and a healthy crew is the case that
 // does not need it: `showStatusColumn` (src/app/account/page.tsx) is
 // exception-only, so on an all-ok seed the widest column in the manifest is not
-// in the DOM at all. The member who actually has to reach STATUS and ACTIONS is
-// the member with something wrong, and that is the layout nothing measured.
+// in the DOM at all. The member who actually has to reach STATUS is the member
+// with something wrong, and that is the layout nothing measured.
 //
 // `needs_reauth`, not `missing_label`, and the choice is the point. The STATUS
 // column is content-sized, so its width is the rendered width of whichever
@@ -1436,8 +1470,10 @@ test("a faulted character does not blow out the forced horizontal scroll at 320p
   const pinned = await pinGeometry(
     page,
     MANIFEST,
-    // Fourth cell: with the STATUS column mounted, ACTIONS moves right by one.
-    "tbody tr:first-child td:nth-child(4)",
+    // Third cell, and the last one: with the STATUS column mounted the table
+    // is portrait / name / status. ACTIONS used to be a fourth column here and
+    // is not one now — its toggle moved inside the NAME cell.
+    "tbody tr:first-child td:nth-child(3)",
     "right",
   );
   // Same anti-vacuity floor as the healthy gate — a passing 0 would mean the
@@ -1471,16 +1507,25 @@ test("a faulted character does not blow out the forced horizontal scroll at 320p
   // The member-facing total: 316px before Task 3's copy work, 299px after it,
   // 257px after 3.2/3.3 replaced the permanent MAIN/UNLINK column with a
   // per-row disclosure toggle — against a 286px region. That crossing matters:
-  // 257 is the first measurement of this gate to land under one region-width,
-  // so the worst member-fixable state now clears the forced-scroll fold in a
-  // single swipe, where every prior measurement took more than one. 270
-  // brackets today's number without pinning it exactly, so a small copy or
-  // font change does not fail this line for reasons unrelated to layout.
+  // 257 was the first measurement of this gate to land under one region-width,
+  // so the worst member-fixable state clears the forced-scroll fold in a
+  // single swipe, where every prior measurement took more than one.
   //
   // Re-measured after P0: still 257px. This seed's own characters all render
   // a `line` (`seedNominalCrew` places every one of them), so the new
-  // `never`/`unresolved` states never enter this gate — 270 stays correct.
-  expect(pinned.maxScrollLeft).toBeLessThan(270);
+  // `never`/`unresolved` states never enter this gate.
+  //
+  // 180px after the ACTIONS column was dropped and its toggle moved into the
+  // NAME cell: −77px, which is the 113px column gone minus the 36px the
+  // control costs in its new home (28px button + an 8px `margin-left`). This
+  // is the gate the change was for, and unlike the healthy one above it moves,
+  // because with STATUS mounted the table itself is 466px — wider than the
+  // 286px region — so the table's own width IS the forced scroll. The tripwire
+  // follows the measurement down to 190 rather than staying at 270: a bound
+  // that no longer binds is not a bound. It still brackets rather than pins, so
+  // a small copy or font change does not fail this line for reasons unrelated
+  // to layout.
+  expect(pinned.maxScrollLeft).toBeLessThan(190);
 });
 
 // What the two gates above do NOT claim, recorded so the next person does not
@@ -1488,31 +1533,30 @@ test("a faulted character does not blow out the forced horizontal scroll at 320p
 // where the remaining width is.
 //
 // Measured at a 320px viewport (286px scroll region), ten characters, seeded
-// `needs_reauth` as the gate above is — re-measured after 3.2 replaced the
-// permanent MAIN/UNLINK column with a per-row disclosure toggle:
+// `needs_reauth` as the gate above is — re-measured after the ACTIONS column
+// was dropped and its toggle moved inside the NAME cell:
 //
 //   portrait   56px   the image plus cell padding
-//   name      151px   "J30000142 — Home Astrahus" is the binding string
+//   name      187px   "J30000142 — Home Astrahus" is still the binding string
+//                     (151px), plus the 28px toggle and its 8px margin-left
 //   status    223px   71px label column + 8px gap + 120px value column + 24px padding
-//   actions   113px   the `actions` toggle button alone (was 155px: `main` + `unlink`)
 //   -------------
-//   table     543px  ->  257px forced scroll against the 286px region (was 585px -> 299px)
+//   table     466px  ->  180px forced scroll against the 286px region
 //
-// 3.2's disclosure is most of finding 3.3's reclaimed width: the ACTIONS
-// column dropped from 155px to 113px by replacing two permanent controls with
-// one toggle, which is what brought the forced scroll under one region-width
-// (257px < 286px) for the first time — a member on the narrowest supported
-// viewport can now reach the end of a faulted row's content within a single
-// swipe past the fold, where before it took more than one.
+// The line that used to sit between NAME and STATUS — `actions 113px`, the
+// toggle button alone, itself down from 155px when the column held permanent
+// `main` + `unlink` controls — no longer exists. Its 113px did not vanish
+// though: 36px of it followed the control into NAME, so the net saving is
+// 77px (543 -> 466 table, 257 -> 180 forced scroll). The remaining 77px is a
+// column's worth of cell padding and fit-column slack that a table stops
+// paying the moment the column stops existing.
 //
-// The 71px is the rendered width of "STANDINGS" (the widest of the three
-// labels, so dropping the two `ok` lines would not narrow it) and the 120px is
-// the rendered width of the "re-auth needed" chip. Both are content, and the
-// 8px is --s-2. That is the whole cell: there is no padding left in it to
-// remove, and deleting the STATUS column outright still leaves 320px of table
-// against a 286px region. Four columns of genuine content do not fit 320px,
-// and no arrangement that keeps a portrait, a name, a status and an actions
-// toggle will.
+// Three columns of genuine content still do not fit 320px, and none of the
+// three has anything left to give: the 56px is a 32px portrait plus padding,
+// the 71px in STATUS is the rendered width of "STANDINGS" (the widest of the
+// three labels, so dropping the two `ok` lines would not narrow it), the 120px
+// is the "re-auth needed" chip, and the 8px is --s-2. Deleting the STATUS
+// column outright would still leave a table wider than the region.
 //
 // One case is unbounded and no threshold here covers it: an unrecognized result
 // code falls through to `result.replace(/_/g, " ")` (contact-state.tsx) and
@@ -1558,6 +1602,15 @@ test("a located manifest row stays inside the 63px density budget", async ({
   // padding 8 + border 1. 65 leaves margin for platform font variance. Only
   // main's row (index 0) carries a second line under elision; the nine alts
   // are one-line rows and land well under the ceiling — measured at 49px.
+  //
+  // The "name 22" term is doing more work than it looks like: the actions
+  // toggle is inlined ON that line and its border box is 28px, four more than
+  // the line it sits in. `.row-toggle--actions` in globals.css buys that back
+  // with `vertical-align: middle` and a -3px `margin-block`, trimming the
+  // margin box (which is what the line box measures) while leaving the border
+  // box at the full WCAG 2.5.8 (AA) target. This assertion is the primary
+  // guard on that trick — without it, dropping either declaration takes this
+  // row to 69.1px and nothing else in the suite notices.
   expect(heights[0]).toBeLessThanOrEqual(65);
   for (const h of heights.slice(1)) expect(h).toBeLessThanOrEqual(65);
 });
@@ -1575,7 +1628,12 @@ test("an all-ok account renders no STATUS column and keeps the per-character fac
   await page.goto("/account");
 
   const head = manifest(page).locator("thead > tr > th");
-  await expect(head).toHaveCount(3);
+  // Two, down from three: an all-ok crew's manifest is portrait + name and
+  // nothing else. The number moved because ACTIONS ceased to be a column at
+  // all — its toggle now renders inside the NAME cell beside the name it
+  // expands — not because STATUS started rendering here. That remains the
+  // point of the test and is still asserted by name on the next line.
+  await expect(head).toHaveCount(2);
   await expect(page.getByRole("columnheader", { name: "Status" })).toHaveCount(0);
   await expect(manifest(page).locator("[data-state]")).toHaveCount(0);
 
@@ -1746,7 +1804,7 @@ test("one non-ok character brings the STATUS column back for every row", async (
 // Round 3 (team-lead judgment, task 5a): every label in this table's <thead>
 // is now `.visually-hidden` — even "Name" and "Status", which used to render
 // as sighted text — so the bar itself should cost next to nothing, while a
-// screen reader still gets all four columns named.
+// screen reader still gets every column named.
 test("the manifest's header bar carries no visible chrome, but still names every column", async ({
   page,
   context,
@@ -1759,14 +1817,22 @@ test("the manifest's header bar carries no visible chrome, but still names every
   await context.addCookies([await sessionCookieFor(db, acc.id)]);
   await page.goto("/account");
 
-  // All four columns present (STATUS included, since one character faulted
+  // All three columns present (STATUS included, since one character faulted
   // above) and each still exposes its accessible name — `.visually-hidden`
   // does not remove a `<th>` from the accessibility tree, only from sight.
-  for (const name of ["Portrait", "Name", "Status", "Actions"]) {
+  //
+  // Three, not the four this loop used to run: the ACTIONS column is gone and
+  // its toggle lives inside the NAME cell. That is a loss of nothing in this
+  // channel — the column never named anything a screen-reader user needed, and
+  // the control it held still carries its own `aria-label` ("<name> actions").
+  // Pinned by an exact count below as well, so a fourth column arriving under
+  // any name has to come and argue for itself here.
+  for (const name of ["Portrait", "Name", "Status"]) {
     await expect(
       manifest(page).getByRole("columnheader", { name, exact: true }),
     ).toHaveCount(1);
   }
+  await expect(manifest(page).getByRole("columnheader")).toHaveCount(3);
 
   // The bar's own chrome — `.log th`'s background/border-bottom/padding — is
   // gone for this table: the header row collapses to close to nothing rather
@@ -2266,7 +2332,10 @@ test("a faulted character's remedy renders in a sub-row under that character", a
   // Spans the whole table, which is what keeps its height from wrapping
   // against one narrow column — the property the in-cell alternative did not
   // have.
-  await expect(subRows.locator("td")).toHaveAttribute("colspan", "4");
+  // Three, not four: the whole table is one column narrower since ACTIONS was
+  // folded into the NAME cell. The assertion is still "spans the whole table"
+  // — this seed renders STATUS, so portrait + name + status is the full width.
+  await expect(subRows.locator("td")).toHaveAttribute("colspan", "3");
 
   // The footnote copy is gone, not merely duplicated: exactly one remedy
   // element exists for the one faulted character, and it is the sub-row.
@@ -2410,10 +2479,21 @@ test("hovering the manifest's remedy sub-row leaves it untinted", async ({
 // Walkthrough 3.2's own carve-out, asserted directly rather than only relied
 // on by other tests: a single-character account's one row has neither `main`
 // (gated on `!isMain`) nor `unlink` (gated on more than one character), and
-// `CharacterRow`'s `actions === null` branch must render no toggle, no drawer
-// `<tr>`, and no `<td>` at all — rather than a control that opens onto nothing,
-// or an empty cell under a header naming a column every row leaves blank.
-test("a single-character account's row has no actions toggle, drawer, or column", async ({
+// `CharacterRow`'s `actions === null` branch must render no toggle and no
+// drawer `<tr>` — rather than a control that opens onto nothing.
+//
+// What this test used to also claim — that the ACTIONS column disappears with
+// the toggle — is no longer a claim anyone can make: there is no ACTIONS
+// column at any crew size, since the toggle moved inside the NAME cell. The
+// cell-count half of it survives and is worth MORE than before, not less. It
+// used to guard an agreement between two files (`showActionsColumn` gating a
+// `<col>`/`<th>` on the same predicate `CharacterRow` gated its `<td>` on);
+// it now guards the property that made that agreement unnecessary — a row with
+// no actions and a row with actions have identical shape, so this seed's row
+// spans the table exactly as any other row does. Nothing throws when body
+// cells outnumber header cells, so a mis-span is invisible in both review and
+// rendering, which is why it is counted rather than eyeballed.
+test("a single-character account's row has no actions toggle or drawer, and the table's usual shape", async ({
   page,
   context,
 }) => {
@@ -2427,17 +2507,25 @@ test("a single-character account's row has no actions toggle, drawer, or column"
   await expect(manifest(page).locator("tbody tr")).toHaveCount(1);
   await expect(page.getByRole("button", { name: "Solo Pilot actions" })).toHaveCount(0);
   await expect(manifest(page).locator("tr.drawer-row")).toHaveCount(0);
+  // The absent toggle leaves nothing behind it: the name cell holds the name
+  // and the `(main)` badge and no control at all, rather than an empty box
+  // where one would sit.
+  await expect(manifest(page).locator(".char")).toHaveText("Solo Pilot (main)");
+  await expect(manifest(page).locator("tbody td:nth-child(2) button")).toHaveCount(0);
 
-  // The header, the `<colgroup>`, and the body all drop the column together
-  // (`showActionsColumn`, page.tsx). Counted rather than merely checking the
-  // `<th>` is gone: nothing throws when body cells outnumber header cells, so
-  // the mis-span this guards against is invisible in both review and rendering.
+  // Kept, though it is now true at every crew size and the all-ok test asserts
+  // it too: this is the tripwire for the column coming BACK. A future change
+  // that re-adds an ACTIONS `<col>`/`<th>` would leave this single-character
+  // seed with a header and no cell under it — a mis-span that neither the
+  // renderer nor review reports, and the cell-count check below reads the
+  // `<tr>`s rather than the `<thead>`, so it would not catch a header-only
+  // regression on its own.
   await expect(manifest(page).getByRole("columnheader", { name: "Actions" })).toHaveCount(
     0,
   );
   // Asserted as an equality between the three rather than against a literal
-  // count, so this stays true of whichever way the OTHER exception column
-  // (STATUS) happens to fall for this seed — the mis-span is the defect, not any
+  // count, so this stays true of whichever way the exception column (STATUS)
+  // happens to fall for this seed — the mis-span is the defect, not any
   // particular width.
   const shape = await manifest(page).evaluate((t) => ({
     cols: t.querySelectorAll("colgroup col").length,
@@ -2448,13 +2536,74 @@ test("a single-character account's row has no actions toggle, drawer, or column"
   expect(shape.cells).toBe(shape.cols);
 });
 
-// The elision predicate is `!isMain || characters.length > 1`, not the
+// The defect this layout exists to fix, written as an assertion. As a trailing
+// `.log__col--fit` column against an elastic NAME, the bare `+` marker sat
+// ~490px from the name it expands at a desktop width — ten unattached marks in
+// an otherwise empty column. The marker carries no caption (see
+// `.row-toggle--actions` in globals.css for why), so proximity is the whole of
+// what makes it a statement about a particular row.
+//
+// Measured at 1440x900, which is where the old layout was worst: the wider the
+// viewport, the more width NAME absorbed and the further the marker travelled.
+// A narrow-viewport-only gate would have passed on the broken layout.
+test("the actions toggle sits beside the name it expands, not at the row's far edge", async ({
+  page,
+  context,
+}) => {
+  const acc = await seedNominalCrew();
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/account");
+  await page.evaluate(() => document.fonts.ready);
+
+  const geom = await page.evaluate((sel) => {
+    // Row 3 is an alt (row 1 is main, row 2 is main's hidden drawer row), so
+    // this measures the common case rather than the one row with a `(main)`
+    // badge between the name and the toggle.
+    const char = document.querySelector(
+      `${sel} tbody tr:nth-child(3) .char`,
+    ) as HTMLElement;
+    const btn = char.querySelector("button") as HTMLElement;
+    const row = btn.closest("tr") as HTMLElement;
+    // A Range over everything before the button, rather than the `.char` span
+    // itself: the span contains the button, so its own right edge is at or
+    // past the button's and would measure zero no matter where the button sat.
+    const before = document.createRange();
+    before.setStart(char, 0);
+    before.setEndBefore(btn);
+    return {
+      gap: btn.getBoundingClientRect().left - before.getBoundingClientRect().right,
+      toRowEdge: row.getBoundingClientRect().right - btn.getBoundingClientRect().right,
+    };
+  }, MANIFEST);
+
+  // Measured at 8px, which is `.row-toggle--actions`'s own `margin-left`
+  // (--s-2) and nothing else. 16 leaves room for a font-metric wobble in the
+  // name's trailing glyph without admitting anything that could be called
+  // "somewhere else in the row".
+  expect(geom.gap).toBeLessThan(16);
+  // The other half, and the one that would catch a regression that keeps the
+  // toggle in the name cell but lets that cell stop being elastic: there is
+  // still a lot of row to the right of this control. A layout where NAME went
+  // fit-width would satisfy the gap above while re-stranding the marker.
+  expect(geom.toRowEdge).toBeGreaterThan(200);
+});
+
+// The gate predicate is `!isMain || characters.length > 1`, not the
 // `characters.length > 1` it superficially resembles. `applyNoMainRule`
 // (services/accounts.ts) nulls `main_character_id` when a member unlinks the
 // character that was main, so an account can hold exactly one character that is
 // NOT main — and that row still carries a live `make main`. The naive predicate
-// would elide the column out from under a working control.
-test("a lone character that is not main keeps its actions column", async ({
+// would drop the toggle out from under a working control.
+//
+// This used to assert an ACTIONS columnheader, on the argument that the column
+// had to survive alongside the toggle. There is no such column now — the
+// toggle sits inside the NAME cell — so the assertion re-points to the
+// property that replaced it: the control exists, and it exists WHERE the fix
+// put it. A count-of-one on the button alone would pass just as well with the
+// toggle back out at the table's right edge, which is the defect this whole
+// change is about.
+test("a lone character that is not main keeps its actions toggle, in the name cell", async ({
   page,
   context,
 }) => {
@@ -2468,23 +2617,34 @@ test("a lone character that is not main keeps its actions column", async ({
   await page.goto("/account");
 
   await expect(manifest(page).getByRole("columnheader", { name: "Actions" })).toHaveCount(
-    1,
+    0,
   );
   const toggle = page.getByRole("button", { name: "Lone Survivor actions" });
   await expect(toggle).toHaveCount(1);
+  // Inside `.char`, which is the name's own nowrap line — not merely inside
+  // the NAME cell. `.char-line` is a grid with `justify-items: start`, so a
+  // toggle that is the cell's child rather than `.char`'s lands on its own
+  // grid row and costs every character a line; this locator is what tells the
+  // two apart.
+  await expect(manifest(page).locator("td:nth-child(2) .char > button")).toHaveCount(1);
   await toggle.click();
   await expect(page.getByRole("button", { name: /make .* main/i })).toBeVisible();
 });
 
-// The ACTIONS column is `.log__col--fit` (shrink-to-content), and the toggle
-// swaps its marker glyph on open/close (+ / −, not on hover) — the axis that
-// could actually resize a shrink-to-content column, per team-lead's
-// correction to the hover-only reasoning this rule's comment originally gave.
-// `+` and `−` share one advance width in the marker's monospace face, backed
-// by `width: 1ch; flex-shrink: 0` on `.row-toggle--actions::before`
-// (globals.css) — this pins the guarantee structurally rather than leaving it
-// to ride on the font choice never changing.
-test("opening the actions drawer does not resize the toggle's own column", async ({
+// The disclosure marker swaps glyph on open/close (+ / −, not on hover), and
+// `width: 1ch; flex-shrink: 0` on `.row-toggle--actions::before` (globals.css)
+// plus the marker's monospace face is what keeps that swap from changing the
+// control's own box.
+//
+// That guarantee is MORE load-bearing since the toggle moved out of its own
+// `.log__col--fit` column and into the NAME cell, not less, which is why this
+// test is re-pointed rather than deleted with the column. It used to protect a
+// shrink-to-content column from re-fitting. It now protects the table's own
+// width: at 320px NAME is content-sized, so a marker that measured differently
+// open than closed would move the whole table sideways under a member who
+// pressed it. The button's box is still the thing to measure — it is just that
+// what rides on it got bigger.
+test("opening the actions drawer does not resize the toggle or its name cell", async ({
   page,
   context,
 }) => {
@@ -2495,11 +2655,15 @@ test("opening the actions drawer does not resize the toggle's own column", async
   });
   await markTokensHealthy(acc.id);
   await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.setViewportSize({ width: NARROWEST, height: 900 });
   await page.goto("/account");
   await page.evaluate(() => document.fonts.ready);
 
+  const nameCell = manifest(page).locator("tbody tr:nth-child(3) td:nth-child(2)");
   const toggle = page.getByRole("button", { name: "Pilot Alt actions" });
   const restBox = await toggle.boundingBox();
+  const restCell = await nameCell.boundingBox();
+  const restTable = await manifest(page).locator("table").boundingBox();
   await toggle.click();
   const openBox = await page
     .getByRole("button", { name: "Pilot Alt actions" })
@@ -2508,6 +2672,14 @@ test("opening the actions drawer does not resize the toggle's own column", async
   // glyph, not the box it sits in.
   expect(openBox?.x).toBe(restBox?.x);
   expect(openBox?.width).toBe(restBox?.width);
+  // And the cell and table around it did not move either, measured at 320px
+  // where NAME is content-sized and so can actually be pushed by its contents.
+  // The button assertions above cannot see this on their own: a cell that grew
+  // around an unchanged button would leave both of them true.
+  expect((await nameCell.boundingBox())?.width).toBe(restCell?.width);
+  expect((await manifest(page).locator("table").boundingBox())?.width).toBe(
+    restTable?.width,
+  );
 });
 
 // An arm must not survive its own drawer closing. `ConfirmArmScope`

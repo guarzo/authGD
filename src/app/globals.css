@@ -140,16 +140,27 @@
   --measure-page: 78rem;
   --measure-page-narrow: 60rem;
   /* The crew manifest's own measure, derived from its content rather than
-     chosen: 56px portrait + 376px name + 223px status + 112px actions = 767px.
-     The 376 is `.char__location`'s 22rem ceiling (352px) plus the cell's two
-     `--s-3` paddings, so this is the narrowest the table can be while a
+     chosen: 56px portrait + 376px name + 223px status = 655px. The 376 is
+     `.char__location`'s 22rem ceiling (352px) plus the cell's two `--s-3`
+     paddings, so this is the narrowest the table can be while a
      member-supplied structure name still renders every character it renders
      today. Below it, long names start truncating earlier; by 44rem the line
      overflows its cell into STATUS.
 
-     It exists because the table wants that 767px and the page was giving it
-     1198px, which stranded STATUS and ACTIONS 667px to the right of the names
-     they describe — the "too much empty space" the owner reported. */
+     It exists because the table wants that width and the page was giving it
+     1198px, which stranded STATUS 667px to the right of the names it
+     describes — the "too much empty space" the owner reported.
+
+     Kept at 48rem after the ACTIONS column was dropped (its 112px is the
+     difference between the 767px this derivation used to total and the 655px
+     above). Not retightened to ~41rem, deliberately: this variable caps every
+     direct child of `/account`'s main column, not just the manifest — the page
+     head, the payouts table, the notices — and the comment on
+     `.page--narrow.page--crew` measures the payouts table as fitting 766px
+     with zero overflow, which is a claim about 48rem and not about 41. The
+     slack lands in NAME, which is the elastic column and the one that spends
+     it on longer structure names before truncating. Retightening is a separate
+     measurement, not a consequence of this one. */
   --measure-crew: 48rem;
 
   --ease: cubic-bezier(0.22, 1, 0.36, 1); /* ease-out-quint */
@@ -2228,8 +2239,8 @@ h3.rule-head__label {
   font-size: var(--t-caption);
   color: var(--ink-dim);
   /* A structure name is member-supplied and can be long. The name column sets
-     the manifest's width, so let this line clip rather than push the STATUS and
-     ACTIONS columns off a 320px viewport. */
+     the manifest's width, so let this line clip rather than push the STATUS
+     column off a 320px viewport. */
   max-width: 22rem;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2244,7 +2255,8 @@ h3.rule-head__label {
    of additional forced horizontal scroll for an ordinary short location and
    267px for a stress-test long structure name — against a 286px-wide scroll
    region, i.e. close to a full extra screen's worth of blind scrolling to
-   reach the STATUS/ACTIONS columns a member came for. `e2e/account.spec.ts`'s
+   reach the STATUS column a member came for (ACTIONS was a fourth column then
+   and is not one now; the toggle moved into this cell). `e2e/account.spec.ts`'s
    horizontal-cost test pins the measurement that forced this call and trips
    if a future change reintroduces the flex row without re-checking it.
    `.char-line` keeps the name Task 4 introduced as its styling hook, but is
@@ -2255,7 +2267,14 @@ h3.rule-head__label {
    `.inline-form` and isn't a `.num` cell; don't assume a future `.stack >`
    rule applies here without checking. The manifest-density-round-2 pass
    tightens the gap below from `--s-2` to `--s-1`, taking the row from 75px to
-   63px; see that gap's own comment for why.) */
+   63px; see that gap's own comment for why.)
+
+   Two lines, and exactly two: this is a grid with `justify-items: start`, so
+   every direct child gets a row of its own. That is why the actions toggle is
+   a child of `.char` and not of this box — see `.row-toggle--actions` — and
+   why the status summary is too. A third child here is a third line on every
+   character, which is the shape that took the 390x844 fold count from 7 rows
+   to 5 when it was last measured. */
 .char-line {
   display: grid;
   /* --s-1, not the --s-2 every other stack uses: at 4px the name and its
@@ -2276,10 +2295,11 @@ h3.rule-head__label {
 
    Why this is worth a rule of its own: the STATUS column exists only when
    something is wrong, so its width is paid by exactly the member who has a
-   fault to fix and needs to reach the ACTIONS column beyond it. At a 320px
-   viewport the manifest's scroll region is 286px, and every faulted state was
-   over it. Sizing the label column to content takes 17px off all of them
-   uniformly — the gutter is a constant, so the saving is too.
+   fault to fix — and it is the last column in the table, so its width is the
+   whole of what pushes past a 320px viewport's right edge. At that width the
+   manifest's scroll region is 286px, and every faulted state was over it.
+   Sizing the label column to content takes 17px off all of them uniformly —
+   the gutter is a constant, so the saving is too.
 
    What that does and does not buy, measured across every result code
    `contactStateToken` can render (src/app/account/contact-state.tsx), forced
@@ -2291,13 +2311,18 @@ h3.rule-head__label {
      missing_scope   "scope missing"   308 -> 291
      needs_reauth    "re-auth needed"  316 -> 299
 
-   So the common case clears one region-width and the worst member-fixable one
-   does not: `needs_reauth` still forces 299px of scroll against a 286px
-   region. Do not read this rule as having closed that gap. The remaining 13px
-   is the difference between "re-auth needed" and "label needed" — content, not
-   layout, and the faulted-crew gate in e2e/account.spec.ts records the levers
-   that would reach it. What this rule does buy is 17px that no state has to
-   pay for an alignment none of them were using.
+   So the common case cleared one region-width and the worst member-fixable
+   one did not: `needs_reauth` still forced 299px of scroll against a 286px
+   region after this rule. Do not read this rule as having closed that gap —
+   the 13px it was short is the difference between "re-auth needed" and "label
+   needed", which is content, not layout. What closed it was a later change on
+   a different axis: dropping the ACTIONS column and inlining its toggle into
+   the NAME cell took `needs_reauth` from 257px to 180px. The five figures
+   above are this rule's own before/after and predate that, so read them as
+   deltas (−17px each, uniformly) rather than as today's absolutes; the
+   faulted-crew gate in e2e/account.spec.ts carries the current numbers. What
+   this rule buys is 17px that no state has to pay for an alignment none of
+   them were using.
 
    `column-gap` and `row-gap` are both --s-2, which is what the `.stack` this
    replaced used between lines: the change is horizontal only, and the row
@@ -3857,27 +3882,87 @@ h3.rule-head__label {
    the trigger, `Disclosure as="row"`'s own shape — would fold the whole
    NAME cell's content (main badge, status summary, location line) into the
    button's accessible name, which is a real regression for a screen-reader
-   user; the marker stays a control of its own.
+   user; the marker stays a control of its own, and inlining it into that
+   cell (below) does not change that: `<button>` takes its accessible name
+   from `aria-label` alone, so the text it now sits among is not folded in.
 
-   OPEN DEFECT, recorded rather than fixed. As the trailing column the bare
-   marker sits against the table's right edge, ~490px from the name it
-   expands, so ten of them float in an empty column with no visible anchor —
-   which IS the R4 failure the paragraph above claims to avoid, because "there
-   is more here" only reads as a statement about THIS row if it is near this
-   row. Caption-less is fine; caption-less and stranded is not.
+   Inside the NAME cell, immediately after the character's name — not a
+   trailing ACTIONS column, which is what it was and what made the caption-
+   less marker a defect rather than a saving. As the last column of a table
+   whose NAME column is the elastic one, the bare `+` floated against the
+   table's right edge ~490px from the name it expands, so ten of them read as
+   a column of unattached marks: "there is more here" only states something
+   about THIS row if it is near this row. Caption-less is fine; caption-less
+   and stranded is not.
 
-   Two fixes were built and measured against this table, and both cost more
-   than the defect (page.tsx's `<colgroup>` carries the numbers): leading the
-   row with ACTIONS costs 52px of the 320px forced-scroll budget, and making
-   NAME fit-width so ACTIONS takes the slack starves the long-location case.
-   The fix that works is moving this control inside the NAME cell, which needs
-   `leadCells` split so page.tsx can pass the name content separately. */
+   Two cheaper repairs were built and measured first, and both cost more than
+   the defect — page.tsx's `<colgroup>` carries the numbers. Leading the row
+   with ACTIONS cost 52px of the 320px forced-scroll budget (134 -> 186
+   against a 170 tripwire); making NAME fit-width so ACTIONS took the slack
+   starved the long-location case (>= 352px wanted, 151px measured). Dropping
+   the column outright and inlining the control is what shipped, and it moved
+   the budget the RIGHT way where that budget is set by the table at all:
+   measured at 320px on a ten-character crew, the faulted `needs_reauth` gate
+   went 257px -> 180px of forced scroll against a 286px region. The column's
+   113px did not all come back — 36px of it (this button plus its
+   `margin-left`) followed the control into NAME — but the other 77px is
+   padding and fit-column slack a table stops paying once the column is gone.
+   The healthy long-structure gate did NOT move (134px before and after) and
+   that is not a disappointment to fix: there the table already fits its
+   region and the forced scroll is `.char__location`'s 22rem span overflowing
+   its own cell, which no column count can reach. Both gates carry the full
+   account in e2e/account.spec.ts.
+
+   Placement inside that cell is load-bearing twice over, so don't move it:
+   the button is a child of `.char` (nowrap, the name's own line), NOT of
+   `.char-line` — that is a grid with `justify-items: start`, so a direct
+   child lands on its own row and costs a whole line per character, the exact
+   failure that dropped the 390x844 fold count from 7 rows to 5 when the
+   status summary was tried visible below 40rem. And within `.char` it comes
+   before `.char__status-summary`, which is visible at >= 40rem: a toggle
+   after it would sit at the far end of a long mono string and re-strand the
+   marker at precisely the widths this fix is about. */
 .row-toggle--actions {
   /* A square target now that the label is gone — `.btn--micro`'s 28px
      min-height paired with content-width padding alone would leave this
      narrower than tall. `min-width` matches it so the WCAG 2.5.8 (AA) 24px
      floor holds on both axes, not just height. */
   min-width: 1.75rem;
+  /* Its own gap, rather than a space character in the markup: the text before
+     it is a name, or a name plus a `(main)` badge, and page.tsx keeps the
+     inter-word space with the badge so both cases meet this control at the
+     same distance. */
+  margin-left: var(--s-2);
+  /* The two rules that keep a 28px control on a ~22px text line without
+     driving the row taller — measured, not assumed: inlined with neither of
+     them the manifest's row pitch went 63px -> 69.1px and tripped the 65px
+     density ceiling in e2e/account.spec.ts outright. With both, the located
+     row measures 63.45px, the same pitch it had before this control moved
+     into the cell, and the 1440/1280/390 fold counts stay 10/9/7.
+
+     `vertical-align: middle` aligns the box's centre to the baseline plus
+     half the parent's x-height. That is NOT the line box's centre, so the
+     leftover overhang is downward-biased rather than split evenly, and the
+     line box does grow by a fraction. It is still the right choice here:
+     baseline alignment would hang the whole 6px difference under the text.
+
+     The negative block margins then take most of that overhang back out of
+     layout — an inline-level box contributes its MARGIN box to the line box,
+     while its BORDER box is what a pointer hits and what WCAG 2.5.8 (AA)
+     measures. So the target keeps DESIGN.md's full 28px in-row grade and the
+     row keeps the pitch the fold-count budget is built on. The ~3px that
+     overhangs downward is smaller than `.char-line`'s own 4px gap, so it
+     never touches the location line under it, and the upward side sits inside
+     the cell's 8px top padding.
+
+     -0.1875rem (-3px) is a measured literal, not a derived one. It does not
+     track the type scale: this control is `.btn--micro`, which sets
+     `--t-label`, while the line it sits on is `--t-data` at 1.55 (~21.7px) —
+     an `em`-based trim here would follow the wrong one of the two. The
+     row-pitch assertion in e2e/account.spec.ts is what guards the number if
+     either scale moves. */
+  vertical-align: middle;
+  margin-block: -0.1875rem;
 }
 
 .row-toggle--actions::before {
@@ -3901,18 +3986,12 @@ h3.rule-head__label {
    the button, since `:focus-within` on the button alone would just restate
    `:focus-visible`.
 
-   No width reservation on the ACTIONS column itself: this toggle's PRESENCE is
-   uniform across every row of a given account's table — `hasActions` (page.tsx)
-   is `!isMain || characters.length > 1`, which is true for every row once the
-   crew is larger than one, and has only one row to answer for when it is not.
-   `showActionsColumn` hoists that same expression to decide whether the column
-   exists at all, so a table either has this toggle on all of its rows or has no
-   ACTIONS column. There is no per-row presence change for this class to guard
-   the column width against.
-
-   The marker glyph itself DOES change, on open/close (`[aria-expanded="true"]`
-   swaps `+` for `\2212`, above) — that's the axis that could actually resize
-   a `.log__col--fit` shrink-to-content column, not hover. What keeps it
+   The marker glyph DOES change, on open/close (`[aria-expanded="true"]` swaps
+   `+` for `\2212`, above) — and that axis matters MORE now than it did when
+   this control held a `.log__col--fit` column of its own, not less. At 320px
+   the NAME column is content-sized, so the button's own width is part of the
+   table's width: a swap that changed it would move the table under a member
+   mid-read, not just re-fit one shrink-to-content column. What keeps it
    stable is `width: 1ch; flex-shrink: 0` on `.row-toggle--actions::before`
    (same idiom as `.row-toggle::before` above) plus the monospace face this
    marker already sets: `+` and `−` share one advance width in any mono font,
