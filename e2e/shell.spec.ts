@@ -37,6 +37,7 @@ test("aria-current lands on the right tab on every shell route", async ({
     ["/admin/accounts", "Members", "page"],
     ["/admin/audit", "Audit log", "page"],
     ["/admin/sync", "Sync", "page"],
+    ["/admin/access-lists", "Access lists", "page"],
     ["/payouts", "Operations", "page"],
     // `/payouts/new` sits under the Operations tab without being it, so the tab
     // is current-within-the-set rather than the page you are on. Asserting the
@@ -105,6 +106,7 @@ test("nav membership follows the viewer, not the section", async ({ page, contex
       "Members",
       "Audit log",
       "Sync",
+      "Access lists",
     ]);
   }
 
@@ -124,6 +126,7 @@ test("nav membership follows the viewer, not the section", async ({ page, contex
     "Members",
     "Audit log",
     "Sync",
+    "Access lists",
   ]);
   await expect(
     adminNav.getByRole("link", { name: "Operations", exact: true }),
