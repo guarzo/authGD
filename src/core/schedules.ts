@@ -53,7 +53,9 @@ export function cronFor(jobType: string): string | null {
  * - `sweep` — the four jobs the primary "sync everything" fan-out enqueues
  *   (membership, contacts, wanderer, discord-roles).
  * - `on-demand` — reachable from a dedicated control other than the fan-out
- *   (membership-recheck, via "Recheck invalid affiliations").
+ *   (membership-recheck, via "Recheck invalid affiliations"; access-lists, via
+ *   the access-list page's own "Check now"). Having a cron of its own doesn't
+ *   disqualify a job from this group — membership-recheck carries one too.
  * - `housekeeping` — not reachable from any page control, specifically
  *   (token-health, purge). Nothing on the page points at these jobs and
  *   nothing outside the page reads their output either, so control-reach and

@@ -106,6 +106,20 @@ function labelled(word: string, key: string): Part {
   return part([key], (d) => (d[key] === undefined ? "" : `${word} ${fmt(d[key])}`));
 }
 
+/** `Home Fleet (580356)`, or the bare id when the payload carried no name. A
+ * list can be watched before the first discovery names it, and a list that went
+ * invisible has no catalog row — both write `name: null`, and `fmt`'s `?` would
+ * read as a failure rather than a not-yet. Declares both keys so the missing
+ * name does not surface as a `+1 more`. */
+function accessListRef(nameKey: string, idKey: string): Part {
+  return part([nameKey, idKey], (d) => {
+    const id = d[idKey] === undefined ? "" : fmt(d[idKey]);
+    const name = typeof d[nameKey] === "string" ? d[nameKey] : "";
+    if (!id) return name;
+    return name ? `${name} (${id})` : id;
+  });
+}
+
 /** `labelled`, for a key whose value is a tier. See `tierTransition` for why
  * this is its own builder rather than a flag on the generic one. */
 function tierLabelled(word: string, key: string): Part {
@@ -299,6 +313,13 @@ const PARTS: Record<string, readonly Part[]> = {
   "tier.unlocked": [tierLabelled("was", "tier")],
   "status.note_changed": [noteChange("had", "has")],
   "character.owner_mismatch": [labelled("detected by", "detectedBy")],
+  "access_list.holder_designated": [labelled("character", "characterId")],
+  "access_list.holder_replaced": [
+    labelled("character", "characterId"),
+    labelled("was", "previousCharacterId"),
+  ],
+  "access_list.watch_added": [accessListRef("name", "accessListId")],
+  "access_list.watch_removed": [accessListRef("name", "accessListId")],
   "discord.unlinked": [scalar("reason")],
   "discord.role_changed": [
     roles("added", "removed"),

@@ -108,6 +108,7 @@ test("resolved names, distinguishable system actor, one-line details, filtered c
  * purpose is meant to fail here once and be added here on purpose too.
  */
 const EXPECTED_ACTION_NAMESPACES = [
+  "access_list.",
   "account.",
   "admin.",
   "character.",
