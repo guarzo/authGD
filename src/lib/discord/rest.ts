@@ -48,7 +48,40 @@ const memberSchema = z.object({
     .catch(null),
 });
 const userSchema = z.object({ id: z.string() });
-type Member = z.infer<typeof memberSchema>;
+/**
+ * Discord's error envelope, narrowed to the one field this client branches on.
+ * Non-strict, so the `message`/`errors` keys Discord also sends are ignored
+ * rather than failing the parse. Validated rather than cast: `code` decides
+ * whether a 404 means "not a member" (recoverable, returns null) or "bad guild
+ * config" (throws permanently), and a cast would let a string `"10007"` reach
+ * that comparison as an unequal-but-plausible value.
+ */
+const errorBodySchema = z.object({ code: z.number().optional() });
+
+/**
+ * The shapes this client hands back, exported so callers can name them without
+ * re-deriving the inference (or re-declaring a structural copy that would not
+ * track a schema change here). Both are inferred from the schemas above, so
+ * they cannot drift from what is actually parsed.
+ */
+export type DiscordRole = z.infer<typeof roleSchema>;
+export type Member = z.infer<typeof memberSchema>;
+
+/**
+ * The methods this client issues. Narrow rather than `string` so `routeKey`'s
+ * role-mutation branch is checkable: adding a method later is a compile-time
+ * prompt to decide which bucket key it belongs to, instead of silently
+ * defaulting to its own.
+ */
+type HttpMethod = "GET" | "PUT" | "DELETE";
+
+/**
+ * `RequestInit` with `method` narrowed to the methods this client issues, so
+ * the narrowing at `routeKey` holds all the way from the call site. Dropping
+ * `.toUpperCase()` on the way through is safe because the type now admits only
+ * the uppercase literals.
+ */
+type DiscordRequestInit = Omit<RequestInit, "method"> & { method?: HttpMethod };
 
 /** Malformed bodies are deterministic — fail closed as permanent, never
  * retry-loop. Reads the body here so invalid JSON classifies the same way as
@@ -196,7 +229,7 @@ export function createDiscordClient(cfg: Config, fetchImpl: typeof fetch = fetch
    * is what lets the bucket state learned from member #1 correctly pace the
    * wait before member #6.
    */
-  function routeKey(method: string, path: string): string {
+  function routeKey(method: HttpMethod, path: string): string {
     const KNOWN_SEGMENTS = new Set(["guilds", "roles", "members", "users", "@me"]);
     const templated = path
       .split("/")
@@ -260,8 +293,11 @@ export function createDiscordClient(cfg: Config, fetchImpl: typeof fetch = fetch
     buckets.set(key, { remaining, resetAt: Date.now() + resetAfter * 1000 });
   }
 
-  async function rawRequest(path: string, init: RequestInit = {}): Promise<Response> {
-    const method = (init.method ?? "GET").toUpperCase();
+  async function rawRequest(
+    path: string,
+    init: DiscordRequestInit = {},
+  ): Promise<Response> {
+    const method = init.method ?? "GET";
     const key = routeKey(method, path);
     return enqueue(key, async () => {
       for (let attempt = 0; ; attempt++) {
@@ -347,7 +383,7 @@ export function createDiscordClient(cfg: Config, fetchImpl: typeof fetch = fetch
     return res;
   }
 
-  async function request(path: string, init: RequestInit = {}): Promise<Response> {
+  async function request(path: string, init: DiscordRequestInit = {}): Promise<Response> {
     return assertOk(await rawRequest(path, init), init.method ?? "GET", path);
   }
 
@@ -358,8 +394,7 @@ export function createDiscordClient(cfg: Config, fetchImpl: typeof fetch = fetch
   // (for its current role ids). None of these need a fresh fetch every run —
   // see `PREAMBLE_TTL_MS` above for the tradeoff that caching them accepts.
   let botUserIdCache: string | null = null;
-  let guildRolesCache: { roles: z.infer<typeof roleSchema>[]; expiresAt: number } | null =
-    null;
+  let guildRolesCache: { roles: DiscordRole[]; expiresAt: number } | null = null;
   let botMemberCache: { member: Member | null; expiresAt: number } | null = null;
 
   /** null ONLY for Discord code 10007 (Unknown Member — user not in guild).
@@ -369,11 +404,15 @@ export function createDiscordClient(cfg: Config, fetchImpl: typeof fetch = fetch
     const path = `/guilds/${guild}/members/${userId}`;
     const res = await rawRequest(path);
     if (res.status === 404) {
-      const body = (await res.json().catch(() => undefined)) as
-        { code?: number } | undefined;
-      if (body?.code === 10007) return null;
+      const raw: unknown = await res.json().catch(() => undefined);
+      const parsed = errorBodySchema.safeParse(raw);
+      // An unparseable envelope and one carrying no `code` are the same thing
+      // to this branch: not a confirmed 10007, so it must throw rather than
+      // silently skip the member.
+      const code = parsed.success ? parsed.data.code : undefined;
+      if (code === 10007) return null;
       throw new DiscordApiError(
-        `discord GET ${path} failed (404${body?.code !== undefined ? `, code ${body.code}` : ", malformed body"})`,
+        `discord GET ${path} failed (404${code !== undefined ? `, code ${code}` : ", malformed body"})`,
         { status: 404, transient: false },
       );
     }

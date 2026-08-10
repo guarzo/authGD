@@ -94,6 +94,24 @@ describe("createDiscordClient", () => {
     expect((err as DiscordApiError).transient).toBe(false);
   });
 
+  it("does not read a non-numeric 404 code as 'left the guild'", async () => {
+    // The 10007 branch is the ONE path that turns a 404 into a recoverable
+    // null instead of a throw, so what reaches that comparison is validated,
+    // not cast. A string "10007" is a malformed envelope: it must throw,
+    // rather than silently deroling a member who is still in the guild.
+    server.use(
+      http.get(`${API}/guilds/9000/members/u1`, () =>
+        HttpResponse.json({ message: "Unknown Member", code: "10007" }, { status: 404 }),
+      ),
+    );
+    const err = await createDiscordClient(cfg)
+      .getGuildMember("u1")
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(DiscordApiError);
+    expect((err as DiscordApiError).transient).toBe(false);
+    expect((err as DiscordApiError).message).toContain("malformed body");
+  });
+
   it("carries the member's names through, and survives a payload without them", async () => {
     server.use(
       http.get(`${API}/guilds/9000/members/u1`, () =>
