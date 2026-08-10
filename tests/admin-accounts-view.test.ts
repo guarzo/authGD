@@ -9,13 +9,16 @@ import {
 // The success confirmation the nine /admin/accounts server actions carry
 // back — setTierAction, approveAction, returnToAutoAction, setStatusAction
 // (both directions), promoteAdminAction, demoteAdminAction,
-// unlinkDiscordAction, syncAccountAction and setMainAction. Eight of them
-// redirect and end in the pressed control unmounting or disabling itself,
-// which is the only evidence an admin gets that the press landed.
-// setMainAction is the ninth and does not redirect: its pressed `Submit`
-// unmounts while its `ConfirmingForm` deliberately does not, which is what
-// lets the effect report at all (Task 6 Step 2). `done`, `name` and `tier`
-// arrive off the query string, exactly like `accountConfirmation`'s own
+// unlinkDiscordAction, syncAccountAction and setMainAction. Three of them
+// (promoteAdminAction, demoteAdminAction, syncAccountAction) redirect and
+// carry `done`/`name`/`at` off the query string. The other six, including
+// setMainAction, return through `useActionState` instead — a redirect would
+// reset the drawer they live in. All nine still end in the pressed control
+// unmounting or disabling itself, which is the only evidence an admin gets
+// that the press landed: for setMainAction specifically, its pressed
+// `Submit` unmounts while its `ConfirmingForm` deliberately does not, which
+// is what lets the effect report at all (Task 6 Step 2). `done`, `name` and
+// `tier` arrive off the query string, exactly like `accountConfirmation`'s own
 // `done`/`name` in account/view.ts, so an unrecognized or missing value is
 // untrusted input reaching copy and has to degrade rather than throw or
 // print garbage.
