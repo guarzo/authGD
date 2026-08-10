@@ -391,6 +391,7 @@ a:hover {
 .launch__scopes-head,
 .shell__register,
 .acl-detail th,
+.status-line__label,
 .shell__nav a {
   font-family: var(--font-mono), ui-monospace, monospace;
   font-size: var(--t-label);
@@ -2436,11 +2437,11 @@ h3.rule-head__label {
   display: contents;
 }
 
+/* Register member, so the three shared properties come from the list above.
+   What stays here is what every other member also keeps for itself: its own
+   `letter-spacing` and `color`. */
 .status-line__label {
-  font-family: var(--font-mono), ui-monospace, monospace;
-  font-size: var(--t-label);
   letter-spacing: var(--track-value);
-  text-transform: uppercase;
   color: var(--ink-faint);
 }
 

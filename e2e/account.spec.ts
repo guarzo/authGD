@@ -1128,6 +1128,78 @@ test("a stalled chip's accessible name also carries the standings fact", async (
   expect(label).toMatch(/map/i);
 });
 
+// The register block in globals.css is the one typographic rule DESIGN.md
+// states in absolute terms: a label that is mono, `--t-label` and uppercase
+// belongs to it, and every member renders at 600. `.status-line__label` was
+// register-shaped and not a member — the only one of the set that never
+// declared a weight, so it fell to 400.
+//
+// It shows up on this page because both channels render the same two words.
+// The rail's `.facts dt` says STANDINGS and MAP; the manifest's status stack
+// says STANDINGS and MAP; same size, same colour, same family, ~430px apart
+// and two different weights. A reader has no way to know the difference is
+// meaningless, so the page invents a hierarchy it does not have.
+//
+// Asserted as parity between the two rather than against the literal "600",
+// because parity is the requirement and the constant is just today's value of
+// it. If the register moves, this should follow it, not fail.
+//
+// Both are read from the live page rather than from the stylesheet, so this
+// also covers the way the bug arrived: the properties were all present and
+// individually correct, and the weight was simply never declared, which no
+// source-level check of the rule's contents would notice.
+test("the manifest's status labels carry the same register weight as the rail's", async ({
+  page,
+  context,
+}) => {
+  const acc = await seedNominalCrew();
+  // Mounts the exception-only STATUS column; without it the manifest has no
+  // `.status-line__label` in the DOM and this test passes on an empty locator.
+  await faultContacts(acc.id, ["Alt Pilot Two"], "needs_reauth");
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.goto("/account");
+
+  const weights = await page.evaluate(() => {
+    const read = (el: Element | null | undefined) => {
+      if (!el) return null;
+      const cs = getComputedStyle(el);
+      return {
+        weight: cs.fontWeight,
+        size: cs.fontSize,
+        family: cs.fontFamily,
+        transform: cs.textTransform,
+        text: el.textContent?.trim().toLowerCase(),
+      };
+    };
+    const byText = (sel: string, want: string) =>
+      [...document.querySelectorAll(sel)].find(
+        (el) => el.textContent?.trim().toLowerCase() === want,
+      );
+    // The colliding pair by name, not by position: both channels render the
+    // word "standings", and that is the comparison the finding is about.
+    return {
+      rail: read(byText(".facts dt", "standings")),
+      manifest: read(
+        byText("[aria-label='Your characters'] .status-line__label", "standings"),
+      ),
+    };
+  });
+
+  // Anti-vacuity: a null on either side would make every comparison below
+  // compare undefined to undefined and pass.
+  expect(weights.rail, "no STANDINGS in the rail").not.toBeNull();
+  expect(weights.manifest, "no STANDINGS label in the manifest").not.toBeNull();
+  expect(weights.rail!.text).toBe("standings");
+  expect(weights.manifest!.text).toBe("standings");
+
+  expect(weights.manifest!.weight).toBe(weights.rail!.weight);
+  // The rest of the register, so a future edit cannot restore parity by
+  // dropping the rail to 400 and calling the collision closed.
+  expect(weights.manifest!.size).toBe(weights.rail!.size);
+  expect(weights.manifest!.family).toBe(weights.rail!.family);
+  expect(weights.manifest!.transform).toBe(weights.rail!.transform);
+});
+
 // Scoped to the Scroller's own region, as location.spec.ts's `manifest`
 // helper does: the payouts table on this same page (page.tsx renders it after
 // the manifest, once seeded) shares `table tbody tr`, so an unscoped selector
