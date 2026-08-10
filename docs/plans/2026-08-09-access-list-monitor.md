@@ -3043,7 +3043,6 @@ async function runReads(args: {
 }): Promise<JobResult> {
   const { db, esi, counts, characterId, accessToken } = args;
   const errors: string[] = [];
-  let anyTransient = false;
 
   // 4. Discovery. /access-lists returns ids ONLY, so every name costs its own
   //    detail call. `access_list_catalog` is the cache of those names, which is
@@ -3080,7 +3079,6 @@ async function runReads(args: {
       // next run retries it, and a row named "?" in the picker is worse than a
       // row that is not there yet.
       errors.push(`naming ${accessListId}: ${message(err)}`);
-      if (err instanceof EsiError ? err.kind === "transient" : true) anyTransient = true;
     }
   }
 
@@ -3116,7 +3114,6 @@ async function runReads(args: {
     characterId,
     accessToken,
     errors,
-    anyTransient,
     discovered,
   });
 }
@@ -3186,11 +3183,9 @@ async function readWatched(args: {
   characterId: number;
   accessToken: string;
   errors: string[];
-  anyTransient: boolean;
   discovered: number[];
 }): Promise<JobResult> {
   const { db, esi, counts, characterId, accessToken, errors } = args;
-  let anyTransient = args.anyTransient;
   const watched = await getWatchedListIds(db);
   counts.watched = watched.length;
   const observedIds = new Set<number>();
@@ -3233,9 +3228,6 @@ async function readWatched(args: {
       // as a broken token.
       const notVisible =
         err instanceof EsiError && (err.status === 403 || err.status === 404);
-      if (!notVisible && (err instanceof EsiError ? err.kind === "transient" : true)) {
-        anyTransient = true;
-      }
       errors.push(`${accessListId}: ${message(err)}`);
       const stale = await writeAttempt(db, characterId, accessListId, {
         lastAttemptAt: new Date(),
@@ -3295,11 +3287,15 @@ async function readWatched(args: {
   counts.namesResolved = names.size;
 
   if (counts.failed > 0) {
+    // A partial run does NOT retry. It already wrote good snapshots for every
+    // list it could read; retrying re-reads all of them and spends pg-boss's
+    // retry budget to re-earn work already done. The next hourly tick picks up
+    // whatever failed. Only the "failed" paths above — discovery and token —
+    // retry, because those produced nothing at all.
     return {
       status: "partial",
       errorSummary: errors.slice(0, 5).join("; "),
       counts,
-      retry: anyTransient || undefined,
     };
   }
   return { status: "ok", counts };
