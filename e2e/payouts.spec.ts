@@ -1096,7 +1096,9 @@ test("a bare-hostname battle report is refused through the form, with no client 
  *
  * The date is built from the run's own clock rather than hard-coded, so this
  * does not quietly stop testing anything when a fixed "future" date becomes
- * the past.
+ * the past. Two days out, not one: the action compares against UTC midnight of
+ * the instant it runs, so a run that fills the form at 23:59 and submits after
+ * the boundary would be posting today's date and get it accepted.
  */
 test("an operation cannot be dated into the future", async ({ page, context }) => {
   const operator = await seedMember(db, {
@@ -1105,11 +1107,11 @@ test("an operation cannot be dated into the future", async ({ page, context }) =
     status: "active",
   });
   await context.addCookies([await sessionCookieFor(db, operator.id)]);
-  const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const future = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
   await page.goto("/payouts/new");
   await page.getByLabel("Name").fill("Tomorrow's roam");
-  await page.getByLabel("Date").fill(tomorrow);
+  await page.getByLabel("Date").fill(future);
   await page.getByRole("button", { name: "Create operation" }).click();
 
   await expect(page).toHaveURL(/\/payouts\/new$/);

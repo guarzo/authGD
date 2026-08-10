@@ -49,13 +49,18 @@ export async function generateMetadata({
   }>;
 }): Promise<Metadata> {
   const sp = await searchParams;
-  const one = (v: string | string[] | undefined) =>
-    (Array.isArray(v) ? v[0] : v)?.trim() ?? "";
-  const filtered = one(sp.actor) !== "" || one(sp.action) !== "" || one(sp.target) !== "";
+  // The module's own `one`, not a local copy: a repeated param resolves
+  // last-wins here exactly as it does in the page body. A private helper that
+  // took the FIRST value disagreed with the body on `?before=a&before=b` --
+  // the body paged on `b` while the title described `a` -- so the title
+  // described a page the admin was not on, which is the one thing the `paged`
+  // guard below exists to prevent.
+  const val = (v: string | string[] | undefined) => one(v)?.trim() ?? "";
+  const filtered = val(sp.actor) !== "" || val(sp.action) !== "" || val(sp.target) !== "";
   // Same guard the page body applies to the cursor, for the same reason: a
   // junk `before` is ignored there and must not make the title claim a page
   // the admin is not on.
-  const paged = Number.isFinite(Number(one(sp.before))) && one(sp.before) !== "";
+  const paged = Number.isFinite(Number(val(sp.before))) && val(sp.before) !== "";
   const qualifier = [filtered && "filtered", paged && "older"].filter(Boolean).join(", ");
   return { title: qualifier === "" ? "Audit log" : `Audit log — ${qualifier}` };
 }

@@ -671,6 +671,15 @@ test("the page title says which slice of the log this is", async ({ page, contex
   // admin is not on — the same rule the `<h2>` follows for `?before=abc`.
   await page.goto("/admin/audit?before=abc");
   await expect(page).toHaveTitle("Audit log · Test Corp");
+
+  // A repeated param resolves last-wins in the body, so the title has to read
+  // the same end of the array. Written both ways round because only one of
+  // them fails when the title picks the first value: with the junk cursor
+  // LAST, both readings agree that nothing is paged.
+  await page.goto("/admin/audit?before=abc&before=99999999");
+  await expect(page).toHaveTitle("Audit log — older · Test Corp");
+  await page.goto("/admin/audit?before=99999999&before=abc");
+  await expect(page).toHaveTitle("Audit log · Test Corp");
 });
 
 test("a filtered paged view keeps its filter on the way back", async ({
@@ -1000,14 +1009,25 @@ test("an actor filter points at the target column, full or empty", async ({
     },
   ]);
   await page.goto("/admin/audit?actor=Zed");
-  await expect(page.locator("tbody tr")).toHaveCount(1);
+  // Which row, not how many: a count alone passes on any single row, and the
+  // point of this half is specifically that the actor filter returns Zed's own
+  // self-service entry and NOT the tier change done to them.
+  const rows = page.locator("tbody tr");
+  await expect(rows).toHaveCount(1);
+  await expect(rows).toContainText("character.linked");
+  await expect(rows).not.toContainText("tier.changed");
   await expect(page.locator(".log__empty")).toHaveCount(0);
   await expect(nudge).toBeVisible();
 
   const retry = nudge.getByRole("link");
   await expect(retry).toHaveAttribute("href", "/admin/audit?target=Zed");
   await retry.click();
-  await expect(page.locator("tbody tr")).toHaveCount(2);
+  // The target column returns both: the one Zed did to themselves and the one
+  // the system did to them. The second is the entry the actor filter hid, and
+  // recovering it is the whole reason the nudge exists.
+  await expect(rows).toHaveCount(2);
+  await expect(rows.first()).toContainText("character.linked");
+  await expect(rows.last()).toContainText("tier.changed");
   // Both columns crossed: there is nothing left to suggest.
   await expect(page.getByText("target of an entry, not the actor")).toHaveCount(0);
 });
