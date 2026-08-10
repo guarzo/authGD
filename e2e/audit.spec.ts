@@ -996,6 +996,13 @@ test("linking the system actor does not un-dim it", async ({ page, context }) =>
 
 /* --- Pinned edges --------------------------------------------------------- */
 
+/**
+ * The wide cell's own text: a bare clock when the page's rows all fall on one
+ * calendar day and the date has been hoisted above the table, or the full
+ * stamp when they span more than one and every row has to carry its own.
+ */
+const INSTANT = /^(\d{4}-\d{2}-\d{2} )?\d{2}:\d{2}:\d{2}$/;
+
 /** Enough entries that the table overflows the capped scroll region. */
 async function seedDenseLog() {
   const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
@@ -1032,10 +1039,17 @@ for (const width of [320, 390]) {
     // Two renderings of the instant, one shown per width. The exact stamp is
     // 19ch of a 286px region and the pinned column is where it lands, so below
     // 40rem it reads as elapsed time instead.
+    //
+    // `INSTANT` and not the full stamp: when every row on the page falls on one
+    // calendar day the date is hoisted out of the column and stated once above
+    // the table, so the wide cell is a bare clock. `seedDenseLog` writes all 40
+    // rows at once, so that is the branch these take — the hoist itself is
+    // pinned by its own test below, and here the point is only which of the two
+    // renderings is shown.
     const cell = page.locator("tbody tr:first-child td:first-child");
     const exact = cell.locator("span.only-wide");
     const relative = cell.locator("span.only-narrow time");
-    await expect(exact).toHaveText(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+    await expect(exact).toHaveText(INSTANT);
     await expect(relative).toHaveText(/^\d+[smhd] ago$/);
     if (narrow) {
       await expect(exact).toBeHidden();
@@ -1139,7 +1153,7 @@ for (const width of [768, 1025, 1056, 1057, 1280]) {
     const exact = cell.locator("span.only-wide");
     const relative = cell.locator("span.only-narrow time");
     // Both renderings are in the markup at every width; only one is shown.
-    await expect(exact).toHaveText(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+    await expect(exact).toHaveText(INSTANT);
     await expect(relative).toHaveText(/^\d+[smhd] ago$/);
     await expect(narrow ? relative : exact).toBeVisible();
     await expect(narrow ? exact : relative).toBeHidden();
@@ -1167,6 +1181,70 @@ for (const width of [768, 1025, 1056, 1057, 1280]) {
     expect(detailsWidth, "the Details column has room to open into").toBeGreaterThan(100);
   });
 }
+
+/**
+ * Pattern 2 of the design sweep: a value repeated identically on every row when
+ * it is one fact about the whole set. Both branches, because the interesting
+ * failure is not the hoist — it is the hoist firing on a page whose rows do NOT
+ * agree, which would delete a date the admin needs and state a false one above.
+ */
+test("the shared calendar day is stated once, and only when every row agrees", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+
+  // Two rows, one day. Explicit instants rather than seedDenseLog's defaults:
+  // a test about which day the rows fall on cannot let the clock decide, and
+  // "now" straddles midnight once a day.
+  await db.insert(auditLog).values([
+    {
+      actor: "system",
+      action: "tier.changed",
+      target: "char:1",
+      at: new Date("2026-03-04T09:15:00Z"),
+      details: {},
+    },
+    {
+      actor: "system",
+      action: "tier.changed",
+      target: "char:2",
+      at: new Date("2026-03-04T21:40:30Z"),
+      details: {},
+    },
+  ]);
+
+  await page.goto("/admin/audit");
+  await page.waitForSelector(".scroller tbody tr");
+  await expect(page.getByText("All 2 entries on 2026-03-04 (UTC).")).toBeVisible();
+  // Said once above the table and dropped from both channels in the rows —
+  // `.only-wide` is a display toggle, so this span is what AT reads at this
+  // width too. R4: neither channel keeps what the other lost.
+  const wide = page.locator("tbody tr td:first-child span.only-wide");
+  await expect(wide.first()).toHaveText("21:40:30");
+  await expect(wide.nth(1)).toHaveText("09:15:00");
+
+  // One more row, one day earlier. Now nothing is shared, the line goes away,
+  // and every row carries its own date again. It sorts to the top because the
+  // log is keyset-ordered by id — insertion order — not by `at`; a backdated
+  // entry lands where it was written, which is what makes the multi-day case
+  // reachable at all.
+  await db.insert(auditLog).values([
+    {
+      actor: "system",
+      action: "tier.changed",
+      target: "char:3",
+      at: new Date("2026-03-03T11:00:00Z"),
+      details: {},
+    },
+  ]);
+  await page.reload();
+  await page.waitForSelector(".scroller tbody tr");
+  await expect(page.getByText(/^All \d+ entries on /)).toHaveCount(0);
+  await expect(wide.first()).toHaveText("2026-03-03 11:00:00");
+  await expect(wide.nth(1)).toHaveText("2026-03-04 21:40:30");
+});
 
 /**
  * The exact instant is what an audit log is for, and the narrow rendering

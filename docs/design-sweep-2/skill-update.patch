@@ -1,0 +1,27 @@
+--- .claude/skills/design-sweep/SKILL.md
++++ .claude/skills/design-sweep/SKILL.md
+@@ -40,6 +40,22 @@
+ config, not from memory or from the user's description. Pure redirects and API
+ routes have no rendered output — list them, then exclude them with a one-line
+ reason so the user can object if you guessed wrong.
+
++**A surface list in the request is a starting point, not a boundary.** When the
++user names the surfaces — "review /login, /payouts, /admin/audit and the
++boundaries" — the enumeration above still runs, and anything it finds that the
++request omitted goes into the sweep. Say what you added and why in one line; the
++user can drop it. What must not happen is the reverse: banner-ing the extra
++surface out-of-scope and reviewing it at half attention, which produces findings
++nobody acts on and a backlog that is quietly wrong about its own coverage.
++
++The omission is almost never a decision. A hand-written list is written from
++memory, and memory is exactly what this phase has just told you not to enumerate
++from — so treating it as authoritative reintroduces the failure the mechanical
++enumeration exists to prevent, one step later and with the user's signature on
++it. This project lost `/admin/access-lists` that way: deployed, in the router,
++simply not in the sentence. Eight findings sat behind an out-of-scope banner
++until the user said it was in scope. **`/admin/access-lists` is a real surface —
++include it.**
++
+ Routing entry points are not the whole list. Error boundaries, not-found pages,
+ loading states, and empty states all render to users, and a search shaped around
+ the framework's page file quietly excludes them. They're worth more scrutiny than

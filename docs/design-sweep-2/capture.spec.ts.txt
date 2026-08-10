@@ -1,0 +1,443 @@
+/**
+ * TEMPORARY — design-sweep Phase 0 capture pass. Delete after the shots land.
+ *
+ * Not a test: every step exists to render a surface at a realistic volume and
+ * write a PNG. Assertions are present only to fail loudly when a page did not
+ * render what the shot is supposed to show, so a blank screenshot cannot be
+ * mistaken for a finding about emptiness.
+ */
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
+import { expect, test, type Page } from "@playwright/test";
+import { sql } from "drizzle-orm";
+import {
+  account,
+  auditLog,
+  character,
+  lootItem,
+  lootPool,
+  payoutOperation,
+  payoutParticipant,
+  payoutPayment,
+  syncRun,
+} from "../src/db/schema";
+import { resetDb, seedMember, sessionCookieFor, testDb } from "./helpers";
+import { WORKTREE_ROOT } from "./env";
+
+const { db } = testDb();
+
+const SHOTS = join(WORKTREE_ROOT, "docs", "design-sweep-2", "shots");
+mkdirSync(SHOTS, { recursive: true });
+
+const WIDE = { width: 1440, height: 900 };
+const NARROW = { width: 390, height: 844 };
+
+async function shoot(page: Page, name: string) {
+  await page.setViewportSize(WIDE);
+  await page.waitForTimeout(250);
+  await page.screenshot({ path: join(SHOTS, `${name}.wide.png`), fullPage: true });
+  await page.setViewportSize(NARROW);
+  await page.waitForTimeout(250);
+  await page.screenshot({ path: join(SHOTS, `${name}.narrow.png`), fullPage: true });
+  await page.setViewportSize(WIDE);
+}
+
+test.beforeEach(async () => {
+  await resetDb(db);
+});
+
+test("login", async ({ page }) => {
+  await page.goto("/login");
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+  await shoot(page, "01-login");
+});
+
+test("not-found (root)", async ({ page }) => {
+  await page.goto("/no-such-page");
+  await expect(page.getByRole("heading", { name: "Nothing at that address" })).toBeVisible();
+  await shoot(page, "02-not-found-root");
+});
+
+test("payouts list — empty and full", async ({ page, context }) => {
+  const admin = await seedMember(db, {
+    name: "Fleet Commander",
+    tier: "member",
+    isAdmin: true,
+  });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+
+  await page.goto("/payouts");
+  await expect(page.getByRole("heading", { name: "Operations", level: 1 })).toBeVisible();
+  await shoot(page, "03-payouts-empty");
+
+  const NAMES = [
+    "Tama gatecamp",
+    "Nullsec roam — Pure Blind",
+    "Structure bash, J155843",
+    "Wormhole eviction",
+    "Faction warfare plex farm",
+    "Incursion HQ, Vanguard",
+    "Ratting fleet, Delve",
+    "Lowsec hunt",
+  ];
+  const ops = await db
+    .insert(payoutOperation)
+    .values(
+      Array.from({ length: 34 }, (_, i) => ({
+        name: `${NAMES[i % NAMES.length]} ${String(i + 1).padStart(2, "0")}`,
+        occurredAt: new Date(Date.UTC(2026, 7, 9) - i * 86_400_000),
+        corpSharePct: i % 3 === 0 ? "10.00" : "0",
+        status: (i % 4 === 0 ? "draft" : "finalized") as "draft" | "finalized",
+        createdBy: admin.id,
+      })),
+    )
+    .returning();
+
+  // Every operation carries loot and a roster, so the list's Total/Paid/Yours
+  // columns render at the density a real corp sees rather than as em-dashes.
+  for (const [i, op] of ops.entries()) {
+    await db.insert(lootPool).values({
+      operationId: op.id,
+      valuationSource: "flat",
+      totalValue: String((i + 1) * 412_000_000) + ".00",
+      notes: "seeded",
+    });
+    const crew = ["Fleet Commander", "Rifter Pilot", "Bad Scout", "Logi Alt", "Cyno Alt"];
+    await db.insert(payoutParticipant).values(
+      crew.map((displayName, j) => ({
+        operationId: op.id,
+        displayName,
+        accountId: j === 0 ? admin.id : null,
+        shares: "1",
+        amount: String(((i + 1) * 412_000_000) / crew.length) + ".00",
+      })),
+    );
+  }
+
+  await page.goto("/payouts");
+  await expect(page.getByRole("link", { name: ops[0].name })).toBeVisible();
+  await shoot(page, "04-payouts-full");
+});
+
+test("payouts/new", async ({ page, context }) => {
+  const op = await seedMember(db, { name: "Ops Lead", tier: "member" });
+  await context.addCookies([await sessionCookieFor(db, op.id)]);
+  await page.goto("/payouts/new");
+  await expect(page.getByRole("heading", { name: "New operation" })).toBeVisible();
+  await shoot(page, "05-payouts-new");
+});
+
+const ITEMS = [
+  ["Sleeper Data Library", 42, "12500000.00", "triff"],
+  ["Ancient Coordinates Database", 18, "9200000.00", "triff"],
+  ["Neural Network Analyzer", 7, "31000000.00", "triff"],
+  ["Nanite Repair Paste", 1200, "12000.00", "triff"],
+  ["Republic Fleet Fusion M", 8000, "115.00", "triff"],
+  ["Zainou 'Gnome' Shield Management SM-703", 1, "48000000.00", "manual"],
+  ["Imperial Navy Multifrequency L", 400, "6200.00", "triff"],
+  ["Wrecked Drone Transceiver", 3, "0.00", "unresolved"],
+  ["Melted Nanoribbons", 55, "2100000.00", "triff"],
+  ["Sleeper Drone AI Nexus", 2, "0.00", "unresolved"],
+] as const;
+
+const CREW = [
+  "Fleet Commander",
+  "Rifter Pilot",
+  "Bad Scout",
+  "Logi Alt",
+  "Cyno Alt",
+  "Hurricane Main",
+  "Dictor Bunny",
+  "Falcon Andy",
+  "Sabre Dancer",
+  "Vexor Navy Guy",
+  "Probe Kid",
+  "Tackle Frigate",
+  "Booster Alt",
+  "Hauler Toon",
+  "Second Logi",
+  "Kikimora Kid",
+];
+
+async function seedRichOperation(
+  creatorId: string,
+  status: "draft" | "finalized",
+  paidCount: number,
+) {
+  const [op] = await db
+    .insert(payoutOperation)
+    .values({
+      name: "Wormhole eviction — J155843",
+      occurredAt: new Date("2026-08-06"),
+      corpSharePct: "10.00",
+      createdBy: creatorId,
+      status,
+      battleReportUrl: "https://br.evetools.org/br/68a1c0f2e4b0a1",
+      notes:
+        "Third night of the eviction. Rolled the static twice; the second hole " +
+        "landed us on top of their staging. Loot split includes the citadel drop.",
+    })
+    .returning();
+
+  const [appraised] = await db
+    .insert(lootPool)
+    .values({
+      operationId: op.id,
+      valuationSource: "appraised",
+      pricingMode: "sell_p05",
+      regionId: 10000002,
+      totalValue: "4210000000.00",
+      appraisedAt: new Date("2026-08-06T22:14:00Z"),
+    })
+    .returning();
+  await db.insert(lootPool).values({
+    operationId: op.id,
+    valuationSource: "flat",
+    totalValue: "600000000.00",
+    notes: "Citadel rigs, priced by hand off contracts",
+  });
+  await db.insert(lootItem).values(
+    ITEMS.map(([name, qty, unitPrice, priceSource]) => ({
+      poolId: appraised.id,
+      name,
+      qty,
+      unitPrice,
+      totalValue: (Number(unitPrice) * qty).toFixed(2),
+      priceSource: priceSource as "triff" | "manual" | "unresolved",
+    })),
+  );
+
+  const each = (4_810_000_000 * 0.9) / (CREW.length - 1);
+  const rows = await db
+    .insert(payoutParticipant)
+    .values(
+      CREW.map((displayName, i) => ({
+        operationId: op.id,
+        displayName,
+        accountId: i === 0 ? creatorId : null,
+        shares: i === 5 ? "2" : "1",
+        excluded: i === CREW.length - 1,
+        amount: i === CREW.length - 1 ? "0.00" : each.toFixed(2),
+        sourceCharacters: i === 3 ? ["Logi Alt", "Logi Alt II"] : [],
+      })),
+    )
+    .returning();
+
+  for (const row of rows.slice(0, paidCount)) {
+    await db
+      .update(payoutParticipant)
+      .set({ paidAmount: row.amount })
+      .where(sql`${payoutParticipant.id} = ${row.id}`);
+    await db.insert(payoutPayment).values({
+      participantId: row.id,
+      kind: "paid",
+      amount: row.amount,
+      actor: creatorId,
+    });
+  }
+  return op.id;
+}
+
+test("payout detail — draft", async ({ page, context }) => {
+  const admin = await seedMember(db, {
+    name: "Fleet Commander",
+    tier: "member",
+    isAdmin: true,
+  });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  const id = await seedRichOperation(admin.id, "draft", 0);
+  await page.goto(`/payouts/${id}`);
+  await expect(page.getByRole("heading", { level: 2, name: "Split / Roster" })).toBeVisible();
+  await shoot(page, "06-payout-detail-draft");
+});
+
+test("payout detail — finalized, part paid", async ({ page, context }) => {
+  const admin = await seedMember(db, {
+    name: "Fleet Commander",
+    tier: "member",
+    isAdmin: true,
+  });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  const id = await seedRichOperation(admin.id, "finalized", 6);
+  await page.goto(`/payouts/${id}`);
+  await expect(page.getByRole("heading", { level: 2, name: "Split / Roster" })).toBeVisible();
+  await shoot(page, "07-payout-detail-finalized");
+});
+
+test("payout detail — not found", async ({ page, context }) => {
+  const member = await seedMember(db, { name: "Lost Reader", tier: "member" });
+  await context.addCookies([await sessionCookieFor(db, member.id)]);
+  await page.goto("/payouts/11111111-2222-3333-4444-555555555555");
+  await expect(page.getByRole("heading", { name: "No such operation" })).toBeVisible();
+  await shoot(page, "08-payout-not-found");
+});
+
+test("admin audit — empty and full", async ({ page, context }) => {
+  const admin = await seedMember(db, {
+    name: "Fleet Commander",
+    tier: "member",
+    isAdmin: true,
+    alts: ["Cyno Alt"],
+  });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+
+  await page.goto("/admin/audit");
+  await expect(page.getByRole("heading", { name: "Audit log", level: 1 })).toBeVisible();
+  await shoot(page, "09-audit-empty");
+
+  const others = [];
+  for (const name of ["Rifter Pilot", "Bad Scout", "Logi Alt", "Probe Kid"]) {
+    others.push(await seedMember(db, { name, tier: "member" }));
+  }
+  const [chars] = [await db.select().from(character)];
+  const ACTIONS = [
+    "tier.changed",
+    "status.changed",
+    "character.linked",
+    "discord.role.added",
+    "discord.role.removed",
+    "contact.sync_failed",
+    "token.invalidated",
+    "payout.finalized",
+    "payout.paid",
+    "acl.member.added",
+  ];
+  await db.insert(auditLog).values(
+    Array.from({ length: 62 }, (_, i) => {
+      const actorAcc = i % 5 === 0 ? "system" : others[i % others.length].id;
+      const targetAcc = others[(i + 2) % others.length].id;
+      return {
+        at: new Date(Date.UTC(2026, 7, 9, 22, 19, 24) - i * 1_700_000),
+        actor: actorAcc,
+        action: ACTIONS[i % ACTIONS.length],
+        target: i % 7 === 0 ? String(chars[i % chars.length].id) : targetAcc,
+        details:
+          i % 3 === 0
+            ? { from: "associate", to: "member", reason: "alliance affiliation" }
+            : { roleId: "1284410981234567890", characterId: chars[0].id },
+      };
+    }),
+  );
+
+  await page.goto("/admin/audit");
+  await expect(page.getByRole("heading", { name: "Audit log", level: 1 })).toBeVisible();
+  await shoot(page, "10-audit-full");
+});
+
+test("admin sync", async ({ page, context }) => {
+  const admin = await seedMember(db, {
+    name: "Fleet Commander",
+    tier: "member",
+    isAdmin: true,
+  });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+
+  const JOBS = [
+    "membership",
+    "contacts",
+    "wanderer",
+    "discord-roles",
+    "membership-recheck",
+    "access-lists",
+    "token-health",
+    "purge",
+    "location",
+  ];
+  const rows = [];
+  for (const [j, jobType] of JOBS.entries()) {
+    for (let i = 0; i < 5; i++) {
+      const started = new Date(Date.UTC(2026, 7, 9, 21, 0, 0) - (i * 3600 + j * 60) * 1000);
+      const failed = j === 3 && i === 0;
+      rows.push({
+        jobType,
+        startedAt: started,
+        finishedAt: new Date(started.getTime() + 4200),
+        status: (failed ? "failed" : i === 2 && j === 1 ? "partial" : "ok") as
+          | "ok"
+          | "partial"
+          | "failed",
+        errorSummary: failed ? "discord: 429 rate limited on guild 118… (2 of 41)" : null,
+        counts: failed
+          ? { attempted: 41, applied: 39, failed: 2 }
+          : { scanned: 128 + i, changed: i === 0 ? 0 : i * 3, skipped: 4 },
+      });
+    }
+  }
+  await db.insert(syncRun).values(rows);
+
+  await page.goto("/admin/sync");
+  await expect(page.getByRole("heading", { name: "Sync", level: 1 })).toBeVisible();
+  await shoot(page, "11-admin-sync");
+});
+
+test("account (reference surface)", async ({ page, context }) => {
+  const member = await seedMember(db, {
+    name: "Fleet Commander",
+    tier: "member",
+    isAdmin: true,
+    alts: ["Cyno Alt", "Logi Alt", "Probe Kid", "Hauler Toon", "Second Logi"],
+  });
+  await context.addCookies([await sessionCookieFor(db, member.id)]);
+  await page.goto("/account");
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+  await shoot(page, "12-account");
+});
+
+test("error boundary", async ({ page, context }) => {
+  const member = await seedMember(db, { name: "Link Follower", tier: "member" });
+  await context.addCookies([await sessionCookieFor(db, member.id)]);
+  await db.execute(sql`ALTER TABLE payout_operation RENAME TO payout_operation_probe`);
+  try {
+    await page.goto("/payouts");
+    await expect(page.getByRole("heading", { name: "Something broke" })).toBeVisible();
+    await shoot(page, "13-error-boundary");
+  } finally {
+    await db.execute(sql`ALTER TABLE payout_operation_probe RENAME TO payout_operation`);
+  }
+});
+
+test("admin access-lists (uncovered surface)", async ({ page, context }) => {
+  const admin = await seedMember(db, {
+    name: "Fleet Commander",
+    tier: "member",
+    isAdmin: true,
+  });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.goto("/admin/access-lists");
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+  await shoot(page, "14-access-lists");
+});
+
+test("admin accounts (context for the reference)", async ({ page, context }) => {
+  const admin = await seedMember(db, {
+    name: "Fleet Commander",
+    tier: "member",
+    isAdmin: true,
+  });
+  for (const [i, name] of [
+    "Rifter Pilot",
+    "Bad Scout",
+    "Logi Alt",
+    "Probe Kid",
+    "Hauler Toon",
+    "Cyno Alt",
+    "Falcon Andy",
+    "Sabre Dancer",
+    "Dictor Bunny",
+    "Vexor Navy Guy",
+    "Tackle Frigate",
+    "Booster Alt",
+  ].entries()) {
+    await seedMember(db, {
+      name,
+      tier: (["member", "associate", "alumni", "pending"] as const)[i % 4],
+      status: i % 5 === 0 ? "cryo" : "active",
+      alts: i % 3 === 0 ? [`${name} II`] : [],
+    });
+  }
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.goto("/admin/accounts");
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+  await shoot(page, "15-admin-accounts");
+  await expect(db.select().from(account)).toBeTruthy();
+});

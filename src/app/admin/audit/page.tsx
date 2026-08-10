@@ -36,6 +36,39 @@ function stamp(d: Date): string {
   return d.toISOString().replace("T", " ").slice(0, 19);
 }
 
+/** Just the clock, for rows whose calendar day is stated once above the table. */
+function clock(d: Date): string {
+  return d.toISOString().slice(11, 19);
+}
+
+/**
+ * The calendar day every rendered row shares, or null when they span more than
+ * one. `crewNorms`' shape from `account/page.tsx`: measure the deviation
+ * against the set, state once what the whole set agrees on, and leave the rows
+ * carrying only what actually differs between them.
+ *
+ * Audit traffic arrives in bursts, and a full page is AUDIT_PAGE_SIZE rows, so
+ * the ordinary case is a column reading `2026-08-03 22:19:24`, `2026-08-03
+ * 22:19:31`, `2026-08-03 22:19:31`, ... — eleven of nineteen characters
+ * restating a date, in the column that is pinned and therefore paints over
+ * whatever the horizontal scroll has brought alongside it.
+ *
+ * Two rows minimum: one row is not a set, and "All 1 entries on ..." states a
+ * norm over nothing while costing the reader the instant it replaced.
+ *
+ * Both channels lose exactly the same characters. `.only-wide` is a display
+ * toggle, so the trimmed span is what assistive tech reads at this width too,
+ * and the day is restored in the flow above the table rather than in a per-row
+ * `visually-hidden` — which would put the fact in one channel and not the
+ * other, which is the breach R4 exists to name. The narrow branch is untouched:
+ * it renders elapsed time and already carries its own full-instant restoration.
+ */
+function sharedDay(rows: ResolvedAuditRow[]): string | null {
+  if (rows.length < 2) return null;
+  const first = rows[0].at.toISOString().slice(0, 10);
+  return rows.every((r) => r.at.toISOString().slice(0, 10) === first) ? first : null;
+}
+
 /** Collapses a possibly-repeated query param to one value, last wins: a
  * duplicate arises in practice by appending `&actor=x` to a URL that already
  * has one, so the appended value is the intent. */
@@ -305,6 +338,7 @@ export default async function AdminAuditPage({
         targetIds: idsOf(targetRes),
         beforeId: hasCursor ? beforeId : undefined,
       });
+  const day = sharedDay(rows);
 
   // The active filters, cursor dropped. Shared by the pager (which then adds
   // its own `before`) and the past-the-end exit link (which must not), so the
@@ -565,6 +599,14 @@ export default async function AdminAuditPage({
           wrong, the filter is simply pointed at the column that answers a
           different question, and a warn band would say otherwise. */}
       {actorNudge}
+      {/* The day the whole page agrees on, said once so the pinned column does
+          not say it on every row. Same slot and same treatment as the actor
+          nudge above: a fact about the rows below, not a warning about them. */}
+      {day !== null && (
+        <p className="lede">
+          All {rows.length} entries on {day} (UTC).
+        </p>
+      )}
       {/* Also above the table. The bottom pager is roughly 300 tab stops past
           the top of a full page, so on a keyboard the only way to reach the
           next page was to traverse every link in every row. */}
@@ -630,7 +672,9 @@ export default async function AdminAuditPage({
                       "as of HH:MM UTC", so the reading is dated in the same
                       way the rest of the page is. */}
                   <td className="mono nowrap">
-                    <span className="only-wide">{stamp(r.at)}</span>
+                    <span className="only-wide">
+                      {day === null ? stamp(r.at) : clock(r.at)}
+                    </span>
                     <span className="only-narrow">
                       <time className="ago dim mono" dateTime={iso}>
                         {formatAgo(iso, now)}
