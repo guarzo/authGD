@@ -637,11 +637,33 @@ a:hover {
   max-width: var(--measure-crew);
 }
 
+/* Named on the `<main>` explicitly rather than left to the absence of
+   `--narrow`, the way `.page--narrow`/`.page--crew` already name their own
+   end of this scale. `--measure-page` is already what bare `.page` renders
+   at — every other admin route (accounts, audit, sync) gets it by leaving
+   `.page` unmodified — so this changes nothing about the box. It exists so
+   the page states which column it chose instead of "wide" reading as
+   whatever "narrow" wasn't. */
+.page--wide {
+  max-width: var(--measure-page);
+}
+
 .page__head {
   margin-bottom: var(--s-6);
 }
 
 .page__lede {
+  max-width: var(--measure);
+  color: var(--ink-dim);
+  margin-top: var(--s-2);
+}
+
+/* The access-list monitor's own lede: same treatment as `.page__lede`, but
+   the page has no `.page__head` wrapper around its `<h1>` — `AdminAccessListsPage`
+   sits the summary sentence directly after it (and, when there is one, the
+   redirect-carried `ConfirmNotice`), so the class has to stand on its own
+   rather than as a child selector. */
+.lede {
   max-width: var(--measure);
   color: var(--ink-dim);
   margin-top: var(--s-2);
@@ -4233,6 +4255,167 @@ h3.rule-head__label {
 .drawer__label {
   letter-spacing: var(--track-label);
   color: var(--ink-faint);
+}
+
+/* --- Access list monitor -------------------------------------------------- */
+/* One `<ul>` of watched lists, each row a name/drift-summary/age line that
+   expands to the same three buckets (missing access, has access, broad
+   grant). Structured after `.strip` (admin/sync) — a bordered list of
+   expandable rows, the "+"/"−" marker, the row-divider border — rather than
+   invented fresh. It diverges where the content does: a watched list has
+   three things in its collapsed line, not four, so nothing forces `.strip`'s
+   fixed-width grid tracks; and a clean row carries its own "Stop watching"
+   with no drawer at all (`rowHasDetail`, page.tsx), which `.strip`'s jobs
+   never need to. */
+
+.acl-list {
+  list-style: none;
+  margin: var(--s-4) 0 0;
+  padding: 0;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius);
+}
+
+.acl-list__row + .acl-list__row {
+  border-top: 1px solid var(--rule-strong);
+}
+
+/* Places a clean row's head beside its own "Stop watching", and lets a
+   drifted row's `.acl-list__disc` (the whole `<details>`) take the row's
+   full width — `.acl-list__disc` renders its "Stop watching" itself, below
+   the open drawer, so it is never a second flex item here. */
+.acl-list__row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.acl-list__row > .acl-list__head,
+.acl-list__row > .acl-list__disc {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.acl-list__row > .btn {
+  flex-shrink: 0;
+  margin: var(--s-2) var(--s-4);
+}
+
+/* The collapsed line, whether it renders as a bare `<span>` (a clean row) or
+   a `<summary>` (a drifted one) — both carry the same three children (name,
+   drift `Status`, `.ago`), so both selectors get the same layout, the
+   duplication `.strip__head, .strip__disc > summary` already accepts for the
+   same reason. The name grows; the status and age keep their own content
+   width and trail it, reading as a loose right-hand column across rows
+   rather than `.strip`'s hard-pinned tracks — this list has no fourth value
+   competing for the same space, so nothing forces that grid's discipline. */
+.acl-list__head,
+.acl-list__disc > summary {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  column-gap: var(--s-4);
+  row-gap: var(--s-1);
+  padding: var(--s-3) var(--s-4);
+}
+
+.acl-list__name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+/* `.st` is `nowrap` everywhere else it appears — a table cell's "3/5 OK" or
+   an account verdict, always a handful of words. This page's drift summary
+   ("1 missing access · 1 has access, not a member") is a sentence, not a
+   token, and at 320px it is wider than the row: 388px of mono uppercase in a
+   288px content box. Scoped to this list rather than loosened on `.st`
+   itself, which every short-form caller still wants pinned to one line. */
+.acl-list__head .st,
+.acl-list__disc > summary > .st {
+  white-space: normal;
+  min-width: 0;
+}
+
+.acl-list__disc > summary {
+  cursor: pointer;
+  list-style: none;
+  transition: background-color var(--dur-color) var(--ease);
+}
+
+.acl-list__disc > summary::-webkit-details-marker {
+  display: none;
+}
+
+.acl-list__disc > summary::before {
+  content: "+";
+  font-family: var(--font-mono), ui-monospace, monospace;
+  color: var(--ink-faint);
+}
+
+.acl-list__disc[open] > summary::before {
+  content: "\2212"; /* minus */
+}
+
+.acl-list__disc > summary:hover {
+  background: var(--hull-hi);
+}
+
+.acl-list__disc > summary:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: -2px;
+}
+
+/* The drawer's own content wrapper — `Disclosure`'s unconditional `<div>`,
+   holding `.acl-detail` plus this row's own "Stop watching" beneath it.
+   `align-items: flex-start` keeps the button at its own width; without it
+   the column flex's default `stretch` would run it the drawer's full
+   inline size. `.acl-detail` opts back into that full width below, since its
+   own table and lists need it. */
+.acl-list__disc > div {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--s-4);
+  padding: 0 var(--s-4) var(--s-4);
+}
+
+.acl-list__disc > div > .acl-detail {
+  align-self: stretch;
+}
+
+/* `AccessListDetail`'s table is a bare `<table>` with no class of its own, so
+   the styling reaches it by descendant selector rather than a `.log` class on
+   the element itself. */
+.acl-detail table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--t-data);
+}
+
+.acl-detail th {
+  text-align: left;
+  padding: var(--s-3) var(--s-4);
+  background: var(--hull);
+  color: var(--ink-faint);
+  letter-spacing: var(--track-label);
+  border-bottom: 1px solid var(--rule-strong);
+}
+
+.acl-detail td {
+  padding: var(--s-3) var(--s-4);
+  border-top: 1px solid var(--rule);
+  color: var(--ink-dim);
+}
+
+.acl-detail__names {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--s-2);
 }
 
 /* --- Utility ------------------------------------------------------------ */
