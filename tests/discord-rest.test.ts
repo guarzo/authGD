@@ -461,6 +461,45 @@ describe("createDiscordClient", () => {
     }
   });
 
+  it("ignores a non-finite reset-after rather than pacing on an infinite window", async () => {
+    vi.useFakeTimers();
+    try {
+      let calls = 0;
+      server.use(
+        http.get(`${API}/guilds/9000/members/:id`, () => {
+          calls++;
+          // remaining=0 is the arm that makes `waitForCapacity` sleep at all;
+          // reset-after decides for how long. `Number("Infinity")` passes a
+          // `!Number.isNaN` check, so only the isFinite guard keeps this pair
+          // out of the bucket.
+          return HttpResponse.json(
+            { roles: [] },
+            {
+              headers: {
+                "x-ratelimit-remaining": "0",
+                "x-ratelimit-reset-after": "Infinity",
+              },
+            },
+          );
+        }),
+      );
+      const client = createDiscordClient(cfg);
+      await client.getGuildMember("u1");
+      const pending = client.getGuildMember("u2");
+      // Flushes microtasks WITHOUT moving the clock. If the infinite window
+      // had been recorded, the second fetch would be parked on a sleep that no
+      // amount of advancement could ever fire, and `calls` would still be 1.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls).toBe(2);
+      // Resolving at all is the "no 429" assertion: the handler never rate
+      // limits, so a 429 here could only come from the client's own pacing
+      // having failed to keep the two calls apart.
+      await expect(pending).resolves.toEqual({ roles: [] });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("caches the preamble (roles, bot id, bot member) instead of re-fetching every run", async () => {
     let rolesCalls = 0;
     let meCalls = 0;

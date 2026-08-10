@@ -356,14 +356,18 @@ export function createDiscordClient(cfg: Config, fetchImpl: typeof fetch = fetch
               `scope=${scope ?? "route"} attempt=${attempt + 1}/${MAX_429_RETRIES + 1}` +
               (willRetry ? "" : " (retries exhausted)"),
           );
+          // Nothing ever reads a 429 body — `assertOk` inspects only
+          // `res.status`, and the one body read below is on 404 — while undici
+          // holds the socket until the body is consumed or cancelled. Released
+          // on BOTH arms: the exhausting attempt returns a response whose body
+          // is just as dead as a retried one's, and leaking that socket is
+          // worst precisely when the route is already rate limited. Released
+          // deliberately WITHOUT awaiting: under the mocked fetch this suite
+          // uses, `cancel()` never settles, and awaiting it hung every 429
+          // retry test. Neither the retry nor the return may be gated on a
+          // best-effort cleanup.
+          void res.body?.cancel().catch(() => undefined);
           if (willRetry) {
-            // Nothing ever reads a retried response's body, and undici holds
-            // the socket until the body is consumed or cancelled. Released
-            // deliberately WITHOUT awaiting: under the mocked fetch this
-            // suite uses, `cancel()` never settles, and awaiting it hung
-            // every 429 retry test. The retry must not be gated on a
-            // best-effort cleanup either way.
-            void res.body?.cancel().catch(() => undefined);
             await sleep(retryAfterSec * 1000);
             continue;
           }
@@ -422,14 +426,18 @@ export function createDiscordClient(cfg: Config, fetchImpl: typeof fetch = fetch
 
   return {
     async getGuildRoles() {
+      // Copied on the way out, both arms. The cache outlives the call and is
+      // shared by every sweep in this process, so handing out the stored array
+      // would let one caller's in-place `sort`/`splice` silently rewrite what
+      // the next five minutes of runs diff against.
       if (guildRolesCache && Date.now() < guildRolesCache.expiresAt) {
-        return guildRolesCache.roles;
+        return [...guildRolesCache.roles];
       }
       const path = `/guilds/${guild}/roles`;
       const res = await request(path);
       const roles = await parseBody(z.array(roleSchema), res, "GET", path);
       guildRolesCache = { roles, expiresAt: Date.now() + PREAMBLE_TTL_MS };
-      return roles;
+      return [...roles];
     },
     // The bot's own id is fixed for the lifetime of the token — cached
     // indefinitely, no TTL needed (there is no "operator fixed it" case to
