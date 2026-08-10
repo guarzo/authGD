@@ -40,7 +40,7 @@ describe("setTierManual", () => {
     const r = await ctx.db.transaction((tx) =>
       setTierManual(tx, admin.id, target.id, "associate"),
     );
-    expect(r).toEqual({ ok: true, tierLocked: true });
+    expect(r).toEqual({ ok: true, tierLocked: true, changed: true });
     const after = await getAcc(target.id);
     expect(after.tier).toBe("associate");
     expect(after.tierLocked).toBe(true);
@@ -72,8 +72,10 @@ describe("setTierManual", () => {
       setTierManual(tx, admin.id, target.id, "alumni"),
     );
     // `r.tierLocked` is what `setTierAction` reads to keep the confirmation
-    // honest (view.ts): this press really did lock the account.
-    expect(r).toEqual({ ok: true, tierLocked: true });
+    // honest (view.ts): this press really did lock the account, which is also
+    // why `changed` is true for a press that left the tier where it was — the
+    // lock is the change.
+    expect(r).toEqual({ ok: true, tierLocked: true, changed: true });
     const after = await getAcc(target.id);
     expect(after.tier).toBe("alumni");
     expect(after.tierLocked).toBe(true);
@@ -93,7 +95,11 @@ describe("setTierManual", () => {
     const r = await ctx.db.transaction((tx) =>
       setTierManual(tx, admin.id, target.id, "associate"),
     );
-    expect(r).toEqual({ ok: true, tierLocked: true });
+    // `changed: false` is the whole point of the no-op being distinguishable:
+    // no row, no audit entry, no outbox job — and `setTierAction` reads this
+    // flag to say "was already pinned" rather than claiming a pin it didn't
+    // perform, which would send the admin to an audit log with nothing in it.
+    expect(r).toEqual({ ok: true, tierLocked: true, changed: false });
     expect(await outboxRows()).toHaveLength(0);
     expect(await lastAudit()).toBeUndefined();
   });
@@ -148,7 +154,8 @@ describe("returnTierToAuto", () => {
   it("is a no-op when already unlocked", async () => {
     const admin = await seedAdmin();
     const target = await seedAccount(ctx.db);
-    await ctx.db.transaction((tx) => returnTierToAuto(tx, admin.id, target.id));
+    const r = await ctx.db.transaction((tx) => returnTierToAuto(tx, admin.id, target.id));
+    expect(r).toEqual({ ok: true, changed: false });
     expect(await outboxRows()).toHaveLength(0);
   });
 
@@ -180,8 +187,43 @@ describe("setAccountStatus / setStatusNote", () => {
   it("status no-op when unchanged", async () => {
     const admin = await seedAdmin();
     const target = await seedAccount(ctx.db);
-    await ctx.db.transaction((tx) => setAccountStatus(tx, admin.id, target.id, "active"));
+    const r = await ctx.db.transaction((tx) =>
+      setAccountStatus(tx, admin.id, target.id, "active"),
+    );
+    expect(r).toEqual({ ok: true, changed: false });
     expect(await outboxRows()).toHaveLength(0);
+  });
+
+  // The note field is the one control here an admin presses without editing —
+  // it is a text input with its own save button, so "did that take?" is
+  // answered by pressing again. That press writes nothing and audits nothing,
+  // and `changed` is what lets `NoteForm` say "· already saved" instead of
+  // repeating "· saved" as though a second write had landed.
+  it("note no-op when the text already matches, down to the trim", async () => {
+    const admin = await seedAdmin();
+    const target = await seedAccount(ctx.db);
+    await ctx.db.transaction((tx) =>
+      setStatusNote(tx, admin.id, target.id, "back in Oct"),
+    );
+    const r = await ctx.db.transaction((tx) =>
+      setStatusNote(tx, admin.id, target.id, "  back in Oct  "),
+    );
+    expect(r).toEqual({ ok: true, changed: false });
+    // One audit row for the two presses: the first one.
+    const rows = await ctx.db.select().from(auditLog);
+    expect(rows).toHaveLength(1);
+  });
+
+  // An account that never had a note, saved empty: still nothing to write, and
+  // the sentence must not claim otherwise.
+  it("note no-op when it was empty and stays empty", async () => {
+    const admin = await seedAdmin();
+    const target = await seedAccount(ctx.db);
+    const r = await ctx.db.transaction((tx) =>
+      setStatusNote(tx, admin.id, target.id, "  "),
+    );
+    expect(r).toEqual({ ok: true, changed: false });
+    expect(await lastAudit()).toBeUndefined();
   });
 
   it("note is trimmed, empty clears to null, audited, NO outbox row", async () => {

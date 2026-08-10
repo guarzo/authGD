@@ -347,3 +347,76 @@ export function accountsConfirmation(
         : "Main updated. The tier follows within a few seconds.";
   }
 }
+
+/**
+ * The one drawer outcome `accountsConfirmation` above does not cover: a lost
+ * `not_linked` race on `unlinkDiscordAction`. Every other sentence in this
+ * file confirms something the press just did; this one instead corrects
+ * something the press assumed — the drawer's Discord group only renders when
+ * the row reads as linked, so between that render and this press landing,
+ * something else (another admin, the member themselves) already cleared it.
+ * Saying nothing here, the way the plain "don't confirm a no-op" rule says to
+ * for every other sibling race in `actions.ts`, would leave the row still
+ * claiming to be linked underneath a drawer the admin has no reason to
+ * distrust. This is why it gets its own sentence and its own `tone: "warn"`
+ * (`confirm-group.tsx`'s `ActionOutcome`) instead of the silent `null` those
+ * other races return.
+ *
+ * Takes the same `name` `accountsConfirmation` does (the row's own `identity`,
+ * bound at the call site in `page.tsx` and passed through the action), and
+ * degrades the same way when the account has no display name to give.
+ */
+export function accountsDiscordAlreadyUnlinked(name: string | undefined): string {
+  return name
+    ? `Discord was already unlinked for ${name}.`
+    : "Discord was already unlinked.";
+}
+
+/**
+ * The other half of "this press changed nothing", for the three drawer
+ * controls whose service short-circuits when the account already holds the
+ * value being set (`changed: false`, services/admin-accounts.ts). Same
+ * problem `accountsDiscordAlreadyUnlinked` solves and a deliberately
+ * different tone.
+ *
+ * That one is `warn` because the row LIES: the Discord group only renders on
+ * a row that reads as linked, so a `not_linked` result means what the admin
+ * is looking at is stale and the sentence has to correct it. These three do
+ * not lie — the tier chip already carries `aria-pressed`, the Cryo control
+ * already reads as frozen, and the note field already shows the note. The
+ * display was right; only the verb was wrong, claiming an act for a press
+ * that wrote no row, logged no audit entry and queued no sync. So these say
+ * "was already" in the untoned rendering rather than raising a warning about
+ * a screen that is telling the truth.
+ *
+ * Kept as a separate function from `accountsConfirmation` rather than a
+ * `changed` parameter on it, because that one is also reached from the query
+ * string (`page.tsx`'s `params.done`) where no such flag survives the
+ * redirect — a parameter there would be silently `undefined` on exactly the
+ * three actions that still redirect.
+ */
+export function accountsNoChange(
+  done: "tier" | "auto" | "freeze" | "wake",
+  name: string | undefined,
+  tier: string | undefined,
+): string {
+  switch (done) {
+    case "tier":
+      // No `PINNED` clause even though the account IS pinned, and that is the
+      // one place this family diverges from `accountsConfirmation`: "press
+      // auto to unpin" is instruction for a lock this press just created. The
+      // lock here predates the press, the `auto` button is already on screen,
+      // and repeating its instruction would read as though something just
+      // happened.
+      if (name && tier) return `${name} was already pinned to ${tier}.`;
+      return tier ? `Already pinned to ${tier}.` : "Tier was already pinned.";
+    case "auto":
+      return name
+        ? `${name} was already on automatic tier.`
+        : "Already on automatic tier.";
+    case "freeze":
+      return name ? `${name} was already frozen.` : "Already frozen.";
+    case "wake":
+      return name ? `${name} was already active.` : "Already active.";
+  }
+}

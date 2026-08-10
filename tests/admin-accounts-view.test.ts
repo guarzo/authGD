@@ -1,27 +1,28 @@
 import { describe, expect, it } from "vitest";
 import {
   accountsConfirmation,
+  accountsDiscordAlreadyUnlinked,
+  accountsNoChange,
   isDoneCode,
   matchesAccountSearch,
   type AdminAccountsDoneCode,
 } from "@/app/admin/accounts/view";
 
-// The success confirmation the nine /admin/accounts server actions carry
-// back — setTierAction, approveAction, returnToAutoAction, setStatusAction
-// (both directions), promoteAdminAction, demoteAdminAction,
-// unlinkDiscordAction, syncAccountAction and setMainAction. Three of them
-// (promoteAdminAction, demoteAdminAction, syncAccountAction) redirect and
-// carry `done`/`name`/`at` off the query string. The other six, including
-// setMainAction, return through `useActionState` instead — a redirect would
-// reset the drawer they live in. All nine still end in the pressed control
-// unmounting or disabling itself, which is the only evidence an admin gets
-// that the press landed: for setMainAction specifically, its pressed
-// `Submit` unmounts while its `ConfirmingForm` deliberately does not, which
-// is what lets the effect report at all (Task 6 Step 2). `done`, `name` and
-// `tier` arrive off the query string, exactly like `accountConfirmation`'s own
-// `done`/`name` in account/view.ts, so an unrecognized or missing value is
-// untrusted input reaching copy and has to degrade rather than throw or
-// print garbage.
+// The success confirmation nine of this page's ten server actions carry
+// back, by one of two routes — setTierAction, approveAction, returnToAutoAction,
+// setStatusAction (both directions), unlinkDiscordAction and setMainAction call
+// this directly and return the sentence through `useActionState`, because their
+// controls live in the row drawer where a redirect would close it;
+// syncAccountAction, promoteAdminAction and demoteAdminAction redirect with a
+// `?done=` code and `page.tsx` calls this on the way back out. Either way it is
+// the only evidence an admin gets that the press landed, since the pressed
+// control ends up unmounted or (setTierAction) disabled. setMainAction is the
+// one case where that unmounting is deliberately partial: its pressed `Submit`
+// goes, its `ConfirmingForm` stays, which is what leaves something mounted to
+// report through. On the redirecting three, `done`, `name` and `tier` arrive off
+// the query string, exactly like `accountConfirmation`'s own `done`/`name` in
+// account/view.ts, so an unrecognized or missing value is untrusted input
+// reaching copy and has to degrade rather than throw or print garbage.
 describe("accountsConfirmation", () => {
   it("names the account and the tier for a manual tier change", () => {
     expect(accountsConfirmation("tier", "Aiden Sol", "Alumni")).toBe(
@@ -202,6 +203,130 @@ describe("accountsConfirmation", () => {
         undefined,
       ),
     ).toBe("");
+  });
+});
+
+// The one /admin/accounts sentence that is not a confirmation. Its name is not
+// untrusted input the way `accountsConfirmation`'s is: it arrives as the
+// action's own `identity` argument, a server-bound `string` the row already
+// rendered, never off a query string. The fallback branch is defensive against
+// an account with no display name at all rather than against a hand-typed URL,
+// which makes it the harder shape to reach — and the e2e race test only ever
+// exercises the named one, so it is asserted here.
+describe("accountsDiscordAlreadyUnlinked", () => {
+  it("names the account whose link someone else already cleared", () => {
+    expect(accountsDiscordAlreadyUnlinked("Aiden Sol")).toBe(
+      "Discord was already unlinked for Aiden Sol.",
+    );
+  });
+
+  it("falls back to a bare statement when there is no name to give", () => {
+    expect(accountsDiscordAlreadyUnlinked(undefined)).toBe(
+      "Discord was already unlinked.",
+    );
+  });
+
+  // The point of the sentence, over the `null` it replaced: it has to read as
+  // "your press did nothing", not as "done". Both shapes say "already", and
+  // neither collapses into the success sentence `accountsConfirmation`
+  // produces for the same control on a press that did land.
+  it("reads as a correction rather than a confirmation in both shapes", () => {
+    for (const [text, success] of [
+      [accountsDiscordAlreadyUnlinked("Aiden Sol"), "Discord unlinked for Aiden Sol."],
+      [accountsDiscordAlreadyUnlinked(undefined), "Discord unlinked."],
+    ]) {
+      expect(text).toContain("already");
+      expect(text).not.toBe(success);
+    }
+  });
+});
+
+// The three no-op sentences the drawer's other controls fall back to when the
+// press wrote nothing. They exist because the alternative was the success
+// sentence: an admin who pressed `cryo` on an account already frozen read
+// "Aiden Sol frozen." and would go to /admin/audit expecting a row that was
+// never written. Like `accountsDiscordAlreadyUnlinked` and unlike
+// `accountsConfirmation`, `name` here is the action's own bound argument
+// rather than query-string input — the fallback shapes guard against an
+// account with no display name, not a hand-typed URL.
+describe("accountsNoChange", () => {
+  it("names the account and the tier it was already pinned to", () => {
+    expect(accountsNoChange("tier", "Aiden Sol", "Alumni")).toBe(
+      "Aiden Sol was already pinned to Alumni.",
+    );
+  });
+
+  it("falls back to the tier alone, then to a bare statement", () => {
+    expect(accountsNoChange("tier", undefined, "Alumni")).toBe(
+      "Already pinned to Alumni.",
+    );
+    expect(accountsNoChange("tier", undefined, undefined)).toBe(
+      "Tier was already pinned.",
+    );
+  });
+
+  // `accountsConfirmation`'s "tier" sentence ends "Press auto to unpin.",
+  // because that press is what created the lock and the admin may want it
+  // back. This one must not: the lock predates the press, so instructing an
+  // admin who changed nothing to undo something reads as a consequence of what
+  // they just did.
+  it("does not tell the admin how to undo a lock this press did not create", () => {
+    for (const text of [
+      accountsNoChange("tier", "Aiden Sol", "Alumni"),
+      accountsNoChange("tier", undefined, "Alumni"),
+      accountsNoChange("tier", undefined, undefined),
+    ]) {
+      expect(text).not.toContain("auto");
+    }
+  });
+
+  it("names the account for a tier already on automatic", () => {
+    expect(accountsNoChange("auto", "Aiden Sol", undefined)).toBe(
+      "Aiden Sol was already on automatic tier.",
+    );
+    expect(accountsNoChange("auto", undefined, undefined)).toBe(
+      "Already on automatic tier.",
+    );
+  });
+
+  it("names the account for an already-frozen account", () => {
+    expect(accountsNoChange("freeze", "Aiden Sol", undefined)).toBe(
+      "Aiden Sol was already frozen.",
+    );
+    expect(accountsNoChange("freeze", undefined, undefined)).toBe("Already frozen.");
+  });
+
+  it("names the account for an already-active account", () => {
+    expect(accountsNoChange("wake", "Aiden Sol", undefined)).toBe(
+      "Aiden Sol was already active.",
+    );
+    expect(accountsNoChange("wake", undefined, undefined)).toBe("Already active.");
+  });
+
+  // The property that makes these worth having at all, asserted over every
+  // shape rather than re-listing literals: each says "already", and none of
+  // them collapses into the success sentence `accountsConfirmation` produces
+  // for the very same control on a press that did land.
+  it("reads as a correction, never as the confirmation it replaces", () => {
+    const cases = [
+      ["tier", "Aiden Sol", "Alumni"],
+      ["tier", undefined, "Alumni"],
+      ["tier", undefined, undefined],
+      ["auto", "Aiden Sol", undefined],
+      ["auto", undefined, undefined],
+      ["freeze", "Aiden Sol", undefined],
+      ["freeze", undefined, undefined],
+      ["wake", "Aiden Sol", undefined],
+      ["wake", undefined, undefined],
+    ] as const;
+    for (const [done, name, tier] of cases) {
+      const text = accountsNoChange(done, name, tier);
+      // Case-insensitive: the word opens the sentence when the name did not
+      // survive ("Already frozen.") and sits mid-sentence when it did ("Aiden
+      // Sol was already frozen.").
+      expect(text).toMatch(/already/i);
+      expect(text).not.toBe(accountsConfirmation(done, name, tier));
+    }
   });
 });
 

@@ -315,14 +315,18 @@ describe("StandingTier (main-fix hint)", () => {
 // unrecognized or missing value is untrusted input reaching copy and has to
 // degrade rather than throw or print garbage.
 describe("accountConfirmation", () => {
-  it("names the character for a main-character change", () => {
+  it("names the character for a main-character change, and the sync it queued", () => {
     expect(accountConfirmation("main", "Aiden Sol")).toBe(
-      "Main character set to Aiden Sol.",
+      "Main character set to Aiden Sol. Sync queued.",
     );
   });
 
+  // The name is the half that can go missing; the sync is not conditional on
+  // it, so the degraded sentence keeps both clauses.
   it("falls back to a bare verb when the name didn't survive the redirect", () => {
-    expect(accountConfirmation("main", undefined)).toBe("Main character updated.");
+    expect(accountConfirmation("main", undefined)).toBe(
+      "Main character updated. Sync queued.",
+    );
   });
 
   it("confirms an unlink without repeating the character's name", () => {

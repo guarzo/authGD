@@ -18,27 +18,38 @@ import { Submit } from "./submit";
  * it; `onChange` sets it, and the state-vs-`seen` check below clears it the
  * moment a save actually lands.
  */
+
+/**
+ * `seq` counts saves; `changed` says whether the last one wrote anything.
+ * They are separate fields because a save that changes nothing still has to
+ * advance `seq` — that is the "a save just landed" signal `dirty` depends on,
+ * and a press on unedited text is exactly the press that produces one.
+ */
+export type NoteSaveState = { seq: number; changed: boolean };
+
+const NO_SAVE_YET: NoteSaveState = { seq: 0, changed: false };
+
 export function NoteForm({
   action,
   identity,
   defaultValue,
 }: {
-  action: (prevState: number, formData: FormData) => Promise<number>;
+  action: (prevState: NoteSaveState, formData: FormData) => Promise<NoteSaveState>;
   identity: string;
   defaultValue: string;
 }) {
-  const [state, formAction] = useActionState(action, 0);
+  const [state, formAction] = useActionState(action, NO_SAVE_YET);
   const [dirty, setDirty] = useState(false);
   // Adjusting state during render (React's documented pattern for reacting to
   // a changed value without the extra render pass an effect would cost):
-  // `state` is `saveNoteAction`'s own counter, incremented once per
-  // successful save, so comparing it against the last one this component has
+  // `state.seq` is `saveNoteAction`'s own counter, incremented once per
+  // completed save, so comparing it against the last one this component has
   // seen is what tells "a save just landed" apart from "still showing the
   // last one" — including two saves in a row, which a value that could repeat
   // (a fixed sentinel, a clock reading two saves could tie on) would miss.
   const [seen, setSeen] = useState(0);
-  if (state !== seen) {
-    setSeen(state);
+  if (state.seq !== seen) {
+    setSeen(state.seq);
     setDirty(false);
   }
 
@@ -81,9 +92,16 @@ export function NoteForm({
           `note-form__saved` carries no style rule of its own — `dim mono` do
           that. It exists so the e2e test has a selector that survives a
           wording or utility-class change, since the visible text is the
-          thing under test. */}
+          thing under test.
+
+          Two words, not one: a press on text the account already holds writes
+          nothing and logs nothing, so `"· saved"` there would claim an edit
+          the audit log will not show. `"· already saved"` says the note is
+          safe without claiming this press is what made it so — the same
+          distinction the drawer's other controls draw with
+          `accountsNoChange` (admin/accounts/view.ts). */}
       <span className="note-form__saved dim mono" role="status">
-        {state !== 0 && !dirty ? "· saved" : ""}
+        {state.seq !== 0 && !dirty ? (state.changed ? "· saved" : "· already saved") : ""}
       </span>
     </form>
   );

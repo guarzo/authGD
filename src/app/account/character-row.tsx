@@ -1,6 +1,14 @@
 "use client";
 
-import { createContext, useContext, useId, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useId,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 
 /**
  * At most one character's actions drawer open at a time, the same shape as
@@ -67,11 +75,20 @@ export function ManifestOpenScope({ children }: { children: ReactNode }) {
  * row inside a narrow band with a doubled hairline. `.manifest-panel`
  * (globals.css) is the plain, unpinned panel that replaced it.
  *
- * `actions === null` renders no toggle and no panel at all — an empty `<td>`
- * — rather than a control that opens on nothing. That is deliberate, not a
- * missed case: a single-character account's row has neither `main` (gated on
- * `!isMain`) nor `unlink` (gated on more than one character), and the account
- * page has to be able to say so.
+ * `actions === null` renders no toggle, no panel, and no `<td>` at all, rather
+ * than a control that opens on nothing. That is deliberate, not a missed case:
+ * a single-character account's row has neither `main` (gated on `!isMain`) nor
+ * `unlink` (gated on more than one character), and the account page has to be
+ * able to say so.
+ *
+ * Dropping the cell rather than emptying it is what keeps this row aligned with
+ * `showActionsColumn` (page.tsx), which elides the matching `<col>` and `<th>`
+ * on the same condition. The two agree without a second prop because the
+ * predicate is uniform across a given table — when the crew is larger than one
+ * every row has actions, and when it is exactly one there is no other row to
+ * disagree with. A future gate that varies row-to-row breaks that and would
+ * have to pass the column's own decision down, because nothing throws when body
+ * cells outnumber header cells.
  */
 export function CharacterRow({
   name,
@@ -119,15 +136,46 @@ export function CharacterRow({
   // Whether THIS row's `id` is the one the scope currently holds open — not
   // its own state, so opening one row closes whichever other row held it.
   const open = scope.openId === id;
+  const toggleRef = useRef<HTMLButtonElement>(null);
+
+  // Escape closes the drawer — but only a press no one else has claimed.
+  // `ConfirmSubmit`'s own Escape handler (`_components/confirm-submit.tsx`)
+  // disarms and calls `preventDefault()` WITHOUT `stopPropagation()`, so that
+  // same keypress bubbles to here. Skipping an already-prevented event is what
+  // makes the two layers ordered rather than simultaneous: the first Escape
+  // disarms an armed unlink, the second closes the drawer. Collapsing both into
+  // one press would take the panel away mid-confirmation, which is the state a
+  // member pressing Escape is most likely trying to back out of one step at a
+  // time. The signal is already on the event, so this needs no coordination
+  // with the arm scope.
+  //
+  // Bound to the toggle as well as the panel, not just the panel: opening moves
+  // no focus — nothing here focuses the panel, the same as `Disclosure`, since
+  // this is a non-modal inline disclosure and not a dialog — so a keyboard
+  // member who has just opened a drawer is still standing on the toggle, and
+  // that is where the first Escape actually lands.
+  const onEscape = (e: KeyboardEvent) => {
+    if (e.key !== "Escape" || e.defaultPrevented || !open) return;
+    e.preventDefault();
+    scope.setOpenId(null);
+    // Closing sets `hidden` on the row that contains the focused element, so
+    // without this focus is stranded in a hidden subtree — a worse outcome than
+    // having no Escape at all. Close-and-refocus-the-trigger is the repo's
+    // existing idiom for this (`payouts/[id]/inline-edit.tsx`); `Disclosure`
+    // manages no focus only because closing it is always a click on the toggle,
+    // which focus never left.
+    toggleRef.current?.focus();
+  };
 
   return (
     <>
       <tr>
         {leadCells}
-        <td>
-          {actions && (
+        {actions && (
+          <td>
             <button
               type="button"
+              ref={toggleRef}
               // `.btn--micro`: this toggle is the in-row control now, not the
               // buttons it opens — DESIGN.md's 28px grade for "rows that each
               // carry a control set and are read many at a time" describes
@@ -144,11 +192,12 @@ export function CharacterRow({
                 scope.setOpenId(open ? null : id);
                 setEverOpen(true);
               }}
+              onKeyDown={onEscape}
             >
               actions
             </button>
-          )}
-        </td>
+          </td>
+        )}
       </tr>
       {actions && (
         // `drawer-row`: the same "not a data row" convention class the
@@ -159,7 +208,11 @@ export function CharacterRow({
         // "the remedy sub-row" need to tell them apart, since a nominal
         // ten-character seed now mounts one of these — hidden, but still in
         // the DOM — per character.
-        <tr className="drawer-row drawer-row--actions" hidden={!open}>
+        <tr
+          className="drawer-row drawer-row--actions"
+          hidden={!open}
+          onKeyDown={onEscape}
+        >
           {/* Carries the toggle's `aria-controls` target. On the `<td>` rather
               than the `<tr>`: the row is the thing `hidden` toggles, but the
               cell is what actually holds the controls, and a reference into a
