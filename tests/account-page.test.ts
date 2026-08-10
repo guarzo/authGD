@@ -261,7 +261,7 @@ describe("ContactRemedy (job-failure codes)", () => {
 
 describe("StandingTier", () => {
   const render = (tier: Tier) =>
-    renderToStaticMarkup(createElement(StandingTier, { tier }));
+    renderToStaticMarkup(createElement(StandingTier, { tier, canFixMain: false }));
 
   it("tells a pending member their access is awaiting approval", () => {
     const html = render("pending");
@@ -273,6 +273,37 @@ describe("StandingTier", () => {
 
   it("still renders a badge for a granted tier", () => {
     expect(render("alumni")).toContain("tier--alumni");
+  });
+});
+
+describe("StandingTier (main-fix hint)", () => {
+  const render = (tier: Tier, canFixMain: boolean) =>
+    renderToStaticMarkup(createElement(StandingTier, { tier, canFixMain }));
+
+  it("tells a stalled pending account which character is the problem", () => {
+    const html = render("pending", true);
+    expect(html).toContain("alliance");
+    expect(html).toContain("ask an admin");
+    // The old copy promised a review that will never come while the main is
+    // out of alliance — decideTier holds pending accounts until it isn't.
+    expect(html).not.toContain("awaiting approval");
+  });
+
+  it("leaves the ordinary pending message alone", () => {
+    const html = render("pending", false);
+    expect(html).toContain("awaiting approval");
+    expect(html).not.toContain("ask an admin");
+  });
+
+  it("stops promising an alumni account that this reverts on its own", () => {
+    const html = render("alumni", true);
+    expect(html).toContain("ask an admin");
+    expect(html).not.toContain("reverts on its own");
+  });
+
+  it("keeps the self-correcting promise for a genuinely out-of-alliance account", () => {
+    const html = render("alumni", false);
+    expect(html).toContain("reverts on its own");
   });
 });
 

@@ -20,11 +20,39 @@ import type { Tier as TierValue } from "@/core/tier";
  * being pushed (desired.ts targets `tier === "member"` only), and PRODUCT.md's
  * core promise — "derole, don't boot" — means that fact must not land as a
  * bare uppercase badge with no reassurance attached. Alumni is the system's own
- * call (tier.ts) and converges back to member on its own; associate is
- * admin-set and does not self-correct. The two sentences say which is true,
- * never the word "demoted" and never that anything was "removed".
+ * call (tier.ts) and converges back to member on its own *when the tier machine
+ * is reading the right character* — associate is admin-set and never
+ * self-corrects. The two sentences say which is true, never the word
+ * "demoted" and never that anything was "removed".
+ *
+ * `canFixMain` (core/main-fix.ts, via AccountView) overrides both the pending
+ * and alumni sentences with one that names the actual, fixable problem: a
+ * linked character is in the alliance and the account's main is not, so
+ * `decideTier` (core/tier.ts) is reading the wrong character's affiliation.
+ * Neither displaced sentence stays true in this state — pending's promised
+ * review never arrives (`decideTier` returns `null` while the main is broken)
+ * and alumni's "reverts on its own" never fires (nothing changes about the
+ * main that would revert it) — so both are replaced rather than appended to.
  */
-export function StandingTier({ tier }: { tier: TierValue }) {
+export function StandingTier({
+  tier,
+  canFixMain,
+}: {
+  tier: TierValue;
+  canFixMain: boolean;
+}) {
+  // One sentence for both tiers: the member's situation is identical in
+  // pending and alumni here (a linked alt is in-alliance, the main isn't), and
+  // the remedy is identical too. Written against the effect ("ask an admin to
+  // switch it") rather than the three causes core/main-fix.ts distinguishes
+  // (missing main, out-of-alliance main, stale affiliation read) — a member
+  // can't tell those apart from here and doesn't need to.
+  const mainFix = (
+    <span className="dim">
+      One of your other characters is in the alliance, but it isn&rsquo;t set as your main
+      — ask an admin to switch it.
+    </span>
+  );
   if (tier === "pending") {
     return (
       <>
@@ -32,10 +60,14 @@ export function StandingTier({ tier }: { tier: TierValue }) {
             comment), but the word is still a tier name, so it takes the
             configured label like every other one. */}
         <Status>{tierLabel("pending")}</Status>
-        <span className="dim">
-          Your access is awaiting approval from an admin. Nothing is wrong — someone on
-          the team will review your account.
-        </span>
+        {canFixMain ? (
+          mainFix
+        ) : (
+          <span className="dim">
+            Your access is awaiting approval from an admin. Nothing is wrong — someone on
+            the team will review your account.
+          </span>
+        )}
       </>
     );
   }
@@ -43,11 +75,15 @@ export function StandingTier({ tier }: { tier: TierValue }) {
     return (
       <>
         <Tier tier={tier} size="lead" />
-        <span className="dim">
-          Your main isn&rsquo;t in the alliance right now, so standings and map access
-          aren&rsquo;t pushed — your account, characters, and Discord link stay as they
-          are, and this reverts on its own once that changes.
-        </span>
+        {canFixMain ? (
+          mainFix
+        ) : (
+          <span className="dim">
+            Your main isn&rsquo;t in the alliance right now, so standings and map access
+            aren&rsquo;t pushed — your account, characters, and Discord link stay as they
+            are, and this reverts on its own once that changes.
+          </span>
+        )}
       </>
     );
   }
