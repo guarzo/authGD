@@ -3228,3 +3228,62 @@ test("pressing make main in the drawer reports the confirmation, surviving its o
 
   await expect(page.getByText("is now the main")).toBeVisible();
 });
+
+/**
+ * The locked half of the same control. A pinned account still gets the button —
+ * that was the deliberate choice over hiding it — so the only thing keeping the
+ * press honest is copy: the note before it saying the tier won't move, and the
+ * confirmation after it repeating that instead of the unlocked sentence's
+ * promise that membership reconverges in a few seconds. Both strings are
+ * unit-tested where they are built (view.ts's `accountsConfirmation`, and its
+ * tests at admin-accounts-view.test.ts), but neither had anything asserting it
+ * reaches the screen: the note is rendered under `r.mainBroken && r.tierLocked`
+ * in page.tsx and nothing else reads that pair, so dropping the condition would
+ * have been caught by no test at any layer.
+ */
+test("the pinned-tier note and confirmation survive a make main press on a locked account", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedMember(db, {
+    name: "Lock Boss",
+    tier: "member",
+    isAdmin: true,
+  });
+  await seedMember(db, {
+    name: "Pinned Main",
+    tier: "associate",
+    tierLocked: true,
+    alts: ["Pinned Alt"],
+  });
+  await db
+    .update(character)
+    .set({ allianceId: 5 })
+    .where(eq(character.name, "Pinned Main"));
+  await db
+    .update(character)
+    .set({ allianceId: 99000001 })
+    .where(eq(character.name, "Pinned Alt"));
+
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.goto("/admin/accounts");
+
+  const row = rowFor(page, "Pinned Main");
+  await toggleOf(row).click();
+  const drawer = drawerOf(row);
+
+  // Before the press: the warning that the tier is pinned, and how to unpin it.
+  await expect(drawer).toContainText(
+    "tier is pinned, so changing the main won’t move it",
+  );
+
+  await drawer
+    .getByRole("button", { name: "make Pinned Alt the main for Pinned Main" })
+    .click();
+
+  // After: the locked wording, NOT the unlocked sentence's reconvergence promise.
+  await expect(
+    page.getByText("Pinned Alt is now the main, but the tier stays pinned."),
+  ).toBeVisible();
+  await expect(page.getByText("Press auto to unpin.")).toBeVisible();
+});
