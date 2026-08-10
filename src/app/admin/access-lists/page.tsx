@@ -175,71 +175,86 @@ export default async function AdminAccessListsPage({
             </form>
           )}
 
-          {compared.length === 0 ? (
-            <Notice>No lists are being watched yet.</Notice>
-          ) : (
-            <ul className="acl-list">
-              {compared.map((c) => {
-                const row: WatchedRow = {
-                  accessListId: c.accessListId,
-                  name: c.name,
-                  readStatus: c.readStatus,
-                  observedAt: c.observedAt,
-                  allowEveryone: c.allowEveryone,
-                  missingAccess: c.comparison.missingAccess.length,
-                  nonMembers: c.comparison.nonMembers.length,
-                  broadGrants: c.comparison.broadGrants.length,
-                };
-                const observedIso =
-                  c.observedAt === null ? null : c.observedAt.toISOString();
-                const head = (
-                  <span className="acl-list__head">
-                    <span className="acl-list__name">
-                      {c.name ?? `#${c.accessListId}`}
-                    </span>
-                    <Status tone={rowTone(row)}>{rowSummary(row)}</Status>
-                    {/* Honest staleness: the last SUCCESSFUL read, never the
-                        last attempt. A row whose latest attempt failed still
-                        shows how old the answer under it is. */}
-                    {observedIso !== null && (
-                      <RelativeTime
-                        iso={observedIso}
-                        initial={formatAgo(observedIso, now)}
-                      />
-                    )}
-                  </span>
-                );
-                // Only rows with something to report expand. A clean list gets
-                // no disclosure control at all, rather than a toggle that opens
-                // an empty box — but it still gets its own "Stop watching",
-                // inline. Putting that control only inside the drawer would
-                // make a clean or never-read list permanently unremovable,
-                // which is precisely the list an admin is most likely to want
-                // off the page.
-                if (!rowHasDetail(row)) {
-                  return (
-                    <li key={c.accessListId} className="acl-list__row">
-                      {head}
-                      <StopWatching accessListId={c.accessListId} />
-                    </li>
-                  );
-                }
-                return (
-                  <li key={c.accessListId} className="acl-list__row">
-                    <Disclosure summary={head} className="acl-list__disc">
-                      <AccessListDetail
-                        detail={c.detail}
-                        readStatus={c.readStatus}
-                        comparison={c.comparison}
-                        names={names}
-                      />
-                      <StopWatching accessListId={c.accessListId} />
-                    </Disclosure>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
+          {/* One `ConfirmingForm` for the whole region, not one per row: both
+              halves of the confirm pair — the host `ConfirmGroup` AND the
+              reporting `ConfirmingForm` — must outlive a row's removal, or
+              neither paints. `src/app/admin/accounts/page.tsx:1075-1097`
+              documents hoisting the host alone failing for exactly this
+              reason ("the reporter went down with the section"); the list
+              itself, not any row inside it, is the only element guaranteed to
+              survive `compared` shrinking to zero. Each row's "Stop watching"
+              is a plain submit button carrying its own `accessListId`, not a
+              form of its own — the button's job ends at the press, and
+              submitting a shared form by name/value is ordinary HTML. */}
+          <ConfirmGroup>
+            <ConfirmingForm action={removeWatchAction}>
+              {compared.length === 0 ? (
+                <Notice>No lists are being watched yet.</Notice>
+              ) : (
+                <ul className="acl-list">
+                  {compared.map((c) => {
+                    const row: WatchedRow = {
+                      accessListId: c.accessListId,
+                      name: c.name,
+                      readStatus: c.readStatus,
+                      observedAt: c.observedAt,
+                      allowEveryone: c.allowEveryone,
+                      missingAccess: c.comparison.missingAccess.length,
+                      nonMembers: c.comparison.nonMembers.length,
+                      broadGrants: c.comparison.broadGrants.length,
+                    };
+                    const observedIso =
+                      c.observedAt === null ? null : c.observedAt.toISOString();
+                    const head = (
+                      <span className="acl-list__head">
+                        <span className="acl-list__name">
+                          {c.name ?? `#${c.accessListId}`}
+                        </span>
+                        <Status tone={rowTone(row)}>{rowSummary(row)}</Status>
+                        {/* Honest staleness: the last SUCCESSFUL read, never the
+                            last attempt. A row whose latest attempt failed still
+                            shows how old the answer under it is. */}
+                        {observedIso !== null && (
+                          <RelativeTime
+                            iso={observedIso}
+                            initial={formatAgo(observedIso, now)}
+                          />
+                        )}
+                      </span>
+                    );
+                    // Only rows with something to report expand. A clean list gets
+                    // no disclosure control at all, rather than a toggle that opens
+                    // an empty box — but it still gets its own "Stop watching",
+                    // inline. Putting that control only inside the drawer would
+                    // make a clean or never-read list permanently unremovable,
+                    // which is precisely the list an admin is most likely to want
+                    // off the page.
+                    if (!rowHasDetail(row)) {
+                      return (
+                        <li key={c.accessListId} className="acl-list__row">
+                          {head}
+                          <StopWatching accessListId={c.accessListId} />
+                        </li>
+                      );
+                    }
+                    return (
+                      <li key={c.accessListId} className="acl-list__row">
+                        <Disclosure summary={head} className="acl-list__disc">
+                          <AccessListDetail
+                            detail={c.detail}
+                            readStatus={c.readStatus}
+                            comparison={c.comparison}
+                            names={names}
+                          />
+                          <StopWatching accessListId={c.accessListId} />
+                        </Disclosure>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </ConfirmingForm>
+          </ConfirmGroup>
         </>
       )}
     </main>
@@ -247,25 +262,43 @@ export default async function AdminAccessListsPage({
 }
 
 /**
- * The one control every watched row carries, expandable or not.
+ * The one control every watched row carries, expandable or not. A plain
+ * submit button, not a form of its own: it submits the single `ConfirmingForm`
+ * that wraps the whole watched-lists region (`AdminAccessListsPage` above),
+ * carrying its own `accessListId` by name/value the way any button in a
+ * shared HTML form does. `<form>` cannot nest, and this row's own form would
+ * unmount with it anyway — the button's job ends at the press.
  *
- * `ConfirmGroup`/`ConfirmingForm`, not a bare form, in BOTH placements. Inside
- * the `Disclosure` that is load-bearing: a redirect would reset the drawer's
- * `useState` and close it on the very press that used it. Outside, it is
- * uniformity — one component, one confirm affordance, one label, so the two
- * branches cannot drift into two different removal experiences. `removeWatch`
- * is idempotent (Task 6), so a double submit is harmless either way.
+ * The region-wide form exists because a row-level (or even row-level-group)
+ * `ConfirmingForm` unmounts in the same commit that would paint its own
+ * confirmation: `revalidatePath` and this action's `useActionState` result
+ * land together, so removing the last row collapses straight to the empty
+ * `Notice`, taking whatever reported the text with it.
+ * `src/app/admin/accounts/page.tsx:1075-1097` documents the same failure for
+ * the Discord drawer group and states the fix this page follows: "hoisting
+ * the host alone is not enough... both halves have to outlive the press" —
+ * here that means the `ConfirmingForm`, not just the `ConfirmGroup`, has to
+ * sit above every row rather than inside one.
+ *
+ * No `pendingLabel` here, unlike every other `Submit` on this page.
+ * `useFormStatus` (inside `Submit`) reports the nearest parent `<form>`'s
+ * pending state, and after this refactor that form is shared by every row —
+ * pressing one row's button flips `pending` for all of them at once, so a
+ * "Removing…" label would name the wrong row on every row but the one
+ * actually in flight. `aria-busy` still fans out the same way, but that is
+ * honest rather than a bug: the shared form genuinely is busy, region-wide,
+ * until the one submission it can hold at a time resolves. Same reason
+ * `useSubmitGuard` correctly refuses a second press anywhere in the region
+ * while the first is in flight, not just on the pressed row's own button —
+ * one form, one in-flight submission. Undoing any of this would mean giving
+ * the row its own form again, which is the exact structure that breaks the
+ * confirmation.
  */
 function StopWatching({ accessListId }: { accessListId: number }) {
   return (
-    <ConfirmGroup>
-      <ConfirmingForm action={removeWatchAction}>
-        <input type="hidden" name="accessListId" value={accessListId} />
-        <Submit className="btn btn--quiet" pendingLabel="Removing…">
-          Stop watching
-        </Submit>
-      </ConfirmingForm>
-    </ConfirmGroup>
+    <Submit name="accessListId" value={accessListId} className="btn btn--quiet">
+      Stop watching
+    </Submit>
   );
 }
 

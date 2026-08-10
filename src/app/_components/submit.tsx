@@ -53,6 +53,17 @@ export function Submit({
   // site owns the wording, since what to say depends on what is at stake; see
   // `submit-guard.ts` for why it fires from the re-entry branch only.
   onRefused,
+  // Opt-in only: plain HTML button attributes for the one case where several
+  // buttons share a single `<form>` and the submitted value is how the
+  // action tells them apart — `/admin/access-lists`'s "Stop watching" row
+  // buttons are the first caller (see that page's `page.tsx` for why the
+  // form is shared rather than per-row). Passed straight through to the
+  // `<button>` rather than growing a closed prop union: this is exactly what
+  // `name`/`value` already mean on a submit button, nothing this component
+  // needs to interpret. Both default to `undefined`, so no existing call
+  // site's rendered button changes.
+  name,
+  value,
 }: {
   className?: string;
   children: ReactNode;
@@ -62,6 +73,8 @@ export function Submit({
   "aria-label"?: string;
   "aria-describedby"?: string;
   onRefused?: () => void;
+  name?: string;
+  value?: string | number;
 }) {
   const { pending } = useFormStatus();
   const guard = useSubmitGuard(pending, onRefused);
@@ -75,6 +88,8 @@ export function Submit({
       aria-label={ariaLabel}
       aria-describedby={ariaDescribedBy}
       onClick={guard}
+      name={name}
+      value={value}
     >
       {pending && pendingLabel ? pendingLabel : children}
     </button>
