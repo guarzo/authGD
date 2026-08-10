@@ -35,10 +35,18 @@ export const NEW_OPERATION_ERRORS = {
   name_required: "An operation needs a name. Everything else you typed is still here.",
   date_invalid:
     "Date must be a real calendar date. Everything else you typed is still here.",
+  date_future:
+    "An operation cannot be dated in the future. Everything else you typed is still here.",
   appraisal_failed:
     "Could not price that loot paste right now (triff.tools did not answer). Nothing was created — adjust the paste and try again, or leave it blank and price loot later.",
+  // Names the remedy, because this is the code a pasted zkillboard link
+  // actually lands on: `zkillboard.com/related/…` with no scheme fails
+  // `new URL()` outright, so it is `url_invalid` that an operator meets, not
+  // `url_scheme` — which only fires for something like `javascript:`, already
+  // a URL and merely the wrong kind. Saying "not a URL" and stopping is true
+  // and useless; the missing piece is always the `https://` on the front.
   url_invalid:
-    "That battle report is not a URL. Everything else you typed is still here.",
+    "That battle report is not a URL — it usually needs an https:// on the front. Everything else you typed is still here.",
   url_scheme:
     "Battle report links must start with http:// or https://. Everything else you typed is still here.",
 } as const;

@@ -139,6 +139,69 @@ test("a retry that fails again re-announces instead of looking like a dead click
   });
 });
 
+/*
+ * The other outcome, and the one that had no announcement at all: the retry
+ * works. `reset()` unmounts the boundary, so the button holding focus goes with
+ * it, the URL never changes, and nothing is left mounted to run a focus effect
+ * — focus fell to `<body>` and a screen-reader user heard silence on the single
+ * press that succeeded.
+ *
+ * Note the shape of the setup: the table is restored BEFORE the click, by
+ * letting `breakPayoutsList` exit while the broken page is still on screen.
+ * That is what makes the retry deterministically succeed, and it is the only
+ * difference from the failing-retry test above.
+ *
+ * Writing it that way is also what exposed the larger defect this test now
+ * guards. With the table repaired and the press made, the boundary came back
+ * anyway: `reset()` alone re-runs the segment from the client router cache,
+ * which is still holding the payload that threw, so for a server-side failure
+ * the button could not recover anything at all. The fix pairs it with
+ * `router.refresh()` (see error.tsx). So the first assertion below — that the
+ * page is actually back — is the load-bearing one; the focus assertions ride
+ * on top of a retry that now works.
+ */
+test("a retry that succeeds hands focus to the recovered page", async ({
+  page,
+  context,
+}) => {
+  const member = await seedMember(db, {
+    name: "Retry Winner",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, member.id)]);
+
+  await breakPayoutsList(async () => {
+    await page.goto(BROKEN_ROUTE);
+    await expect(page.getByRole("heading", { name: "Something broke" })).toBeVisible();
+  });
+
+  // The table is back; this press repairs the page.
+  const retry = page.getByRole("button", { name: /Try again|Trying/ });
+  await retry.focus();
+  await retry.click();
+
+  await expect(page.getByRole("heading", { name: "Operations" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Something broke" })).toHaveCount(0);
+
+  // Focus is on the recovered page's own main — the skip link's target, and
+  // where a member skipping to content would have landed. Asserting the
+  // boundary marker is absent as well as the tag: both mains carry
+  // `id="main"`, and `data-error-boundary` is the attribute the fix uses to
+  // tell them apart, so a regression that focuses the wrong one still fails
+  // here rather than passing on the tag alone.
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => ({
+          tag: document.activeElement?.tagName,
+          boundary: document.activeElement?.hasAttribute("data-error-boundary"),
+        })),
+      { timeout: 10_000 },
+    )
+    .toEqual({ tag: "MAIN", boundary: false });
+});
+
 test("the boundary keeps an admin inside the admin section", async ({
   page,
   context,

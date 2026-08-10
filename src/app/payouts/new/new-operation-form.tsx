@@ -74,8 +74,32 @@ export function NewOperationForm({ today }: { today: string }) {
     if (state && !state.ok) document.getElementById(ERROR_NOTICE_ID)?.focus();
   }, [state]);
 
+  /* `noValidate` below, so this form's own rejection messages are the ones an
+     operator actually reads. Native constraint validation runs BEFORE the
+     `submit` event and React's `<form action>` runs FROM it, so with validation
+     on, `name_required`, `date_invalid`, `date_future`, `url_invalid` and
+     `url_scheme` were server backstops for scripted requests only — every one
+     of them ends "Everything else you typed is still here", a promise about a
+     screen nobody could reach.
+
+     What the browser showed instead was a transient bubble ("Please enter a
+     URL.") that auto-dismisses, cannot be recalled, and never says the thing an
+     operator pasting a zkillboard link needs to hear — that the link wants an
+     http:// or https:// on the front. The replacement is the reserved `Notice`
+     slot below: persistent, re-readable, and a live region, which is what
+     SC 3.3.1/3.3.3 are asking for.
+
+     The promise those messages make is already true and does not depend on this
+     change: every field here is controlled React state, so a rejected submit
+     re-renders with the pastes still in their textareas.
+
+     The one thing native validation was really enforcing is `max={today}` —
+     nothing server-side rejected a future date. `createOperationAction` now
+     does; see the comment there. Do not remove `noValidate` without also
+     deciding what happens to that check, and do not remove that check while
+     this attribute is here. */
   return (
-    <form action={formAction} className="form-stack" data-navigates>
+    <form action={formAction} className="form-stack" data-navigates noValidate>
       {/* Mounted unconditionally, not behind `&&`: the reserved slot registers
           the live region before the text arrives, so AT announces a change to
           it rather than a region born holding its own message. */}
@@ -140,10 +164,19 @@ export function NewOperationForm({ today }: { today: string }) {
             strict-mode violation that took out 22 payouts specs. Any wording
             added here has to stay clear of every other label on the form. */}
         Loot paste (optional: one line per item, quantity before or after)
+        {/* rows={6}, and the same six as Roster below. These are two sibling
+            optional pastes with the same job, and 10-then-8 reserved 18 rows of
+            empty box between the operator and "Create operation" while saying,
+            by the size difference alone, that loot matters more than roster.
+            Neither field is read at rest — both are pasted into, and a textarea
+            scrolls once it overflows — so the reserved height buys nothing the
+            scrollbar does not, and spends it on the page length of the app's
+            primary creation flow. Equal heights also let the two read as the
+            pair they are. */}
         <textarea
           className="field"
           name="lootPaste"
-          rows={10}
+          rows={6}
           value={lootPaste}
           onChange={(e) => setLootPaste(e.target.value)}
         />
@@ -155,7 +188,7 @@ export function NewOperationForm({ today }: { today: string }) {
         <textarea
           className="field"
           name="rosterPaste"
-          rows={8}
+          rows={6}
           value={rosterPaste}
           onChange={(e) => setRosterPaste(e.target.value)}
         />

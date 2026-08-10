@@ -257,6 +257,27 @@ export async function createOperationAction(
   if (!name) return { ok: false, code: "name_required" };
   const occurredAt = parseYmd(field(formData, "occurredAt"));
   if (occurredAt === null) return { ok: false, code: "date_invalid" };
+  // `max={today}` on the form declares this rule; until now the browser was the
+  // only thing enforcing it, so a hand-built request could always date an
+  // operation into the future. That became load-bearing the moment this form
+  // took `noValidate` (see new-operation-form.tsx): with native validation off,
+  // the attribute stops being enforcement at all and this check is the rule.
+  //
+  // Compared against the same UTC-midnight boundary `parseYmd` produces, not
+  // against `now`: both sides are then EVE-day granular, so an operation
+  // recorded during today's downtime is not rejected for being "ahead" of an
+  // instant a few hours later in the same day.
+  //
+  // `/payouts/[id]`'s own date field is deliberately NOT changed to match. It
+  // still runs native validation, so its `max={today}` still holds for anyone
+  // using the page; it carries the same scripted-request gap this closes here,
+  // pre-existing and unchanged, and closing it there means a new code on
+  // `OPERATION_ERRORS` for a path this task did not touch.
+  const todayUtc = new Date();
+  todayUtc.setUTCHours(0, 0, 0, 0);
+  if (occurredAt.getTime() > todayUtc.getTime()) {
+    return { ok: false, code: "date_future" };
+  }
 
   // Checked before any network call, alongside name and date, so a bad scheme
   // never triggers an appraisal only to be thrown away.
