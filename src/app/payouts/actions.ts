@@ -13,7 +13,6 @@ import {
   setItemPrice,
 } from "@/services/payout-loot";
 import {
-  MAX_SHARES_HUNDREDTHS,
   PayoutDuplicateParticipantError,
   PayoutHasPaidError,
   PayoutLockedError,
@@ -44,12 +43,24 @@ import { classifyOpenInfoFailure } from "@/core/open-info-error";
 import { createTriffClient, TriffError } from "@/lib/triff/client";
 import type { PricingMode } from "@/core/pricing";
 import { parseRosterPaste } from "@/core/roster-paste";
-import { iskToCents } from "@/core/payout-split";
 import { encodeDropped } from "./dropped";
 import { encodeUnresolved } from "./unresolved";
+import { NEW_OPERATION_ERRORS, OPERATION_ERRORS } from "./errors";
 import type { NewOperationErrorCode, OperationErrorCode } from "./errors";
 import type { AppraisalResult } from "@/services/appraisal";
 import { unresolvedRosterNames } from "./new/unresolved-roster";
+import {
+  battleReportUrlFieldSchema,
+  buildCreateOperationSchema,
+  corpSharePctFieldSchema,
+  flatPoolFieldSchema,
+  nameFieldSchema,
+  occurredAtFieldSchema,
+  participantNameFieldSchema,
+  readValidationCode,
+  sharesFieldSchema,
+  unitPriceFieldSchema,
+} from "./validation";
 
 /**
  * `addAppraisedPoolAction` used to read these from the form: a "Pricing"
@@ -112,72 +123,11 @@ function operationFailed(operationId: string, code: OperationErrorCode): never {
   redirect(`/payouts/${operationId}?error=${code}`);
 }
 
-/**
- * The one definition of what a battle report link is allowed to be: an
- * absolute http(s) URL, or nothing.
- *
- * The rule matters because the value is rendered as a plain `<a href>` on the
- * operation's own page, so a `javascript:` (or `data:`, or any other) scheme
- * reaching the database is stored XSS. `URL.protocol` is lowercase-normalized
- * by the URL spec, so an allowlist compare on it is not case-bypassable, and
- * anything `new URL` cannot parse at all — a bare `zkillboard.com`, say — is
- * not a link this can store either.
- *
- * Extracted rather than written twice. Both entry points need it — the create
- * form and the inline edit on the operation page — and both now RETURN the code
- * rather than redirecting, so the value the operator typed survives the
- * rejection (the loot paste beside the field in the composer's case, the field's
- * own text in the editor's). This returns the code and lets each caller shape it
- * into its own state type. When the two checks were written out separately, the
- * comment in each claiming to match the other went stale inside one change.
- *
- * Returns null when there is nothing to object to, including for a null or
- * empty value — the field is optional at both call sites.
- */
-function battleReportUrlProblem(
-  value: string | null,
-): "url_invalid" | "url_scheme" | null {
-  if (!value) return null;
-  let scheme: string;
-  try {
-    scheme = new URL(value).protocol;
-  } catch {
-    return "url_invalid";
-  }
-  return scheme === "http:" || scheme === "https:" ? null : "url_scheme";
-}
-
-/**
- * The `<input type="date">` wire format, parsed strictly. Shared by the two
- * places an operation date arrives (`createOperationAction` and
- * `setOccurredAtAction`) for the same reason `battleReportUrlProblem` is
- * shared: two copies of a check drift.
- *
- * `new Date(...)` alone is not enough. It rejects "not-a-date" and month 13,
- * but it *normalizes* a day past the end of the month rather than refusing it
- * — `new Date("2026-02-30")` is 2026-03-02 — so a hand-built request (the
- * browser's own date picker cannot produce one) would store a different day
- * than it submitted, silently, on a record operators reconcile against their
- * own logs. Comparing the parsed UTC components back against the submitted
- * digits is what catches the rollover; the format guard in front of it is what
- * keeps locale-ish spellings like "2026-2-3" out, since those parse in local
- * time and would shift the stored day by a timezone.
- */
-function parseYmd(raw: string): Date | null {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw.trim());
-  if (!m) return null;
-  const [, y, mo, d] = m;
-  const parsed = new Date(`${y}-${mo}-${d}T00:00:00.000Z`);
-  if (Number.isNaN(parsed.getTime())) return null;
-  if (
-    parsed.getUTCFullYear() !== Number(y) ||
-    parsed.getUTCMonth() + 1 !== Number(mo) ||
-    parsed.getUTCDate() !== Number(d)
-  ) {
-    return null;
-  }
-  return parsed;
-}
+/** `parseYmd` and `battleReportUrlProblem` now live in `./validation`, wrapped
+ *  by the zod field schemas there (`occurredAtFieldSchema`,
+ *  `battleReportUrlFieldSchema`) — see that module's docblocks for both. Every
+ *  caller in this file now goes through those schemas rather than either bare
+ *  function directly. */
 
 /** The composer's own state. `null` is `useActionState`'s initial value,
  *  matching `AppraiseActionState`'s own convention: `state === null` never
@@ -253,20 +203,18 @@ export async function createOperationAction(
   formData: FormData,
 ): Promise<CreateOperationState> {
   const actor = await requireOperatorAccount();
-  const name = field(formData, "name").trim();
-  if (!name) return { ok: false, code: "name_required" };
-  const occurredAt = parseYmd(field(formData, "occurredAt"));
-  if (occurredAt === null) return { ok: false, code: "date_invalid" };
-  // `max={today}` on the form declares this rule; until now the browser was the
-  // only thing enforcing it, so a hand-built request could always date an
-  // operation into the future. That became load-bearing the moment this form
-  // took `noValidate` (see new-operation-form.tsx): with native validation off,
-  // the attribute stops being enforcement at all and this check is the rule.
+  // `max={today}` on the form declares the future-date rule; until now the
+  // browser was the only thing enforcing it, so a hand-built request could
+  // always date an operation into the future. That became load-bearing the
+  // moment this form took `noValidate` (see new-operation-form.tsx): with
+  // native validation off, the attribute stops being enforcement at all and
+  // this schema's `date_future` refine is the rule.
   //
   // Compared against the same UTC-midnight boundary `parseYmd` produces, not
   // against `now`: both sides are then EVE-day granular, so an operation
   // recorded during today's downtime is not rejected for being "ahead" of an
-  // instant a few hours later in the same day.
+  // instant a few hours later in the same day. Computed fresh per call (not a
+  // module-level constant) — see `buildCreateOperationSchema`'s own comment.
   //
   // `/payouts/[id]`'s own date field is deliberately NOT changed to match. It
   // still runs native validation, so its `max={today}` still holds for anyone
@@ -275,15 +223,22 @@ export async function createOperationAction(
   // `OPERATION_ERRORS` for a path this task did not touch.
   const todayUtc = new Date();
   todayUtc.setUTCHours(0, 0, 0, 0);
-  if (occurredAt.getTime() > todayUtc.getTime()) {
-    return { ok: false, code: "date_future" };
-  }
 
-  // Checked before any network call, alongside name and date, so a bad scheme
-  // never triggers an appraisal only to be thrown away.
-  const battleReportUrl = field(formData, "battleReportUrl").trim() || null;
-  const urlProblem = battleReportUrlProblem(battleReportUrl);
-  if (urlProblem) return { ok: false, code: urlProblem };
+  // One parse, not three sequential `if`s — see `buildCreateOperationSchema`'s
+  // own comment for why declaration order (name, occurredAt, battleReportUrl)
+  // is what keeps a blank name and a bad URL both present landing on
+  // `name_required`, matching the `if` chain this replaces. Every field is
+  // checked before any network call, so a typo or a bad scheme never triggers
+  // an appraisal only to be thrown away.
+  const parsed = buildCreateOperationSchema(todayUtc).safeParse({
+    name: field(formData, "name").trim(),
+    occurredAt: field(formData, "occurredAt"),
+    battleReportUrl: field(formData, "battleReportUrl").trim(),
+  });
+  if (!parsed.success) {
+    return { ok: false, code: readValidationCode(parsed.error, NEW_OPERATION_ERRORS) };
+  }
+  const { name, occurredAt, battleReportUrl } = parsed.data;
 
   const lootPaste = field(formData, "lootPaste").trim();
   const rosterPaste = field(formData, "rosterPaste").trim();
@@ -514,12 +469,7 @@ export async function addFlatPoolAction(
   formData: FormData,
 ): Promise<FlatPoolEditState> {
   const actor = await requireOperatorAccount();
-  const totalValue = field(formData, "totalValue").trim();
-  const notes = field(formData, "notes").trim();
   const rawPaste = field(formData, "rawPaste").trim();
-  if (!notes) {
-    return { ok: false, code: "note_required" };
-  }
   // <input type="number"> accepts scientific notation like "1e5" client-side;
   // iskToCents' regex rejects it, but let this action fail with the same
   // readable message the other numeric fields above use, rather than relying
@@ -531,9 +481,18 @@ export async function addFlatPoolAction(
   // form to fix the number. Rejecting here keeps them on the form, with
   // `FlatPoolForm`'s controlled inputs — not this state — holding what they
   // typed.
-  if (!/^\d+(\.\d{1,2})?$/.test(totalValue)) {
-    return { ok: false, code: "total_invalid" };
+  //
+  // `notes` declared before `totalValue` in `flatPoolFieldSchema` (`./validation`)
+  // is what keeps a blank note taking priority over a malformed total, matching
+  // the `if` chain this replaces.
+  const parsed = flatPoolFieldSchema.safeParse({
+    notes: field(formData, "notes").trim(),
+    totalValue: field(formData, "totalValue").trim(),
+  });
+  if (!parsed.success) {
+    return { ok: false, code: readValidationCode(parsed.error, OPERATION_ERRORS) };
   }
+  const { notes, totalValue } = parsed.data;
 
   await getDb().transaction((dbtx) =>
     addFlatPool(dbtx, actor, operationId, {
@@ -568,10 +527,15 @@ export async function setItemPriceAction(
   // silent round to 0.01 would inflate the line 2.5x with no sign of it. The
   // escape hatch for genuinely sub-cent heaps is the flat-total pool, which
   // takes a pool value directly and skips per-item pricing.
-  if (!/^\d+(\.\d{1,2})?$/.test(unitPrice)) {
-    return { ok: false, code: "price_invalid", value: unitPrice };
+  const parsed = unitPriceFieldSchema.safeParse(unitPrice);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      code: readValidationCode(parsed.error, OPERATION_ERRORS),
+      value: unitPrice,
+    };
   }
-  await getDb().transaction((dbtx) => setItemPrice(dbtx, actor, itemId, unitPrice));
+  await getDb().transaction((dbtx) => setItemPrice(dbtx, actor, itemId, parsed.data));
   revalidateOperation(operationId);
   return { ok: true };
 }
@@ -605,7 +569,14 @@ export async function addParticipantAction(
 ): Promise<StringFieldEditState> {
   const actor = await requireOperatorAccount();
   const name = field(formData, "name").trim();
-  if (!name) return { ok: false, code: "participant_name_required", value: name };
+  const parsed = participantNameFieldSchema.safeParse(name);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      code: readValidationCode(parsed.error, OPERATION_ERRORS),
+      value: name,
+    };
+  }
   try {
     await getDb().transaction((dbtx) => addParticipant(dbtx, actor, operationId, name));
   } catch (err) {
@@ -626,31 +597,24 @@ export async function setParticipantSharesAction(
 ): Promise<StringFieldEditState> {
   const actor = await requireOperatorAccount();
   const shares = field(formData, "shares").trim();
-  if (!shares) return { ok: false, code: "shares_required", value: shares };
   // Format first, positivity second, and in that order deliberately: iskToCents
   // *throws* on anything its regex rejects (core/payout-split.ts), so calling it
   // on "abc" would escape past the checks below — and text in a numeric field
   // is the likeliest bad input this control gets. Mirrors the regex-then-parse
-  // order addFlatPoolAction already uses for totalValue.
-  if (!/^-?\d+(\.\d{1,2})?$/.test(shares)) {
-    return { ok: false, code: "shares_invalid", value: shares };
-  }
-  // Mirrors payout_participant_shares_ck (shares > 0) with a readable message
-  // before the raw string reaches the numeric(6,2) column.
-  if (iskToCents(shares) <= 0n) {
-    return { ok: false, code: "shares_positive", value: shares };
-  }
-  // The numeric(6, 2) column's own range, mirrored here for the same reason the
-  // three checks above mirror the format and payout_participant_shares_ck: an
-  // unbounded "10000" reaches Postgres as a raw numeric overflow. assertSharesInRange
-  // in the service enforces this for every caller; this copy is the one that can
-  // give the operator a page with their roster still on it. Same constant, so the
-  // two cannot drift.
-  if (iskToCents(shares) > MAX_SHARES_HUNDREDTHS) {
-    return { ok: false, code: "shares_range", value: shares };
+  // order addFlatPoolAction already uses for totalValue. `sharesFieldSchema`
+  // (`./validation`) is what keeps that ordering: its own `.transform` calling
+  // `iskToCents` never runs once an earlier `.refine` in the same chain has
+  // already failed.
+  const parsed = sharesFieldSchema.safeParse(shares);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      code: readValidationCode(parsed.error, OPERATION_ERRORS),
+      value: shares,
+    };
   }
   await getDb().transaction((dbtx) =>
-    setParticipantShares(dbtx, actor, participantId, shares),
+    setParticipantShares(dbtx, actor, participantId, parsed.data),
   );
   revalidateOperation(operationId);
   return { ok: true };
@@ -677,8 +641,17 @@ export async function setNameAction(
 ): Promise<StringFieldEditState> {
   const actor = await requireOperatorAccount();
   const name = field(formData, "name").trim();
-  if (!name) return { ok: false, code: "name_required", value: name };
-  await getDb().transaction((dbtx) => setOperationName(dbtx, actor, operationId, name));
+  const parsed = nameFieldSchema.safeParse(name);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      code: readValidationCode(parsed.error, OPERATION_ERRORS),
+      value: name,
+    };
+  }
+  await getDb().transaction((dbtx) =>
+    setOperationName(dbtx, actor, operationId, parsed.data),
+  );
   revalidateOperation(operationId);
   return { ok: true };
 }
@@ -690,12 +663,16 @@ export async function setOccurredAtAction(
 ): Promise<StringFieldEditState> {
   const actor = await requireOperatorAccount();
   const raw = field(formData, "occurredAt");
-  const occurredAt = parseYmd(raw);
-  if (occurredAt === null) {
-    return { ok: false, code: "date_invalid", value: raw };
+  const parsed = occurredAtFieldSchema.safeParse(raw);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      code: readValidationCode(parsed.error, OPERATION_ERRORS),
+      value: raw,
+    };
   }
   await getDb().transaction((dbtx) =>
-    setOccurredAt(dbtx, actor, operationId, occurredAt),
+    setOccurredAt(dbtx, actor, operationId, parsed.data),
   );
   revalidateOperation(operationId);
   return { ok: true };
@@ -707,10 +684,18 @@ export async function setBattleReportUrlAction(
   formData: FormData,
 ): Promise<StringFieldEditState> {
   const actor = await requireOperatorAccount();
-  const raw = field(formData, "battleReportUrl").trim() || null;
-  const problem = battleReportUrlProblem(raw);
-  if (problem) return { ok: false, code: problem, value: raw ?? "" };
-  await getDb().transaction((dbtx) => setBattleReportUrl(dbtx, actor, operationId, raw));
+  const raw = field(formData, "battleReportUrl").trim();
+  const parsed = battleReportUrlFieldSchema.safeParse(raw);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      code: readValidationCode(parsed.error, OPERATION_ERRORS),
+      value: raw,
+    };
+  }
+  await getDb().transaction((dbtx) =>
+    setBattleReportUrl(dbtx, actor, operationId, parsed.data),
+  );
   revalidateOperation(operationId);
   return { ok: true };
 }
@@ -775,14 +760,16 @@ export async function setCorpShareAction(
 ): Promise<StringFieldEditState> {
   const actor = await requireOperatorAccount();
   const corpSharePct = field(formData, "corpSharePct").trim();
-  if (!/^\d+(\.\d{1,2})?$/.test(corpSharePct)) {
-    return { ok: false, code: "share_format", value: corpSharePct };
-  }
-  if (Number(corpSharePct) > 100) {
-    return { ok: false, code: "share_range", value: corpSharePct };
+  const parsed = corpSharePctFieldSchema.safeParse(corpSharePct);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      code: readValidationCode(parsed.error, OPERATION_ERRORS),
+      value: corpSharePct,
+    };
   }
   await getDb().transaction((dbtx) =>
-    setCorpSharePct(dbtx, actor, operationId, corpSharePct),
+    setCorpSharePct(dbtx, actor, operationId, parsed.data),
   );
   revalidateOperation(operationId);
   return { ok: true };

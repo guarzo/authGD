@@ -1,5 +1,6 @@
 "use server";
 
+import { z } from "zod";
 import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
@@ -11,6 +12,26 @@ import { accountErrorUrl, loginErrorUrl } from "@/lib/error-redirects";
 import { setMainCharacter, unlinkCharacter, wakeSelf } from "@/services/accounts";
 import { unlinkDiscord } from "@/services/discord-link";
 import { getSessionAccount } from "@/services/session";
+
+/** `setMainAction`/`unlinkAction`'s one bound argument. Neither action reads
+ *  any FormData at all — `account/page.tsx` renders zero named controls — but
+ *  a bound server-action argument is still caller input on the wire, not
+ *  trusted state, so it is parsed rather than cast. Unreachable from the
+ *  rendered page with anything but a real character id, so a bad value throws
+ *  rather than earning notice copy — the same posture the admin actions take
+ *  on their own unreachable inputs (`access-lists/actions.ts`'s `parseId`,
+ *  `sync/actions.ts`'s `jobTypeSchema`). Both callers parse AFTER
+ *  `requireAccount()`, not before — same order those two siblings use — so a
+ *  caller who is not signed in gets `requireAccount`'s own redirect regardless
+ *  of what they sent, rather than a thrown validation error telling an
+ *  unauthenticated request whether its argument even had the right shape. */
+const characterIdSchema = z.number().int().positive({ error: "invalid_character_id" });
+
+function parseCharacterId(value: number): number {
+  const parsed = characterIdSchema.safeParse(value);
+  if (!parsed.success) throw new Error("invalid_character_id");
+  return parsed.data;
+}
 
 async function requireAccount(): Promise<string> {
   const cfg = getConfig();
@@ -26,6 +47,7 @@ async function requireAccount(): Promise<string> {
 
 export async function setMainAction(characterId: number): Promise<void> {
   const accountId = await requireAccount();
+  characterId = parseCharacterId(characterId);
   const result = await getDb().transaction((dbtx) =>
     setMainCharacter(dbtx, accountId, accountId, characterId),
   );
@@ -52,6 +74,7 @@ export async function setMainAction(characterId: number): Promise<void> {
 
 export async function unlinkAction(characterId: number): Promise<void> {
   const accountId = await requireAccount();
+  characterId = parseCharacterId(characterId);
   const db = getDb();
   const cfg = getConfig();
   // members may only unlink their own characters. This is a fast, non-locking

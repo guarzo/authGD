@@ -1,5 +1,6 @@
 "use server";
 
+import { z } from "zod";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getDb } from "@/db";
@@ -17,14 +18,22 @@ import { type ActionOutcome } from "@/app/_components/confirm-group";
  * worker performs every read.
  */
 
-/** A server action takes whatever the wire sends, so an id that will become a
- *  bigint column and an audit target is parsed rather than trusted.
- *  Unreachable from the rendered page, so a bad value throws rather than
+/** An id that will become a bigint column and an audit target, parsed with
+ *  zod rather than cast — a server action takes whatever the wire sends.
+ *  `removeWatchAction`'s `accessListId` arrives as a submit button's own
+ *  name/value, not a hidden input, so a scripted POST with no submitter gives
+ *  `null`; the input type is `FormDataEntryValue | null`, never bare `string`. */
+const idSchema = z.preprocess(
+  (value) => Number(value),
+  z.number().refine((n) => Number.isSafeInteger(n) && n > 0, { error: "invalid_id" }),
+);
+
+/** Unreachable from the rendered page, so a bad value throws rather than
  *  earning notice copy — the same posture `syncJobAction` takes on `jobType`. */
 function parseId(value: FormDataEntryValue | null): number {
-  const n = Number(value);
-  if (!Number.isSafeInteger(n) || n <= 0) throw new Error("invalid_id");
-  return n;
+  const parsed = idSchema.safeParse(value);
+  if (!parsed.success) throw new Error("invalid_id");
+  return parsed.data;
 }
 
 export async function designateHolderAction(formData: FormData): Promise<void> {

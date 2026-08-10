@@ -1,9 +1,10 @@
 "use server";
 
+import { z } from "zod";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getDb } from "@/db";
-import { isJobType } from "@/core/schedules";
+import { isJobType, type JobType } from "@/core/schedules";
 import { HEARTBEAT_STALE_AFTER_MS, evaluateFreshness } from "@/core/health";
 import { requireAdminAction } from "@/lib/admin-guard";
 import { logAudit } from "@/services/audit";
@@ -12,6 +13,12 @@ import { workerHeartbeat } from "@/services/health";
 import { elapsedShort } from "@/app/_components/format-ago";
 import { type ActionOutcome } from "@/app/_components/confirm-group";
 import { queuedNotice } from "./view";
+
+/** Derives its enum from `isJobType` (`@/core/schedules`) — the one place a
+ *  job's schedule is written down — rather than duplicating that job-type
+ *  list here. `z.custom` is the v4 way to lift an existing type guard into a
+ *  schema without re-deriving the literals it checks. */
+const jobTypeSchema = z.custom<JobType>(isJobType, { error: "invalid_job_type" });
 
 export async function syncAllAction(): Promise<void> {
   const { accountId: actor } = await requireAdminAction();
@@ -69,16 +76,18 @@ export async function syncJobAction(
   formData: FormData,
 ): Promise<ActionOutcome> {
   const { accountId: actor } = await requireAdminAction();
-  const jobType = formData.get("jobType");
+  const rawJobType = formData.get("jobType");
   // A server action takes whatever the wire sends, and `jobType` becomes a
   // queue name downstream. Only the schedules table's own keys are accepted,
   // so a tampered form cannot enqueue against an arbitrary queue. The dispatch
   // side checks again; this one keeps the bad row out of the outbox and the
   // audit log entirely. Unreachable from the rendered page, so it throws
   // rather than earning notice copy.
-  if (!isJobType(jobType)) {
+  const parsed = jobTypeSchema.safeParse(rawJobType);
+  if (!parsed.success) {
     throw new Error("invalid_job_type");
   }
+  const jobType = parsed.data;
 
   const db = getDb();
   await db.transaction(async (tx) => {
