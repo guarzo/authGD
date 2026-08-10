@@ -17,7 +17,7 @@ import type { AccessEntry } from "@/core/access-list-compare";
  * exists so every read and write spells the key the same way; a literal `1`
  * scattered across call sites is how a second row eventually appears.
  */
-const HOLDER_ROW_ID = 1;
+export const HOLDER_ROW_ID = 1;
 
 export type Holder = {
   characterId: number;
