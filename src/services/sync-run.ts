@@ -38,6 +38,12 @@ export async function finishSyncRun(
  * reported via result.retry (recorded, then thrown as JobRetryError so pg-boss
  * retries the idempotent job); permanent/config failures return status
  * "failed" WITHOUT retry so they don't retry-loop.
+ *
+ * "partial" (some units of work succeeded, some did not) must never set
+ * retry either: the job's own schedule already revisits whatever partially
+ * failed on its next tick, so pg-boss's job-level retry would only burn its
+ * retry budget re-running work that already succeeded alongside it. A future
+ * job that returns "partial" should follow the same rule.
  */
 export async function runJob(
   db: Db,
