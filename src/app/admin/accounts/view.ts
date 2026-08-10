@@ -221,7 +221,11 @@ const PINNED = "Press auto to unpin.";
  * page.
  *
  * `name` is the row's own `identity` (page.tsx's mainName-or-firstName-or-id
- * pick), echoed straight through with no further validation — same posture as
+ * pick) for every case but `"main"`, which names the PROMOTED CHARACTER
+ * instead — the row's identity there is the old, broken main, and saying
+ * "<old main> is now the main" would be exactly backwards (actions.ts's
+ * `setMainAction`, which is why it takes no `identity` parameter). Either
+ * way it is echoed straight through with no further validation — same posture as
  * `/account`'s `accountConfirmation` echoing `?name=`: it travels off a
  * redirect this same request wrote, so a hand-edited query string is the
  * only way to make it disagree with reality, and the cost of that is a wrong
