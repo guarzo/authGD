@@ -47,6 +47,23 @@ describe("buildEveAuthorizeUrl", () => {
     expect(url.searchParams.get("code_challenge_method")).toBe("S256");
     expect(url.searchParams.get("scope")).toBe("esi-characters.read_contacts.v1");
   });
+
+  it("unions extraScopes with the configured set, de-duplicated", () => {
+    const url = new URL(
+      buildEveAuthorizeUrl(cfg, "st4te", "ch4llenge", [
+        "esi-access.read_lists.v1",
+        "esi-characters.read_contacts.v1", // already configured
+      ]),
+    );
+    expect(url.searchParams.get("scope")).toBe(
+      "esi-characters.read_contacts.v1 esi-access.read_lists.v1",
+    );
+  });
+
+  it("omitting extraScopes is unchanged", () => {
+    const url = new URL(buildEveAuthorizeUrl(cfg, "st4te", "ch4llenge"));
+    expect(url.searchParams.get("scope")).toBe("esi-characters.read_contacts.v1");
+  });
 });
 
 describe("exchangeEveCode", () => {
