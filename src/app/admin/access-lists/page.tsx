@@ -37,6 +37,7 @@ import {
   rowHasDetail,
   rowSummary,
   rowTone,
+  sharedCorporation,
   showsObservations,
   type WatchedRow,
 } from "./view";
@@ -124,10 +125,27 @@ export default async function AdminAccessListsPage({
 
   const watchedIds = new Set(compared.map((c) => c.accessListId));
   const addable = catalog.filter((c) => !watchedIds.has(c.accessListId));
+  // What a list is called, by the same precedence the audit path already uses:
+  // catalog first, snapshot second (`watchedListName`,
+  // src/services/access-lists.ts:88-103). A list added to the watchlist a
+  // minute ago has no snapshot row at all, so `w.name` is null and the row was
+  // printing a bare `#4104` — while the catalog it was picked FROM knew the
+  // name the whole time. Deriving both from one rule also stops the page and
+  // the audit log naming the same list differently.
+  const catalogNames = new Map(catalog.map((c) => [c.accessListId, c.name]));
   const notice = doneNotice(done, at);
   // One instant for the whole render, so every row's "ago" text and the
   // client's first tick agree on what "now" meant when the page was built.
   const now = Date.now();
+
+  // Whether the watched-lists region has anything to put in the page. Narrower
+  // than `showsObservations`, deliberately: that predicate asks "is there a
+  // stale answer worth showing", and its answer is yes for the three holder
+  // faults — correct when rows exist, and an empty promise when they do not.
+  // With no rows and nothing addable, the region is a heading over a notice
+  // saying the heading has nothing under it.
+  const showsRegion =
+    showsObservations(state) && (compared.length > 0 || addable.length > 0);
 
   return (
     // `tabIndex={-1}` so the skip link lands here rather than merely scrolling
@@ -137,7 +155,18 @@ export default async function AdminAccessListsPage({
     // through the nav the member just skipped (SC 2.4.1). Ten of the app's
     // eleven `id="main"` elements carry it; this was the one that didn't,
     // because it landed after the sweep that added the rest.
-    <main id="main" tabIndex={-1} className="page page--wide">
+    // `page--wide` only once there is a table to be wide for. The fault states
+    // put one sentence and one link on the page, and a 78rem column turns that
+    // into a ribbon across an otherwise empty field — the measure the prose
+    // needs is the one `.page--narrow` sets. It caps CONTENTS rather than the
+    // page box, so the `h1`'s left edge and every rule's origin stay on the
+    // same vertical as the other admin routes either way; only the line length
+    // changes.
+    <main
+      id="main"
+      tabIndex={-1}
+      className={`page ${showsRegion ? "page--wide" : "page--narrow"}`}
+    >
       <h1>Access lists</h1>
       <ConfirmNotice text={notice} at={at} />
 
@@ -193,22 +222,26 @@ export default async function AdminAccessListsPage({
 
       {showsObservations(state) && (
         <>
-          <RuleHead as="h2" aside={addable.length === 0 ? undefined : "add a list"}>
-            Watched lists
-          </RuleHead>
+          {showsRegion && (
+            <>
+              <RuleHead as="h2" aside={addable.length === 0 ? undefined : "add a list"}>
+                Watched lists
+              </RuleHead>
 
-          {addable.length > 0 && (
-            <form action={addWatchAction} className="btn-row">
-              <label htmlFor="add-list">List</label>
-              <select id="add-list" name="accessListId" defaultValue="">
-                {addable.map((c) => (
-                  <option key={c.accessListId} value={c.accessListId}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
-              <Submit pendingLabel="Adding…">Add to watchlist</Submit>
-            </form>
+              {addable.length > 0 && (
+                <form action={addWatchAction} className="btn-row">
+                  <label htmlFor="add-list">List</label>
+                  <select id="add-list" name="accessListId" defaultValue="">
+                    {addable.map((c) => (
+                      <option key={c.accessListId} value={c.accessListId}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+                  <Submit pendingLabel="Adding…">Add to watchlist</Submit>
+                </form>
+              )}
+            </>
           )}
 
           {/* One `ConfirmingForm` for the whole region, not one per row: both
@@ -221,11 +254,20 @@ export default async function AdminAccessListsPage({
               survive `compared` shrinking to zero. Each row's "Stop watching"
               is a plain submit button carrying its own `accessListId`, not a
               form of its own — the button's job ends at the press, and
-              submitting a shared form by name/value is ordinary HTML. */}
+              submitting a shared form by name/value is ordinary HTML.
+
+              Which is also why this pair sits OUTSIDE the `showsRegion` gate
+              above while everything visible sits inside it. Removing the last
+              watched list can empty `compared` and `addable` in the same
+              commit — a list dropped from the catalog is watched but not
+              addable — so gating the pair on `showsRegion` would unmount the
+              reporter on exactly the press it exists to report. Empty, it
+              renders a `<form>` with nothing in it and costs the page
+              nothing. */}
           <ConfirmGroup>
             <ConfirmingForm action={removeWatchAction}>
               {compared.length === 0 ? (
-                <Notice>No lists are being watched yet.</Notice>
+                showsRegion && <Notice>No lists are being watched yet.</Notice>
               ) : (
                 <ul className="acl-list">
                   {compared.map((c) => {
@@ -244,7 +286,8 @@ export default async function AdminAccessListsPage({
                     // One label for the visible name and for "Stop watching"'s
                     // accessible name, so the two can never disagree about what
                     // an unnamed list is called.
-                    const label = c.name ?? `#${c.accessListId}`;
+                    const label =
+                      catalogNames.get(c.accessListId) ?? c.name ?? `#${c.accessListId}`;
                     const head = (
                       <span className="acl-list__head">
                         <span className="acl-list__name">{label}</span>
@@ -381,10 +424,13 @@ function StopWatching({ accessListId, name }: { accessListId: number; name: stri
  * Names lead and ids are secondary throughout: the admin retypes these in-game,
  * where the id is not what the client accepts.
  *
- * Broad grants always carry the "plus an unknown number of others" clause. We
- * store a corporation per character and hold no corp or alliance roster, so the
- * covered-member count is OUR members only — the page must never imply a
- * corp-granted list is fully accounted for.
+ * Broad grants carry the "plus an unknown number of others" clause once, above
+ * the list rather than on every line. We store a corporation per character and
+ * hold no corp or alliance roster, so the covered-member count is OUR members
+ * only — the page must never imply a corp-granted list is fully accounted for.
+ * Stating it per line said the identical sentence up to N times to make one
+ * point about how the count is computed, which is a property of the counting
+ * and not of any particular grant.
  */
 export function AccessListDetail({
   detail,
@@ -397,6 +443,9 @@ export function AccessListDetail({
   comparison: AccessListComparison;
   names: Map<number, string>;
 }) {
+  // See `sharedCorporation`. Null means the rows genuinely differ, and only
+  // then is a Corporation column earning its width.
+  const missingCorp = sharedCorporation(comparison.missingAccess);
   return (
     <div className="acl-detail">
       {readStatus !== null && readStatus !== "ok" && (
@@ -410,28 +459,41 @@ export function AccessListDetail({
       {comparison.missingAccess.length > 0 && (
         <>
           <RuleHead as="h3">Missing access ({comparison.missingAccess.length})</RuleHead>
-          <Scroller label="Members missing access">
-            <table>
-              <thead>
-                <tr>
-                  <th scope="col">Character</th>
-                  <th scope="col">Corporation</th>
-                </tr>
-              </thead>
-              <tbody>
-                {comparison.missingAccess.map((m) => (
-                  <tr key={m.characterId}>
-                    <td>{m.name}</td>
-                    <td>
-                      {m.corporationId === null
-                        ? "—"
-                        : (names.get(m.corporationId) ?? `#${m.corporationId}`)}
-                    </td>
+          {missingCorp === null ? (
+            <Scroller label="Members missing access">
+              <table>
+                <thead>
+                  <tr>
+                    <th scope="col">Character</th>
+                    <th scope="col">Corporation</th>
                   </tr>
+                </thead>
+                <tbody>
+                  {comparison.missingAccess.map((m) => (
+                    <tr key={m.characterId}>
+                      <td>{m.name}</td>
+                      <td>
+                        {m.corporationId === null
+                          ? "—"
+                          : (names.get(m.corporationId) ?? `#${m.corporationId}`)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </Scroller>
+          ) : (
+            <>
+              <p className="acl-detail__norm">
+                All of them are in {names.get(missingCorp) ?? `#${missingCorp}`}.
+              </p>
+              <ul className="acl-detail__names">
+                {comparison.missingAccess.map((m) => (
+                  <li key={m.characterId}>{m.name}</li>
                 ))}
-              </tbody>
-            </table>
-          </Scroller>
+              </ul>
+            </>
+          )}
         </>
       )}
 
@@ -451,6 +513,10 @@ export function AccessListDetail({
       {comparison.broadGrants.length > 0 && (
         <>
           <RuleHead as="h3">Broad grants ({comparison.broadGrants.length})</RuleHead>
+          <p className="table-note">
+            Counts are our members only — each grant covers those, plus an unknown number
+            of others.
+          </p>
           <ul className="acl-detail__names">
             {comparison.broadGrants.map((g) => (
               <li key={`${g.kind}:${g.entityId ?? "all"}`}>
@@ -462,7 +528,7 @@ export function AccessListDetail({
                         : (names.get(g.entityId) ?? `#${g.entityId}`)
                     }`}
                 {" — covers "}
-                {g.coveredMembers} of our members, plus an unknown number of others
+                {g.coveredMembers} of our members
               </li>
             ))}
           </ul>

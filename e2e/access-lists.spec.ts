@@ -21,6 +21,7 @@ import {
   accessListWatch,
   auditLog,
   character,
+  esiEntityName,
   outbox,
 } from "../src/db/schema";
 import { ACCESS_LISTS_SCOPE } from "../src/lib/esi/client";
@@ -485,4 +486,152 @@ test("a watched row's toggle does not rename itself as its timestamp ages", asyn
   await expect(stamp).not.toHaveText(stampBefore);
 
   expect(await nameOf(), "the toggle renamed itself as the clock moved").toBe(before);
+});
+
+/**
+ * The two halves of one decision, asserted as a pair on purpose. Either half
+ * alone passes on a page that hard-codes the other: a page permanently narrow
+ * satisfies the first, a page permanently wide satisfies the second, and only
+ * the pair says the measure actually follows the content.
+ */
+test("a page with no table is narrow and says nothing about watched lists", async ({
+  page,
+  context,
+}) => {
+  // A holder whose token went stale, with nothing discovered and nothing
+  // watched. `showsObservations` is true here — there is a holder — but there
+  // is no observation to show, so the region would be a heading over a notice
+  // saying the heading has nothing under it.
+  const { characterId } = await asAdmin(context, { tokenStatus: "needs_reauth" });
+  await seedHolder(characterId);
+  await page.goto("/admin/access-lists");
+
+  await expect(page.locator(".lede")).toContainText("gone stale");
+  await expect(page.getByRole("heading", { name: "Watched lists" })).toHaveCount(0);
+  await expect(page.getByText("No lists are being watched yet.")).toHaveCount(0);
+  // One sentence and one link do not want a 78rem column.
+  await expect(page.locator("main#main")).toHaveClass(/page--narrow/);
+});
+
+test("a page with a table is wide", async ({ page, context }) => {
+  const { characterId } = await asAdmin(context);
+  await seedHolder(characterId);
+  await seedCatalog(characterId);
+  await seedWatched(characterId);
+  await page.goto("/admin/access-lists");
+
+  await expect(page.getByRole("heading", { name: "Watched lists" })).toBeVisible();
+  await expect(page.locator("main#main")).toHaveClass(/page--wide/);
+});
+
+test("a list watched before its first read is named from the catalog, not by id", async ({
+  page,
+  context,
+}) => {
+  const { characterId } = await asAdmin(context);
+  await seedHolder(characterId);
+  await seedCatalog(characterId);
+  // Deliberately NOT `seedWatched`: the watch row alone, with no snapshot,
+  // which is the state every list is in between "Add to watchlist" and the
+  // worker's next run. The snapshot is where the name used to come from, so
+  // the row printed a bare `#4001` for a list the catalog could name all along.
+  await db.insert(accessListWatch).values({ accessListId: LIST_ID, addedBy: "e2e" });
+  await page.goto("/admin/access-lists");
+
+  const row = page.locator(".acl-list__row");
+  await expect(row).toContainText("Fleet staging");
+  await expect(row).not.toContainText(`#${LIST_ID}`);
+  await expect(row).toContainText("not read yet");
+});
+
+/** Two members of one corporation, neither on the list. */
+async function seedMissingPair(corporationIds: [number, number]) {
+  const a = await seedMember(db, { name: "Rane Solette", tier: "member" });
+  const b = await seedMember(db, { name: "Ivo Tarn", tier: "member" });
+  await db
+    .update(character)
+    .set({ corporationId: corporationIds[0] })
+    .where(eq(character.accountId, a.id));
+  await db
+    .update(character)
+    .set({ corporationId: corporationIds[1] })
+    .where(eq(character.accountId, b.id));
+}
+
+test("one corporation behind every missing member is stated once, not per row", async ({
+  page,
+  context,
+}) => {
+  const CORP = 98_000_777;
+  const { characterId } = await asAdmin(context);
+  await seedHolder(characterId);
+  await seedCatalog(characterId);
+  await seedMissingPair([CORP, CORP]);
+  await db
+    .insert(esiEntityName)
+    .values({ id: CORP, kind: "corporation", name: "Static Vector" });
+  // Only the admin is on the list, so the pair above is exactly `missingAccess`.
+  await seedWatched(characterId, {
+    entries: [{ kind: "character", entityId: characterId }],
+  });
+  await page.goto("/admin/access-lists");
+
+  await page.locator(".acl-list__row summary").click();
+  const detail = page.locator(".acl-detail");
+  await expect(detail.locator(".acl-detail__norm")).toHaveText(
+    "All of them are in Static Vector.",
+  );
+  // Said once. Printed per row it appeared twice and told the two rows apart
+  // not at all, which is the whole finding.
+  await expect(detail.getByText("Static Vector")).toHaveCount(1);
+  // And the column that carried it is gone with it.
+  await expect(detail.getByRole("columnheader", { name: "Corporation" })).toHaveCount(0);
+  // The names are what the admin retypes in-game, so they survive intact.
+  await expect(detail).toContainText("Rane Solette");
+  await expect(detail).toContainText("Ivo Tarn");
+});
+
+test("missing members from different corporations keep the column that tells them apart", async ({
+  page,
+  context,
+}) => {
+  const { characterId } = await asAdmin(context);
+  await seedHolder(characterId);
+  await seedCatalog(characterId);
+  await seedMissingPair([98_000_777, 98_000_888]);
+  await seedWatched(characterId, {
+    entries: [{ kind: "character", entityId: characterId }],
+  });
+  await page.goto("/admin/access-lists");
+
+  await page.locator(".acl-list__row summary").click();
+  const detail = page.locator(".acl-detail");
+  await expect(detail.getByRole("columnheader", { name: "Corporation" })).toBeVisible();
+  await expect(detail.locator(".acl-detail__norm")).toHaveCount(0);
+});
+
+test("the only control in a watched row does not read as another caption", async ({
+  page,
+  context,
+}) => {
+  const { characterId } = await asAdmin(context);
+  await seedHolder(characterId);
+  await seedCatalog(characterId);
+  // A clean row, so the button sits directly in the `<li>` rather than inside
+  // a closed drawer — the shape the new rule is scoped by descendant selector
+  // to cover in both cases, and the one that is visible without a press.
+  await seedWatched(characterId, {
+    entries: [{ kind: "character", entityId: characterId }],
+  });
+  await page.goto("/admin/access-lists");
+
+  // `.btn--quiet` sets `border-color: transparent`, which computes to
+  // `rgba(0, 0, 0, 0)` — the value this asserts against rather than any
+  // particular colour, so it cannot be satisfied by an outline of the wrong
+  // grade and does not pin a token. Without the outline the row's one
+  // pressable thing sits at the weight of the labels around it.
+  const outline = await page
+    .getByRole("button", { name: "Stop watching" })
+    .evaluate((el) => getComputedStyle(el).borderTopColor);
+  expect(outline).not.toBe("rgba(0, 0, 0, 0)");
 });

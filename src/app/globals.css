@@ -4953,6 +4953,40 @@ h3.rule-head__label {
   gap: var(--s-2);
 }
 
+/* The one fact every "missing access" row shared, lifted out of the table the
+   way `crewNorms` lifts the account manifest's — see `.crew-fact` above and
+   `sharedCorporation` in access-lists/view.ts. When the whole set sits in one
+   corporation, the Corporation column told the rows apart not at all and
+   charged each of them for the repetition; this says it once instead.
+
+   Full `--ink`, deliberately not `.table-note`'s caption grade. This is the
+   data that column used to carry, and the detail panel's own rule is that
+   names lead because the admin retypes them in-game — a string you have to
+   read character by character does not belong at the de-emphasised weight
+   reserved for standing explanations. The broad-grants note directly below it
+   IS such an explanation, and does use `.table-note`. */
+.acl-detail__norm {
+  margin: 0 0 var(--s-3);
+  color: var(--ink);
+}
+
+/* "Stop watching" is the only control inside a watched row, and `.btn--quiet`
+   strips the border that says so: at --ink-faint with no outline it lands on
+   exactly the weight of `.acl-list__head`'s labels and the rule heads around
+   it, so the one thing on the row a press can change reads as another caption.
+   Keep `.btn--quiet`'s restraint — no fill, no gold at rest, the 28px in-row
+   grade — and put back the outline, which is what separates a control from a
+   label here without spending a second gold or a colour token.
+
+   Descendant rather than child: the button sits directly in the `<li>` on a
+   clean row and inside `Disclosure`'s drawer on a row that has one, and it
+   has to read the same in both. Two classes, so `.btn--quiet:hover` (a class
+   plus a pseudo-class plus `:not(:disabled)`) still escalates over it. */
+.acl-list__row .btn--quiet {
+  border-color: var(--rule);
+  color: var(--ink-dim);
+}
+
 /* --- Utility ------------------------------------------------------------ */
 
 /* A `.field` plus a micro `Submit`, meant to sit inline with the prose around
