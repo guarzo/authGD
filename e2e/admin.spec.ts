@@ -809,9 +809,9 @@ test("saving a note that hasn't changed says already saved, not saved", async ({
  * from a dead control — hence `ConfirmSubmit` reporting it into the group's own
  * notice when there is a group above it.
  *
- * Reaching the guard takes three clicks, not two: after the first confirm the
- * control disarms, so the next click re-arms (never touching the guard) and
- * only the one after that is a submit for the guard to refuse.
+ * Four clicks, because only every second one is a submit: arm, confirm, re-arm
+ * (the confirm disarmed the control, so this click never reaches the guard),
+ * and finally a second submit for the guard to refuse.
  */
 test("a drawer press refused while the last one is still in flight says so", async ({
   page,
@@ -824,9 +824,18 @@ test("a drawer press refused while the last one is still in flight says so", asy
 
   // Held open so the second confirm lands while the first is still in flight.
   // POSTs only: the server action is one, the RSC fetches around it are not.
+  //
+  // Released explicitly below rather than after a fixed delay. A wall clock
+  // would have to outlast four clicks' actionability checks, and a loaded CI
+  // worker that overruns it closes the window before the refusal happens —
+  // the guard never fires and the failure reads as if the feature broke.
+  let release!: () => void;
+  const held = new Promise<void>((r) => {
+    release = r;
+  });
   await page.route("**/admin/accounts**", async (route) => {
     if (route.request().method() !== "POST") return route.fallback();
-    await new Promise((r) => setTimeout(r, 1500));
+    await held;
     await route.continue();
   });
 
@@ -840,7 +849,10 @@ test("a drawer press refused while the last one is still in flight says so", asy
 
   const notice = drawerOf(rowFor(page, "Pilot")).locator("p.notice--warn");
   await expect(notice).toHaveText("Still working on the last press.");
+  release();
   // And it is not the last word: the action it was waiting on overwrites it.
+  // Same element — the group renders one notice and swaps its text — so this
+  // reads through `p.notice` on purpose, and passing means the warn is gone.
   await expect(drawerOf(rowFor(page, "Pilot")).locator("p.notice")).toHaveText(
     "Pilot frozen.",
   );
