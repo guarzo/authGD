@@ -534,6 +534,131 @@ describe("summarizeDetails with configured tier labels", () => {
     ).toBe("character 90000002, was 90000001");
   });
 
+  it("renders a resolved character name in place of a raw id", () => {
+    const names = new Map([["mainCharacterId", "Probe Kid"]]);
+    expect(
+      summarizeDetails(
+        "account.main_changed",
+        { mainCharacterId: 90000001 },
+        new Map(),
+        {},
+        new Map(),
+        names,
+      ),
+    ).toBe("main → Probe Kid");
+    expect(
+      summarizeDetails(
+        "account.created",
+        { mainCharacterId: 90000001 },
+        new Map(),
+        {},
+        new Map(),
+        names,
+      ),
+    ).toBe("main Probe Kid");
+    expect(
+      summarizeDetails(
+        "account.merged",
+        {
+          sourceAccountId: "7f3a2b1c-0000-4000-8000-000000000001",
+          characterId: 90000001,
+        },
+        new Map(),
+        {},
+        new Map(),
+        new Map([["characterId", "Probe Kid"]]),
+      ),
+    ).toBe("absorbed 7f3a2b…, character Probe Kid");
+    expect(
+      summarizeDetails(
+        "admin.bootstrap_granted",
+        { characterId: 90000001 },
+        new Map(),
+        {},
+        new Map(),
+        new Map([["characterId", "Probe Kid"]]),
+      ),
+    ).toBe("character Probe Kid");
+    expect(
+      summarizeDetails(
+        "access_list.holder_designated",
+        { characterId: 90000001 },
+        new Map(),
+        {},
+        new Map(),
+        new Map([["characterId", "Probe Kid"]]),
+      ),
+    ).toBe("character Probe Kid");
+    expect(
+      summarizeDetails(
+        "token.subject_mismatch",
+        { subjectCharacterId: 90000003 },
+        new Map(),
+        {},
+        new Map(),
+        new Map([["subjectCharacterId", "Some Alt"]]),
+      ),
+    ).toBe("subject Some Alt");
+  });
+
+  it("renders both sides of a holder replacement by their own field-name key", () => {
+    // The case that proves keying by details field name, not by id: the same
+    // action names two different characters under two different keys, and
+    // each must resolve to its own name rather than the other's.
+    expect(
+      summarizeDetails(
+        "access_list.holder_replaced",
+        { characterId: 90000002, previousCharacterId: 90000001 },
+        new Map(),
+        {},
+        new Map(),
+        new Map([
+          ["characterId", "New Holder"],
+          ["previousCharacterId", "Old Holder"],
+        ]),
+      ),
+    ).toBe("character New Holder, was Old Holder");
+  });
+
+  it("degrades a character id to the raw value when no name resolves", () => {
+    // No characterNames map at all -- the default parameter, exercised the
+    // way a caller that hasn't been updated for this field still would be.
+    // Output must be byte-identical to what this line rendered before names
+    // were resolved.
+    expect(summarizeDetails("account.main_changed", { mainCharacterId: 90000001 })).toBe(
+      "main → 90000001",
+    );
+  });
+
+  it("does not turn a declared character key into a hidden-key count", () => {
+    expect(
+      summarizeDetails(
+        "access_list.holder_designated",
+        { characterId: 90000001 },
+        new Map(),
+        {},
+        new Map(),
+        new Map([["characterId", "Probe Kid"]]),
+      ),
+    ).not.toContain("more");
+  });
+
+  // The jsonb column's shape is unenforced, so a hand-inserted or legacy row
+  // could hold something that is not an id at all. Whatever that is, the miss
+  // path must render it the way this column always has (`labelled` -> `fmt`)
+  // rather than silently dropping the part and leaving the row blank.
+  it("falls back like the plain renderer for a value that is not an id", () => {
+    expect(summarizeDetails("account.main_changed", { mainCharacterId: null })).toBe(
+      "main → ?",
+    );
+    expect(summarizeDetails("account.created", { mainCharacterId: true })).toBe(
+      "main true",
+    );
+    // Absent is the one case the part renders nothing for, leaving the row
+    // with no summary at all rather than a labelled `?`.
+    expect(summarizeDetails("account.created", {})).toBe("—");
+  });
+
   it("renders a watch change with the list's name, and without it", () => {
     expect(
       summarizeDetails("access_list.watch_added", {

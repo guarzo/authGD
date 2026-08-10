@@ -27,6 +27,7 @@ type Render = (
   roleNames: ReadonlyMap<string, string>,
   labels: Record<string, string>,
   accountNames: ReadonlyMap<string, string>,
+  characterNames: ReadonlyMap<string, string>,
 ) => string;
 
 /**
@@ -164,6 +165,27 @@ function accountRef(word: string, key: string): Part {
   });
 }
 
+/** A character id resolved to its name, e.g. `main Probe Kid`. Unlike
+ * `accountRef`'s uuid or `roleRef`'s snowflake, a miss degrades to the raw id
+ * via `fmt`, not to a shortened form: a 9-10 digit character id is already
+ * legible, so truncating it would destroy information for no gain, and
+ * rendering it whole keeps the miss path byte-identical to what this column
+ * showed before names were resolved -- an unresolvable row is no worse than
+ * it is today. `characterNames` is keyed by the `details` field name, the
+ * same convention `accountNames` uses -- see `resolveAuditIdentities`'s
+ * `detailCharacterNames`. The miss path is deliberately `labelled`'s exactly
+ * -- render on any defined value, nothing only when the key is absent -- so a
+ * row this cannot resolve reads exactly as it did before, whatever shape the
+ * unenforced jsonb column turns out to hold. */
+function characterRef(word: string, key: string): Part {
+  return part([key], (d, _roleNames, _labels, _accountNames, characterNames) => {
+    const raw = d[key];
+    if (raw === undefined) return "";
+    const name = characterNames.get(key);
+    return `${word} ${name ?? fmt(raw)}`;
+  });
+}
+
 /** A single Discord role id, resolved to its configured tier name where one
  * exists. The id in `roleId` (role_strip_failed, role_sync_failed) is always
  * one of `discord.roleIds`' values -- the same set `roleNames` is built from
@@ -263,7 +285,7 @@ const PARTS: Record<string, readonly Part[]> = {
   "tier.approved": [tierTransition("from", "to"), flag("locked", "locked")],
   "account.merged": [
     shortRef("absorbed", "sourceAccountId"),
-    labelled("character", "characterId"),
+    characterRef("character", "characterId"),
   ],
   // The only action in the repo whose payload exceeds FALLBACK_KEYS, and the
   // key the fallback dropped was the price — the reason the row exists.
@@ -293,17 +315,21 @@ const PARTS: Record<string, readonly Part[]> = {
   // noteChange's doc.
   "payout.notes_changed": [noteChange("had", "has")],
   "status.changed": [transition("from", "to"), flag("self", "self-service")],
-  "admin.bootstrap_granted": [labelled("character", "characterId")],
-  "account.created": [labelled("main", "mainCharacterId")],
-  "account.main_changed": [labelled("main →", "mainCharacterId")],
+  "admin.bootstrap_granted": [characterRef("character", "characterId")],
+  "account.created": [characterRef("main", "mainCharacterId")],
+  "account.main_changed": [characterRef("main →", "mainCharacterId")],
   // Same shape as the member-driven row above; the two are separate actions
   // only so the log can say who drove it (services/accounts.ts).
-  "admin.main_changed": [labelled("main →", "mainCharacterId")],
+  "admin.main_changed": [characterRef("main →", "mainCharacterId")],
   "character.reclaimed": [accountRef("from", "fromAccount")],
   "character.unlinked": [scalar("name"), flag("wasMain", "was main")],
   "token.invalidated": [scalar("reason")],
   "token.verify_failed": [scalar("error")],
-  "token.subject_mismatch": [labelled("subject", "subjectCharacterId")],
+  // The subject is by construction a different character from the row's
+  // target (jobs/token-health.ts:61 -- the mismatch is the whole point), so
+  // it will often be a character with no linked account and thus no name to
+  // resolve. A raw id here is expected, not a sign the lookup is broken.
+  "token.subject_mismatch": [characterRef("subject", "subjectCharacterId")],
   // Two writers, two payload shapes. token-health computes a shortfall against
   // config and sends `missingScopes`; the location job sends the single scope
   // whose read ESI refused. Each renders nothing for the other's keys, so the
@@ -316,10 +342,10 @@ const PARTS: Record<string, readonly Part[]> = {
   "tier.unlocked": [tierLabelled("was", "tier")],
   "status.note_changed": [noteChange("had", "has")],
   "character.owner_mismatch": [labelled("detected by", "detectedBy")],
-  "access_list.holder_designated": [labelled("character", "characterId")],
+  "access_list.holder_designated": [characterRef("character", "characterId")],
   "access_list.holder_replaced": [
-    labelled("character", "characterId"),
-    labelled("was", "previousCharacterId"),
+    characterRef("character", "characterId"),
+    characterRef("was", "previousCharacterId"),
   ],
   "access_list.watch_added": [accessListRef("name", "accessListId")],
   "access_list.watch_removed": [accessListRef("name", "accessListId")],
@@ -379,8 +405,10 @@ const FALLBACK_KEYS = 3;
  * tier value to this deployment's configured label. `accountNames` maps a
  * `details` field name (not a uuid) to the account it resolved to -- see
  * `resolveAuditIdentities`'s `detailAccountNames` and `accountRef` above.
- * All three passed in rather than imported so this module stays a pure
- * function of its arguments and needs no env to test.
+ * `characterNames` is the same idea for character ids -- see
+ * `detailCharacterNames` and `characterRef` above. All four passed in rather
+ * than imported so this module stays a pure function of its arguments and
+ * needs no env to test.
  */
 export function summarizeDetails(
   action: string,
@@ -388,6 +416,7 @@ export function summarizeDetails(
   roleNames: ReadonlyMap<string, string> = new Map(),
   labels: Record<string, string> = {},
   accountNames: ReadonlyMap<string, string> = new Map(),
+  characterNames: ReadonlyMap<string, string> = new Map(),
 ): string {
   const d = (details && typeof details === "object" ? details : {}) as Record<
     string,
@@ -397,7 +426,7 @@ export function summarizeDetails(
     const parts = PARTS[action];
     if (parts) {
       const rendered = parts
-        .map((p) => p(d, roleNames, labels, accountNames))
+        .map((p) => p(d, roleNames, labels, accountNames, characterNames))
         .filter(Boolean);
       const declared = new Set(parts.flatMap((p) => p.keys));
       const hidden = Object.keys(d).filter((k) => !declared.has(k)).length;

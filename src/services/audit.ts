@@ -84,6 +84,12 @@ export type ResolvedAuditRow = typeof auditLog.$inferSelect & {
    * without knowing which action wrote it. Empty for every row that carries
    * no such field — see `DETAIL_ACCOUNT_KEYS`. */
   detailAccountNames: Record<string, string>;
+  /** Character ids embedded in `details`, resolved to that character's name —
+   * see `DETAIL_CHARACTER_KEYS`. Keyed by the `details` field name rather than
+   * by the id: `access_list.holder_replaced` carries two different character
+   * ids on the same row (`characterId` and `previousCharacterId`), and an
+   * id-keyed map could not tell a caller which field either name came from. */
+  detailCharacterNames: Record<string, string>;
 };
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -219,6 +225,51 @@ const DETAIL_ACCOUNT_KEYS: Readonly<Record<string, readonly string[]>> = {
 };
 
 /**
+ * `details` keys that hold a character id, per action — same idea as
+ * `DETAIL_ACCOUNT_KEYS`, one join fewer. These ids name a character this app
+ * had a row for at write time, but a character row is HARD-deleted the moment
+ * it is unlinked or reclaimed (accounts.ts, both the reclaim and unlink
+ * paths), so resolution here is best-effort: the renderer falls back to the
+ * raw id, same as any other unresolved detail.
+ *
+ * `access_list.watch_added`/`watch_removed`'s `accessListId` is deliberately
+ * NOT listed here — it is an EVE access-list id, not a character id, and is
+ * exactly the false-positive a bare key-name heuristic would produce (see the
+ * `NAMESPACE_TARGET_KIND` comment above, which flags this same namespace for
+ * the same reason on the target column).
+ *
+ * `token.subject_mismatch`'s `subjectCharacterId` is, by construction, a
+ * DIFFERENT character from the row's own target (src/jobs/token-health.ts):
+ * it names whichever character the mismatched token actually belongs to, so
+ * it will often belong to a still-live character on someone else's account
+ * and resolve fine, but on occasion belongs to one already gone — that is
+ * expected, not a bug.
+ */
+const DETAIL_CHARACTER_KEYS: Readonly<Record<string, readonly string[]>> = {
+  "account.created": ["mainCharacterId"],
+  "account.main_changed": ["mainCharacterId"],
+  "admin.main_changed": ["mainCharacterId"],
+  "account.merged": ["characterId"],
+  "admin.bootstrap_granted": ["characterId"],
+  "access_list.holder_designated": ["characterId"],
+  "access_list.holder_replaced": ["characterId", "previousCharacterId"],
+  "token.subject_mismatch": ["subjectCharacterId"],
+};
+
+/**
+ * `jsonb` gives back a genuine number for anything written as one, but the
+ * column's shape is unenforced by the type system — a hand-inserted or
+ * legacy row could hold the same id as a digit string instead. Accept either
+ * and reject everything else, rather than assuming today's writer shape is
+ * the only one that will ever be read.
+ */
+function detailCharacterId(raw: unknown): number | null {
+  if (typeof raw === "number") return Number.isInteger(raw) ? raw : null;
+  if (typeof raw === "string" && DIGITS_RE.test(raw)) return Number(raw);
+  return null;
+}
+
+/**
  * Resolves actor/target ids to human (main character) names in a fixed,
  * small number of batched queries, independent of row count:
  *   1. accounts referenced directly (as actor or an account-shaped target)
@@ -244,6 +295,7 @@ export async function resolveAuditIdentities(
   const targetCharacterIds = new Set<number>();
   const targetDiscordIds = new Set<string>();
   const targetPayoutIds = new Set<string>();
+  const detailCharacterIds = new Set<number>();
 
   for (const r of rows) {
     if (r.actor !== "system" && UUID_RE.test(r.actor)) accountIds.add(r.actor);
@@ -263,6 +315,13 @@ export async function resolveAuditIdentities(
     for (const key of DETAIL_ACCOUNT_KEYS[r.action] ?? []) {
       const raw = r.details?.[key];
       if (typeof raw === "string" && UUID_RE.test(raw)) accountIds.add(raw);
+    }
+    // Same idea, one join fewer: a character id living inside `details`,
+    // folded into the same `characterIds` set seeded below so it rides the
+    // already in-flight `character` query rather than paying for a new one.
+    for (const key of DETAIL_CHARACTER_KEYS[r.action] ?? []) {
+      const id = detailCharacterId(r.details?.[key]);
+      if (id !== null) detailCharacterIds.add(id);
     }
   }
 
@@ -332,7 +391,7 @@ export async function resolveAuditIdentities(
     }
   }
 
-  const characterIds = new Set<number>(targetCharacterIds);
+  const characterIds = new Set<number>([...targetCharacterIds, ...detailCharacterIds]);
   for (const a of accountById.values()) {
     if (a.mainCharacterId !== null) characterIds.add(a.mainCharacterId);
   }
@@ -410,7 +469,22 @@ export async function resolveAuditIdentities(
       if (name !== null) detailAccountNames[key] = name;
     }
 
-    return { ...r, actorName, actorKind, targetName, targetKind, detailAccountNames };
+    const detailCharacterNames: Record<string, string> = {};
+    for (const key of DETAIL_CHARACTER_KEYS[r.action] ?? []) {
+      const id = detailCharacterId(r.details?.[key]);
+      const name = id !== null ? (nameByCharacterId.get(id) ?? null) : null;
+      if (name !== null) detailCharacterNames[key] = name;
+    }
+
+    return {
+      ...r,
+      actorName,
+      actorKind,
+      targetName,
+      targetKind,
+      detailAccountNames,
+      detailCharacterNames,
+    };
   });
 }
 
