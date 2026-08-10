@@ -1297,7 +1297,8 @@ function AccountRow({
                             its own confirmation and the effect would never
                             run — the exact failure the first attempt at
                             `unlinkDiscordAction` hit above (see the comment
-                            at :1099-1111). Binding the action for a
+                            over `<div className="drawer__confirm">`). Binding
+                            the action for a
                             non-candidate is harmless: there is no submit
                             control inside to press, and the action
                             re-authorizes server-side regardless.

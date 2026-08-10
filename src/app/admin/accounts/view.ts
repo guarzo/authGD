@@ -39,8 +39,8 @@
  * Both shapes end at the same sentence-building function below, so there is
  * one copy of "what does 'tier' outcome say" rather than two.
  *
- * The pressed control is exactly what each of those nine changes out from
- * under itself — `setTierAction`'s own matching button locks (a locked
+ * In eight of those nine, the pressed control is exactly what the action
+ * changes out from under itself — `setTierAction`'s own matching button locks (a locked
  * tier's button is `disabled`, and a disabled element cannot hold focus at
  * all), `approveAction`'s pending-only buttons unmount into the ordinary tier
  * row, `setStatusAction`'s freeze/wake button swaps branches,
@@ -55,7 +55,11 @@
  * deliberately does not, which is what lets the effect report at all (Task 6).
  * Left alone, the admin's focus falls to
  * `<body>` and a keyboard or screen-reader admin working a long roster has to
- * re-traverse the document to find out whether the press even landed. The
+ * re-traverse the document to find out whether the press even landed.
+ * `syncAccountAction` is the ninth and the exception: a sync button is still a
+ * sync button afterwards, so nothing moves out from under the press, and its
+ * confirmation lands page-level on `ConfirmNotice` with no focus target to
+ * lose. The
  * tenth, `saveNoteAction`, already sits inside `NoteForm`'s `useActionState` —
  * the note field's own form never unmounts or disables itself on a save, so
  * its focus was never at risk, and it already carries its own live-region
