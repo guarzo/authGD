@@ -14,7 +14,8 @@ import {
   type AccessListsEsi,
   type EsiAccessList,
 } from "@/lib/esi/client";
-import { getHolder, getWatchedListIds } from "@/services/access-lists";
+import { getHolder, getWatchedListIds, HOLDER_ROW_ID } from "@/services/access-lists";
+import { getMemberCharacters } from "@/services/desired";
 import { resolveEntityNames } from "@/services/entity-names";
 import { runJob, type JobResult } from "@/services/sync-run";
 import { getFreshAccessToken } from "@/services/tokens";
@@ -146,7 +147,7 @@ async function stillHolder(tx: Dbx, characterId: number): Promise<boolean> {
   const [row] = await tx
     .select({ characterId: accessListHolder.characterId })
     .from(accessListHolder)
-    .where(eq(accessListHolder.id, 1));
+    .where(eq(accessListHolder.id, HOLDER_ROW_ID));
   return row?.characterId === characterId;
 }
 
@@ -166,6 +167,18 @@ async function runReads(args: {
   //    rebuilding: a rebuild would throw away every cached name and re-buy the
   //    whole set every run. The name column is NOT NULL, and an id the job
   //    cannot name is not worth showing in a picker.
+  //
+  //    `access_lists` is nullish in the ESI schema, and the client coerces an
+  //    absent/null field to `[]` (`src/lib/esi/client.ts`) — so "the holder was
+  //    never granted any list" and "ESI omitted the field" are indistinguishable
+  //    here, and both are written as the observation "the holder sees nothing".
+  //    A discovered set of `[]` then reconciles the catalog down to empty too
+  //    (`keep.length > 0 ? ... : undefined` below deletes unconditionally when
+  //    nothing was kept). The blast radius is bounded — the watch list and its
+  //    snapshots are untouched, the page falls back to its honest
+  //    catalog-empty state, and names re-buy next run — but it is the one place
+  //    in this job where an ambiguous read is written as if it were a
+  //    confirmed one.
   let discovered: number[];
   try {
     discovered = await esi.getAccessLists(characterId, accessToken);
@@ -388,6 +401,16 @@ async function readWatched(args: {
     }
     counts.read++;
     for (const r of entryRows(accessListId, detail)) observedIds.add(r.entityId);
+  }
+
+  // The roster's own corporation ids join the same batch. A member's corp is
+  // not necessarily an access-list ENTRY — the "Missing access" panel names it
+  // from the roster side of the comparison, not the list side — so nothing in
+  // the loop above would ever add it. Null means affiliation unknown and is
+  // never a matchable id (src/core/access-list-compare.ts:68).
+  const roster = await getMemberCharacters(db);
+  for (const c of roster) {
+    if (c.corporationId !== null) observedIds.add(c.corporationId);
   }
 
   // 6. Names, last and best-effort: resolveEntityNames never throws, and
