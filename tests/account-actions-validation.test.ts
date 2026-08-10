@@ -6,9 +6,10 @@ import { describe, expect, it, vi } from "vitest";
 // needs requireAccount's own dependencies (next/headers's cookies and
 // getSessionAccount) mocked to resolve, the same way
 // admin-sync-actions-validation.test.ts mocks admin-guard for the equivalent
-// reason. Nothing below this mock touches a real database: the schema
-// rejection throws before setMainCharacter/unlinkCharacter or getDb are ever
-// called.
+// reason. Nothing below this mock reaches a real database: `getDb()` is
+// evaluated (it is the argument to the mocked `getSessionAccount`), but it
+// only builds a client — no query is issued, and the schema rejection throws
+// before setMainCharacter/unlinkCharacter are ever called.
 vi.mock("next/headers", () => ({
   cookies: async () => ({ get: () => ({ value: "session-id" }) }),
 }));

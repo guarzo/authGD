@@ -14,10 +14,11 @@ import { elapsedShort } from "@/app/_components/format-ago";
 import { type ActionOutcome } from "@/app/_components/confirm-group";
 import { queuedNotice } from "./view";
 
-/** Derives its enum from `isJobType` (`@/core/schedules`) — the one place a
- *  job's schedule is written down — rather than duplicating that job-type
- *  list here. `z.custom` is the v4 way to lift an existing type guard into a
- *  schema without re-deriving the literals it checks. */
+/** Defers to `isJobType` (`@/core/schedules`) — the one place a job's schedule
+ *  is written down — rather than restating that job-type list here as literals
+ *  that could drift from it. `z.custom` lifts an existing type guard into a
+ *  schema; it derives no literals of its own, so there is nothing here to keep
+ *  in step. */
 const jobTypeSchema = z.custom<JobType>(isJobType, { error: "invalid_job_type" });
 
 export async function syncAllAction(): Promise<void> {

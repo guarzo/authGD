@@ -39,7 +39,7 @@ describe("readValidationCode", () => {
   });
 });
 
-describe("parseYmd / battleReportUrlProblem (still the single definitions, only reached via schemas below)", () => {
+describe("parseYmd / battleReportUrlProblem (still the single definitions the schemas below build on)", () => {
   it("parseYmd rejects a rollover date rather than normalizing it", () => {
     expect(parseYmd("2026-02-30")).toBeNull();
   });
@@ -301,39 +301,72 @@ describe("corpSharePctFieldSchema — share_format before share_range", () => {
   });
 });
 
-describe("every code emitted by these schemas is mapped in the destination page's own error map", () => {
-  it("NEW_OPERATION_ERRORS covers every code buildCreateOperationSchema can emit", () => {
-    const codes = [
-      "name_required",
-      "date_invalid",
-      "date_future",
-      "url_invalid",
-      "url_scheme",
-    ];
-    for (const code of codes) {
-      expect(Object.hasOwn(NEW_OPERATION_ERRORS, code)).toBe(true);
-    }
-  });
+/**
+ * Reads the code a schema actually emits rather than restating it, so that a
+ * schema whose `error:` string is typo'd fails the coverage assertions below
+ * instead of passing a hand-copied list against a map it no longer matches.
+ */
+function emittedCode(schema: z.ZodType, input: unknown): string {
+  const result = schema.safeParse(input);
+  if (result.success) throw new Error(`expected ${JSON.stringify(input)} to be rejected`);
+  const code = result.error.issues[0]?.message;
+  if (code === undefined) throw new Error("rejection carried no issue");
+  return code;
+}
 
-  it("OPERATION_ERRORS covers every code the field schemas can emit", () => {
-    const codes = [
-      "name_required",
-      "date_invalid",
-      "url_invalid",
-      "url_scheme",
-      "note_required",
-      "total_invalid",
-      "price_invalid",
-      "participant_name_required",
-      "shares_required",
-      "shares_invalid",
-      "shares_positive",
-      "shares_range",
-      "share_format",
-      "share_range",
-    ];
-    for (const code of codes) {
+const CREATE_REJECTIONS: ReadonlyArray<[string, unknown]> = [
+  ["blank name", { name: "", occurredAt: "2026-01-01", battleReportUrl: "" }],
+  ["unparseable date", { name: "Op", occurredAt: "2026-02-30", battleReportUrl: "" }],
+  ["future date", { name: "Op", occurredAt: "2099-01-01", battleReportUrl: "" }],
+  [
+    "unparseable url",
+    { name: "Op", occurredAt: "2026-01-01", battleReportUrl: "zkillboard.com" },
+  ],
+  [
+    "non-http scheme",
+    { name: "Op", occurredAt: "2026-01-01", battleReportUrl: "javascript:alert(1)" },
+  ],
+];
+
+const FIELD_REJECTIONS: ReadonlyArray<[string, z.ZodType, unknown]> = [
+  ["nameFieldSchema", nameFieldSchema, ""],
+  ["occurredAtFieldSchema", occurredAtFieldSchema, "2026-02-30"],
+  [
+    "battleReportUrlFieldSchema (unparseable)",
+    battleReportUrlFieldSchema,
+    "zkillboard.com",
+  ],
+  [
+    "battleReportUrlFieldSchema (scheme)",
+    battleReportUrlFieldSchema,
+    "javascript:alert(1)",
+  ],
+  ["flatPoolFieldSchema (note)", flatPoolFieldSchema, { notes: "", totalValue: "1" }],
+  ["flatPoolFieldSchema (total)", flatPoolFieldSchema, { notes: "n", totalValue: "x" }],
+  ["unitPriceFieldSchema", unitPriceFieldSchema, "x"],
+  ["participantNameFieldSchema", participantNameFieldSchema, ""],
+  ["sharesFieldSchema (blank)", sharesFieldSchema, ""],
+  ["sharesFieldSchema (format)", sharesFieldSchema, "abc"],
+  ["sharesFieldSchema (zero)", sharesFieldSchema, "0"],
+  ["sharesFieldSchema (over max)", sharesFieldSchema, "10000"],
+  ["corpSharePctFieldSchema (format)", corpSharePctFieldSchema, "x"],
+  ["corpSharePctFieldSchema (range)", corpSharePctFieldSchema, "120"],
+];
+
+describe("every code emitted by these schemas is mapped in the destination page's own error map", () => {
+  it.each(CREATE_REJECTIONS)(
+    "NEW_OPERATION_ERRORS maps what buildCreateOperationSchema emits for %s",
+    (_label, input) => {
+      const code = emittedCode(buildCreateOperationSchema(TODAY_UTC), input);
+      expect(Object.hasOwn(NEW_OPERATION_ERRORS, code)).toBe(true);
+    },
+  );
+
+  it.each(FIELD_REJECTIONS)(
+    "OPERATION_ERRORS maps what %s emits",
+    (_label, schema, input) => {
+      const code = emittedCode(schema, input);
       expect(Object.hasOwn(OPERATION_ERRORS, code)).toBe(true);
-    }
-  });
+    },
+  );
 });

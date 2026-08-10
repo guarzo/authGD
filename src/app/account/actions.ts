@@ -24,12 +24,23 @@ import { getSessionAccount } from "@/services/session";
  *  `requireAccount()`, not before — same order those two siblings use — so a
  *  caller who is not signed in gets `requireAccount`'s own redirect regardless
  *  of what they sent, rather than a thrown validation error telling an
- *  unauthenticated request whether its argument even had the right shape. */
-const characterIdSchema = z.number().int().positive({ error: "invalid_character_id" });
+ *  unauthenticated request whether its argument even had the right shape.
+ *
+ *  The code is spelled on every step rather than only the last:
+ *  `parseCharacterId` throws what it reads off the rejected issue, and
+ *  `z.number().int().positive({ error })` attaches the code to `positive`
+ *  alone — so a non-integer would otherwise surface zod's own wording
+ *  ("Invalid input: expected int, received number") as the thrown message. */
+const characterIdSchema = z
+  .number({ error: "invalid_character_id" })
+  .int({ error: "invalid_character_id" })
+  .positive({ error: "invalid_character_id" });
 
 function parseCharacterId(value: number): number {
   const parsed = characterIdSchema.safeParse(value);
-  if (!parsed.success) throw new Error("invalid_character_id");
+  if (!parsed.success) {
+    throw new Error(parsed.error.issues[0]?.message ?? "invalid_character_id");
+  }
   return parsed.data;
 }
 

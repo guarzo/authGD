@@ -25,14 +25,27 @@ import { type ActionOutcome } from "@/app/_components/confirm-group";
  *  `null`; the input type is `FormDataEntryValue | null`, never bare `string`. */
 const idSchema = z.preprocess(
   (value) => Number(value),
-  z.number().refine((n) => Number.isSafeInteger(n) && n > 0, { error: "invalid_id" }),
+  // The `error` on the type gate is not redundant with the refine's, and both
+  // are read: `parseId` below throws the code it takes off the rejected issue,
+  // so a path left without one would surface zod's own generated wording as
+  // the thrown message. `Number()` runs first and maps a non-numeric spelling
+  // to `NaN`, which `z.number()` rejects at the gate — the refine never runs —
+  // so the most likely bad input ("12abc") rejects through the gate while a
+  // well-formed-but-out-of-range one ("-1") rejects through the refine. Both
+  // spell it the same way, so the caller gets `invalid_id` either way.
+  z
+    .number({ error: "invalid_id" })
+    .refine((n) => Number.isSafeInteger(n) && n > 0, { error: "invalid_id" }),
 );
 
 /** Unreachable from the rendered page, so a bad value throws rather than
- *  earning notice copy — the same posture `syncJobAction` takes on `jobType`. */
+ *  earning notice copy — the same posture `syncJobAction` takes on `jobType`.
+ *  The code comes off the rejected issue rather than being restated here, so
+ *  `invalid_id` has one spelling (the schema's) rather than two that can
+ *  drift; same shape as `admin/accounts/actions.ts`'s `assertValid`. */
 function parseId(value: FormDataEntryValue | null): number {
   const parsed = idSchema.safeParse(value);
-  if (!parsed.success) throw new Error("invalid_id");
+  if (!parsed.success) throw new Error(parsed.error.issues[0]?.message ?? "invalid_id");
   return parsed.data;
 }
 

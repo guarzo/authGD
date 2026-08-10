@@ -46,22 +46,41 @@ import {
  * redirect regardless of what they sent, rather than a thrown validation
  * error handing an unauthenticated request a way to distinguish a malformed
  * argument from a well-formed one.
+ *
+ * Each schema spells its code on EVERY path it can reject through, not just
+ * the last one: `assertValid` throws the code it reads back off the issue, so
+ * a path left carrying zod's own generated wording ("Invalid input: expected
+ * number, received string") would surface that wording as the thrown message
+ * instead of this file's code. `z.number().int().positive({ error })` attaches
+ * the code to `positive` alone — hence the repetition on the two schemas that
+ * reject through more than one step.
  */
 const accountIdSchema = z.uuid({ error: "invalid_account_id" });
-const identitySchema = z.string().min(1, { error: "invalid_identity" });
+const identitySchema = z
+  .string({ error: "invalid_identity" })
+  .min(1, { error: "invalid_identity" });
 const listSearchSchema = z.string({ error: "invalid_list_search" });
 const tierSchema = z.enum(["member", "associate", "alumni"], { error: "invalid_tier" });
 const approveTierSchema = z.enum(["alumni", "associate"], { error: "invalid_tier" });
 const statusSchema = z.enum(["active", "cryo"], { error: "invalid_status" });
-const characterIdSchema = z.number().int().positive({ error: "invalid_character_id" });
+const characterIdSchema = z
+  .number({ error: "invalid_character_id" })
+  .int({ error: "invalid_character_id" })
+  .positive({ error: "invalid_character_id" });
 const noteSchema = z.string({ error: "invalid_note" });
 
-/** Parses `value` against `schema`, throwing `Error(message)` — not a
- *  `ZodError` — on rejection, matching every other unreachable-input throw in
- *  this file's siblings. */
-function assertValid<T>(schema: z.ZodType<T>, value: unknown, message: string): T {
+/** Parses `value` against `schema`, throwing `Error(code)` — not a `ZodError`
+ *  — on rejection, matching every other unreachable-input throw in this file's
+ *  siblings. The code comes from the rejected issue's own message, which is
+ *  what each schema's `error:` option puts there, so the code has exactly one
+ *  spelling per schema rather than one on the schema and another repeated at
+ *  each call site. (`error:` is zod v4's spelling of v3's `message:`, which is
+ *  what the older schemas in `src/config.ts` and `src/lib/wanderer/client.ts`
+ *  still use; new schemas here take the v4 form.) */
+function assertValid<T>(schema: z.ZodType<T>, value: unknown): T {
   const result = schema.safeParse(value);
-  if (!result.success) throw new Error(message);
+  if (!result.success)
+    throw new Error(result.error.issues[0]?.message ?? "invalid_input");
   return result.data;
 }
 
@@ -209,10 +228,10 @@ export async function setTierAction(
   _formData: FormData,
 ): Promise<ActionOutcome> {
   const { accountId: actor } = await requireAdminAction();
-  accountId = assertValid(accountIdSchema, accountId, "invalid_account_id");
-  tier = assertValid(tierSchema, tier, "invalid_tier");
-  listSearch = assertValid(listSearchSchema, listSearch, "invalid_list_search");
-  identity = assertValid(identitySchema, identity, "invalid_identity");
+  accountId = assertValid(accountIdSchema, accountId);
+  tier = assertValid(tierSchema, tier);
+  listSearch = assertValid(listSearchSchema, listSearch);
+  identity = assertValid(identitySchema, identity);
   const result = await getDb().transaction((tx) =>
     setTierManual(tx, actor, accountId, tier),
   );
@@ -245,10 +264,10 @@ export async function approveAction(
   _formData: FormData,
 ): Promise<ActionOutcome> {
   const { accountId: actor } = await requireAdminAction();
-  accountId = assertValid(accountIdSchema, accountId, "invalid_account_id");
-  tier = assertValid(approveTierSchema, tier, "invalid_tier");
-  listSearch = assertValid(listSearchSchema, listSearch, "invalid_list_search");
-  identity = assertValid(identitySchema, identity, "invalid_identity");
+  accountId = assertValid(accountIdSchema, accountId);
+  tier = assertValid(approveTierSchema, tier);
+  listSearch = assertValid(listSearchSchema, listSearch);
+  identity = assertValid(identitySchema, identity);
   const result = await getDb().transaction((tx) =>
     approveAccount(tx, actor, accountId, tier),
   );
@@ -267,9 +286,9 @@ export async function returnToAutoAction(
   _formData: FormData,
 ): Promise<ActionOutcome> {
   const { accountId: actor } = await requireAdminAction();
-  accountId = assertValid(accountIdSchema, accountId, "invalid_account_id");
-  listSearch = assertValid(listSearchSchema, listSearch, "invalid_list_search");
-  identity = assertValid(identitySchema, identity, "invalid_identity");
+  accountId = assertValid(accountIdSchema, accountId);
+  listSearch = assertValid(listSearchSchema, listSearch);
+  identity = assertValid(identitySchema, identity);
   const result = await getDb().transaction((tx) =>
     returnTierToAuto(tx, actor, accountId),
   );
@@ -295,10 +314,10 @@ export async function setStatusAction(
   _formData: FormData,
 ): Promise<ActionOutcome> {
   const { accountId: actor } = await requireAdminAction();
-  accountId = assertValid(accountIdSchema, accountId, "invalid_account_id");
-  status = assertValid(statusSchema, status, "invalid_status");
-  listSearch = assertValid(listSearchSchema, listSearch, "invalid_list_search");
-  identity = assertValid(identitySchema, identity, "invalid_identity");
+  accountId = assertValid(accountIdSchema, accountId);
+  status = assertValid(statusSchema, status);
+  listSearch = assertValid(listSearchSchema, listSearch);
+  identity = assertValid(identitySchema, identity);
   const result = await getDb().transaction((tx) =>
     setAccountStatus(tx, actor, accountId, status),
   );
@@ -337,15 +356,15 @@ export async function saveNoteAction(
   formData: FormData,
 ): Promise<NoteSaveState> {
   const { accountId: actor } = await requireAdminAction();
-  accountId = assertValid(accountIdSchema, accountId, "invalid_account_id");
-  listSearch = assertValid(listSearchSchema, listSearch, "invalid_list_search");
+  accountId = assertValid(accountIdSchema, accountId);
+  listSearch = assertValid(listSearchSchema, listSearch);
   // FormData.get() is string | File | null. Coercing a File or a missing field
   // to "" would silently CLEAR the note (setStatusNote maps "" to null) and
   // write a status.note_changed audit entry for an edit nobody requested.
   // Reject the malformed request instead; "" itself stays valid — that is how
   // the form asks for the note to be cleared. This can only happen if the
   // form itself is tampered with, so it stays a throw rather than a race.
-  const raw = assertValid(noteSchema, formData.get("note"), "invalid_note");
+  const raw = assertValid(noteSchema, formData.get("note"));
 
   const result = await getDb().transaction((tx) =>
     setStatusNote(tx, actor, accountId, raw),
@@ -367,9 +386,9 @@ export async function syncAccountAction(
   identity: string,
 ): Promise<void> {
   const { accountId: actor } = await requireAdminAction();
-  accountId = assertValid(accountIdSchema, accountId, "invalid_account_id");
-  listSearch = assertValid(listSearchSchema, listSearch, "invalid_list_search");
-  identity = assertValid(identitySchema, identity, "invalid_identity");
+  accountId = assertValid(accountIdSchema, accountId);
+  listSearch = assertValid(listSearchSchema, listSearch);
+  identity = assertValid(identitySchema, identity);
   await getDb().transaction(async (tx) => {
     await logAudit(tx, { actor, action: "sync.requested", target: accountId });
     await enqueueSync(tx, { kind: "account", accountId });
@@ -384,9 +403,9 @@ export async function promoteAdminAction(
   identity: string,
 ): Promise<void> {
   const { accountId: actor } = await requireAdminAction();
-  accountId = assertValid(accountIdSchema, accountId, "invalid_account_id");
-  listSearch = assertValid(listSearchSchema, listSearch, "invalid_list_search");
-  identity = assertValid(identitySchema, identity, "invalid_identity");
+  accountId = assertValid(accountIdSchema, accountId);
+  listSearch = assertValid(listSearchSchema, listSearch);
+  identity = assertValid(identitySchema, identity);
   const result = await getDb().transaction((tx) => promoteAdmin(tx, actor, accountId));
   if (!result.ok) {
     // promoteAdmin predates AdminMutationResult and returns `error` as
@@ -409,9 +428,9 @@ export async function demoteAdminAction(
   identity: string,
 ): Promise<void> {
   const { accountId: actor } = await requireAdminAction();
-  accountId = assertValid(accountIdSchema, accountId, "invalid_account_id");
-  listSearch = assertValid(listSearchSchema, listSearch, "invalid_list_search");
-  identity = assertValid(identitySchema, identity, "invalid_identity");
+  accountId = assertValid(accountIdSchema, accountId);
+  listSearch = assertValid(listSearchSchema, listSearch);
+  identity = assertValid(identitySchema, identity);
   const result = await getDb().transaction((tx) => demoteAdmin(tx, actor, accountId));
   if (!result.ok && result.error === "last_admin") {
     // Surface the service's protection instead of a 500 (carry-over).
@@ -452,9 +471,9 @@ export async function unlinkDiscordAction(
   _formData: FormData,
 ): Promise<ActionOutcome> {
   const { accountId: actor } = await requireAdminAction();
-  accountId = assertValid(accountIdSchema, accountId, "invalid_account_id");
-  listSearch = assertValid(listSearchSchema, listSearch, "invalid_list_search");
-  identity = assertValid(identitySchema, identity, "invalid_identity");
+  accountId = assertValid(accountIdSchema, accountId);
+  listSearch = assertValid(listSearchSchema, listSearch);
+  identity = assertValid(identitySchema, identity);
   const result = await getDb().transaction((tx) =>
     unlinkDiscord(tx, actor, accountId, "admin"),
   );
@@ -499,10 +518,12 @@ export async function unlinkDiscordAction(
 /**
  * Promote a character to main from the drawer's crew table.
  *
- * `characterId` is bound at render time from the row's own crew list, so it is
- * not user input in the way a form field would be — but the service still
- * verifies the character belongs to the account, which is what makes a forged
- * request land on `not_found` rather than on someone else's account.
+ * `characterId` is bound at render time from the row's own crew list, but a
+ * bound argument round-trips through the client exactly as a form field does,
+ * so it is parsed here like every other argument (see this file's docblock).
+ * The service independently verifies the character belongs to the account,
+ * which is what makes a forged request that clears the parse land on
+ * `not_found` rather than on someone else's account.
  *
  * Returns an `ActionOutcome` rather than redirecting: the control lives inside
  * the drawer, and a redirect would collapse it.
@@ -515,9 +536,9 @@ export async function setMainAction(
   _formData: FormData,
 ): Promise<ActionOutcome> {
   const { accountId: actor } = await requireAdminAction();
-  accountId = assertValid(accountIdSchema, accountId, "invalid_account_id");
-  characterId = assertValid(characterIdSchema, characterId, "invalid_character_id");
-  listSearch = assertValid(listSearchSchema, listSearch, "invalid_list_search");
+  accountId = assertValid(accountIdSchema, accountId);
+  characterId = assertValid(characterIdSchema, characterId);
+  listSearch = assertValid(listSearchSchema, listSearch);
   const result = await getDb().transaction((tx) =>
     setMainCharacterAsAdmin(tx, actor, accountId, characterId),
   );

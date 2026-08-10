@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
 // Every action below now validates its bound arguments (via `assertValid`)
-// AFTER calling `requireAdminAction()`, not before — see this file's own
-// docblock. That means the guard has to resolve for any of these throws to be
-// reached at all, mocked rather than exercised for real, the same pattern
+// AFTER calling `requireAdminAction()`, not before — see the docblock at the
+// top of src/app/admin/accounts/actions.ts. That means the guard has to
+// resolve for any of these throws to be reached at all, mocked rather than
+// exercised for real, the same pattern
 // admin-sync-actions-validation.test.ts and
 // admin-access-lists-actions-validation.test.ts already use. Nothing below
 // this mock touches a real database: every rejection throws before
