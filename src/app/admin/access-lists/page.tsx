@@ -106,13 +106,18 @@ export default async function AdminAccessListsPage({
   // One batched cache read for every id the detail panels will print, rather
   // than one per row. Unresolved ids render bare — `lookupEntityNames` is a
   // cache read, and a name we have never fetched is not a reason to fail a
-  // page.
+  // page. `missingAccess` entries name a ROSTER character's corp, not an
+  // access-list entity — the job's `readWatched` fetches those alongside the
+  // list entities precisely so this read can find them.
   const names = await lookupEntityNames(
     db,
     compared.flatMap((c) => [
       ...c.comparison.nonMembers,
       ...c.comparison.broadGrants.flatMap((g) =>
         g.entityId === null ? [] : [g.entityId],
+      ),
+      ...c.comparison.missingAccess.flatMap((m) =>
+        m.corporationId === null ? [] : [m.corporationId],
       ),
     ]),
   );
@@ -311,7 +316,7 @@ function StopWatching({ accessListId }: { accessListId: number }) {
  * covered-member count is OUR members only — the page must never imply a
  * corp-granted list is fully accounted for.
  */
-function AccessListDetail({
+export function AccessListDetail({
   detail,
   readStatus,
   comparison,
