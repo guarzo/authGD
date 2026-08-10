@@ -2754,6 +2754,54 @@ test("the notes Save control sits at the page's standalone hit-target grade", as
 });
 
 /**
+ * The same ruling, one control type over. R1 scopes the 28px grade by the
+ * reason for it — rows carrying a control set, read many at a time — and says
+ * so outright: "A disclosure drawer is not in-row for this purpose and takes
+ * 36px." These four summaries are page-level sections of a draft operation,
+ * not table rows, and they were taking the in-row ration.
+ *
+ * Every `.disc` on the page rather than a named one: the class has exactly
+ * four call sites, all here, and a per-summary assertion would pass while a
+ * fifth was added at the wrong grade. Compared against `Finalize` for the same
+ * reason the test above does it — the number has to mean "this page's own
+ * standalone grade", not a constant restated.
+ */
+test("the page-level disclosures sit at the standalone hit-target grade", async ({
+  page,
+  context,
+}) => {
+  const operator = await seedMember(db, {
+    name: "Disc FC",
+    tier: "member",
+    status: "active",
+  });
+  await context.addCookies([await sessionCookieFor(db, operator.id)]);
+
+  await page.goto("/payouts/new");
+  await page.getByLabel("Name").fill("Disclosure roam");
+  await page.getByLabel("Date").fill("2026-08-01");
+  await page.getByRole("button", { name: "Create operation" }).click();
+  await expect(page.getByRole("heading", { name: "Disclosure roam" })).toBeVisible();
+
+  const finalizeBox = await page.getByRole("button", { name: "Finalize" }).boundingBox();
+  expect(Math.round(finalizeBox!.height)).toBe(36);
+
+  const summaries = page.locator("details.disc > summary");
+  const count = await summaries.count();
+  // A draft with no pools and no participants still renders more than one, so
+  // a zero here would mean the locator stopped matching rather than that the
+  // grade holds.
+  expect(count).toBeGreaterThan(1);
+  for (let i = 0; i < count; i++) {
+    const box = await summaries.nth(i).boundingBox();
+    expect(
+      Math.round(box!.height),
+      await summaries.nth(i).innerText(),
+    ).toBeGreaterThanOrEqual(Math.round(finalizeBox!.height));
+  }
+});
+
+/**
  * Seeds a *draft* operation — pools, participants, or both. `seedFinalizedRoster`
  * above cannot stand in for this: `canEdit` is
  * `access.isOperator && operation.status === "draft" && !locked`

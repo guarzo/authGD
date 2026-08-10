@@ -436,6 +436,89 @@ test("housekeeping's collapsed line states health when nothing needs attention",
 });
 
 /**
+ * The collapsed line is the only place the flagged member names appear while
+ * the group is shut, and it is a sentence rendered as a `Status` — so it
+ * inherited `.st`'s `white-space: nowrap`, which is written for a one-word
+ * token in a table cell. At 320px that held ~41 unbreakable characters on one
+ * line and pushed them out of the panel.
+ *
+ * Both jobs faulted, because that is the longest the sentence gets and the
+ * state in which it matters most: an admin who cannot read past "token-health
+ * fai…" has to open the group to learn what the line exists to tell them.
+ * Wrapping, never truncating — the names are the payload.
+ */
+test("housekeeping's collapsed line wraps inside the panel at 320px", async ({
+  page,
+  context,
+}) => {
+  await asAdmin(context);
+  await db.insert(syncRun).values([
+    {
+      jobType: "token-health",
+      startedAt: ago(2 * MIN),
+      finishedAt: ago(2 * MIN - 300),
+      status: "failed",
+      errorSummary: "token refresh failed for 3 accounts",
+      counts: null,
+    },
+    {
+      jobType: "purge",
+      startedAt: ago(3 * MIN),
+      finishedAt: ago(3 * MIN - 300),
+      status: "failed",
+      errorSummary: "purge could not acquire its lock",
+      counts: null,
+    },
+  ]);
+  await page.setViewportSize({ width: 320, height: 720 });
+  await page.goto("/admin/sync");
+
+  const summary = page.locator(".strip__group-disc > summary");
+  // Whole sentence, both names, nothing elided.
+  await expect(summary).toHaveText("2 jobs · token-health failed, purge failed");
+
+  // The measurement, not the rule: the sentence's own painted box stays inside
+  // the strip that contains it. Measured on the `.st`, not on the `<summary>`
+  // — an overflowing flex item spills past its container's edge without
+  // growing it, so the summary's own right edge sits at the panel boundary
+  // whether the line fits or not, and asserting on it passes vacuously.
+  const fit = await summary.locator(".st").evaluate((el) => ({
+    right: el.getBoundingClientRect().right,
+    limit: el.closest(".strip")!.getBoundingClientRect().right,
+  }));
+  expect(fit.right, "collapsed line overflows the strip at 320px").toBeLessThanOrEqual(
+    Math.ceil(fit.limit),
+  );
+
+  // And it wrapped to get there rather than being narrow enough all along.
+  // Measured against the rule it overrides: put `.st`'s own `white-space:
+  // nowrap` back on the element and the line demands more width than it was
+  // given. That comparison is what makes this a test of the media-query rule
+  // rather than of the seed happening to be short — it fails if the rule is
+  // dropped, and it also fails if the rule never did anything.
+  const width = await summary.locator(".st").evaluate((el) => {
+    const wrapped = el.getBoundingClientRect().width;
+    const prev = el.style.whiteSpace;
+    el.style.whiteSpace = "nowrap";
+    const nowrap = el.getBoundingClientRect().width;
+    el.style.whiteSpace = prev;
+    return { wrapped, nowrap };
+  });
+  expect(width.nowrap, "the line fits at 320px even unwrapped").toBeGreaterThan(
+    width.wrapped,
+  );
+
+  // The page itself still does not scroll sideways (WCAG 1.4.10).
+  const doc = await page.evaluate(() => ({
+    scroll: document.documentElement.scrollWidth,
+    client: document.documentElement.clientWidth,
+  }));
+  expect(doc.scroll, "page-level horizontal scroll at 320px").toBeLessThanOrEqual(
+    doc.client,
+  );
+});
+
+/**
  * A job JOB_CRON schedules but that has no rows at all. Before this it was an
  * absent row, and an absent row is the hardest thing on a page for an eye to
  * catch.

@@ -3874,7 +3874,18 @@ h3.rule-head__label {
   display: flex;
   align-items: center;
   gap: var(--s-2);
-  min-height: 1.75rem;
+  /* R1's standalone grade, not the in-row one. The 28px grade is scoped by the
+     reason for it — rows carrying a control set, read many at a time — and
+     DESIGN.md states the consequence outright: "A disclosure drawer is not
+     in-row for this purpose and takes 36px." All four `.disc` call sites are
+     page-level sections of `/payouts/[id]` (`page.tsx:135`, `:844`, `:1165`,
+     `appraise-form.tsx:183`); nothing wearing this class sits in a table row.
+
+     `PaymentHistory`'s "payments (N)" toggle is unaffected and should be:
+     `Disclosure` passes `className` through with no default, that call site
+     passes none, and it is styled by `.log summary` above — where it is
+     genuinely in-row and the 28px grade is the right one. */
+  min-height: 2.25rem;
 }
 
 .disc > summary::-webkit-details-marker {
@@ -4483,6 +4494,33 @@ h3.rule-head__label {
 
   .strip__name {
     flex: 1 1 100%;
+  }
+
+  /* The housekeeping group's collapsed line is a sentence wearing a status
+     token's clothes, and `.st`'s `white-space: nowrap` is written for the
+     token: one uppercase word in a table cell, which must not break. Here the
+     same rule holds `2 jobs · discord.sweep overdue, wanderer.sweep overdue`
+     on one line in a region ~233px wide at 320, so the group's own summary —
+     the only place those member names appear while the group is collapsed —
+     leaves the panel. Not truncated: the names are the payload, and a group
+     that cannot say which of its jobs is overdue is a group there is no
+     reason to collapse.
+
+     Scoped to this summary rather than relaxed on `.st`, which is correct
+     everywhere else it lands.
+
+     `align-items: baseline` on the summary, replacing the base rule's
+     `center`: once the sentence occupies three lines, centring puts the `+`
+     marker halfway down the block instead of beside the line it opens. The
+     absolute-gutter treatment `.strip__disc > summary` takes above is not
+     needed here — that one exists because `.strip__name` claims a 100%
+     basis and strands the marker on a line of its own; nothing here does. */
+  .strip__group-disc > summary {
+    align-items: baseline;
+  }
+
+  .strip__group-disc > summary .st {
+    white-space: normal;
   }
 }
 
