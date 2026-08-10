@@ -4270,6 +4270,36 @@ h3.rule-head__label {
   max-width: 34ch;
 }
 
+/* `ConfirmGroup`'s own `Notice` (confirm-group.tsx), scoped to this page's
+   drawer specifically. `.notice` alone caps at `--measure` (68ch) — sized for
+   a page-level notice with a whole page to grow into — which is wide enough,
+   inside `.drawer__controls`' flex row, to push the groups after it (Cryo,
+   Discord, Note, History) onto a line of their own the instant a long enough
+   sentence lands, the same re-wrap `.drawer__note` above exists to prevent for
+   the tier-lock sentence. 34ch is that same cap, for the same reason: a
+   `Notice` sitting in this group is exactly the same kind of control-row prose
+   `.drawer__note` already measures for, not a document-level notice.
+
+   Scoped to `/admin/accounts` only, and structurally rather than by
+   convention: `<div class="drawer">` is emitted by exactly one branch of
+   `Disclosure` (`as="row"`, disclosure.tsx), which only this page uses.
+   `/admin/sync` renders the identical `ConfirmGroup` but mounts it under
+   `as="details"`, whose wrapper carries no `.drawer`, so this rule cannot
+   reach it and that page keeps `.notice`'s own 68ch/`--measure` cap.
+
+   `margin-bottom: 0` for a second reason, not the same one: `.notice` carries
+   `margin-bottom: var(--s-5)` sized for a notice that PRECEDES the content it
+   is announcing (an error banner above a form). `ConfirmGroup` renders its
+   `Notice` last, after every button in the group, so in the Discord group
+   (whose `.drawer__confirm` is `display: contents`) it is a flex item with
+   nothing after it, and in the tier and Cryo groups it lands in the middle of
+   `.drawer__group`'s grid, where `gap` already owns the spacing and `--s-5`
+   would open a hole above the `set by` and `since` lines that follow. */
+.drawer .notice {
+  max-width: 34ch;
+  margin-bottom: 0;
+}
+
 .drawer__crew {
   display: grid;
   gap: var(--s-2);

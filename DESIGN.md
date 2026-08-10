@@ -358,6 +358,36 @@ reading the code cannot see the failure; only someone using the app can.
   a standing, self-contained lifecycle control with its own permanent caption
   — and stays distinct from the `<td>` case rather than replacing it.
 
+  **A drawer action confirms inline and rejects by redirect.** R2 puts controls
+  inside a `Disclosure`, whose open/closed state is `useState` in the route
+  tree, so a `redirect()` (even back to the same URL) replaces that tree and
+  closes the drawer the admin is working in. Two e2e failures established this
+  the expensive way. Hence the split: a *success* stays in place, threading a
+  sentence back through `useActionState` into `ConfirmGroup`'s `Notice`
+  (`confirm-group.tsx`), never through a `?done=` redirect. A *rejection* does
+  the opposite and redirects through `redirectOnMutationError`, because in
+  every one of those cases there is no drawer context left worth preserving:
+  `not_found` means the row was merged away, `not_pending` means someone else
+  approved it out of the filter, and `not_authorized` means the *actor's* own
+  admin bit was cleared between the render and the press, so the page itself
+  is no longer theirs to be standing on. The redirect lands back on the same
+  filtered view the admin was working (`listSearch` rides along; it
+  deliberately does not assume the pending queue) with a `.notice--bad`
+  explaining why. `e2e/admin.spec.ts`'s "approving an account someone else
+  already approved lands on a notice" asserts that redirect deliberately.
+
+  One rejection is exempt, and the test for the exemption is whether the row is
+  still there and still wrong. `unlinkDiscordAction`'s `not_linked` fails that
+  test in the other direction: the row survives, the drawer's Discord group is
+  gated on the row reading as linked, and nothing has re-queried since it
+  rendered, so the admin is looking at a stale claim rather than at a row that
+  left. It resolves inline like a success (`revalidatePath` to correct the
+  display, plus a `tone: "warn"` outcome to say the press did not do what it
+  looked like it would) rather than redirecting away from a drawer that is
+  still pointed at something real. `/account`'s own `unlinkDiscordAction` can
+  stay silent on the identical race only because it is not in a drawer: it
+  redirects, and the fresh render corrects the display for free.
+
 - **Information may not live only in the assistive-tech channel.** Parity runs
   in both directions. The usual failure is a control with no accessible name;
   this codebase's failure is the inverse — a `role="status"` confirmation
