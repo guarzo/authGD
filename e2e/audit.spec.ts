@@ -315,7 +315,7 @@ test("mono columns fit their widest value instead of painting over the next one"
  *
  * The width half of this guards the other way the hint can distort its cell.
  * A grid item contributes its max-content width to the track, so once the
- * Action hint became a sentence ("matches the start of an action, ...") rather
+ * Action hint became a sentence ("what happened, like tier.changed") rather
  * than `e.g. tier.`, it was wider than the input and sized the cell — the
  * Action field rendered 257px against its siblings' 199px. `.filter-form__hint`
  * zeroes its inline-size to opt out of that; this is what would catch the opt-out

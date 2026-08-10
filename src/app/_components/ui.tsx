@@ -228,7 +228,7 @@ export type Tone = "ok" | "warn" | "bad" | "off" | "neutral";
  * `{tone, label}` pair. A bound pair was considered — it's what would make
  * `<Status tone="ok">dead</Status>` a type error — but the 56 call sites
  * don't share a vocabulary: "ok" tone alone backs "ok", "valid", "linked",
- * "on" and a computed "3/5 ok" across four unrelated domains (token health,
+ * "on" and a computed "3/5 healthy" across four unrelated domains (token health,
  * map presence, Discord link, cryo), and two sites pass a tone computed from
  * a `syncRunStatusEnum` value (`admin/sync/page.tsx`) whose label is that
  * same run's raw status string. A single closed word list would either have

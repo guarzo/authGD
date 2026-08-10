@@ -1,4 +1,4 @@
-# authGD — focused identity and access for EVE corporations and alliances
+# authGD — focused identity and access for one EVE alliance
 
 <p align="center">
   <a href="https://github.com/guarzo/authGD/actions/workflows/ci.yml"><img src="https://github.com/guarzo/authGD/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
@@ -15,9 +15,8 @@
 </p>
 
 authGD is a focused, self-hosted identity and access manager for one EVE Online
-corporation or alliance. Members sign in with EVE SSO, link their characters,
-and keep Discord roles, Wanderer ACL access, and in-game standings synchronized
-from one account.
+alliance. Members sign in with EVE SSO, link their characters, and keep Discord
+roles, Wanderer ACL access, and in-game standings synchronized from one account.
 
 It is an opinionated alternative to a full Alliance Auth deployment for a group
 that wants this exact workflow and nothing else. It is not a multi-tenant
@@ -25,11 +24,13 @@ community platform, not a plugin framework, and not a general-purpose EVE
 dashboard.
 
 > [!IMPORTANT]
-> **One deployment serves one corporation or alliance.** It has a single
-> `ALLIANCE_ID`, a single Discord guild, a single Wanderer ACL, and a single
-> standings label. There is no multi-tenancy — running it for two groups means
-> running it twice. EVE SSO, Discord, Wanderer, and in-game standings are all
-> required today; none can currently be switched off.
+> **One deployment serves one alliance.** It has a single `ALLIANCE_ID`, a
+> single Discord guild, a single Wanderer ACL, and a single standings label.
+> There is no multi-tenancy — running it for two groups means running it twice.
+> Membership is alliance-wide and there is no `CORPORATION_ID`: a single
+> corporation cannot scope authGD to its own members, and every character in the
+> configured alliance qualifies. EVE SSO, Discord, Wanderer, and in-game
+> standings are all required today; none can currently be switched off.
 
 ## What authGD manages
 
@@ -63,7 +64,8 @@ is also why it will not cover everything a larger organization needs.
 
 | Good fit | Look elsewhere when you need |
 | --- | --- |
-| One corporation or alliance running its own deployment | Multiple unrelated groups in one deployment |
+| One alliance running its own deployment | Multiple unrelated groups in one deployment |
+| Membership that follows the configured alliance | Membership scoped to one corporation inside a larger alliance |
 | EVE SSO, Discord, Wanderer, and standings as one fixed workflow | Integrations you can enable and disable independently |
 | A small, reviewable TypeScript application | A plugin ecosystem or broad service provisioning |
 | Automatic membership and access reconciliation | A general EVE community portal, asset tracker, or intel platform |
@@ -200,10 +202,10 @@ Other useful scripts: `npm run build`, `npm run typecheck`, `npm run lint`,
 `npm run format:check`, `npm run test:watch`, and `npm run db:generate` to author
 a new migration after changing the Drizzle schema.
 
-## Running it for your corp
+## Running it for your alliance
 
 The quickstart above runs on fake credentials. To point a deployment at your own
-corp you need accounts on four external services. Every value below goes in
+alliance you need accounts on four external services. Every value below goes in
 `.env` (or your host's secret store); [`docs/ops.md` → Environment
 variables](docs/ops.md#environment-variables) is the authoritative
 variable-by-variable reference and deployment runbook, and this section is how
@@ -272,9 +274,9 @@ to `live` when the diffs look right.
 
 ## Making it yours
 
-Nothing corp-specific is compiled in. The display name, tagline, tier labels, and
-login-page copy are all environment variables — every one optional, each falling
-back to a neutral default:
+Nothing group-specific is compiled in. The display name, tagline, tier labels,
+and login-page copy are all environment variables — every one optional, each
+falling back to a neutral default:
 
 | Variable                                                    | Where it shows                               | Default                                       |
 | ----------------------------------------------------------- | -------------------------------------------- | --------------------------------------------- |
@@ -315,7 +317,7 @@ repository documentation and is MIT licensed like the code.
 
 `PRODUCT.md` and `DESIGN.md` describe the reference deployment's own voice and
 visual language. They are a design record, not a template: if you are actively
-developing a fork, rewrite them for your corp rather than treating their
+developing a fork, rewrite them for your group rather than treating their
 personality choices as requirements.
 
 ## Documentation

@@ -2,6 +2,7 @@
 
 import { createContext, useContext, useId, useState, type ReactNode } from "react";
 import { useFormStatus } from "react-dom";
+import { useConfirmReport } from "./confirm-group";
 import { useSubmitGuard } from "./submit-guard";
 
 /**
@@ -240,11 +241,12 @@ export function ConfirmCost({
  * exactly who derole-don't-boot is protecting. Omitted where the visible label
  * already carries its object.
  *
- * `armedClassName` lets a caller upgrade the visual grade only once armed
- * (e.g. FREEZE and UNLINK go to full `.btn--danger` red only on confirm,
- * never at rest) while REVOKE, which is already `.btn--danger` at rest, can
- * omit it and keep the same class in both states — its rest colour and grade
- * are not supposed to change at all.
+ * `armedClassName` lets a caller upgrade the visual grade only once armed:
+ * FREEZE, UNLINK and REVOKE all sit at a quiet grade at rest and go to full
+ * `.btn--danger` red only on confirm. REVOKE was the one exception until the
+ * design pass that followed #193 — it held full `--danger` at rest, which put
+ * four saturated buttons in a four-row admin table and spent the alarm colour
+ * on a recoverable action. No caller now keeps the same class in both states.
  *
  * Width is reserved for the wider of the two labels so the swap never
  * changes the button's own size and reflows the row it sits in — the same
@@ -375,7 +377,27 @@ export function ConfirmSubmit({
   const ctx = useContext(ArmContext);
   const id = useId();
   const { pending } = useFormStatus();
-  const guard = useSubmitGuard(pending);
+  // A refused re-press is silent by design (`submit-guard.ts`): no POST, no
+  // response, nothing for `ConfirmingForm` to forward. That silence is the
+  // right answer for a control that redirects — the navigation the first press
+  // started is visible on its own — and the wrong one inside a drawer, where
+  // the page does not move and the admin is left watching a press do nothing
+  // while the arm step they just cleared has already reset. The group's notice
+  // is where every other outcome in that drawer lands, so it is where this one
+  // lands too.
+  //
+  // Safe to leave standing, per `useConfirmReport`'s rule: the press that was
+  // refused was refused *because* an action is in flight, and that action's own
+  // outcome overwrites this sentence when it resolves. Outside a `ConfirmGroup`
+  // there is no channel, `report` is null, and the guard behaves exactly as it
+  // did before.
+  const report = useConfirmReport();
+  const guard = useSubmitGuard(
+    pending,
+    report
+      ? () => report({ text: "Still working on the last press.", tone: "warn" })
+      : undefined,
+  );
   // Thrown BELOW the hooks, not above them. `confirm` can change between
   // renders, so a throw placed before `useId` would run a different number of
   // hooks than the previous render did, and React's "rendered fewer hooks than

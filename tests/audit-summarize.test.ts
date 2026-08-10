@@ -24,6 +24,12 @@ describe("summarizeDetails", () => {
     );
   });
 
+  it("summarizes an admin-driven main change like a member-driven one", () => {
+    expect(summarizeDetails("admin.main_changed", { mainCharacterId: 90000001 })).toBe(
+      summarizeDetails("account.main_changed", { mainCharacterId: 90000001 }),
+    );
+  });
+
   it("renders an empty payload as an em dash", () => {
     expect(summarizeDetails("unknown.action", {})).toBe("—");
   });

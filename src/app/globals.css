@@ -7,24 +7,58 @@
 /* --- Tokens ------------------------------------------------------------- */
 
 :root {
-  /* Ground and structure. Every neutral is tinted toward the patch navy. */
-  --void: oklch(0.17 0.035 264);
-  --hull: oklch(0.22 0.04 264);
-  --hull-hi: oklch(0.27 0.042 264);
-  --rule: oklch(0.36 0.035 264);
-  /* Lightness fixed by WCAG 1.4.11: clears 3:1 on void, hull and hull-hi,
-     so a control's edge is identifiable on every ground it can sit on. */
-  --rule-strong: oklch(0.56 0.05 264);
+  /* Ground and structure. A neutral near-black, warming as it lightens.
+     Hue 54-58 where any hue applies at all, NOT the blue-slate axis this used
+     to sit on: navy-with-a-gold-
+     accent is the single most-generated "premium dark tool" palette in
+     circulation, and the ground reading as templated was the substance of the
+     feedback this palette answers. Warm ground also lets the seal's navy ring
+     separate from the header bar by hue, which it could not do on navy.
+     Measured, not asserted: every text token below clears 4.5:1 on all three
+     grounds, worst case 4.63 (--ink-faint on a hovered row).
+
+     THE TINT SCALES WITH LIGHTNESS, and that is the whole rule here. It took
+     three passes to get right, so the failed ones are worth recording.
+
+     "Tint every neutral toward the brand hue" is sound advice that silently
+     assumes mid-to-light neutrals. At near-black it inverts: a warm hue reads
+     as BROWN, not as a tinted grey, and the eye judges it by the red-to-blue
+     RATIO rather than the difference. Pass one copied the old navy's chroma
+     (0.035) down to 0.012, which looked conservative in OKLCH and rendered
+     #0e0906 — blue at 57% of red, unmistakably brown, and the first thing
+     anyone said about it. Pass two halved it to 0.006: #0c0a08, R/B still
+     1.50, still visibly brown. The absolute gap was only 4 by then, which is
+     why "R-B is small" was the wrong reassurance — 4 is nothing at rgb(200)
+     and a 50% cast at rgb(12).
+
+     So the ramp below: --void is neutral outright, and each lighter token
+     carries a little more hue, because that is where a tint reads as a tint.
+     The system's warmth lives in --ink, the gold, and the artwork — none of
+     which are near-black, all of which read warm without dragging the page
+     brown. Judge these by R/B in sRGB, never by chroma in OKLCH. */
+  --void: oklch(0.145 0 58);
+  --hull: oklch(0.195 0.001 56);
+  --hull-hi: oklch(0.245 0.002 54);
+  --rule: oklch(0.33 0.004 55);
+  /* Lightness fixed by WCAG 1.4.11: 4.24 / 3.92 / 3.48 against void, hull and
+     hull-hi, so a control's edge is identifiable on every ground it can sit
+     on. */
+  --rule-strong: oklch(0.56 0.008 58);
 
   /* Ink. Warm cream, tinted toward the patch gold. */
-  --ink: oklch(0.94 0.012 85);
-  --ink-dim: oklch(0.78 0.015 85);
-  --ink-faint: oklch(0.66 0.02 264);
+  --ink: oklch(0.93 0.014 85);
+  --ink-dim: oklch(0.77 0.016 80);
+  --ink-faint: oklch(0.63 0.018 70);
 
   /* Signal. Gold is identity; the three signals are semantic, never decor. */
   --gold: oklch(0.83 0.155 88);
   --gold-dim: oklch(0.72 0.14 84);
-  --signal-ok: oklch(0.76 0.13 158);
+  /* Chroma pulled from 0.13 to 0.09. `ok` is the state nobody needs to act on
+     (see the .st--ok rule below, which now spends --ink-dim on it), so the
+     token is kept only for the few places health is genuinely the subject
+     rather than the default. A full-chroma green there is the dashboard
+     signature the palette is getting away from. */
+  --signal-ok: oklch(0.74 0.09 150);
   /* Hue 50, not the 70 this started at. At 70 the warn signal sat 18 degrees
      from --gold / --tier-member with near-identical chroma and 0.03 of
      lightness between them — 0.057 apart in OKLab, which is not enough to
@@ -41,17 +75,22 @@
      0.104 clears it, and colour is never the only carrier anyway (the token
      carries its own word and glyph).
 
-     Contrast is unchanged in kind: 9.43 / 8.54 / 7.44 / 8.41 against --void /
-     --hull / --hull-hi / a hovered row, all far above the 4.5:1 it needs as
-     text and the 3:1 it needs as the .notice--warn border. */
+     Contrast on the neutral ground: 9.75 / 9.01 / 8.00 against --void /
+     --hull / --hull-hi, all far above the 4.5:1 it needs as text and the 3:1
+     it needs as the .notice--warn border. */
   --signal-warn: oklch(0.8 0.15 50);
-  --signal-bad: oklch(0.68 0.19 25);
+  /* 0.66, not the 0.68 of the navy palette and not the 0.64 the first dark probe
+     used. 0.64 measured 4.42 against --hull-hi — under the 4.5 floor exactly
+     when the pointer is on the row, which is the same class of bug as the
+     disabled-opacity one recorded further down. 0.66 measures 5.83 / 5.39 /
+     4.79. Do not darken this to match the ground. */
+  --signal-bad: oklch(0.66 0.19 26);
 
   /* Tiers separate by lightness as well as hue, so they survive
      deuteranopia and protanopia. Always paired with the name in text. */
   --tier-member: oklch(0.83 0.155 88);
-  --tier-associate: oklch(0.72 0.13 245);
-  --tier-alumni: oklch(0.76 0.13 158);
+  --tier-associate: oklch(0.72 0.115 235);
+  --tier-alumni: oklch(0.74 0.09 150);
 
   /* Space: 4 8 12 16 24 32 48 64 96. Rhythm comes from varying the step. */
   --s-1: 0.25rem;
@@ -648,6 +687,57 @@ a:hover {
   max-width: var(--measure-page);
 }
 
+/* /account's own composition: the crew manifest is the subject and keeps the
+   48rem measure above; "Sync schedule" and the closing illustration are
+   material a member reads but does not operate, so from a sensible width
+   they sit beside the manifest in a rail rather than stacked under it. Both
+   `.account-layout__main` and `.account-layout__rail` are matched by
+   `.page--narrow.page--crew > :where(*)` above (a `:where()` selector
+   contributes no specificity), so without this rule the rail would also be
+   capped to 48rem and there would be no room left beside the manifest for
+   it — this un-caps the wrapper on class specificity and re-caps its two
+   children below. `.page`'s own 78rem `--measure-page` still bounds the
+   whole thing; this only gives back the width `--measure-crew` would
+   otherwise take from the wrapper.
+
+   Grid, not flex: the two columns start at the same top edge
+   (`align-items: start`) whatever their own content heights are, which is
+   what keeps the manifest's row pitch — and the fold-count budget measured
+   against it — independent of how tall the rail happens to be. */
+.page--narrow.page--crew > .account-layout {
+  max-width: none;
+  display: grid;
+  grid-template-columns: var(--measure-crew) minmax(16rem, 1fr);
+  align-items: start;
+  gap: var(--s-4) var(--s-7);
+}
+
+/* `min-width: 0` on both: a grid column's implicit minimum is its content's
+   intrinsic width, and the manifest's `Scroller` and the payouts table
+   underneath it would otherwise refuse to shrink below that and force the
+   grid wider than `.page` allows. The manifest column keeps its own 48rem
+   ceiling explicitly — the grid track above already sizes it, but a bare
+   `1fr` sibling makes `minmax`'s auto side track the wider column too
+   without it. */
+.account-layout__main {
+  min-width: 0;
+  max-width: var(--measure-crew);
+}
+
+.account-layout__rail {
+  min-width: 0;
+}
+
+/* Below this, the rail's own width stops being useful — 16rem is already the
+   floor `minmax` above holds it to — and a member scanning a stacked page is
+   a better read than a manifest and a rail both fighting for a narrow
+   screen. One column, manifest first (source order), rail below it. */
+@media (max-width: 64rem) {
+  .page--narrow.page--crew > .account-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
 .page__head {
   margin-bottom: var(--s-6);
 }
@@ -712,14 +802,23 @@ a:hover {
    removed, since a future `.verdict` rendered outside that row — its own row
    again, say — would want the top margin back without anyone having to
    reconstruct why it was there. */
-.verdict {
+/* `.crew-fact` is a crew-wide reading that is NOT a health verdict — the fact
+   every row shares, lifted out of the manifest by `crewNorms` so it is said
+   once (account/page.tsx). It shares the box because it sits on the same head
+   line, and stays a separate class because it makes a different claim, and
+   because `p.verdict .st` is a selector several specs use to mean "the health
+   verdict" specifically. Shared here rather than duplicated so the two cannot
+   drift apart. */
+.verdict,
+.crew-fact {
   margin-top: var(--s-3);
 }
 
 /* The verdict shares the H1's line rather than taking one of its own. The
    token's own top margin is what made it a row; inside the head row it is a
    flex item and the margin only pushes it off the h1's baseline. */
-.page__head-row > .verdict {
+.page__head-row > .verdict,
+.page__head-row > .crew-fact {
   margin-top: 0;
 }
 
@@ -1283,6 +1382,60 @@ h3.rule-head__label {
   padding: var(--s-2) var(--s-3);
 }
 
+/* Round 4 (owner critique): binds an open drawer to the data row it belongs
+   to, so the two read as one object instead of a row with a same-coloured
+   but detached band beneath it. `:has(+ tr…)` reaches the data row from its
+   drawer sibling's own state — `hidden` on `tr.drawer-row--actions` already
+   is that state, so nothing new has to be threaded through from React.
+
+   `--hull`, the same ground `.manifest-panel`'s `<td>` paints below —
+   deliberately not `--hull-hi`: raising this row's ground to `--hull-hi`
+   would change what `--ink-faint` sits on, and the `tr.drawer-row--actions >
+   td` comment below records that pairing was chosen to clear WCAG 4.5:1
+   (`--ink-faint` on `--hull` measures 5.58:1; on `--hull-hi` it drops to
+   4.85:1). A layout change binding a row to its panel is not licence to
+   revisit that.
+
+   Specificity, not luck: `.log tbody tr:not(:has(.log__empty)):hover` (below)
+   weighs (0,3,2), and `:has()`'s own specificity is that of its most specific
+   argument — here `tr.drawer-row--actions:not([hidden])`, itself (0,2,1) — so
+   this selector totals (0,3,3) and wins outright rather than by source order.
+   The explicit `:hover` variant below exists anyway, pinned rather than
+   inherited from the plain rule's win: with `--void: 0.17`, `--hull: 0.22`
+   and `--hull-hi: 0.27`, the general row-hover composite
+   (`color-mix(in oklab, var(--hull-hi) 55%, transparent)`, which composites
+   over `--void` — the `:hover` declaration replaces the plain rule's
+   `background` on the same `<tr>`, and nothing between `body` and the row
+   paints) lands at L 0.225, within a hair of `--hull` itself, so a silent
+   loss of this rule would read as "barely broken" on a screenshot rather than
+   obviously wrong — worth stating outright instead of leaving to a
+   specificity calculation nobody re-derives on sight.
+
+   Adjacency is the other unstated dependency: `+` means this binds only while
+   the drawer row is the data row's IMMEDIATE next sibling. It is today
+   (page.tsx renders `CharacterRow`'s fragment, then any contacts-remedy row
+   after it). Moving the remedy row up between them would silently drop the
+   binding on exactly the faulted rows, with no test to catch it. */
+.log--manifest tbody tr:has(+ tr.drawer-row--actions:not([hidden])) {
+  background: var(--hull);
+}
+
+.log--manifest tbody tr:has(+ tr.drawer-row--actions:not([hidden])):hover {
+  background: var(--hull);
+}
+
+/* The seam between an open row and its panel: `.log td`'s own `border-top`
+   (above) draws a hairline above every cell, including the drawer row's,
+   which put a rule between two `<td>`s now sharing one background — a stripe
+   of `--rule` cutting a solid block in half. Suppressed only while the row is
+   open (`:not([hidden])`): a closed drawer row is invisible either way, but a
+   bare, unconditional override here would be true by accident rather than by
+   reading as "no seam because these are bound", which is the thing this rule
+   exists to state. */
+.log--manifest tr.drawer-row--actions:not([hidden]) > td {
+  border-top: 0;
+}
+
 /* Round 3 (team-lead judgment): collapses the header bar's own
    chrome — `.log th`'s `background`, `border-bottom` and block padding — for
    this table only. Every label in this `<thead>` is now `.visually-hidden`
@@ -1312,7 +1465,9 @@ h3.rule-head__label {
   height: 1px;
 }
 
-/* The manifest's own per-row actions panel — same reasoning as the admin
+/* The manifest's own per-row actions panel — this docblock covers the pair
+   below it, the drawer cell's ground (immediately following) and
+   `.manifest-panel`'s own spacing after that. Same reasoning as the admin
    accounts table's `.drawer` (ruling R1: one open at a time, spans the full
    row's width, nothing competing with it for space, so its controls take the
    36px standalone grade), but not that class. `.drawer` carries
@@ -1329,19 +1484,35 @@ h3.rule-head__label {
    var(--rule)`, floating it in its own band below a SECOND hairline — `.log
    td`'s own `border-top` (:1020) already draws one 1px above this one, so
    the drawer row read as two rules and a gap rather than as an extension of
-   the row it belongs to. Measured: 78px against a 49px alt data row. Binding
-   upward instead of opening a new band: no rule and no top spacing of its
-   own, `--hull` for a background so the panel visually attaches to the row
-   above rather than floating on the page ground, and the weight kept only
-   as `padding-bottom` so the panel still has room before the NEXT row's own
-   hairline. Measured after: ~57px. `--hull` does not resurrect the hover
-   flash `.log tbody tr.drawer-row:hover { background: none }` (:1060) exists
-   to suppress — that rule targets the row's hover state specifically, and
-   this is a static background on the `<td>`'s content, not a hover ground.
-   `--ink-faint` (`.manifest-panel__controls .btn--quiet`'s rest ink, and the
-   status-line labels this panel can carry) measures 5.58:1 against `--hull`,
-   clear of WCAG's 4.5:1 text floor — the same pairing `.log th` already uses
-   for its own `--hull` background.
+   the row it belongs to. Measured: 78px against a 49px alt data row. Round 2
+   bound the panel upward instead by dropping the rule and top spacing, and
+   giving `--hull` to this `<div>` so it read as attached to the row above.
+   That div sat inside the `<td>`'s own padding, though, so the coloured band
+   was inset 8px/12px from the cell — a `--void` gutter around the panel and
+   between it and the row above, the opposite of "attached" once you looked
+   for the seam rather than just the missing rule. Round 4 (owner critique,
+   again) fixed the actual cause: `--hull` moved onto
+   `tr.drawer-row--actions > td` (the rule directly below this comment), which
+   paints full-bleed to the cell's own edges since a `<td>`'s background
+   extends under its padding by default, and the OPEN DATA ROW gets the same
+   `--hull` (the `:has(+ tr…)` rule further above), so
+   panel and row now share one ground with no `--void` gap on any side. The
+   asymmetric `padding-bottom`-only spacing Round 2 used to fake "binds
+   upward" is gone too — see `.manifest-panel` below — now that the shared
+   background does the real binding, the fake one earns nothing but an
+   off-centre button.
+
+   `--hull` does not resurrect the hover flash
+   `.log tbody tr.drawer-row:hover { background: none }` (:1108) exists to
+   suppress — that rule targets the drawer row's OWN hover state, and the
+   background lives on its `<td>` and on the separate data row above, neither
+   of which that selector matches. `--ink-faint`
+   (`.manifest-panel__controls .btn--quiet`'s rest ink, and the status-line
+   labels this panel can carry) measures 5.58:1 against `--hull`, clear of
+   WCAG's 4.5:1 text floor — the same pairing `.log th` already uses for its
+   own `--hull` background. Do not raise the shared ground to `--hull-hi` to
+   make an open row "pop" more: that would change what `--ink-faint` sits on
+   and break this measurement.
 
    56px left indent: measured live, the panel's own `<td>` starts 37px from
    the viewport edge and the NAME column's GLYPHS (not the column boundary)
@@ -1351,9 +1522,21 @@ h3.rule-head__label {
    padding = 56px) minus this panel's own 12px padding, which lines the panel
    up with the column BOUNDARY at 81px instead — nothing is drawn at a
    boundary, so that left a 12px gap between the panel's controls and the
-   name text above them. 56px (93 - 37) puts `controlsLeft === nameLeft`. */
-.manifest-panel {
+   name text above them. 56px (93 - 37) puts `controlsLeft === nameLeft`. This
+   indent is unaffected by the background move above: it is about where the
+   CONTENT starts, not where the colour starts, and the colour moving to the
+   `<td>` changed only the latter. */
+.log--manifest tr.drawer-row--actions > td {
   background: var(--hull);
+}
+
+.manifest-panel {
+  /* Symmetric top/bottom — Round 2's `padding-bottom`-only spacing (see the
+     comment above) was a stand-in for the binding the shared row/panel
+     background now does for real; keeping it asymmetric after that fix is
+     what put the owner's "the button isn't centred in its block" complaint
+     on this panel specifically. */
+  padding-top: var(--s-3);
   padding-bottom: var(--s-3);
   padding-left: 56px;
 }
@@ -1458,64 +1641,57 @@ h3.rule-head__label {
    one grid, which stopped being true when each job started showing only the
    counters it actually moves. What remains is the point below which the status
    cell crushes an error string into a one-word column — under that the Scroller
-   takes over. Column widths otherwise come from content.
+   takes over. Column widths otherwise come from content, except for the
+   trailing spacer column below, which exists to soak up whatever content
+   doesn't ask for.
 
-   These two blocks sit here, above the narrow media query, rather than at the
-   end of the file where they used to: the query releases both floors at 40rem,
-   and same-specificity rules declared after it would win regardless. */
+   This block sits here, above the narrow media query, rather than at the
+   end of the file where it used to: the query releases the floor at 40rem,
+   and a same-specificity rule declared after it would win regardless. */
 .log--runs {
   width: 100%;
   min-width: 44rem;
-  /* `width: 100%` alone hands every byte of the container's leftover space to
-     auto-layout's content-sized columns, and Status — the widest of them, the
-     one holding the folded-in error string — absorbs the largest share of
-     that surplus. Measured on
-     a 6-counter job at the page's own 1164px content width: Status stretched
-     to 336px for "ok" or a one-line error, nearly three columns' worth of
-     blank cell between the badge and the first counter it's supposed to sit
-     beside. `max-content` caps the table at what its own cells actually ask
-     for — different for every job, since each now shows only the counters it
-     moves (see the comment on the table below) — so a fixed rem value would
-     be wrong for most of them. Surplus width becomes trailing space after the
-     table instead of stretching into it; the `min-width` floor above still
-     wins on a narrow container, where `max-content` would only starve it
-     further. */
-  max-width: max-content;
+}
+
+/* Each job shows a different set of counters (see the comment on the table
+   below), so with a bare `width: 100%` the auto-layout algorithm hands every
+   byte of leftover space to whichever content-sized column asks widest —
+   Status, the one holding the folded-in error string. Measured on a
+   6-counter job at the page's own 1164px content width: Status stretched to
+   336px for "ok" or a one-line error, nearly three columns' worth of blank
+   cell between the badge and the first counter it's supposed to sit beside.
+   A fixed rem value would be wrong for most jobs, since the counter set
+   differs per job.
+
+   The fix is this trailing spacer column, not a cap on the table's own width:
+   an empty last `<th>`/`<td>` pair (page.tsx) with nothing in it and no
+   min-width of its own. Auto layout still gives every *other* column exactly
+   what its content asks for; only a column with nothing asking for space —
+   this one — is left to absorb 100% of the surplus. That means each job's
+   drawer now reaches the same right edge as the panel around it (previously
+   ragged: 1604px for membership, 1667px for contacts, 1476px for wanderer,
+   against a ~1866px panel, on the reference 1920px viewport this was
+   measured against) while every real column still hugs its own content.
+   `aria-hidden`, same as the rest of this page's decorative table
+   furniture: it carries no data, so a screen reader has nothing to gain
+   from an announced "blank" column, and the header cell is a `<td>` rather
+   than a `<th>` so it never claims to be one. */
+.log--runs th:last-child,
+.log--runs td:last-child {
+  width: 100%;
 }
 
 /* `.scroller`'s own border is a block box by default: `width` is `auto`,
    which resolves to "fill the available space" regardless of how wide its
-   child actually is. `.log--runs` above stops at its own content's width, so
-   an unmodified `.scroller` left its border running on to the full strip
-   width anyway — the table's header rule ending at content width, ~445px of
-   bare space, then the scroller's own border closing far past it. Measured on
-   the same 6-counter membership job, at the page's own 1200px strip: the
-   table stopped at 721px, the scroller's border at 1166px. That reads as a
-   rendering fault exactly the way 5.6 describes, not because the table's own
-   edge is wrong (it is deliberately content-sized, see above) but because
-   nothing shrank the box drawn around it to match.
-
-   `width: 100%; max-width: max-content`, the same pairing as `.log--runs`
-   above, not the bare `fit-content` keyword: a `fit-content`-sized ancestor
-   feeding a `width: 100%` child (the table) turned out to affect *its own*
-   ancestor's available-width calculation too, in testing — `.scroller-frame`
-   measured 32px narrower than the region actually had at 320px, and the
-   table's designed 320px overflow (the "hands its scroll region a tab stop"
-   test) stopped triggering, because the browser had sized `.scroller` to the
-   table's full max-content demand instead of clamping it to the space on
-   screen. `width: 100%` first keeps that available-space calculation exactly
-   as it was — every other consumer of it downstream is unaffected — and
-   `max-width: max-content` only ever pulls the box *in* from that 100%,
-   never past it, which is the one direction this fix needs.
-
-   Scoped to this table's own scroller, not `.scroller` bare: the class is
-   shared with /admin/audit and /admin/accounts, both fixed- or wide-layout
-   tables that already consume their full region, where this would be a
-   no-op at best and an unreviewed risk at worst for a fix this page's own
-   finding doesn't ask for. */
+   child actually is. Now that `.log--runs` reaches the full width of its
+   container on its own (the spacer column above), the table's own edge and
+   `.scroller`'s border close at the same point without anything special
+   here — this rule is now a no-op for width, kept only so a future change to
+   `.log--runs` doesn't silently regress the border alignment this comment
+   used to fix by hand (was: the table stopped at content width, the
+   scroller's border ran on past it — the same fault 5.6 describes). */
 .scroller:has(.log--runs) {
   width: 100%;
-  max-width: max-content;
 }
 
 /* Third column is Status by construction (Started, Took, Status, …). It is the
@@ -2262,26 +2438,53 @@ h3.rule-head__label {
 .st::before {
   content: "";
   width: 0.5em;
-  background: currentColor;
   flex-shrink: 0;
+  /* Box stays a constant 0.5em square in every tone below, width AND height:
+     an inline-flex box with no baseline of its own synthesizes one from its
+     first flex item (CSS Flexbox §8.5) — the ::before, here — using that
+     item's bottom margin edge. Before this fix, only width held at 0.5em;
+     height varied per tone (0.5em for the signal tones, 0.15em for neutral),
+     so neutral's shorter first item put its bottom edge higher, and
+     `align-items: center` shifted the whole token down to line that edge up
+     with the taller tones beside it in the same row — measured ~1.7px lower
+     in a real browser (Playwright, a scratch page against this stylesheet).
+     Holding the box height constant removes the discrepancy the same way
+     holding its width constant already keeps the column's advance from
+     moving; neutral now draws its thin bar INSIDE the constant box instead
+     of shrinking the box to make one. */
+  height: 0.5em;
   /* Neutral's own mark, drawn thin rather than filled: a bar, not a dot. This
      is the one shape a caller never asks for explicitly (tone="neutral" adds
      no modifier class, so it's what every unrecognised or default Status
      renders), and it has to read as visibly quieter than every signal tone
      below — payouts/page.tsx puts a neutral "N/N paid" next to an ok one with
-     identical wording, so the dot is the only thing telling a draft mid-
-     payment apart from a finished one. Width stays 0.5em in every rule below;
-     only height and radius change, so the column's advance never moves. */
-  height: 0.15em;
+     identical wording, so the bar is the only thing telling a draft mid-
+     payment apart from a finished one. A gradient rather than a shorter box:
+     `background: linear-gradient(currentColor, currentColor) center / 100%
+     0.15em no-repeat` paints the same 0.15em-tall bar the old shrunk box did,
+     centered in the now-constant 0.5em box, so the visible mark is identical
+     in thickness while the box's own geometry — and therefore the
+     synthesized baseline above — never differs between tones. */
+  background: linear-gradient(currentColor, currentColor) center / 100% 0.15em no-repeat;
   border-radius: 1px;
 }
 
+/* Healthy is not an event. DESIGN.md's status-token rule has always said
+   "colour only when the state is actionable; neutral states stay --ink-dim",
+   and this rule was the place the shipped UI contradicted it: every `ok`
+   chip, every LINKED, every "all healthy" count rendered full-chroma green.
+   A screen of green dots reporting that nothing needs doing is the
+   generic-dashboard signature, and it spends the eye's attention on exactly
+   the rows that have no claim on it.
+   --signal-ok is not deleted — it is still right where health is genuinely
+   the subject rather than the default (see .notice--ok) — but the default
+   `ok` token is now as quiet as what it reports. */
 .st--ok {
-  color: var(--signal-ok);
+  color: var(--ink-dim);
 }
 
 .st--ok::before {
-  height: 0.5em;
+  background: currentColor;
   border-radius: 50%;
 }
 
@@ -2295,7 +2498,7 @@ h3.rule-head__label {
      alone. Clipped rather than a border-radius change so a colour-only
      reading of an amber circle can never be mistaken for the ok tone's
      green one. */
-  height: 0.5em;
+  background: currentColor;
   border-radius: 0;
   clip-path: polygon(50% 0%, 0% 100%, 100% 100%);
 }
@@ -2308,7 +2511,7 @@ h3.rule-head__label {
   /* Square: the one filled shape left with straight edges, so bad reads as
      distinct from ok's circle and warn's triangle without adding a fourth
      clip-path. */
-  height: 0.5em;
+  background: currentColor;
   border-radius: 0;
 }
 
@@ -2317,7 +2520,6 @@ h3.rule-head__label {
 }
 
 .st--off::before {
-  height: 0.5em;
   border-radius: 50%;
   background: transparent;
   border: 1px solid currentColor;
@@ -3660,7 +3862,46 @@ h3.rule-head__label {
    control that opens a panel, the same standing as a `<details>` summary, so
    it dims like one. `.btn--quiet .btn--micro` already supplies the button's
    type, colour and 28px height; this only adds the marker `<button>` doesn't
-   get for free the way `<summary>` does. */
+   get for free the way `<summary>` does.
+
+   Icon-only, deliberately: the button used to also carry the visible word
+   "actions" — every row's own, identical, in a table read ten rows at a
+   time, which made the one repeated word the loudest pattern in the manifest
+   (composition pass finding 2). The marker alone is the disclosure
+   affordance everywhere else in this app already uses it (`.row-toggle`,
+   `.disc > summary`), so this is not a new idiom, just this control losing
+   the caption it never needed — `aria-label="${name} actions"`
+   (character-row.tsx) still names the control for assistive tech, unchanged,
+   so nothing moves out of the accessible channel; the sighted channel drops
+   a word that was pure repetition, not a fact (R4 governs facts, and "there
+   is more here" is exactly what the marker already states visually). The
+   alternative this pass considered and rejected — making the row's own name
+   the trigger, `Disclosure as="row"`'s own shape — would fold the whole
+   NAME cell's content (main badge, status summary, location line) into the
+   button's accessible name, which is a real regression for a screen-reader
+   user; the marker stays a control of its own.
+
+   OPEN DEFECT, recorded rather than fixed. As the trailing column the bare
+   marker sits against the table's right edge, ~490px from the name it
+   expands, so ten of them float in an empty column with no visible anchor —
+   which IS the R4 failure the paragraph above claims to avoid, because "there
+   is more here" only reads as a statement about THIS row if it is near this
+   row. Caption-less is fine; caption-less and stranded is not.
+
+   Two fixes were built and measured against this table, and both cost more
+   than the defect (page.tsx's `<colgroup>` carries the numbers): leading the
+   row with ACTIONS costs 52px of the 320px forced-scroll budget, and making
+   NAME fit-width so ACTIONS takes the slack starves the long-location case.
+   The fix that works is moving this control inside the NAME cell, which needs
+   `leadCells` split so page.tsx can pass the name content separately. */
+.row-toggle--actions {
+  /* A square target now that the label is gone — `.btn--micro`'s 28px
+     min-height paired with content-width padding alone would leave this
+     narrower than tall. `min-width` matches it so the WCAG 2.5.8 (AA) 24px
+     floor holds on both axes, not just height. */
+  min-width: 1.75rem;
+}
+
 .row-toggle--actions::before {
   content: "+";
   font-family: var(--font-mono), ui-monospace, monospace;
@@ -3682,11 +3923,14 @@ h3.rule-head__label {
    the button, since `:focus-within` on the button alone would just restate
    `:focus-visible`.
 
-   No width reservation on the ACTIONS column itself: `hasActions` (page.tsx)
-   is uniform across every row of a given account's table today — either
-   every row has this toggle or none do, gated on `characters.length > 1` for
-   the whole table — so there is no per-row PRESENCE change this class needs
-   to guard the column against.
+   No width reservation on the ACTIONS column itself: this toggle's PRESENCE is
+   uniform across every row of a given account's table — `hasActions` (page.tsx)
+   is `!isMain || characters.length > 1`, which is true for every row once the
+   crew is larger than one, and has only one row to answer for when it is not.
+   `showActionsColumn` hoists that same expression to decide whether the column
+   exists at all, so a table either has this toggle on all of its rows or has no
+   ACTIONS column. There is no per-row presence change for this class to guard
+   the column width against.
 
    The marker glyph itself DOES change, on open/close (`[aria-expanded="true"]`
    swaps `+` for `\2212`, above) — that's the axis that could actually resize
@@ -4199,6 +4443,36 @@ h3.rule-head__label {
   max-width: 34ch;
 }
 
+/* `ConfirmGroup`'s own `Notice` (confirm-group.tsx), scoped to this page's
+   drawer specifically. `.notice` alone caps at `--measure` (68ch) — sized for
+   a page-level notice with a whole page to grow into — which is wide enough,
+   inside `.drawer__controls`' flex row, to push the groups after it (Cryo,
+   Discord, Note, History) onto a line of their own the instant a long enough
+   sentence lands, the same re-wrap `.drawer__note` above exists to prevent for
+   the tier-lock sentence. 34ch is that same cap, for the same reason: a
+   `Notice` sitting in this group is exactly the same kind of control-row prose
+   `.drawer__note` already measures for, not a document-level notice.
+
+   Scoped to `/admin/accounts` only, and structurally rather than by
+   convention: `<div class="drawer">` is emitted by exactly one branch of
+   `Disclosure` (`as="row"`, disclosure.tsx), which only this page uses.
+   `/admin/sync` renders the identical `ConfirmGroup` but mounts it under
+   `as="details"`, whose wrapper carries no `.drawer`, so this rule cannot
+   reach it and that page keeps `.notice`'s own 68ch/`--measure` cap.
+
+   `margin-bottom: 0` for a second reason, not the same one: `.notice` carries
+   `margin-bottom: var(--s-5)` sized for a notice that PRECEDES the content it
+   is announcing (an error banner above a form). `ConfirmGroup` renders its
+   `Notice` last, after every button in the group, so in the Discord group
+   (whose `.drawer__confirm` is `display: contents`) it is a flex item with
+   nothing after it, and in the tier and Cryo groups it lands in the middle of
+   `.drawer__group`'s grid, where `gap` already owns the spacing and `--s-5`
+   would open a hole above the `set by` and `since` lines that follow. */
+.drawer .notice {
+  max-width: 34ch;
+  margin-bottom: 0;
+}
+
 .drawer__crew {
   display: grid;
   gap: var(--s-2);
@@ -4439,6 +4713,16 @@ h3.rule-head__label {
   align-items: center;
   gap: var(--s-2);
   flex-wrap: wrap;
+}
+
+/* An ungated `ConfirmingForm` in the crew table renders empty for every
+   character that is not a main-fix candidate — which is most of them. The form
+   has to stay mounted so its effect can report the confirmation after a
+   successful press (see admin/accounts/page.tsx), but an empty flex box still
+   costs its parent `.stack` a gap. Same treatment, same reason, as
+   `.inline-form__err:empty` below. */
+.inline-form:empty {
+  display: none;
 }
 
 /* The rejection message for an in-place editor. Phrasing content rather than

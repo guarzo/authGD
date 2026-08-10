@@ -71,13 +71,13 @@ filtered out of the report. The rationale lives next to the setting in
 `playwright.config.ts`. If you are here because CI is red and retries look
 tempting, that comment is aimed at you.
 
-## The one root cause behind every entry below
+## The root cause behind mechanisms 1 and 2
 
 **A test pressed a control before the previous action reached the client.**
 
 That is the whole of it. Server actions on these pages mostly `revalidate` in
 place rather than navigating, so nothing unmounts and nothing about the DOM
-obviously says "still working". The three ways it goes wrong differ only in what
+obviously says "still working". The two ways it goes wrong differ only in what
 the too-early press collides with:
 
 | # | Collides with | Symptom | Seen in |
@@ -87,12 +87,49 @@ the too-early press collides with:
 
 Two, not "the two": nobody has enumerated the client state a revalidation can
 reset. Mechanism 2 was found by measuring, not by reasoning from the guard, and
-the next one probably will be too.
+the next one probably will be too. It was — see "A flake that was none of the
+above" below, which did not involve a press at all.
 
 **Waiting on the database is the trap common to all of them.** The row commits
 before the action's response reaches the browser, so an `expect.poll` against
 Postgres can go green with the form still busy. Wait on a signal the *client*
 produces, then check the database to prove the server agreed.
+
+## A flake that was none of the above
+
+`not-found.spec.ts:84` ("clicking a since-deleted operation…") failed
+intermittently in CI on its `toHaveTitle` line, and it is worth its own heading
+precisely because it does not fit the table above: no control was pressed early,
+no revalidation reset anything, and no server action was involved.
+
+The mechanism was the router's **prefetch**. The member is on `/payouts` with
+the row link in view, so Next prefetches `/payouts/<id>` and the response —
+title and all — lands while the operation still exists. The test then deletes
+the operation and clicks. The navigation fetches fresh and the body renders the
+404 correctly, but the head that gets committed is the prefetched one, so the
+heading reads "No such operation" while the tab reads "Thursday roam".
+
+Measured rather than argued, and the measuring is the transferable part:
+
+| Condition | Result |
+| --- | --- |
+| production build, warm server | **4/20**, then 3/8 |
+| same, prefetch responses aborted (`next-router-prefetch: 1` → `route.abort()`) | 0/20 |
+| local `next dev` | 0/18 |
+| production build, cold server | 0/6 |
+
+Two things in that table generalise. **Server warmth is a condition**, not
+noise: every run that reproduced was one where the pages were already compiled
+and the whole 20 finished in under a minute, and the first attempt at this bug
+missed it entirely by running cold. And **the confirming experiment is the one
+that removes the suspected cause**, not the one that reproduces the symptom
+again — allowing prefetch and blocking prefetch is what turned a plausible story
+into the answer.
+
+The fix is in `src/app/payouts/[id]/not-found.tsx`: the boundary hoists its own
+`<title>`, which travels with the body instead of with the metadata. 40/40 after
+it, prefetch still firing. Its docblock carries the rest, including the
+duplicate-`<title>` cost it accepts.
 
 ## Mechanism 1: the guard refuses a press while the last one is in flight
 

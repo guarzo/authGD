@@ -92,12 +92,53 @@ function containerState(): "missing" | "running" | "stopped" {
   return res.stdout === "true" ? "running" : "stopped";
 }
 
+/**
+ * Blocks until Postgres is reachable the way the migration will reach it: over
+ * TCP, on a server that is past initdb.
+ *
+ * The distinction is not pedantic. On first boot the entrypoint initialises the
+ * cluster behind a *temporary* server started with `-c listen_addresses=''` —
+ * unix socket only, no TCP listener for that entire phase — and only then stops
+ * it and execs the real one. A `pg_isready` that goes through the socket
+ * answers "ready" throughout, so provisioning ran ahead and the migration
+ * opened a TCP connection against a container with nothing listening on it.
+ * Docker's proxy accepts that connection and closes it, which node-postgres
+ * reports as `Connection terminated unexpectedly` (or `ECONNRESET`) on
+ * `CREATE SCHEMA IF NOT EXISTS "drizzle"` — drizzle's first statement. It only
+ * bit when initdb ran slow enough to outlast the migration process's own
+ * startup, which is why it read as a flake rather than a bug.
+ *
+ * `-h 127.0.0.1` forces the check through the container's TCP listener, which
+ * exists only once the real server is up. That is exactly the condition the
+ * migration needs, so readiness now means what its name claims.
+ *
+ * Polling the mapped host port from here would not be an improvement. Under
+ * Docker's default userland proxy the host port is accepted from the moment the
+ * container starts, well before Postgres listens behind it, so the check would
+ * report ready *earlier* than the socket check it replaced. Disabling that proxy
+ * turns the early accept into a refusal and would make host-port polling work —
+ * but resting on a daemon-wide setting is a weaker guarantee than asking the
+ * server itself, which is correct either way.
+ *
+ * Retrying the migration on connection errors would also mask this window, but
+ * it buries genuine connectivity failures under a backoff and leaves every
+ * future caller of this function holding the same wrong guarantee.
+ */
 function waitForReady(): void {
   const deadline = Date.now() + 60_000;
   while (Date.now() < deadline) {
     if (
-      docker(["exec", CONTAINER_NAME, "pg_isready", "-U", "authgd", "-d", "authgd_test"])
-        .ok
+      docker([
+        "exec",
+        CONTAINER_NAME,
+        "pg_isready",
+        "-h",
+        "127.0.0.1",
+        "-U",
+        "authgd",
+        "-d",
+        "authgd_test",
+      ]).ok
     ) {
       return;
     }

@@ -698,10 +698,27 @@ describe("payout list cursor encoding", () => {
 });
 
 describe("listCharacterNames", () => {
-  async function seedCharacters(count: number) {
-    const acc = await seedAccount(ctx.db, { tier: "member", status: "active" });
+  /**
+   * `count` accounts, one character each, all mainless.
+   *
+   * Mainless on purpose. It bounds insert cost — `account.main_character_id`'s
+   * composite FK is DEFERRED, so seeding a main means either a transaction per
+   * account or a second pass of updates — and it exercises the fallback branch
+   * at the scale the cap cares about. Main-preference is covered by the small
+   * focused tests below.
+   */
+  async function seedAccountsWithOneCharacterEach(count: number) {
+    const accounts = await ctx.db
+      .insert(account)
+      .values(
+        Array.from({ length: count }, () => ({
+          tier: "member" as const,
+          status: "active" as const,
+        })),
+      )
+      .returning();
     await ctx.db.insert(character).values(
-      Array.from({ length: count }, (_, i) => ({
+      accounts.map((acc, i) => ({
         id: 5_000_000 + i,
         accountId: acc.id,
         // Zero-padded so alphabetical order is also numeric order, which is
@@ -713,14 +730,89 @@ describe("listCharacterNames", () => {
     );
   }
 
-  it("returns every name, alphabetically, under the cap", async () => {
-    await seedCharacters(3);
+  // "Aardvark Alt" sorts before the main, so this also pins that the main wins
+  // over the alphabetical fallback rather than tying with it.
+  it("returns the main's name and none of its alts", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "member", status: "active" });
+    await ctx.db.insert(character).values([
+      {
+        id: 6_000_001,
+        accountId: acc.id,
+        name: "Aardvark Alt",
+        ownerHash: "oh-6000001",
+        scopes: [],
+      },
+      {
+        id: 6_000_002,
+        accountId: acc.id,
+        name: "Main Pilot",
+        ownerHash: "oh-6000002",
+        scopes: [],
+      },
+      {
+        id: 6_000_003,
+        accountId: acc.id,
+        name: "Zulu Alt",
+        ownerHash: "oh-6000003",
+        scopes: [],
+      },
+    ]);
+    await ctx.db
+      .update(account)
+      .set({ mainCharacterId: 6_000_002 })
+      .where(eq(account.id, acc.id));
+
+    expect(await listCharacterNames(ctx.db)).toEqual(["Main Pilot"]);
+  });
+
+  // Ids run counter to the names so neither insertion order nor id order can
+  // produce a passing result by accident.
+  it("falls back to the alphabetically-first character when there is no main", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "member", status: "active" });
+    await ctx.db.insert(character).values([
+      {
+        id: 6_100_002,
+        accountId: acc.id,
+        name: "Beta Pilot",
+        ownerHash: "oh-6100002",
+        scopes: [],
+      },
+      {
+        id: 6_100_001,
+        accountId: acc.id,
+        name: "Alpha Pilot",
+        ownerHash: "oh-6100001",
+        scopes: [],
+      },
+    ]);
+
+    expect(await listCharacterNames(ctx.db)).toEqual(["Alpha Pilot"]);
+  });
+
+  // `reclaimCharacter` deletes a transferred character and leaves the account
+  // standing, so characterless accounts are a real state, not a hypothetical.
+  it("skips accounts with no characters", async () => {
+    await seedAccount(ctx.db, { tier: "member", status: "active" });
+    const acc = await seedAccount(ctx.db, { tier: "member", status: "active" });
+    await ctx.db.insert(character).values({
+      id: 6_200_001,
+      accountId: acc.id,
+      name: "Only Pilot",
+      ownerHash: "oh-6200001",
+      scopes: [],
+    });
+
+    expect(await listCharacterNames(ctx.db)).toEqual(["Only Pilot"]);
+  });
+
+  it("returns one name per account, alphabetically across accounts", async () => {
+    await seedAccountsWithOneCharacterEach(3);
     const names = await listCharacterNames(ctx.db);
     expect(names).toEqual(["Pilot 0000", "Pilot 0001", "Pilot 0002"]);
   });
 
   it("returns exactly the cap's worth at the cap", async () => {
-    await seedCharacters(CHARACTER_NAME_CAP);
+    await seedAccountsWithOneCharacterEach(CHARACTER_NAME_CAP);
     expect(await listCharacterNames(ctx.db)).toHaveLength(CHARACTER_NAME_CAP);
   });
 
@@ -729,7 +821,7 @@ describe("listCharacterNames", () => {
   // none: an operator would type a real pilot's name, see no suggestion, and
   // reasonably conclude the name is unknown.
   it("returns null past the cap rather than a truncated list", async () => {
-    await seedCharacters(CHARACTER_NAME_CAP + 1);
+    await seedAccountsWithOneCharacterEach(CHARACTER_NAME_CAP + 1);
     expect(await listCharacterNames(ctx.db)).toBeNull();
   });
 });

@@ -132,9 +132,19 @@ test("clicking a since-deleted operation announces the 404 and lands focus in it
   // The tab agrees with the page. `page.tsx` exports `generateMetadata`, which
   // resolves the same lookup the page did, finds nothing, and titles the tab
   // after this heading rather than "Payout operation" — a title for an
-  // operation that isn't there. Asserted on the soft-nav path specifically:
-  // it is the one where the document is never reloaded, so a stale title
-  // would simply persist.
+  // operation that isn't there.
+  //
+  // Asserted on the soft-nav path specifically, and this is the assertion that
+  // caught a real defect rather than a hypothetical one. The row link is in
+  // view on `/payouts`, so the router prefetches this route; when the delete
+  // above lands *after* that prefetch, the click renders the body from the
+  // fresh 404 while committing the head from the pre-delete payload, and the
+  // tab keeps the deleted operation's name. It reproduced 4/20 and 3/8 against
+  // a production build with a warm server (0/20 with prefetch aborted), which
+  // is why `not-found.tsx` hoists its own `<title>`: that one travels with the
+  // body. The head then holds two titles that agree everywhere except here,
+  // and the browser takes the first — so this line is also the only thing
+  // watching that the hoisted one stays first.
   await expect(page).toHaveTitle("No such operation · Test Corp");
 
   // Focus is the half that is deterministic and ours. The pressed link is

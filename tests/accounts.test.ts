@@ -78,8 +78,8 @@ const link = (accountId: string, c: EveCallbackCharacter) =>
   ctx.db.transaction((tx) => linkCharacter(tx, cfg, accountId, c));
 const unlink = (actor: string, characterId: number) =>
   ctx.db.transaction((tx) => unlinkCharacter(tx, cfg, actor, characterId));
-const setMain = (accountId: string, characterId: number) =>
-  ctx.db.transaction((tx) => setMainCharacter(tx, accountId, characterId));
+const setMain = (accountId: string, characterId: number, actor = accountId) =>
+  ctx.db.transaction((tx) => setMainCharacter(tx, actor, accountId, characterId));
 const demote = (actor: string, accountId: string) =>
   ctx.db.transaction((tx) => demoteAdmin(tx, actor, accountId));
 const wake = (accountId: string) => ctx.db.transaction((tx) => wakeSelf(tx, accountId));
@@ -571,7 +571,11 @@ describe("setMainCharacter", () => {
   it("returns the character's name on success", async () => {
     const a = await login(ch());
     await link(a.accountId, ch({ characterId: 90000003, characterName: "Alt" }));
-    expect(await setMain(a.accountId, 90000003)).toEqual({ ok: true, name: "Alt" });
+    expect(await setMain(a.accountId, 90000003)).toEqual({
+      ok: true,
+      name: "Alt",
+      tierLocked: false,
+    });
   });
 
   it("rejects characters not on the account", async () => {
@@ -580,6 +584,24 @@ describe("setMainCharacter", () => {
       ok: false,
       error: "not_on_account",
     });
+  });
+
+  it("logs the admin action, with the admin as actor, when told to", async () => {
+    const a = await login(ch());
+    await link(a.accountId, ch({ characterId: 90000003, characterName: "Alt" }));
+    const admin = await seedAccount(ctx.db, { isAdmin: true });
+    await ctx.db.transaction((tx) =>
+      setMainCharacter(tx, admin.id, a.accountId, 90000003, "admin.main_changed"),
+    );
+    const rows = await ctx.db
+      .select()
+      .from(auditLog)
+      .where(eq(auditLog.target, a.accountId));
+    const entry = rows.find((r) => r.action === "admin.main_changed")!;
+    expect(entry).toBeDefined();
+    expect(entry.actor).toBe(admin.id);
+    expect(entry.details).toMatchObject({ mainCharacterId: 90000003 });
+    expect(rows.some((r) => r.action === "account.main_changed")).toBe(false);
   });
 });
 

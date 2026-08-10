@@ -3,6 +3,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ContactRemedy } from "@/app/account/contact-state";
 import { StandingTier } from "@/app/account/standing";
+import { crewNorms } from "@/app/account/page";
 import { accountConfirmation } from "@/app/account/view";
 import type { Tier } from "@/core/tier";
 
@@ -261,7 +262,7 @@ describe("ContactRemedy (job-failure codes)", () => {
 
 describe("StandingTier", () => {
   const render = (tier: Tier) =>
-    renderToStaticMarkup(createElement(StandingTier, { tier }));
+    renderToStaticMarkup(createElement(StandingTier, { tier, canFixMain: false }));
 
   it("tells a pending member their access is awaiting approval", () => {
     const html = render("pending");
@@ -276,6 +277,51 @@ describe("StandingTier", () => {
   });
 });
 
+describe("StandingTier (main-fix hint)", () => {
+  const render = (tier: Tier, canFixMain: boolean) =>
+    renderToStaticMarkup(createElement(StandingTier, { tier, canFixMain }));
+
+  it("tells a stalled pending account which character is the problem", () => {
+    const html = render("pending", true);
+    expect(html).toContain("alliance");
+    expect(html).toContain("make main");
+    // The old copy promised a review that will never come while the main is
+    // out of alliance — decideTier holds pending accounts until it isn't.
+    expect(html).not.toContain("awaiting approval");
+  });
+
+  // `canFixMain` is true in three states, one of which is "this account has no
+  // main at all" (main-fix.ts's `main === null` branch). `StandingTier` is told
+  // only the boolean, so the one sentence it renders has to read correctly in
+  // all three — and "one of your *other* characters" doesn't, because in the
+  // missing-main case there is nothing for the in-alliance character to be
+  // other than. Asserting the absence is the only thing holding that word out.
+  it("words the hint so it survives an account with no main at all", () => {
+    for (const tier of ["pending", "alumni"] as const) {
+      const html = render(tier, true);
+      expect(html).toContain("One of your characters is in the alliance");
+      expect(html).not.toContain("other characters");
+    }
+  });
+
+  it("leaves the ordinary pending message alone", () => {
+    const html = render("pending", false);
+    expect(html).toContain("awaiting approval");
+    expect(html).not.toContain("make main");
+  });
+
+  it("stops promising an alumni account that this reverts on its own", () => {
+    const html = render("alumni", true);
+    expect(html).toContain("make main");
+    expect(html).not.toContain("reverts on its own");
+  });
+
+  it("keeps the self-correcting promise for a genuinely out-of-alliance account", () => {
+    const html = render("alumni", false);
+    expect(html).toContain("reverts on its own");
+  });
+});
+
 // The success confirmation the four /account server actions redirect back
 // with — setMainAction, unlinkAction, wakeSelfAction, unlinkDiscordAction all
 // end in a control unmounting, and this is the only evidence a member gets
@@ -284,14 +330,18 @@ describe("StandingTier", () => {
 // unrecognized or missing value is untrusted input reaching copy and has to
 // degrade rather than throw or print garbage.
 describe("accountConfirmation", () => {
-  it("names the character for a main-character change", () => {
+  it("names the character for a main-character change, and the sync it queued", () => {
     expect(accountConfirmation("main", "Aiden Sol")).toBe(
-      "Main character set to Aiden Sol.",
+      "Main character set to Aiden Sol. Sync queued.",
     );
   });
 
+  // The name is the half that can go missing; the sync is not conditional on
+  // it, so the degraded sentence keeps both clauses.
   it("falls back to a bare verb when the name didn't survive the redirect", () => {
-    expect(accountConfirmation("main", undefined)).toBe("Main character updated.");
+    expect(accountConfirmation("main", undefined)).toBe(
+      "Main character updated. Sync queued.",
+    );
   });
 
   it("confirms an unlink without repeating the character's name", () => {
@@ -314,5 +364,36 @@ describe("accountConfirmation", () => {
     // A hand-typed `?done=` (or one a future rollback no longer emits) must
     // not silently pass through to become copy on the page.
     expect(accountConfirmation("delete_account", undefined)).toBe("");
+  });
+});
+
+// `crewNorms` decides whether a fact belongs to a row or to the account, and
+// its edge cases are otherwise only reachable through DB-backed e2e specs.
+// The rule it encodes: map membership cannot substantiate a fault
+// (src/core/account-health.ts:27-35), so a crew that uniformly lacks it has
+// one fact about the account rather than N deviations, and the manifest stops
+// reciting it per row (DESIGN.md ruling R4's parity is kept by the page head
+// saying it once instead).
+describe("crewNorms", () => {
+  const crew = (...onMap: boolean[]) => onMap.map((onMapAcl) => ({ onMapAcl }));
+
+  it("treats an empty crew as no fact at all, so an account with no characters says nothing", () => {
+    expect(crewNorms([])).toEqual({ mapUniformOff: false });
+  });
+
+  it("reads a wholly off-map crew as one account-level fact", () => {
+    expect(crewNorms(crew(false, false, false)).mapUniformOff).toBe(true);
+  });
+
+  it("reads a single off-map character the same way — one character is still a uniform crew", () => {
+    expect(crewNorms(crew(false)).mapUniformOff).toBe(true);
+  });
+
+  it("leaves a mixed crew alone, so the row that differs keeps saying so", () => {
+    expect(crewNorms(crew(true, false, true)).mapUniformOff).toBe(false);
+  });
+
+  it("does not fire when every character IS on the map — that case was never repetitive", () => {
+    expect(crewNorms(crew(true, true)).mapUniformOff).toBe(false);
   });
 });

@@ -11,6 +11,7 @@ import {
   approveAccount,
   returnTierToAuto,
   setAccountStatus,
+  setMainCharacterAsAdmin,
   setStatusNote,
   setTierManual,
 } from "@/services/admin-accounts";
@@ -18,12 +19,18 @@ import { logAudit } from "@/services/audit";
 import { unlinkDiscord } from "@/services/discord-link";
 import { enqueueSync } from "@/services/outbox";
 import { type ActionOutcome } from "@/app/_components/confirm-group";
-import { accountsConfirmation, type AdminAccountsDoneCode } from "./view";
+import { type NoteSaveState } from "@/app/_components/note-form";
+import {
+  accountsConfirmation,
+  accountsDiscordAlreadyUnlinked,
+  accountsNoChange,
+  type AdminAccountsDoneCode,
+} from "./view";
 
 /**
  * `/admin/accounts?[<listSearch>&]done=<code>&name=<name>&at=<instant>`.
  *
- * Three of this page's nine actions redirect through this on success —
+ * Three of this page's ten actions redirect through this on success —
  * `promoteAdminAction`, `demoteAdminAction`, `syncAccountAction`. Their
  * controls sit in the row's always-visible `cells`, not the `Disclosure`
  * drawer, so a redirect back to this same route costs nothing: nothing
@@ -32,9 +39,10 @@ import { accountsConfirmation, type AdminAccountsDoneCode } from "./view";
  * lands — same shape as `/account`'s `setMainAction` and `/admin/sync`'s
  * `queuedNotice`, and the same `?done=&name=&at=` triple `/account` uses.
  *
- * The other five mutating actions (`setTierAction`, `approveAction`,
- * `returnToAutoAction`, `setStatusAction`, `unlinkDiscordAction`) do NOT use
- * this — they live inside the drawer, where a redirect resets the drawer's
+ * The other six mutating actions (`setTierAction`, `approveAction`,
+ * `returnToAutoAction`, `setStatusAction`, `unlinkDiscordAction`,
+ * `setMainAction`) do NOT use this — they live inside the drawer, where a
+ * redirect resets the drawer's
  * own open/closed `useState` (`disclosure.tsx`) by replacing the route tree.
  * They call `accountsConfirmation` (`view.ts`) directly and return it
  * through `useActionState` instead; see `view.ts`'s docblock for the full
@@ -138,7 +146,7 @@ function redirectOnMutationError(
   }
 }
 
-// These five (through `unlinkDiscordAction`, below) live in the row's
+// These six (through `setMainAction`, below) live in the row's
 // `Disclosure` drawer, unlike their four siblings — and that is why they
 // don't `redirect()` on success. A drawer row holds its open/closed state in
 // a plain `useState` (`disclosure.tsx`) with nowhere else to live; navigating,
@@ -171,7 +179,19 @@ export async function setTierAction(
   // Not a bare return: `ConfirmGroup`'s `Notice` (`confirm-group.tsx`) is what
   // gets focus after this action settles, and it has nothing to focus
   // without text here.
-  return { text: accountsConfirmation("tier", identity, tierLabel(tier)) };
+  //
+  // `changed` splits a press that pinned the account from one that found it
+  // already pinned to this very tier — the only shape `setTierManual` treats
+  // as a no-op, and the one where "pinned to Alumni. Press auto to unpin."
+  // would claim a write that never happened. Note this is NOT the same-tier
+  // press on an unlocked account: that one IS the pin, writes a row, and
+  // takes the success sentence.
+  const label = tierLabel(tier);
+  return {
+    text: result.changed
+      ? accountsConfirmation("tier", identity, label)
+      : accountsNoChange("tier", identity, label),
+  };
 }
 
 export async function approveAction(
@@ -208,7 +228,13 @@ export async function returnToAutoAction(
   revalidatePath("/admin/accounts");
   // The "auto" button only renders while `r.tierLocked`, so it unmounts
   // outright the moment this succeeds — the tier it exists to unlock is gone.
-  return { text: accountsConfirmation("auto", identity, undefined) };
+  // When it does not (`changed: false`, an account that was never locked),
+  // the button is still there and the sentence has to explain why.
+  return {
+    text: result.changed
+      ? accountsConfirmation("auto", identity, undefined)
+      : accountsNoChange("auto", identity, undefined),
+  };
 }
 
 export async function setStatusAction(
@@ -226,34 +252,37 @@ export async function setStatusAction(
   if (!result.ok) redirectOnMutationError(result.error, listSearch);
   revalidatePath("/admin/accounts");
   // freeze/wake are two branches of the same slot (page.tsx), so whichever
-  // one was pressed unmounts into the other.
+  // one was pressed unmounts into the other — unless nothing changed, in
+  // which case the same button is still sitting there and saying "frozen"
+  // would read as though it had just done something.
+  const done = status === "cryo" ? "freeze" : "wake";
   return {
-    text: accountsConfirmation(
-      status === "cryo" ? "freeze" : "wake",
-      identity,
-      undefined,
-    ),
+    text: result.changed
+      ? accountsConfirmation(done, identity, undefined)
+      : accountsNoChange(done, identity, undefined),
   };
 }
 
 // `useActionState` needs the bound action shaped `(prevState, formData) =>
 // newState`, hence the extra `prevState` param ahead of `formData` — the
 // write itself is a plain overwrite either way, `prevState` only exists to be
-// incremented. Returning `prevState + 1` rather than a clock reading
+// incremented. Returning `prevState.seq + 1` rather than a clock reading
 // (`Date.now()`) is the point: a monotonic counter can't collide with itself,
 // where a millisecond timestamp can — two saves resolving inside the same
 // millisecond would return the same value, and the client's "did a save just
-// land" check (a `state !== seen` comparison) would never fire for the
-// second one, silently dropping its confirmation.
+// land" check (a `state.seq !== seen` comparison) would never fire for the
+// second one, silently dropping its confirmation. The counter therefore
+// advances even when `setStatusNote` wrote nothing; `changed` is what carries
+// that apart, so `NoteForm` can say "already saved" instead of "saved".
 //
 // Both bound args therefore sit AHEAD of `prevState`: `useActionState` supplies
 // the last two, so anything the caller binds has to come first.
 export async function saveNoteAction(
   accountId: string,
   listSearch: string,
-  prevState: number,
+  prevState: NoteSaveState,
   formData: FormData,
-): Promise<number> {
+): Promise<NoteSaveState> {
   const { accountId: actor } = await requireAdminAction();
   const raw = formData.get("note");
   // FormData.get() is string | File | null. Coercing a File or a missing field
@@ -269,7 +298,7 @@ export async function saveNoteAction(
   );
   if (!result.ok) redirectOnMutationError(result.error, listSearch);
   revalidatePath("/admin/accounts");
-  return prevState + 1;
+  return { seq: prevState.seq + 1, changed: result.changed };
 }
 
 export async function syncAccountAction(
@@ -341,7 +370,9 @@ export async function demoteAdminAction(
  *
  *  `not_found` is the merge race every control here shares. `not_linked` is a
  *  stale tab: the cell renders the control only when the row says linked, and
- *  a second admin clearing it first is not an error worth a notice.
+ *  a second admin clearing it first between that render and this press. It is
+ *  not an unhandled error, but it is worth a notice — see the case below and
+ *  `view.ts`'s `accountsDiscordAlreadyUnlinked`.
  *
  *  Moved into the drawer group above (docs/design-walkthrough.md, ruling R2):
  *  this control used to sit in the row's always-visible cells and redirect
@@ -369,13 +400,20 @@ export async function unlinkDiscordAction(
     switch (result.error) {
       case "not_found":
         return redirectOnMutationError("not_found", listSearch);
-      // The row is already in the state the admin asked for. Nothing to say,
-      // and no confirmation to send: a lost race that did nothing this press
-      // must not claim otherwise — same "don't confirm a no-op" rule
-      // `/account`'s own unlinkDiscordAction follows for the identical race.
+      // Unlike every other race this switch handles, this one is not a
+      // no-op: the row still reads as linked, because the drawer group that
+      // renders this control is gated on exactly that (`page.tsx`), and
+      // nothing else has re-run the query since. `/account`'s own
+      // `unlinkDiscordAction` gets away with silence on the identical race
+      // because it redirects and the fresh render corrects the display for
+      // free; this control's redirect-free drawer shape means the stale
+      // "linked" state would otherwise sit under the admin's press with no
+      // notice at all. `revalidatePath` clears the display; the `tone: "warn"`
+      // outcome (`confirm-group.tsx`'s `ActionOutcome`) is what tells the
+      // admin their press did not do what they thought it would.
       case "not_linked":
         revalidatePath("/admin/accounts");
-        return null;
+        return { text: accountsDiscordAlreadyUnlinked(identity), tone: "warn" };
       default: {
         const unhandled: never = result.error;
         throw new Error(`unhandled unlinkDiscord error: ${String(unhandled)}`);
@@ -390,4 +428,33 @@ export async function unlinkDiscordAction(
   // already being removed and never paint. Anything else this action wants to
   // say after a success has the same constraint.
   return { text: accountsConfirmation("discord", identity, undefined) };
+}
+
+/**
+ * Promote a character to main from the drawer's crew table.
+ *
+ * `characterId` is bound at render time from the row's own crew list, so it is
+ * not user input in the way a form field would be — but the service still
+ * verifies the character belongs to the account, which is what makes a forged
+ * request land on `not_found` rather than on someone else's account.
+ *
+ * Returns an `ActionOutcome` rather than redirecting: the control lives inside
+ * the drawer, and a redirect would collapse it.
+ */
+export async function setMainAction(
+  accountId: string,
+  characterId: number,
+  listSearch: string,
+  _prevState: ActionOutcome,
+  _formData: FormData,
+): Promise<ActionOutcome> {
+  const { accountId: actor } = await requireAdminAction();
+  const result = await getDb().transaction((tx) =>
+    setMainCharacterAsAdmin(tx, actor, accountId, characterId),
+  );
+  if (!result.ok) redirectOnMutationError(result.error, listSearch);
+  revalidatePath("/admin/accounts");
+  return {
+    text: accountsConfirmation("main", result.name, undefined, result.tierLocked),
+  };
 }

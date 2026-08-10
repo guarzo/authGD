@@ -296,6 +296,9 @@ const PARTS: Record<string, readonly Part[]> = {
   "admin.bootstrap_granted": [labelled("character", "characterId")],
   "account.created": [labelled("main", "mainCharacterId")],
   "account.main_changed": [labelled("main →", "mainCharacterId")],
+  // Same shape as the member-driven row above; the two are separate actions
+  // only so the log can say who drove it (services/accounts.ts).
+  "admin.main_changed": [labelled("main →", "mainCharacterId")],
   "character.reclaimed": [accountRef("from", "fromAccount")],
   "character.unlinked": [scalar("name"), flag("wasMain", "was main")],
   "token.invalidated": [scalar("reason")],

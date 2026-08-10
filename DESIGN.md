@@ -14,37 +14,85 @@ typed telemetry, a printed seal — rendered for a dark room.
 
 The scene that fixes the theme: *an EVE player alt-tabbed at 1am, the monitor the only
 light in the room, checking whether an alt's token still works before a fleet forms.*
-That forces dark. It does not force black: the ground is the mission patch's own navy,
-so the surface belongs to the brand rather than defaulting to a void.
+That forces dark, and the audience settles it independently: EVE's own client is dark
+and its players expect dark, so a light ground is not on the table however well it
+would suit the artwork.
+
+The ground is a **neutral near-black**, not the mission patch's navy it started as.
+Navy-with-a-gold-accent is the single most-generated "premium dark tool" palette in
+circulation; the first reflex for anything space-adjacent is a cyan-on-black HUD, and
+this design correctly refused that, then landed squarely on the *second* reflex
+instead. Feedback that the app felt machine-made named the colour scheme specifically,
+and this is what it was naming.
+
+It reached neutral by overshooting twice, which is worth recording so nobody re-adds
+the tint as an improvement. Both intermediate grounds were warm — the aim was a ground
+that belonged to the brand rather than a default — and both read as **brown** on
+screen rather than as a warm grey. See "Judge a ground by its hex" below for why the
+notation hid it. The colour that carries the brand is the gold and the cream ink,
+which sit at lightnesses where warmth reads as warmth; the ground's job is to stay out
+of their way.
 
 The deliberate distance from the obvious: this is **not** a sci-fi HUD. No cyan, no
 glow, no clipped corners, no scanlines. It is paper, ink, and rules — the flight log,
 not the cockpit display. Structure comes from hairlines and typographic hierarchy, not
 from boxes and shadows.
 
+A note on how far that metaphor goes, because it was tested and bounded. Making the
+page *literally* paper (light ground), and then making the manifest a paper panel on a
+dark desk, were both built and rejected — the first on audience, the second because
+bright panels on a dark ground read as rectangles taped to a board. The flight-log
+character lives in the rules, the type and the artwork, not in a light surface.
+
 ## Color
 
-**Strategy: Committed.** Navy carries the surface. Gold is the single emphasis colour
-and stays scarce. Everything is OKLCH, and every neutral is tinted toward the navy or
-gold hue — nothing is pure grey, nothing is `#000` or `#fff`.
+**Strategy: Committed.** A neutral near-black carries the surface. Gold is the single
+emphasis colour and stays scarce. Everything is OKLCH, and nothing is `#000` or
+`#fff`.
+
+**The tint scales with lightness, and the darkest ground carries none.** "Tint every
+neutral toward the brand hue" is the usual advice and this document used to state it
+flatly; it is only true of mid and light neutrals. `--void` is chroma `0` on purpose —
+at that lightness any warm tint reads as brown rather than as a tinted grey — and each
+lighter structure token carries a little more, up to `--rule-strong`. Do not "restore"
+a tint to `--void` for consistency with the rest of the ramp: the ramp *is* the rule.
+
+Every text token below was measured against all three grounds rather than asserted;
+the worst case is `--ink-faint` at 4.63:1 on a hovered row, and nothing sits under
+4.5:1. Two of these values exist *because* of that measurement rather than taste:
+`--signal-bad` is `0.66` because `0.64` measured 4.42 against `--hull-hi` (under the
+floor exactly when the pointer is on the row), and `--rule-strong` holds its lightness
+for the 3:1 boundary rule. Re-run the check before retuning any of them.
+
+**Judge a ground by its hex, never by its chroma — and at near-black, by the
+red-to-blue RATIO rather than the difference.** This took three passes. The tokens
+were first set by analogy to the navy they replaced, whose chroma was `0.035`, so
+`0.012` looked conservative in OKLCH; it rendered `#0e0906` — red 14, blue 6 — and
+"it's brown" was the first thing anyone said. Halving to `0.006` gave `#0c0a08`, an
+absolute red-minus-blue gap of just 4, which sounded like nothing and was still
+visibly brown: at `rgb(12,10,8)` that gap is a **1.50 red-to-blue ratio**. The same
+gap of 4 is invisible at `rgb(200)`. Absolute spread is the wrong statistic down here.
+`--void` is now `#0a0a0a`, ratio 1.00.
+
+OKLCH is the right space to *tune* in and the wrong one to *judge* in.
 
 ### Ground and structure
 
 | Token | Value | Use |
 |---|---|---|
-| `--void` | `oklch(0.17 0.035 264)` | Page ground. Patch navy, taken deep. |
-| `--hull` | `oklch(0.22 0.04 264)` | Panels, table headers, inset regions. |
-| `--hull-hi` | `oklch(0.27 0.042 264)` | Row hover, raised controls, pressed states. |
-| `--rule` | `oklch(0.36 0.035 264)` | Hairlines. The primary structural device. |
-| `--rule-strong` | `oklch(0.56 0.05 264)` | Section boundaries, control borders. Lightness is set by WCAG 1.4.11: it clears 3:1 against `--void`, `--hull`, and `--hull-hi`, so a control's edge is identifiable on every ground it can sit on. |
+| `--void` | `oklch(0.145 0 58)` | Page ground. Neutral near-black (`#0a0a0a`). |
+| `--hull` | `oklch(0.195 0.001 56)` | Panels, table headers, inset regions. |
+| `--hull-hi` | `oklch(0.245 0.002 54)` | Row hover, raised controls, pressed states. |
+| `--rule` | `oklch(0.33 0.004 55)` | Hairlines. The primary structural device. |
+| `--rule-strong` | `oklch(0.56 0.008 58)` | Section boundaries, control borders. Lightness is set by WCAG 1.4.11: it measures 4.24 / 3.92 / 3.48 against `--void`, `--hull`, and `--hull-hi`, so a control's edge is identifiable on every ground it can sit on. |
 
 ### Ink
 
 | Token | Value | Use |
 |---|---|---|
-| `--ink` | `oklch(0.94 0.012 85)` | Primary text. Warm cream, tinted to gold. |
-| `--ink-dim` | `oklch(0.78 0.015 85)` | Secondary text, data cells. |
-| `--ink-faint` | `oklch(0.66 0.02 264)` | Labels, metadata, timestamps. |
+| `--ink` | `oklch(0.93 0.014 85)` | Primary text. Warm cream, tinted to gold. |
+| `--ink-dim` | `oklch(0.77 0.016 80)` | Secondary text, data cells. |
+| `--ink-faint` | `oklch(0.63 0.018 70)` | Labels, metadata, timestamps. |
 
 ### Signal
 
@@ -54,9 +102,9 @@ Gold is identity and emphasis. The three signals are semantic and never decorati
 |---|---|---|
 | `--gold` | `oklch(0.83 0.155 88)` | Brand mark, active nav, primary action, Member tier. |
 | `--gold-dim` | `oklch(0.72 0.14 84)` | Gold borders, hover on gold surfaces. |
-| `--signal-ok` | `oklch(0.76 0.13 158)` | Healthy token, present on map, linked. |
+| `--signal-ok` | `oklch(0.74 0.09 150)` | Reserved for where health is genuinely the subject (`.notice--ok`). **Not** the default `ok` status token, which takes `--ink-dim` — see "Status token" below. |
 | `--signal-warn` | `oklch(0.80 0.15 50)` | Needs re-auth, scope shortfall, cryo (admin table only — an admin scans for it; the member's own account page reads cryo in `--ink-dim` instead, since it's a pause the member asked for, not a fault). Hue 50 rather than the 70 this started at: at 70 the warn signal sat 18° from `--gold`/`--tier-member` at near-identical chroma and lightness — 0.057 apart in OKLab, not enough to tell a gold Member badge from an amber CRYO token two columns away in the same mono uppercase. 50 nearly doubles that to 0.104 while holding 0.146 from `--signal-bad`. Warn remains nearer to gold than to bad, deliberately: equalising the two means rotating to about hue 37, buying separation from identity by spending it on failure, and mistaking a warning for an error is the worse confusion. The bar is legibility against gold, not equidistance. |
-| `--signal-bad` | `oklch(0.68 0.19 25)` | Dead token, failed sync, destructive action. |
+| `--signal-bad` | `oklch(0.66 0.19 26)` | Dead token, failed sync, destructive action. |
 
 ### Tier colours
 
@@ -67,8 +115,8 @@ the enum value, so the pairing holds however a deployment renames its tiers.
 | Tier | Token | Value |
 |---|---|---|
 | Member | `--tier-member` | `oklch(0.83 0.155 88)` (gold) |
-| Associate | `--tier-associate` | `oklch(0.72 0.13 245)` |
-| Alumni | `--tier-alumni` | `oklch(0.76 0.13 158)` |
+| Associate | `--tier-associate` | `oklch(0.72 0.115 235)` |
+| Alumni | `--tier-alumni` | `oklch(0.74 0.09 150)` |
 
 Pending has no hue of its own. It renders achromatic in `--ink-dim`: the three
 colours above are tuned as a set, and "not yet approved" reads better as an
@@ -225,6 +273,14 @@ you what it holds.
   inside a focusable, labelled region so keyboard users can reach the overflow.
 - **Status token** — mono, uppercase, small, with a leading geometric glyph.
   Colour only when the state is actionable; neutral states stay in `--ink-dim`.
+  **`ok` is a neutral state.** This rule was written from the start and the
+  shipped UI contradicted it for a long time: `.st--ok` took `--signal-ok`, so
+  every healthy chip, every `LINKED`, and every "all healthy" count rendered
+  full-chroma green. A screenful of green dots reporting that nothing needs
+  doing is the generic-dashboard signature, and it spends the eye on exactly
+  the rows with no claim on it. `.st--ok` now takes `--ink-dim`. Do not
+  "restore" the green: an `ok` that has to shout is an `ok` competing with the
+  one row that isn't.
 - **Tier badge** — the tier name in mono uppercase, on a low-chroma tint of its own
   hue, with a `1px` border in the full-chroma hue. A lock glyph when the tier is
   admin-pinned.
@@ -271,6 +327,14 @@ configuration, the other two by overwriting the file.
   ground. Referenced by path from `globals.css`; not configurable.
 - `public/brand/hero-account.webp` — the account page illustration, cut for the size
   it is drawn at. Referenced by path from the account page; not configurable.
+  Held as a **night cut**: the same drawing with its lightness pulled down
+  (`modulate({ lightness: -40 })`), so it sits in the page instead of glowing on
+  top of it. At full brightness this is the lightest object on any screen in the
+  app and reads as a sticker pasted on the ground. Faoble has cleared
+  modification of the artwork; the master is in git history.
+  The same treatment was tried on `mark.webp` and **rejected** — at 34px the
+  gold rope goes out and the disc turns to mud. A mark that small needs more
+  separation from its ground, not less. Recut the illustration, never the mark.
 
 ## Focus and states
 
@@ -289,7 +353,12 @@ configuration, the other two by overwriting the file.
   `24px` WCAG 2.5.8 (AA) minimum. The tables carry a control set on every row and
   cannot reach the `44px` AAA target without growing past a screenful, so density wins
   there and nowhere else. There are **two** sizes and no others: `quiet` is a colour
-  grade, like `primary` and `default`, and does not carry a size of its own.
+  grade, like `primary` and `default`, not a third size. `.btn--quiet` does carry
+  its own `min-height: 1.75rem` (the `28px` grade) as its base rule, but that is
+  not the last word wherever it lands — the manifest drawer's controls sit on
+  the `36px` R1 grade instead, because `.manifest-panel__controls .btn--quiet`
+  sets `min-height: 2.25rem` and wins there on both specificity and source
+  order.
 
   The `28px` grade is scoped by the *reason* for it, not by the tag it lands in:
   it applies to rows that each carry a control set and are read many at a time.
@@ -357,6 +426,36 @@ reading the code cannot see the failure; only someone using the app can.
   sighted operator ever read it. `"visible"` is for exactly this shape —
   a standing, self-contained lifecycle control with its own permanent caption
   — and stays distinct from the `<td>` case rather than replacing it.
+
+  **A drawer action confirms inline and rejects by redirect.** R2 puts controls
+  inside a `Disclosure`, whose open/closed state is `useState` in the route
+  tree, so a `redirect()` (even back to the same URL) replaces that tree and
+  closes the drawer the admin is working in. Two e2e failures established this
+  the expensive way. Hence the split: a *success* stays in place, threading a
+  sentence back through `useActionState` into `ConfirmGroup`'s `Notice`
+  (`confirm-group.tsx`), never through a `?done=` redirect. A *rejection* does
+  the opposite and redirects through `redirectOnMutationError`, because in
+  every one of those cases there is no drawer context left worth preserving:
+  `not_found` means the row was merged away, `not_pending` means someone else
+  approved it out of the filter, and `not_authorized` means the *actor's* own
+  admin bit was cleared between the render and the press, so the page itself
+  is no longer theirs to be standing on. The redirect lands back on the same
+  filtered view the admin was working (`listSearch` rides along; it
+  deliberately does not assume the pending queue) with a `.notice--bad`
+  explaining why. `e2e/admin.spec.ts`'s "approving an account someone else
+  already approved lands on a notice" asserts that redirect deliberately.
+
+  One rejection is exempt, and the test for the exemption is whether the row is
+  still there and still wrong. `unlinkDiscordAction`'s `not_linked` fails that
+  test in the other direction: the row survives, the drawer's Discord group is
+  gated on the row reading as linked, and nothing has re-queried since it
+  rendered, so the admin is looking at a stale claim rather than at a row that
+  left. It resolves inline like a success (`revalidatePath` to correct the
+  display, plus a `tone: "warn"` outcome to say the press did not do what it
+  looked like it would) rather than redirecting away from a drawer that is
+  still pointed at something real. `/account`'s own `unlinkDiscordAction` can
+  stay silent on the identical race only because it is not in a drawer: it
+  redirects, and the fresh render corrects the display for free.
 
 - **Information may not live only in the assistive-tech channel.** Parity runs
   in both directions. The usual failure is a control with no accessible name;
