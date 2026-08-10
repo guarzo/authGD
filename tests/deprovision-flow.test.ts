@@ -77,6 +77,19 @@ it("main leaves alliance → alumni → contacts removed, ACL removed, role chan
     getSystemName: async (id: number) => `System ${id}`,
     getStationName: async (id: number) => `Station ${id}`,
     getStructureName: async (id: number) => `Structure ${id}`,
+    // Access lists: this flow never enqueues the access-lists job either;
+    // these exist only to satisfy the widened JobDeps["esi"].
+    getAccessLists: async () => [],
+    getAccessList: async (_characterId, accessListId) => ({
+      id: accessListId,
+      name: `List ${accessListId}`,
+      description: "",
+      allowEveryone: false,
+      characters: [],
+      corporations: [],
+      alliances: [],
+    }),
+    getUniverseNames: async () => [],
   };
 
   // Wanderer: the ACL still lists the leaver's chars.

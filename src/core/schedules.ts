@@ -19,6 +19,10 @@ export const JOB_CRON = {
   // this job quadruples per-character SSO refreshes and would otherwise race
   // the contacts job for the same rows (src/services/tokens.ts:100).
   location: "2,17,32,47 * * * *",
+  // :25 is a free slot — :00/:30 membership, :05 contacts, :10 wanderer,
+  // :15 discord-roles, :02,17,32,47 location. A read-only monitor has no
+  // reason to contend with the jobs that push member state outward.
+  "access-lists": "25 * * * *",
 } as const satisfies Record<string, string>;
 
 /**
@@ -76,6 +80,7 @@ export const JOB_GROUP: Record<JobType, JobGroup> = {
   "token-health": "housekeeping",
   purge: "housekeeping",
   location: "member-facing",
+  "access-lists": "on-demand",
 };
 
 /** The strip a job type belongs to, or null when nothing schedules it. */
