@@ -240,6 +240,12 @@ const PINNED = "Press auto to unpin.";
  * Missing `name`/`tier` (a stripped query string, not a real redirect) falls
  * back to the bare verb rather than a sentence with a hole in it, same
  * fallback shape as `accountConfirmation`'s `"main"` case.
+ *
+ * `tierLocked` is not query-string-derived like the other three — the
+ * `"main"` case is one of the six drawer actions that calls this function
+ * directly with in-memory values (see the plumbing-shapes note above), so it
+ * arrives straight off `SetMainResult` with no missing/hand-edited case to
+ * default against.
  */
 // `done` is `AdminAccountsDoneCode | undefined`, not `string | undefined` —
 // every call site in `actions.ts` passes a literal (`"tier"`, `"approve"`,
@@ -258,6 +264,12 @@ export function accountsConfirmation(
   done: AdminAccountsDoneCode | undefined,
   name: string | undefined,
   tier: string | undefined,
+  // Only the "main" case reads this — whether the press's OWN account was
+  // already locked, straight off `SetMainResult.tierLocked`
+  // (services/admin-accounts.ts), not re-derived here. Optional and ignored
+  // by every other case, the same posture `tier` already has for the cases
+  // that don't need it.
+  tierLocked?: boolean,
 ): string {
   // Still load-bearing, not merely defensive: the switch below has no
   // `default` and every case returns, so this is what strips `undefined` —
@@ -302,11 +314,26 @@ export function accountsConfirmation(
     case "sync":
       return `Sync queued${name ? ` for ${name}` : ""}. The worker picks it up within a few seconds.`;
     case "main":
-      // No `PINNED` clause and no tier named: this press does not touch the
-      // lock, and the tier it produces is the membership job's to decide from
-      // the new main a few seconds later — naming one here would be a guess.
-      // On a LOCKED account nothing moves at all, which is why the drawer warns
-      // about that before the press rather than here after it.
+      // No tier named either way: the tier itself is the membership job's to
+      // decide from the new main, not this action's to guess. What DOES
+      // change between the two branches is whether that job will run at all.
+      //
+      // A locked account's tier does not move on this press — `decideTier`
+      // (core/tier.ts) returns `null` for it and the membership job's own
+      // query filters `tierLocked` out entirely (jobs/membership.ts) — so the
+      // unconditional "follows within a few seconds" sentence below is false
+      // here. The drawer's pre-press warning (`page.tsx`, gated on
+      // `r.mainBroken && r.tierLocked`) used to be the only place this was
+      // said, but a successful promotion clears `mainBroken` in the same
+      // revalidation that delivers this confirmation, unmounting that warning
+      // — leaving the false sentence as the only one left on screen. `PINNED`
+      // (above) is reused rather than a new string invented here, so the two
+      // places an admin can learn "this account is pinned" say it identically.
+      if (tierLocked) {
+        return name
+          ? `${name} is now the main, but the tier stays pinned. ${PINNED}`
+          : `Main updated, but the tier stays pinned. ${PINNED}`;
+      }
       return name
         ? `${name} is now the main. The tier follows within a few seconds.`
         : "Main updated. The tier follows within a few seconds.";

@@ -418,5 +418,7 @@ export async function setMainAction(
   );
   if (!result.ok) redirectOnMutationError(result.error, listSearch);
   revalidatePath("/admin/accounts");
-  return { text: accountsConfirmation("main", result.name, undefined) };
+  return {
+    text: accountsConfirmation("main", result.name, undefined, result.tierLocked),
+  };
 }

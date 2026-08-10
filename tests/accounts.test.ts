@@ -571,7 +571,11 @@ describe("setMainCharacter", () => {
   it("returns the character's name on success", async () => {
     const a = await login(ch());
     await link(a.accountId, ch({ characterId: 90000003, characterName: "Alt" }));
-    expect(await setMain(a.accountId, 90000003)).toEqual({ ok: true, name: "Alt" });
+    expect(await setMain(a.accountId, 90000003)).toEqual({
+      ok: true,
+      name: "Alt",
+      tierLocked: false,
+    });
   });
 
   it("rejects characters not on the account", async () => {

@@ -151,6 +151,21 @@ describe("accountsConfirmation", () => {
     );
   });
 
+  // A locked account's tier does not move on this press (decideTier holds
+  // it, the membership job's query filters it out) — the "follows within a
+  // few seconds" sentence above is only true when `tierLocked` is false.
+  it("does not promise a tier follow-up on a locked account", () => {
+    expect(accountsConfirmation("main", "Aiden Sol", undefined, true)).toBe(
+      "Aiden Sol is now the main, but the tier stays pinned. Press auto to unpin.",
+    );
+  });
+
+  it("degrades to the bare verb for a locked account with no name", () => {
+    expect(accountsConfirmation("main", undefined, undefined, true)).toBe(
+      "Main updated, but the tier stays pinned. Press auto to unpin.",
+    );
+  });
+
   it("recognizes the main code", () => {
     expect(isDoneCode("main")).toBe(true);
   });

@@ -349,7 +349,7 @@ describe("setMainCharacterAsAdmin", () => {
     const result = await ctx.db.transaction((tx) =>
       setMainCharacterAsAdmin(tx, admin.id, target.id, alt.id),
     );
-    expect(result).toEqual({ ok: true, name: "Alt Two" });
+    expect(result).toEqual({ ok: true, name: "Alt Two", tierLocked: false });
     const [acc] = await ctx.db.select().from(account).where(eq(account.id, target.id));
     expect(acc.mainCharacterId).toBe(alt.id);
     const rows = await ctx.db
@@ -357,6 +357,26 @@ describe("setMainCharacterAsAdmin", () => {
       .from(auditLog)
       .where(eq(auditLog.target, target.id));
     expect(rows.some((r) => r.action === "admin.main_changed")).toBe(true);
+  });
+
+  // The confirmation shown after this press (accountsConfirmation's "main"
+  // case, admin/accounts/view.ts) has to know whether the tier will actually
+  // follow the new main — a locked account's tier does not move, and this
+  // is the field that tells the caller so, read off the same `FOR UPDATE`
+  // row `setMainCharacter` already locks (no extra query).
+  it("reports the account's tier lock so the caller can word the confirmation honestly", async () => {
+    const admin = await seedAdmin();
+    const target = await seedAccount(ctx.db, { tier: "associate", tierLocked: true });
+    await seedCharacter(ctx.db, cfg, { id: 90000011, accountId: target.id, main: true });
+    const alt = await seedCharacter(ctx.db, cfg, {
+      id: 90000012,
+      accountId: target.id,
+      name: "Alt Three",
+    });
+    const result = await ctx.db.transaction((tx) =>
+      setMainCharacterAsAdmin(tx, admin.id, target.id, alt.id),
+    );
+    expect(result).toEqual({ ok: true, name: "Alt Three", tierLocked: true });
   });
 
   // actor === target here, which is exactly why the action discriminator exists

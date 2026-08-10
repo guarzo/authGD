@@ -283,7 +283,7 @@ describe("StandingTier (main-fix hint)", () => {
   it("tells a stalled pending account which character is the problem", () => {
     const html = render("pending", true);
     expect(html).toContain("alliance");
-    expect(html).toContain("ask an admin");
+    expect(html).toContain("make main");
     // The old copy promised a review that will never come while the main is
     // out of alliance — decideTier holds pending accounts until it isn't.
     expect(html).not.toContain("awaiting approval");
@@ -292,12 +292,12 @@ describe("StandingTier (main-fix hint)", () => {
   it("leaves the ordinary pending message alone", () => {
     const html = render("pending", false);
     expect(html).toContain("awaiting approval");
-    expect(html).not.toContain("ask an admin");
+    expect(html).not.toContain("make main");
   });
 
   it("stops promising an alumni account that this reverts on its own", () => {
     const html = render("alumni", true);
-    expect(html).toContain("ask an admin");
+    expect(html).toContain("make main");
     expect(html).not.toContain("reverts on its own");
   });
 

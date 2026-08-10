@@ -196,10 +196,14 @@ export async function setStatusNote(
 /**
  * Its own result type rather than `AdminMutationResult`: the caller needs the
  * promoted character's NAME to word the confirmation, and `setMainCharacter`
- * already has it in hand from the row it locked.
+ * already has it in hand from the row it locked. `tierLocked` follows the
+ * same `SetTierResult` shape above for the same reason — a locked account's
+ * tier does not move on this press, and `accountsConfirmation`'s "main" case
+ * needs to know that to avoid promising a convergence that will not happen.
  */
 export type SetMainResult =
-  { ok: true; name: string } | { ok: false; error: "not_authorized" | "not_found" };
+  | { ok: true; name: string; tierLocked: boolean }
+  | { ok: false; error: "not_authorized" | "not_found" };
 
 /**
  * Promote one of an account's own characters to main, on an admin's behalf.
@@ -231,5 +235,5 @@ export async function setMainCharacterAsAdmin(
     "admin.main_changed",
   );
   if (!result.ok) return { ok: false, error: "not_found" };
-  return { ok: true, name: result.name };
+  return { ok: true, name: result.name, tierLocked: result.tierLocked };
 }

@@ -43,14 +43,17 @@ export function StandingTier({
 }) {
   // One sentence for both tiers: the member's situation is identical in
   // pending and alumni here (a linked alt is in-alliance, the main isn't), and
-  // the remedy is identical too. Written against the effect ("ask an admin to
-  // switch it") rather than the three causes core/main-fix.ts distinguishes
+  // the remedy is identical too. Written against the effect (the main isn't
+  // counted) rather than the three causes core/main-fix.ts distinguishes
   // (missing main, out-of-alliance main, stale affiliation read) — a member
-  // can't tell those apart from here and doesn't need to.
+  // can't tell those apart from here and doesn't need to. Points at the
+  // self-service selector already on this page (page.tsx's per-row `make
+  // main` action, gated only on `!c.isMain`) rather than an admin: the member
+  // can fix this themselves in one press without leaving `/account`.
   const mainFix = (
     <span className="dim">
       One of your other characters is in the alliance, but it isn&rsquo;t set as your main
-      — ask an admin to switch it.
+      — open that character below and press &ldquo;make main&rdquo;.
     </span>
   );
   if (tier === "pending") {
