@@ -527,25 +527,50 @@ export async function unlinkCharacter(
   return { ok: true };
 }
 
+/**
+ * Set the account's main.
+ *
+ * `actor` is explicit rather than assumed to be the account itself: an admin
+ * repairing a member's main (admin/accounts/actions.ts) is a different act from
+ * a member picking their own, and the audit log has to be able to tell them
+ * apart. `actor === accountId` is NOT that signal — an admin fixing their own
+ * account produces exactly that — so the caller names the action too. Whether
+ * the alliance actually warrants the swap is the caller's business; this
+ * function only enforces ownership.
+ */
 export async function setMainCharacter(
   dbx: DbTx,
+  actor: string,
   accountId: string,
   characterId: number,
-): Promise<{ ok: true; name: string } | { ok: false; error: "not_on_account" }> {
+  action: "account.main_changed" | "admin.main_changed" = "account.main_changed",
+): Promise<
+  { ok: true; name: string; tierLocked: boolean } | { ok: false; error: "not_on_account" }
+> {
   const rows = await dbx
     .select()
     .from(character)
     .where(and(eq(character.id, characterId), eq(character.accountId, accountId)))
     .for("update");
   if (rows.length === 0) return { ok: false, error: "not_on_account" };
-  await dbx.select().from(account).where(eq(account.id, accountId)).for("update");
+  // Captured (not discarded like before this row grew a second reader):
+  // `tierLocked` rides along the same way `name` does below, off the row this
+  // `FOR UPDATE` already locked — the admin caller needs it to word its
+  // confirmation honestly (accountsConfirmation's "main" case, view.ts), and a
+  // second, unlocked read afterward would race against a concurrent tier
+  // change instead of seeing the value this transaction is committed against.
+  const [acc] = await dbx
+    .select()
+    .from(account)
+    .where(eq(account.id, accountId))
+    .for("update");
   await dbx
     .update(account)
     .set({ mainCharacterId: characterId })
     .where(eq(account.id, accountId));
   await logAudit(dbx, {
-    actor: accountId,
-    action: "account.main_changed",
+    actor,
+    action,
     target: accountId,
     details: { mainCharacterId: characterId },
   });
@@ -554,7 +579,7 @@ export async function setMainCharacter(
   // a second query for it: the row is already locked and read right above,
   // and the caller's own redirect needs it to name the confirmation
   // ("Main character set to <name>") rather than a bare verb.
-  return { ok: true, name: rows[0].name };
+  return { ok: true, name: rows[0].name, tierLocked: acc.tierLocked };
 }
 
 export async function maybeGrantBootstrapAdmin(

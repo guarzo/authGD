@@ -528,12 +528,14 @@ test("unlink arms on the first click, confirms on the second, and Escape disarms
   ).toHaveLength(1);
 });
 
-// 3.5/5b: the character unlink's cost sentence, which R4 requires stay
-// sighted-reader-visible (this panel's `ConfirmCost` uses `visibility="visible"`,
-// not `"reveal"` — see the comment beside the call site for why `"reveal"` was
-// off the table inside this `<td>`). Visible at rest, before any arm, is the
-// behavior under test: `"reveal"` would only show this sentence once armed.
-test("unlink carries a visible, wired cost sentence that does not move the button", async ({
+// 3.5/5b: the character unlink's cost sentence. This panel's `ConfirmCost`
+// uses the `"reveal"` default (see the comment beside the call site,
+// page.tsx:1007-1042, for why "reveal" is correct here and not "visible" or
+// "hidden") — hidden at rest, revealed once armed. The properties under test:
+// the sentence is wired (`aria-describedby` resolves to a real element), says
+// the right words, is hidden at rest, reveals on arm, and arming does not move
+// the button.
+test("unlink carries a wired cost sentence, hidden at rest and revealed on arm, that does not move the button", async ({
   page,
   context,
 }) => {
@@ -561,15 +563,17 @@ test("unlink carries a visible, wired cost sentence that does not move the butto
   expect(describedBy).toBeTruthy();
 
   const cost = page.locator(`#${describedBy}`);
-  await expect(cost).toBeVisible();
+  // Hidden at rest is "reveal"'s whole point: the drawer opens as a control
+  // strip, not as a paragraph about an action nobody is taking yet.
+  await expect(cost).toHaveClass(/visually-hidden/);
   // "starts a new, separate account" rather than "relink any time" (the
   // Discord control's own promise): a fresh SSO login with this character
   // does not rejoin this account, and this sentence must not say otherwise.
+  // This works against a `.visually-hidden` element because the text is
+  // still in the DOM, just visually suppressed.
   await expect(cost).toContainText("new, separate account");
 
-  // The sentence sits at rest, unarmed — this is the "visible" mode's whole
-  // point (see #108/#111/#112 for the "reveal" failure it was chosen over) —
-  // and arming must not move the button out from under a stationary pointer,
+  // Arming must not move the button out from under a stationary pointer —
   // the same property the Discord unlink's own reflow test checks below.
   // `document.fonts.ready` first, same as the fold-count gates below: the
   // mono face this button and its ghost label render in can still be loading
@@ -583,6 +587,9 @@ test("unlink carries a visible, wired cost sentence that does not move the butto
     .boundingBox();
   expect(armedBox?.x).toBe(restBox?.x);
   expect(armedBox?.y).toBe(restBox?.y);
+  // The reveal itself: the sentence stops being visually hidden once this
+  // control's own arm matches its id.
+  await expect(cost).not.toHaveClass(/visually-hidden/);
 });
 
 test("sync schedule reports per surface, and drops Discord when it isn't linked", async ({
@@ -2403,10 +2410,10 @@ test("hovering the manifest's remedy sub-row leaves it untinted", async ({
 // Walkthrough 3.2's own carve-out, asserted directly rather than only relied
 // on by other tests: a single-character account's one row has neither `main`
 // (gated on `!isMain`) nor `unlink` (gated on more than one character), and
-// `CharacterRow`'s `actions === null` branch must render an empty cell — no
-// toggle button and no drawer `<tr>` at all — rather than a control that opens
-// onto nothing.
-test("a single-character account's row has no actions toggle and no drawer", async ({
+// `CharacterRow`'s `actions === null` branch must render no toggle, no drawer
+// `<tr>`, and no `<td>` at all — rather than a control that opens onto nothing,
+// or an empty cell under a header naming a column every row leaves blank.
+test("a single-character account's row has no actions toggle, drawer, or column", async ({
   page,
   context,
 }) => {
@@ -2420,6 +2427,53 @@ test("a single-character account's row has no actions toggle and no drawer", asy
   await expect(manifest(page).locator("tbody tr")).toHaveCount(1);
   await expect(page.getByRole("button", { name: "Solo Pilot actions" })).toHaveCount(0);
   await expect(manifest(page).locator("tr.drawer-row")).toHaveCount(0);
+
+  // The header, the `<colgroup>`, and the body all drop the column together
+  // (`showActionsColumn`, page.tsx). Counted rather than merely checking the
+  // `<th>` is gone: nothing throws when body cells outnumber header cells, so
+  // the mis-span this guards against is invisible in both review and rendering.
+  await expect(manifest(page).getByRole("columnheader", { name: "Actions" })).toHaveCount(
+    0,
+  );
+  // Asserted as an equality between the three rather than against a literal
+  // count, so this stays true of whichever way the OTHER exception column
+  // (STATUS) happens to fall for this seed — the mis-span is the defect, not any
+  // particular width.
+  const shape = await manifest(page).evaluate((t) => ({
+    cols: t.querySelectorAll("colgroup col").length,
+    headers: t.querySelectorAll("thead th").length,
+    cells: t.querySelectorAll("tbody tr:first-child td").length,
+  }));
+  expect(shape.headers).toBe(shape.cols);
+  expect(shape.cells).toBe(shape.cols);
+});
+
+// The elision predicate is `!isMain || characters.length > 1`, not the
+// `characters.length > 1` it superficially resembles. `applyNoMainRule`
+// (services/accounts.ts) nulls `main_character_id` when a member unlinks the
+// character that was main, so an account can hold exactly one character that is
+// NOT main — and that row still carries a live `make main`. The naive predicate
+// would elide the column out from under a working control.
+test("a lone character that is not main keeps its actions column", async ({
+  page,
+  context,
+}) => {
+  const acc = await seedMember(db, {
+    name: "Lone Survivor",
+    tier: "member",
+    mainless: true,
+  });
+  await markTokensHealthy(acc.id);
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.goto("/account");
+
+  await expect(manifest(page).getByRole("columnheader", { name: "Actions" })).toHaveCount(
+    1,
+  );
+  const toggle = page.getByRole("button", { name: "Lone Survivor actions" });
+  await expect(toggle).toHaveCount(1);
+  await toggle.click();
+  await expect(page.getByRole("button", { name: /make .* main/i })).toBeVisible();
 });
 
 // The ACTIONS column is `.log__col--fit` (shrink-to-content), and the toggle
@@ -2455,6 +2509,100 @@ test("opening the actions drawer does not resize the toggle's own column", async
   expect(openBox?.x).toBe(restBox?.x);
   expect(openBox?.width).toBe(restBox?.width);
 });
+
+// An arm must not survive its own drawer closing. `ConfirmArmScope`
+// (_components/confirm-submit.tsx) deliberately never unmounts an armed
+// control — that is what lets an arm outlive a close/reopen without a
+// screen-reader user losing their place — so nothing about the drawer itself
+// clears one, and `everOpen` keeps the panel mounted after the first open.
+// What actually covers it is `ConfirmSubmit`'s `onBlur` disarm: closing means
+// pressing the toggle, which moves focus off the armed button. That is an
+// indirect guarantee resting on a handler two components away, which is
+// exactly the kind that gets refactored away by someone who can't see what
+// depends on it — hence a test at the drawer level rather than trusting the
+// unit that owns the handler.
+//
+// Written after a measured false alarm: a disarm-on-close effect was drafted
+// here on the assumption the arm DID survive, and probes across all four
+// close paths (self-close and cross-row close, mouse and touch) reported zero
+// still-armed on the unmodified code. The effect was dropped as dead code.
+// This is the guard that would have answered that question without the
+// investigation, and it exists so the next person doesn't repeat it.
+for (const pointer of [
+  { label: "mouse", hasTouch: false },
+  { label: "touch", hasTouch: true },
+] as const) {
+  test.describe(`arming, ${pointer.label}`, () => {
+    test.use({ hasTouch: pointer.hasTouch });
+
+    test(`an armed unlink does not survive its drawer closing, ${pointer.label}`, async ({
+      page,
+      context,
+    }) => {
+      const acc = await seedMember(db, {
+        name: "Pilot Prime",
+        tier: "alumni",
+        alts: ["Pilot Alt", "Pilot Alt Two"],
+      });
+      await markTokensHealthy(acc.id);
+      await context.addCookies([await sessionCookieFor(db, acc.id)]);
+      await page.goto("/account");
+
+      const toggle = page.getByRole("button", { name: "Pilot Alt actions", exact: true });
+      const other = page.getByRole("button", {
+        name: "Pilot Alt Two actions",
+        exact: true,
+      });
+      const unlink = page.getByRole("button", { name: "unlink Pilot Alt", exact: true });
+      const confirm = page.getByRole("button", {
+        name: "confirm unlink Pilot Alt",
+        exact: true,
+      });
+
+      // Closing by pressing the row's own toggle.
+      await toggle.click();
+      await unlink.click();
+      await expect(confirm).toBeVisible();
+      await toggle.click();
+      await toggle.click();
+      await expect(unlink).toBeVisible();
+      await expect(confirm).toHaveCount(0);
+
+      // Closing because a different row took the one open slot — a distinct
+      // path: the armed row's own toggle is never pressed, so the close comes
+      // from `ManifestOpenScope` rather than from the control holding focus.
+      //
+      // Armed on the LOWER row and closed from the UPPER one, which is not
+      // arbitrary. Disarming shrinks the button's label from `confirm` back to
+      // `unlink`, and that reflow moves every toggle BELOW the armed row; a
+      // click aimed at one of those lands at a coordinate the target has
+      // already vacated, so the press silently hits nothing and the drawer
+      // never opens. A row above the armed one cannot be moved by it.
+      //
+      // With a mouse this path also disarms before the second toggle is even
+      // reached — `ConfirmSubmit`'s `onPointerLeave` fires on the way there —
+      // so for that pointer type the assertion holds via a different mechanism
+      // than for touch, where `pointerleave` is deliberately excluded and the
+      // arm really does survive until the drawer closes.
+      const otherUnlink = page.getByRole("button", {
+        name: "unlink Pilot Alt Two",
+        exact: true,
+      });
+      const otherConfirm = page.getByRole("button", {
+        name: "confirm unlink Pilot Alt Two",
+        exact: true,
+      });
+      await other.click();
+      await otherUnlink.click();
+      await expect(otherConfirm).toBeVisible();
+      await toggle.click();
+      await expect(otherConfirm).toHaveCount(0);
+      await other.click();
+      await expect(otherUnlink).toBeVisible();
+      await expect(otherConfirm).toHaveCount(0);
+    });
+  });
+}
 
 // The gate the actions drawer's `ConfirmCost visibility="reveal"` rests on.
 // #108/#111/#112 found that revealing a cost sentence inside a `<td>` widens
@@ -2574,6 +2722,163 @@ test("a faulted character composes a data row, an actions drawer, and a remedy r
   ).toBeVisible();
   await expect(page.locator('[id^="contact-remedy-"]')).toHaveCount(1);
   await expect(page.locator('[id^="contact-remedy-"]')).toBeVisible();
+});
+
+// The row/panel background binding is written as `tr:has(+ tr.drawer-row--
+// actions:not([hidden]))` (globals.css), and that `+` means it holds only while
+// the drawer is the data row's IMMEDIATE next sibling. Its own comment admits
+// moving the remedy row up between them "would silently drop the binding on
+// exactly the faulted rows, with no test to catch it" — and it would fail quiet:
+// the losing background composites to within a hair of `--hull`, so a
+// screenshot would read as barely-off rather than broken. Measured on a faulted
+// row for that reason, not a nominal one.
+test("an open drawer shares one background with the row above it", async ({
+  page,
+  context,
+}) => {
+  const acc = await seedNominalCrew();
+  await faultContacts(acc.id, ["Alt Pilot One"], "missing_label");
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.goto("/account");
+
+  const row = manifest(page).locator("tbody tr:not(.drawer-row)", {
+    hasText: "Alt Pilot One",
+  });
+  await page.getByRole("button", { name: "Alt Pilot One actions" }).click();
+  // Polled, not sampled once: `.log tbody tr` transitions `background-color`, so
+  // a reading taken immediately after a pointer move lands mid-interpolation and
+  // reports an alpha that differs run to run — a flake that looks exactly like
+  // the binding being broken.
+  const settled = async () => {
+    const p = await page.evaluate(() => {
+      const open = document.querySelector<HTMLElement>(
+        "tr.drawer-row--actions:not([hidden])",
+      )!;
+      const above = open.previousElementSibling as HTMLElement;
+      return {
+        aboveIsDataRow: !above.classList.contains("drawer-row"),
+        row: getComputedStyle(above).backgroundColor,
+        panel: getComputedStyle(open.querySelector("td")!).backgroundColor,
+      };
+    });
+    // `bound` rather than comparing the two colours in the assertion, so a
+    // failure prints both values beside the verdict.
+    return { ...p, bound: p.row === p.panel };
+  };
+
+  // Off the table first. Clicking leaves the pointer on the row it pressed, so
+  // measuring there reads the hover declaration rather than the resting one —
+  // two separate rules, and both have to hold.
+  await page.mouse.move(0, 0);
+  // `aboveIsDataRow` is the `+` dependency itself, stated separately from its
+  // consequence: if a future row is inserted between them this names the cause
+  // instead of only reporting two colours that no longer match.
+  await expect.poll(settled).toMatchObject({ aboveIsDataRow: true, bound: true });
+
+  // And again under the pointer, which is the state a mouse member actually
+  // sees: the general row-hover tint would otherwise repaint the top half of the
+  // block and split it, which is why the binding is declared twice.
+  await row.hover();
+  await expect.poll(settled).toMatchObject({ bound: true });
+});
+
+// `.manifest-panel`'s `padding-left: 56px` is a magic number derived from one
+// live measurement (93px name glyphs − 37px panel `<td>`), and its whole claim
+// is `controlsLeft === nameLeft`. Both halves depend on things no other test
+// touches — the portrait column's width and the name cell's own 12px padding —
+// so a change to either silently reopens the 12px gap this number was chosen to
+// close.
+test("the drawer's controls start where its character's name does", async ({
+  page,
+  context,
+}) => {
+  const acc = await seedMember(db, {
+    name: "Indent Prime",
+    tier: "alumni",
+    alts: ["Indent Alt"],
+  });
+  await markTokensHealthy(acc.id);
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.goto("/account");
+  await page.evaluate(() => document.fonts.ready);
+
+  await page.getByRole("button", { name: "Indent Alt actions" }).click();
+  const nameLeft = await manifest(page)
+    .locator("tbody tr:not(.drawer-row) .char", { hasText: "Indent Alt" })
+    .evaluate((el) => el.getBoundingClientRect().left);
+  const controlsLeft = await page
+    .locator("tr.drawer-row--actions:not([hidden]) .manifest-panel__controls")
+    .evaluate((el) => el.getBoundingClientRect().left);
+  // Exact, not within a tolerance: 56px was picked to make these identical, and
+  // a near-miss is the 12px column-boundary error the comment records rejecting.
+  expect(controlsLeft).toBe(nameLeft);
+});
+
+// Escape is layered, not collapsed. `ConfirmSubmit` calls `preventDefault()`
+// without `stopPropagation()`, so its disarm and the drawer's close would both
+// fire on one press unless `CharacterRow` skips an already-prevented event —
+// which would take the panel away mid-confirmation, the state a member pressing
+// Escape is most likely backing out of one step at a time.
+test("escape disarms first and closes second, returning focus to the toggle", async ({
+  page,
+  context,
+}) => {
+  const acc = await seedMember(db, {
+    name: "Escape Prime",
+    tier: "alumni",
+    alts: ["Escape Alt"],
+  });
+  await markTokensHealthy(acc.id);
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.goto("/account");
+
+  const toggle = page.getByRole("button", { name: "Escape Alt actions" });
+  const drawer = page.locator("tr.drawer-row--actions:not([hidden])");
+  await toggle.click();
+  await page.getByRole("button", { name: "unlink Escape Alt", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "confirm unlink Escape Alt" }),
+  ).toBeVisible();
+
+  await page.keyboard.press("Escape");
+  await expect(
+    page.getByRole("button", { name: "unlink Escape Alt", exact: true }),
+  ).toBeVisible();
+  await expect(drawer).toHaveCount(1);
+
+  await page.keyboard.press("Escape");
+  await expect(drawer).toHaveCount(0);
+  // Closing sets `hidden` on the row holding the focused element, so without the
+  // refocus this leaves focus stranded in a hidden subtree — worse than having
+  // no Escape at all.
+  await expect(toggle).toBeFocused();
+});
+
+// Bound to the toggle as well as the panel: opening moves no focus, so a
+// keyboard member who has just opened a drawer is still standing on the toggle,
+// and that is where their first Escape actually lands. A panel-only handler
+// would do nothing there — the common case, not an edge one.
+test("escape closes the drawer from the toggle it was opened with", async ({
+  page,
+  context,
+}) => {
+  const acc = await seedMember(db, {
+    name: "Toggle Prime",
+    tier: "alumni",
+    alts: ["Toggle Alt"],
+  });
+  await markTokensHealthy(acc.id);
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.goto("/account");
+
+  const toggle = page.getByRole("button", { name: "Toggle Alt actions" });
+  await toggle.click();
+  await expect(toggle).toBeFocused();
+  await expect(page.locator("tr.drawer-row--actions:not([hidden])")).toHaveCount(1);
+
+  await page.keyboard.press("Escape");
+  await expect(page.locator("tr.drawer-row--actions:not([hidden])")).toHaveCount(0);
+  await expect(toggle).toBeFocused();
 });
 
 // Walkthrough 3.4: an alt is elided only when it reads identically to main's

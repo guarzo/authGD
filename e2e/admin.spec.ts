@@ -677,6 +677,188 @@ test("an admin can unlink a member's Discord", async ({ page, context }) => {
 });
 
 /**
+ * Two admins working the same row, or one with a drawer open since this
+ * morning — the same class of race `"approving an account someone else
+ * already approved"` covers for the tier queue, but this control has no
+ * redirect to fall back on (ruling R2 moved it into the drawer, and a
+ * redirect there would close the very drawer the admin has open). Written
+ * directly to the DB rather than through the action, so `unlinkDiscord`'s own
+ * re-check under the row lock is what has to catch it, not this test's setup.
+ */
+test("unlinking a Discord link someone else already cleared lands on a warning, not silence", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
+  const member = await seedMember(db, { name: "Pilot", tier: "alumni" });
+  await db.insert(discordLink).values({
+    accountId: member.id,
+    discordUserId: "duid-e2e-race",
+  });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+
+  await page.goto("/admin/accounts");
+  await toggleOf(rowFor(page, "Pilot")).click();
+
+  const unlink = page.getByRole("button", {
+    name: "unlink Discord for Pilot",
+    exact: true,
+  });
+  await unlink.click();
+  const confirm = page.getByRole("button", {
+    name: "confirm unlink Discord for Pilot",
+    exact: true,
+  });
+  await expect(confirm).toBeVisible();
+
+  // The other admin's clear, landing between the arm above and the press
+  // below.
+  await db.delete(discordLink).where(eq(discordLink.accountId, member.id));
+
+  await confirm.click();
+
+  // No redirect: `not_linked` resolves inline, the way it always has — this
+  // control's error union never reached `redirectOnMutationError` at all. What
+  // changed is that resolving inline used to mean resolving silently. The URL
+  // picks up no `?error=` code and the drawer this admin had open stays open
+  // rather than being replaced by a fresh route tree.
+  await expect(page).not.toHaveURL(/[?&]error=/);
+  const row = rowFor(page, "Pilot");
+  await expect(drawerOf(row)).toBeVisible();
+  const notice = drawerOf(row).locator("p.notice--warn");
+  await expect(notice).toContainText("Discord was already unlinked for Pilot.");
+  await expect(page.getByText("Something broke")).toHaveCount(0);
+});
+
+/**
+ * The same race one control over, and the reason `changed` exists on every
+ * mutation in `services/admin-accounts.ts`: a press that writes nothing must
+ * not read back as a press that did. The freeze control only renders on a row
+ * the page believes is active, so the only way to press it against a frozen
+ * account is for the freeze to land between the render and the press — which
+ * is exactly what this stages, by writing the status directly rather than
+ * through the action, so `setAccountStatus`'s own re-check is what catches it.
+ *
+ * The cost of getting this wrong is not just a wrong sentence: the success
+ * copy sends an admin to `/admin/audit` for a row that was never written.
+ */
+test("freezing an account someone else already froze says so, and claims nothing", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
+  const member = await seedMember(db, { name: "Pilot", tier: "member" });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+
+  await page.goto("/admin/accounts");
+  const row = rowFor(page, "Pilot");
+  await toggleOf(row).click();
+  await drawerOf(row).getByRole("button", { name: "freeze Pilot", exact: true }).click();
+  const confirm = drawerOf(row).getByRole("button", {
+    name: "confirm freeze Pilot",
+    exact: true,
+  });
+  await expect(confirm).toBeVisible();
+
+  // The other admin's freeze, landing between the arm above and the press
+  // below.
+  await db.update(account).set({ status: "cryo" }).where(eq(account.id, member.id));
+
+  await confirm.click();
+
+  const notice = drawerOf(rowFor(page, "Pilot")).locator("p.notice");
+  await expect(notice).toHaveText("Pilot was already frozen.");
+  // The distinction the whole change is for: not the success sentence, which
+  // would send this admin looking for an audit row that does not exist.
+  await expect(notice).not.toHaveText("Pilot frozen.");
+});
+
+/**
+ * The note field is the one control here an admin can press twice against the
+ * same value without any race at all — it stays on screen holding its own text
+ * after a save, and pressing again is a natural way to make sure. `"· saved"`
+ * on that second press would claim a write `setStatusNote` short-circuited.
+ */
+test("saving a note that hasn't changed says already saved, not saved", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedWorld();
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.goto("/admin/accounts");
+  const drawer = drawerOf(rowFor(page, "Zed"));
+  await toggleOf(rowFor(page, "Zed")).click();
+
+  const save = drawer.getByRole("button", { name: "save note" });
+  const saved = drawer.locator(".note-form__saved");
+  await drawer.getByPlaceholder("notes").fill("watch this one");
+  await save.click();
+  await expect(saved).toHaveText("· saved");
+
+  // Same text, second press. `seq` still has to advance — that is what clears
+  // `dirty` and repaints this at all — while `changed` says what the press did.
+  await save.click();
+  await expect(saved).toHaveText("· already saved");
+});
+
+/**
+ * A press the re-entry guard refuses produces no POST and no response
+ * (`submit-guard.ts`), so nothing about it reaches `ConfirmingForm`. Outside a
+ * drawer that silence is fine: the first press navigated, and the admin can
+ * see it. Inside one the page does not move, so the refusal is indistinguishable
+ * from a dead control — hence `ConfirmSubmit` reporting it into the group's own
+ * notice when there is a group above it.
+ *
+ * Four clicks, because only every second one is a submit: arm, confirm, re-arm
+ * (the confirm disarmed the control, so this click never reaches the guard),
+ * and finally a second submit for the guard to refuse.
+ */
+test("a drawer press refused while the last one is still in flight says so", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
+  await seedMember(db, { name: "Pilot", tier: "member" });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.goto("/admin/accounts");
+
+  // Held open so the second confirm lands while the first is still in flight.
+  // POSTs only: the server action is one, the RSC fetches around it are not.
+  //
+  // Released explicitly below rather than after a fixed delay. A wall clock
+  // would have to outlast four clicks' actionability checks, and a loaded CI
+  // worker that overruns it closes the window before the refusal happens —
+  // the guard never fires and the failure reads as if the feature broke.
+  let release!: () => void;
+  const held = new Promise<void>((r) => {
+    release = r;
+  });
+  await page.route("**/admin/accounts**", async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    await held;
+    await route.continue();
+  });
+
+  const row = rowFor(page, "Pilot");
+  await toggleOf(row).click();
+  const freeze = drawerOf(row).getByRole("button", { name: /freeze Pilot/ });
+  await freeze.click();
+  await freeze.click();
+  await freeze.click(); // re-arms
+  await freeze.click(); // refused: the first press is still in flight
+
+  const notice = drawerOf(rowFor(page, "Pilot")).locator("p.notice--warn");
+  await expect(notice).toHaveText("Still working on the last press.");
+  release();
+  // And it is not the last word: the action it was waiting on overwrites it.
+  // Same element — the group renders one notice and swaps its text — so this
+  // reads through `p.notice` on purpose, and passing means the warn is gone.
+  await expect(drawerOf(rowFor(page, "Pilot")).locator("p.notice")).toHaveText(
+    "Pilot frozen.",
+  );
+});
+
+/**
  * The unlink control sits in the drawer at the standalone (36px) grade, per
  * ruling R1 (DESIGN.md's "Hit targets") — the same grade every other control
  * in this drawer takes, not the 28px `.btn--micro` grade the collapsed row's
@@ -3000,4 +3182,108 @@ test("the Map column separates a healthy account from every way it can drift", a
   await expect(
     page.locator(`${ROWS} > td:nth-child(${MAP_CELL + 1}) .st--bad`),
   ).toHaveCount(0);
+});
+
+/**
+ * The point of this test is the assertion at the end, not the press before it.
+ * `setMainAction` promotes the alt in the same revalidation that flips its own
+ * `mainFixCandidate` false — see the comment above the crew table's
+ * `ConfirmingForm` in page.tsx — so a form gated from outside the `<td>`, or a
+ * `ConfirmGroup` nested inside the row rather than hoisted above the whole
+ * crew table, would unmount in the very commit that produced this
+ * confirmation and it would never paint. That is the failure mode this
+ * feature is most likely to hit, and the only thing that catches it is
+ * actually reading the sentence off the page after the press.
+ */
+test("pressing make main in the drawer reports the confirmation, surviving its own row's re-render", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
+  await seedMember(db, { name: "Out Main", tier: "alumni", alts: ["In Alt"] });
+  // Out of alliance: anything other than cfg.allianceId (99000001, see
+  // playwright.config.ts) makes `mainFixCandidates` treat the main as broken.
+  await db.update(character).set({ allianceId: 5 }).where(eq(character.name, "Out Main"));
+  await db
+    .update(character)
+    .set({ allianceId: 99000001 })
+    .where(eq(character.name, "In Alt"));
+
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.goto("/admin/accounts");
+
+  // The row marker: exactly one, naming the real problem. Shortened visible
+  // text ("·main out"), per page.tsx's own comment on why the full phrase
+  // doesn't survive the row-height budget at 320/390px — the accessible name
+  // still carries the unabbreviated "·main out of alliance" via `aria-label`.
+  await expect(rowFor(page, "Out Main")).toContainText("·main out");
+  await expect(toggleOf(rowFor(page, "Out Main"))).toHaveAccessibleName(
+    /·main out of alliance/,
+  );
+
+  const row = rowFor(page, "Out Main");
+  await toggleOf(row).click();
+  const drawer = drawerOf(row);
+  await drawer.getByRole("button", { name: "make In Alt the main for Out Main" }).click();
+
+  await expect(page.getByText("is now the main")).toBeVisible();
+});
+
+/**
+ * The locked half of the same control. A pinned account still gets the button —
+ * that was the deliberate choice over hiding it — so the only thing keeping the
+ * press honest is copy: the note before it saying the tier won't move, and the
+ * confirmation after it repeating that instead of the unlocked sentence's
+ * promise that membership reconverges in a few seconds. Both strings are
+ * unit-tested where they are built (view.ts's `accountsConfirmation`, and its
+ * tests at admin-accounts-view.test.ts), but neither had anything asserting it
+ * reaches the screen: the note is rendered under `r.mainBroken && r.tierLocked`
+ * in page.tsx and nothing else reads that pair, so dropping the condition would
+ * have been caught by no test at any layer.
+ */
+test("the pinned-tier note and confirmation survive a make main press on a locked account", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedMember(db, {
+    name: "Lock Boss",
+    tier: "member",
+    isAdmin: true,
+  });
+  await seedMember(db, {
+    name: "Pinned Main",
+    tier: "associate",
+    tierLocked: true,
+    alts: ["Pinned Alt"],
+  });
+  await db
+    .update(character)
+    .set({ allianceId: 5 })
+    .where(eq(character.name, "Pinned Main"));
+  await db
+    .update(character)
+    .set({ allianceId: 99000001 })
+    .where(eq(character.name, "Pinned Alt"));
+
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  await page.goto("/admin/accounts");
+
+  const row = rowFor(page, "Pinned Main");
+  await toggleOf(row).click();
+  const drawer = drawerOf(row);
+
+  // Before the press: the warning that the tier is pinned, and how to unpin it.
+  await expect(drawer).toContainText(
+    "tier is pinned, so changing the main won’t move it",
+  );
+
+  await drawer
+    .getByRole("button", { name: "make Pinned Alt the main for Pinned Main" })
+    .click();
+
+  // After: the locked wording, NOT the unlocked sentence's reconvergence promise.
+  await expect(
+    page.getByText("Pinned Alt is now the main, but the tier stays pinned."),
+  ).toBeVisible();
+  await expect(page.getByText("Press auto to unpin.")).toBeVisible();
 });

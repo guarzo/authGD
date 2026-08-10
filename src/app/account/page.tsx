@@ -43,11 +43,13 @@ import { AccountPayouts } from "./account-payouts";
 import { ConfirmNotice } from "@/app/_components/confirm-notice";
 import { accountConfirmation } from "./view";
 
-/** Columns in the crew manifest table: portrait, name, [status], actions.
- *  Derived rather than constant because STATUS is an exception column — see
- *  `showStatusColumn` in the page body — and the empty-state row's `colSpan`
- *  has to follow it or a no-character account renders a short row. */
-const manifestColumns = (showStatus: boolean) => (showStatus ? 4 : 3);
+/** Columns in the crew manifest table: portrait, name, [status], [actions].
+ *  Derived rather than constant because both STATUS and ACTIONS are exception
+ *  columns — see `showStatusColumn` and `showActionsColumn` in the page body —
+ *  and the empty-state row's `colSpan` has to follow them or a no-character
+ *  account renders a short row. */
+const manifestColumns = (showStatus: boolean, showActions: boolean) =>
+  2 + (showStatus ? 1 : 0) + (showActions ? 1 : 0);
 
 /** The id a contacts cell's `aria-describedby` points at when — and only
  *  when — `ContactRemedy` has something to say about that character. Unlike
@@ -279,6 +281,28 @@ export default async function AccountPage({
   // `classifyCharacter` over the crew, so the manifest stays a server component.
   const showStatusColumn = view.characters.some((c) => classifyCharacter(c) !== "ok");
 
+  // ACTIONS is an exception column for the same reason, and was the one place
+  // that rule was stated in the markup but not applied: a single-character
+  // account has no `main` (gated on `!isMain`) and no `unlink` (gated on more
+  // than one character), so every row's actions cell was empty while the header
+  // and `<col>` stayed — a column reporting that there is nothing to do. AT and
+  // sighted parity (walkthrough ruling R4) wants the same treatment STATUS
+  // already gets.
+  //
+  // The per-row `hasActions` predicate below, hoisted, NOT `characters.length >
+  // 1`: `applyNoMainRule` (`services/accounts.ts`) clears `mainCharacterId` when
+  // a member unlinks their main, so a lone survivor has `isMain === false` and
+  // still carries a live `make main` button. The naive predicate would elide the
+  // column out from under it.
+  //
+  // Uniform across the table by construction, which is what lets
+  // `CharacterRow` gate its own `<td>` on `actions` alone rather than taking a
+  // second prop: when `length > 1` every row is true, and when `length === 1`
+  // there is only one row to disagree with.
+  const showActionsColumn = view.characters.some(
+    (c) => !c.isMain || view.characters.length > 1,
+  );
+
   // Walkthrough 3.4: an alt's location line is elided when it reads the same
   // as the main's. The main keeps its own line unconditionally — it is the
   // anchor the comparison is stated against, and eliding it too would leave a
@@ -417,7 +441,7 @@ export default async function AccountPage({
                   answers nothing without "Tier" in front of it. The `.facts`
                   grid's `<dt>` was doing this job; nothing else was. */}
               <span className="visually-hidden">Tier</span>
-              <StandingTier tier={view.tier} />
+              <StandingTier tier={view.tier} canFixMain={view.canFixMain} />
               {/* Cryo's copy and its "wake me" control, unchanged from the dd
                   they used to share. The old comment here argued they could not
                   have a row of their own because a `.visually-hidden` dt is
@@ -680,9 +704,13 @@ export default async function AccountPage({
                 `table-layout: auto` has nowhere to put its slack and hands all
                 of it to whichever column happens to come first in markup,
                 which was NAME purely by accident of column order, not by
-                declaration. Column count follows `manifestColumns()` so a
-                STATUS-less (all-ok) crew still gets the right number of
-                `<col>`s.
+                declaration. The `<col>`s follow the same two exception gates
+                the `<thead>` does, so a STATUS-less (all-ok) crew and an
+                ACTIONS-less (lone main) crew each still get the right number of
+                them. Gated inline rather than through `manifestColumns()`:
+                that helper returns a count, and this needs the individual
+                columns, so the two agree by sharing the gates rather than by
+                one deriving from the other.
 
                 Wide-viewport only: at 320px the table already overflows its
                 scroll region, so there is no leftover width to redistribute
@@ -713,7 +741,7 @@ export default async function AccountPage({
                   <col className="log__col--fit" />
                   <col />
                   {showStatusColumn && <col className="log__col--fit" />}
-                  <col className="log__col--fit" />
+                  {showActionsColumn && <col className="log__col--fit" />}
                 </colgroup>
                 {/* Always present, unlike the visual copy above: a `<caption>` is
                 announced for the table as a whole, so this is the one place a
@@ -770,9 +798,11 @@ export default async function AccountPage({
                         <span className="visually-hidden">Status</span>
                       </th>
                     )}
-                    <th scope="col">
-                      <span className="visually-hidden">Actions</span>
-                    </th>
+                    {showActionsColumn && (
+                      <th scope="col">
+                        <span className="visually-hidden">Actions</span>
+                      </th>
+                    )}
                   </tr>
                 </thead>
                 <tbody>
@@ -803,9 +833,17 @@ export default async function AccountPage({
                         // per-row disclosure instead of holding a permanent column.
                         // Gates unchanged from before the move — `main` on not
                         // already being the main, `unlink` on there being more than
-                        // one character to unlink down to — so `hasActions` is
-                        // false only for a single-character account's one row,
-                        // which must render no toggle onto an empty panel.
+                        // one character to unlink down to.
+                        //
+                        // `hasActions` is false for a single-character account whose
+                        // one character IS the main, and only then. Not for every
+                        // single-character account: `applyNoMainRule`
+                        // (`services/accounts.ts`) clears `mainCharacterId` when a
+                        // member unlinks their main, so a lone survivor has
+                        // `isMain === false` and keeps a live `make main`. That row
+                        // still gets a toggle, and `showActionsColumn` above is
+                        // hoisted from this same expression so the column follows it
+                        // rather than a crew-size shortcut.
                         const hasMainAction = !c.isMain;
                         const hasUnlinkAction = view.characters.length > 1;
                         const hasActions = hasMainAction || hasUnlinkAction;
@@ -833,7 +871,10 @@ export default async function AccountPage({
                           <Fragment key={c.id}>
                             <CharacterRow
                               name={c.name}
-                              colSpan={manifestColumns(showStatusColumn)}
+                              colSpan={manifestColumns(
+                                showStatusColumn,
+                                showActionsColumn,
+                              )}
                               leadCells={
                                 <>
                                   <td>
@@ -1191,7 +1232,12 @@ export default async function AccountPage({
                           disarms (#108/#111/#112). */}
                             {hasContactRemedy(c.contactSyncResult, c.contactsTarget) && (
                               <tr className="drawer-row">
-                                <td colSpan={manifestColumns(showStatusColumn)}>
+                                <td
+                                  colSpan={manifestColumns(
+                                    showStatusColumn,
+                                    showActionsColumn,
+                                  )}
+                                >
                                   <p id={contactRemedyId(c.id)} className="table-note">
                                     {/* The prose used to be prefixed `{c.name}:` when it
                                   lived in a footnote block below the table, far
@@ -1233,7 +1279,7 @@ export default async function AccountPage({
                         <tr>
                           <td
                             className="log__empty"
-                            colSpan={manifestColumns(showStatusColumn)}
+                            colSpan={manifestColumns(showStatusColumn, showActionsColumn)}
                           >
                             <span className="log__empty-text">
                               No characters linked yet. Add one to start pushing

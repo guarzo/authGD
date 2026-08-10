@@ -1,11 +1,23 @@
 import { eq } from "drizzle-orm";
 import type { DbTx } from "@/db";
 import { account } from "@/db/schema";
+import { setMainCharacter } from "@/services/accounts";
 import { logAudit } from "@/services/audit";
 import { enqueueSync } from "@/services/outbox";
 
+/**
+ * `changed` is what the press actually did, not whether it was allowed. Every
+ * mutation here short-circuits when the account already holds the value being
+ * set: no row written, no audit entry, no outbox job. That short-circuit is
+ * correct and stays — what was wrong is that it returned the same `{ ok: true }`
+ * a real write returns, so `/admin/accounts` told the admin "frozen" for a
+ * press that froze nothing and left no trace in the audit log they would go on
+ * to check. The flag lets the caller word the confirmation honestly (see
+ * `accountsNoChange`, admin/accounts/view.ts) without moving the decision about
+ * whether to write into the UI layer.
+ */
 export type AdminMutationResult =
-  { ok: true } | { ok: false; error: "not_authorized" | "not_found" };
+  { ok: true; changed: boolean } | { ok: false; error: "not_authorized" | "not_found" };
 
 /**
  * `setTierManual`'s own result, distinct from the shared `AdminMutationResult`
@@ -14,9 +26,11 @@ export type AdminMutationResult =
  * `accountsConfirmation`'s "tier" case (`view.ts`). `tierLocked` is the
  * account's state after this call returns, whether this press just set it,
  * left a pre-existing lock alone, or (the no-op case) changed nothing at all.
+ * `changed` is the same flag `AdminMutationResult` carries, for the same
+ * reason, and is the one that tells those three cases apart.
  */
 export type SetTierResult =
-  | { ok: true; tierLocked: boolean }
+  | { ok: true; tierLocked: boolean; changed: boolean }
   | { ok: false; error: "not_authorized" | "not_found" };
 
 /** Defense in depth: routes gate too, but services refuse unauthorized actors. */
@@ -61,7 +75,8 @@ export async function setTierManual(
   // the pin, not a bug, and `enqueueSync`/the audit row below are what make it
   // a real, visible action rather than a silent one now that the row arms
   // first.
-  if (acc.tier === tier && acc.tierLocked) return { ok: true, tierLocked: true };
+  if (acc.tier === tier && acc.tierLocked)
+    return { ok: true, tierLocked: true, changed: false };
   await dbx
     .update(account)
     .set({ tier, tierLocked: true, tierChangedAt: new Date(), tierChangedBy: actor })
@@ -73,7 +88,7 @@ export async function setTierManual(
     details: { from: acc.tier, to: tier, locked: true, cause: "manual" },
   });
   await enqueueSync(dbx, { kind: "account", accountId });
-  return { ok: true, tierLocked: true };
+  return { ok: true, tierLocked: true, changed: true };
 }
 
 /**
@@ -88,7 +103,7 @@ export async function returnTierToAuto(
   if (!(await isAuthorized(dbx, actor))) return { ok: false, error: "not_authorized" };
   const acc = await lockTarget(dbx, accountId);
   if (!acc) return { ok: false, error: "not_found" };
-  if (!acc.tierLocked) return { ok: true };
+  if (!acc.tierLocked) return { ok: true, changed: false };
   await dbx.update(account).set({ tierLocked: false }).where(eq(account.id, accountId));
   await logAudit(dbx, {
     actor,
@@ -97,7 +112,7 @@ export async function returnTierToAuto(
     details: { tier: acc.tier },
   });
   await enqueueSync(dbx, { kind: "account", accountId });
-  return { ok: true };
+  return { ok: true, changed: true };
 }
 
 export async function setAccountStatus(
@@ -109,7 +124,7 @@ export async function setAccountStatus(
   if (!(await isAuthorized(dbx, actor))) return { ok: false, error: "not_authorized" };
   const acc = await lockTarget(dbx, accountId);
   if (!acc) return { ok: false, error: "not_found" };
-  if (acc.status === status) return { ok: true };
+  if (acc.status === status) return { ok: true, changed: false };
   await dbx
     .update(account)
     .set({ status, statusChangedAt: new Date() })
@@ -121,7 +136,7 @@ export async function setAccountStatus(
     details: { from: acc.status, to: status },
   });
   await enqueueSync(dbx, { kind: "account", accountId });
-  return { ok: true };
+  return { ok: true, changed: true };
 }
 
 export type ApproveResult =
@@ -179,7 +194,7 @@ export async function setStatusNote(
   const acc = await lockTarget(dbx, accountId);
   if (!acc) return { ok: false, error: "not_found" };
   const value = note.trim() || null;
-  if (acc.statusNote === value) return { ok: true };
+  if (acc.statusNote === value) return { ok: true, changed: false };
   await dbx.update(account).set({ statusNote: value }).where(eq(account.id, accountId));
   await logAudit(dbx, {
     actor,
@@ -189,5 +204,50 @@ export async function setStatusNote(
     // where it is current, rather than frozen here at write time.
     details: { had: acc.statusNote !== null, has: value !== null },
   });
-  return { ok: true };
+  return { ok: true, changed: true };
+}
+
+/**
+ * Its own result type rather than `AdminMutationResult`: the caller needs the
+ * promoted character's NAME to word the confirmation, and `setMainCharacter`
+ * already has it in hand from the row it locked. `tierLocked` follows the
+ * same `SetTierResult` shape above for the same reason — a locked account's
+ * tier does not move on this press, and `accountsConfirmation`'s "main" case
+ * needs to know that to avoid promising a convergence that will not happen.
+ */
+export type SetMainResult =
+  | { ok: true; name: string; tierLocked: boolean }
+  | { ok: false; error: "not_authorized" | "not_found" };
+
+/**
+ * Promote one of an account's own characters to main, on an admin's behalf.
+ *
+ * The alliance is deliberately NOT re-checked here. The condition that surfaces
+ * this control (core/main-fix.ts) is presentational: it decides what to show,
+ * not what is permitted. An admin who has a reason to move a main that authGD
+ * would not have suggested is not doing anything the tier machine can't undo —
+ * the next membership run re-decides from the new main either way, and the
+ * audit row says who did it. What IS enforced is ownership: `setMainCharacter`
+ * rejects a character that isn't on the account, and that rejection surfaces
+ * here as `not_found` so `redirectOnMutationError` needs no new case.
+ *
+ * `lockTarget` is not called: `setMainCharacter` takes `FOR UPDATE` on both the
+ * character and the account itself.
+ */
+export async function setMainCharacterAsAdmin(
+  dbx: DbTx,
+  actor: string,
+  accountId: string,
+  characterId: number,
+): Promise<SetMainResult> {
+  if (!(await isAuthorized(dbx, actor))) return { ok: false, error: "not_authorized" };
+  const result = await setMainCharacter(
+    dbx,
+    actor,
+    accountId,
+    characterId,
+    "admin.main_changed",
+  );
+  if (!result.ok) return { ok: false, error: "not_found" };
+  return { ok: true, name: result.name, tierLocked: result.tierLocked };
 }

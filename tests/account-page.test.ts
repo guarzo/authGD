@@ -262,7 +262,7 @@ describe("ContactRemedy (job-failure codes)", () => {
 
 describe("StandingTier", () => {
   const render = (tier: Tier) =>
-    renderToStaticMarkup(createElement(StandingTier, { tier }));
+    renderToStaticMarkup(createElement(StandingTier, { tier, canFixMain: false }));
 
   it("tells a pending member their access is awaiting approval", () => {
     const html = render("pending");
@@ -277,6 +277,37 @@ describe("StandingTier", () => {
   });
 });
 
+describe("StandingTier (main-fix hint)", () => {
+  const render = (tier: Tier, canFixMain: boolean) =>
+    renderToStaticMarkup(createElement(StandingTier, { tier, canFixMain }));
+
+  it("tells a stalled pending account which character is the problem", () => {
+    const html = render("pending", true);
+    expect(html).toContain("alliance");
+    expect(html).toContain("make main");
+    // The old copy promised a review that will never come while the main is
+    // out of alliance — decideTier holds pending accounts until it isn't.
+    expect(html).not.toContain("awaiting approval");
+  });
+
+  it("leaves the ordinary pending message alone", () => {
+    const html = render("pending", false);
+    expect(html).toContain("awaiting approval");
+    expect(html).not.toContain("make main");
+  });
+
+  it("stops promising an alumni account that this reverts on its own", () => {
+    const html = render("alumni", true);
+    expect(html).toContain("make main");
+    expect(html).not.toContain("reverts on its own");
+  });
+
+  it("keeps the self-correcting promise for a genuinely out-of-alliance account", () => {
+    const html = render("alumni", false);
+    expect(html).toContain("reverts on its own");
+  });
+});
+
 // The success confirmation the four /account server actions redirect back
 // with — setMainAction, unlinkAction, wakeSelfAction, unlinkDiscordAction all
 // end in a control unmounting, and this is the only evidence a member gets
@@ -285,14 +316,18 @@ describe("StandingTier", () => {
 // unrecognized or missing value is untrusted input reaching copy and has to
 // degrade rather than throw or print garbage.
 describe("accountConfirmation", () => {
-  it("names the character for a main-character change", () => {
+  it("names the character for a main-character change, and the sync it queued", () => {
     expect(accountConfirmation("main", "Aiden Sol")).toBe(
-      "Main character set to Aiden Sol.",
+      "Main character set to Aiden Sol. Sync queued.",
     );
   });
 
+  // The name is the half that can go missing; the sync is not conditional on
+  // it, so the degraded sentence keeps both clauses.
   it("falls back to a bare verb when the name didn't survive the redirect", () => {
-    expect(accountConfirmation("main", undefined)).toBe("Main character updated.");
+    expect(accountConfirmation("main", undefined)).toBe(
+      "Main character updated. Sync queued.",
+    );
   });
 
   it("confirms an unlink without repeating the character's name", () => {

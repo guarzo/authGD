@@ -3901,11 +3901,14 @@ h3.rule-head__label {
    the button, since `:focus-within` on the button alone would just restate
    `:focus-visible`.
 
-   No width reservation on the ACTIONS column itself: `hasActions` (page.tsx)
-   is uniform across every row of a given account's table today — either
-   every row has this toggle or none do, gated on `characters.length > 1` for
-   the whole table — so there is no per-row PRESENCE change this class needs
-   to guard the column against.
+   No width reservation on the ACTIONS column itself: this toggle's PRESENCE is
+   uniform across every row of a given account's table — `hasActions` (page.tsx)
+   is `!isMain || characters.length > 1`, which is true for every row once the
+   crew is larger than one, and has only one row to answer for when it is not.
+   `showActionsColumn` hoists that same expression to decide whether the column
+   exists at all, so a table either has this toggle on all of its rows or has no
+   ACTIONS column. There is no per-row presence change for this class to guard
+   the column width against.
 
    The marker glyph itself DOES change, on open/close (`[aria-expanded="true"]`
    swaps `+` for `\2212`, above) — that's the axis that could actually resize
@@ -4418,6 +4421,36 @@ h3.rule-head__label {
   max-width: 34ch;
 }
 
+/* `ConfirmGroup`'s own `Notice` (confirm-group.tsx), scoped to this page's
+   drawer specifically. `.notice` alone caps at `--measure` (68ch) — sized for
+   a page-level notice with a whole page to grow into — which is wide enough,
+   inside `.drawer__controls`' flex row, to push the groups after it (Cryo,
+   Discord, Note, History) onto a line of their own the instant a long enough
+   sentence lands, the same re-wrap `.drawer__note` above exists to prevent for
+   the tier-lock sentence. 34ch is that same cap, for the same reason: a
+   `Notice` sitting in this group is exactly the same kind of control-row prose
+   `.drawer__note` already measures for, not a document-level notice.
+
+   Scoped to `/admin/accounts` only, and structurally rather than by
+   convention: `<div class="drawer">` is emitted by exactly one branch of
+   `Disclosure` (`as="row"`, disclosure.tsx), which only this page uses.
+   `/admin/sync` renders the identical `ConfirmGroup` but mounts it under
+   `as="details"`, whose wrapper carries no `.drawer`, so this rule cannot
+   reach it and that page keeps `.notice`'s own 68ch/`--measure` cap.
+
+   `margin-bottom: 0` for a second reason, not the same one: `.notice` carries
+   `margin-bottom: var(--s-5)` sized for a notice that PRECEDES the content it
+   is announcing (an error banner above a form). `ConfirmGroup` renders its
+   `Notice` last, after every button in the group, so in the Discord group
+   (whose `.drawer__confirm` is `display: contents`) it is a flex item with
+   nothing after it, and in the tier and Cryo groups it lands in the middle of
+   `.drawer__group`'s grid, where `gap` already owns the spacing and `--s-5`
+   would open a hole above the `set by` and `since` lines that follow. */
+.drawer .notice {
+  max-width: 34ch;
+  margin-bottom: 0;
+}
+
 .drawer__crew {
   display: grid;
   gap: var(--s-2);
@@ -4489,6 +4522,16 @@ h3.rule-head__label {
   align-items: center;
   gap: var(--s-2);
   flex-wrap: wrap;
+}
+
+/* An ungated `ConfirmingForm` in the crew table renders empty for every
+   character that is not a main-fix candidate — which is most of them. The form
+   has to stay mounted so its effect can report the confirmation after a
+   successful press (see admin/accounts/page.tsx), but an empty flex box still
+   costs its parent `.stack` a gap. Same treatment, same reason, as
+   `.inline-form__err:empty` below. */
+.inline-form:empty {
+  display: none;
 }
 
 /* The rejection message for an in-place editor. Phrasing content rather than

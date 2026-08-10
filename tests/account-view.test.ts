@@ -628,6 +628,102 @@ describe("getAccountView location", () => {
   });
 });
 
+describe("main-fix candidacy", () => {
+  it("marks the account fixable when the main is out of alliance and an alt is in", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "member" });
+    const accountId = acc.id;
+    await seedCharacter(ctx.db, cfg, {
+      id: 6001,
+      accountId,
+      main: true,
+      name: "Main",
+      allianceId: 99999999, // outside cfg.allianceId
+    });
+    await seedCharacter(ctx.db, cfg, {
+      id: 6002,
+      accountId,
+      name: "Alt",
+      allianceId: 99000001, // inside cfg.allianceId
+    });
+
+    const view = await getAccountView(ctx.db, cfg, accountId);
+    expect(view.canFixMain).toBe(true);
+  });
+
+  it("leaves a healthy account alone", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "member" });
+    const accountId = acc.id;
+    await seedCharacter(ctx.db, cfg, {
+      id: 6003,
+      accountId,
+      main: true,
+      name: "Main",
+      allianceId: 99000001, // inside cfg.allianceId
+    });
+
+    const view = await getAccountView(ctx.db, cfg, accountId);
+    expect(view.canFixMain).toBe(false);
+  });
+
+  it("flags the candidate alt and the account on the admin list", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "member" });
+    const accountId = acc.id;
+    const altId = 6005;
+    await seedCharacter(ctx.db, cfg, {
+      id: 6004,
+      accountId,
+      main: true,
+      name: "Main",
+      allianceId: 99999999, // outside cfg.allianceId
+    });
+    await seedCharacter(ctx.db, cfg, {
+      id: altId,
+      accountId,
+      name: "Alt",
+      allianceId: 99000001, // inside cfg.allianceId
+    });
+
+    const rows = await getAdminAccountsList(ctx.db, cfg);
+    const row = rows.find((r) => r.accountId === accountId)!;
+    expect(row.mainBroken).toBe(true);
+    expect(row.characters.filter((c) => c.mainFixCandidate).map((c) => c.id)).toEqual([
+      altId,
+    ]);
+  });
+
+  it("does not flag a broken main that has no usable alt", async () => {
+    const fixableAcc = await seedAccount(ctx.db, { tier: "member" });
+    await seedCharacter(ctx.db, cfg, {
+      id: 6006,
+      accountId: fixableAcc.id,
+      main: true,
+      name: "Main",
+      allianceId: 99999999, // outside cfg.allianceId
+    });
+    await seedCharacter(ctx.db, cfg, {
+      id: 6007,
+      accountId: fixableAcc.id,
+      name: "Alt",
+      allianceId: 99000001, // inside cfg.allianceId
+    });
+
+    const lonelyAcc = await seedAccount(ctx.db, { tier: "member" });
+    const lonelyAccountId = lonelyAcc.id;
+    await seedCharacter(ctx.db, cfg, {
+      id: 6008,
+      accountId: lonelyAccountId,
+      main: true,
+      name: "Lonely Main",
+      allianceId: 99999999, // outside cfg.allianceId, no in-alliance alt linked
+    });
+
+    const rows = await getAdminAccountsList(ctx.db, cfg);
+    const row = rows.find((r) => r.accountId === lonelyAccountId)!;
+    expect(row.mainBroken).toBe(false);
+    expect(row.characters.some((c) => c.mainFixCandidate)).toBe(false);
+  });
+});
+
 describe("countAccountsByTier", () => {
   it("counts only the requested tier, ignoring other rows", async () => {
     await seedAccount(ctx.db, { tier: "pending" });
