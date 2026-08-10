@@ -415,4 +415,34 @@ describe("runAccessListsJob", () => {
     });
     expect(result.counts?.namesResolved).toBe(2);
   });
+
+  it("a transient discovery failure retries, with no reads attempted", async () => {
+    await seedHolder();
+    await watch(7);
+    const { esi, calls } = fakeEsi({
+      listsError: new EsiError("boom", 500, "transient"),
+    });
+    await expect(
+      runAccessListsJob({ db: ctx.db, cfg, esi, fetchImpl: okToken }),
+    ).rejects.toThrow(JobRetryError);
+    expect(calls.details).toEqual([]);
+  });
+
+  it("a permanent discovery failure fails without retrying", async () => {
+    await seedHolder();
+    await watch(7);
+    const { esi, calls } = fakeEsi({
+      listsError: new EsiError("forbidden", 403, "permanent"),
+    });
+    const result = await runAccessListsJob({
+      db: ctx.db,
+      cfg,
+      esi,
+      fetchImpl: okToken,
+    });
+    expect(result.status).toBe("failed");
+    expect(result.retry).toBeUndefined();
+    expect(result.errorSummary).toContain("list discovery failed");
+    expect(calls.details).toEqual([]);
+  });
 });
