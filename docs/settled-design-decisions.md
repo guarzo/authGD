@@ -173,6 +173,15 @@ undiscovered.
 | `/payouts/[id]`'s 404 uses `generateMetadata`, not a static `metadata` export | Lets the title read "No such operation" specifically, rather than a generic "Payout operation" that would also apply when the operation exists | `src/app/payouts/[id]/not-found.tsx:36` |
 | `PendingLink`'s pending affordance is built on `useLinkStatus`, not a route-level `loading.tsx` | A `loading.tsx` fallback would blank `SiteHeader`'s chrome — `SiteHeader` is rendered per-page, not from a shared `payouts/layout.tsx` | `src/app/payouts/pending-link.tsx:16-26` |
 
+### Access lists (`admin/access-lists/`)
+
+| Decision | Reason (as recorded) | Citation |
+|---|---|---|
+| The access-list scope stays out of `EVE_SSO_SCOPES` | Adding it flips every character to `needs_reauth` at the next token-health run, because that job compares granted scopes against the required set | `docs/specs/2026-08-09-access-list-monitor-design.md`, `src/jobs/token-health.ts` |
+| A dropped ACL scope outranks a bad token in the page's state cascade | A holder that re-authenticated through the ordinary link has a `valid` token AND no scope; offering the plain re-auth link first sends the admin round the loop that caused it | `src/app/admin/access-lists/view.ts` (`monitorState`) |
+| Access-list drift is `warn`, never `bad` | `bad` is reserved for destructive acts, and every row on this page is a read of a list only a human can change in-game | `src/app/admin/access-lists/view.ts` (`rowTone`) |
+| `removeWatchAction` returns an `ActionOutcome` instead of redirecting | Its control sits inside a `Disclosure`; a redirect replaces the route tree and resets that `useState`, closing the drawer on the press that used it — caught twice before on two other pages | `src/app/admin/access-lists/actions.ts` |
+
 ---
 
 ## Excluded or unverifiable — flagged, not included above

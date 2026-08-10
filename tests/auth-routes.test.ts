@@ -29,6 +29,8 @@ process.env.SYNC_MODE = "live";
 
 const { GET: loginRoute } = await import("@/app/auth/eve/login/route");
 const { GET: callbackRoute } = await import("@/app/auth/eve/callback/route");
+const { GET: linkRoute } = await import("@/app/auth/eve/link/route");
+const { ACCESS_LISTS_SCOPE } = await import("@/lib/esi/client");
 
 let ctx: Awaited<ReturnType<typeof setupTestDb>>;
 let signToken: (characterId: number, owner: string) => Promise<string>;
@@ -265,5 +267,43 @@ describe("EVE auth flow", () => {
     expect(
       await consumeOauthTransaction(ctx.db, tx.state, ["link-discord"]),
     ).not.toBeNull();
+  });
+});
+
+describe("EVE link route — ?grant= is the only attacker-controllable input", () => {
+  it("grant=access-lists asks EVE for the extra scope, alongside the base set", async () => {
+    const { createSession } = await import("@/services/session");
+    const [acc] = await ctx.db.insert(account).values({}).returning();
+    const sid = await createSession(ctx.db, acc.id);
+    const req = new NextRequest("http://localhost:3000/auth/eve/link?grant=access-lists");
+    req.cookies.set("authgd_session", sid);
+
+    const res = await linkRoute(req);
+    expect(res.status).toBe(307);
+    const authorize = new URL(res.headers.get("location")!);
+    const scopes = authorize.searchParams.get("scope")!.split(" ");
+    expect(scopes).toContain(ACCESS_LISTS_SCOPE);
+    expect(scopes).toContain("esi-characters.read_contacts.v1");
+  });
+
+  it("any other grant value asks for no extra scope", async () => {
+    const { createSession } = await import("@/services/session");
+    const [acc] = await ctx.db.insert(account).values({}).returning();
+    const sid = await createSession(ctx.db, acc.id);
+
+    for (const url of [
+      "http://localhost:3000/auth/eve/link",
+      "http://localhost:3000/auth/eve/link?grant=",
+      "http://localhost:3000/auth/eve/link?grant=anything-else",
+    ]) {
+      const req = new NextRequest(url);
+      req.cookies.set("authgd_session", sid);
+      const res = await linkRoute(req);
+      expect(res.status).toBe(307);
+      const authorize = new URL(res.headers.get("location")!);
+      const scopes = authorize.searchParams.get("scope")!.split(" ");
+      expect(scopes).not.toContain(ACCESS_LISTS_SCOPE);
+      expect(scopes).toContain("esi-characters.read_contacts.v1");
+    }
   });
 });

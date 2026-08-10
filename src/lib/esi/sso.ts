@@ -24,16 +24,28 @@ export interface EveIdentity {
   scopes: string[];
 }
 
+/**
+ * `extraScopes` is unioned with the configured set rather than replacing it:
+ * the callback stores whatever EVE grants, so a request that dropped the
+ * standing scopes would silently downgrade the character.
+ *
+ * This CANNOT target a specific character. EVE's picker runs after this URL is
+ * built, so the grant attaches to whichever character the operator chooses —
+ * identity is learned only from the callback JWT. Callers detect the resulting
+ * scope state; they cannot guarantee it.
+ */
 export function buildEveAuthorizeUrl(
   cfg: Config,
   state: string,
   codeChallenge: string,
+  extraScopes: string[] = [],
 ): string {
   const url = new URL(AUTHORIZE_URL);
+  const scopes = [...new Set([...cfg.eveSso.scopes, ...extraScopes])];
   url.searchParams.set("response_type", "code");
   url.searchParams.set("redirect_uri", `${cfg.appBaseUrl}/auth/eve/callback`);
   url.searchParams.set("client_id", cfg.eveSso.clientId);
-  url.searchParams.set("scope", cfg.eveSso.scopes.join(" "));
+  url.searchParams.set("scope", scopes.join(" "));
   url.searchParams.set("state", state);
   url.searchParams.set("code_challenge", codeChallenge);
   url.searchParams.set("code_challenge_method", "S256");

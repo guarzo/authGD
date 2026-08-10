@@ -46,6 +46,7 @@ export async function seedCharacter(
     /** Also set as the account's main character. */
     main?: boolean;
     allianceId?: number | null;
+    corporationId?: number | null;
     affiliationInvalid?: boolean;
   },
 ) {
@@ -63,6 +64,7 @@ export async function seedCharacter(
       scopes: opts.scopes ?? [...cfg.eveSso.scopes],
       tokenStatus: opts.tokenStatus ?? "valid",
       allianceId: opts.allianceId ?? null,
+      corporationId: opts.corporationId ?? null,
       affiliationInvalid: opts.affiliationInvalid ?? false,
     })
     .returning();

@@ -14,6 +14,7 @@ const KNOWN_ORDER = [
   "token-health",
   "purge",
   "location",
+  "access-lists",
 ];
 
 export type SyncStatusGroup = {

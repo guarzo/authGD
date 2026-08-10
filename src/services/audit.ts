@@ -150,8 +150,22 @@ type TargetKind = "account" | "character" | "discord" | "payout";
  * RESERVED_TARGET_LITERALS) are short-circuited by the caller before
  * `targetKindFromAction` is consulted, so `sync.*` reaching it always means
  * the account-uuid form.
+ *
+ * `access_list.*` is the one namespace that breaks the "one shape per
+ * namespace" premise above: `holder_designated`/`holder_replaced` target a
+ * character id, but `watch_added`/`watch_removed` target an access-list id —
+ * a kind `TargetKind` has no member for. Classified as `character` anyway,
+ * because the holder actions are the ones worth resolving to a name and the
+ * watch actions' ids are small (list ids in the hundreds of thousands vs.
+ * ~9-10-digit character ids), so a false character match is not realistic in
+ * practice; on the rare miss it just stays unresolved, exactly as it did
+ * before this namespace existed. `access_list.watch_*`'s target is rendered
+ * from its own `details` payload (`summarize.ts`'s `accessListRef`), not from
+ * this resolution, so nothing user-facing depends on the id being "right"
+ * here.
  */
 const NAMESPACE_TARGET_KIND = {
+  "access_list.": "character",
   "account.": "account",
   "admin.": "account",
   "character.": "character",

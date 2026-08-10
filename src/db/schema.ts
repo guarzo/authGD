@@ -3,6 +3,7 @@ import {
   boolean,
   check,
   index,
+  integer,
   jsonb,
   numeric,
   pgEnum,
@@ -30,6 +31,22 @@ export const oauthIntentEnum = pgEnum("oauth_intent", [
   "link-discord",
 ]);
 export const syncRunStatusEnum = pgEnum("sync_run_status", ["ok", "partial", "failed"]);
+export const accessListReadStatusEnum = pgEnum("access_list_read_status", [
+  "ok",
+  "not_visible",
+  "failed",
+]);
+export const esiEntityKindEnum = pgEnum("esi_entity_kind", [
+  "character",
+  "corporation",
+  "alliance",
+]);
+export const accessListEntryKindEnum = pgEnum("access_list_entry_kind", [
+  "character",
+  "corporation",
+  "alliance",
+]);
+export type AccessListReadStatus = (typeof accessListReadStatusEnum.enumValues)[number];
 
 /**
  * The recorded outcome of one sync run. Exported here rather than re-derived at
@@ -241,6 +258,119 @@ export const universeNameKindEnum = pgEnum("universe_name_kind", [
 export const universeName = pgTable("universe_name", {
   id: bigint("id", { mode: "number" }).primaryKey(),
   kind: universeNameKindEnum("kind").notNull(),
+  name: text("name").notNull(),
+  fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
+ * The designated ACL holder: the one character whose token reads every watched
+ * access list. Singleton by construction — `id` is pinned to 1 by a check
+ * constraint, so "replace the holder" is an UPDATE and there is no way to end
+ * up with two.
+ *
+ * The FK CASCADES deliberately. The default (NO ACTION) would make
+ * `delete(character)` fail with a constraint violation for whoever happens to
+ * be the holder, breaking both existing deletion paths — unlink
+ * (src/services/accounts.ts:198-205) and transfer reclaim (:482-505, :583-609).
+ * `set null` is not available because the column is NOT NULL, so cascade it is:
+ * unlinking the holder's character silently drops the designation and the page
+ * falls back to its "no holder designated" state, which it already renders as a
+ * first-class case rather than an error.
+ */
+export const accessListHolder = pgTable(
+  "access_list_holder",
+  {
+    id: integer("id").primaryKey(),
+    characterId: bigint("character_id", { mode: "number" })
+      .notNull()
+      .references(() => character.id, { onDelete: "cascade" }),
+    designatedAt: timestamp("designated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    designatedBy: text("designated_by").notNull(), // account uuid or "system"
+  },
+  (t) => [check("access_list_holder_singleton_ck", sql`${t.id} = 1`)],
+);
+
+/**
+ * Every list the holder can currently see, and the cache of their names —
+ * `/access-lists` returns ids only, so a name costs its own detail call.
+ * Discovery reconciles this against what the holder sees rather than rebuilding
+ * it, so it stays one holder's world and never a merge of several;
+ * `observedByCharacterId` records whose.
+ */
+export const accessListCatalog = pgTable("access_list_catalog", {
+  accessListId: bigint("access_list_id", { mode: "number" }).primaryKey(),
+  name: text("name").notNull(),
+  discoveredAt: timestamp("discovered_at", { withTimezone: true }).notNull().defaultNow(),
+  observedByCharacterId: bigint("observed_by_character_id", { mode: "number" }).notNull(),
+});
+
+/** The shared watchlist. Curated by admins; not per-admin by design. */
+export const accessListWatch = pgTable("access_list_watch", {
+  accessListId: bigint("access_list_id", { mode: "number" }).primaryKey(),
+  addedAt: timestamp("added_at", { withTimezone: true }).notNull().defaultNow(),
+  addedBy: text("added_by").notNull(), // account uuid
+});
+
+/**
+ * One row per watched list, split from its entries so three states stay
+ * distinguishable: read succeeded and the list is empty (row, zero entries),
+ * never read (no row), and read failed (row with readStatus ≠ ok and the last
+ * good observedAt still in place).
+ *
+ * Two timestamps, not one. `observedAt` is the last SUCCESSFUL read and is null
+ * until there is one; `lastAttemptAt` + `readStatus` + `detail` describe the
+ * most recent attempt whether it worked or not. Collapsing them forces a choice
+ * between lying about freshness and discarding the failure.
+ */
+export const accessListSnapshot = pgTable("access_list_snapshot", {
+  accessListId: bigint("access_list_id", { mode: "number" }).primaryKey(),
+  observedAt: timestamp("observed_at", { withTimezone: true }),
+  lastAttemptAt: timestamp("last_attempt_at", { withTimezone: true }).notNull(),
+  readStatus: accessListReadStatusEnum("read_status").notNull(),
+  observedByCharacterId: bigint("observed_by_character_id", { mode: "number" }).notNull(),
+  name: text("name"),
+  description: text("description"),
+  allowEveryone: boolean("allow_everyone"),
+  detail: text("detail"),
+});
+
+/**
+ * Membership rows, replaced per list inside the same transaction as its
+ * snapshot. `access` is stored verbatim as text: CCP adding a value must not
+ * be able to fail a read of a field nothing branches on.
+ */
+export const accessListEntry = pgTable(
+  "access_list_entry",
+  {
+    id: serial("id").primaryKey(),
+    accessListId: bigint("access_list_id", { mode: "number" }).notNull(),
+    kind: accessListEntryKindEnum("kind").notNull(),
+    entityId: bigint("entity_id", { mode: "number" }).notNull(),
+    access: text("access").notNull(),
+  },
+  (t) => [unique("access_list_entry_uq").on(t.accessListId, t.kind, t.entityId)],
+);
+
+/**
+ * Name cache for the ids access-list entries carry.
+ *
+ * Fork operators: unlike `universe_name` above, personal data DOES land here.
+ * `character` rows are EVE character names — people, not places — including
+ * people who are not your members, since an access list can grant anyone. Corp
+ * and alliance names are public. Nothing here is a secret (every one of these
+ * names is visible in-game to anyone who looks the id up), but they are stored
+ * in your database and rendered on the admin monitor page. Safe to truncate at
+ * any time; it refills on the next job run at the cost of some ESI calls, and
+ * the page renders unresolved ids bare in the meantime rather than failing.
+ *
+ * Kept separate from `universe_name` precisely so that table's promise — "no
+ * personal data lands here" — stays true.
+ */
+export const esiEntityName = pgTable("esi_entity_name", {
+  id: bigint("id", { mode: "number" }).primaryKey(),
+  kind: esiEntityKindEnum("kind").notNull(),
   name: text("name").notNull(),
   fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull().defaultNow(),
 });

@@ -521,6 +521,35 @@ describe("summarizeDetails with configured tier labels", () => {
       summarizeDetails("tier.changed", { from: "green", to: "flygd" }, new Map(), LABELS),
     ).toBe("green → flygd");
   });
+
+  it("renders an access-list holder designation and its replacement", () => {
+    expect(
+      summarizeDetails("access_list.holder_designated", { characterId: 90000001 }),
+    ).toBe("character 90000001");
+    expect(
+      summarizeDetails("access_list.holder_replaced", {
+        characterId: 90000002,
+        previousCharacterId: 90000001,
+      }),
+    ).toBe("character 90000002, was 90000001");
+  });
+
+  it("renders a watch change with the list's name, and without it", () => {
+    expect(
+      summarizeDetails("access_list.watch_added", {
+        accessListId: 580356,
+        name: "Home Fleet",
+      }),
+    ).toBe("Home Fleet (580356)");
+    // A list can be watched before any discovery has named it. The id alone is
+    // the honest rendering; `?` would read as a failure rather than a not-yet.
+    expect(
+      summarizeDetails("access_list.watch_removed", {
+        accessListId: 580356,
+        name: null,
+      }),
+    ).toBe("580356");
+  });
 });
 
 describe("isFailureAction", () => {

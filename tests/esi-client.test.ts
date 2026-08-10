@@ -10,6 +10,7 @@ afterEach(() => server.resetHandlers());
 afterAll(() => server.close());
 
 const BASE = "https://esi.evetech.net/latest";
+const ROOT = "https://esi.evetech.net";
 
 describe("chunk", () => {
   it("splits into fixed-size chunks", () => {
@@ -495,5 +496,183 @@ describe("universe name reads", () => {
     const err = await esi.getStructureName(1035466617946, "at").catch((e: unknown) => e);
     expect(err).toBeInstanceOf(EsiError);
     expect((err as EsiError).status).toBe(403);
+  });
+});
+
+describe("access lists", () => {
+  it("reads list ids from the versionless base with a compatibility date", async () => {
+    let seen: { url: string; auth: string | null; compat: string | null } | null = null;
+    server.use(
+      http.get(`${ROOT}/characters/90000001/access-lists`, ({ request }) => {
+        seen = {
+          url: request.url,
+          auth: request.headers.get("authorization"),
+          compat: request.headers.get("x-compatibility-date"),
+        };
+        return HttpResponse.json({ access_lists: [{ id: 101 }, { id: 202 }] });
+      }),
+    );
+    const esi = createEsiClient();
+    expect(await esi.getAccessLists(90000001, "at")).toEqual([101, 202]);
+    expect(seen).toEqual({
+      url: "https://esi.evetech.net/characters/90000001/access-lists",
+      auth: "Bearer at",
+      compat: "2026-08-04",
+    });
+  });
+
+  it("flattens nested membership and defaults absent arrays to empty", async () => {
+    server.use(
+      http.get(`${ROOT}/characters/90000001/access-lists/101`, () =>
+        HttpResponse.json({
+          id: 101,
+          name: "Home ACL",
+          description: "the good one",
+          membership: {
+            allow_everyone: false,
+            characters: [{ access: "member", character_id: 90000002 }],
+            corporations: [{ access: "viewer", corporation_id: 98000001 }],
+          },
+        }),
+      ),
+    );
+    const esi = createEsiClient();
+    expect(await esi.getAccessList(90000001, 101, "at")).toEqual({
+      id: 101,
+      name: "Home ACL",
+      description: "the good one",
+      allowEveryone: false,
+      characters: [{ access: "member", id: 90000002 }],
+      corporations: [{ access: "viewer", id: 98000001 }],
+      alliances: [],
+    });
+  });
+
+  it("treats an absent membership object as an empty list, not a read failure", async () => {
+    server.use(
+      http.get(`${ROOT}/characters/90000001/access-lists/101`, () =>
+        HttpResponse.json({ id: 101, name: "Empty ACL", description: null }),
+      ),
+    );
+    const esi = createEsiClient();
+    expect(await esi.getAccessList(90000001, 101, "at")).toEqual({
+      id: 101,
+      name: "Empty ACL",
+      description: "",
+      allowEveryone: false,
+      characters: [],
+      corporations: [],
+      alliances: [],
+    });
+  });
+
+  it("keeps an unrecognized access value verbatim rather than failing", async () => {
+    server.use(
+      http.get(`${ROOT}/characters/90000001/access-lists/101`, () =>
+        HttpResponse.json({
+          id: 101,
+          name: "Home ACL",
+          description: null,
+          membership: {
+            allow_everyone: true,
+            characters: [
+              { access: "some-value-ccp-added-last-tuesday", character_id: 90000002 },
+            ],
+            corporations: [],
+            alliances: [],
+          },
+        }),
+      ),
+    );
+    const esi = createEsiClient();
+    const list = await esi.getAccessList(90000001, 101, "at");
+    expect(list.characters[0].access).toBe("some-value-ccp-added-last-tuesday");
+    expect(list.allowEveryone).toBe(true);
+    expect(list.description).toBe("");
+  });
+
+  it("fails closed on a malformed list envelope", async () => {
+    server.use(
+      http.get(`${ROOT}/characters/90000001/access-lists/101`, () =>
+        HttpResponse.json({ id: "not-a-number", name: "Home ACL" }),
+      ),
+    );
+    const esi = createEsiClient();
+    const err = await esi.getAccessList(90000001, 101, "at").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(EsiError);
+    expect((err as EsiError).kind).toBe("permanent");
+  });
+
+  it("throws a classified EsiError when the holder cannot see the list", async () => {
+    server.use(
+      http.get(`${ROOT}/characters/90000001/access-lists/101`, () =>
+        HttpResponse.json({ error: "Forbidden" }, { status: 403 }),
+      ),
+    );
+    const esi = createEsiClient();
+    const err = await esi.getAccessList(90000001, 101, "at").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(EsiError);
+    expect((err as EsiError).status).toBe(403);
+  });
+});
+
+describe("getUniverseNames", () => {
+  it("posts unauthenticated and returns id, name and category", async () => {
+    let auth: string | null = null;
+    let body: unknown;
+    server.use(
+      http.post(`${BASE}/universe/names/`, async ({ request }) => {
+        auth = request.headers.get("authorization");
+        body = await request.json();
+        return HttpResponse.json([
+          { id: 90000002, name: "Some Pilot", category: "character" },
+          { id: 98000001, name: "Some Corp", category: "corporation" },
+        ]);
+      }),
+    );
+    const esi = createEsiClient();
+    expect(await esi.getUniverseNames([90000002, 98000001])).toEqual([
+      { id: 90000002, name: "Some Pilot", category: "character" },
+      { id: 98000001, name: "Some Corp", category: "corporation" },
+    ]);
+    expect(body).toEqual([90000002, 98000001]);
+    expect(auth).toBeNull();
+  });
+
+  it("chunks ids at 1000 per request and concatenates the results", async () => {
+    const sizes: number[] = [];
+    server.use(
+      http.post(`${BASE}/universe/names/`, async ({ request }) => {
+        const ids = (await request.json()) as number[];
+        sizes.push(ids.length);
+        return HttpResponse.json(
+          ids.map((id) => ({ id, name: `N${id}`, category: "character" })),
+        );
+      }),
+    );
+    const esi = createEsiClient();
+    const ids = Array.from({ length: 1001 }, (_, i) => i + 1);
+    const out = await esi.getUniverseNames(ids);
+    expect(sizes).toEqual([1000, 1]);
+    expect(out).toHaveLength(1001);
+  });
+
+  it("makes no request at all for an empty id list", async () => {
+    // No MSW handler registered: onUnhandledRequest "error" turns any call into
+    // a failure, so this asserts the early exit rather than trusting a counter.
+    const esi = createEsiClient();
+    expect(await esi.getUniverseNames([])).toEqual([]);
+  });
+
+  it("fails closed on a malformed names body", async () => {
+    server.use(
+      http.post(`${BASE}/universe/names/`, () =>
+        HttpResponse.json([{ id: 1, name: 2, category: "character" }]),
+      ),
+    );
+    const esi = createEsiClient();
+    const err = await esi.getUniverseNames([1]).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(EsiError);
+    expect((err as EsiError).kind).toBe("permanent");
   });
 });

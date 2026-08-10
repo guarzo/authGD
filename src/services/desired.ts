@@ -7,6 +7,11 @@ export type MemberCharacter = {
   characterId: number;
   accountId: string;
   name: string;
+  /** Affiliation, as the membership job last recorded it. Null means never
+   * read — it is not a matchable id, and the access-list comparison treats it
+   * that way. */
+  corporationId: number | null;
+  allianceId: number | null;
   refreshTokenEnc: string | null;
   tokenStatus: "valid" | "invalid" | "needs_reauth" | "missing";
   scopes: string[];
@@ -38,6 +43,8 @@ export async function getMemberCharacters(dbx: Dbx): Promise<MemberCharacter[]> 
       characterId: character.id,
       accountId: character.accountId,
       name: character.name,
+      corporationId: character.corporationId,
+      allianceId: character.allianceId,
       refreshTokenEnc: character.refreshTokenEnc,
       tokenStatus: character.tokenStatus,
       scopes: character.scopes,
@@ -67,6 +74,8 @@ export async function getLocatableCharacters(dbx: Dbx): Promise<MemberCharacter[
       characterId: character.id,
       accountId: character.accountId,
       name: character.name,
+      corporationId: character.corporationId,
+      allianceId: character.allianceId,
       refreshTokenEnc: character.refreshTokenEnc,
       tokenStatus: character.tokenStatus,
       scopes: character.scopes,

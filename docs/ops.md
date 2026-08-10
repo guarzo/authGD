@@ -111,6 +111,7 @@ renders — this table is a copy for readers, not a source.
 | `discord-roles` | `15 * * * *` | sweep |
 | `location` | `2,17,32,47 * * * *` | housekeeping |
 | `membership-recheck` | `0 4 * * 0` | on-demand |
+| `access-lists` | `25 * * * *` | on-demand |
 | `token-health` | `0 3 * * *` | housekeeping |
 | `purge` | `30 3 * * *` | housekeeping |
 
@@ -402,6 +403,23 @@ fly deploy   # only if the secret change did not already trigger the rolling res
 backstop, not a second required step. To confirm it took: `fly secrets list`
 shows an updated digest/timestamp for `EVE_SSO_SCOPES`, and the new scope
 appears on the EVE SSO consent screen the next time someone logs in.
+
+### The access-list scope is opt-in
+
+`esi-access.read_lists.v1` is deliberately **absent** from `EVE_SSO_SCOPES`.
+Putting it there would flip every existing character to `needs_reauth` on the
+next token-health run, for a feature only one character needs.
+
+An admin grants it by visiting `/auth/eve/link?grant=access-lists`, which adds
+the scope to that one authorization. Token-health checks that nothing required
+is *missing*, not that the sets are equal, so a character carrying the extra
+scope stays `valid`.
+
+The grant is **not sticky**. Clicking any ordinary re-authentication link drops
+it, and nothing prevents that — EVE's character picker runs after the authorize
+URL is built, so at that moment there is no "the character" whose existing
+scopes could be carried forward. `/admin/access-lists` detects the loss and asks
+for a re-grant rather than failing silently.
 
 ## SYNC_MODE — the dry-run safety guard
 

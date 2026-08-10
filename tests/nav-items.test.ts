@@ -26,6 +26,7 @@ describe("navFor", () => {
       "Members",
       "Audit log",
       "Sync",
+      "Access lists",
     ]);
     expect(labels(navFor({ canReadPayouts: true, isAdmin: false }))).toEqual([
       "Your account",
@@ -40,6 +41,7 @@ describe("navFor", () => {
       "Members",
       "Audit log",
       "Sync",
+      "Access lists",
     ]);
   });
 
@@ -61,6 +63,7 @@ describe("navFromPath", () => {
       "Members",
       "Audit log",
       "Sync",
+      "Access lists",
     ]);
   });
 

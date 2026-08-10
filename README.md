@@ -128,7 +128,8 @@ web (Next.js UI + API) ──enqueue──▶ worker (pg-boss jobs)
 ```
 
 - **web** — Next.js 16 App Router. Member pages (login, account, add character,
-  link Discord, payouts) and admin pages (accounts, audit log, sync status).
+  link Discord, payouts) and admin pages (accounts, audit log, sync status,
+  access lists).
   OAuth callbacks live in API routes. Web never calls an external service inside
   a request: it writes its state change and enqueues a job.
 - **worker** — the same codebase running [pg-boss](https://github.com/timgit/pg-boss):
@@ -141,8 +142,8 @@ web (Next.js UI + API) ──enqueue──▶ worker (pg-boss jobs)
 Sync jobs are all idempotent diff-and-apply, so re-running them is always safe:
 membership verification (every 30 min, the anchor), contact push (hourly and on
 demand), Wanderer ACL sync (hourly and on demand), Discord role sync (hourly and
-on demand), token health (daily), a weekly affiliation recheck, and a daily
-purge. The admin sync page renders each job's cadence from the same table the
+on demand), token health (daily), a weekly affiliation recheck, a daily purge,
+and an hourly read-only access-list check. The admin sync page renders each job's cadence from the same table the
 worker schedules from, so the two cannot drift.
 
 Stack: TypeScript (strict), Next.js 16, React 19, Drizzle ORM, pg-boss, `jose` +

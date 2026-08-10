@@ -67,6 +67,22 @@ describe("getMemberCharacters", () => {
       expect(isContactsTarget(c)).toBe(inSet.has(c.id));
     }
   });
+
+  it("carries corporation and alliance ids, so the access-list page and the syncs share one roster", async () => {
+    const member = await seedAccount(ctx.db, { tier: "member" });
+    await seedCharacter(ctx.db, cfg, {
+      id: 1,
+      accountId: member.id,
+      main: true,
+      corporationId: 500,
+      allianceId: 900,
+    });
+    await seedCharacter(ctx.db, cfg, { id: 2, accountId: member.id });
+    const rows = await getMemberCharacters(ctx.db);
+    const byId = new Map(rows.map((r) => [r.characterId, r]));
+    expect(byId.get(1)).toMatchObject({ corporationId: 500, allianceId: 900 });
+    expect(byId.get(2)).toMatchObject({ corporationId: null, allianceId: null });
+  });
 });
 
 describe("getLocatableCharacters", () => {
