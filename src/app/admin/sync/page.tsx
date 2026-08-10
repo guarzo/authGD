@@ -424,6 +424,37 @@ export default async function AdminSyncPage({
                   cadence ?? "on demand",
                 );
                 const nextRun = nextRunFor(g.jobType, renderedAt);
+                // A pre-built accessible name for the toggle, because the
+                // computed one would not hold still. `<summary>`'s name comes
+                // from its contents, and one of those contents is
+                // `RelativeTime` — a client component on a shared 30s ticker —
+                // so this control renamed itself twice a minute with no state
+                // having changed. A screen reader re-announces a control whose
+                // name it sees change (SC 4.1.2), and a voice user's "click
+                // discord.sweep healthy 2 minutes ago" stops matching the page
+                // a minute later (SC 3.2.4).
+                //
+                // Every other piece is restated here rather than left to the
+                // contents, because `aria-label` replaces the computed name
+                // outright: anything not repeated leaves the assistive channel
+                // entirely, which is the R4 parity failure inverted. All of it
+                // is safe to freeze — `renderedAt` is one server-side instant
+                // for the whole render, so the queued age and the next-run time
+                // are as fixed as the cadence is. Only the "ago" is dropped,
+                // which is the entire reason this exists; the drawer under it
+                // carries every run's own timestamp.
+                //
+                // Assembled to match what the contents computed to, separator
+                // for separator: `queuedMarkerText` supplies its own leading
+                // comma, ` UTC` is the span `splitCadenceUtc` strips off the
+                // visible text, and the space before "next" is the one the
+                // `<br>` was contributing. The three `toHaveAccessibleName`
+                // cases in `e2e/sync.spec.ts` pin those joins.
+                const summaryName =
+                  `${g.jobType} ${healthLabel(health)}` +
+                  `${g.queued ? queuedMarkerText(g.queuedSince, renderedAt) : ""}` +
+                  ` ${cadenceVisible}${hiddenUtc ? " UTC" : ""}` +
+                  `${nextRun ? ` next ${utcHhmm(nextRun)}` : ""}`;
                 const cols = countColumns(g.jobType, g.runs);
                 const span = cols.length || 1;
                 // Shared between the runs table below and the window
@@ -434,6 +465,7 @@ export default async function AdminSyncPage({
                   <li key={g.jobType} className="strip__job">
                     <Disclosure
                       className="strip__disc"
+                      ariaLabel={summaryName}
                       defaultOpen={needsAttention(health)}
                       summary={
                         <>

@@ -403,3 +403,86 @@ test("Check now enqueues a read and audits nothing", async ({ page, context }) =
     .where(eq(auditLog.action, "access_list.check_requested"));
   expect(audits).toHaveLength(0);
 });
+
+/**
+ * The skip link has to move the caret, not just the viewport. A fragment link
+ * focuses its target only if the platform already considers that target
+ * focusable, and `<main>` is not — so without `tabIndex={-1}` the page scrolls
+ * to the content and focus stays back in the header, and the next Tab walks the
+ * admin through the nav they just asked to skip (SC 2.4.1).
+ *
+ * Asserted as focus, never as `toHaveAttribute("tabindex", "-1")`: the
+ * attribute is the mechanism and the caret is the requirement, and a `<main>`
+ * made focusable some other way would fail an attribute check while doing
+ * exactly the right thing.
+ */
+test("the skip link moves focus into the page, not just the scroll position", async ({
+  page,
+  context,
+}) => {
+  const { characterId } = await asAdmin(context);
+  await seedHolder(characterId);
+  await seedCatalog(characterId);
+  await page.goto("/admin/access-lists");
+
+  await page.keyboard.press("Tab");
+  const skip = page.locator("a:focus");
+  await expect(skip).toHaveAttribute("href", "#main");
+  await skip.press("Enter");
+
+  const landed = await page.evaluate(() => document.activeElement?.id);
+  expect(landed, "focus stayed behind the skip link").toBe("main");
+});
+
+/**
+ * The row toggle's accessible name must hold still. Its name is computed from
+ * its contents, and one of those is `RelativeTime` — a client component on a
+ * shared 30s ticker — so the control used to rename itself twice a minute with
+ * nothing about the row having changed: SC 4.1.2 for a screen reader that
+ * re-announces a control it sees renamed, and SC 3.2.4 for a voice user whose
+ * remembered phrase stops matching the page.
+ *
+ * The two reads are compared against each other rather than against a literal.
+ * A literal would pin today's wording and start passing for the wrong reason
+ * the day the summary gains a field.
+ */
+test("a watched row's toggle does not rename itself as its timestamp ages", async ({
+  page,
+  context,
+}) => {
+  const { characterId } = await asAdmin(context);
+  await seedHolder(characterId);
+  await seedCatalog(characterId);
+  // Entries the alliance roster does not contain, so the row has findings and
+  // therefore renders a disclosure at all — a clean row is a plain `<li>` with
+  // no toggle to name.
+  await seedWatched(characterId, {
+    entries: [
+      { kind: "character", entityId: 9001 },
+      { kind: "character", entityId: 9002 },
+    ],
+  });
+
+  // Before `goto`: the clock has to be in place while the page's own scripts
+  // load or the ticker captures the real timers on the way past.
+  await page.clock.install();
+  await page.goto("/admin/access-lists");
+
+  const summary = page.locator(".acl-list__disc > summary");
+  const nameOf = () => summary.evaluate((el) => el.getAttribute("aria-label") ?? "");
+  const before = await nameOf();
+  // Non-empty, or the two reads below would agree vacuously.
+  expect(before).not.toBe("");
+  // And it still leads with what a voice user would say, so 2.5.3 holds.
+  expect(before).toContain("Fleet staging");
+
+  // The visible "ago" moving is what proves the tick landed. Without this the
+  // test would pass on a page where nothing ticked at all, which is the
+  // failure it exists to rule out.
+  const stamp = summary.locator(".ago");
+  const stampBefore = await stamp.innerText();
+  await page.clock.fastForward("05:00");
+  await expect(stamp).not.toHaveText(stampBefore);
+
+  expect(await nameOf(), "the toggle renamed itself as the clock moved").toBe(before);
+});

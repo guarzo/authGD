@@ -283,6 +283,49 @@ test("a fixed-hour cadence keeps UTC in its accessible name, and an interval one
  * whitespace, so this distinguishes one space from none — the whole question —
  * but not one from two.
  */
+/**
+ * The same defect as `/admin/access-lists`, on the denser of the two surfaces.
+ * A `<summary>`'s accessible name is computed from its contents, and one of
+ * these contents is `RelativeTime` — a client component on a shared 30s ticker
+ * — so every job row's toggle renamed itself twice a minute with nothing about
+ * the job having changed: SC 4.1.2 for a screen reader that re-announces a
+ * control it sees renamed, SC 3.2.4 for a voice user whose remembered phrase
+ * stops matching the page.
+ *
+ * Stability only. What the name *contains* is pinned by the three
+ * `toHaveAccessibleName` cases above, which is the half that catches the
+ * pre-built label drifting away from the visible content — the standing risk
+ * of fixing this with `aria-label`, since the label replaces the computed name
+ * outright and anything not restated leaves the assistive channel (R4).
+ */
+test("a job row's toggle does not rename itself as its timestamp ages", async ({
+  page,
+  context,
+}) => {
+  await asAdmin(context);
+  await seedRuns();
+  // Before `goto`: the clock has to be in place while the page's scripts load,
+  // or the ticker captures the real timers on the way past.
+  await page.clock.install();
+  await page.goto("/admin/sync");
+
+  const summary = summaryFor(page, "membership");
+  const nameOf = () => summary.evaluate((el) => el.getAttribute("aria-label") ?? "");
+  const before = await nameOf();
+  // Non-empty, or the two reads would agree vacuously.
+  expect(before).not.toBe("");
+  expect(before).toContain("membership");
+
+  // The visible "ago" moving is what proves the tick landed; without it this
+  // would pass on a page where nothing ticked at all.
+  const stamp = summary.locator(".ago");
+  const stampBefore = await stamp.innerText();
+  await page.clock.fastForward("05:00");
+  await expect(stamp).not.toHaveText(stampBefore);
+
+  expect(await nameOf(), "the toggle renamed itself as the clock moved").toBe(before);
+});
+
 test("an interval row's cadence and its next-run time stay separate words", async ({
   page,
   context,

@@ -130,7 +130,14 @@ export default async function AdminAccessListsPage({
   const now = Date.now();
 
   return (
-    <main id="main" className="page page--wide">
+    // `tabIndex={-1}` so the skip link lands here rather than merely scrolling
+    // here. A fragment link moves focus only to elements the platform already
+    // considers focusable, and `<main>` is not one — without it the viewport
+    // jumps and the caret stays in the header, so the next Tab walks back
+    // through the nav the member just skipped (SC 2.4.1). Ten of the app's
+    // eleven `id="main"` elements carry it; this was the one that didn't,
+    // because it landed after the sweep that added the rest.
+    <main id="main" tabIndex={-1} className="page page--wide">
       <h1>Access lists</h1>
       <ConfirmNotice text={notice} at={at} />
 
@@ -270,7 +277,35 @@ export default async function AdminAccessListsPage({
                     }
                     return (
                       <li key={c.accessListId} className="acl-list__row">
-                        <Disclosure summary={head} className="acl-list__disc">
+                        <Disclosure
+                          summary={head}
+                          className="acl-list__disc"
+                          // A pre-built name, because the computed one would not
+                          // hold still. The summary's accessible name is derived
+                          // from its contents, and one of those contents is
+                          // `RelativeTime` — a client component on a shared 30s
+                          // ticker. So the control renamed itself twice a minute
+                          // ("Alliance ACL 3 to add, 2 minutes ago" → "… 3
+                          // minutes ago") without any state having changed. That
+                          // is SC 4.1.2 in the announcement channel, where a
+                          // screen reader re-reads a control whose name it
+                          // notices has changed, and SC 3.2.4 for a voice user,
+                          // whose "click Alliance ACL 3 to add 2 minutes ago"
+                          // stops matching whatever the page now calls it.
+                          //
+                          // Starts with the visible name, so 2.5.3 label-in-name
+                          // still matches on the word a voice user would say,
+                          // and restates the row's status after it — an
+                          // `aria-label` on a summary replaces the computed name
+                          // outright, so anything stable that the contents were
+                          // contributing has to be put back by hand or it leaves
+                          // the assistive channel entirely (R4). Everything here
+                          // is server-computed and holds still for the life of
+                          // the render. The one thing deliberately not restated
+                          // is the timestamp, which is the whole reason this
+                          // prop is here.
+                          ariaLabel={`${label} ${rowSummary(row)} — findings and controls`}
+                        >
                           <AccessListDetail
                             detail={c.detail}
                             readStatus={c.readStatus}

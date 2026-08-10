@@ -159,6 +159,20 @@ export default async function LoginPage({
             the brand twice before reaching anything actionable — on the one
             page an unauthenticated visitor can get to. The emblem adds nothing
             the heading does not already say, which is what `alt=""` is for. */}
+        {/* `fetchPriority="low"`, stated rather than left implied. This mark is
+            79.8 KB of decorative WebP with `alt=""`, and the control below it —
+            the entry point the whole page exists for — is 2,248 bytes carrying
+            an explicit `high`. Left unset, the emblem contends for the same
+            connection as that control on a first visit over a bad link, and the
+            page's one actionable thing waits behind its own background. Saying
+            `low` costs the emblem nothing a visitor can perceive (it is drawn
+            at 180px, below the fold of nothing, and announces nothing to AT)
+            and takes it out of the race.
+
+            This block sits above the disable directive, not between it and the
+            `<img>`. "Next line" means the next line, and a comment is a line —
+            inserting anything there retargets the directive at the comment and
+            silently unguards the element. Keep the directive adjacent. */}
         {/* eslint-disable-next-line @next/next/no-img-element -- what next/image
             would add here is a re-encode at its default quality 75, and
             PRODUCT.md principle 5 asks for this artwork at "full quality" or not
@@ -169,15 +183,6 @@ export default async function LoginPage({
             is the retina source, not principle 5's "large file scaled down".
             (The one thing next/image WOULD buy is a 1x srcset entry; that is a
             real cost, paid deliberately to keep the encode untouched.) */}
-        {/* `fetchPriority="low"`, stated rather than left implied. This mark is
-            79.8 KB of decorative WebP with `alt=""`, and the control below it —
-            the entry point the whole page exists for — is 2,248 bytes carrying
-            an explicit `high`. Left unset, the emblem contends for the same
-            connection as that control on a first visit over a bad link, and the
-            page's one actionable thing waits behind its own background. Saying
-            `low` costs the emblem nothing a visitor can perceive (it is drawn
-            at 180px, below the fold of nothing, and announces nothing to AT)
-            and takes it out of the race. */}
         <img
           className="launch__seal"
           src={brand.sealUrl}

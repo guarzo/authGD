@@ -325,7 +325,29 @@ export function Notice({
       id={id}
       tabIndex={id ? -1 : undefined}
     >
-      {children}
+      {/* One flex item, always. `.notice` is `display: flex` so that the glyph
+          in `::before` can sit in its own column and the text can wrap beside
+          it rather than under it — but that makes every top-level child its own
+          flex item, and flex items are laid out in the row box independently of
+          the inline content they contain. A caller writing
+          `Quote {" "} <code>{digest}</code> {" "} when you report this` got the
+          `<code>` promoted to item 2 and the two text runs to items 3 and 4, so
+          the rendered order read "Quote 4292868890 . when you report this" with
+          the phrase broken around a number that belongs at the end. Visual order
+          diverging from DOM order is SC 1.3.2, and it is invisible in the source
+          — the JSX is in the right order and the browser is not.
+
+          Wrapping here rather than at the call sites fixes every `Notice` in the
+          app carrying inline markup at once. Several callers had already worked
+          around it by hand with a `<span>` of their own; those now nest one span
+          in another, which costs nothing and is not worth unpicking one by one.
+
+          The empty-slot branch shares this `<p>`, so it renders an empty span.
+          That is inert — `.notice-slot` is not a flex container and an empty
+          inline box draws nothing — and the slot's whole job is to be a live
+          region registered before its text arrives, which the span does not
+          change. */}
+      <span>{children}</span>
     </p>
   );
 }

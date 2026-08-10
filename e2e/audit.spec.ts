@@ -622,6 +622,57 @@ test("a paged view offers a way back to the newest entries", async ({
   await expect(page.locator("tbody tr")).toHaveCount(AUDIT_PAGE_SIZE);
 });
 
+/**
+ * Every control on this page that changes the result set is a document load —
+ * the filter is a `<form method="get">` and both pagers are plain `<a href>` —
+ * so a screen reader's entire response to "Filter" or "Older entries" is to
+ * announce the new document by its title. With a constant "Audit log" that
+ * announcement was byte-identical whether the press had done something or
+ * nothing, and the only text distinguishing page one from page seven was an
+ * `<h2>` the admin then had to go and find.
+ *
+ * Note what cannot fix this: `aria-live`. A live region announces *mutations*
+ * to a region that was already present, and a region arriving with its
+ * document is not a mutation — so the obvious remedy would test green under
+ * any assertion that checks the attribute exists, and announce nothing.
+ *
+ * Deliberately coarse. The exact filter values belong to the `<h2>` and the
+ * chips; a title reciting them is read out in full, ahead of the thing the
+ * admin actually asked for, on every single load.
+ */
+test("the page title says which slice of the log this is", async ({ page, context }) => {
+  const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
+  await db.insert(auditLog).values(
+    Array.from({ length: AUDIT_PAGE_SIZE + 5 }, () => ({
+      actor: admin.id,
+      action: "tier.changed",
+      target: admin.id,
+      details: { to: "alumni" },
+    })),
+  );
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+
+  await page.goto("/admin/audit");
+  await expect(page).toHaveTitle("Audit log · Test Corp");
+
+  // Paging: the announcement now differs from the one before it.
+  await page.getByRole("link", { name: "Older entries" }).first().click();
+  await expect(page).toHaveTitle("Audit log — older · Test Corp");
+
+  // Filtering, from the newest page, is its own distinct announcement.
+  await page.goto("/admin/audit?actor=Boss");
+  await expect(page).toHaveTitle("Audit log — filtered · Test Corp");
+
+  // Both at once, and in that order.
+  await page.getByRole("link", { name: "Older entries" }).first().click();
+  await expect(page).toHaveTitle("Audit log — filtered, older · Test Corp");
+
+  // A cursor the page itself discards must not make the title claim a page the
+  // admin is not on — the same rule the `<h2>` follows for `?before=abc`.
+  await page.goto("/admin/audit?before=abc");
+  await expect(page).toHaveTitle("Audit log · Test Corp");
+});
+
 test("a filtered paged view keeps its filter on the way back", async ({
   page,
   context,

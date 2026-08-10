@@ -19,9 +19,47 @@ import { tierLabel } from "@/app/_components/labels";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = {
-  title: "Audit log",
-};
+/**
+ * The title states which page of the log this is, because on this surface the
+ * title is the announcement. Every control that changes the result set here is
+ * a document load — the filter is a `<form method="get">` and both pagers are
+ * plain `<a href>` — so a screen reader's response to "Filter" or "Older" is
+ * to announce the new document by its title and stop. With a constant "Audit
+ * log" that announcement is byte-identical whether the press did something or
+ * nothing, and the only text that distinguishes page 1 from page 7 is an `<h2>`
+ * the admin now has to go and find.
+ *
+ * A live region cannot do this job, which is worth writing down because it is
+ * the obvious fix and it fails silently: `aria-live` announces *mutations* to a
+ * region that was already there, and a region that arrives with the document is
+ * never a mutation. It would test green under any assertion that checks the
+ * attribute is present.
+ *
+ * Deliberately coarse — filtered or not, paged or not. The exact filter values
+ * are the `<h2>` and the chips' job; a title reciting them would be read in
+ * full on every load, ahead of the thing the admin actually asked for.
+ */
+export async function generateMetadata({
+  searchParams,
+}: {
+  searchParams: Promise<{
+    actor?: string | string[];
+    action?: string | string[];
+    target?: string | string[];
+    before?: string | string[];
+  }>;
+}): Promise<Metadata> {
+  const sp = await searchParams;
+  const one = (v: string | string[] | undefined) =>
+    (Array.isArray(v) ? v[0] : v)?.trim() ?? "";
+  const filtered = one(sp.actor) !== "" || one(sp.action) !== "" || one(sp.target) !== "";
+  // Same guard the page body applies to the cursor, for the same reason: a
+  // junk `before` is ignored there and must not make the title claim a page
+  // the admin is not on.
+  const paged = Number.isFinite(Number(one(sp.before))) && one(sp.before) !== "";
+  const qualifier = [filtered && "filtered", paged && "older"].filter(Boolean).join(", ");
+  return { title: qualifier === "" ? "Audit log" : `Audit log — ${qualifier}` };
+}
 
 /** id linking the action filter's `list` attribute to its `<datalist>` —
  * see `add-participant-form.tsx`'s `CHARACTER_LIST_ID` for the precedent this

@@ -323,6 +323,34 @@ test("the reference is inside the instruction that asks for it", async ({
     await expect(digest).toBeVisible();
     expect((await digest.innerText()).trim()).not.toBe("");
 
+    // And it sits *in* the sentence, not beside it. `.notice` is `display:
+    // flex` so the glyph in `::before` can hold its own column, which makes
+    // every top-level child of the notice a flex item laid out in the row box
+    // — the `<code>` became item 2 and the text runs around it items 1 and 3,
+    // each separated by the container's `gap: var(--s-3)`. The DOM order was
+    // right and the reading was not: "quote reference  4292868890  ." with the
+    // digest floated off the words that name it and the period stranded past
+    // it. `toContainText` cannot see that, because the text is all present and
+    // in order in the DOM; only the painted boxes disagree. So measure them.
+    //
+    // The trailing period, ranged rather than located — it is a bare text node
+    // with no element to address. Two pixels of slack for subpixel layout; the
+    // gap this guards against is `--s-3`, an order of magnitude wider.
+    const stranded = await alert.evaluate((el) => {
+      const code = el.querySelector("code")!;
+      const tail = code.nextSibling!;
+      const range = document.createRange();
+      range.selectNodeContents(tail);
+      return {
+        codeRight: code.getBoundingClientRect().right,
+        tailLeft: range.getBoundingClientRect().left,
+      };
+    });
+    expect(
+      stranded.tailLeft - stranded.codeRight,
+      "the period after the digest is stranded across a flex gap",
+    ).toBeLessThan(2);
+
     // Only the value is monospaced. The prose around it, "reference" included,
     // stays proportional — DESIGN.md's split, which the old `dim mono` line ran
     // backwards by setting a code face on an English word.
