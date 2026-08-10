@@ -4,8 +4,19 @@ import { account } from "@/db/schema";
 import { logAudit } from "@/services/audit";
 import { enqueueSync } from "@/services/outbox";
 
+/**
+ * `changed` is what the press actually did, not whether it was allowed. Every
+ * mutation here short-circuits when the account already holds the value being
+ * set: no row written, no audit entry, no outbox job. That short-circuit is
+ * correct and stays — what was wrong is that it returned the same `{ ok: true }`
+ * a real write returns, so `/admin/accounts` told the admin "frozen" for a
+ * press that froze nothing and left no trace in the audit log they would go on
+ * to check. The flag lets the caller word the confirmation honestly (see
+ * `accountsNoChange`, admin/accounts/view.ts) without moving the decision about
+ * whether to write into the UI layer.
+ */
 export type AdminMutationResult =
-  { ok: true } | { ok: false; error: "not_authorized" | "not_found" };
+  { ok: true; changed: boolean } | { ok: false; error: "not_authorized" | "not_found" };
 
 /**
  * `setTierManual`'s own result, distinct from the shared `AdminMutationResult`
@@ -14,9 +25,11 @@ export type AdminMutationResult =
  * `accountsConfirmation`'s "tier" case (`view.ts`). `tierLocked` is the
  * account's state after this call returns, whether this press just set it,
  * left a pre-existing lock alone, or (the no-op case) changed nothing at all.
+ * `changed` is the same flag `AdminMutationResult` carries, for the same
+ * reason, and is the one that tells those three cases apart.
  */
 export type SetTierResult =
-  | { ok: true; tierLocked: boolean }
+  | { ok: true; tierLocked: boolean; changed: boolean }
   | { ok: false; error: "not_authorized" | "not_found" };
 
 /** Defense in depth: routes gate too, but services refuse unauthorized actors. */
@@ -61,7 +74,8 @@ export async function setTierManual(
   // the pin, not a bug, and `enqueueSync`/the audit row below are what make it
   // a real, visible action rather than a silent one now that the row arms
   // first.
-  if (acc.tier === tier && acc.tierLocked) return { ok: true, tierLocked: true };
+  if (acc.tier === tier && acc.tierLocked)
+    return { ok: true, tierLocked: true, changed: false };
   await dbx
     .update(account)
     .set({ tier, tierLocked: true, tierChangedAt: new Date(), tierChangedBy: actor })
@@ -73,7 +87,7 @@ export async function setTierManual(
     details: { from: acc.tier, to: tier, locked: true, cause: "manual" },
   });
   await enqueueSync(dbx, { kind: "account", accountId });
-  return { ok: true, tierLocked: true };
+  return { ok: true, tierLocked: true, changed: true };
 }
 
 /**
@@ -88,7 +102,7 @@ export async function returnTierToAuto(
   if (!(await isAuthorized(dbx, actor))) return { ok: false, error: "not_authorized" };
   const acc = await lockTarget(dbx, accountId);
   if (!acc) return { ok: false, error: "not_found" };
-  if (!acc.tierLocked) return { ok: true };
+  if (!acc.tierLocked) return { ok: true, changed: false };
   await dbx.update(account).set({ tierLocked: false }).where(eq(account.id, accountId));
   await logAudit(dbx, {
     actor,
@@ -97,7 +111,7 @@ export async function returnTierToAuto(
     details: { tier: acc.tier },
   });
   await enqueueSync(dbx, { kind: "account", accountId });
-  return { ok: true };
+  return { ok: true, changed: true };
 }
 
 export async function setAccountStatus(
@@ -109,7 +123,7 @@ export async function setAccountStatus(
   if (!(await isAuthorized(dbx, actor))) return { ok: false, error: "not_authorized" };
   const acc = await lockTarget(dbx, accountId);
   if (!acc) return { ok: false, error: "not_found" };
-  if (acc.status === status) return { ok: true };
+  if (acc.status === status) return { ok: true, changed: false };
   await dbx
     .update(account)
     .set({ status, statusChangedAt: new Date() })
@@ -121,7 +135,7 @@ export async function setAccountStatus(
     details: { from: acc.status, to: status },
   });
   await enqueueSync(dbx, { kind: "account", accountId });
-  return { ok: true };
+  return { ok: true, changed: true };
 }
 
 export type ApproveResult =
@@ -179,7 +193,7 @@ export async function setStatusNote(
   const acc = await lockTarget(dbx, accountId);
   if (!acc) return { ok: false, error: "not_found" };
   const value = note.trim() || null;
-  if (acc.statusNote === value) return { ok: true };
+  if (acc.statusNote === value) return { ok: true, changed: false };
   await dbx.update(account).set({ statusNote: value }).where(eq(account.id, accountId));
   await logAudit(dbx, {
     actor,
@@ -189,5 +203,5 @@ export async function setStatusNote(
     // where it is current, rather than frozen here at write time.
     details: { had: acc.statusNote !== null, has: value !== null },
   });
-  return { ok: true };
+  return { ok: true, changed: true };
 }

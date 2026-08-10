@@ -52,9 +52,15 @@ import { useEffect, useRef, type MouseEvent } from "react";
  * re-entry branch — never from the two early returns below, which refuse to
  * *latch* rather than refusing the press, and where the browser is already
  * showing its own constraint-validation message. Opting in is per call site
- * because the right words depend on what the form does; `/payouts/[id]`'s
- * `NotesForm` is the one wired up so far, and the case for it there is that its
- * text is the member's own typing, which nothing else on the page preserves.
+ * because the right words depend on what the form does, and there are two
+ * shapes of caller now. `/payouts/[id]`'s `NotesForm` passes its own closure,
+ * because its text is the member's own typing, which nothing else on the page
+ * preserves. `ConfirmSubmit` opts in for itself, without a prop, whenever it
+ * finds a `ConfirmGroup` above it: inside a drawer the page does not move on a
+ * press, so a swallowed one is indistinguishable from a dead control, and the
+ * group's notice is already where that drawer's outcomes land. Both are
+ * conditional — a `ConfirmSubmit` in a plain redirecting form still refuses
+ * silently, as every other caller does.
  * `e2e/submit-guard.spec.ts` proves the refusal happens; the test named for
  * that form proves the member is told.
  */
