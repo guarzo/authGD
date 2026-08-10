@@ -4301,14 +4301,19 @@ h3.rule-head__label {
   margin: var(--s-2) var(--s-4);
 }
 
-/* The collapsed line, whether it renders as a bare `<span>` (a clean row) or
-   a `<summary>` (a drifted one) — both carry the same three children (name,
-   drift `Status`, `.ago`), so both selectors get the same layout, the
-   duplication `.strip__head, .strip__disc > summary` already accepts for the
-   same reason. The name grows; the status and age keep their own content
-   width and trail it, reading as a loose right-hand column across rows
-   rather than `.strip`'s hard-pinned tracks — this list has no fourth value
-   competing for the same space, so nothing forces that grid's discipline. */
+/* The collapsed line's OUTER container differs by row: a clean row's is the
+   bare `.acl-list__head` span itself, sitting directly under `.acl-list__row`;
+   a drifted row's is `.acl-list__disc > summary`, and `.acl-list__head` is its
+   one and only child (`Disclosure` renders `<summary>{summary}</summary>` —
+   see `disclosure.tsx`), not a second layout owner. Both share this rule so
+   whichever one is the outer container gets the same padding and the same
+   flex line for name / drift `Status` / `.ago`; the override below strips
+   that padding back off `.acl-list__head` on a drifted row, where `summary`
+   is already supplying it, so a drifted row doesn't sit inset twice. The name
+   grows; the status and age keep their own content width and trail it,
+   reading as a loose right-hand column across rows rather than `.strip`'s
+   hard-pinned tracks — this list has no fourth value competing for the same
+   space, so nothing forces that grid's discipline. */
 .acl-list__head,
 .acl-list__disc > summary {
   display: flex;
@@ -4317,6 +4322,10 @@ h3.rule-head__label {
   column-gap: var(--s-4);
   row-gap: var(--s-1);
   padding: var(--s-3) var(--s-4);
+}
+
+.acl-list__disc > summary > .acl-list__head {
+  padding: 0;
 }
 
 .acl-list__name {
@@ -4333,8 +4342,7 @@ h3.rule-head__label {
    token, and at 320px it is wider than the row: 388px of mono uppercase in a
    288px content box. Scoped to this list rather than loosened on `.st`
    itself, which every short-form caller still wants pinned to one line. */
-.acl-list__head .st,
-.acl-list__disc > summary > .st {
+.acl-list__head .st {
   white-space: normal;
   min-width: 0;
 }
