@@ -102,7 +102,9 @@ function scalar(key: string): Part {
   return part([key], (d) => (d[key] === undefined ? "" : fmt(d[key])));
 }
 
-/** A payload value behind a fixed word, e.g. `character 90000001`. */
+/** A payload value behind a fixed word, e.g. `detected by token-health`. For a
+ * value that is a character id, use `characterRef` — it renders exactly this on
+ * the miss path but resolves a name when there is one. */
 function labelled(word: string, key: string): Part {
   return part([key], (d) => (d[key] === undefined ? "" : `${word} ${fmt(d[key])}`));
 }
@@ -326,9 +328,10 @@ const PARTS: Record<string, readonly Part[]> = {
   "token.invalidated": [scalar("reason")],
   "token.verify_failed": [scalar("error")],
   // The subject is by construction a different character from the row's
-  // target (jobs/token-health.ts:61 -- the mismatch is the whole point), so
-  // it will often be a character with no linked account and thus no name to
-  // resolve. A raw id here is expected, not a sign the lookup is broken.
+  // target (jobs/token-health.ts:61 -- the mismatch is the whole point). It
+  // names whichever character the token's EVE subject belongs to, which this
+  // app need never have held a row for, so a raw id here is expected rather
+  // than a sign the lookup is broken.
   "token.subject_mismatch": [characterRef("subject", "subjectCharacterId")],
   // Two writers, two payload shapes. token-health computes a shortfall against
   // config and sends `missingScopes`; the location job sends the single scope
