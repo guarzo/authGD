@@ -353,10 +353,19 @@ const PARTS: Record<string, readonly Part[]> = {
   "access_list.watch_added": [accessListRef("name", "accessListId")],
   "access_list.watch_removed": [accessListRef("name", "accessListId")],
   "discord.unlinked": [scalar("reason")],
+  // Both writers stamp `partial` on every row (jobs/discord-roles.ts:143 and
+  // :369), so it has to be declared here or every single role-change row
+  // reports a `+1 more` that has nothing behind it. `flag` rather than
+  // `scalar`: the interesting state is the true one, and a row reading
+  // "partial false" would be noise on the overwhelming majority that are not.
+  // Last in the list because it qualifies the whole change rather than naming
+  // a part of it — and declared parts are never truncated, so trailing costs
+  // it no visibility.
   "discord.role_changed": [
     roles("added", "removed"),
     tierLabelled("tier", "tier"),
     scalar("cause"),
+    flag("partial", "partial"),
   ],
   // `error` leads: this is the row an admin opens the audit log to read
   // (the deprovision half of `discord.role_sync_failed`'s failure), and the
