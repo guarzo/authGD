@@ -327,6 +327,34 @@ export default function Error({
         </pre>
 
         <div className="btn-row">
+          {/* The escape route first, and that ordering is the whole of this
+              change. Both controls are the plain grade and 8px apart, so
+              nothing but position separates them — and the one that sat first,
+              in the position a reader takes as the offered answer, was the one
+              the lede directly above had just warned about. "Your action may
+              already have taken effect; check before sending it again", and
+              then, as the first and visually equal choice, the control that
+              sends it again.
+
+              Differentiated downward rather than upward: gold is the page's one
+              emphasis ration and a boundary has no action it can recommend, so
+              spending it on either control would be a claim this page cannot
+              make. The obvious downward move — `.btn--quiet` on Try again — is
+              wrong for a different reason: that class carries
+              `min-height: 1.75rem`, and DESIGN.md R1 scopes the 28px grade by
+              the reason for it, to rows that carry a control set and are read
+              many at a time. Two buttons read once are not that. Order is the
+              one axis here that is free.
+
+              This also puts the safe control first in the tab order, which is
+              the same argument in the keyboard channel.
+
+              Stays an `<a href>`, not a `<Link>`: a full document load is the
+              one escape guaranteed to work from a client tree that has already
+              thrown once, and it is the arrival the browser announces itself. */}
+          <a className="btn" href={section.back.href}>
+            Back to {section.back.label}
+          </a>
           {/* Plain grade, not `btn--primary`. The lede directly above warns that
               a submitted action may have taken effect and to check before
               sending it again — and pressing this is that second send. Gold is
@@ -359,12 +387,6 @@ export default function Error({
           <button type="button" className="btn" aria-busy={retrying} onClick={retry}>
             {retrying ? "Trying…" : "Try again"}
           </button>
-          {/* Stays an `<a href>`, not a `<Link>`: a full document load is the
-              one escape guaranteed to work from a client tree that has already
-              thrown once, and it is the arrival the browser announces itself. */}
-          <a className="btn" href={section.back.href}>
-            Back to {section.back.label}
-          </a>
         </div>
       </main>
     </>

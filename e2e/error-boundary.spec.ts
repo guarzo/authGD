@@ -258,6 +258,25 @@ test("the boundary keeps an admin inside the admin section", async ({
 
     // And the escape goes back to the section, not to /account.
     await expect(page.getByRole("link", { name: "Back to Members" })).toBeVisible();
+
+    // The escape comes first. Both controls are the plain grade and sit 8px
+    // apart, so position is the only thing separating them — and the lede
+    // above has just told this member their action may already have taken
+    // effect and to check before sending it again. Offering the re-send as
+    // the first and visually equal choice contradicts the sentence directly
+    // above it.
+    //
+    // Asserted on DOM order rather than on x-coordinates: `.btn-row` wraps at
+    // narrow widths, so the leftmost control is not stably the first one, and
+    // the tab order this also fixes follows the DOM either way.
+    const escapeFirst = await page.evaluate(() => {
+      const row = document.querySelector(".btn-row")!;
+      const back = row.querySelector("a.btn")!;
+      const retry = row.querySelector("button.btn")!;
+      // Node.DOCUMENT_POSITION_FOLLOWING — retry comes after back.
+      return (back.compareDocumentPosition(retry) & 4) !== 0;
+    });
+    expect(escapeFirst, "Try again sits before the escape route").toBe(true);
   } finally {
     await db.execute(sql`ALTER TABLE sync_run_probe RENAME TO sync_run`);
   }
