@@ -190,7 +190,14 @@ async function runReads(args: {
   counts.lists = discovered.length;
 
   const cached = new Map(
-    (await db.select().from(accessListCatalog)).map((r) => [r.accessListId, r.name]),
+    (
+      await db
+        .select({
+          accessListId: accessListCatalog.accessListId,
+          name: accessListCatalog.name,
+        })
+        .from(accessListCatalog)
+    ).map((r) => [r.accessListId, r.name]),
   );
   const named: { accessListId: number; name: string; observedByCharacterId: number }[] =
     [];
@@ -290,7 +297,9 @@ async function writeAttempt(
       .values({ accessListId, observedByCharacterId: characterId, ...attempt })
       .onConflictDoUpdate({
         target: accessListSnapshot.accessListId,
-        set: attempt,
+        // The observer moves with the attempt: a row left behind by a
+        // superseded holder would otherwise keep naming them as the reader.
+        set: { ...attempt, observedByCharacterId: characterId },
       });
     return false;
   });

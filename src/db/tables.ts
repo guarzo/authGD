@@ -1,8 +1,9 @@
 /**
  * Every table this app owns, in one place.
  *
- * Two callers TRUNCATE the whole set — the test helper between tests
- * (tests/helpers/db.ts) and the dev seed's --reset (scripts/seed-dev.ts).
+ * Three callers TRUNCATE the whole set — the unit-test helper between tests
+ * (tests/helpers/db.ts), the e2e helper (e2e/helpers.ts), and the dev seed's
+ * --reset (scripts/seed-dev.ts).
  * They used to keep separate copies of this list, which drifts silently: a new
  * table missing from one copy leaves stale rows behind and fails no test.
  * tests/seed-dev.ts asserts this list matches the database, so adding a table

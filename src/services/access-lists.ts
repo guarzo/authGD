@@ -240,11 +240,18 @@ export async function getWatchedListViews(dbx: Dbx): Promise<WatchedListView[]> 
         rows.map((r) => r.accessListId),
       ),
     );
+  // Group once rather than re-scanning `entries` per row: watching a few dozen
+  // lists with a few hundred entries each turns the naive filter into a
+  // quadratic scan for no reason.
+  const byList = new Map<number, Omit<(typeof entries)[number], "accessListId">[]>();
+  for (const { accessListId, kind, entityId, access } of entries) {
+    const bucket = byList.get(accessListId);
+    if (bucket === undefined) byList.set(accessListId, [{ kind, entityId, access }]);
+    else bucket.push({ kind, entityId, access });
+  }
   return rows.map((r) => ({
     ...r,
-    entries: entries
-      .filter((e) => e.accessListId === r.accessListId)
-      .map(({ kind, entityId, access }) => ({ kind, entityId, access })),
+    entries: byList.get(r.accessListId) ?? [],
   }));
 }
 

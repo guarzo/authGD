@@ -215,12 +215,12 @@ export function createEsiClient(opts: EsiClientOptions = {}) {
       await sleep(resetAt - now());
       remain = Number.POSITIVE_INFINITY;
     }
-    const { base, compatibilityDate, ...rest } = init;
+    const { base, compatibilityDate, accessToken, ...rest } = init;
     const headers: Record<string, string> = {
       accept: "application/json",
       ...(init.headers as Record<string, string> | undefined),
     };
-    if (init.accessToken) headers.authorization = `Bearer ${init.accessToken}`;
+    if (accessToken) headers.authorization = `Bearer ${accessToken}`;
     if (opts.userAgent) headers["user-agent"] = opts.userAgent;
     if (compatibilityDate) headers["x-compatibility-date"] = COMPATIBILITY_DATE;
     const res = await fetchImpl(`${base ?? ESI_BASE}${path}`, {
@@ -544,9 +544,10 @@ export function createEsiClient(opts: EsiClientOptions = {}) {
   }
 
   /**
-   * Unauthenticated batch id→name resolve, chunked like resolveIds. Ids ESI
-   * does not recognize are simply absent from the result; the caller renders
-   * those bare rather than failing the run.
+   * Unauthenticated batch id→name resolve, chunked like resolveIds. ESI rejects
+   * the whole chunk if any id in it is unknown, so an unresolvable id costs the
+   * names of its chunkmates too; callers treat a missing name as "render the
+   * number" rather than failing the run.
    */
   async function getUniverseNames(ids: number[]): Promise<EsiEntityName[]> {
     const out: EsiEntityName[] = [];

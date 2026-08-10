@@ -371,6 +371,7 @@ a:hover {
 .filter-form__label,
 .launch__scopes-head,
 .shell__register,
+.acl-detail th,
 .shell__nav a {
   font-family: var(--font-mono), ui-monospace, monospace;
   font-size: var(--t-label);

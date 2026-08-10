@@ -210,11 +210,13 @@ export default async function AdminAccessListsPage({
                     };
                     const observedIso =
                       c.observedAt === null ? null : c.observedAt.toISOString();
+                    // One label for the visible name and for "Stop watching"'s
+                    // accessible name, so the two can never disagree about what
+                    // an unnamed list is called.
+                    const label = c.name ?? `#${c.accessListId}`;
                     const head = (
                       <span className="acl-list__head">
-                        <span className="acl-list__name">
-                          {c.name ?? `#${c.accessListId}`}
-                        </span>
+                        <span className="acl-list__name">{label}</span>
                         <Status tone={rowTone(row)}>{rowSummary(row)}</Status>
                         {/* Honest staleness: the last SUCCESSFUL read, never the
                             last attempt. A row whose latest attempt failed still
@@ -238,7 +240,7 @@ export default async function AdminAccessListsPage({
                       return (
                         <li key={c.accessListId} className="acl-list__row">
                           {head}
-                          <StopWatching accessListId={c.accessListId} />
+                          <StopWatching accessListId={c.accessListId} name={label} />
                         </li>
                       );
                     }
@@ -251,7 +253,7 @@ export default async function AdminAccessListsPage({
                             comparison={c.comparison}
                             names={names}
                           />
-                          <StopWatching accessListId={c.accessListId} />
+                          <StopWatching accessListId={c.accessListId} name={label} />
                         </Disclosure>
                       </li>
                     );
@@ -299,9 +301,18 @@ export default async function AdminAccessListsPage({
  * the row its own form again, which is the exact structure that breaks the
  * confirmation.
  */
-function StopWatching({ accessListId }: { accessListId: number }) {
+function StopWatching({ accessListId, name }: { accessListId: number; name: string }) {
   return (
-    <Submit name="accessListId" value={accessListId} className="btn btn--quiet">
+    <Submit
+      name="accessListId"
+      value={accessListId}
+      className="btn btn--quiet"
+      // Every watched row renders this button with the same visible words, so
+      // the accessible name has to carry the row's identity — `Submit`'s own
+      // rule for when an aria-label is required. The visible text stays
+      // "Stop watching"; the label appends the list it acts on.
+      aria-label={`Stop watching ${name}`}
+    >
       Stop watching
     </Submit>
   );

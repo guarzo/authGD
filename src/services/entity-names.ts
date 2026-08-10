@@ -60,8 +60,10 @@ export async function resolveEntityNames(
   let names: Map<number, string>;
   try {
     names = await lookupEntityNames(dbx, unique);
-  } catch {
-    // A failed read degrades to "nothing cached" rather than rejecting.
+  } catch (err) {
+    // A failed read degrades to "nothing cached" rather than rejecting. Log it:
+    // silence here would make a broken cache table look like a cold one.
+    console.error("entity-names: cache read failed", err);
     names = new Map();
   }
   const missing = unique.filter((id) => !names.has(id));
@@ -96,9 +98,10 @@ export async function resolveEntityNames(
     }
     for (const r of rows) names.set(r.id, r.name);
     return names;
-  } catch {
+  } catch (err) {
     // Whatever was cached. An id ESI would not or could not name simply has no
     // entry, and the caller renders the number.
+    console.error("entity-names: resolve failed", err);
     return names;
   }
 }

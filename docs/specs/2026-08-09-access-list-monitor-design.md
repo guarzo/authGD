@@ -1,7 +1,7 @@
 # Access-list monitor — design
 
 **Date:** 2026-08-09
-**Status:** approved, not yet implemented
+**Status:** implemented
 
 ## Purpose
 

@@ -210,7 +210,13 @@ export function rowSummary(row: WatchedRow): string {
   const parts: string[] = [];
   if (row.missingAccess > 0) parts.push(`${row.missingAccess} missing access`);
   if (row.nonMembers > 0) {
-    parts.push(`${row.nonMembers} has access, not a member`);
+    // Verb and noun agree with the count: "1 has access, not a member" but
+    // "2 have access, not members".
+    parts.push(
+      row.nonMembers === 1
+        ? "1 has access, not a member"
+        : `${row.nonMembers} have access, not members`,
+    );
   }
   return parts.length === 0 ? "in sync" : parts.join(" · ");
 }

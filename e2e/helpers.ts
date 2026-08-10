@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { sql } from "drizzle-orm";
 import { createDb } from "../src/db";
 import { account, character, session } from "../src/db/schema";
+import { TRUNCATE_ALL_SQL } from "../src/db/tables";
 import { BASE_URL, TEST_DATABASE_URL } from "./env";
 
 export function testDb() {
@@ -9,15 +10,7 @@ export function testDb() {
 }
 
 export async function resetDb(db: ReturnType<typeof testDb>["db"]) {
-  await db.execute(sql`
-    TRUNCATE account, "character", discord_link, session, bootstrap_admin_grant,
-      outbox, oauth_transaction, contact_sync_state, sync_run,
-      wanderer_acl_observation, audit_log, payout_operation, loot_pool,
-      loot_item, payout_participant, payout_payment, universe_name,
-      access_list_holder, access_list_catalog, access_list_watch,
-      access_list_snapshot, access_list_entry, esi_entity_name
-      RESTART IDENTITY CASCADE
-  `);
+  await db.execute(sql.raw(TRUNCATE_ALL_SQL));
 }
 
 let nextCharId = 90_000_001;
