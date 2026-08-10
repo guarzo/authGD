@@ -414,28 +414,37 @@ export default async function AdminAuditPage({
       <a href={filterHrefBase}>Back to the latest entries</a>
     </>
   ) : filtered ? (
-    // The actor/target asymmetry bites hardest here: a member appears as an
-    // actor only for what they did to their own account, so "no results" for
-    // an actor filter usually means the filter was pointed at the wrong
-    // column, not that the log is silent about that person. The nudge only
-    // appears when it can actually help -- when actor is set and target is
-    // not.
-    <>
-      Nothing matches this filter.
-      {params.actor && !params.target && (
-        <>
-          {" "}
-          Members are usually the target of an entry, not the actor.{" "}
-          <a href={filterHref({ action: params.action }, "target", params.actor)}>
-            Search {params.actor} as a target
-          </a>
-          .
-        </>
-      )}
-    </>
+    "Nothing matches this filter."
   ) : (
     "Nothing has happened yet."
   );
+
+  // The actor/target asymmetry, said where it can still prevent the wrong
+  // answer rather than only where the wrong answer was harmless.
+  //
+  // A member reaches `actor` only for what they did to their own account;
+  // everything done TO them is written with `system` or an admin as actor and
+  // the member as `target`, and that is most of the log. This nudge used to
+  // live inside `emptyMessage`'s `filtered` branch, so it fired on the one
+  // outcome that already told the admin something was wrong -- zero rows --
+  // and stayed silent on the outcome that does the damage: an actor filter
+  // that returns the member's four self-service entries, reads as a complete
+  // history, and is not one. Same sentence, hoisted to where both cases see
+  // it.
+  //
+  // Still gated on actor-set-and-target-unset, which is the only shape it can
+  // help: with both set the admin has already crossed the columns, and with
+  // neither there is nothing to re-point.
+  const actorNudge =
+    params.actor && !params.target ? (
+      <p className="lede">
+        Members are usually the target of an entry, not the actor.{" "}
+        <a href={filterHref({ action: params.action }, "target", params.actor)}>
+          Search {params.actor} as a target
+        </a>
+        .
+      </p>
+    ) : null;
 
   return (
     <main id="main" tabIndex={-1} className="page">
@@ -550,6 +559,12 @@ export default async function AdminAuditPage({
       <Notice tone="warn">
         {ambiguityNotes.length > 0 ? ambiguityNotes.join(" · ") : null}
       </Notice>
+      {/* Under the count, above the rows: the sentence has to be readable
+          while the admin is looking at a result they believe, not only after
+          the page has already come up empty. Not a `Notice` — nothing here is
+          wrong, the filter is simply pointed at the column that answers a
+          different question, and a warn band would say otherwise. */}
+      {actorNudge}
       {/* Also above the table. The bottom pager is roughly 300 tab stops past
           the top of a full page, so on a keyboard the only way to reach the
           next page was to traverse every link in every row. */}

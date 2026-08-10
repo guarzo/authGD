@@ -900,8 +900,16 @@ test("the action is a filter link like actor and target", async ({ page, context
  * tier change, derole and token event puts them in `target` with `system` or an
  * admin acting. Filtering the wrong column returns "no results", which is true
  * and says nothing about the log actually being silent on that person.
+ *
+ * The nudge sits above the results rather than inside the empty state, and the
+ * second half of this test is why: an actor filter that returns the member's
+ * own self-service entries is the dangerous outcome, because it reads as a
+ * complete history and is not one. An empty result at least announces itself.
  */
-test("an empty actor filter points at the target column", async ({ page, context }) => {
+test("an actor filter points at the target column, full or empty", async ({
+  page,
+  context,
+}) => {
   const admin = await seedMember(db, { name: "Boss", tier: "member", isAdmin: true });
   const member = await seedMember(db, { name: "Zed", tier: "alumni" });
   await db.insert(auditLog).values([
@@ -919,17 +927,36 @@ test("an empty actor filter points at the target column", async ({ page, context
   await expect(page.getByLabel("Actor", { exact: true })).toBeVisible();
   await expect(page.locator("#filter-actor-hint")).toHaveText("who did it");
   await expect(page.locator("#filter-target-hint")).toHaveText("who it happened to");
+  // Nothing to re-point when no filter is set.
+  await expect(page.getByText("target of an entry, not the actor")).toHaveCount(0);
 
   await page.goto("/admin/audit?actor=Zed");
-  const empty = page.locator(".log__empty");
-  await expect(empty).toContainText("Nothing matches this filter.");
-  await expect(empty).toContainText("target of an entry, not the actor");
+  const nudge = page.locator("p.lede", { hasText: "target of an entry, not the actor" });
+  await expect(nudge).toBeVisible();
+  await expect(page.locator(".log__empty")).toContainText("Nothing matches this filter.");
 
-  const retry = empty.getByRole("link");
-  await expect(retry).toHaveAttribute("href", "/admin/audit?target=Zed");
-  await retry.click();
+  // Now give Zed something they did themselves, so the actor filter returns a
+  // row. The filter now looks answered, which is exactly when the sentence has
+  // to still be on screen.
+  await db.insert(auditLog).values([
+    {
+      actor: member.id,
+      action: "character.linked",
+      target: member.id,
+      details: {},
+    },
+  ]);
+  await page.goto("/admin/audit?actor=Zed");
   await expect(page.locator("tbody tr")).toHaveCount(1);
   await expect(page.locator(".log__empty")).toHaveCount(0);
+  await expect(nudge).toBeVisible();
+
+  const retry = nudge.getByRole("link");
+  await expect(retry).toHaveAttribute("href", "/admin/audit?target=Zed");
+  await retry.click();
+  await expect(page.locator("tbody tr")).toHaveCount(2);
+  // Both columns crossed: there is nothing left to suggest.
+  await expect(page.getByText("target of an entry, not the actor")).toHaveCount(0);
 });
 
 test("linking the system actor does not un-dim it", async ({ page, context }) => {
