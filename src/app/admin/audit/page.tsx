@@ -11,7 +11,6 @@ import {
 } from "@/services/audit";
 import type { FilterResolution, ResolvedAuditRow } from "@/services/audit";
 import { RuleHead, Json, Notice, Scroller } from "@/app/_components/ui";
-import { Submit } from "@/app/_components/submit";
 import { formatAgo } from "@/app/_components/format-ago";
 import { renderedAt } from "@/app/_components/utc-time";
 import { summarizeDetails, isFailureAction } from "@/app/admin/audit/summarize";
@@ -65,7 +64,7 @@ export async function generateMetadata({
  * see `add-participant-form.tsx`'s `CHARACTER_LIST_ID` for the precedent this
  * follows: an `<option>` per namespace, no children. The datalist itself needs
  * no client JS — the browser does the filtering — so it costs this page
- * nothing to render it server-side. (The page is not JS-free: `Submit` is a
+ * nothing to render it server-side. (The page is not JS-free: `Scroller` is a
  * client component. The datalist just isn't why.) */
 const ACTION_NAMESPACE_LIST_ID = "action-namespaces";
 
@@ -604,8 +603,16 @@ export default async function AdminAuditPage({
         <div className="filter-form__cell filter-form__cell--actions">
           <div className="filter-form__actions">
             {/* Filter is routine and reversible, not the page's primary act —
-                gold (btn--primary) is rationed for the one thing that is. */}
-            <Submit className="btn">Filter</Submit>
+                gold (btn--primary) is rationed for the one thing that is.
+
+                A plain button rather than `<Submit>`, because this form is
+                `method="get"`: see `submit.tsx` for why that pairing is wrong
+                in both directions. Nothing about the rendered control changes
+                — `<Submit>` was passed the same `className` and its only other
+                output here was an `aria-busy` fixed at "false". */}
+            <button type="submit" className="btn">
+              Filter
+            </button>
             {filtered && (
               <a className="btn btn--quiet" href="/admin/audit">
                 clear

@@ -9,7 +9,6 @@ import {
 } from "@/services/payout-view";
 import { navFor } from "@/app/_components/nav-items";
 import { RuleHead, Scroller, SiteHeader, Status } from "@/app/_components/ui";
-import { Submit } from "@/app/_components/submit";
 import { brandProps } from "@/app/_components/brand-server";
 import { fmtIsk } from "@/app/_components/format-isk";
 import { PendingLink } from "./pending-link";
@@ -209,8 +208,13 @@ export default async function PayoutsPage({
           <div className="filter-form__cell filter-form__cell--actions">
             <div className="filter-form__actions">
               {/* Filter is routine and reversible, not the page's primary act
-                  — gold (btn--primary) is rationed for New operation. */}
-              <Submit className="btn">Filter</Submit>
+                  — gold (btn--primary) is rationed for New operation.
+
+                  A plain button rather than `<Submit>`, because this form is
+                  `method="get"` — see `submit.tsx`. */}
+              <button type="submit" className="btn">
+                Filter
+              </button>
               {filtered && (
                 <Link className="btn btn--quiet" href="/payouts">
                   clear
