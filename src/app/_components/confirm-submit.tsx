@@ -288,10 +288,14 @@ export function ConfirmCost({
  * every character has the same advance and letter-spacing gap, so the longer
  * string is always the wider one, and comparing lengths to choose it is a
  * safe shortcut — unlike using the length to *compute* a width, which is what
- * broke before. `pendingLabel` is a `ReactNode`, not a string, so it can't
- * feed `attr()` and isn't part of this reservation; none of the twelve call
- * sites in `src/app/` pass it today, so nothing regresses, but a future
- * caller that does would want its own fix here.
+ * broke before. `pendingLabel` is a `ReactNode`, so it can only join that
+ * comparison when a caller passes a plain string — which the payout page's
+ * eight controls now do, and which is why the reservation reads all three
+ * candidates rather than the two it started with. A caller passing an element
+ * gets the old two-way reservation and is responsible for its own width; that
+ * is a narrower gap than the one that existed when nothing passed a pending
+ * label at all, and it is the honest limit of a technique that has to feed
+ * `attr()` a string.
  *
  * `confirm` defaults to true but can be set false to make this render as a
  * plain one-click submit instead — no arm step, no live region text, ever.
@@ -428,7 +432,16 @@ export function ConfirmSubmit({
   // See the block comment above: the longer string, in a true monospace
   // face, is always the wider one, so `.length` is a safe way to choose
   // which label the ghost renders — it is not used to compute a width.
-  const ghostLabel = label.length >= confirmLabel.length ? label : confirmLabel;
+  // `pendingLabel` joins the comparison only when it is a string, because
+  // `attr()` has nothing to do with an element; a caller passing a node is
+  // reserving for two labels out of three and owns the consequence.
+  const ghostLabel = [
+    label,
+    confirmLabel,
+    typeof pendingLabel === "string" ? pendingLabel : "",
+  ].reduce((widest, candidate) =>
+    candidate.length > widest.length ? candidate : widest,
+  );
 
   return (
     <>

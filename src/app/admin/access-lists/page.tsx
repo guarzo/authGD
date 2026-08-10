@@ -150,14 +150,38 @@ export default async function AdminAccessListsPage({
             </Submit>
           </form>
         )}
-        <form action={checkNowAction}>
-          <Submit
-            className={remedy.kind === "check-now" ? "btn btn--primary" : "btn"}
-            pendingLabel="Queueing…"
-          >
-            Check now
-          </Submit>
-        </form>
+        {/*
+          Only where a check can actually read something. The button used to
+          render in every state, including the one a fresh deployment opens on:
+          no holder, so `runAccessListsJob` returns at its first branch having
+          read nothing (src/jobs/access-lists.ts:59-62) — and the admin was told
+          "Check queued at 09:41:22.418 UTC. Reload this page once the worker
+          has run." They reload to a byte-identical page, with no way to tell a
+          dead worker from a stuck queue from a feature that was never
+          configured. The confirmation was true about the enqueue and false
+          about everything the admin cared about.
+
+          Gated on the remedy rather than on `showsObservations(state)`, which
+          is the wider predicate this page already uses for the table below.
+          The two differ on the three holder-fault states, and the job cannot
+          read in those either: a dropped scope returns at branch 2
+          (`access-lists.ts:80-83`) and both token faults return `failed`
+          without a read (`:101-121`). `showsObservations` asks "is there a
+          stale answer worth showing" — true there, which is why the table
+          stays. This asks "can a check change anything", and the honest answer
+          in all three is no; the link beside it is the action that helps.
+
+          Since the form now renders only when `remedy.kind === "check-now"`,
+          the class is unconditionally primary — it is the state's one remedy,
+          not a secondary sitting next to a link.
+        */}
+        {remedy.kind === "check-now" && (
+          <form action={checkNowAction}>
+            <Submit className="btn btn--primary" pendingLabel="Queueing…">
+              Check now
+            </Submit>
+          </form>
+        )}
       </div>
 
       {showsObservations(state) && (

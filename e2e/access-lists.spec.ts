@@ -128,6 +128,11 @@ test("state 1: no holder and no scope asks for the grant, and shows no table", a
   // Nothing to be stale about, so no watched-list section at all — an empty
   // table here would read as "no drift".
   await expect(page.getByRole("heading", { name: "Watched lists" })).toHaveCount(0);
+  // And no "Check now" either. This is the state a fresh deployment opens on,
+  // and the job returns at its first branch with no holder to read as — so the
+  // button could only ever have answered with a timestamped confirmation that
+  // nothing observable had been arranged.
+  await expect(page.getByRole("button", { name: "Check now" })).toHaveCount(0);
 });
 
 test("state 2: a granted character with no holder gets the designate button", async ({
@@ -168,6 +173,11 @@ test("state 3: a holder whose scope was dropped is offered the GRANTING link, no
   // The last successful observation still renders beneath the problem.
   await expect(page.getByRole("heading", { name: "Watched lists" })).toBeVisible();
   await expect(page.locator(".acl-list__row")).toContainText("Fleet staging");
+  // The table stays and the button does not, and the split is deliberate: a
+  // stale answer is worth showing, but a check cannot produce a new one — the
+  // job returns as soon as it reads the persisted scopes. The re-granting link
+  // above is the only action here that changes anything.
+  await expect(page.getByRole("button", { name: "Check now" })).toHaveCount(0);
 });
 
 test("states 4 and 5: a stale authorization and a dead token are different sentences", async ({
