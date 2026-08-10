@@ -369,10 +369,18 @@ a:hover {
    and these per-cell spans become the only thing naming the columns. Same
    job, so the same register — it carries only its own `letter-spacing` and
    `color` down there, the way every other member carries its own. It stays
-   `display: none` above the breakpoint because this list sets no `display`. */
+   `display: none` above the breakpoint because this list sets no `display`.
+
+   `.payouts__label` is the same idiom on `/payouts`, and it is a sibling class
+   rather than a reuse of `.crew__label` for the reason `.log--manifest` gives
+   for keeping its own copy of `.log--dense`'s padding: the two tables reflow at
+   the same breakpoint today, and a shared class quietly welds that together.
+   The register entry is the part worth sharing, and it is shared here. */
 .rule-head__label,
 .log th,
 .crew__label,
+.payouts__label,
+.roster__label,
 .strip__name,
 .strip__head,
 .strip__group,
@@ -1319,7 +1327,13 @@ h3.rule-head__label {
    Dropping columns below a breakpoint was the alternative and was rejected:
    it hides Total, Paid and Status on a phone, turning the ledger into a
    personal list and collapsing the very /payouts-vs-/account distinction R3
-   draws. A pin hides nothing from anyone. */
+   draws. A pin hides nothing from anyone.
+
+   All of the above now describes the table from 30rem up only. Below that the
+   pin was measured at 24% of the region and the row reflows to labelled blocks
+   instead — see the `@media (max-width: 29.9375rem)` block at the foot of this
+   file, beside `.log--crew`'s. The budget figures here are unchanged and still
+   the reason a phone cannot have this as a table; what changed is the answer. */
 .log--payouts th,
 .log--payouts td {
   padding-top: var(--s-2);
@@ -1352,7 +1366,9 @@ h3.rule-head__label {
    name widens the column to 637px for EVERY row, since a table column is as
    wide as its widest cell: the pin then exceeds the region it anchors and
    `payouts.spec.ts` fails on the spot. That test holds the ratio under 60% at
-   both 320px and 390px, so the ceiling is asserted rather than assumed.
+   560px, where the pin still runs. It used to assert at 320px and 390px, and
+   was moved when those widths stopped having a pin to measure — a `<td>` laid
+   out as a block has no scroll range and `maxScrollLeft > 0` cannot hold.
 
    No `scroll-margin-left` companion rule, unlike `.log--audit` and
    `.log--dense` above. That rule exists for a control in a non-first column
@@ -1368,6 +1384,25 @@ h3.rule-head__label {
 .log--payouts th:last-child,
 .log--payouts td:last-child {
   padding-right: var(--s-5);
+}
+
+/* The per-cell label the narrow media query on `.log--payouts` turns on, off
+   up here where the real `<thead>` already names the columns. Same
+   construction and same reasoning as `.crew__label`. The media block that
+   pairs with this one is not here but at the foot of the file, beside
+   `.log--crew`'s: `.log--sticky-col`'s `position: sticky` rule sits at equal
+   specificity further down, so an override written next to this rule would
+   lose the cascade and the first cell would still try to pin. */
+.payouts__label {
+  display: none;
+}
+
+/* Same idiom again on the /payouts/[id] roster, which reflows at 40rem rather
+   than 30rem — the roster carries a row of controls the payouts list does not,
+   and runs out of width sooner. Only the Shares cell gets one; the block that
+   turns this on says why. */
+.roster__label {
+  display: none;
 }
 
 /* Ten columns of state per row: the standard cell padding pushes the accounts
@@ -4583,7 +4618,10 @@ h3.rule-head__label {
    all — this one and `.pool-items` on the payout detail page. The rest hang off
    `.page` or a plain `<div>`, where `min-width: auto` and `0` are the same
    number, so a global rule would be inert on eight surfaces and load-bearing on
-   a ninth nobody measured.
+   a ninth nobody measured. (`.pool-items` was named here and left unfixed for
+   exactly one release; it now carries the same floor as
+   `grid-template-columns: minmax(0, 1fr)`, which bounds the track rather than
+   the item and reaches the Scroller in one rule instead of two.)
 
    Both floors are kept but are no longer reproducibly load-bearing, and that
    is measured, not assumed: finding 4.4 (`.log--crew` below) stops the crew
@@ -4858,6 +4896,13 @@ h3.rule-head__label {
    gap, grid's default stretch. */
 .pool-items {
   display: grid;
+  /* The implicit track is `auto`, which sizes to the item table's intrinsic
+     width and lets the `.scroller` inside escape the grid entirely — taking
+     the edge fades and the region's keyboard tab stop with it, and widening
+     the document past the viewport. `.drawer__crew` above is the other of the
+     two at-risk Scroller parents the comment at `.scroller-frame` names; it
+     got its floor and this one did not. */
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--s-2);
 }
 
@@ -5470,6 +5515,157 @@ h3.rule-head__label {
   }
 
   .crew__label {
+    display: block;
+    letter-spacing: var(--track-label);
+    color: var(--ink-faint);
+  }
+}
+
+/* `.log--payouts` reflows at the same breakpoint, for the reason the block
+   above spends its docblock establishing — the argument for hiding the
+   `<thead>` rather than dropping columns, and for a real element over
+   `content: attr(data-label)`, is there and is not repeated here. What is
+   specific to this table is why it needed the treatment at all.
+
+   The pin defeats itself down here. `.log--payouts td:first-child`'s comment
+   records the pinned Name column at 69px of a 286px region at 320px — 24% —
+   which is a column too narrow to read an operation name out of and still the
+   only thing the reader keeps while panning right across five more. The 60%
+   ceiling `payouts.spec.ts` asserts is a ceiling with no floor, so 24% passed
+   it exactly as 55% would have. And `.log--crew`'s own comment cites this
+   table as the precedent for reflowing; the precedent had not actually done
+   it. This is that debt paid back.
+
+   Nothing is dropped, which is the property that kept the pin through two
+   earlier passes: all six columns still render, so the corp-wide-ledger
+   distinction ruling R3 draws between `/payouts` and `/account` survives. The
+   row runs down instead of across, which is the one axis a phone has spare. */
+@media (max-width: 29.9375rem) {
+  .log--payouts thead {
+    display: none;
+  }
+
+  .log--payouts tbody tr {
+    display: grid;
+    gap: var(--s-2);
+    padding: var(--s-3) 0;
+    border-top: 1px solid var(--rule);
+  }
+
+  .log--payouts tbody tr:first-child {
+    border-top: none;
+  }
+
+  /* The second selector is `.log--sticky-col`'s own, repeated verbatim so it
+     matches at equal specificity and wins on source order — this file's
+     sticky-column rules sit ~3500 lines above and would otherwise keep
+     pinning a cell that is now block-level, against a table with no scroll
+     range left to pin it out of. `border-right` is the frozen region's edge
+     and there is no frozen region here. */
+  .log--payouts td,
+  .log--payouts tbody tr:not(.drawer-row) > td:first-child:not(.log__empty) {
+    display: block;
+    position: static;
+    padding: 0;
+    border-top: none;
+    border-right: none;
+    background-color: transparent;
+  }
+
+  .payouts__label {
+    display: block;
+    letter-spacing: var(--track-label);
+    color: var(--ink-faint);
+  }
+}
+
+/* The roster on /payouts/[id], below 40rem. Measured at 390px: 253px of a
+   339px region on Shares and Amount, which pushes State and every row control
+   off the right edge. A member's whole reason to open this page is "was I
+   paid?", and State is the cell that answers it — so the roster's most
+   important column is the one a phone never shows, while two numeric columns
+   the reader mostly scans keep the room.
+
+   Reflowed rather than pinned, same as `.log--payouts` above, and rather than
+   dropped, same as everything else in this file. What differs is the shape:
+   this table's five cells do not want to be a flat stack, because Name and
+   State are one question and answer and Shares and Amount are the arithmetic
+   behind it. So the row becomes a small grid with the pairs on their own
+   lines, and the action cell spans the foot where a row of buttons has the
+   full width it was designed for.
+
+   The areas are assigned by `nth-child` against DOM order (Name, Shares,
+   Amount, State, actions) — the DOM order is the reading order the desktop
+   table has and the accessibility tree keeps, and only the visual placement
+   changes. `grid-template-areas` is what makes State climb to line 1 without
+   moving a node, which is the whole point: R4 wants both channels populated,
+   not a second copy of the state written into the name cell. */
+@media (max-width: 40rem) {
+  .log--roster thead {
+    display: none;
+  }
+
+  .log--roster tbody tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "name  state"
+      "shares amount"
+      "act   act";
+    gap: var(--s-2) var(--s-3);
+    padding: var(--s-3) 0;
+    border-top: 1px solid var(--rule);
+  }
+
+  .log--roster tbody tr:first-child {
+    border-top: none;
+  }
+
+  /* The second selector is `.log--sticky-col`'s own, repeated verbatim so it
+     matches at equal specificity and wins on source order — see the identical
+     note on `.log--payouts` above. */
+  .log--roster td,
+  .log--roster tbody tr:not(.drawer-row) > td:first-child:not(.log__empty) {
+    display: block;
+    position: static;
+    padding: 0;
+    border-top: none;
+    border-right: none;
+    background-color: transparent;
+  }
+
+  .log--roster td:nth-child(1) {
+    grid-area: name;
+  }
+
+  /* `.num`'s right alignment is for reading a column of figures down a shared
+     vertical, and there is no column here — Shares now starts the second line,
+     so it reads from the left like the name above it. Amount keeps its right
+     edge, which is the row's one remaining vertical. */
+  .log--roster td:nth-child(2) {
+    grid-area: shares;
+    text-align: left;
+  }
+
+  .log--roster td:nth-child(3) {
+    grid-area: amount;
+  }
+
+  /* State sits on the first line beside the name it describes, and stops
+     being right-aligned there — it is an answer, not a figure. */
+  .log--roster td:nth-child(4) {
+    grid-area: state;
+    text-align: right;
+  }
+
+  .log--roster td:nth-child(5) {
+    grid-area: act;
+  }
+
+  /* Shares keeps its own label because a bare number beside a currency figure
+     is ambiguous once the `<thead>` naming them is gone. Amount does not: it
+     carries the word ISK, and State and the action row are self-describing. */
+  .roster__label {
     display: block;
     letter-spacing: var(--track-label);
     color: var(--ink-faint);
