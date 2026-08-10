@@ -6,12 +6,15 @@ import {
   type AdminAccountsDoneCode,
 } from "@/app/admin/accounts/view";
 
-// The success confirmation the eight redirecting /admin/accounts server
-// actions carry back — setTierAction, approveAction, returnToAutoAction,
-// setStatusAction (both directions), promoteAdminAction, demoteAdminAction,
-// unlinkDiscordAction and syncAccountAction all end in the pressed control
-// unmounting or (setTierAction) disabling itself, and this is the only
-// evidence an admin gets that the press landed. `done`, `name` and `tier`
+// The success confirmation the nine /admin/accounts server actions carry
+// back — setTierAction, approveAction, returnToAutoAction, setStatusAction
+// (both directions), promoteAdminAction, demoteAdminAction,
+// unlinkDiscordAction, syncAccountAction and setMainAction. Eight of them
+// redirect and end in the pressed control unmounting or disabling itself,
+// which is the only evidence an admin gets that the press landed.
+// setMainAction is the ninth and does not redirect: its pressed `Submit`
+// unmounts while its `ConfirmingForm` deliberately does not, which is what
+// lets the effect report at all (Task 6 Step 2). `done`, `name` and `tier`
 // arrive off the query string, exactly like `accountConfirmation`'s own
 // `done`/`name` in account/view.ts, so an unrecognized or missing value is
 // untrusted input reaching copy and has to degrade rather than throw or
@@ -131,6 +134,22 @@ describe("accountsConfirmation", () => {
     expect(accountsConfirmation("sync", undefined, undefined)).toBe(
       "Sync queued. The worker picks it up within a few seconds.",
     );
+  });
+
+  it("names the promoted character for a main change", () => {
+    expect(accountsConfirmation("main", "Aiden Sol", undefined)).toBe(
+      "Aiden Sol is now the main. The tier follows within a few seconds.",
+    );
+  });
+
+  it("degrades to the bare verb with no name", () => {
+    expect(accountsConfirmation("main", undefined, undefined)).toBe(
+      "Main updated. The tier follows within a few seconds.",
+    );
+  });
+
+  it("recognizes the main code", () => {
+    expect(isDoneCode("main")).toBe(true);
   });
 
   it("renders nothing for a missing done code", () => {
