@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import type { Db, Dbx } from "@/db";
 import {
   accessListCatalog,
@@ -107,35 +107,53 @@ async function watchedListName(dbx: Dbx, accessListId: number): Promise<string |
  * Adds a list to the shared watchlist. Idempotent: watching an already-watched
  * list changes nothing and therefore audits nothing, so a double submit does
  * not manufacture history.
+ *
+ * Returns whether a row was actually inserted, which is the same fact the
+ * audit branch turns on. The caller needs it because "idempotent" and
+ * "confirmed as done" are different claims: the page filters already-watched
+ * lists out of its `<select>`, so reaching this branch means the admin was
+ * looking at a stale catalog, and telling them the list was added would
+ * describe an act that did not happen.
  */
 export async function addWatch(
   db: Db,
   accessListId: number,
   actor: string,
-): Promise<void> {
-  await db.transaction(async (tx) => {
+): Promise<boolean> {
+  return db.transaction(async (tx) => {
     const inserted = await tx
       .insert(accessListWatch)
       .values({ accessListId, addedAt: new Date(), addedBy: actor })
       .onConflictDoNothing({ target: accessListWatch.accessListId })
       .returning({ accessListId: accessListWatch.accessListId });
-    if (inserted.length === 0) return;
+    if (inserted.length === 0) return false;
     await logAudit(tx, {
       actor,
       action: "access_list.watch_added",
       target: String(accessListId),
       details: { accessListId, name: await watchedListName(tx, accessListId) },
     });
+    return true;
   });
 }
 
-/** Removes a list from the watchlist. Audits only when a row actually went. */
+/**
+ * Removes a list from the watchlist. Audits only when a row actually went.
+ *
+ * Returns both halves the caller needs to write an honest confirmation: the
+ * name it read (the same one that lands in the audit row, when one is written)
+ * so the list can be named rather than numbered, and `removed` so a press that
+ * deleted nothing is not confirmed as a removal. `name` is populated on both
+ * branches — the catalog and snapshot rows outlive the watch row, so a list
+ * that was already off the watchlist can still be named in the notice saying
+ * so.
+ */
 export async function removeWatch(
   db: Db,
   accessListId: number,
   actor: string,
-): Promise<void> {
-  await db.transaction(async (tx) => {
+): Promise<{ removed: boolean; name: string | null }> {
+  return db.transaction(async (tx) => {
     // Read the name BEFORE the delete: nothing here cascades to the snapshot,
     // but reading first keeps the audit row correct regardless of what a later
     // change makes the delete cascade to.
@@ -144,13 +162,14 @@ export async function removeWatch(
       .delete(accessListWatch)
       .where(eq(accessListWatch.accessListId, accessListId))
       .returning({ accessListId: accessListWatch.accessListId });
-    if (removed.length === 0) return;
+    if (removed.length === 0) return { removed: false, name };
     await logAudit(tx, {
       actor,
       action: "access_list.watch_removed",
       target: String(accessListId),
       details: { accessListId, name },
     });
+    return { removed: true, name };
   });
 }
 
@@ -207,12 +226,27 @@ export type WatchedListView = {
  * Every watched list, LEFT-joined to its snapshot: a list added to the
  * watchlist a minute ago has no snapshot row at all, and that "never read"
  * state is one the page renders rather than a row it drops.
+ *
+ * Also LEFT-joined to the catalog, with the name sourced as
+ * COALESCE(catalog, snapshot): a list can be watched before the worker ever
+ * takes a snapshot of it, in which case only the catalog has a name at all.
+ *
+ * The two sources rarely disagree — a successful read writes `snapshot.name`
+ * and `catalog.name` from the same ESI detail in one transaction
+ * (`jobs/access-lists.ts`) — so the precedence only decides the edges, and
+ * both edges want the catalog first: a watched-but-never-read list has only a
+ * catalog row, and a list the holder can no longer see is pruned from the
+ * catalog by discovery, leaving only the last snapshot. Keeping this in the
+ * same order as `watchedListName()` above is load-bearing: the page and the
+ * audit log must never disagree about what a list is called.
  */
 export async function getWatchedListViews(dbx: Dbx): Promise<WatchedListView[]> {
   const rows = await dbx
     .select({
       accessListId: accessListWatch.accessListId,
-      name: accessListSnapshot.name,
+      name: sql<
+        string | null
+      >`coalesce(${accessListCatalog.name}, ${accessListSnapshot.name})`,
       readStatus: accessListSnapshot.readStatus,
       observedAt: accessListSnapshot.observedAt,
       lastAttemptAt: accessListSnapshot.lastAttemptAt,
@@ -223,6 +257,10 @@ export async function getWatchedListViews(dbx: Dbx): Promise<WatchedListView[]> 
     .leftJoin(
       accessListSnapshot,
       eq(accessListSnapshot.accessListId, accessListWatch.accessListId),
+    )
+    .leftJoin(
+      accessListCatalog,
+      eq(accessListCatalog.accessListId, accessListWatch.accessListId),
     )
     .orderBy(accessListWatch.accessListId);
   if (rows.length === 0) return [];

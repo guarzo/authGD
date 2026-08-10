@@ -111,7 +111,25 @@ describe("monitorState", () => {
   });
 
   it("7: a healthy holder with a catalog is normal", () => {
-    expect(monitorState(input()).kind).toBe("normal");
+    const s = monitorState(input());
+    expect(s.kind).toBe("normal");
+    // Names the holder and says what the page compares — the state an admin
+    // scans most is the one that used to explain itself least.
+    expect(monitorSentence(s)).toContain("Vela Kaine");
+    expect(monitorSentence(s)).toContain("compares");
+  });
+
+  it("normal never claims reads are healthy — it cannot know that", () => {
+    // `monitorState` reaches `normal` from holder + scope + token + catalog
+    // size. It never sees a `readStatus`, which is per-list and lives on the
+    // snapshot: `rowTone` below turns `failed` and `not_visible` rows warn,
+    // and every one of those rows renders under this sentence. A summary
+    // asserting reads are fine, printed above the rows disproving it, is the
+    // "looks fine while dead" failure this whole cascade exists to prevent.
+    const sentence = monitorSentence(monitorState(input()));
+    for (const claim of ["running normally", "reads are running", "no problems"]) {
+      expect(sentence).not.toContain(claim);
+    }
   });
 
   it("every dark-monitor state still shows the last observations", () => {
@@ -234,5 +252,16 @@ describe("doneNotice", () => {
   it("returns nothing for an unknown marker", () => {
     expect(doneNotice("nope", "1786500000000")).toBe("");
     expect(doneNotice(undefined, undefined)).toBe("");
+  });
+
+  it("distinguishes an add that inserted from one that found the list already there", () => {
+    // `addWatchAction` picks the marker from `addWatch`'s return value. The
+    // two sentences must not be interchangeable: this control redirects, so
+    // there is no tone channel and the words are the whole of the correction.
+    const added = doneNotice("watch", "1786500000000");
+    const already = doneNotice("watch-already", "1786500000000");
+    expect(added).toContain("added to the watchlist");
+    expect(already).toContain("already on the watchlist");
+    expect(already).not.toContain("added to the watchlist");
   });
 });

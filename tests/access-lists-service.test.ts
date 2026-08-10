@@ -141,6 +141,28 @@ describe("addWatch / removeWatch / getWatchedListIds", () => {
     expect(await audits()).toHaveLength(1);
   });
 
+  it("reports whether the press changed anything, so a no-op is not confirmed", async () => {
+    // The return values the two actions turn their copy on: a second add and a
+    // second remove both leave the table exactly as the first press did, and
+    // the only thing separating "added" from "was already there" is this
+    // boolean. Both are reachable from a stale page — the `<select>` and the
+    // row list are both built from a render that has since been overtaken.
+    const acc = await seedAccount(ctx.db, { tier: "member", isAdmin: true });
+    await seedCatalog(42, "Home Structures");
+    expect(await addWatch(ctx.db, 42, acc.id)).toBe(true);
+    expect(await addWatch(ctx.db, 42, acc.id)).toBe(false);
+    expect(await removeWatch(ctx.db, 42, acc.id)).toEqual({
+      removed: true,
+      name: "Home Structures",
+    });
+    // Still named on the no-op branch: the catalog row outlives the watch row,
+    // so the notice saying nothing happened can still say which list.
+    expect(await removeWatch(ctx.db, 42, acc.id)).toEqual({
+      removed: false,
+      name: "Home Structures",
+    });
+  });
+
   it("returns watched ids in a stable order", async () => {
     const acc = await seedAccount(ctx.db, { tier: "member", isAdmin: true });
     await addWatch(ctx.db, 9, acc.id);

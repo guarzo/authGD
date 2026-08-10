@@ -23,6 +23,7 @@ import { Disclosure } from "@/app/_components/disclosure";
 import { Submit } from "@/app/_components/submit";
 import { RelativeTime } from "@/app/_components/relative-time";
 import { formatAgo } from "@/app/_components/format-ago";
+import { StopWatching } from "./stop-watching";
 import {
   addWatchAction,
   checkNowAction,
@@ -131,10 +132,12 @@ export default async function AdminAccessListsPage({
 
   return (
     <main id="main" className="page page--wide">
-      <h1>Access lists</h1>
-      <ConfirmNotice text={notice} at={at} />
+      <div className="page__head">
+        <h1>Access lists</h1>
+        <p className="page__lede">{monitorSentence(state)}</p>
+      </div>
 
-      <p className="lede">{monitorSentence(state)}</p>
+      <ConfirmNotice text={notice} at={at} />
 
       <div className="btn-row btn-row--controls">
         {remedy.kind === "link" && (
@@ -162,14 +165,63 @@ export default async function AdminAccessListsPage({
 
       {showsObservations(state) && (
         <>
-          <RuleHead as="h2" aside={addable.length === 0 ? undefined : "add a list"}>
-            Watched lists
-          </RuleHead>
+          <RuleHead as="h2">Watched lists</RuleHead>
 
+          {/* Its own class rather than `.btn-row`: same four declarations
+              today, but the two answer to different things — `.btn-row` is
+              the shape of a row of buttons, and a change to it should not
+              have to reason about a label bound to a control. No `aside` on
+              the `RuleHead` above either — `aside` is a metadata slot (every
+              other user in `src/app` carries a fact: an ISK total, a
+              "checked … UTC" stamp, a filter summary — never an action name),
+              so the affordance's name was rendering as inert prose at the
+              rule's trailing edge rather than owning a control.
+
+              Not `.btn--primary`: this form renders in four of the five
+              states `showsObservations` admits (every one but `catalog-empty`,
+              which by definition has nothing addable), and in the three
+              dark-monitor ones the gold is already spent on `monitorRemedy`'s
+              link — re-granting a dropped scope outranks adding a list when
+              nothing is being read at all. Rather than paint it gold in
+              `normal` and plain elsewhere, which would make the emphasis a
+              function of an unrelated fault, it stays plain everywhere and
+              earns its place by sitting directly under the section it adds
+              to. */}
           {addable.length > 0 && (
-            <form action={addWatchAction} className="btn-row">
-              <label htmlFor="add-list">List</label>
-              <select id="add-list" name="accessListId" defaultValue="">
+            <form action={addWatchAction} className="acl-add">
+              <label className="acl-add__label" htmlFor="add-list">
+                Catalog
+              </label>
+              <select
+                id="add-list"
+                name="accessListId"
+                className="field"
+                defaultValue=""
+                required
+              >
+                {/* A real option for the default, not an absent one: every
+                    option below comes from `addable`, so with no placeholder
+                    the browser's ask-for-reset step selected the first list in
+                    the catalog and an untouched submit added a list the admin
+                    never chose, which the redirect then confirmed as a
+                    deliberate act.
+
+                    `required` is what makes the placeholder a guard rather
+                    than a label. `disabled` alone only stops the option being
+                    re-chosen; it does NOT stop the form submitting, and a
+                    disabled selected option contributes no entry at all — so
+                    an untouched submit sent no `accessListId`, `parseId` threw
+                    `invalid_id` on the resulting `null`, and an ordinary
+                    mis-click landed on the "Something broke" boundary
+                    (measured: the form's entry list held only `$ACTION_ID_…`).
+                    With `required` the browser refuses the submit and points
+                    at the field, and `parseId` goes back to being what its own
+                    docblock says it is — the backstop for a hand-crafted POST,
+                    not the only thing between a mis-click and the error
+                    page. */}
+                <option value="" disabled>
+                  Choose a list…
+                </option>
                 {addable.map((c) => (
                   <option key={c.accessListId} value={c.accessListId}>
                     {c.name}
@@ -265,56 +317,6 @@ export default async function AdminAccessListsPage({
         </>
       )}
     </main>
-  );
-}
-
-/**
- * The one control every watched row carries, expandable or not. A plain
- * submit button, not a form of its own: it submits the single `ConfirmingForm`
- * that wraps the whole watched-lists region (`AdminAccessListsPage` above),
- * carrying its own `accessListId` by name/value the way any button in a
- * shared HTML form does. `<form>` cannot nest, and this row's own form would
- * unmount with it anyway — the button's job ends at the press.
- *
- * The region-wide form exists because a row-level (or even row-level-group)
- * `ConfirmingForm` unmounts in the same commit that would paint its own
- * confirmation: `revalidatePath` and this action's `useActionState` result
- * land together, so removing the last row collapses straight to the empty
- * `Notice`, taking whatever reported the text with it.
- * `src/app/admin/accounts/page.tsx:1075-1097` documents the same failure for
- * the Discord drawer group and states the fix this page follows: "hoisting
- * the host alone is not enough... both halves have to outlive the press" —
- * here that means the `ConfirmingForm`, not just the `ConfirmGroup`, has to
- * sit above every row rather than inside one.
- *
- * No `pendingLabel` here, unlike every other `Submit` on this page.
- * `useFormStatus` (inside `Submit`) reports the nearest parent `<form>`'s
- * pending state, and after this refactor that form is shared by every row —
- * pressing one row's button flips `pending` for all of them at once, so a
- * "Removing…" label would name the wrong row on every row but the one
- * actually in flight. `aria-busy` still fans out the same way, but that is
- * honest rather than a bug: the shared form genuinely is busy, region-wide,
- * until the one submission it can hold at a time resolves. Same reason
- * `useSubmitGuard` correctly refuses a second press anywhere in the region
- * while the first is in flight, not just on the pressed row's own button —
- * one form, one in-flight submission. Undoing any of this would mean giving
- * the row its own form again, which is the exact structure that breaks the
- * confirmation.
- */
-function StopWatching({ accessListId, name }: { accessListId: number; name: string }) {
-  return (
-    <Submit
-      name="accessListId"
-      value={accessListId}
-      className="btn btn--quiet"
-      // Every watched row renders this button with the same visible words, so
-      // the accessible name has to carry the row's identity — `Submit`'s own
-      // rule for when an aria-label is required. The visible text stays
-      // "Stop watching"; the label appends the list it acts on.
-      aria-label={`Stop watching ${name}`}
-    >
-      Stop watching
-    </Submit>
   );
 }
 
