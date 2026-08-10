@@ -7,10 +7,18 @@ import { useEffect, useRef, type MouseEvent } from "react";
  * flight.
  *
  * `disabled` used to do this job, and it did it by destroying focus: disabling
- * the element the member just pressed moves focus to `<body>`, and because
- * every one of these actions ends in a server-action `redirect()` — a client
- * navigation with no document load — there is nothing afterwards that puts it
- * back. `error.tsx:275-278` already refuses `disabled` for exactly this reason.
+ * the element the member just pressed moves focus to `<body>`, and nothing
+ * afterwards puts it back. This used to say the reason was that "every one of
+ * these actions ends in a server-action `redirect()`" — a client navigation
+ * with no document load. Most do, but not all: `syncJobAction`
+ * (admin/sync/actions.ts:67) revalidates and returns, and it is driven by a
+ * `<Submit>` like the rest. The narrower claim is the true one, and it covers
+ * both shapes — neither a client-side `redirect()` nor a `revalidatePath()` is
+ * a focus restoration. A revalidated button re-renders in place with focus
+ * still on `<body>`, which is the same dead end by a different route. Stating
+ * it as "they all redirect" invited exactly the wrong repair: adding a
+ * redirect to the actions that lack one would not have helped.
+ * `error.tsx:275-278` already refuses `disabled` for this reason.
  * So the button keeps `aria-busy`, keeps focus, and stops a second submit here
  * instead.
  *

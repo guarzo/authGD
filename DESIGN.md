@@ -58,7 +58,7 @@ lighter structure token carries a little more, up to `--rule-strong`. Do not "re
 a tint to `--void` for consistency with the rest of the ramp: the ramp *is* the rule.
 
 Every text token below was measured against all three grounds rather than asserted;
-the worst case is `--ink-faint` at 4.63:1 on a hovered row, and nothing sits under
+the worst case is `--ink-faint` at 4.61:1 on a hovered row, and nothing sits under
 4.5:1. Two of these values exist *because* of that measurement rather than taste:
 `--signal-bad` is `0.66` because `0.64` measured 4.42 against `--hull-hi` (under the
 floor exactly when the pointer is on the row), and `--rule-strong` holds its lightness
@@ -84,7 +84,7 @@ OKLCH is the right space to *tune* in and the wrong one to *judge* in.
 | `--hull` | `oklch(0.195 0.001 56)` | Panels, table headers, inset regions. |
 | `--hull-hi` | `oklch(0.245 0.002 54)` | Row hover, raised controls, pressed states. |
 | `--rule` | `oklch(0.33 0.004 55)` | Hairlines. The primary structural device. |
-| `--rule-strong` | `oklch(0.56 0.008 58)` | Section boundaries, control borders. Lightness is set by WCAG 1.4.11: it measures 4.24 / 3.92 / 3.48 against `--void`, `--hull`, and `--hull-hi`, so a control's edge is identifiable on every ground it can sit on. |
+| `--rule-strong` | `oklch(0.56 0.008 58)` | Section boundaries, control borders. Lightness is set by WCAG 1.4.11: it measures 4.23 / 3.90 / 3.47 against `--void`, `--hull`, and `--hull-hi`, so a control's edge is identifiable on every ground it can sit on. |
 
 ### Ink
 
@@ -346,7 +346,7 @@ configuration, the other two by overwriting the file.
 - Disabled controls keep `opacity: 1` and take an explicit `--ink-faint`, rather than
   fading. An opacity fade moves with whatever ground it lands on: at 65% the disabled
   text measured 3.24:1 on `--void` but 2.88:1 on a hovered admin table row, under the
-  3:1 floor exactly when the pointer is on the row. The explicit colour is 4.85:1 on
+  3:1 floor exactly when the pointer is on the row. The explicit colour is 4.61:1 on
   `--hull-hi` and does not move. **Do not "simplify" this back to an opacity.**
 - Hit targets: `36px` for standalone controls (`.btn`), `28px` for the in-row controls
   of the admin tables (`.btn--micro`, `.btn--quiet`, `.row-toggle`). Both clear the

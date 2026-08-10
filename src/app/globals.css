@@ -15,7 +15,16 @@
      feedback this palette answers. Warm ground also lets the seal's navy ring
      separate from the header bar by hue, which it could not do on navy.
      Measured, not asserted: every text token below clears 4.5:1 on all three
-     grounds, worst case 4.63 (--ink-faint on a hovered row).
+     grounds, worst case 4.61 (--ink-faint on a hovered row).
+
+     Every ratio quoted in this file was re-measured on 2026-08-10 by painting
+     each token to a 1x1 canvas and reading the pixel back. That indirection is
+     the point: `getComputedStyle` hands these back as `oklch(...)`, still in
+     their authoring space, so a probe that parses the string reads L, a and b
+     as if they were r, g and b — which is a probe that reports `--ink`, a
+     near-white, as a dark maroon, and does it without failing. Rasterizing is
+     the only reading here that is actually sRGB. Several of the numbers below
+     were wrong before that pass; none of the arguments they support were.
 
      THE TINT SCALES WITH LIGHTNESS, and that is the whole rule here. It took
      three passes to get right, so the failed ones are worth recording.
@@ -40,7 +49,7 @@
   --hull: oklch(0.195 0.001 56);
   --hull-hi: oklch(0.245 0.002 54);
   --rule: oklch(0.33 0.004 55);
-  /* Lightness fixed by WCAG 1.4.11: 4.24 / 3.92 / 3.48 against void, hull and
+  /* Lightness fixed by WCAG 1.4.11: 4.23 / 3.90 / 3.47 against void, hull and
      hull-hi, so a control's edge is identifiable on every ground it can sit
      on. */
   --rule-strong: oklch(0.56 0.008 58);
@@ -290,6 +299,22 @@ a:hover {
   outline: 2px solid var(--gold);
   outline-offset: 2px;
   border-radius: 1px;
+}
+
+/* The three boundary headings (`FocusHeading` — error.tsx and both
+   not-found.tsx) take focus on mount, which draws the ring above. An `h1` is a
+   block, so that ring spanned the whole column: measured at 912px around 377px
+   of text, which reads as a page-wide gold band rather than as a focus
+   indicator. This is the only selector that matches those three, since
+   `FocusHeading` is the app's only producer of a `tabindex="-1"` heading.
+
+   Unconditional rather than `:focus`-scoped, so nothing shifts at the moment
+   focus lands. It costs no wrapping: `fit-content` resolves to
+   `min(max-content, max(min-content, available))`, so at any width narrow
+   enough for the heading to wrap it is still the available width, and
+   `text-wrap: balance` is unaffected. */
+h1[tabindex="-1"] {
+  width: fit-content;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1036,8 +1061,11 @@ h3.rule-head__label {
   /* --rule-strong, not --rule. This border is the only thing telling a reader
      where the scrollable region begins and ends, which makes it a control
      boundary under WCAG 1.4.11 rather than decoration — and --rule measures
-     1.76:1 on --void, 1.59:1 on --hull and 1.39:1 on --hull-hi. --rule-strong
-     clears 3:1 on every ground the frame can sit on (4.11 / 3.72 / 3.24). */
+     1.62:1 on --void, 1.50:1 on --hull and 1.33:1 on --hull-hi. --rule-strong
+     clears 3:1 on every ground the frame can sit on (4.23 / 3.90 / 3.47 —
+     these used to read 4.11 / 3.72 / 3.24 here while the token's own
+     definition claimed a third set, 4.24 / 3.92 / 3.48; all three sites now
+     quote the same measurement). */
   border: 1px solid var(--rule-strong);
   border-radius: var(--radius);
 }
@@ -1440,8 +1468,8 @@ h3.rule-head__label {
    deliberately not `--hull-hi`: raising this row's ground to `--hull-hi`
    would change what `--ink-faint` sits on, and the `tr.drawer-row--actions >
    td` comment below records that pairing was chosen to clear WCAG 4.5:1
-   (`--ink-faint` on `--hull` measures 5.58:1; on `--hull-hi` it drops to
-   4.85:1). A layout change binding a row to its panel is not licence to
+   (`--ink-faint` on `--hull` measures 5.18:1; on `--hull-hi` it drops to
+   4.61:1). A layout change binding a row to its panel is not licence to
    revisit that.
 
    Specificity, not luck: `.log tbody tr:not(:has(.log__empty)):hover` (below)
@@ -1556,7 +1584,7 @@ h3.rule-head__label {
    background lives on its `<td>` and on the separate data row above, neither
    of which that selector matches. `--ink-faint`
    (`.manifest-panel__controls .btn--quiet`'s rest ink, and the status-line
-   labels this panel can carry) measures 5.58:1 against `--hull`, clear of
+   labels this panel can carry) measures 5.18:1 against `--hull`, clear of
    WCAG's 4.5:1 text floor — the same pairing `.log th` already uses for its
    own `--hull` background. Do not raise the shared ground to `--hull-hi` to
    make an open row "pop" more: that would change what `--ink-faint` sits on
@@ -2064,7 +2092,7 @@ h3.rule-head__label {
 /* The pinned edge has to read as an edge once content is sliding under it, and
    a hairline is what this system draws edges with. --rule-strong rather than
    --rule for the same reason as .scroller: this line is the boundary of the
-   frozen region, so it carries meaning, and --rule's 1.39:1 against the hovered
+   frozen region, so it carries meaning, and --rule's 1.33:1 against the hovered
    row it most often sits on is not a line most people can see at 1px. */
 .log--sticky-col th:first-child,
 .log--sticky-col tr:not(.drawer-row) > td:first-child:not(.log__empty) {
@@ -2739,7 +2767,7 @@ h3.rule-head__label {
      row to --hull-hi; the same 65% opacity measures 2.88:1 there, under the
      3:1 DESIGN.md promises, right when an admin's pointer is on the row.
      An opacity fade moves with whatever ground it sits on, so set the
-     disabled colour explicitly instead: --ink-faint on --hull-hi is 4.85:1,
+     disabled colour explicitly instead: --ink-faint on --hull-hi is 4.61:1,
      clearing text AA rather than only the 3:1 floor, and it no longer
      depends on which ground the control happens to be resting on.
      Higher specificity than .btn--primary/.btn--danger (one class each), so
@@ -3020,9 +3048,20 @@ h3.rule-head__label {
   justify-content: flex-end;
 }
 
-/* A control row that follows the data it operates on rather than heading the
-   page. It carries the top margin the page__head would otherwise have given
-   it. */
+/* A control row that carries the top margin a `page__head` would otherwise
+   have given it.
+
+   This used to describe its position as well — "follows the data it operates
+   on rather than heading the page" — and that is true of only one of its two
+   users. On /admin/sync it does sit below the job strip (page.tsx:1179), and
+   two docblocks over there reason from that placement. On
+   /admin/access-lists (page.tsx:146) it is the first thing under the H1 and
+   lede, above the data entirely, because the control it holds is a remedy for
+   a list that may not have rendered at all.
+
+   The margin is the rule; the placement is the call site's. Stated the other
+   way round, the next person to reach for this class on a third page inherits
+   a positional claim the class does not enforce. */
 .btn-row--controls {
   margin-top: var(--s-6);
 }
@@ -3726,8 +3765,15 @@ h3.rule-head__label {
    same grade as `.launch__disclosure-note` above it, so the sentence a member
    actually needs is not quieter than the identifier it explains. A scope the
    description map does not recognise (a fork's own EVE_SSO_SCOPES addition)
-   renders no dd at all rather than a placeholder — the identifier is still
-   shown, honestly, as the one thing known about it. */
+   still gets a dd — `describeScope`'s default branch (login/page.tsx) says
+   that this deployment asks for the scope, that authGD has no description for
+   it, and to ask whoever runs it. This comment used to claim it "renders no dd
+   at all rather than a placeholder", which is both false and backwards about
+   which behaviour is honest: an empty row leaves a reader to guess whether the
+   scope is undescribed or harmless, while the default sentence tells them what
+   is actually known — that nobody here can vouch for it. The correction
+   matters because login/page.tsx points readers at this comment by name, so
+   the false claim was signposted rather than buried. */
 .launch__scopes dd {
   margin-top: var(--s-1);
   font-size: var(--t-caption);
@@ -4122,7 +4168,7 @@ h3.rule-head__label {
   margin: var(--s-6) 0 0;
   /* The strip's outer edge, like .scroller's, bounds a region of interactive
      rows rather than decorating one — so --rule-strong, which clears 3:1 on
-     --void, --hull and --hull-hi, instead of --rule's 1.39-1.76:1. */
+     --void, --hull and --hull-hi, instead of --rule's 1.33-1.62:1. */
   border: 1px solid var(--rule-strong);
   border-radius: var(--radius);
 }

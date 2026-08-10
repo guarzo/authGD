@@ -216,3 +216,54 @@ test("the payouts 404 stays behind the payouts guard", async ({ page, context })
   await page.goto("/payouts/00000000-0000-4000-8000-000000000000");
   await expect(page).toHaveURL(/\/account/);
 });
+
+/**
+ * `FocusHeading`'s own comment claimed for a long time that focusing the
+ * heading draws no ring, because `:focus-visible` supposedly cannot match a
+ * programmatic focus. It does match, in Chromium, and the ring is wanted — it
+ * is the sighted half of the announcement. What was wrong was that the ring
+ * spanned the full column around a short heading. This pins both halves so
+ * neither the ring nor the `fit-content` that sizes it gets "cleaned up" on the
+ * strength of the comment that used to be there.
+ */
+test("the boundary heading takes a focus ring, and it is the width of the heading", async ({
+  page,
+}) => {
+  await page.goto("/no-such-page-at-all");
+
+  const h1 = page.getByRole("heading", { level: 1 });
+  // Anti-vacuity: every measurement below reads `document.querySelector("h1")`
+  // and would silently measure `null` if the boundary stopped rendering one.
+  await expect(h1).toHaveCount(1);
+  await expect(h1).toHaveText("Nothing at that address");
+
+  const seen = await page.evaluate(() => {
+    const el = document.querySelector("h1")!;
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    return {
+      focused: document.activeElement === el,
+      matchesFocusVisible: el.matches(":focus-visible"),
+      outlineWidth: getComputedStyle(el).outlineWidth,
+      outlineStyle: getComputedStyle(el).outlineStyle,
+      boxWidth: Math.round(el.getBoundingClientRect().width),
+      textWidth: Math.round(range.getBoundingClientRect().width),
+    };
+  });
+
+  // The ring exists. Asserting `:focus-visible` matches rather than only that
+  // an outline is set, because the false claim was specifically about the
+  // selector, and a future reader deleting the rule would want to see that
+  // exact statement contradicted.
+  expect(seen.focused).toBe(true);
+  expect(seen.matchesFocusVisible).toBe(true);
+  expect(seen.outlineStyle).toBe("solid");
+  expect(seen.outlineWidth).toBe("2px");
+
+  // And it hugs the heading. Before `h1[tabindex="-1"] { width: fit-content }`
+  // this was 912 against 377. An exact equality would be brittle across font
+  // metrics, so this asserts the property that matters: the box is the text
+  // plus rounding, not the column.
+  expect(seen.textWidth).toBeGreaterThan(0);
+  expect(seen.boxWidth).toBeLessThanOrEqual(seen.textWidth + 2);
+});

@@ -246,7 +246,16 @@ export function ConfirmCost({
  * `.btn--danger` red only on confirm. REVOKE was the one exception until the
  * design pass that followed #193 — it held full `--danger` at rest, which put
  * four saturated buttons in a four-row admin table and spent the alarm colour
- * on a recoverable action. No caller now keeps the same class in both states.
+ * on a recoverable action. No caller that reaches for `.btn--danger` now holds
+ * it at rest — which is the claim that matters, and is narrower than the one
+ * this sentence used to make ("no caller now keeps the same class in both
+ * states"). That reading is false and always was: `armedClassName` is
+ * optional, and the callers that omit it keep one class by construction —
+ * `RemoveParticipantForm` (pay-flow.tsx), `LifecycleSubmit`
+ * (lifecycle-submit.tsx), and `MarkPaidForm` whenever `arm` is false, plus
+ * grant-admin and the tier buttons on /admin/accounts. Those are all
+ * non-destructive or already-quiet controls with nothing to upgrade *to*, so
+ * their staying put is the design working, not an exception to it.
  *
  * Width is reserved for the wider of the two labels so the swap never
  * changes the button's own size and reflows the row it sits in — the same
