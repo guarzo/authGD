@@ -1,12 +1,16 @@
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import type { Db, Dbx } from "@/db";
 import {
   accessListCatalog,
+  accessListEntry,
   accessListHolder,
   accessListSnapshot,
   accessListWatch,
+  character,
+  type AccessListReadStatus,
 } from "@/db/schema";
 import { logAudit } from "@/services/audit";
+import type { AccessEntry } from "@/core/access-list-compare";
 
 /**
  * The holder table is a singleton enforced by `CHECK (id = 1)`. The constant
@@ -148,4 +152,134 @@ export async function removeWatch(
       details: { accessListId, name },
     });
   });
+}
+
+export type HolderView = {
+  characterId: number;
+  name: string;
+  scopes: string[];
+  tokenStatus: "valid" | "invalid" | "needs_reauth" | "missing";
+  designatedAt: Date;
+};
+
+/** The holder joined to its character row — the four fields `monitorState`
+ *  needs. Separate from `getHolder` (which the job uses and which must stay a
+ *  single-table read for the stale-holder compare-and-swap). */
+export async function getHolderView(dbx: Dbx): Promise<HolderView | null> {
+  const [row] = await dbx
+    .select({
+      characterId: character.id,
+      name: character.name,
+      scopes: character.scopes,
+      tokenStatus: character.tokenStatus,
+      designatedAt: accessListHolder.designatedAt,
+    })
+    .from(accessListHolder)
+    .innerJoin(character, eq(character.id, accessListHolder.characterId))
+    .where(eq(accessListHolder.id, HOLDER_ROW_ID));
+  return row ?? null;
+}
+
+export type CatalogEntry = { accessListId: number; name: string };
+
+export async function getCatalog(dbx: Dbx): Promise<CatalogEntry[]> {
+  return dbx
+    .select({
+      accessListId: accessListCatalog.accessListId,
+      name: accessListCatalog.name,
+    })
+    .from(accessListCatalog)
+    .orderBy(accessListCatalog.accessListId);
+}
+
+export type WatchedListView = {
+  accessListId: number;
+  name: string | null;
+  readStatus: AccessListReadStatus | null;
+  observedAt: Date | null;
+  lastAttemptAt: Date | null;
+  detail: string | null;
+  allowEveryone: boolean | null;
+  entries: AccessEntry[];
+};
+
+/**
+ * Every watched list, LEFT-joined to its snapshot: a list added to the
+ * watchlist a minute ago has no snapshot row at all, and that "never read"
+ * state is one the page renders rather than a row it drops.
+ */
+export async function getWatchedListViews(dbx: Dbx): Promise<WatchedListView[]> {
+  const rows = await dbx
+    .select({
+      accessListId: accessListWatch.accessListId,
+      name: accessListSnapshot.name,
+      readStatus: accessListSnapshot.readStatus,
+      observedAt: accessListSnapshot.observedAt,
+      lastAttemptAt: accessListSnapshot.lastAttemptAt,
+      detail: accessListSnapshot.detail,
+      allowEveryone: accessListSnapshot.allowEveryone,
+    })
+    .from(accessListWatch)
+    .leftJoin(
+      accessListSnapshot,
+      eq(accessListSnapshot.accessListId, accessListWatch.accessListId),
+    )
+    .orderBy(accessListWatch.accessListId);
+  if (rows.length === 0) return [];
+  const entries = await dbx
+    .select({
+      accessListId: accessListEntry.accessListId,
+      kind: accessListEntry.kind,
+      entityId: accessListEntry.entityId,
+      access: accessListEntry.access,
+    })
+    .from(accessListEntry)
+    .where(
+      inArray(
+        accessListEntry.accessListId,
+        rows.map((r) => r.accessListId),
+      ),
+    );
+  return rows.map((r) => ({
+    ...r,
+    entries: entries
+      .filter((e) => e.accessListId === r.accessListId)
+      .map(({ kind, entityId, access }) => ({ kind, entityId, access })),
+  }));
+}
+
+export type OwnCharacter = {
+  characterId: number;
+  name: string;
+  scopes: string[];
+};
+
+/**
+ * The viewer's own linked characters, for the "Designate as holder" control.
+ *
+ * Tier-independent on purpose. `getMemberCharacters` (`services/desired.ts`)
+ * inner-joins `account.tier = 'member'`, which is right for the desired set and
+ * wrong here: `isAdmin` and `tier` are orthogonal, and an admin's default tier
+ * is `alumni` (`_components/nav-items.ts`). Sourcing this from the member
+ * roster would leave an alumni admin looking at a "Grant access" button that
+ * never becomes "Designate as holder", with nothing on the page to explain it.
+ *
+ * `affiliationInvalid` characters are excluded — ESI rejects them, so one
+ * could never actually hold the designation.
+ */
+export async function getOwnCharacters(
+  dbx: Dbx,
+  accountId: string,
+): Promise<OwnCharacter[]> {
+  return dbx
+    .select({
+      characterId: character.id,
+      name: character.name,
+      scopes: character.scopes,
+    })
+    .from(character)
+    .where(
+      and(eq(character.accountId, accountId), eq(character.affiliationInvalid, false)),
+    )
+    .orderBy(character.id);
 }
