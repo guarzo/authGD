@@ -1319,7 +1319,14 @@ function AccountRow({
                             <Submit
                               className="btn"
                               pendingLabel="setting…"
-                              aria-label={`make ${c.name} the main for ${identity}`}
+                              // Opens with the visible label verbatim, then
+                              // disambiguates (WCAG 2.5.3 Label in Name: a
+                              // voice-control user says "click make main", and
+                              // an accessible name that merely *contains* the
+                              // words "make" and "main" apart from each other
+                              // does not match). Same shape as
+                              // `disclosure.tsx`'s `${label} — …`.
+                              aria-label={`make main — ${c.name} for ${identity}`}
                             >
                               make main
                             </Submit>

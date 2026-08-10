@@ -289,6 +289,20 @@ describe("StandingTier (main-fix hint)", () => {
     expect(html).not.toContain("awaiting approval");
   });
 
+  // `canFixMain` is true in three states, one of which is "this account has no
+  // main at all" (main-fix.ts's `main === null` branch). `StandingTier` is told
+  // only the boolean, so the one sentence it renders has to read correctly in
+  // all three — and "one of your *other* characters" doesn't, because in the
+  // missing-main case there is nothing for the in-alliance character to be
+  // other than. Asserting the absence is the only thing holding that word out.
+  it("words the hint so it survives an account with no main at all", () => {
+    for (const tier of ["pending", "alumni"] as const) {
+      const html = render(tier, true);
+      expect(html).toContain("One of your characters is in the alliance");
+      expect(html).not.toContain("other characters");
+    }
+  });
+
   it("leaves the ordinary pending message alone", () => {
     const html = render("pending", false);
     expect(html).toContain("awaiting approval");
