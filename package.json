@@ -41,7 +41,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",
-    "@next/eslint-plugin-next": "^15.5.22",
+    "@next/eslint-plugin-next": "^16.3.1",
     "@playwright/test": "^1.62.1",
     "@types/node": "^24.0.0",
     "@types/pg": "^8.20.4",
