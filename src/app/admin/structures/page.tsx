@@ -142,7 +142,7 @@ export default async function StructuresPage({
               </Submit>
             </form>
           )}
-        {!remedy && state !== "designate-needed" && (
+        {!remedy && state !== "designate-needed" && state !== "corp-changed" && (
           <form action={checkNowAction}>
             <Submit className="btn btn--primary" pendingLabel="Queueing…">
               Check now

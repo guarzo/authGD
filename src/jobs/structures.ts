@@ -169,7 +169,8 @@ export async function runStructuresJob(deps: {
     }
 
     await db.transaction(async (tx) => {
-      if (!(await stillStructureHolder(tx, holder.characterId))) return;
+      if (!(await stillStructureHolder(tx, holder.characterId, holder.designatedAt)))
+        return;
       const seen = rows.map((r) => r.structureId);
       for (const r of rows) {
         const values = {

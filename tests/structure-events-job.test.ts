@@ -201,6 +201,33 @@ describe("runStructureEventsJob", () => {
     expect(await ctx.db.select().from(structureEvent)).toHaveLength(0);
   });
 
+  it("declines to record events when the same character is re-designated to a new corp mid-flight", async () => {
+    await run({ notifications: [attack(1)] }); // seed, corp 98000001
+    const acc = await seedAccount(ctx.db);
+    const esi: StructureEventsEsi = {
+      getCharacterNotifications: async () => {
+        // Same character, re-pinned to a new corp between the job's read of
+        // the holder and its write — exactly what the corp-changed remedy
+        // instructs an admin to do. An id-only CAS would miss this.
+        await designateStructureHolder(ctx.db, HOLDER, 98000099, acc.id);
+        return [attack(2)];
+      },
+    };
+    const posts: string[] = [];
+    await runStructureEventsJob({
+      db: ctx.db,
+      cfg: testConfig(),
+      esi,
+      fetchImpl: buildFetch({ posts }),
+    });
+    expect(posts).toHaveLength(0);
+    const rows = await ctx.db
+      .select()
+      .from(structureEvent)
+      .where(eq(structureEvent.notificationId, 2));
+    expect(rows).toHaveLength(0);
+  });
+
   it("records an event whose body will not parse, and still alerts", async () => {
     await run({ notifications: [attack(1)] });
     const posts: string[] = [];

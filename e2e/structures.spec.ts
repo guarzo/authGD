@@ -115,6 +115,40 @@ test("designating a holder through the server action clears the ask", async ({
   await expect(page.getByRole("main")).not.toContainText("is not the holder");
 });
 
+test("corp-changed shows the designate form and never a second primary action", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedMember(db, { name: "Vela Kaine", isAdmin: true });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  const holderCharacterId = admin.mainCharacterId!;
+  await db
+    .update(character)
+    .set({
+      scopes: [STRUCTURES_SCOPE, NOTIFICATIONS_SCOPE],
+      tokenStatus: "valid",
+      corporationId: CORP,
+    })
+    .where(eq(character.id, holderCharacterId));
+  await db.insert(structureHolder).values({
+    id: 1,
+    characterId: holderCharacterId,
+    corporationId: CORP,
+    designatedBy: "e2e",
+  });
+  // The character leaves the pinned corp after designation — this is what
+  // produces corp-changed, distinct from the holder never existing.
+  await db
+    .update(character)
+    .set({ corporationId: CORP + 1 })
+    .where(eq(character.id, holderCharacterId));
+
+  await page.goto("/admin/structures");
+
+  await expect(page.getByRole("button", { name: "Designate as holder" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Check now" })).toHaveCount(0);
+});
+
 test("Structures appears in the admin nav and not for a plain member", async ({
   page,
   context,

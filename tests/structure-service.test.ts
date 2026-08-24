@@ -130,9 +130,34 @@ describe("stillStructureHolder", () => {
     await seedCharacter(ctx.db, testConfig(), { id: 90000001, accountId: account.id });
     await seedCharacter(ctx.db, testConfig(), { id: 90000002, accountId: account.id });
     await designateStructureHolder(ctx.db, 90000001, 98000001, account.id);
-    expect(await stillStructureHolder(ctx.db, 90000001)).toBe(true);
+    const holder = await getStructureHolder(ctx.db);
+    expect(await stillStructureHolder(ctx.db, 90000001, holder!.designatedAt)).toBe(true);
     await designateStructureHolder(ctx.db, 90000002, 98000002, account.id);
-    expect(await stillStructureHolder(ctx.db, 90000001)).toBe(false);
+    expect(await stillStructureHolder(ctx.db, 90000001, holder!.designatedAt)).toBe(
+      false,
+    );
+  });
+
+  it("returns true when nothing has changed since the snapshot", async () => {
+    const account = await seedAccount(ctx.db);
+    await seedCharacter(ctx.db, testConfig(), { id: 90000001, accountId: account.id });
+    await designateStructureHolder(ctx.db, 90000001, 98000001, account.id);
+    const holder = await getStructureHolder(ctx.db);
+    expect(await stillStructureHolder(ctx.db, 90000001, holder!.designatedAt)).toBe(true);
+  });
+
+  it("is false after a same-character re-designation to a different corp", async () => {
+    const account = await seedAccount(ctx.db);
+    await seedCharacter(ctx.db, testConfig(), { id: 90000001, accountId: account.id });
+    await designateStructureHolder(ctx.db, 90000001, 98000001, account.id);
+    const snapshot = await getStructureHolder(ctx.db);
+
+    // Same character, re-pinned to a different corp: the id-only CAS this
+    // guards against would miss this entirely.
+    await designateStructureHolder(ctx.db, 90000001, 98000002, account.id);
+    expect(await stillStructureHolder(ctx.db, 90000001, snapshot!.designatedAt)).toBe(
+      false,
+    );
   });
 });
 

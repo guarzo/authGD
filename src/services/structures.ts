@@ -118,16 +118,34 @@ export async function designateStructureHolder(
 }
 
 /**
- * Whether `characterId` is STILL the designated holder, read inside the
- * caller's transaction. A job that read the holder minutes ago must not write
- * another character's data under this designation; every write CASes on this.
+ * Whether the holder snapshot a job read minutes ago is STILL the live
+ * designation, read inside the caller's transaction. Every write CASes on
+ * this before touching data scoped to a holder.
+ *
+ * The character id alone cannot distinguish "still the same designation"
+ * from "re-designated to a different corp": `designateStructureHolder` lets
+ * an admin re-pin the SAME character to a NEW corporation — that is exactly
+ * what the page's `corp-changed` remedy instructs — and that write leaves
+ * `characterId` unchanged while stamping a fresh `designatedAt` and a
+ * different `corporationId`. A character-only CAS would pass unchanged
+ * across that re-designation and let a job insert or select data under the
+ * corp it snapshotted, silently orphaning it under a stale pinned corp.
+ * Comparing `designatedAt` too — rewritten on EVERY designation, including a
+ * same-character one — catches that case with no schema change.
+ *
+ * Accepted limit: two designations landing in the same millisecond would be
+ * indistinguishable. No human-driven admin action produces that.
  */
 export async function stillStructureHolder(
   tx: Dbx,
   characterId: number,
+  designatedAt: Date,
 ): Promise<boolean> {
   const holder = await getStructureHolder(tx);
-  return holder?.characterId === characterId;
+  return (
+    holder?.characterId === characterId &&
+    holder.designatedAt.getTime() === designatedAt.getTime()
+  );
 }
 
 /** Stamps the first completed poll, which is what switches seeding off. */

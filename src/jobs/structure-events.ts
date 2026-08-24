@@ -163,7 +163,8 @@ export async function runStructureEventsJob(deps: {
     const damage = notifications.filter((n) => isStructureEventType(n.type));
 
     await db.transaction(async (tx) => {
-      if (!(await stillStructureHolder(tx, holder.characterId))) return;
+      if (!(await stillStructureHolder(tx, holder.characterId, holder.designatedAt)))
+        return;
       for (const n of damage) {
         const parsed = extractStructureEvent(n.text);
         const inserted = await tx
@@ -202,7 +203,7 @@ export async function runStructureEventsJob(deps: {
     // the gap — or a second, overlapping run of this same job (the cron tick
     // racing a "Check now") — is invisible to it. Re-check here rather than
     // trust the holder snapshot read at the top of the run.
-    if (!(await stillStructureHolder(db, holder.characterId))) {
+    if (!(await stillStructureHolder(db, holder.characterId, holder.designatedAt))) {
       return { status: "ok", counts };
     }
 
