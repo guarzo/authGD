@@ -316,7 +316,7 @@ describe("EVE link route — ?grant= is the only attacker-controllable input", (
     expect(res.status).toBe(307);
     const authorize = new URL(res.headers.get("location")!);
     const scopes = authorize.searchParams.get("scope")!.split(" ");
-    expect(scopes.join(" ")).not.toContain("blueprints");
+    expect(scopes).toEqual(["esi-characters.read_contacts.v1"]);
   });
 
   it("does not throw or grant anything for a prototype-chain grant value", async () => {

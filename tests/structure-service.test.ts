@@ -89,6 +89,29 @@ describe("designateStructureHolder", () => {
     });
   });
 
+  it("retires nothing when the holder is replaced within the same corp", async () => {
+    const account = await seedAccount(ctx.db);
+    await seedCharacter(ctx.db, testConfig(), { id: 90000001, accountId: account.id });
+    await seedCharacter(ctx.db, testConfig(), { id: 90000002, accountId: account.id });
+    await designateStructureHolder(ctx.db, 90000001, 98000001, account.id);
+    await ctx.db.insert(structureEvent).values({
+      notificationId: 1,
+      type: "StructureUnderAttack",
+      sentAt: new Date(),
+      corporationId: 98000001,
+      alertStatus: "pending",
+    });
+
+    const result = await designateStructureHolder(ctx.db, 90000002, 98000001, account.id);
+    expect(result.abandonedAlerts).toBe(0);
+
+    const [one] = await ctx.db
+      .select()
+      .from(structureEvent)
+      .where(eq(structureEvent.notificationId, 1));
+    expect(one.alertStatus).toBe("pending");
+  });
+
   it("resets seededAt so a new holder re-seeds", async () => {
     const account = await seedAccount(ctx.db);
     await seedCharacter(ctx.db, testConfig(), { id: 90000001, accountId: account.id });

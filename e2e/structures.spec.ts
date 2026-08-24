@@ -90,6 +90,31 @@ test("a seeded roster renders most-alarming-first", async ({ page, context }) =>
   await expect(rows.first()).toContainText("hull");
 });
 
+test("designating a holder through the server action clears the ask", async ({
+  page,
+  context,
+}) => {
+  const admin = await seedMember(db, { name: "Vela Kaine", isAdmin: true });
+  await context.addCookies([await sessionCookieFor(db, admin.id)]);
+  const holderCharacterId = admin.mainCharacterId!;
+  await db
+    .update(character)
+    .set({
+      scopes: [STRUCTURES_SCOPE, NOTIFICATIONS_SCOPE],
+      tokenStatus: "valid",
+      corporationId: CORP,
+    })
+    .where(eq(character.id, holderCharacterId));
+
+  await page.goto("/admin/structures");
+  await expect(page.getByRole("main")).toContainText(
+    "granted structure access but is not",
+  );
+  await page.getByRole("button", { name: "Designate as holder" }).click();
+
+  await expect(page.getByRole("main")).not.toContainText("is not the holder");
+});
+
 test("Structures appears in the admin nav and not for a plain member", async ({
   page,
   context,

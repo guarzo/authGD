@@ -49,9 +49,15 @@ export async function getStructureHolder(dbx: Dbx): Promise<StructureHolder | nu
  * Three things happen together and must not be separable:
  *   1. the designation is written, with `seededAt` reset to null so the new
  *      holder re-seeds rather than replaying a 90-day backlog;
- *   2. every `pending` alert is retired to `abandoned` — those were owed to a
- *      holder that no longer exists, and posting them under the new one would
- *      alert about a corp this monitor no longer watches;
+ *   2. the retirement sweep runs ONLY when the corporation actually changes.
+ *      Replacing the holder WITHIN the same corp leaves every `pending` row
+ *      alone — those alerts are still for the corp being watched and are
+ *      still deliverable, so retiring them would silently drop a live attack.
+ *      Replacing it with a holder in a DIFFERENT corp retires every `pending`
+ *      row to `abandoned`, unfiltered by corporation — those alerts are no
+ *      longer valid for anyone, and narrowing the WHERE to the old corp would
+ *      leave a third corp's stale `pending` rows sitting live, ready to fire
+ *      the moment that corp is re-designated;
  *   3. the audit row records how many were retired, which is the only number
  *      that says whether a holder swap swallowed a live attack.
  */
@@ -85,13 +91,14 @@ export async function designateStructureHolder(
         },
       });
 
-    const retired = previous
-      ? await tx
-          .update(structureEvent)
-          .set({ alertStatus: "abandoned" })
-          .where(eq(structureEvent.alertStatus, "pending"))
-          .returning({ id: structureEvent.notificationId })
-      : [];
+    const retired =
+      previous && previous.corporationId !== corporationId
+        ? await tx
+            .update(structureEvent)
+            .set({ alertStatus: "abandoned" })
+            .where(eq(structureEvent.alertStatus, "pending"))
+            .returning({ id: structureEvent.notificationId })
+        : [];
 
     await logAudit(tx, {
       actor,
@@ -250,6 +257,23 @@ export async function getRecentEvents(
     .where(eq(structureEvent.corporationId, corporationId))
     .orderBy(desc(structureEvent.sentAt))
     .limit(limit);
+}
+
+/**
+ * The character's CURRENT corporation, read fresh from Postgres. The
+ * designate action must not trust a corp id sent in from the client — a
+ * hidden form field is attacker-controlled, so the corp that gets pinned has
+ * to come from a server-side read of what the database actually says.
+ */
+export async function getCharacterCorporationId(
+  dbx: Dbx,
+  characterId: number,
+): Promise<number | null> {
+  const [row] = await dbx
+    .select({ corporationId: character.corporationId })
+    .from(character)
+    .where(eq(character.id, characterId));
+  return row?.corporationId ?? null;
 }
 
 /**

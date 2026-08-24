@@ -9,7 +9,11 @@ import {
 } from "@/core/structure-event";
 import { EsiError, NOTIFICATIONS_SCOPE } from "@/lib/esi/client";
 import type { StructureEventsEsi } from "@/lib/esi/client";
-import { postStructureWebhook, resolveStructureWebhookUrl } from "@/lib/ops-webhook";
+import {
+  OpsWebhookError,
+  postStructureWebhook,
+  resolveStructureWebhookUrl,
+} from "@/lib/ops-webhook";
 import {
   getStructureHolder,
   markSeeded,
@@ -221,6 +225,7 @@ export async function runStructureEventsJob(deps: {
       )
       .orderBy(asc(structureEvent.sentAt));
 
+    let firstPostError: string | undefined;
     for (const event of pending) {
       const [known] = event.structureId
         ? await db
@@ -252,16 +257,31 @@ export async function runStructureEventsJob(deps: {
           )
           .returning({ id: structureEvent.notificationId });
         if (flipped.length > 0) counts.alerted += 1;
-      } catch {
+      } catch (err) {
         // Leave the row pending. The ten-minute tick is the retry; burning
         // pg-boss's retry budget on a Discord blip would dead-letter a job
         // that read ESI successfully.
         counts.failedPosts += 1;
+        // Only the FIRST failure's message survives into errorSummary — that
+        // is enough to say why, and it keeps the summary from growing with
+        // every subsequent row's post attempt. OpsWebhookError's own message
+        // is safe to surface: postOpsWebhookUrl never interpolates the url
+        // into it. Anything else is a throw this code did not construct, so
+        // its text is not trusted — same posture as the worker's boot-failure
+        // handler (src/worker/index.ts).
+        if (firstPostError === undefined) {
+          firstPostError =
+            err instanceof OpsWebhookError ? err.message : "structure alert post failed";
+        }
       }
     }
 
     if (counts.failedPosts > 0) {
-      return { status: "partial", errorSummary: "some alerts failed to post", counts };
+      return {
+        status: "partial",
+        errorSummary: `some alerts failed to post: ${firstPostError}`,
+        counts,
+      };
     }
     return { status: "ok", counts };
   });

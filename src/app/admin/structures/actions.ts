@@ -6,7 +6,10 @@ import { redirect } from "next/navigation";
 import { getDb } from "@/db";
 import { requireAdminAction } from "@/lib/admin-guard";
 import { enqueueSync } from "@/services/outbox";
-import { designateStructureHolder } from "@/services/structures";
+import {
+  designateStructureHolder,
+  getCharacterCorporationId,
+} from "@/services/structures";
 
 /**
  * Both actions gate themselves with `requireAdminAction`. The admin layout's
@@ -48,15 +51,18 @@ function parseId(value: FormDataEntryValue | null): number {
 }
 
 /**
- * `corporationId` comes from a hidden input the page renders from the
- * candidate character's current `character.corporationId`, so the pin records
- * the corp the admin was actually looking at when they pressed the button.
+ * `corporationId` is read server-side from the character's current
+ * `character.corporationId` rather than taken off the form: a hidden input is
+ * client-controlled, and the pin has to reflect what the database actually
+ * says, not whatever value a request happened to carry.
  */
 export async function designateStructureHolderAction(formData: FormData): Promise<void> {
   const { accountId: actor } = await requireAdminAction();
   const characterId = parseId(formData.get("characterId"));
-  const corporationId = parseId(formData.get("corporationId"));
-  await designateStructureHolder(getDb(), characterId, corporationId, actor);
+  const db = getDb();
+  const corporationId = await getCharacterCorporationId(db, characterId);
+  if (corporationId === null) throw new Error("invalid_id");
+  await designateStructureHolder(db, characterId, corporationId, actor);
   revalidatePath("/admin/structures");
   redirect(`/admin/structures?done=holder&at=${Date.now()}`);
 }
@@ -65,8 +71,10 @@ export async function designateStructureHolderAction(formData: FormData): Promis
 export async function checkNowAction(): Promise<void> {
   await requireAdminAction();
   const db = getDb();
-  await enqueueSync(db, { kind: "job", jobType: "structures" });
-  await enqueueSync(db, { kind: "job", jobType: "structure-events" });
+  await db.transaction(async (tx) => {
+    await enqueueSync(tx, { kind: "job", jobType: "structures" });
+    await enqueueSync(tx, { kind: "job", jobType: "structure-events" });
+  });
   revalidatePath("/admin/structures");
   redirect(`/admin/structures?done=check&at=${Date.now()}`);
 }

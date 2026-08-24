@@ -399,6 +399,18 @@ test("the strip's four groups are four named lists, not one flat one with the la
   // fan-out.
   const onDemand = page.getByRole("list", { name: "On-demand" });
   await expect(onDemand.getByRole("listitem")).toHaveCount(4);
+  // Each job named explicitly, not just counted — `exact` matters here since
+  // "structures" is a substring of "structure-events".
+  for (const jobType of [
+    "membership-recheck",
+    "access-lists",
+    "structures",
+    "structure-events",
+  ]) {
+    await expect(
+      onDemand.getByRole("heading", { name: jobType, exact: true }),
+    ).toBeVisible();
+  }
 
   // housekeeping: token-health, purge. Still a `role="list"` of 2 items once
   // opened — `getByRole` reads the accessibility tree, and Chromium excludes

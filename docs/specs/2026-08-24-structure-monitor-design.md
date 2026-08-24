@@ -1,6 +1,6 @@
 # Structure damage monitor — design
 
-Status: approved, not implemented
+Status: implemented
 Date: 2026-08-24
 
 Monitor the corp's own structures and post a Discord alert when one takes
@@ -67,11 +67,15 @@ access-lists does not have:
   different corp whose whole 90-day backlog would otherwise read as new and fire
   at once.
 
-Re-seeding is necessary but **not sufficient** to make holder replacement safe.
-`seeded_at` only governs how *newly discovered* events are recorded; it says
-nothing about events already sitting at `pending` from the previous holder's
-corp, which the sender would otherwise pick up and post under the new holder.
-`designateHolder` therefore also retires them — see `abandoned` below.
+Re-seeding is necessary but **not sufficient** to make holder replacement safe
+across a corp change. `seeded_at` only governs how *newly discovered* events
+are recorded; it says nothing about events already sitting at `pending` from
+the previous holder's corp, which the sender would otherwise pick up and post
+under the new holder. When the new holder is in a DIFFERENT corp,
+`designateHolder` retires every `pending` row — see `abandoned` below. When
+the new holder is in the SAME corp, nothing is retired: those `pending` rows
+are still for the corp being watched and are still owed their alert, so
+abandoning them would silently drop a live attack.
 
 Not generalised into a shared `service_character(role, character_id)` table
 alongside `access_list_holder`. That is the obvious dedupe and it would mean
@@ -183,9 +187,10 @@ The four values are distinct states, not shades of one:
   (or because no webhook was configured; see Alerting).
 - `pending` — recorded and owed an alert.
 - `sent` — posted successfully.
-- `abandoned` — was `pending` when the holder was replaced, and will never be
-  posted. Written by `designateHolder` in the same transaction as the new
-  designation.
+- `abandoned` — was `pending` when the holder was replaced with one in a
+  DIFFERENT corp, and will never be posted. Written by `designateHolder` in
+  the same transaction as the new designation. A same-corp replacement writes
+  none of these: those rows are still owed to the corp being watched.
 
 `abandoned` is a fourth value rather than a reuse of `seeded` because the two
 answer different questions. `seeded` means "deliberately not alerted, by the
@@ -484,8 +489,10 @@ Following the existing eight-file shape:
   CAS rejects a mid-flight holder swap; 403 sets `forbidden` and mutates no
   roster rows; a corp-roles 403 body classifies `permanent`; **with no webhook
   configured, new events land as `seeded` and no row is ever marked `sent`**;
-  **replacing the holder retires pending rows to `abandoned` and the next run
-  posts none of them**; **pending rows for a non-pinned corp are never
+  **replacing the holder with one in a different corp retires pending rows to
+  `abandoned` and the next run posts none of them**; **replacing the holder
+  with one in the SAME corp retires nothing, and those rows still post**;
+  **pending rows for a non-pinned corp are never
   selected**
 - `tests/esi-client.test.ts` — extend the existing pagination coverage
   (`:109-163`) to the extracted shared helper, proving `getAllContacts` keeps its

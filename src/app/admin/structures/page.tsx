@@ -132,12 +132,11 @@ export default async function StructuresPage({
           </a>
         )}
         {!remedy &&
-          state === "designate-needed" &&
+          (state === "designate-needed" || state === "corp-changed") &&
           grantable !== null &&
           grantable.corporationId !== null && (
             <form action={designateStructureHolderAction}>
               <input type="hidden" name="characterId" value={grantable.characterId} />
-              <input type="hidden" name="corporationId" value={grantable.corporationId} />
               <Submit className="btn btn--primary" pendingLabel="Designating…">
                 Designate as holder
               </Submit>
