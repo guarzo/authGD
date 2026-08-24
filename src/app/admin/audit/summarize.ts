@@ -352,6 +352,20 @@ const PARTS: Record<string, readonly Part[]> = {
   ],
   "access_list.watch_added": [accessListRef("name", "accessListId")],
   "access_list.watch_removed": [accessListRef("name", "accessListId")],
+  // `corporationId` rides along on both writes (services/structures.ts) but
+  // there is only ever one alliance's worth of corps this app tracks, so it
+  // adds nothing a scanning admin doesn't already know; silenced rather than
+  // left to surface as a `+1 more`.
+  "structure.holder_designated": [
+    characterRef("character", "characterId"),
+    silent("corporationId"),
+  ],
+  "structure.holder_replaced": [
+    characterRef("character", "characterId"),
+    characterRef("was", "previousCharacterId"),
+    labelled("abandoned alerts", "abandonedAlerts"),
+    silent("corporationId"),
+  ],
   "discord.unlinked": [scalar("reason")],
   // Both writers stamp `partial` on every row (jobs/discord-roles.ts:143 and
   // :369), so it has to be declared here or every single role-change row

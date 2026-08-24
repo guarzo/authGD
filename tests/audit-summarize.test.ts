@@ -567,6 +567,40 @@ describe("summarizeDetails with configured tier labels", () => {
     ).toBe("character 90000002, was 90000001");
   });
 
+  it("renders a structure holder designation and its replacement", () => {
+    expect(
+      summarizeDetails("structure.holder_designated", {
+        characterId: 90000001,
+        corporationId: 98000001,
+      }),
+    ).toBe("character 90000001");
+    expect(
+      summarizeDetails("structure.holder_replaced", {
+        previousCharacterId: 90000001,
+        characterId: 90000002,
+        corporationId: 98000001,
+        abandonedAlerts: 3,
+      }),
+    ).toBe("character 90000002, was 90000001, abandoned alerts 3");
+  });
+
+  it("does not report the structure holder's corporationId as a hidden key", () => {
+    expect(
+      summarizeDetails("structure.holder_designated", {
+        characterId: 90000001,
+        corporationId: 98000001,
+      }),
+    ).not.toContain("more");
+    expect(
+      summarizeDetails("structure.holder_replaced", {
+        previousCharacterId: 90000001,
+        characterId: 90000002,
+        corporationId: 98000001,
+        abandonedAlerts: 0,
+      }),
+    ).not.toContain("more");
+  });
+
   it("renders a resolved character name in place of a raw id", () => {
     const names = new Map([["mainCharacterId", "Probe Kid"]]);
     expect(

@@ -179,6 +179,7 @@ const NAMESPACE_TARGET_KIND = {
   "discord.": "discord",
   "payout.": "payout",
   "status.": "account",
+  "structure.": "character",
   "sync.": "account",
   "tier.": "account",
   "token.": "character",
@@ -258,6 +259,8 @@ const DETAIL_CHARACTER_KEYS: Readonly<Record<string, readonly string[]>> = {
   "admin.bootstrap_granted": ["characterId"],
   "access_list.holder_designated": ["characterId"],
   "access_list.holder_replaced": ["characterId", "previousCharacterId"],
+  "structure.holder_designated": ["characterId"],
+  "structure.holder_replaced": ["characterId", "previousCharacterId"],
   "token.subject_mismatch": ["subjectCharacterId"],
 };
 
