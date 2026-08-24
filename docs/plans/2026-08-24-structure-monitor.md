@@ -44,9 +44,11 @@
 Create `tests/structure-schema.test.ts`:
 
 ```ts
-import { describe, expect, it, beforeAll, afterAll } from "vitest";
+import { describe, expect, it, beforeAll, afterAll, beforeEach } from "vitest";
 import { sql } from "drizzle-orm";
-import { setupTestDb } from "./helpers/db";
+import { setupTestDb, truncateAll } from "./helpers/db";
+import { testConfig } from "./helpers/config";
+import { seedAccount, seedCharacter } from "./helpers/seed";
 import { MANAGED_TABLE_NAMES } from "@/db/tables";
 
 let ctx: Awaited<ReturnType<typeof setupTestDb>>;
@@ -55,6 +57,9 @@ beforeAll(async () => {
 });
 afterAll(async () => {
   await ctx.cleanup();
+});
+beforeEach(async () => {
+  await truncateAll(ctx.db);
 });
 
 describe("structure monitor schema", () => {
@@ -70,12 +75,14 @@ describe("structure monitor schema", () => {
   });
 
   it("pins structure_holder to a single row", async () => {
+    const account = await seedAccount(ctx.db);
+    await seedCharacter(ctx.db, testConfig(), { id: 90000001, accountId: account.id });
     await ctx.db.execute(
-      sql`insert into "character" (id, account_id, name, owner_hash) values (1, gen_random_uuid(), 'x', 'h')`,
+      sql`insert into structure_holder (id, character_id, corporation_id, designated_by) values (1, 90000001, 5, 'system')`,
     );
     await expect(
       ctx.db.execute(
-        sql`insert into structure_holder (id, character_id, corporation_id, designated_by) values (2, 1, 5, 'system')`,
+        sql`insert into structure_holder (id, character_id, corporation_id, designated_by) values (2, 90000001, 5, 'system')`,
       ),
     ).rejects.toThrow();
   });
@@ -732,30 +739,17 @@ refactor without rejecting the feature.
 - Consumes: the existing `request` and `safeParse` closures inside `createEsiClient`.
 - Produces: an internal `fetchAllPages<T>(path: (page: number) => string, schema: z.ZodType<T[]>, accessToken: string, opts?: { base?: string; compatibilityDate?: boolean }): Promise<T[]>`.
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Record the behaviour this refactor must preserve**
 
-Append to `tests/esi-client.test.ts`:
+This task writes no new test. Its proof is that the existing contacts
+pagination coverage (`tests/esi-client.test.ts:109-163`) stays green across the
+extraction — that is what "behaviour-preserving" means here, and a new test
+would only assert the new helper's shape rather than the old behaviour.
 
-```ts
-describe("paged reads fail closed", () => {
-  it("rejects a corporation structures read with no X-Pages header", async () => {
-    server.use(
-      http.get(`${ROOT}/corporations/98000001/structures/`, () =>
-        HttpResponse.json([], { headers: {} }),
-      ),
-    );
-    const esi = createEsiClient();
-    await expect(esi.getCorporationStructures(98000001, "tok")).rejects.toThrow(
-      /X-Pages/i,
-    );
-  });
-});
-```
-
-Note: this test asserts against `getCorporationStructures`, which Task 4
-creates. Write it now and leave it failing; Task 4's step 4 is what turns it
-green. The existing contacts pagination tests must stay green throughout **this**
-task — they are the proof the refactor changed nothing.
+The fail-closed test for the roster endpoint belongs to Task 4, which is where
+`getCorporationStructures` comes into existence. Do not write it here: `npm test`
+is a CI gate on every commit, so a knowingly-red suite at this commit would make
+any later bisect through this range meaningless.
 
 - [ ] **Step 2: Run the existing pagination tests to record the baseline**
 
@@ -870,6 +864,20 @@ git commit -m "refactor(esi): extract the paged-collection walk from getAllConta
 Append to `tests/esi-client.test.ts`:
 
 ```ts
+describe("paged reads fail closed", () => {
+  it("rejects a corporation structures read with no X-Pages header", async () => {
+    server.use(
+      http.get(`${ROOT}/corporations/98000001/structures/`, () =>
+        HttpResponse.json([], { headers: {} }),
+      ),
+    );
+    const esi = createEsiClient();
+    await expect(esi.getCorporationStructures(98000001, "tok")).rejects.toThrow(
+      /X-Pages/i,
+    );
+  });
+});
+
 describe("getCorporationStructures", () => {
   it("reads every page and maps timestamps to Date", async () => {
     server.use(
@@ -1341,7 +1349,20 @@ git commit -m "feat(structures): dedicated alert webhook with explicit resolutio
   - `getRoster(dbx: Dbx, corporationId: number): Promise<RosterRow[]>`
   - `getRecentEvents(dbx: Dbx, corporationId: number, limit: number): Promise<EventRow[]>`
   - `findGrantableCharacter(dbx: Dbx): Promise<{ characterId: number; name: string; corporationId: number | null } | null>` — the first admin-owned character whose PERSISTED `scopes` carry both structure scopes. Reads `character.scopes`, never `cfg.eveSso.scopes`: config says what we ask for, the column says what was granted.
-  - `toHolderView(dbx: Dbx, holder: StructureHolder): Promise<HolderView>` — joins `character` to fill `name`, `scopes`, `tokenStatus` and `currentCorporationId`. `HolderView` is the type Task 10's `view.ts` declares; import it there rather than redeclaring the shape.
+  - `toHolderView(dbx: Dbx, holder: StructureHolder): Promise<HolderView>` — joins `character` to fill `name`, `scopes`, `tokenStatus` and `currentCorporationId`. **Declare `HolderView` here**, in `src/services/structures.ts`; Task 10's `view.ts` imports it. It describes a service read's return shape, and declaring it in `view.ts` would make this task depend on a later one:
+
+```ts
+export type HolderView = {
+  characterId: number;
+  name: string;
+  scopes: string[];
+  tokenStatus: "valid" | "invalid" | "needs_reauth" | "missing";
+  /** The corp PINNED at designation. */
+  corporationId: number;
+  /** What character.corporationId says right now — null when never resolved. */
+  currentCorporationId: number | null;
+};
+```
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1351,6 +1372,7 @@ Create `tests/structure-service.test.ts`:
 import { describe, expect, it, beforeAll, afterAll, beforeEach } from "vitest";
 import { eq } from "drizzle-orm";
 import { setupTestDb, truncateAll } from "./helpers/db";
+import { testConfig } from "./helpers/config";
 import { seedAccount, seedCharacter } from "./helpers/seed";
 import { auditLog, structureEvent } from "@/db/schema";
 import {
@@ -1374,7 +1396,7 @@ beforeEach(async () => {
 describe("designateStructureHolder", () => {
   it("pins the corporation and audits the designation", async () => {
     const account = await seedAccount(ctx.db);
-    await seedCharacter(ctx.db, { id: 90000001, accountId: account.id });
+    await seedCharacter(ctx.db, testConfig(), { id: 90000001, accountId: account.id });
     await designateStructureHolder(ctx.db, 90000001, 98000001, account.id);
 
     const holder = await getStructureHolder(ctx.db);
@@ -1392,8 +1414,8 @@ describe("designateStructureHolder", () => {
 
   it("retires pending alerts when the holder is replaced, and says how many", async () => {
     const account = await seedAccount(ctx.db);
-    await seedCharacter(ctx.db, { id: 90000001, accountId: account.id });
-    await seedCharacter(ctx.db, { id: 90000002, accountId: account.id });
+    await seedCharacter(ctx.db, testConfig(), { id: 90000001, accountId: account.id });
+    await seedCharacter(ctx.db, testConfig(), { id: 90000002, accountId: account.id });
     await designateStructureHolder(ctx.db, 90000001, 98000001, account.id);
     await ctx.db.insert(structureEvent).values([
       {
@@ -1442,8 +1464,8 @@ describe("designateStructureHolder", () => {
 
   it("resets seededAt so a new holder re-seeds", async () => {
     const account = await seedAccount(ctx.db);
-    await seedCharacter(ctx.db, { id: 90000001, accountId: account.id });
-    await seedCharacter(ctx.db, { id: 90000002, accountId: account.id });
+    await seedCharacter(ctx.db, testConfig(), { id: 90000001, accountId: account.id });
+    await seedCharacter(ctx.db, testConfig(), { id: 90000002, accountId: account.id });
     await designateStructureHolder(ctx.db, 90000001, 98000001, account.id);
     await markSeeded(ctx.db, new Date());
     expect((await getStructureHolder(ctx.db))?.seededAt).toBeInstanceOf(Date);
@@ -1455,8 +1477,8 @@ describe("designateStructureHolder", () => {
 describe("stillStructureHolder", () => {
   it("is false once another character has been designated", async () => {
     const account = await seedAccount(ctx.db);
-    await seedCharacter(ctx.db, { id: 90000001, accountId: account.id });
-    await seedCharacter(ctx.db, { id: 90000002, accountId: account.id });
+    await seedCharacter(ctx.db, testConfig(), { id: 90000001, accountId: account.id });
+    await seedCharacter(ctx.db, testConfig(), { id: 90000002, accountId: account.id });
     await designateStructureHolder(ctx.db, 90000001, 98000001, account.id);
     expect(await stillStructureHolder(ctx.db, 90000001)).toBe(true);
     await designateStructureHolder(ctx.db, 90000002, 98000002, account.id);
@@ -1921,13 +1943,15 @@ function struct(id: number, over: Partial<EsiCorporationStructure> = {}) {
  */
 async function designate(opts: { currentCorp?: number; scopes?: string[] } = {}) {
   const account = await seedAccount(ctx.db);
-  await seedCharacter(ctx.db, {
+  await seedCharacter(ctx.db, testConfig(), {
     id: HOLDER,
     accountId: account.id,
     corporationId: opts.currentCorp ?? CORP,
     scopes: opts.scopes ?? [STRUCTURES_SCOPE, NOTIFICATIONS_SCOPE],
     tokenStatus: "valid",
-    refreshTokenEnc: encryptToken(testConfig().tokenEncryptionKey, "refresh"),
+    // The helper encrypts this with the test key itself — never pass a
+    // pre-encrypted blob (tests/helpers/seed.ts:33-50).
+    refreshToken: "refresh",
   });
   await designateStructureHolder(ctx.db, HOLDER, CORP, account.id);
   return account;
@@ -2893,6 +2917,7 @@ Create `src/app/admin/structures/view.ts`:
 
 ```ts
 import type { StructureReadStatus } from "@/db/schema";
+import type { HolderView } from "@/services/structures";
 import { NOTIFICATIONS_SCOPE, STRUCTURES_SCOPE } from "@/lib/esi/client";
 
 export type MonitorState =
@@ -2910,14 +2935,9 @@ export type MonitorState =
 export const GRANT_HREF = "/auth/eve/link?grant=structures";
 const REAUTH_HREF = "/auth/eve/link";
 
-export type HolderView = {
-  characterId: number;
-  name: string;
-  scopes: string[];
-  tokenStatus: "valid" | "invalid" | "needs_reauth" | "missing";
-  corporationId: number;
-  currentCorporationId: number | null;
-};
+// HolderView is declared in @/services/structures (Task 6) and imported above:
+// it describes that service read's return shape, and re-declaring it here
+// would give the two files a copy each to drift apart.
 
 export type MonitorInput = {
   grantable: { characterId: number; name: string } | null;
