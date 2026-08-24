@@ -16,6 +16,7 @@ const KNOWN_ORDER = [
   "location",
   "access-lists",
   "structures",
+  "structure-events",
 ];
 
 export type SyncStatusGroup = {
