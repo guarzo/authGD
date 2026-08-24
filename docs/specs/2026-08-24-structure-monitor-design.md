@@ -50,7 +50,9 @@ Singleton, copied from `accessListHolder` (`src/db/schema.ts:280-294`):
 `id integer PRIMARY KEY` pinned by
 `structure_holder_singleton_ck CHECK (id = 1)`,
 `character_id bigint NOT NULL REFERENCES character(id) ON DELETE CASCADE`,
-`designated_at`. Two columns access-lists does not have:
+`designated_at`, and `designated_by text NOT NULL` (account uuid or `"system"`,
+carried over verbatim from the precedent at `src/db/schema.ts:291`). Two columns
+access-lists does not have:
 
 - `corporation_id bigint NOT NULL` — **pinned at designation time**, not read
   live. `character.corporationId` is overwritten from affiliation every thirty
@@ -65,6 +67,12 @@ Singleton, copied from `accessListHolder` (`src/db/schema.ts:280-294`):
   different corp whose whole 90-day backlog would otherwise read as new and fire
   at once.
 
+Re-seeding is necessary but **not sufficient** to make holder replacement safe.
+`seeded_at` only governs how *newly discovered* events are recorded; it says
+nothing about events already sitting at `pending` from the previous holder's
+corp, which the sender would otherwise pick up and post under the new holder.
+`designateHolder` therefore also retires them — see `abandoned` below.
+
 Not generalised into a shared `service_character(role, character_id)` table
 alongside `access_list_holder`. That is the obvious dedupe and it would mean
 migrating a table already in production — out of scope here, recorded as
@@ -72,8 +80,8 @@ follow-up.
 
 ### `structure_read_state`
 
-`kind text PRIMARY KEY` (`'roster'` | `'events'`), `observed_at`,
-`last_attempt_at`, `read_status`, `detail`.
+Composite primary key `(kind, corporation_id)` — `kind text` is `'roster'` or
+`'events'`. Then `observed_at`, `last_attempt_at`, `read_status`, `detail`.
 
 Two timestamps, not one, for the reason `accessListSnapshot` gives
 (`src/db/schema.ts:316-326`): `observed_at` is the last _successful_ read and is
@@ -84,6 +92,13 @@ about freshness and discarding the failure.
 Keyed by kind rather than duplicated as columns on the holder because the two
 reads fail independently — notifications can 403 on Director while the roster
 reads fine on Station_Manager, and the page should say which.
+
+Keyed **also** by corporation because the row describes a read against one
+specific corp. Without it, replacing the holder leaves the previous corp's
+freshness and 403 state in place, and the page reports the new holder's monitor
+as healthy on the strength of a read that happened against a corp it no longer
+watches. The page reads the row for the currently pinned corp; rows for other
+corps are inert history.
 
 This table exists because `sync_run` cannot serve it: `counts` is
 `Record<string, number>` and `error_summary` is free text
@@ -117,7 +132,15 @@ distinguishes them.
 
 `notification_id bigint PRIMARY KEY` — ESI's own id, which is what makes "seen"
 idempotent. `type text` verbatim, `sent_at timestamptz` (ESI's timestamp),
-`structure_id bigint` nullable, `alert_status`, `details jsonb`.
+`structure_id bigint` nullable, `corporation_id bigint NOT NULL`, `alert_status`,
+`details jsonb`.
+
+`corporation_id` is stamped at insert from the holder's **pinned** corp, not
+parsed from the body. It is what the sender filters on: pending rows are selected
+for the currently pinned corp only, so a row recorded under a previous holder can
+never be posted under a new one. Without it the seed-silently rule protects only
+newly discovered events and leaves the already-`pending` ones to fire under a
+holder that never saw them.
 
 `structure_id` is nullable because the notification body is YAML and a parse can
 fail; a failed parse still records the event as seen and still alerts, without a
@@ -149,9 +172,26 @@ export const structureAlertStatusEnum = pgEnum("structure_alert_status", [
   "seeded",
   "pending",
   "sent",
+  "abandoned",
 ]);
 export type StructureAlertStatus = (typeof structureAlertStatusEnum.enumValues)[number];
 ```
+
+The four values are distinct states, not shades of one:
+
+- `seeded` — recorded without alerting, because this holder had never polled
+  (or because no webhook was configured; see Alerting).
+- `pending` — recorded and owed an alert.
+- `sent` — posted successfully.
+- `abandoned` — was `pending` when the holder was replaced, and will never be
+  posted. Written by `designateHolder` in the same transaction as the new
+  designation.
+
+`abandoned` is a fourth value rather than a reuse of `seeded` because the two
+answer different questions. `seeded` means "deliberately not alerted, by the
+first-run rule"; `abandoned` means "owed an alert that no longer has a valid
+recipient." Collapsing them would make it impossible to tell, from the table,
+whether a holder swap silently swallowed a live attack.
 
 `structure_read_status` is not a reuse of `accessListReadStatusEnum` — its
 `not_visible` means something else, and coupling two features' enums makes the
@@ -203,15 +243,35 @@ Fetches notifications, filters to `StructureUnderAttack`,
 `StructureLostShields`, `StructureLostArmor`, `StructureDestroyed`, and parses
 each YAML body.
 
-In one transaction: insert each event `ON CONFLICT DO NOTHING` with
-`alert_status = holder.seeded_at === null ? 'seeded' : 'pending'`, and if
-seeding, stamp `seeded_at`.
+**Resolve the webhook URL before the insert, not at post time.** If neither
+`structureWebhookUrl` nor `opsWebhookUrl` is set, there is no recipient, and an
+event recorded as `pending` would be marked `sent` by a post that never
+happened — `postOpsWebhookOrThrow` returns early and successfully when no URL is
+configured (`src/lib/ops-webhook.ts:47-48`). So the insert status is:
 
-After commit, select **all** `pending` rows — which naturally includes leftovers
-from a previous run's failed sends — post each, flip to `sent`. A failed post
-leaves the row `pending`; the run returns `"partial"`, not `"failed"`, because
-the ten-minute tick is the retry and pg-boss's retry budget is for a run that
-accomplished nothing (`src/services/sync-run.ts:36-47`).
+```
+alert_status =
+  no webhook configured        -> 'seeded'
+  holder.seeded_at === null    -> 'seeded'
+  otherwise                    -> 'pending'
+```
+
+Recording as `seeded` when unconfigured is deliberate: it keeps the table honest
+(nothing is owed an alert that can never be delivered), it keeps the pending set
+from growing without bound, and configuring a webhook later starts alerting on
+genuinely new events rather than replaying the backlog. The page says so via the
+`alerts-unconfigured` state rather than claiming alerts go to Discord.
+
+In one transaction: insert each event `ON CONFLICT DO NOTHING` with that status
+and with `corporation_id` stamped from the holder's pinned corp, and if seeding,
+stamp `seeded_at`.
+
+After commit, select all `pending` rows **for the currently pinned corp** — which
+naturally includes leftovers from a previous run's failed sends, and naturally
+excludes anything recorded under a previous holder — post each, flip to `sent`. A
+failed post leaves the row `pending`; the run returns `"partial"`, not
+`"failed"`, because the ten-minute tick is the retry and pg-boss's retry budget
+is for a run that accomplished nothing (`src/services/sync-run.ts:36-47`).
 
 Posting happens after commit, so a crash between the two re-sends next tick.
 At-least-once: a duplicate Discord post is possible and preferred to a lost one.
@@ -223,14 +283,24 @@ constant in `src/core/structure-event.ts`.
 
 ### Pagination
 
-`/corporations/{id}/structures/` is paginated and **the ESI client has no
-pagination support** — `request()` returns the raw `Response`
-(`src/lib/esi/client.ts:204-249`) and nothing in `src/` reads `x-pages`.
+`/corporations/{id}/structures/` is paginated. The ESI client already knows how
+to do this: `getAllContacts` (`src/lib/esi/client.ts:320-358`) reads `x-pages`
+off the first response, rejects a missing or non-integer header as a `transient`
+`EsiError` rather than guessing, and loops pages 2..N. It is covered directly by
+`tests/esi-client.test.ts:109-163`.
 
-This feature adds a `requestPaged` helper beside `request()` that loops on the
-`x-pages` header, rather than a loop inside the job, so the next paginated
-endpoint does not reinvent it. It inherits the existing error-budget throttle and
-header handling.
+The fail-closed behaviour is the valuable part and the comment says why: "an
+unknown page count means an unknown contact set, and the downstream diff
+deletes. Never guess (spec: never remove on unknown state)." That reasoning
+transfers exactly — this roster's `missing_since` stamping is also a
+diff-that-removes, so a silently truncated page set would mark real structures
+missing.
+
+So this feature **generalises the existing loop** rather than inventing one:
+extract the page walk from `getAllContacts` into a shared helper, keeping its
+header validation and error class verbatim, and have both callers use it.
+`getAllContacts` keeps its current observable behaviour, pinned by the tests
+above.
 
 ### Pure core
 
@@ -272,6 +342,19 @@ signature and delegates. New `postStructureWebhook(cfg, content)` resolves
 `cfg.discord.structureWebhookUrl ?? cfg.discord.opsWebhookUrl`. The dry-run guard
 and the 1900-character clamp stay where they are.
 
+**Both may be absent**, and that case is load-bearing rather than degenerate.
+`postOpsWebhookOrThrow` returns early and *successfully* when no URL is
+configured (`src/lib/ops-webhook.ts:47-48`) — correct for its existing callers,
+which have nothing at stake in a missing ops channel, and wrong for this one,
+where a successful no-op would flip an owed alert to `sent`.
+
+So the resolution is exposed rather than buried: a
+`resolveStructureWebhookUrl(cfg): string | undefined` that both the job and the
+page read. The job branches on it *before* inserting (see `structure-events`);
+the page renders `alerts-unconfigured` from it. Neither infers delivery from a
+post's return value, because that value cannot distinguish "delivered" from
+"nowhere to deliver."
+
 Nothing asserts `.env.example` matches the schema, so the var is added by hand in
 four places: `src/config.ts`, `.env.example`, the `docs/ops.md` secret table
 (`:348-371`) plus the first-deploy secrets block (`:14-28`), and
@@ -301,7 +384,15 @@ Priority order, in `view.ts`, mirroring `monitorState`:
 | `corp-changed`        | _Name_ has left the corp the roster belongs to.             | Re-designate                        |
 | `no-corp-roles`       | The corp refused the _roster_ / _notifications_ read.       | Text only                           |
 | `roster-empty`        | Nothing read yet.                                           | Check now                           |
+| `alerts-unconfigured` | _N_ structures. No Discord webhook is set, so nothing is alerted. | Text only                     |
 | `normal`              | _N_ structures. Alerts go to Discord.                       | —                                   |
+
+`alerts-unconfigured` sits directly above `normal` and is the only difference
+between them: the monitor is working, the roster is real, and nothing will be
+sent. It exists because `normal`'s sentence is otherwise a lie whenever neither
+webhook is configured — and since an unconfigured webhook post returns
+successfully (`src/lib/ops-webhook.ts:47-48`), nothing else on the page or in the
+job would ever reveal it.
 
 The scope check precedes the token check for the reason recorded at
 `src/app/admin/access-lists/view.ts:40-54`: the plain re-auth link is what drops
@@ -353,7 +444,12 @@ Two actions only, matching the access-list namespace shape, with entries in
 - `structure.holder_designated` — target characterId, details
   `{characterId, corporationId}`
 - `structure.holder_replaced` — target characterId, details
-  `{previousCharacterId, characterId, corporationId}`
+  `{previousCharacterId, characterId, corporationId, abandonedAlerts}`
+
+`abandonedAlerts` is the count of `pending` rows retired to `abandoned` by that
+replacement. It belongs in the audit row because it is the one number that says
+whether a holder swap swallowed a live alert, and the swap is an admin action
+nobody would otherwise connect to a missing Discord post.
 
 Events are observations, not state changes; access-lists sets the precedent that
 observations surface on the page rather than in the audit log. Read failures are
@@ -382,11 +478,18 @@ Following the existing eight-file shape:
 - `tests/structure-event.test.ts` — the YAML reader against real bodies for all
   four types; a malformed body yields nulls rather than throwing
 - `tests/structure-view.test.ts` — every branch of the cascade, including both
-  `forbidden` variants and `corp-changed`
+  `forbidden` variants, `corp-changed`, and `alerts-unconfigured`
 - `tests/structure-job.test.ts` — seeding sends nothing; second run alerts only
   on new; a failed post leaves `pending` and the next run re-sends; `stillHolder`
   CAS rejects a mid-flight holder swap; 403 sets `forbidden` and mutates no
-  roster rows; a corp-roles 403 body classifies `permanent`
+  roster rows; a corp-roles 403 body classifies `permanent`; **with no webhook
+  configured, new events land as `seeded` and no row is ever marked `sent`**;
+  **replacing the holder retires pending rows to `abandoned` and the next run
+  posts none of them**; **pending rows for a non-pinned corp are never
+  selected**
+- `tests/esi-client.test.ts` — extend the existing pagination coverage
+  (`:109-163`) to the extracted shared helper, proving `getAllContacts` keeps its
+  behaviour and the roster read fails closed on a missing `x-pages` too
 - `tests/structure-service.test.ts`, `tests/structure-schema.test.ts`,
   `tests/structure-reads.test.ts`,
   `tests/admin-structure-actions-validation.test.ts`
