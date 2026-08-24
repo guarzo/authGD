@@ -1800,6 +1800,19 @@ it("ignores an unknown grant value", async () => {
   const scope = new URL(res.headers.get("location")!).searchParams.get("scope")!;
   expect(scope).not.toContain("blueprints");
 });
+
+// A prototype-chain key must take the same path as an unknown key, not throw.
+// Assert on the resulting scope SET, not merely that nothing threw: a
+// no-throw assertion would still pass if the route silently began granting
+// something.
+it("treats a prototype-chain grant key as unknown", async () => {
+  for (const grant of ["toString", "constructor", "__proto__"]) {
+    const res = await GET(linkRequest(`/auth/eve/link?grant=${encodeURIComponent(grant)}`));
+    expect(res.status).toBe(307);
+    const scope = new URL(res.headers.get("location")!).searchParams.get("scope")!;
+    expect(scope.split(" ")).not.toContain(ACCESS_LISTS_SCOPE);
+  }
+});
 ```
 
 Use whatever request helper the existing tests in that file already use for
@@ -1832,7 +1845,14 @@ const GRANTS: Record<string, readonly string[]> = {
   structures: [STRUCTURES_SCOPE, NOTIFICATIONS_SCOPE],
 };
 
-const extraScopes = [...(GRANTS[req.nextUrl.searchParams.get("grant") ?? ""] ?? [])];
+// `Object.hasOwn`, NOT a bare index and NOT `in`. `GRANTS` is a plain object
+// literal, so it inherits from `Object.prototype`: a bare `GRANTS[grant]`
+// returns an inherited member for `grant=toString`, `constructor` or
+// `__proto__`, which `?? []` does not catch and the spread then throws —
+// an unhandled 500 on a crafted query string. `in` walks the prototype chain
+// too and would not fix it. Same guard `isJobType` uses (src/core/schedules.ts:40).
+const grant = req.nextUrl.searchParams.get("grant") ?? "";
+const extraScopes = Object.hasOwn(GRANTS, grant) ? [...GRANTS[grant]] : [];
 ```
 
 - [ ] **Step 4: Register the audit vocabulary**
