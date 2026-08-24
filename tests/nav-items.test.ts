@@ -27,6 +27,7 @@ describe("navFor", () => {
       "Audit log",
       "Sync",
       "Access lists",
+      "Structures",
     ]);
     expect(labels(navFor({ canReadPayouts: true, isAdmin: false }))).toEqual([
       "Your account",
@@ -42,7 +43,17 @@ describe("navFor", () => {
       "Audit log",
       "Sync",
       "Access lists",
+      "Structures",
     ]);
+  });
+
+  it("offers Structures to admins and nobody else", () => {
+    expect(labels(navFor({ canReadPayouts: false, isAdmin: true }))).toContain(
+      "Structures",
+    );
+    expect(labels(navFor({ canReadPayouts: false, isAdmin: false }))).not.toContain(
+      "Structures",
+    );
   });
 
   // Module-level constants are shared across every call in a server process.
@@ -64,6 +75,7 @@ describe("navFromPath", () => {
       "Audit log",
       "Sync",
       "Access lists",
+      "Structures",
     ]);
   });
 
