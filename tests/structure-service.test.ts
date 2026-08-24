@@ -3,12 +3,15 @@ import { eq } from "drizzle-orm";
 import { setupTestDb, truncateAll } from "./helpers/db";
 import { testConfig } from "./helpers/config";
 import { seedAccount, seedCharacter } from "./helpers/seed";
-import { auditLog, structureEvent } from "@/db/schema";
+import { auditLog, character, structureEvent } from "@/db/schema";
+import { NOTIFICATIONS_SCOPE, STRUCTURES_SCOPE } from "@/lib/esi/client";
 import {
   designateStructureHolder,
+  findGrantableCharacter,
   getStructureHolder,
   markSeeded,
   stillStructureHolder,
+  toHolderView,
 } from "@/services/structures";
 
 let ctx: Awaited<ReturnType<typeof setupTestDb>>;
@@ -107,5 +110,112 @@ describe("stillStructureHolder", () => {
     expect(await stillStructureHolder(ctx.db, 90000001)).toBe(true);
     await designateStructureHolder(ctx.db, 90000002, 98000002, account.id);
     expect(await stillStructureHolder(ctx.db, 90000001)).toBe(false);
+  });
+});
+
+describe("findGrantableCharacter", () => {
+  it("returns null when no character carries both scopes", async () => {
+    const admin = await seedAccount(ctx.db, { isAdmin: true });
+    await seedCharacter(ctx.db, testConfig(), {
+      id: 90000001,
+      accountId: admin.id,
+      scopes: [],
+    });
+    expect(await findGrantableCharacter(ctx.db)).toBeNull();
+  });
+
+  it("returns null when a character has only one of the two scopes", async () => {
+    const admin = await seedAccount(ctx.db, { isAdmin: true });
+    await seedCharacter(ctx.db, testConfig(), {
+      id: 90000001,
+      accountId: admin.id,
+      scopes: [STRUCTURES_SCOPE],
+    });
+    await seedCharacter(ctx.db, testConfig(), {
+      id: 90000002,
+      accountId: admin.id,
+      scopes: [NOTIFICATIONS_SCOPE],
+    });
+    expect(await findGrantableCharacter(ctx.db)).toBeNull();
+  });
+
+  it("returns the character when it carries both scopes", async () => {
+    const admin = await seedAccount(ctx.db, { isAdmin: true });
+    await seedCharacter(ctx.db, testConfig(), {
+      id: 90000001,
+      accountId: admin.id,
+      name: "Grantable One",
+      scopes: [STRUCTURES_SCOPE, NOTIFICATIONS_SCOPE],
+      corporationId: 98000001,
+    });
+    expect(await findGrantableCharacter(ctx.db)).toMatchObject({
+      characterId: 90000001,
+      name: "Grantable One",
+      corporationId: 98000001,
+    });
+  });
+
+  it("ignores a character whose account is not an admin, even with both scopes", async () => {
+    const nonAdmin = await seedAccount(ctx.db, { isAdmin: false });
+    await seedCharacter(ctx.db, testConfig(), {
+      id: 90000001,
+      accountId: nonAdmin.id,
+      scopes: [STRUCTURES_SCOPE, NOTIFICATIONS_SCOPE],
+    });
+    expect(await findGrantableCharacter(ctx.db)).toBeNull();
+  });
+
+  it("returns corporationId as null when the character has none", async () => {
+    const admin = await seedAccount(ctx.db, { isAdmin: true });
+    await seedCharacter(ctx.db, testConfig(), {
+      id: 90000001,
+      accountId: admin.id,
+      scopes: [STRUCTURES_SCOPE, NOTIFICATIONS_SCOPE],
+      corporationId: null,
+    });
+    expect(await findGrantableCharacter(ctx.db)).toMatchObject({
+      characterId: 90000001,
+      corporationId: null,
+    });
+  });
+});
+
+describe("toHolderView", () => {
+  it("keeps the pinned corporationId distinct from the character's current one", async () => {
+    const account = await seedAccount(ctx.db);
+    await seedCharacter(ctx.db, testConfig(), {
+      id: 90000001,
+      accountId: account.id,
+      corporationId: 98000001,
+    });
+    await designateStructureHolder(ctx.db, 90000001, 98000001, account.id);
+
+    // The character moves corp after designation; the holder stays pinned.
+    await ctx.db
+      .update(character)
+      .set({ corporationId: 98000099 })
+      .where(eq(character.id, 90000001));
+
+    const holder = await getStructureHolder(ctx.db);
+    const view = await toHolderView(ctx.db, holder!);
+    expect(view.corporationId).toBe(98000001);
+    expect(view.currentCorporationId).toBe(98000099);
+    expect(view.corporationId).not.toBe(view.currentCorporationId);
+  });
+
+  it("carries scopes and tokenStatus through from the character row", async () => {
+    const account = await seedAccount(ctx.db);
+    await seedCharacter(ctx.db, testConfig(), {
+      id: 90000001,
+      accountId: account.id,
+      scopes: [STRUCTURES_SCOPE, NOTIFICATIONS_SCOPE],
+      tokenStatus: "needs_reauth",
+    });
+    await designateStructureHolder(ctx.db, 90000001, 98000001, account.id);
+
+    const holder = await getStructureHolder(ctx.db);
+    const view = await toHolderView(ctx.db, holder!);
+    expect(view.scopes).toEqual([STRUCTURES_SCOPE, NOTIFICATIONS_SCOPE]);
+    expect(view.tokenStatus).toBe("needs_reauth");
   });
 });
