@@ -707,11 +707,15 @@ least one never-used id in reserve, or check
 
 ## Local development
 
-Requires **Node 24+** (Active LTS; the Dockerfile ships `node:24-alpine`) and
-Docker. `npm install` enforces it via `engines` + `.npmrc`, and
+Requires **Node 24.15+** (Active LTS; the Dockerfile ships `node:24-alpine`)
+and Docker. `npm install` enforces it via `engines` + `.npmrc`, and
 `nvm use` picks it up from `.nvmrc`. The three pins (`Dockerfile`, `.nvmrc`,
 `package.json` `engines`) must agree on the major — `scripts/check-node-version.sh`
-fails CI if a bump misses one.
+fails CI if a bump misses one. The floor is a *minor*: Node 24 below 24.15.0
+ships an npm that cannot install this lockfile, failing `npm ci` with a
+misleading "Missing: esbuild@… from lock file" — `.npmrc` has the mechanism.
+`.nvmrc` stays bare `24` on purpose, so it floats to the newest 24.x; if an
+old cached 24 gets selected, run `nvm install 24 --latest-npm`.
 
 ### From a fresh clone
 
