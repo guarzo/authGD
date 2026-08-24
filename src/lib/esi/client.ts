@@ -35,6 +35,22 @@ export const OPEN_WINDOW_SCOPE = "esi-ui.open_window.v1";
  */
 export const ACCESS_LISTS_SCOPE = "esi-access.read_lists.v1";
 
+/**
+ * Deliberately NOT in EVE_SSO_SCOPES, for the reason ACCESS_LISTS_SCOPE gives:
+ * adding either there would flip every character to needs_reauth at the next
+ * token-health run, for a feature only one character needs.
+ *
+ * Note the corporations scope is NOT `esi-universe.read_structures.v1`, which
+ * IS already in EVE_SSO_SCOPES and resolves a single structure's NAME for the
+ * location job. The two differ by one word and grant different things.
+ *
+ * Both also require an in-game corp role that no scope can grant:
+ * Station_Manager for the roster, and Director or CEO for corp structure
+ * notifications to be delivered to the character at all.
+ */
+export const STRUCTURES_SCOPE = "esi-corporations.read_structures.v1";
+export const NOTIFICATIONS_SCOPE = "esi-characters.read_notifications.v1";
+
 export class EsiError extends Error {
   status: number;
   kind: EsiErrorClass;
@@ -118,6 +134,30 @@ const accessListSchema = z.object({
     })
     .nullish(),
 });
+const corporationStructuresSchema = z.array(
+  z.object({
+    structure_id: z.number(),
+    type_id: z.number().int(),
+    system_id: z.number().int(),
+    name: z.string().optional(),
+    state: z.string(),
+    state_timer_start: z.string().optional(),
+    state_timer_end: z.string().optional(),
+    fuel_expires: z.string().optional(),
+  }),
+);
+
+const notificationsSchema = z.array(
+  z.object({
+    notification_id: z.number(),
+    type: z.string(),
+    timestamp: z.string(),
+    // Absent on some notification types. Never fail a read over a missing body:
+    // the event still happened and still deserves an alert.
+    text: z.string().optional(),
+  }),
+);
+
 const universeNamesSchema = z.array(
   z.object({
     id: z.number().int(),
@@ -154,6 +194,24 @@ export type EsiAccessList = {
   alliances: EsiAccessListMember[];
 };
 export type EsiEntityName = { id: number; name: string; category: string };
+
+export type EsiCorporationStructure = {
+  structureId: number;
+  typeId: number;
+  systemId: number;
+  name: string | null;
+  state: string;
+  stateTimerStart: Date | null;
+  stateTimerEnd: Date | null;
+  fuelExpires: Date | null;
+};
+
+export type EsiNotification = {
+  notificationId: number;
+  type: string;
+  timestamp: Date;
+  text: string;
+};
 
 export interface EsiClientOptions {
   fetchImpl?: typeof fetch;
@@ -553,6 +611,72 @@ export function createEsiClient(opts: EsiClientOptions = {}) {
     };
   }
 
+  function optionalDate(value: string | undefined): Date | null {
+    if (!value) return null;
+    const d = new Date(value);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+
+  /**
+   * Every structure the corporation owns. Paginated, and read through
+   * fetchAllPages so a missing X-Pages fails closed rather than truncating —
+   * the roster's missingSince stamping is a diff that removes.
+   *
+   * A 403 here means the character lacks the Station_Manager corp role. It
+   * classifies `permanent` (core/errors.ts: 403 is needs_reauth only when the
+   * body names a scope/token/authorization problem, and the role error does
+   * not), which is what lets the caller tell it apart from a token fault.
+   * Nothing is swallowed here; the caller classifies.
+   */
+  async function getCorporationStructures(
+    corporationId: number,
+    accessToken: string,
+  ): Promise<EsiCorporationStructure[]> {
+    const raw = await fetchAllPages(
+      (page) => `/corporations/${corporationId}/structures/?page=${page}`,
+      corporationStructuresSchema,
+      accessToken,
+      { base: ESI_ROOT, compatibilityDate: true },
+    );
+    return raw.map((s) => ({
+      structureId: s.structure_id,
+      typeId: s.type_id,
+      systemId: s.system_id,
+      name: s.name ?? null,
+      state: s.state,
+      stateTimerStart: optionalDate(s.state_timer_start),
+      stateTimerEnd: optionalDate(s.state_timer_end),
+      fuelExpires: optionalDate(s.fuel_expires),
+    }));
+  }
+
+  /**
+   * The character's notifications — ALL types, not only structure ones. The
+   * caller filters; this client does not, because filtering here would hide
+   * from the test suite what the endpoint actually returns.
+   *
+   * Not paginated: ESI returns a single page of the most recent ~50 from the
+   * last 90 days.
+   */
+  async function getCharacterNotifications(
+    characterId: number,
+    accessToken: string,
+  ): Promise<EsiNotification[]> {
+    const path = `/characters/${characterId}/notifications/`;
+    const res = await request(path, {
+      accessToken,
+      base: ESI_ROOT,
+      compatibilityDate: true,
+    });
+    const raw = safeParse(notificationsSchema, await res.json(), "GET", path, res.status);
+    return raw.map((n) => ({
+      notificationId: n.notification_id,
+      type: n.type,
+      timestamp: new Date(n.timestamp),
+      text: n.text ?? "",
+    }));
+  }
+
   /**
    * Unauthenticated batch id→name resolve, chunked like resolveIds. ESI rejects
    * the whole chunk if any id in it is unknown, so an unresolvable id costs the
@@ -594,6 +718,8 @@ export function createEsiClient(opts: EsiClientOptions = {}) {
     getAccessLists,
     getAccessList,
     getUniverseNames,
+    getCorporationStructures,
+    getCharacterNotifications,
     addContacts: (
       characterId: number,
       accessToken: string,
@@ -638,3 +764,11 @@ export type AccessListsEsi = Pick<
   EsiClient,
   "getAccessLists" | "getAccessList" | "getUniverseNames"
 >;
+
+/** The roster job's narrow view: reads only, no writes reachable. */
+export type StructuresEsi = Pick<
+  EsiClient,
+  "getCorporationStructures" | "getUniverseNames"
+>;
+/** The events job's narrow view. */
+export type StructureEventsEsi = Pick<EsiClient, "getCharacterNotifications">;
