@@ -27,6 +27,7 @@ describe("getSyncStatus", () => {
     "purge",
     "location",
     "access-lists",
+    "structures",
   ];
 
   it("returns a row for every scheduled job on a fresh database", async () => {

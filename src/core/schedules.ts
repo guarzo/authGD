@@ -23,6 +23,10 @@ export const JOB_CRON = {
   // :15 discord-roles, :02,17,32,47 location. A read-only monitor has no
   // reason to contend with the jobs that push member state outward.
   "access-lists": "25 * * * *",
+  // :35 is free — :00/:30 membership, :05 contacts, :10 wanderer,
+  // :15 discord-roles, :25 access-lists, :02,17,32,47 location. The roster
+  // endpoint caches for an hour, so a faster tick would re-read the same page.
+  structures: "35 * * * *",
 } as const satisfies Record<string, string>;
 
 /**
@@ -83,6 +87,7 @@ export const JOB_GROUP: Record<JobType, JobGroup> = {
   purge: "housekeeping",
   location: "member-facing",
   "access-lists": "on-demand",
+  structures: "on-demand",
 };
 
 /** The strip a job type belongs to, or null when nothing schedules it. */

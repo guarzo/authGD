@@ -15,6 +15,7 @@ const KNOWN_ORDER = [
   "purge",
   "location",
   "access-lists",
+  "structures",
 ];
 
 export type SyncStatusGroup = {

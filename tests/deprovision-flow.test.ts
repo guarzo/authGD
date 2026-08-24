@@ -90,6 +90,9 @@ it("main leaves alliance → alumni → contacts removed, ACL removed, role chan
       alliances: [],
     }),
     getUniverseNames: async () => [],
+    // Structures: this flow never enqueues the structures job either; this
+    // exists only to satisfy the widened JobDeps["esi"].
+    getCorporationStructures: async () => [],
   };
 
   // Wanderer: the ACL still lists the leaver's chars.

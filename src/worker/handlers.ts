@@ -7,10 +7,11 @@ import { runDiscordRolesJob } from "@/jobs/discord-roles";
 import { runLocationJob, type LocationEsi } from "@/jobs/location";
 import { runMembershipJob } from "@/jobs/membership";
 import { runPurgeJob } from "@/jobs/purge";
+import { runStructuresJob } from "@/jobs/structures";
 import { runTokenHealthJob } from "@/jobs/token-health";
 import { runWandererJob } from "@/jobs/wanderer";
 import type { DiscordClient } from "@/lib/discord/rest";
-import type { AccessListsEsi, EsiClient } from "@/lib/esi/client";
+import type { AccessListsEsi, EsiClient, StructuresEsi } from "@/lib/esi/client";
 import type { WandererClient } from "@/lib/wanderer/client";
 import { QUEUES } from "@/worker/queues";
 
@@ -39,11 +40,16 @@ const tokenHealthSchema = z.object({ jobType: z.literal(QUEUES.tokenHealth) }).s
 const purgeSchema = z.object({ jobType: z.literal(QUEUES.purge) }).strict();
 const locationSchema = z.object({ jobType: z.literal(QUEUES.location) }).strict();
 const accessListsSchema = z.object({ jobType: z.literal(QUEUES.accessLists) }).strict();
+const structuresSchema = z.object({ jobType: z.literal(QUEUES.structures) }).strict();
 
 export type JobDeps = {
   db: Db;
   cfg: Config;
-  esi: Pick<EsiClient, "postAffiliation"> & ContactsEsi & LocationEsi & AccessListsEsi;
+  esi: Pick<EsiClient, "postAffiliation"> &
+    ContactsEsi &
+    LocationEsi &
+    AccessListsEsi &
+    StructuresEsi;
   wanderer: WandererClient;
   discord: DiscordClient;
   fetchImpl?: typeof fetch;
@@ -94,6 +100,10 @@ export function buildJobHandlers(
     [QUEUES.accessLists]: async (data) => {
       accessListsSchema.parse(data);
       await runAccessListsJob(deps);
+    },
+    [QUEUES.structures]: async (data) => {
+      structuresSchema.parse(data);
+      await runStructuresJob(deps);
     },
   };
 }
