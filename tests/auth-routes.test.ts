@@ -286,6 +286,62 @@ describe("EVE link route — ?grant= is the only attacker-controllable input", (
     expect(scopes).toContain("esi-characters.read_contacts.v1");
   });
 
+  it("grant=structures asks EVE for both structure scopes, and not the access-list one", async () => {
+    const { createSession } = await import("@/services/session");
+    const { STRUCTURES_SCOPE, NOTIFICATIONS_SCOPE } = await import("@/lib/esi/client");
+    const [acc] = await ctx.db.insert(account).values({}).returning();
+    const sid = await createSession(ctx.db, acc.id);
+    const req = new NextRequest("http://localhost:3000/auth/eve/link?grant=structures");
+    req.cookies.set("authgd_session", sid);
+
+    const res = await linkRoute(req);
+    expect(res.status).toBe(307);
+    const authorize = new URL(res.headers.get("location")!);
+    const scopes = authorize.searchParams.get("scope")!.split(" ");
+    expect(scopes).toContain(STRUCTURES_SCOPE);
+    expect(scopes).toContain(NOTIFICATIONS_SCOPE);
+    expect(scopes).not.toContain(ACCESS_LISTS_SCOPE);
+  });
+
+  it("an unknown grant value (not a known name, not a raw scope) asks for no extra scope", async () => {
+    const { createSession } = await import("@/services/session");
+    const [acc] = await ctx.db.insert(account).values({}).returning();
+    const sid = await createSession(ctx.db, acc.id);
+    const req = new NextRequest(
+      "http://localhost:3000/auth/eve/link?grant=esi-corporations.read_blueprints.v1",
+    );
+    req.cookies.set("authgd_session", sid);
+
+    const res = await linkRoute(req);
+    expect(res.status).toBe(307);
+    const authorize = new URL(res.headers.get("location")!);
+    const scopes = authorize.searchParams.get("scope")!.split(" ");
+    expect(scopes).toEqual(["esi-characters.read_contacts.v1"]);
+  });
+
+  it("does not throw or grant anything for a prototype-chain grant value", async () => {
+    // GRANTS is a plain object literal, so `GRANTS[grant]` alone would throw
+    // or return a function for these three -- they are inherited from
+    // Object.prototype, not own keys. Object.hasOwn is the required guard,
+    // not optional hardening.
+    const { createSession } = await import("@/services/session");
+    const [acc] = await ctx.db.insert(account).values({}).returning();
+    const sid = await createSession(ctx.db, acc.id);
+
+    for (const grant of ["toString", "constructor", "__proto__"]) {
+      const req = new NextRequest(
+        `http://localhost:3000/auth/eve/link?grant=${encodeURIComponent(grant)}`,
+      );
+      req.cookies.set("authgd_session", sid);
+      const res = await linkRoute(req);
+      expect(res.status).toBe(307);
+      const authorize = new URL(res.headers.get("location")!);
+      const scopes = authorize.searchParams.get("scope")!.split(" ");
+      expect(scopes).not.toContain(ACCESS_LISTS_SCOPE);
+      expect(scopes).toEqual(["esi-characters.read_contacts.v1"]);
+    }
+  });
+
   it("any other grant value asks for no extra scope", async () => {
     const { createSession } = await import("@/services/session");
     const [acc] = await ctx.db.insert(account).values({}).returning();

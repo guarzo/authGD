@@ -112,12 +112,17 @@ renders — this table is a copy for readers, not a source.
 | `location` | `2,17,32,47 * * * *` | housekeeping |
 | `membership-recheck` | `0 4 * * 0` | on-demand |
 | `access-lists` | `25 * * * *` | on-demand |
+| `structures` | `35 * * * *` | on-demand |
+| `structure-events` | `3,13,23,33,43,53 * * * *` | on-demand |
 | `token-health` | `0 3 * * *` | housekeeping |
 | `purge` | `30 3 * * *` | housekeeping |
 
 `location` is offset off the :00/:05/:10/:15 minutes on purpose: there is no
 access-token cache, so it quadruples per-character SSO refreshes and would
-otherwise race the contacts job for the same rows.
+otherwise race the contacts job for the same rows. `structures` (:35) and
+`structure-events` (:3/:13/:23/.../:53) land on minutes none of the above
+already claim, for the same reason: two jobs sharing a minute race for the
+same holder's token.
 
 The 90-minute freshness threshold used by `/api/health/sync` is a constant in
 `src/core/health.ts`, compared with `<=`. If the most frequent job here ever
@@ -243,6 +248,11 @@ forever, so it is unbounded too — roughly an order of magnitude slower than
 `audit_log`, and worth its own retention policy eventually. Noted here, not
 fixed; it does not change this decision.
 
+`structure_event` is unbounded for the same reason `audit_log` is: it is an
+append-only record of fact — every structure notification this app has ever
+seen, one row per `notification_id` — and `purge.ts` deliberately leaves it
+alone. Same shelf life, same trigger to revisit it.
+
 ### Revisit when — not before
 
 `audit_log` is the fastest-growing table with no retention policy — the `purge`
@@ -362,6 +372,7 @@ character already on the ACL.
 | `DISCORD_GUILD_ID` | yes | the guild whose roles are managed |
 | `DISCORD_ROLE_ID_MEMBER` / `_ASSOCIATE` / `_ALUMNI` | yes | the three managed role ids (distinct) |
 | `DISCORD_OPS_WEBHOOK_URL` | no | ops alerts (final retry failures, config errors) |
+| `DISCORD_STRUCTURE_WEBHOOK_URL` | no (falls back to `DISCORD_OPS_WEBHOOK_URL`) | structure notifications (see below). With neither set, nothing is alerted — events are still recorded, as `seeded` — and `/admin/structures` says so |
 | `WANDERER_BASE_URL` / `WANDERER_API_KEY` | yes | Wanderer instance + the **ACL's own** API key (the map API key returns 401 on `/api/acls/*`) |
 | `WANDERER_ACL_ID` | yes | the managed ACL — dedicated to authGD, reconciled destructively |
 | `STANDINGS_LABEL` | no (default `authgd`) | in-game contact label the app OWNS — see the warning below |
@@ -428,6 +439,39 @@ it, and nothing prevents that — EVE's character picker runs after the authoriz
 URL is built, so at that moment there is no "the character" whose existing
 scopes could be carried forward. `/admin/access-lists` detects the loss and asks
 for a re-grant rather than failing silently.
+
+### The structure scopes are opt-in
+
+`esi-corporations.read_structures.v1` (the roster read) and
+`esi-characters.read_notifications.v1` (structure notifications) are both
+deliberately **absent** from `EVE_SSO_SCOPES`, for the same reason the
+access-list scope is: putting either there would flip every existing character
+to `needs_reauth` on the next token-health run, for a feature only one
+character needs.
+
+An admin grants both by visiting `/auth/eve/link?grant=structures`, the same
+mechanism as `grant=access-lists`, and the grant is equally **not sticky** — any
+ordinary re-authentication drops it, and `/admin/structures` detects the loss
+and asks for a re-grant rather than re-authenticating silently into a monitor
+that has quietly stopped reading anything.
+
+Granting the scope is necessary but not sufficient. Two **in-game corporation
+roles** gate what the holder character can actually see, and this app has no
+way to grant either of them — they are assigned in-game, by someone who already
+holds them, to the character this app designates as the structure holder:
+
+- **Station_Manager** (or higher) is what ESI's structure-list endpoint itself
+  requires. Without it the roster read comes back forbidden and
+  `/admin/structures` reports it as such (`no-corp-roles`, in
+  `src/app/admin/structures/view.ts`), even though the scope grant succeeded.
+- **Director or CEO** is what EVE requires before it will deliver structure
+  notifications to a character **at all** — this is CCP's own delivery rule,
+  not something this app enforces or can bypass. A holder below that rank sees
+  an empty notification stream forever, with no error to point at: the read
+  succeeds, it is simply never sent anything to read.
+
+Designate a holder who already holds both roles, or have someone who does grant
+them to the designated character before relying on this page.
 
 ## SYNC_MODE — the dry-run safety guard
 

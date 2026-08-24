@@ -72,6 +72,7 @@ const envSchema = z.object({
   DISCORD_ROLE_ID_ASSOCIATE: z.string().min(1),
   DISCORD_ROLE_ID_ALUMNI: z.string().min(1),
   DISCORD_OPS_WEBHOOK_URL: z.string().url().optional().or(z.literal("")),
+  DISCORD_STRUCTURE_WEBHOOK_URL: z.string().url().optional().or(z.literal("")),
   WANDERER_BASE_URL: z.string().url(),
   WANDERER_API_KEY: z.string().min(1),
   WANDERER_ACL_ID: z.string().min(1),
@@ -162,6 +163,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
         alumni: e.DISCORD_ROLE_ID_ALUMNI,
       },
       opsWebhookUrl: e.DISCORD_OPS_WEBHOOK_URL || undefined,
+      structureWebhookUrl: e.DISCORD_STRUCTURE_WEBHOOK_URL || undefined,
     },
     wanderer: {
       baseUrl: e.WANDERER_BASE_URL,

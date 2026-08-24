@@ -22,6 +22,7 @@ import type { NavItem } from "./ui";
  *   Audit log     — iff isAdmin
  *   Sync          — iff isAdmin
  *   Access lists  — iff isAdmin
+ *   Structures    — iff isAdmin
  *
  * `isAdmin` and `tier` are orthogonal columns (db/schema.ts) — an admin is not
  * necessarily a payouts reader (default tier is `alumni`), and a payouts
@@ -30,13 +31,13 @@ import type { NavItem } from "./ui";
  * can render Operations unconditionally just because the viewer is an admin.
  *
  * Order is fixed and identical everywhere: Your account, Operations, Members,
- * Audit log, Sync, Access lists — broadest access first. A member-only reader,
- * a payouts reader, and an admin all see a strict prefix (in membership, not
- * merely in count) of the same six-item list, in the same order, rather than
- * six per-surface orderings that happened to agree by convention. This is also
- * why the admin bar's order changes here: "Your account" moves from last to
- * first. That is a consequence of there being one order, not a separate
- * decision about the admin bar.
+ * Audit log, Sync, Access lists, Structures — broadest access first. A
+ * member-only reader, a payouts reader, and an admin all see a strict prefix
+ * (in membership, not merely in count) of the same seven-item list, in the
+ * same order, rather than seven per-surface orderings that happened to agree
+ * by convention. This is also why the admin bar's order changes here: "Your
+ * account" moves from last to first. That is a consequence of there being one
+ * order, not a separate decision about the admin bar.
  *
  * The label strings live here exactly once, which is the point rather than a
  * side effect. Two routes carrying two names for one destination fails WCAG
@@ -89,6 +90,7 @@ const MEMBERS: NavItem = { href: "/admin/accounts", label: "Members" };
 const AUDIT: NavItem = { href: "/admin/audit", label: "Audit log" };
 const SYNC: NavItem = { href: "/admin/sync", label: "Sync" };
 const ACCESS_LISTS: NavItem = { href: "/admin/access-lists", label: "Access lists" };
+const STRUCTURES: NavItem = { href: "/admin/structures", label: "Structures" };
 
 /** So `AdminNav` can attach the pending badge to the Members item without
  *  re-typing its route string a second time. */
@@ -118,7 +120,7 @@ export function navFor({ canReadPayouts, isAdmin }: Reach): NavItem[] {
   return [
     ACCOUNT,
     ...(canReadPayouts ? [PAYOUTS] : []),
-    ...(isAdmin ? [MEMBERS, AUDIT, SYNC, ACCESS_LISTS] : []),
+    ...(isAdmin ? [MEMBERS, AUDIT, SYNC, ACCESS_LISTS, STRUCTURES] : []),
   ];
 }
 

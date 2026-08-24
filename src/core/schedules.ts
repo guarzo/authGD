@@ -23,6 +23,16 @@ export const JOB_CRON = {
   // :15 discord-roles, :02,17,32,47 location. A read-only monitor has no
   // reason to contend with the jobs that push member state outward.
   "access-lists": "25 * * * *",
+  // :35 is free — :00/:30 membership, :05 contacts, :10 wanderer,
+  // :15 discord-roles, :25 access-lists, :02,17,32,47 location. The roster
+  // endpoint caches for an hour, so a faster tick would re-read the same page.
+  structures: "35 * * * *",
+  // Ten minutes matches the notifications endpoint's 600 s cache exactly —
+  // polling faster returns the same cached page. Offset off :00/:05/:10/:15/
+  // :25/:30/:35 and location's :02,17,32,47. formatCadence renders evenly
+  // spaced comma minutes, so the admin page shows "every 10 minutes" rather
+  // than the raw cron.
+  "structure-events": "3,13,23,33,43,53 * * * *",
 } as const satisfies Record<string, string>;
 
 /**
@@ -83,6 +93,8 @@ export const JOB_GROUP: Record<JobType, JobGroup> = {
   purge: "housekeeping",
   location: "member-facing",
   "access-lists": "on-demand",
+  structures: "on-demand",
+  "structure-events": "on-demand",
 };
 
 /** The strip a job type belongs to, or null when nothing schedules it. */

@@ -676,3 +676,100 @@ describe("getUniverseNames", () => {
     expect((err as EsiError).kind).toBe("permanent");
   });
 });
+
+describe("paged reads fail closed", () => {
+  it("rejects a corporation structures read with no X-Pages header", async () => {
+    server.use(
+      http.get(`${ROOT}/corporations/98000001/structures/`, () =>
+        HttpResponse.json([], { headers: {} }),
+      ),
+    );
+    const esi = createEsiClient();
+    await expect(esi.getCorporationStructures(98000001, "tok")).rejects.toThrow(
+      /X-Pages/i,
+    );
+  });
+});
+
+describe("getCorporationStructures", () => {
+  it("reads every page and maps timestamps to Date", async () => {
+    server.use(
+      http.get(`${ROOT}/corporations/98000001/structures/`, ({ request: req }) => {
+        const page = new URL(req.url).searchParams.get("page");
+        const body =
+          page === "1"
+            ? [
+                {
+                  structure_id: 1029209158734,
+                  type_id: 35832,
+                  system_id: 30004268,
+                  name: "Home Fortizar",
+                  state: "armor_reinforce",
+                  state_timer_end: "2026-08-25T12:00:00Z",
+                  fuel_expires: "2026-09-01T00:00:00Z",
+                },
+              ]
+            : [
+                {
+                  structure_id: 2,
+                  type_id: 35832,
+                  system_id: 30004268,
+                  state: "shield_vulnerable",
+                },
+              ];
+        return HttpResponse.json(body, { headers: { "x-pages": "2" } });
+      }),
+    );
+    const esi = createEsiClient();
+    const rows = await esi.getCorporationStructures(98000001, "tok");
+    expect(rows).toHaveLength(2);
+    expect(rows[0].name).toBe("Home Fortizar");
+    expect(rows[0].stateTimerEnd).toBeInstanceOf(Date);
+    expect(rows[1].name).toBeNull();
+    expect(rows[1].fuelExpires).toBeNull();
+  });
+});
+
+describe("getCharacterNotifications", () => {
+  it("returns id, type, timestamp and raw text", async () => {
+    server.use(
+      http.get(`${ROOT}/characters/90000001/notifications/`, () =>
+        HttpResponse.json([
+          {
+            notification_id: 123456,
+            type: "StructureUnderAttack",
+            sender_id: 98000001,
+            sender_type: "corporation",
+            timestamp: "2026-08-24T10:00:00Z",
+            text: "structureID: &id001 1029209158734",
+          },
+        ]),
+      ),
+    );
+    const esi = createEsiClient();
+    const rows = await esi.getCharacterNotifications(90000001, "tok");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].notificationId).toBe(123456);
+    expect(rows[0].type).toBe("StructureUnderAttack");
+    expect(rows[0].timestamp).toBeInstanceOf(Date);
+    expect(rows[0].text).toContain("structureID");
+  });
+
+  it("tolerates a notification with no text body", async () => {
+    server.use(
+      http.get(`${ROOT}/characters/90000001/notifications/`, () =>
+        HttpResponse.json([
+          {
+            notification_id: 7,
+            type: "StructureDestroyed",
+            sender_id: 1,
+            sender_type: "corporation",
+            timestamp: "2026-08-24T10:00:00Z",
+          },
+        ]),
+      ),
+    );
+    const esi = createEsiClient();
+    expect((await esi.getCharacterNotifications(90000001, "tok"))[0].text).toBe("");
+  });
+});

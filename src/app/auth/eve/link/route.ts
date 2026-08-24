@@ -1,10 +1,28 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getConfig } from "@/config";
 import { getDb } from "@/db";
-import { ACCESS_LISTS_SCOPE } from "@/lib/esi/client";
+import {
+  ACCESS_LISTS_SCOPE,
+  NOTIFICATIONS_SCOPE,
+  STRUCTURES_SCOPE,
+} from "@/lib/esi/client";
 import { buildEveAuthorizeUrl } from "@/lib/esi/sso";
 import { getRequestAccount } from "@/lib/request-session";
 import { createOauthTransaction } from "@/services/oauth-tx";
+
+// Opt-in only: none of these are in EVE_SSO_SCOPES, because adding one there
+// would flip every character to needs_reauth at the next token-health run.
+// Exact literals keyed by an allowed grant name, never a free-form scope
+// parameter — the query string is attacker-controllable and must not be able
+// to widen what we ask EVE for. A plain object literal also inherits
+// Object.prototype's own members (toString, constructor, __proto__), so a
+// bare `GRANTS[grant]` throws or returns a function for those three
+// predictable strings; Object.hasOwn (same guard as core/schedules.ts's
+// isJobType) is required before indexing, not optional hardening.
+const GRANTS: Record<string, readonly string[]> = {
+  "access-lists": [ACCESS_LISTS_SCOPE],
+  structures: [STRUCTURES_SCOPE, NOTIFICATIONS_SCOPE],
+};
 
 export async function GET(req: NextRequest) {
   const cfg = getConfig();
@@ -15,13 +33,8 @@ export async function GET(req: NextRequest) {
     sessionId: sess.sessionId,
     accountId: sess.accountId,
   });
-  // Opt-in only: esi-access.read_lists.v1 is deliberately NOT in
-  // EVE_SSO_SCOPES, because adding it there would flip every character to
-  // needs_reauth at the next token-health run. An exact literal, not a
-  // free-form scope parameter — the query string is attacker-controllable and
-  // must not be able to widen what we ask EVE for.
-  const extraScopes =
-    req.nextUrl.searchParams.get("grant") === "access-lists" ? [ACCESS_LISTS_SCOPE] : [];
+  const grant = req.nextUrl.searchParams.get("grant") ?? "";
+  const extraScopes = Object.hasOwn(GRANTS, grant) ? [...GRANTS[grant]] : [];
   return NextResponse.redirect(
     buildEveAuthorizeUrl(cfg, tx.state, tx.codeChallenge, extraScopes),
   );

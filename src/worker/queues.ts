@@ -11,6 +11,8 @@ export const QUEUES = {
   purge: "purge",
   location: "location",
   accessLists: "access-lists",
+  structures: "structures",
+  structureEvents: "structure-events",
   deadLetter: "ops-dead-letter",
 } as const;
 
@@ -47,6 +49,8 @@ const JOB_QUEUES = [
   QUEUES.purge,
   QUEUES.location,
   QUEUES.accessLists,
+  QUEUES.structures,
+  QUEUES.structureEvents,
 ] as const;
 
 export async function createQueues(boss: PgBoss): Promise<void> {
