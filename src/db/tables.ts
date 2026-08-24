@@ -35,6 +35,10 @@ export const MANAGED_TABLES = [
   "access_list_snapshot",
   "access_list_entry",
   "esi_entity_name",
+  "structure_holder",
+  "structure_read_state",
+  "structure",
+  "structure_event",
 ] as const;
 
 /** Bare table names, unquoted — for comparing against information_schema. */

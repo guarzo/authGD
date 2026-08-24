@@ -8,6 +8,7 @@ import {
   numeric,
   pgEnum,
   pgTable,
+  primaryKey,
   serial,
   text,
   timestamp,
@@ -46,6 +47,36 @@ export const accessListEntryKindEnum = pgEnum("access_list_entry_kind", [
   "corporation",
   "alliance",
 ]);
+
+export const structureReadStatusEnum = pgEnum("structure_read_status", [
+  "ok",
+  "forbidden",
+  "failed",
+]);
+export type StructureReadStatus = (typeof structureReadStatusEnum.enumValues)[number];
+
+/**
+ * Four distinct states, not shades of one.
+ *
+ * `seeded`    — recorded without alerting: this holder had never polled, or no
+ *               webhook is configured so there is no recipient.
+ * `pending`   — recorded and owed an alert.
+ * `sent`      — posted successfully.
+ * `abandoned` — was pending when the holder was replaced, and will never be
+ *               posted.
+ *
+ * `abandoned` is not a reuse of `seeded` because the two answer different
+ * questions: "deliberately not alerted" versus "owed an alert with no valid
+ * recipient". Collapsing them makes it impossible to tell from the table
+ * whether a holder swap swallowed a live attack.
+ */
+export const structureAlertStatusEnum = pgEnum("structure_alert_status", [
+  "seeded",
+  "pending",
+  "sent",
+  "abandoned",
+]);
+export type StructureAlertStatus = (typeof structureAlertStatusEnum.enumValues)[number];
 export type AccessListReadStatus = (typeof accessListReadStatusEnum.enumValues)[number];
 
 /**
@@ -545,3 +576,116 @@ export const payoutPayment = pgTable("payout_payment", {
   actor: uuid("actor").references(() => account.id, { onDelete: "set null" }),
   note: text("note"),
 });
+
+/**
+ * The designated structure holder. Singleton, like `access_list_holder`.
+ *
+ * `corporationId` is PINNED at designation rather than read live off
+ * `character.corporationId`, which the membership job overwrites every thirty
+ * minutes (src/jobs/membership.ts:125). Following it live means a holder who
+ * changes corp silently re-rosters against the new corp and stamps
+ * `missingSince` on every previous structure — indistinguishable from a mass
+ * destruction event, arriving during the exact incident this tool exists for.
+ *
+ * `seededAt` null means this holder has never completed a poll: the events job
+ * records without alerting until it is stamped. `designateHolder` writes it
+ * null, so replacing the holder re-seeds.
+ */
+export const structureHolder = pgTable(
+  "structure_holder",
+  {
+    id: integer("id").primaryKey(),
+    characterId: bigint("character_id", { mode: "number" })
+      .notNull()
+      .references(() => character.id, { onDelete: "cascade" }),
+    corporationId: bigint("corporation_id", { mode: "number" }).notNull(),
+    designatedAt: timestamp("designated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    designatedBy: text("designated_by").notNull(), // account uuid or "system"
+    seededAt: timestamp("seeded_at", { withTimezone: true }),
+  },
+  (t) => [check("structure_holder_singleton_ck", sql`${t.id} = 1`)],
+);
+
+/**
+ * Read health, one row per (kind, corporation). Two timestamps for the reason
+ * `access_list_snapshot` gives: `observedAt` is the last SUCCESSFUL read and is
+ * null until there is one; `lastAttemptAt` + `readStatus` + `detail` describe
+ * the most recent attempt either way.
+ *
+ * Keyed by corporation because the row describes a read against one specific
+ * corp. Without it, replacing the holder leaves the previous corp's freshness
+ * and 403 state in place and the page calls the new monitor healthy on the
+ * strength of a read against a corp it no longer watches.
+ */
+export const structureReadState = pgTable(
+  "structure_read_state",
+  {
+    kind: text("kind").notNull(), // 'roster' | 'events'
+    corporationId: bigint("corporation_id", { mode: "number" }).notNull(),
+    observedAt: timestamp("observed_at", { withTimezone: true }),
+    lastAttemptAt: timestamp("last_attempt_at", { withTimezone: true }).notNull(),
+    readStatus: structureReadStatusEnum("read_status").notNull(),
+    detail: text("detail"),
+  },
+  (t) => [primaryKey({ columns: [t.kind, t.corporationId] })],
+);
+
+/**
+ * The roster. `state` is stored verbatim as text, not a pgEnum: a state string
+ * CCP adds next patch must not be able to fail a read of a field nothing
+ * branches on for correctness.
+ *
+ * `typeName` is denormalized because there is no type-id name cache to use —
+ * `universe_name`'s kind enum has no `type` value and `resolveEntityNames`
+ * deliberately drops inventory types (src/services/entity-names.ts:76-80).
+ *
+ * A structure that stops appearing gets `missingSince` stamped, never deleted:
+ * never remove on unknown state. From the roster's side a destroyed Astrahus
+ * and a 403 are identical; only the event stream tells them apart.
+ */
+export const structure = pgTable("structure", {
+  structureId: bigint("structure_id", { mode: "number" }).primaryKey(),
+  corporationId: bigint("corporation_id", { mode: "number" }).notNull(),
+  typeId: bigint("type_id", { mode: "number" }).notNull(),
+  typeName: text("type_name"),
+  systemId: bigint("system_id", { mode: "number" }).notNull(),
+  name: text("name"),
+  state: text("state").notNull(),
+  stateTimerStart: timestamp("state_timer_start", { withTimezone: true }),
+  stateTimerEnd: timestamp("state_timer_end", { withTimezone: true }),
+  fuelExpires: timestamp("fuel_expires", { withTimezone: true }),
+  observedAt: timestamp("observed_at", { withTimezone: true }).notNull(),
+  missingSince: timestamp("missing_since", { withTimezone: true }),
+});
+
+/**
+ * One row per structure notification ever seen. ESI's own `notification_id` is
+ * the primary key, which is what makes "seen" idempotent across runs.
+ *
+ * `corporationId` is stamped at insert from the holder's PINNED corp, not
+ * parsed from the body. It is what the sender filters on, so a row recorded
+ * under a previous holder can never be posted under a new one.
+ *
+ * `details` holds ONLY the parsed subset actually rendered. The notifications
+ * endpoint returns every notification type for the character — war decs, mail,
+ * kill rights, corp applications — and this job persists none of them.
+ */
+export const structureEvent = pgTable(
+  "structure_event",
+  {
+    notificationId: bigint("notification_id", { mode: "number" }).primaryKey(),
+    type: text("type").notNull(),
+    sentAt: timestamp("sent_at", { withTimezone: true }).notNull(),
+    structureId: bigint("structure_id", { mode: "number" }),
+    corporationId: bigint("corporation_id", { mode: "number" }).notNull(),
+    alertStatus: structureAlertStatusEnum("alert_status").notNull(),
+    details: jsonb("details").$type<Record<string, string | number | null>>(),
+  },
+  // Serves the sender's hot path: pending rows for the pinned corp, oldest
+  // first. Without it that is a full scan of a table that only grows.
+  (t) => [
+    index("structure_event_pending_idx").on(t.corporationId, t.alertStatus, t.sentAt),
+  ],
+);
