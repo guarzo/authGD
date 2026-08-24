@@ -41,6 +41,19 @@ describe("structure monitor schema", () => {
     ).rejects.toThrow();
   });
 
+  it("rejects a second row at id = 1", async () => {
+    const account = await seedAccount(ctx.db);
+    await seedCharacter(ctx.db, testConfig(), { id: 90000001, accountId: account.id });
+    await ctx.db.execute(
+      sql`insert into structure_holder (id, character_id, corporation_id, designated_by) values (1, 90000001, 5, 'system')`,
+    );
+    await expect(
+      ctx.db.execute(
+        sql`insert into structure_holder (id, character_id, corporation_id, designated_by) values (1, 90000001, 5, 'system')`,
+      ),
+    ).rejects.toThrow();
+  });
+
   it("keys structure_read_state by (kind, corporation_id)", async () => {
     await ctx.db.execute(
       sql`insert into structure_read_state (kind, corporation_id, last_attempt_at, read_status) values ('roster', 98000001, now(), 'ok')`,

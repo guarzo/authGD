@@ -203,6 +203,15 @@ export async function runStructuresJob(deps: {
 
       // Absent from the response: stamp, never delete. Only rows that are not
       // already stamped, so missingSince records when it FIRST went missing.
+      //
+      // A clean empty `rows` here is affirmative, not a coerced default:
+      // `fetchAllPages` throws on a missing or non-integer `x-pages`, so
+      // reaching this point with zero rows means ESI reported the corp owns
+      // no structures. That is unlike the access-lists case, where a nullable
+      // field is coalesced to `[]` in the client and "empty" and "absent" are
+      // genuinely indistinguishable. The branch is also self-healing: the
+      // upsert above writes `missingSince: null` on conflict, so a structure
+      // that reappears next run is cleared here rather than left stamped.
       const missing = await tx
         .update(structure)
         .set({ missingSince: at })

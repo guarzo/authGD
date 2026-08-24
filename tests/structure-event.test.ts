@@ -67,6 +67,14 @@ describe("parseNotificationBody", () => {
   it("returns an empty object for junk rather than throwing", () => {
     expect(parseNotificationBody("!!! not yaml at all")).toEqual({});
   });
+
+  it("does not resolve an alias to a prototype-chain member", () => {
+    for (const name of ["constructor", "toString", "__proto__"]) {
+      const parsed = parseNotificationBody(`b: *${name}`);
+      expect(parsed.b).toBeUndefined();
+      expect(typeof parsed.b).not.toBe("function");
+    }
+  });
 });
 
 describe("extractStructureEvent", () => {

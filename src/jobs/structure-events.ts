@@ -177,8 +177,8 @@ export async function runStructureEventsJob(deps: {
           .returning({ id: structureEvent.notificationId });
         if (inserted.length > 0) counts.recorded += 1;
       }
+      if (seeding || !hasWebhook) counts.seeded = counts.recorded;
       if (seeding) {
-        counts.seeded = counts.recorded;
         await markSeeded(tx, at);
       }
       await recordReadState(tx, {
@@ -192,6 +192,15 @@ export async function runStructureEventsJob(deps: {
     });
 
     if (seeding || !hasWebhook) return { status: "ok", counts };
+
+    // The insert transaction's CAS only covers what happens inside it. This
+    // phase runs AFTER that transaction commits, so a designation change in
+    // the gap — or a second, overlapping run of this same job (the cron tick
+    // racing a "Check now") — is invisible to it. Re-check here rather than
+    // trust the holder snapshot read at the top of the run.
+    if (!(await stillStructureHolder(db, holder.characterId))) {
+      return { status: "ok", counts };
+    }
 
     // Every pending row for the PINNED corp, oldest first. This picks up
     // leftovers from a previous run's failed posts, and excludes anything
@@ -228,11 +237,21 @@ export async function runStructureEventsJob(deps: {
       });
       try {
         await postStructureWebhook(cfg, content, deps.fetchImpl);
-        await db
+        // Conditional, not unconditional: a concurrent run (the cron tick
+        // racing a "Check now") can select the same pending row and post it
+        // too. Only the run whose UPDATE actually flips `pending` -> `sent`
+        // counts it, so an overlap does not double-count `counts.alerted`.
+        const flipped = await db
           .update(structureEvent)
           .set({ alertStatus: "sent" })
-          .where(eq(structureEvent.notificationId, event.notificationId));
-        counts.alerted += 1;
+          .where(
+            and(
+              eq(structureEvent.notificationId, event.notificationId),
+              eq(structureEvent.alertStatus, "pending"),
+            ),
+          )
+          .returning({ id: structureEvent.notificationId });
+        if (flipped.length > 0) counts.alerted += 1;
       } catch {
         // Leave the row pending. The ten-minute tick is the retry; burning
         // pg-boss's retry budget on a Discord blip would dead-letter a job

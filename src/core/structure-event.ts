@@ -65,7 +65,12 @@ export function parseNotificationBody(text: string): Record<string, string> {
     }
     const alias = ALIAS.exec(value);
     if (alias) {
-      const resolved = anchors[alias[1]];
+      // Object.hasOwn, not `in` or a bare index: `anchors` is a plain object
+      // literal, so `*constructor` (or `*toString`, `*__proto__`) resolves
+      // through the prototype chain to a function rather than `undefined`,
+      // and that function would then be typed as a string all the way to
+      // jsonb. `in` walks the same chain and would not fix it.
+      const resolved = Object.hasOwn(anchors, alias[1]) ? anchors[alias[1]] : undefined;
       if (resolved !== undefined) out[key] = resolved;
       continue;
     }
