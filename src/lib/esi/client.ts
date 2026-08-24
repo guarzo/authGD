@@ -316,46 +316,56 @@ export function createEsiClient(opts: EsiClientOptions = {}) {
     ).map((l) => ({ labelId: l.label_id, labelName: l.label_name }));
   }
 
+  /**
+   * Reads every page of a paginated ESI collection.
+   *
+   * Fails closed on a missing or non-integer `x-pages`: an unknown page count
+   * means an unknown result set, and both callers feed a diff that REMOVES
+   * (contacts deletes; the structure roster stamps missingSince). Never guess
+   * — spec: never remove on unknown state.
+   *
+   * Extracted from getAllContacts, whose behaviour it preserves exactly.
+   */
+  async function fetchAllPages<T>(
+    pathFor: (page: number) => string,
+    schema: z.ZodType<T[]>,
+    accessToken: string,
+    opts: { base?: string; compatibilityDate?: boolean } = {},
+  ): Promise<T[]> {
+    const first = await request(pathFor(1), { accessToken, ...opts });
+    const pagesHeader = first.headers.get("x-pages");
+    const pages = Number(pagesHeader);
+    if (pagesHeader === null || !Number.isInteger(pages) || pages < 1) {
+      throw new EsiError(
+        `ESI GET ${pathFor(1)}: missing or invalid X-Pages header (${pagesHeader})`,
+        0,
+        "transient",
+      );
+    }
+    const out = safeParse(
+      schema,
+      await first.json(),
+      "GET",
+      pathFor(1),
+      first.status,
+    ).slice();
+    for (let page = 2; page <= pages; page++) {
+      const res = await request(pathFor(page), { accessToken, ...opts });
+      out.push(...safeParse(schema, await res.json(), "GET", pathFor(page), res.status));
+    }
+    return out;
+  }
+
   /** Reads ALL pages; any page failure rejects the whole call. */
   async function getAllContacts(
     characterId: number,
     accessToken: string,
   ): Promise<EsiContact[]> {
-    const first = await request(`/characters/${characterId}/contacts/?page=1`, {
-      accessToken,
-    });
-    // Fail closed: an unknown page count means an unknown contact set, and the
-    // downstream diff deletes. Never guess (spec: never remove on unknown state).
-    const pagesHeader = first.headers.get("x-pages");
-    const pages = Number(pagesHeader);
-    if (pagesHeader === null || !Number.isInteger(pages) || pages < 1) {
-      throw new EsiError(
-        `ESI GET contacts: missing or invalid X-Pages header (${pagesHeader})`,
-        0,
-        "transient",
-      );
-    }
-    const raw = safeParse(
+    const raw = await fetchAllPages(
+      (page) => `/characters/${characterId}/contacts/?page=${page}`,
       contactsSchema,
-      await first.json(),
-      "GET",
-      `/characters/${characterId}/contacts/?page=1`,
-      first.status,
-    ).slice();
-    for (let page = 2; page <= pages; page++) {
-      const res = await request(`/characters/${characterId}/contacts/?page=${page}`, {
-        accessToken,
-      });
-      raw.push(
-        ...safeParse(
-          contactsSchema,
-          await res.json(),
-          "GET",
-          `/characters/${characterId}/contacts/?page=${page}`,
-          res.status,
-        ),
-      );
-    }
+      accessToken,
+    );
     return raw.map((c) => ({
       contactId: c.contact_id,
       contactType: c.contact_type,
