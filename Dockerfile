@@ -2,9 +2,9 @@
 FROM node:24-alpine AS deps
 WORKDIR /app
 # .npmrc carries engine-strict=true, so `npm ci` FAILS here rather than warning
-# if the base image ever drops below the engines floor (node >=24). Fail at
-# build, not at deploy — `npm run db:migrate` is fly.toml's release_command, so
-# a runtime too old to parse its flags would otherwise break every deploy.
+# if the base image ever drops below the engines floor. Fail at build, not at
+# deploy — `npm run db:migrate` is fly.toml's release_command, so a runtime too
+# old to parse its flags would otherwise break every deploy.
 COPY package.json package-lock.json .npmrc ./
 RUN npm ci
 
