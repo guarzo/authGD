@@ -76,7 +76,7 @@ function mailNotification(): EsiNotification {
  * `postFails` is set.
  */
 function buildFetch(opts: { posts?: string[]; postFails?: boolean }): typeof fetch {
-  return (async (url: string | URL | Request, init?: RequestInit) => {
+  return async (url: string | URL | Request, init?: RequestInit) => {
     const href = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
     if (href.includes("login.eveonline.com")) {
       return new Response(JSON.stringify({ access_token: "at", refresh_token: "rt2" }), {
@@ -87,10 +87,14 @@ function buildFetch(opts: { posts?: string[]; postFails?: boolean }): typeof fet
     if (opts.postFails) {
       return new Response("boom", { status: 500 });
     }
-    const body = init?.body ? JSON.parse(String(init.body)).content : undefined;
-    opts.posts?.push(body);
+    const body = init?.body
+      ? (JSON.parse(String(init.body)).content as string)
+      : undefined;
+    if (body && opts.posts) {
+      opts.posts.push(body);
+    }
     return new Response(null, { status: 204 });
-  }) as typeof fetch;
+  };
 }
 
 async function run(opts: {

@@ -45,13 +45,16 @@ describe("postStructureWebhook", () => {
   });
 
   it("posts to the resolved url", async () => {
-    const fetchImpl = vi.fn(async () => new Response(null, { status: 204 }));
+    const fetchImpl = vi.fn(
+      async (_input: string | URL | Request, _init?: RequestInit) =>
+        new Response(null, { status: 204 }),
+    );
     await postStructureWebhook(
       cfgWith({ structure: "https://s.example" }),
       "hello",
-      fetchImpl as unknown as typeof fetch,
+      fetchImpl,
     );
-    const [url] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    const url = String(fetchImpl.mock.calls[0][0]);
     expect(url).toBe("https://s.example");
   });
 });
