@@ -394,10 +394,11 @@ test("the strip's four groups are four named lists, not one flat one with the la
   const memberFacing = page.getByRole("list", { name: "Member-facing" });
   await expect(memberFacing.getByRole("listitem")).toHaveCount(1);
 
-  // on-demand: membership-recheck and access-lists, each reachable from a
-  // dedicated control other than the fan-out.
+  // on-demand: membership-recheck, access-lists, structures, and
+  // structure-events, each reachable from a dedicated control other than the
+  // fan-out.
   const onDemand = page.getByRole("list", { name: "On-demand" });
-  await expect(onDemand.getByRole("listitem")).toHaveCount(2);
+  await expect(onDemand.getByRole("listitem")).toHaveCount(4);
 
   // housekeeping: token-health, purge. Still a `role="list"` of 2 items once
   // opened — `getByRole` reads the accessibility tree, and Chromium excludes

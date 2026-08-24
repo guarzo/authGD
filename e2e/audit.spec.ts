@@ -115,6 +115,7 @@ const EXPECTED_ACTION_NAMESPACES = [
   "discord.",
   "payout.",
   "status.",
+  "structure.",
   "sync.",
   "tier.",
   "token.",
