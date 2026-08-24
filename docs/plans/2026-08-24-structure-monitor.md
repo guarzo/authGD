@@ -2878,7 +2878,11 @@ describe("monitorState", () => {
         holder: {
           characterId: 1,
           name: "A",
-          scopes: ["a", "b"],
+          // Real scope constants, not placeholders: the cascade checks scopes
+          // BEFORE the corp comparison, so a holder carrying fake scope strings
+          // returns "scope-dropped" and this arm is never reached. A test that
+          // cannot reach the state it names proves nothing.
+          scopes: [STRUCTURES_SCOPE, NOTIFICATIONS_SCOPE],
           tokenStatus: "valid",
           corporationId: 5,
           currentCorporationId: 6,
