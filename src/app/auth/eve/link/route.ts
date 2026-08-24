@@ -14,7 +14,11 @@ import { createOauthTransaction } from "@/services/oauth-tx";
 // would flip every character to needs_reauth at the next token-health run.
 // Exact literals keyed by an allowed grant name, never a free-form scope
 // parameter — the query string is attacker-controllable and must not be able
-// to widen what we ask EVE for.
+// to widen what we ask EVE for. A plain object literal also inherits
+// Object.prototype's own members (toString, constructor, __proto__), so a
+// bare `GRANTS[grant]` throws or returns a function for those three
+// predictable strings; Object.hasOwn (same guard as core/schedules.ts's
+// isJobType) is required before indexing, not optional hardening.
 const GRANTS: Record<string, readonly string[]> = {
   "access-lists": [ACCESS_LISTS_SCOPE],
   structures: [STRUCTURES_SCOPE, NOTIFICATIONS_SCOPE],
@@ -29,7 +33,8 @@ export async function GET(req: NextRequest) {
     sessionId: sess.sessionId,
     accountId: sess.accountId,
   });
-  const extraScopes = [...(GRANTS[req.nextUrl.searchParams.get("grant") ?? ""] ?? [])];
+  const grant = req.nextUrl.searchParams.get("grant") ?? "";
+  const extraScopes = Object.hasOwn(GRANTS, grant) ? [...GRANTS[grant]] : [];
   return NextResponse.redirect(
     buildEveAuthorizeUrl(cfg, tx.state, tx.codeChallenge, extraScopes),
   );
