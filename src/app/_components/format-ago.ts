@@ -24,3 +24,30 @@ export function formatAgo(iso: string | null, now: number): string {
   if (!iso) return "never";
   return `${elapsedShort(now - Date.parse(iso))} ago`;
 }
+
+/**
+ * "3d" style, for an instant in the *future*. The structures roster asks a
+ * question the sync page never did — not "how stale is this?" but "how long
+ * until this runs out?" — and `formatAgo` cannot answer it: `elapsedShort`
+ * clamps a negative elapsed to zero (deliberately, for clock skew), so every
+ * future instant formatted to the same "0s ago" regardless of how far out it
+ * was. A "Fuel expires" column built on it read as though the whole corp had
+ * simultaneously run dry.
+ *
+ * Deliberately bare, no "in": the column headers ("Fuel expires", "Timer
+ * ends") already supply the tense. Past-due gets an explicit verb instead,
+ * because a dead structure must not read as a small countdown — and the verb
+ * is the caller's, since a reinforcement timer has "ended" where fuel has
+ * "expired". Shares `elapsedShort` with `formatAgo` so the two grammars cannot
+ * drift into disagreeing about the same interval.
+ */
+export function formatDeadline(
+  iso: string | null,
+  now: number,
+  pastVerb = "expired",
+): string {
+  if (!iso) return "never";
+  const remaining = Date.parse(iso) - now;
+  if (remaining <= 0) return `${pastVerb} ${elapsedShort(-remaining)} ago`;
+  return elapsedShort(remaining);
+}

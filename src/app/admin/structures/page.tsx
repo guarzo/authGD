@@ -18,7 +18,7 @@ import { RuleHead, Scroller, Status } from "@/app/_components/ui";
 import { ConfirmNotice } from "@/app/_components/confirm-notice";
 import { Submit } from "@/app/_components/submit";
 import { RelativeTime } from "@/app/_components/relative-time";
-import { formatAgo } from "@/app/_components/format-ago";
+import { formatAgo, formatDeadline } from "@/app/_components/format-ago";
 import { checkNowAction, designateStructureHolderAction } from "./actions";
 import {
   doneNotice,
@@ -249,13 +249,22 @@ function StructureRow({
       </td>
       <td>
         {timerIso ? (
-          <RelativeTime iso={timerIso} initial={formatAgo(timerIso, now)} />
+          <RelativeTime
+            iso={timerIso}
+            initial={formatDeadline(timerIso, now, "ended")}
+            countdown
+            pastVerb="ended"
+          />
         ) : (
           "—"
         )}
       </td>
       <td>
-        {fuelIso ? <RelativeTime iso={fuelIso} initial={formatAgo(fuelIso, now)} /> : "—"}
+        {fuelIso ? (
+          <RelativeTime iso={fuelIso} initial={formatDeadline(fuelIso, now)} countdown />
+        ) : (
+          "—"
+        )}
       </td>
     </tr>
   );
