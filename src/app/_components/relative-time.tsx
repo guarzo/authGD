@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { formatAgo } from "./format-ago";
+import { formatAgo, formatDeadline } from "./format-ago";
 
 /**
  * The sync page is server-rendered and never refreshes, so a server-computed
@@ -59,15 +59,42 @@ function subscribe(tick: () => void): () => void {
   };
 }
 
-export function RelativeTime({ iso, initial }: { iso: string | null; initial: string }) {
+/**
+ * `countdown` picks the tense, and it has to be a prop rather than a formatter
+ * argument: this is a "use client" boundary, so a server component cannot hand
+ * a function across it. It also cannot be inferred from the instant being in
+ * the future — fuel that has already run out is a past instant that still
+ * belongs to the countdown grammar ("expired 2d ago", not "2d ago").
+ *
+ * The ticker matters as much as the first paint here. It recomputes from
+ * scratch every 30s, so a countdown rendered correctly on the server but
+ * ticked with `formatAgo` would sit right for half a minute and then collapse
+ * back to "0s ago" on its own.
+ */
+export function RelativeTime({
+  iso,
+  initial,
+  countdown = false,
+  pastVerb,
+}: {
+  iso: string | null;
+  initial: string;
+  countdown?: boolean;
+  pastVerb?: string;
+}) {
   const [text, setText] = useState(initial);
 
   useEffect(() => {
     if (!iso) return;
-    const tick = () => setText(formatAgo(iso, Date.now()));
+    const tick = () =>
+      setText(
+        countdown
+          ? formatDeadline(iso, Date.now(), pastVerb)
+          : formatAgo(iso, Date.now()),
+      );
     tick();
     return subscribe(tick);
-  }, [iso]);
+  }, [iso, countdown, pastVerb]);
 
   // No instant, no `<time>`: a `<time>` with no `datetime` takes its machine
   // value from its own text, and "never" is not one. The sync strip reaches
