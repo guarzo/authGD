@@ -373,6 +373,7 @@ character already on the ACL.
 | `DISCORD_ROLE_ID_MEMBER` / `_ASSOCIATE` / `_ALUMNI` | yes | the three managed role ids (distinct) |
 | `DISCORD_OPS_WEBHOOK_URL` | no | ops alerts (final retry failures, config errors) |
 | `DISCORD_STRUCTURE_WEBHOOK_URL` | no (falls back to `DISCORD_OPS_WEBHOOK_URL`) | structure notifications (see below). With neither set, nothing is alerted — events are still recorded, as `seeded` — and `/admin/structures` says so |
+| `DISCORD_STRUCTURE_ROLE_ID` | no | a bare role snowflake to `@`-mention on structure alerts. The role must be set mentionable in Discord's role settings, or the ping silently fails to notify anyone despite posting correctly |
 | `WANDERER_BASE_URL` / `WANDERER_API_KEY` | yes | Wanderer instance + the **ACL's own** API key (the map API key returns 401 on `/api/acls/*`) |
 | `WANDERER_ACL_ID` | yes | the managed ACL — dedicated to authGD, reconciled destructively |
 | `STANDINGS_LABEL` | no (default `authgd`) | in-game contact label the app OWNS — see the warning below |

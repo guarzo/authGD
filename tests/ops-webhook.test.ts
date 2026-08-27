@@ -13,7 +13,10 @@ describe("postOpsWebhookUrl", () => {
     await postOpsWebhookUrl("https://hook.example/x", "worker died", fetchImpl);
     const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe("https://hook.example/x");
-    expect(JSON.parse(init.body as string)).toEqual({ content: "worker died" });
+    expect(JSON.parse(init.body as string)).toEqual({
+      content: "worker died",
+      allowed_mentions: { parse: [], users: [], roles: [] },
+    });
   });
 
   it("truncates to Discord's limit", async () => {
@@ -61,7 +64,10 @@ describe("postOpsWebhook", () => {
     expect(fetchImpl).toHaveBeenCalledOnce();
     const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe("https://discord.example/webhook");
-    expect(JSON.parse(init.body as string)).toEqual({ content: "job failed" });
+    expect(JSON.parse(init.body as string)).toEqual({
+      content: "job failed",
+      allowed_mentions: { parse: [], users: [], roles: [] },
+    });
   });
 
   it("is a no-op when no webhook is configured", async () => {

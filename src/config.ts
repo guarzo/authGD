@@ -73,6 +73,18 @@ const envSchema = z.object({
   DISCORD_ROLE_ID_ALUMNI: z.string().min(1),
   DISCORD_OPS_WEBHOOK_URL: z.string().url().optional().or(z.literal("")),
   DISCORD_STRUCTURE_WEBHOOK_URL: z.string().url().optional().or(z.literal("")),
+  // A BARE snowflake, never `<@&id>` — the poster wraps it in the mention
+  // syntax itself. Stricter than the sibling DISCORD_ROLE_ID_* vars (which are
+  // `z.string().min(1)`, and stay that way; do not retrofit them here, it is
+  // out of scope and would break tests/helpers/env.ts) because a pasted
+  // mention or a role *name* typed into this one still "looks configured" and
+  // would otherwise post a dud, unresolved mention at 3am instead of failing
+  // at boot where someone is looking.
+  DISCORD_STRUCTURE_ROLE_ID: z
+    .string()
+    .regex(/^\d{17,20}$/)
+    .optional()
+    .or(z.literal("")),
   WANDERER_BASE_URL: z.string().url(),
   WANDERER_API_KEY: z.string().min(1),
   WANDERER_ACL_ID: z.string().min(1),
@@ -164,6 +176,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
       },
       opsWebhookUrl: e.DISCORD_OPS_WEBHOOK_URL || undefined,
       structureWebhookUrl: e.DISCORD_STRUCTURE_WEBHOOK_URL || undefined,
+      structureRoleId: e.DISCORD_STRUCTURE_ROLE_ID || undefined,
     },
     wanderer: {
       baseUrl: e.WANDERER_BASE_URL,

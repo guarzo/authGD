@@ -1,7 +1,8 @@
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { Config } from "@/config";
-import { structureEvent } from "@/db/schema";
+import { structure, structureEvent, universeName } from "@/db/schema";
+import type { DiscordEmbed } from "@/core/structure-event";
 import { runStructureEventsJob } from "@/jobs/structure-events";
 import {
   NOTIFICATIONS_SCOPE,
@@ -72,8 +73,8 @@ function mailNotification(): EsiNotification {
 /**
  * A single fetchImpl that serves both callers the job makes: EVE SSO's token
  * endpoint (always succeeds, rotating to a new blob) and the Discord webhook
- * post, which either records its content into `posts` or fails when
- * `postFails` is set.
+ * post, which either records the posted embed's title into `posts` or fails
+ * when `postFails` is set.
  */
 function buildFetch(opts: { posts?: string[]; postFails?: boolean }): typeof fetch {
   return async (url: string | URL | Request, init?: RequestInit) => {
@@ -87,11 +88,11 @@ function buildFetch(opts: { posts?: string[]; postFails?: boolean }): typeof fet
     if (opts.postFails) {
       return new Response("boom", { status: 500 });
     }
-    const body = init?.body
-      ? (JSON.parse(String(init.body)).content as string)
+    const title = init?.body
+      ? (JSON.parse(String(init.body)).embeds?.[0]?.title as string | undefined)
       : undefined;
-    if (body && opts.posts) {
-      opts.posts.push(body);
+    if (title && opts.posts) {
+      opts.posts.push(title);
     }
     return new Response(null, { status: 204 });
   };
@@ -242,5 +243,75 @@ describe("runStructureEventsJob", () => {
       .where(eq(structureEvent.notificationId, 2));
     expect(row.structureId).toBeNull();
     expect(row.alertStatus).toBe("sent");
+  });
+
+  it("posts a fully enriched embed once the roster and name cache know the structure", async () => {
+    // attack(2)'s body carries structureID 1000002 and solarsystemID 30000142
+    // (tests/structure-events-job.test.ts's `attack` helper). Seeding a
+    // `structure` row for that id, plus a cached name for that system, is
+    // what exercises the roster-lookup + name-cache enrichment path in
+    // runStructureEventsJob — without it (as every other test in this file
+    // does) `known` is always undefined and the assertions below would be
+    // vacuous.
+    await ctx.db.insert(structure).values({
+      structureId: 1000002,
+      corporationId: CORP,
+      typeId: 35832,
+      typeName: "Fortizar",
+      systemId: 30000142,
+      name: "J000000 - Home Fortizar",
+      state: "shield_vulnerable",
+      observedAt: new Date(),
+    });
+    await ctx.db.insert(universeName).values({
+      id: 30000142,
+      kind: "system",
+      name: "Jita",
+    });
+
+    await run({ notifications: [attack(1)] }); // seed
+    let capturedBody: string | undefined;
+    const fetchImpl: typeof fetch = async (url, init) => {
+      const href =
+        typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
+      if (href.includes("login.eveonline.com")) {
+        return new Response(
+          JSON.stringify({ access_token: "at", refresh_token: "rt2" }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      capturedBody = String(init?.body);
+      return new Response(null, { status: 204 });
+    };
+    await ensureHolder();
+    const esi: StructureEventsEsi = {
+      getCharacterNotifications: async () => [attack(1), attack(2)],
+    };
+    const res = await runStructureEventsJob({
+      db: ctx.db,
+      cfg: testConfig(),
+      esi,
+      fetchImpl,
+    });
+    expect(res.status).toBe("ok");
+    expect(capturedBody).toBeDefined();
+    const body = JSON.parse(capturedBody as string) as { embeds: DiscordEmbed[] };
+    const embed = body.embeds[0];
+
+    const [row] = await ctx.db
+      .select()
+      .from(structureEvent)
+      .where(eq(structureEvent.notificationId, 2));
+
+    expect(embed.title).toContain("J000000 - Home Fortizar");
+    expect(embed.url).toBe("https://zkillboard.com/system/30000142/");
+    expect(embed.thumbnail).toEqual({
+      url: "https://images.evetech.net/types/35832/render?size=1024",
+    });
+    expect(embed.timestamp).toBe(row.sentAt.toISOString());
+    expect(embed.fields).toContainEqual({ name: "Damage", value: "Shield 50%" });
   });
 });

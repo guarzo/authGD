@@ -132,28 +132,196 @@ const VERB: Record<string, string> = {
   StructureDestroyed: "was destroyed",
 };
 
-export type StructureAlertInput = {
+/** The subject + location fields common to both alert renders. */
+type StructureAlertSubject = {
   type: string;
   structureName: string | null;
   typeName: string | null;
   systemName: string | null;
+};
+
+export type StructureAlertInput = StructureAlertSubject & {
   details: Record<string, string | number | null>;
 };
 
 /**
- * One plain-text line per alert.
- *
- * Clamped to 1900 characters here as well as in the webhook poster. The poster
- * clamps to protect Discord; this clamps so the string a test asserts on is the
- * string that gets sent, rather than one silently truncated a layer later.
+ * The subject + location + verb, shared by `formatStructureAlert`'s plain-text
+ * line and `buildStructureAlertEmbed`'s title. One helper so the two renders
+ * of "what happened" cannot drift apart — only the attacker suffix and the
+ * truncation mechanism differ between them (a plain `.slice` clamp for the
+ * plain-text line, `truncateCodePoints` plus a separate `description` field
+ * for the embed).
  */
-export function formatStructureAlert(input: StructureAlertInput): string {
+function structureAlertSentence(input: StructureAlertSubject): string {
   const subject = input.structureName ?? input.typeName ?? "A structure";
   const verb = VERB[input.type] ?? input.type;
-  const where = input.systemName ? ` in ${input.systemName}` : "";
+  // Real structure names are typically `"<systemName> - <structureName>"`
+  // (e.g. "J214811 - Derelicte" in system "J214811"), so appending the system
+  // name again would read as "J214811 - Derelicte in J214811 is under
+  // attack". Omit the location clause whenever the structure name already
+  // contains it.
+  const where =
+    input.systemName && !input.structureName?.includes(input.systemName)
+      ? ` in ${input.systemName}`
+      : "";
+  return `${subject}${where} ${verb}`;
+}
+
+/**
+ * One plain-text line per alert, rendered into the admin structures page's
+ * notification table (src/app/admin/structures/page.tsx). Clamped to 1900
+ * characters here as well as in the webhook poster's own clamp, so a `<td>`
+ * never has to render an unbounded string built from attacker-controlled
+ * text.
+ */
+export function formatStructureAlert(input: StructureAlertInput): string {
   const attacker = input.details.allianceName ?? input.details.corpName ?? null;
   const by = attacker ? ` — ${attacker}` : "";
-  return `${subject}${where} ${verb}${by}`.slice(0, 1900);
+  return `${structureAlertSentence(input)}${by}`.slice(0, 1900);
+}
+
+/** Truncates by CODE POINT, not UTF-16 unit, so a surrogate pair is never split. */
+function truncateCodePoints(s: string, max: number): string {
+  const chars = Array.from(s);
+  if (chars.length <= max) return s;
+  return `${chars.slice(0, max - 1).join("")}…`;
+}
+
+/** Severity ramp — most alarming last, matching how bad the outcome is. */
+const EMBED_COLOR: Record<StructureEventType, number> = {
+  StructureUnderAttack: 0xf1c40f,
+  StructureLostShields: 0xe67e22,
+  StructureLostArmor: 0xe74c3c,
+  StructureDestroyed: 0x992d22,
+};
+
+/**
+ * Falls back to Discord's "greyple" for an unknown type. This is NOT what an
+ * embed with no `color` renders as — that has no colored sidebar at all —
+ * it's just a neutral, still-visible color for a `type` this module does not
+ * recognize (the DB column is `text`, not the union, so an unmapped value
+ * must degrade rather than crash).
+ */
+const DEFAULT_EMBED_COLOR = 0x99aab5;
+
+const TITLE_MAX = 256;
+const DESCRIPTION_MAX = 4096;
+
+/** A reinforcement timer beyond this is not trustworthy data, not a real window. */
+const MAX_REINFORCE_SECONDS = 14 * 24 * 60 * 60;
+
+/** EVE's `timeLeft` unit: 100-nanosecond ticks. */
+const TICKS_PER_SECOND = 1e7;
+
+export type DiscordEmbedField = { name: string; value: string };
+
+export type DiscordEmbed = {
+  title: string;
+  color: number;
+  description?: string;
+  fields?: DiscordEmbedField[];
+  thumbnail?: { url: string };
+  url?: string;
+  timestamp: string;
+  footer: { text: string };
+};
+
+export type StructureAlertEmbedInput = StructureAlertSubject & {
+  systemId: number | null;
+  sentAt: Date;
+  notificationId: number;
+  details: Record<string, string | number | null>;
+};
+
+function roundPercent(value: string | number | null | undefined): number | undefined {
+  if (value === null || value === undefined || value === "") return undefined;
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.round(n) : undefined;
+}
+
+/**
+ * A plain Discord embed object for one structure alert. Kept pure — no I/O —
+ * like the rest of this module; the poster is the only thing that sends it.
+ *
+ * Every absent datum SHORTENS the embed rather than rendering a placeholder:
+ * there is no "Unknown" or "????" anywhere below. `timestamp` is the event's
+ * own `sentAt`, never `new Date()` — delivery is at-least-once, so a re-post
+ * must report when the notification actually fired, not when it happened to
+ * be retried.
+ */
+export function buildStructureAlertEmbed(input: StructureAlertEmbedInput): DiscordEmbed {
+  const title = truncateCodePoints(structureAlertSentence(input), TITLE_MAX);
+  const color = isStructureEventType(input.type)
+    ? EMBED_COLOR[input.type]
+    : DEFAULT_EMBED_COLOR;
+
+  const attacker = input.details.allianceName ?? input.details.corpName ?? null;
+  const description = attacker
+    ? truncateCodePoints(`Attacker: ${attacker}`, DESCRIPTION_MAX)
+    : undefined;
+
+  const shield = roundPercent(input.details.shieldPercentage);
+  const armor = roundPercent(input.details.armorPercentage);
+  const hull = roundPercent(input.details.hullPercentage);
+  const damageParts: string[] = [];
+  if (shield !== undefined) damageParts.push(`Shield ${shield}%`);
+  if (armor !== undefined) damageParts.push(`Armor ${armor}%`);
+  if (hull !== undefined) damageParts.push(`Hull ${hull}%`);
+
+  const fields: DiscordEmbedField[] = [];
+  if (damageParts.length > 0) {
+    fields.push({ name: "Damage", value: damageParts.join(" · ") });
+  }
+
+  const rawTimeLeft = input.details.timeLeft;
+  const timeLeftTicks =
+    rawTimeLeft === null || rawTimeLeft === undefined || rawTimeLeft === ""
+      ? undefined
+      : Number(rawTimeLeft);
+  if (timeLeftTicks !== undefined && Number.isFinite(timeLeftTicks)) {
+    const durationSeconds = timeLeftTicks / TICKS_PER_SECOND;
+    // Sanity-gated: a negative, zero, or absurdly long duration is bad data,
+    // not a real window worth telling anyone to watch for.
+    if (durationSeconds > 0 && durationSeconds <= MAX_REINFORCE_SECONDS) {
+      const unix = Math.floor(input.sentAt.getTime() / 1000 + durationSeconds);
+      fields.push({
+        name: "Reinforcement ends",
+        value: `<t:${unix}:F> (<t:${unix}:R>)`,
+      });
+    }
+  }
+
+  // `structureTypeID` is the ONE url input here that is not type-guaranteed
+  // numeric: `systemId` arrives from a bigint column, but this comes through
+  // `asNumberIfNumeric`, which leaves a value that will not coerce as a raw
+  // STRING. Interpolating that straight into a url would build a malformed —
+  // or path-traversing — image request out of a notification body. Gate on a
+  // positive safe integer so a junk body drops the thumbnail instead.
+  const typeIdNumber = Number(input.details.structureTypeID);
+  const thumbnail =
+    input.details.structureTypeID !== null &&
+    input.details.structureTypeID !== undefined &&
+    input.details.structureTypeID !== "" &&
+    Number.isSafeInteger(typeIdNumber) &&
+    typeIdNumber > 0
+      ? { url: `https://images.evetech.net/types/${typeIdNumber}/render?size=1024` }
+      : undefined;
+
+  const url =
+    input.systemId !== null
+      ? `https://zkillboard.com/system/${input.systemId}/`
+      : undefined;
+
+  return {
+    title,
+    color,
+    ...(description !== undefined ? { description } : {}),
+    ...(fields.length > 0 ? { fields } : {}),
+    ...(thumbnail !== undefined ? { thumbnail } : {}),
+    ...(url !== undefined ? { url } : {}),
+    timestamp: input.sentAt.toISOString(),
+    footer: { text: `Notification ${input.notificationId}` },
+  };
 }
 
 /**
