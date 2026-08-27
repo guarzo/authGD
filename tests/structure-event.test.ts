@@ -210,6 +210,37 @@ describe("buildStructureAlertEmbed", () => {
     );
   });
 
+  // A percentage outside 0-100 is a malformed body, not a real reading.
+  // Rendering "Shield -1%" mid-attack is worse than rendering nothing.
+  it("drops an out-of-range percentage but keeps its in-range siblings", () => {
+    const embed = buildStructureAlertEmbed({
+      ...base,
+      details: { shieldPercentage: -1, armorPercentage: 101, hullPercentage: 50 },
+    });
+    expect(embed.fields).toContainEqual({ name: "Damage", value: "Hull 50%" });
+  });
+
+  it("keeps the inclusive 0 and 100 boundaries", () => {
+    const embed = buildStructureAlertEmbed({
+      ...base,
+      details: { shieldPercentage: 0, hullPercentage: 100 },
+    });
+    expect(embed.fields).toContainEqual({
+      name: "Damage",
+      value: "Shield 0% · Hull 100%",
+    });
+  });
+
+  it("omits the damage field when every percentage is out of range", () => {
+    const embed = buildStructureAlertEmbed({
+      ...base,
+      details: { shieldPercentage: -5, armorPercentage: 250 },
+    });
+    expect(embed.fields ?? []).not.toContainEqual(
+      expect.objectContaining({ name: "Damage" }),
+    );
+  });
+
   it("computes the reinforcement timer for a real LOST_SHIELDS fixture", () => {
     // A GOLDEN value, deliberately not recomputed from the implementation's
     // formula: 2026-01-01T00:00:00Z is unix 1767225600, and timeLeft

@@ -233,10 +233,20 @@ export type StructureAlertEmbedInput = StructureAlertSubject & {
   details: Record<string, string | number | null>;
 };
 
+/**
+ * A damage percentage, rounded for display, or `undefined` when the body did
+ * not carry a usable one.
+ *
+ * Range-gated to 0-100 for the same reason `timeLeft` is gated to 14 days and
+ * `structureTypeID` to a positive safe integer: the value is parsed from an
+ * external notification body, and a field that renders "Shield -1%" during an
+ * actual attack is worse than one that renders nothing.
+ */
 function roundPercent(value: string | number | null | undefined): number | undefined {
   if (value === null || value === undefined || value === "") return undefined;
   const n = Number(value);
-  return Number.isFinite(n) ? Math.round(n) : undefined;
+  if (!Number.isFinite(n) || n < 0 || n > 100) return undefined;
+  return Math.round(n);
 }
 
 /**
