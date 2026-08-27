@@ -148,6 +148,44 @@ describe("loadConfig", () => {
     });
   });
 
+  describe("DISCORD_STRUCTURE_ROLE_ID", () => {
+    it("is undefined when unset", () => {
+      expect(loadConfig(validEnv).discord.structureRoleId).toBeUndefined();
+    });
+
+    it("is undefined when explicitly empty", () => {
+      expect(
+        loadConfig({ ...validEnv, DISCORD_STRUCTURE_ROLE_ID: "" }).discord
+          .structureRoleId,
+      ).toBeUndefined();
+    });
+
+    it("accepts a bare 18-digit snowflake", () => {
+      expect(
+        loadConfig({ ...validEnv, DISCORD_STRUCTURE_ROLE_ID: "123456789012345678" })
+          .discord.structureRoleId,
+      ).toBe("123456789012345678");
+    });
+
+    it("rejects a pasted Discord mention", () => {
+      expect(() =>
+        loadConfig({ ...validEnv, DISCORD_STRUCTURE_ROLE_ID: "<@&123456789012345678>" }),
+      ).toThrow(/DISCORD_STRUCTURE_ROLE_ID/);
+    });
+
+    it("rejects an id that is too short to be a real snowflake", () => {
+      expect(() => loadConfig({ ...validEnv, DISCORD_STRUCTURE_ROLE_ID: "123" })).toThrow(
+        /DISCORD_STRUCTURE_ROLE_ID/,
+      );
+    });
+
+    it("rejects a role name", () => {
+      expect(() =>
+        loadConfig({ ...validEnv, DISCORD_STRUCTURE_ROLE_ID: "Fleet Commander" }),
+      ).toThrow(/DISCORD_STRUCTURE_ROLE_ID/);
+    });
+  });
+
   describe("payout corp share", () => {
     it("defaults to 10 percent when unset", () => {
       expect(loadConfig(validEnv).payoutCorpSharePct).toBe("10");

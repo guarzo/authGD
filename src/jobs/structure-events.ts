@@ -1,10 +1,10 @@
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import type { Config } from "@/config";
 import type { Db } from "@/db";
 import { character, structure, structureEvent } from "@/db/schema";
 import {
+  buildStructureAlertEmbed,
   extractStructureEvent,
-  formatStructureAlert,
   isStructureEventType,
 } from "@/core/structure-event";
 import { EsiError, NOTIFICATIONS_SCOPE } from "@/lib/esi/client";
@@ -22,6 +22,17 @@ import {
 } from "@/services/structures";
 import { runJob, type JobResult } from "@/services/sync-run";
 import { getFreshAccessToken } from "@/services/tokens";
+import { lookupCachedNames } from "@/services/universe-names";
+
+/**
+ * The roster columns the sender needs to render an alert. Derived from the
+ * schema rather than hand-written, so a nullability change to `structure`
+ * cannot silently diverge from what this job actually selects.
+ */
+type RosterLookup = Pick<
+  typeof structure.$inferSelect,
+  "structureId" | "name" | "typeName" | "typeId" | "systemId"
+>;
 
 type Counts = {
   fetched: number;
@@ -215,6 +226,7 @@ export async function runStructureEventsJob(deps: {
         notificationId: structureEvent.notificationId,
         type: structureEvent.type,
         structureId: structureEvent.structureId,
+        sentAt: structureEvent.sentAt,
         details: structureEvent.details,
       })
       .from(structureEvent)
@@ -226,23 +238,96 @@ export async function runStructureEventsJob(deps: {
       )
       .orderBy(asc(structureEvent.sentAt));
 
+    // One batched roster read plus one cache-only name read, covering every
+    // system a pending alert's structure sits in. Batched BEFORE the post
+    // loop rather than resolved per-event, matching the admin page's read
+    // (src/app/admin/structures/page.tsx). Scoped by `structureId` — via
+    // `inArray` on the deduped, non-null ids the pending events reference —
+    // rather than the whole corp's roster: strictly less data than a
+    // corp-wide read, and it preserves the per-event `eq(structureId, ...)`
+    // semantics a corp-wide filter would silently widen.
+    //
+    // Both are skipped entirely when nothing is pending, which is the
+    // overwhelmingly common tick: this job runs every ten minutes and new
+    // damage is rare, so the empty case is the one worth not paying for.
+    // Hoisting them out of the loop must not turn "no alerts to post" into
+    // two queries that the per-event lookup never made.
+    const structureById = new Map<number, RosterLookup>();
+    let systemNames = new Map<number, string>();
+    const pendingIds = [
+      ...new Set(
+        pending.map((e) => e.structureId).filter((id): id is number => id !== null),
+      ),
+    ];
+    if (pendingIds.length > 0) {
+      const knownStructures = await db
+        .select({
+          structureId: structure.structureId,
+          name: structure.name,
+          typeName: structure.typeName,
+          typeId: structure.typeId,
+          systemId: structure.systemId,
+        })
+        .from(structure)
+        .where(inArray(structure.structureId, pendingIds));
+      for (const s of knownStructures) structureById.set(s.structureId, s);
+      systemNames = await lookupCachedNames(db, [
+        ...new Set(knownStructures.map((s) => s.systemId)),
+      ]);
+    }
+
+    /** True for a value that will render as a well-formed positive integer id. */
+    function isPositiveSafeInteger(value: string | number | null | undefined): boolean {
+      if (value === null || value === undefined || value === "") return false;
+      const n = Number(value);
+      return Number.isSafeInteger(n) && n > 0;
+    }
+
     let firstPostError: string | undefined;
     for (const event of pending) {
-      const [known] = event.structureId
-        ? await db
-            .select({ name: structure.name, typeName: structure.typeName })
-            .from(structure)
-            .where(eq(structure.structureId, event.structureId))
-        : [];
-      const content = formatStructureAlert({
-        type: event.type,
-        structureName: known?.name ?? null,
-        typeName: known?.typeName ?? null,
-        systemName: null,
-        details: event.details ?? {},
-      });
+      const known = event.structureId ? structureById.get(event.structureId) : undefined;
+      const systemName = known ? (systemNames.get(known.systemId) ?? null) : null;
+      // The notification body normally carries its own `structureTypeID`, but
+      // when it doesn't parse (see extractStructureEvent's "unparseable body"
+      // fallback) the roster row known from `structureId` still has one — free
+      // to fall back to, since it was already selected above. Gated on the
+      // same positive-safe-integer test the embed builder uses for its own
+      // thumbnail check: a junk body can put a non-coercing STRING here,
+      // which is `!== undefined` but still not usable, and would otherwise
+      // silently skip a perfectly good roster fallback.
+      const details = { ...(event.details ?? {}) };
+      if (
+        !isPositiveSafeInteger(details.structureTypeID) &&
+        known?.typeId !== undefined
+      ) {
+        details.structureTypeID = known.typeId;
+      }
+      // `details.solarsystemID` is persisted on every event (KEPT_KEYS) but
+      // otherwise unread. When the holder has lost the in-game Director role,
+      // the roster read 403s and `structure` goes stale, so `known` misses —
+      // dropping name, type, system AND link all at once. Falling back to the
+      // body's own system id here keeps at least the zkillboard link and
+      // system-name lookup alive.
+      const systemId =
+        known?.systemId ??
+        (isPositiveSafeInteger(details.solarsystemID)
+          ? Number(details.solarsystemID)
+          : null);
       try {
-        await postStructureWebhook(cfg, content, deps.fetchImpl);
+        // Built INSIDE the try: a throw here (bad data slipping past every
+        // gate above) degrades to one failedPosts count, not an aborted
+        // post loop that leaves every remaining pending row untouched.
+        const embed = buildStructureAlertEmbed({
+          type: event.type,
+          structureName: known?.name ?? null,
+          typeName: known?.typeName ?? null,
+          systemName,
+          systemId,
+          sentAt: event.sentAt,
+          notificationId: event.notificationId,
+          details,
+        });
+        await postStructureWebhook(cfg, embed, deps.fetchImpl);
         // Conditional, not unconditional: a concurrent run (the cron tick
         // racing a "Check now") can select the same pending row and post it
         // too. Only the run whose UPDATE actually flips `pending` -> `sent`
@@ -266,10 +351,10 @@ export async function runStructureEventsJob(deps: {
         // Only the FIRST failure's message survives into errorSummary — that
         // is enough to say why, and it keeps the summary from growing with
         // every subsequent row's post attempt. OpsWebhookError's own message
-        // is safe to surface: postOpsWebhookUrl never interpolates the url
-        // into it. Anything else is a throw this code did not construct, so
-        // its text is not trusted — same posture as the worker's boot-failure
-        // handler (src/worker/index.ts).
+        // is safe to surface: it originates in postWebhookBody, which never
+        // interpolates the url into it. Anything else is a throw this code
+        // did not construct, so its text is not trusted — same posture as
+        // the worker's boot-failure handler (src/worker/index.ts).
         if (firstPostError === undefined) {
           firstPostError =
             err instanceof OpsWebhookError ? err.message : "structure alert post failed";
