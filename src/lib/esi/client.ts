@@ -51,6 +51,16 @@ export const ACCESS_LISTS_SCOPE = "esi-access.read_lists.v1";
 export const STRUCTURES_SCOPE = "esi-corporations.read_structures.v1";
 export const NOTIFICATIONS_SCOPE = "esi-characters.read_notifications.v1";
 
+/**
+ * Deliberately NOT in EVE_SSO_SCOPES, for the same reason as the other
+ * optional scopes above: adding it there would flip every character to
+ * needs_reauth at the next token-health run. Feasibility-only today — no job
+ * reads it, and no UI grants it except through `?grant=fleet-read` — exported
+ * so the link route and the manual probe script (scripts/fleet-esi-feasibility.ts)
+ * spell it identically.
+ */
+export const FLEET_READ_SCOPE = "esi-fleets.read_fleet.v1";
+
 export class EsiError extends Error {
   status: number;
   kind: EsiErrorClass;
@@ -166,6 +176,16 @@ const universeNamesSchema = z.array(
   }),
 );
 
+// Feasibility-probe schemas: only the two fields needed to establish fleet
+// membership survive the parse. z.object's default "strip" behaviour drops
+// every other field (role, ship, system, squad, ...) without needing them
+// spelled out here — the probe never sees, stores, or logs them.
+const fleetInfoSchema = z.object({
+  fleet_id: z.number().int(),
+  fleet_boss_id: z.number().int(),
+});
+const fleetMembersSchema = z.array(z.object({ character_id: z.number().int() }));
+
 export type Affiliation = {
   characterId: number;
   corporationId: number;
@@ -211,6 +231,25 @@ export type EsiNotification = {
   type: string;
   timestamp: Date;
   text: string;
+};
+
+/** Minimal fleet-membership evidence — never the roster's ship, system, or role. */
+export type FleetInfo = { fleetId: number; fleetBossId: number };
+export type FleetMember = { characterId: number };
+/**
+ * The feasibility probe's own envelope, returned only after a successful,
+ * strictly-parsed read — exactly like every other typed read in this file.
+ * A non-2xx status or a malformed body still throws `EsiError` (via `request`
+ * / `safeParse`), never a `FleetProbeResponse` with a null value: the probe
+ * script (scripts/fleet-esi-feasibility.ts) catches that per endpoint and
+ * reports it as a redacted status line instead, so the type here stays exactly
+ * as narrow as the value it always carries.
+ */
+export type FleetProbeResponse<T> = {
+  status: number;
+  value: T;
+  cacheControl: string | null;
+  etag: string | null;
 };
 
 export interface EsiClientOptions {
@@ -704,6 +743,56 @@ export function createEsiClient(opts: EsiClientOptions = {}) {
     return out;
   }
 
+  /**
+   * Feasibility probe for the Fleet Read tracer (FLEET_READ_SCOPE). Same
+   * authorized request + safeParse pattern as every other read in this file:
+   * a non-2xx status throws a classified EsiError, and a malformed fleet_id
+   * or fleet_boss_id throws too — never defaults to a synthetic empty fleet.
+   * Only the two fields needed to establish fleet membership are read back;
+   * the schema strips everything else (fleet_job, squad_id, wing_id) before
+   * it reaches this client's caller.
+   */
+  async function getCharacterFleet(
+    characterId: number,
+    accessToken: string,
+  ): Promise<FleetProbeResponse<FleetInfo>> {
+    const path = `/characters/${characterId}/fleet/`;
+    const res = await request(path, { accessToken });
+    const parsed = safeParse(fleetInfoSchema, await res.json(), "GET", path, res.status);
+    return {
+      status: res.status,
+      value: { fleetId: parsed.fleet_id, fleetBossId: parsed.fleet_boss_id },
+      cacheControl: res.headers.get("cache-control"),
+      etag: res.headers.get("etag"),
+    };
+  }
+
+  /**
+   * Same feasibility scope as getCharacterFleet: only `character_id` survives
+   * the parse, never role, ship, squad, station, or system — the fields that
+   * would turn a membership probe into a location or ship read.
+   */
+  async function getFleetMembers(
+    fleetId: number,
+    accessToken: string,
+  ): Promise<FleetProbeResponse<FleetMember[]>> {
+    const path = `/fleets/${fleetId}/members/`;
+    const res = await request(path, { accessToken });
+    const parsed = safeParse(
+      fleetMembersSchema,
+      await res.json(),
+      "GET",
+      path,
+      res.status,
+    );
+    return {
+      status: res.status,
+      value: parsed.map((m) => ({ characterId: m.character_id })),
+      cacheControl: res.headers.get("cache-control"),
+      etag: res.headers.get("etag"),
+    };
+  }
+
   return {
     postAffiliation,
     resolveIds,
@@ -720,6 +809,8 @@ export function createEsiClient(opts: EsiClientOptions = {}) {
     getUniverseNames,
     getCorporationStructures,
     getCharacterNotifications,
+    getCharacterFleet,
+    getFleetMembers,
     addContacts: (
       characterId: number,
       accessToken: string,

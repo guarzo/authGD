@@ -773,3 +773,118 @@ describe("getCharacterNotifications", () => {
     expect((await esi.getCharacterNotifications(90000001, "tok"))[0].text).toBe("");
   });
 });
+
+describe("fleet reads", () => {
+  it("returns fleet id, boss id, and cache evidence from a successful read", async () => {
+    server.use(
+      http.get(`${BASE}/characters/7/fleet/`, () =>
+        HttpResponse.json(
+          { fleet_id: 42, fleet_boss_id: 8 },
+          { headers: { "Cache-Control": "max-age=5", ETag: '"fleet-v1"' } },
+        ),
+      ),
+    );
+    const esi = createEsiClient();
+    expect(await esi.getCharacterFleet(7, "token")).toEqual({
+      status: 200,
+      value: { fleetId: 42, fleetBossId: 8 },
+      cacheControl: "max-age=5",
+      etag: '"fleet-v1"',
+    });
+  });
+
+  it("defaults cache-control and etag to null when the response has neither header", async () => {
+    server.use(
+      http.get(`${BASE}/characters/7/fleet/`, () =>
+        HttpResponse.json({ fleet_id: 42, fleet_boss_id: 8 }),
+      ),
+    );
+    const esi = createEsiClient();
+    const result = await esi.getCharacterFleet(7, "token");
+    expect(result.cacheControl).toBeNull();
+    expect(result.etag).toBeNull();
+  });
+
+  it("fails closed on a malformed fleet id rather than reporting an empty fleet", async () => {
+    server.use(
+      http.get(`${BASE}/characters/7/fleet/`, () =>
+        HttpResponse.json({ fleet_id: "not-a-number", fleet_boss_id: 8 }),
+      ),
+    );
+    const esi = createEsiClient();
+    const err = await esi.getCharacterFleet(7, "token").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(EsiError);
+    expect((err as EsiError).kind).toBe("permanent");
+  });
+
+  it("throws a classified EsiError on 401", async () => {
+    server.use(
+      http.get(`${BASE}/characters/7/fleet/`, () =>
+        HttpResponse.json({ error: "invalid token" }, { status: 401 }),
+      ),
+    );
+    const esi = createEsiClient();
+    const err = await esi.getCharacterFleet(7, "token").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(EsiError);
+    expect((err as EsiError).status).toBe(401);
+  });
+
+  it("throws a classified EsiError on 403", async () => {
+    server.use(
+      http.get(`${BASE}/characters/7/fleet/`, () =>
+        HttpResponse.json(
+          { error: "Character does not have required scope" },
+          { status: 403 },
+        ),
+      ),
+    );
+    const esi = createEsiClient();
+    const err = await esi.getCharacterFleet(7, "token").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(EsiError);
+    expect((err as EsiError).status).toBe(403);
+    expect((err as EsiError).kind).toBe("needs_reauth");
+  });
+
+  it("returns members, keeping only character_id and dropping every other field", async () => {
+    server.use(
+      http.get(`${BASE}/fleets/42/members/`, () =>
+        HttpResponse.json(
+          [
+            {
+              character_id: 90000002,
+              join_time: "2026-08-24T10:00:00Z",
+              role: "squad_member",
+              role_name: "Member",
+              ship_type_id: 670,
+              solar_system_id: 30000142,
+              squad_id: -1,
+              station_id: null,
+              takes_fleet_warp: true,
+              wing_id: -1,
+            },
+          ],
+          { headers: { "Cache-Control": "no-cache", ETag: '"members-v1"' } },
+        ),
+      ),
+    );
+    const esi = createEsiClient();
+    expect(await esi.getFleetMembers(42, "token")).toEqual({
+      status: 200,
+      value: [{ characterId: 90000002 }],
+      cacheControl: "no-cache",
+      etag: '"members-v1"',
+    });
+  });
+
+  it("fails closed when a roster entry has no numeric character_id", async () => {
+    server.use(
+      http.get(`${BASE}/fleets/42/members/`, () =>
+        HttpResponse.json([{ character_id: "not-a-number" }]),
+      ),
+    );
+    const esi = createEsiClient();
+    const err = await esi.getFleetMembers(42, "token").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(EsiError);
+    expect((err as EsiError).kind).toBe("permanent");
+  });
+});

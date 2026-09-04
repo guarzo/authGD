@@ -3,6 +3,7 @@ import { getConfig } from "@/config";
 import { getDb } from "@/db";
 import {
   ACCESS_LISTS_SCOPE,
+  FLEET_READ_SCOPE,
   NOTIFICATIONS_SCOPE,
   STRUCTURES_SCOPE,
 } from "@/lib/esi/client";
@@ -22,6 +23,7 @@ import { createOauthTransaction } from "@/services/oauth-tx";
 const GRANTS: Record<string, readonly string[]> = {
   "access-lists": [ACCESS_LISTS_SCOPE],
   structures: [STRUCTURES_SCOPE, NOTIFICATIONS_SCOPE],
+  "fleet-read": [FLEET_READ_SCOPE],
 };
 
 export async function GET(req: NextRequest) {
