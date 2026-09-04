@@ -14,6 +14,17 @@ import { createHash, createPublicKey, verify as ed25519Verify } from "node:crypt
 /** authGD rejects clock skew outside this window, in either direction. */
 const MAX_CLOCK_SKEW_MS = 60_000;
 
+/**
+ * `fleet_device_session.last_revision` is stored as Postgres `integer`
+ * (int4), not `bigint` (controller ruling: a non-negative JS safe integer,
+ * rendered as base-10 canonical text, is far below int4's range at the
+ * intended cadence). A revision beyond int4's max is still a valid JS safe
+ * integer, so `Number.isSafeInteger` alone would accept it here and only fail
+ * once Task 5 tries to persist it — rejecting it in this contract instead
+ * turns that into an immediate, diagnosable `bad_headers` at the boundary.
+ */
+const MAX_REVISION = 2_147_483_647; // Postgres int4 max
+
 // Opaque session identifiers are `randomBytes(32).toString("base64url")`
 // (src/services/session.ts's existing convention) — base64url charset, no
 // padding. A comma could only appear here if a caller naively joined two
@@ -81,6 +92,7 @@ function hasWellFormedHeaders(headers: FleetAuthHeaders): boolean {
     !Number.isNaN(Date.parse(headers.issuedAt)) &&
     Number.isSafeInteger(headers.revision) &&
     headers.revision >= 0 &&
+    headers.revision <= MAX_REVISION &&
     BODY_SHA256_RE.test(headers.bodySha256) &&
     SIGNATURE_RE.test(headers.signature)
   );
@@ -139,4 +151,36 @@ export function verifyFleetRequest(
     // Malformed/non-DER key bytes throw rather than returning false.
     return "bad_signature";
   }
+}
+
+/**
+ * Canonicalizes an Ed25519 SPKI DER public key to the single text form
+ * `fleet_device.publicKeySpkiB64` and `fleet_pairing_request.publicKeySpkiB64`
+ * persist and compare by: padded, standard (not URL-safe) base64.
+ *
+ * `fleet_device.publicKeySpkiB64` is UNIQUE on this exact string. The same
+ * key bytes can arrive as base64url or unpadded base64 (e.g. decoded from a
+ * JSON field or an HTTP header), and those encode to a *different* literal
+ * string than padded standard base64 — so without a single canonical form,
+ * the same key could be persisted twice under different text, silently
+ * defeating the uniqueness constraint. Task 4's pairing service MUST
+ * canonicalize a device's submitted public key through this function before
+ * it ever reaches `fleetPairingRequest`/`fleetDevice`; never persist a
+ * caller-supplied encoding directly.
+ *
+ * `fleet_device.revokedAt` is a soft revoke, but the unique constraint is not
+ * scoped by it: a public key that was ever inserted — revoked or not — can
+ * never be inserted again. Re-pairing after revocation therefore requires
+ * generating a brand-new local key pair, not reusing the old one. This is
+ * intentional (see the Task 3 fix report), not a bug for Task 4 to work
+ * around.
+ */
+export function canonicalDevicePublicKeyB64(spki: Uint8Array): string {
+  return Buffer.from(spki).toString("base64");
+}
+
+/** Inverse of {@link canonicalDevicePublicKeyB64}: decodes a stored/canonical
+ * public key string back to raw SPKI DER bytes, e.g. for `verifyFleetRequest`. */
+export function decodeDevicePublicKeyB64(canonical: string): Uint8Array {
+  return new Uint8Array(Buffer.from(canonical, "base64"));
 }

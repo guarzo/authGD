@@ -6,7 +6,9 @@ import {
 } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
+  canonicalDevicePublicKeyB64,
   canonicalFleetRequest,
+  decodeDevicePublicKeyB64,
   verifyFleetRequest,
   type FleetAuthHeaders,
 } from "@/lib/fleet-signature";
@@ -219,6 +221,50 @@ describe("verifyFleetRequest", () => {
     });
     const now = new Date("2026-09-04T12:00:00.000Z"); // -60001ms
     expect(verifyFleetRequest(pub, headers, body, { ...request, now })).toBe("bad_time");
+  });
+
+  // fleet_device_session.last_revision is a Postgres `integer` (int4), not
+  // `bigint` (controller ruling). A revision beyond int4's range is a valid
+  // JS safe integer but could never be persisted, so it must be rejected here
+  // rather than surfacing as a runtime failure deep in Task 5's write path.
+  it("accepts the maximum 32-bit revision value", () => {
+    const { pub, headers, body, request } = buildSigned({ revision: 2_147_483_647 });
+    expect(verifyFleetRequest(pub, headers, body, request)).toBe("ok");
+  });
+
+  it("rejects a revision one past the 32-bit maximum as malformed, not merely unsigned", () => {
+    const { pub, headers, body, request } = buildSigned();
+    const changed = { ...headers, revision: 2_147_483_648 };
+    expect(verifyFleetRequest(pub, changed, body, request)).toBe("bad_headers");
+  });
+});
+
+describe("canonicalDevicePublicKeyB64 / decodeDevicePublicKeyB64", () => {
+  // fleet_device.publicKeySpkiB64 is UNIQUE on this exact string. Two
+  // encodings of the identical key bytes (base64url vs. base64, padded vs.
+  // unpadded) must canonicalize to the one value Task 4's pairing service
+  // persists and compares, or the uniqueness constraint stops meaning
+  // anything and the same key could be paired twice under different text.
+  it("canonicalizes to padded, standard (non-URL-safe) base64 and round-trips", () => {
+    const { publicKey } = generateKeyPairSync("ed25519");
+    const spki = new Uint8Array(publicKey.export({ type: "spki", format: "der" }));
+
+    const canonical = canonicalDevicePublicKeyB64(spki);
+    expect(canonical).toMatch(/^[A-Za-z0-9+/]+={0,2}$/);
+    expect(canonical.length % 4).toBe(0);
+    expect(decodeDevicePublicKeyB64(canonical)).toEqual(spki);
+  });
+
+  it("canonicalizes identically regardless of the encoding the caller decoded from", () => {
+    const { publicKey } = generateKeyPairSync("ed25519");
+    const spki = new Uint8Array(publicKey.export({ type: "spki", format: "der" }));
+    const canonical = canonicalDevicePublicKeyB64(spki);
+
+    // Same bytes, obtained by decoding a base64url representation instead —
+    // exactly the path a device submitting its key over JSON/a header takes.
+    const viaBase64Url = Buffer.from(spki).toString("base64url");
+    const bytesFromUrl = new Uint8Array(Buffer.from(viaBase64Url, "base64url"));
+    expect(canonicalDevicePublicKeyB64(bytesFromUrl)).toBe(canonical);
   });
 });
 

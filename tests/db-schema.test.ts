@@ -14,6 +14,7 @@ import {
   universeName,
 } from "@/db/schema";
 import { MANAGED_TABLE_NAMES } from "@/db/tables";
+import { canonicalDevicePublicKeyB64 } from "@/lib/fleet-signature";
 import { setupTestDb } from "./helpers/db";
 import { testConfig } from "./helpers/config";
 import { seedAccount, seedCharacter } from "./helpers/seed";
@@ -268,5 +269,69 @@ describe("fleet relay schema", () => {
         "hardExpiresAt",
       ].sort(),
     );
+  });
+
+  it("permanently bars a revoked device's public key from ever being reused", async () => {
+    const acc = await seedAccount(ctx.db);
+    const keyB64 = canonicalDevicePublicKeyB64(
+      new Uint8Array(Array.from({ length: 32 }, (_, i) => i)),
+    );
+
+    const [device] = await ctx.db
+      .insert(fleetDevice)
+      .values({ accountId: acc.id, publicKeySpkiB64: keyB64 })
+      .returning();
+    await ctx.db
+      .update(fleetDevice)
+      .set({ revokedAt: new Date() })
+      .where(eq(fleetDevice.id, device.id));
+
+    // Re-pairing with the SAME (now-revoked) key must fail: the unique
+    // constraint is not scoped by revokedAt, by design.
+    await expect(
+      ctx.db.insert(fleetDevice).values({ accountId: acc.id, publicKeySpkiB64: keyB64 }),
+    ).rejects.toThrow();
+  });
+
+  it('permits ewar to be exactly [] or ["SCRAM/POINT"], and rejects any other JSON', async () => {
+    const acc = await seedAccount(ctx.db);
+    const [device] = await ctx.db
+      .insert(fleetDevice)
+      .values({
+        accountId: acc.id,
+        publicKeySpkiB64: canonicalDevicePublicKeyB64(new Uint8Array([9, 9, 9])),
+      })
+      .returning();
+    const [session] = await ctx.db
+      .insert(fleetDeviceSession)
+      .values({
+        id: createHash("sha256").update("ewar-check-session").digest("base64url"),
+        deviceId: device.id,
+        expiresAt: new Date(Date.now() + 60_000),
+      })
+      .returning();
+
+    const now = new Date("2026-09-04T12:00:00.000Z");
+    const insertWithEwar = async (characterId: number, ewar: string[]) => {
+      const ch = await seedCharacter(ctx.db, cfg, { id: characterId, accountId: acc.id });
+      return ctx.db.insert(fleetTelemetryRow).values({
+        characterId: ch.id,
+        fleetId: 5000002,
+        deviceId: device.id,
+        sessionId: session.id,
+        dps: 0,
+        ewar,
+        receivedAt: now,
+        staleAt: new Date(now.getTime() + 3_000),
+        hardExpiresAt: new Date(now.getTime() + 10_000),
+      });
+    };
+
+    await expect(insertWithEwar(91500010, [])).resolves.toBeDefined();
+    await expect(insertWithEwar(91500011, ["SCRAM/POINT"])).resolves.toBeDefined();
+    await expect(insertWithEwar(91500012, ["WARP_SCRAMBLE"])).rejects.toThrow();
+    await expect(
+      insertWithEwar(91500013, ["SCRAM/POINT", "SCRAM/POINT"]),
+    ).rejects.toThrow();
   });
 });

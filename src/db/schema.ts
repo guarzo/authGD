@@ -712,6 +712,17 @@ export const structureEvent = pgTable(
  * `accountId` is the schema-level backstop: deleting an account tears down
  * every device (and, transitively, every session/lease/row) it ever paired,
  * even if a future code path forgets to call that service first.
+ *
+ * `publicKeySpkiB64` MUST be `canonicalDevicePublicKeyB64`'s output
+ * (`src/lib/fleet-signature.ts`) — padded, standard base64 of the raw SPKI
+ * DER bytes — never a caller-supplied encoding. The UNIQUE constraint
+ * compares this column as literal text, so two encodings of the identical
+ * key (base64url vs. base64, padded vs. unpadded) would otherwise both
+ * insert successfully and defeat it. The constraint is also NOT scoped by
+ * `revokedAt`: a key that was ever inserted here, revoked or not, can never
+ * be inserted again. Re-pairing after revocation is by design a new local
+ * key pair, not the old one — see this table's fix-report entry in
+ * `task-3-report.md` for the ruling.
  */
 export const fleetDevice = pgTable("fleet_device", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -733,6 +744,9 @@ export const fleetDevice = pgTable("fleet_device", {
  * completion respectively, and both CASCADE: this row has no independent
  * value once its account or device is gone, unlike the audit-quality
  * `bootstrap_admin_grant` pattern elsewhere in this schema.
+ *
+ * `publicKeySpkiB64` here follows the same canonicalization contract as
+ * `fleet_device.publicKeySpkiB64` above — see that column's comment.
  */
 export const fleetPairingRequest = pgTable(
   "fleet_pairing_request",
@@ -862,6 +876,11 @@ export const fleetTelemetryRow = pgTable(
       .notNull()
       .references(() => fleetDeviceSession.id, { onDelete: "cascade" }),
     dps: integer("dps").notNull(),
+    // Only `[]` or `["SCRAM/POINT"]` are meaningful values (Task 5's
+    // `PublishedRow.ewar` union) — the CHECK constraint below is the only
+    // thing stopping an arbitrary JSON array from being persisted here, since
+    // jsonb has no way to express "array of this one literal, 0 or 1 times"
+    // in its column type.
     ewar: jsonb("ewar").$type<string[]>().notNull().default([]),
     receivedAt: timestamp("received_at", { withTimezone: true }).notNull(),
     staleAt: timestamp("stale_at", { withTimezone: true }).notNull(),
@@ -870,5 +889,9 @@ export const fleetTelemetryRow = pgTable(
   (t) => [
     index("fleet_telemetry_row_hard_expires_at_idx").on(t.hardExpiresAt),
     index("fleet_telemetry_row_fleet_hard_expires_idx").on(t.fleetId, t.hardExpiresAt),
+    check(
+      "fleet_telemetry_row_ewar_ck",
+      sql`${t.ewar} = '[]'::jsonb OR ${t.ewar} = '["SCRAM/POINT"]'::jsonb`,
+    ),
   ],
 );
