@@ -184,3 +184,27 @@ export function canonicalDevicePublicKeyB64(spki: Uint8Array): string {
 export function decodeDevicePublicKeyB64(canonical: string): Uint8Array {
   return new Uint8Array(Buffer.from(canonical, "base64"));
 }
+
+/**
+ * True when `spki` parses as valid SPKI DER for an Ed25519 public key, and
+ * false for anything else — malformed/non-DER bytes, or DER for a different
+ * key algorithm — never throwing. The same defensive shape
+ * `verifyFleetRequest` and `verifyCompletionProof` already apply to a
+ * *stored* key's bytes, exposed here as a single reusable check so Task 4's
+ * pairing service can apply it to a *candidate* key BEFORE ever
+ * canonicalizing, persisting it, or creating a pairing request a browser
+ * could approve — rather than hand-rolling the same `createPublicKey`/
+ * `asymmetricKeyType` logic a second time.
+ */
+export function isEd25519SpkiPublicKey(spki: Uint8Array): boolean {
+  try {
+    const key = createPublicKey({
+      key: Buffer.from(spki),
+      format: "der",
+      type: "spki",
+    });
+    return key.asymmetricKeyType === "ed25519";
+  } catch {
+    return false;
+  }
+}

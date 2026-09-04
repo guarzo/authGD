@@ -54,10 +54,16 @@ export async function buildDeviceCatalogue(
  * Reads the materialized `fleet_eligibility` cache — never a live ESI call
  * (Global Constraint: relay routes only ever read this cache). Returns
  * `null` for anything short of definite, current evidence: below Member
- * tier; no unexpired row; a linked character whose CURRENT `scopes` have
- * since lost `FLEET_READ_SCOPE`; or a row whose own `rosterCharacterIds`
- * does not include its own `characterId` (materialization that failed to
- * record itself correctly) — every one of those fails exactly the same way,
+ * tier; no unexpired row; an `outcomeCode` other than `"ok"` (any other
+ * recorded outcome — forbidden, not-in-fleet, an error — is not fleet-read
+ * evidence, whatever else the row happens to hold); a linked character
+ * whose CURRENT `scopes` have since lost `FLEET_READ_SCOPE`; a character
+ * whose CURRENT `accountId` no longer matches the account being read (the
+ * row's own denormalized `fleetEligibility.accountId` can go stale if the
+ * character is later reclaimed onto a different account, and this is the
+ * check that catches that); or a row whose own `rosterCharacterIds` does
+ * not include its own `characterId` (materialization that failed to record
+ * itself correctly) — every one of those fails exactly the same way,
  * closed, never a "last known good" fallback.
  *
  * Cryo is deliberately NOT checked, unlike `requirePayoutOperator`
@@ -89,7 +95,9 @@ export async function readEligibleAccount(
       characterId: fleetEligibility.characterId,
       rosterCharacterIds: fleetEligibility.rosterCharacterIds,
       expiresAt: fleetEligibility.expiresAt,
+      outcomeCode: fleetEligibility.outcomeCode,
       scopes: character.scopes,
+      characterAccountId: character.accountId,
     })
     .from(fleetEligibility)
     .innerJoin(character, eq(character.id, fleetEligibility.characterId))
@@ -101,6 +109,14 @@ export async function readEligibleAccount(
   let earliestExpiry: Date | null = null;
 
   for (const row of rows) {
+    // Only a recorded "ok" outcome is fleet-read evidence at all — any other
+    // outcome (forbidden, not-in-fleet, an ESI error) must not count, no
+    // matter what its roster/scope/expiry happen to look like.
+    if (row.outcomeCode !== "ok") continue;
+    // The character may have been reclaimed onto a different account since
+    // this row was written; the row's own `accountId` column would not
+    // reflect that. The CURRENT link is the only one that counts.
+    if (row.characterAccountId !== accountId) continue;
     // No scope: the character's evidence is stale even though the cache row
     // itself has not expired yet (a scope can be revoked mid-flight).
     if (!row.scopes.includes(FLEET_READ_SCOPE)) continue;

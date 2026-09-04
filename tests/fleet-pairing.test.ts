@@ -1,18 +1,27 @@
-import { generateKeyPairSync, sign as ed25519Sign } from "node:crypto";
+import {
+  createPublicKey,
+  generateKeyPairSync,
+  sign as ed25519Sign,
+  verify as ed25519Verify,
+} from "node:crypto";
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Db } from "@/db";
 import {
+  account,
   auditLog,
   fleetDevice,
   fleetDeviceSession,
   fleetPairingRequest,
+  fleetPublisherLease,
+  fleetTelemetryRow,
 } from "@/db/schema";
 import { canonicalDevicePublicKeyB64 } from "@/lib/fleet-signature";
 import {
   DeviceBoundToAnotherAccountError,
   DeviceNotFoundError,
   InvalidCompletionProofError,
+  InvalidDevicePublicKeyError,
   NonMemberApprovalError,
   PairingAlreadyApprovedError,
   PairingAlreadyConsumedError,
@@ -30,6 +39,7 @@ import {
 import { setupTestDb } from "./helpers/db";
 import { seedAccount, seedCharacter } from "./helpers/seed";
 import { testConfig } from "./helpers/config";
+import fixture from "./fixtures/fleet-pairing-v1.json";
 
 const cfg = testConfig();
 const NOW = new Date("2026-09-04T12:00:00.000Z");
@@ -58,6 +68,57 @@ function signCompletion(
 async function auditRowsFor(db: Db, target: string) {
   return db.select().from(auditLog).where(eq(auditLog.target, target));
 }
+
+describe("fleet-pairing-v1 golden vector (tests/fixtures/fleet-pairing-v1.json)", () => {
+  it("reproduces the exact UTF-8 preimage and verifies the fixture's public-key/signature pair", () => {
+    expect(fixture.preimage_utf8).toBe(`fleet-pairing-v1\n${fixture.pairing_id}`);
+    expect(pairingChallengePreimage(fixture.pairing_id).toString("utf8")).toBe(
+      fixture.preimage_utf8,
+    );
+
+    const key = createPublicKey({
+      key: Buffer.from(fixture.public_key_spki_b64, "base64"),
+      format: "der",
+      type: "spki",
+    });
+    expect(key.asymmetricKeyType).toBe("ed25519");
+    const signature = Buffer.from(fixture.signature_b64url, "base64url");
+    expect(
+      ed25519Verify(null, pairingChallengePreimage(fixture.pairing_id), key, signature),
+    ).toBe(true);
+  });
+});
+
+describe("beginPairing candidate key validation", () => {
+  it("rejects a candidate key that is not valid DER at all", async () => {
+    await expect(
+      beginPairing(ctx.db, { publicKeySpki: new Uint8Array([1, 2, 3, 4, 5]), now: NOW }),
+    ).rejects.toThrow(InvalidDevicePublicKeyError);
+  });
+
+  it("rejects a candidate key that parses as SPKI DER but is the wrong algorithm", async () => {
+    const { publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    const rsaSpki = new Uint8Array(publicKey.export({ type: "spki", format: "der" }));
+    await expect(
+      beginPairing(ctx.db, { publicKeySpki: rsaSpki, now: NOW }),
+    ).rejects.toThrow(InvalidDevicePublicKeyError);
+  });
+
+  it("never creates a pairing request row for a rejected candidate key", async () => {
+    const garbage = new Uint8Array([9, 9, 9, 9]);
+    await expect(
+      beginPairing(ctx.db, { publicKeySpki: garbage, now: NOW }),
+    ).rejects.toThrow(InvalidDevicePublicKeyError);
+
+    const rows = await ctx.db
+      .select()
+      .from(fleetPairingRequest)
+      .where(
+        eq(fleetPairingRequest.publicKeySpkiB64, canonicalDevicePublicKeyB64(garbage)),
+      );
+    expect(rows).toHaveLength(0);
+  });
+});
 
 describe("beginPairing / approvePairing / completePairing", () => {
   it("completes the full pending -> approved -> completed lifecycle exactly once", async () => {
@@ -431,6 +492,76 @@ describe("beginPairing / approvePairing / completePairing", () => {
       .where(eq(fleetDeviceSession.deviceId, devices[0].id));
     expect(sessions).toHaveLength(2);
   });
+
+  it("refuses completion without mutation when the approving account loses Member tier before completion", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "member" });
+    await seedCharacter(ctx.db, cfg, { id: 92300082, accountId: acc.id });
+    const { spki, privateKey } = newKeyPair();
+    const { pairingId } = await beginPairing(ctx.db, { publicKeySpki: spki, now: NOW });
+    await approvePairing(ctx.db, pairingId, acc.id, NOW);
+
+    // Membership lost in the window between approval and completion.
+    await ctx.db.update(account).set({ tier: "associate" }).where(eq(account.id, acc.id));
+
+    await expect(
+      completePairing(ctx.db, {
+        pairingId,
+        completionSignature: signCompletion(privateKey, pairingId),
+        now: NOW,
+      }),
+    ).rejects.toThrow(NonMemberApprovalError);
+
+    const [row] = await ctx.db
+      .select()
+      .from(fleetPairingRequest)
+      .where(eq(fleetPairingRequest.id, pairingId));
+    expect(row.consumedAt).toBeNull();
+    expect(row.approvedDeviceId).toBeNull();
+    expect(
+      await ctx.db.select().from(fleetDevice).where(eq(fleetDevice.accountId, acc.id)),
+    ).toHaveLength(0);
+  });
+
+  it("refuses completion when the device is revoked after approval but before completion", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "member" });
+    await seedCharacter(ctx.db, cfg, { id: 92300080, accountId: acc.id });
+    const { spki, privateKey } = newKeyPair();
+
+    // First pairing creates the device.
+    const first = await beginPairing(ctx.db, { publicKeySpki: spki, now: NOW });
+    await approvePairing(ctx.db, first.pairingId, acc.id, NOW);
+    await completePairing(ctx.db, {
+      pairingId: first.pairingId,
+      completionSignature: signCompletion(privateKey, first.pairingId),
+      now: NOW,
+    });
+    const [device] = await ctx.db
+      .select()
+      .from(fleetDevice)
+      .where(eq(fleetDevice.accountId, acc.id));
+
+    // Second pairing request for the SAME key/account, approved...
+    const second = await beginPairing(ctx.db, { publicKeySpki: spki, now: NOW });
+    await approvePairing(ctx.db, second.pairingId, acc.id, NOW);
+
+    // ...but the device is revoked in the window between approval and
+    // completion, so completion must refuse rather than silently reviving it.
+    await revokeFleetDevice(ctx.db, device.id, acc.id, NOW);
+
+    await expect(
+      completePairing(ctx.db, {
+        pairingId: second.pairingId,
+        completionSignature: signCompletion(privateKey, second.pairingId),
+        now: NOW,
+      }),
+    ).rejects.toThrow(RevokedDeviceKeyError);
+
+    const [secondRow] = await ctx.db
+      .select()
+      .from(fleetPairingRequest)
+      .where(eq(fleetPairingRequest.id, second.pairingId));
+    expect(secondRow.consumedAt).toBeNull();
+  });
 });
 
 describe("revokeFleetDevice", () => {
@@ -471,6 +602,62 @@ describe("revokeFleetDevice", () => {
     await expect(
       revokeFleetDevice(ctx.db, "00000000-0000-0000-0000-000000000000", acc.id, NOW),
     ).rejects.toThrow(DeviceNotFoundError);
+  });
+
+  it("deletes seeded publisher leases and telemetry rows, not just sessions", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "member" });
+    const ch = await seedCharacter(ctx.db, cfg, { id: 92300041, accountId: acc.id });
+    const { spki, privateKey } = newKeyPair();
+    const { pairingId } = await beginPairing(ctx.db, { publicKeySpki: spki, now: NOW });
+    await approvePairing(ctx.db, pairingId, acc.id, NOW);
+    await completePairing(ctx.db, {
+      pairingId,
+      completionSignature: signCompletion(privateKey, pairingId),
+      now: NOW,
+    });
+
+    const [device] = await ctx.db
+      .select()
+      .from(fleetDevice)
+      .where(eq(fleetDevice.accountId, acc.id));
+    const [session] = await ctx.db
+      .select()
+      .from(fleetDeviceSession)
+      .where(eq(fleetDeviceSession.deviceId, device.id));
+
+    await ctx.db.insert(fleetPublisherLease).values({
+      characterId: ch.id,
+      deviceId: device.id,
+      sessionId: session.id,
+      fleetId: 5200001,
+      leaseExpiresAt: new Date(NOW.getTime() + 60_000),
+    });
+    await ctx.db.insert(fleetTelemetryRow).values({
+      characterId: ch.id,
+      fleetId: 5200001,
+      deviceId: device.id,
+      sessionId: session.id,
+      dps: 100,
+      ewar: [],
+      receivedAt: NOW,
+      staleAt: new Date(NOW.getTime() + 3_000),
+      hardExpiresAt: new Date(NOW.getTime() + 10_000),
+    });
+
+    await revokeFleetDevice(ctx.db, device.id, acc.id, NOW);
+
+    expect(
+      await ctx.db
+        .select()
+        .from(fleetPublisherLease)
+        .where(eq(fleetPublisherLease.deviceId, device.id)),
+    ).toHaveLength(0);
+    expect(
+      await ctx.db
+        .select()
+        .from(fleetTelemetryRow)
+        .where(eq(fleetTelemetryRow.deviceId, device.id)),
+    ).toHaveLength(0);
   });
 });
 

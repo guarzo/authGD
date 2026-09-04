@@ -27,6 +27,7 @@ async function seedEligibility(
     fleetId: number;
     rosterCharacterIds: number[];
     expiresAt: Date;
+    outcomeCode?: string;
   },
 ) {
   await db.insert(fleetEligibility).values({
@@ -36,7 +37,7 @@ async function seedEligibility(
     rosterCharacterIds: opts.rosterCharacterIds,
     verifiedAt: NOW,
     expiresAt: opts.expiresAt,
-    outcomeCode: "ok",
+    outcomeCode: opts.outcomeCode ?? "ok",
   });
 }
 
@@ -213,6 +214,54 @@ describe("readEligibleAccount", () => {
     });
 
     expect(await readEligibleAccount(ctx.db, acc.id, NOW)).toBeNull();
+  });
+
+  it('returns null when the eligibility row\'s outcomeCode is not "ok"', async () => {
+    const acc = await seedAccount(ctx.db, { tier: "member" });
+    const ch = await seedCharacter(ctx.db, cfg, {
+      id: 92200070,
+      accountId: acc.id,
+      scopes: [FLEET_READ_SCOPE],
+    });
+    await seedEligibility(ctx.db, {
+      characterId: ch.id,
+      accountId: acc.id,
+      fleetId: 5100070,
+      rosterCharacterIds: [ch.id],
+      expiresAt: FRESH,
+      outcomeCode: "not_in_fleet",
+    });
+
+    expect(await readEligibleAccount(ctx.db, acc.id, NOW)).toBeNull();
+  });
+
+  it("returns null when the character has since moved to a different account than the eligibility row's own accountId", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "member" });
+    const otherAcc = await seedAccount(ctx.db, { tier: "member" });
+    const ch = await seedCharacter(ctx.db, cfg, {
+      id: 92200071,
+      accountId: acc.id,
+      scopes: [FLEET_READ_SCOPE],
+    });
+    await seedEligibility(ctx.db, {
+      characterId: ch.id,
+      accountId: acc.id,
+      fleetId: 5100071,
+      rosterCharacterIds: [ch.id],
+      expiresAt: FRESH,
+    });
+
+    // Simulate a reclaim: the character now belongs to a different account,
+    // while the eligibility row's own (denormalized) accountId is unchanged.
+    await ctx.db
+      .update(character)
+      .set({ accountId: otherAcc.id })
+      .where(eq(character.id, ch.id));
+
+    expect(await readEligibleAccount(ctx.db, acc.id, NOW)).toBeNull();
+    // The row is not simply "moved": the new account does not gain
+    // eligibility from a row that was never verified for its character.
+    expect(await readEligibleAccount(ctx.db, otherAcc.id, NOW)).toBeNull();
   });
 
   it("builds one fleet-to-roster set per fleet for a multi-fleet account, never letting the caller choose", async () => {

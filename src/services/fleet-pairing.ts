@@ -18,6 +18,7 @@ import {
 import {
   canonicalDevicePublicKeyB64,
   decodeDevicePublicKeyB64,
+  isEd25519SpkiPublicKey,
 } from "@/lib/fleet-signature";
 import { logAudit } from "@/services/audit";
 import { buildDeviceCatalogue, type DeviceCatalogue } from "@/services/fleet-eligibility";
@@ -30,9 +31,18 @@ export class PairingNotApprovedError extends Error {}
 /** Thrown by `approvePairing` for any account that is not a CURRENT,
  *  Member-tier account — deliberately one error for "no such account" and
  *  "wrong tier", since both mean the same thing to the caller: this account
- *  may not approve a pairing. */
+ *  may not approve a pairing. `completePairing` throws the SAME error when
+ *  its transactional recheck finds the previously-approving account no
+ *  longer current/Member-tier by completion time — the underlying condition
+ *  (this account may not vouch for a device pairing) is identical either
+ *  way. */
 export class NonMemberApprovalError extends Error {}
 export class InvalidCompletionProofError extends Error {}
+/** A candidate public key is not valid Ed25519 SPKI DER. Thrown by
+ *  `beginPairing` before the key is canonicalized, persisted, or offered to
+ *  a browser for approval — a malformed/garbage/wrong-algorithm key never
+ *  reaches storage or creates a pairing request at all. */
+export class InvalidDevicePublicKeyError extends Error {}
 /** A candidate/stored public key belongs to a device whose `revokedAt` is
  *  set. Permanent by design (Task 3's ruling): re-pairing requires a brand
  *  new locally generated key pair, never reuse of the revoked one. */
@@ -99,8 +109,9 @@ const SIGNATURE_RE = /^[A-Za-z0-9_-]{86}$/;
  * key) over this pairing's challenge pre-image. Mirrors
  * `verifyFleetRequest`'s defensive shape (`src/lib/fleet-signature.ts`):
  * reject a malformed signature shape before touching `crypto` at all, reject
- * a non-Ed25519 key outright, and treat any parse/verify exception as an
- * unproven signature rather than letting it escape uncaught.
+ * a non-Ed25519 key outright via the shared `isEd25519SpkiPublicKey` check,
+ * and treat any parse/verify exception as an unproven signature rather than
+ * letting it escape uncaught.
  */
 function verifyCompletionProof(
   publicKeySpkiB64: string,
@@ -109,16 +120,15 @@ function verifyCompletionProof(
 ): boolean {
   if (!SIGNATURE_RE.test(completionSignature)) return false;
 
+  const spki = decodeDevicePublicKeyB64(publicKeySpkiB64);
+  // No dedicated outcome for "right key material, wrong algorithm" — a
+  // paired device can only ever record an Ed25519 SPKI key (beginPairing
+  // validates this before persisting), so a mismatched key type is exactly
+  // as unproven as a bad signature.
+  if (!isEd25519SpkiPublicKey(spki)) return false;
+
   try {
-    const key = createPublicKey({
-      key: Buffer.from(decodeDevicePublicKeyB64(publicKeySpkiB64)),
-      format: "der",
-      type: "spki",
-    });
-    // No dedicated outcome for "right key material, wrong algorithm" — a
-    // paired device can only ever record an Ed25519 SPKI key, so a
-    // mismatched key type is exactly as unproven as a bad signature.
-    if (key.asymmetricKeyType !== "ed25519") return false;
+    const key = createPublicKey({ key: Buffer.from(spki), format: "der", type: "spki" });
     const signature = Buffer.from(completionSignature, "base64url");
     return ed25519Verify(null, pairingChallengePreimage(pairingId), key, signature);
   } catch {
@@ -131,17 +141,27 @@ function verifyCompletionProof(
  * Registers a device's candidate Ed25519 public key and opens a one-time
  * pairing request for a browser-signed-in account to approve.
  *
- * Persists ONLY the key's `canonicalDevicePublicKeyB64()` form (Task 3's
- * ruling) — never the caller-supplied encoding — so base64/base64url and
- * padded/unpadded spellings of the identical key always resolve to the same
- * stored identity. A key already recorded on a soft-revoked device is
- * permanently barred: this returns a stable refusal rather than silently
- * reviving it, and the caller must generate a new local key pair instead.
+ * Rejects a candidate that does not parse as valid Ed25519 SPKI DER with a
+ * stable `InvalidDevicePublicKeyError` BEFORE anything else runs — before
+ * canonicalizing, before the revoked-key lookup, and before a row exists for
+ * any browser to approve. Persists ONLY the key's
+ * `canonicalDevicePublicKeyB64()` form (Task 3's ruling) — never the
+ * caller-supplied encoding — so base64/base64url and padded/unpadded
+ * spellings of the identical key always resolve to the same stored
+ * identity. A key already recorded on a soft-revoked device is permanently
+ * barred: this returns a stable refusal rather than silently reviving it,
+ * and the caller must generate a new local key pair instead.
  */
 export async function beginPairing(
   dbx: Dbx,
   args: { publicKeySpki: Uint8Array; now: Date },
 ): Promise<{ pairingId: string; approvalUrl: string }> {
+  if (!isEd25519SpkiPublicKey(args.publicKeySpki)) {
+    throw new InvalidDevicePublicKeyError(
+      "candidate device public key is not valid Ed25519 SPKI DER",
+    );
+  }
+
   const canonicalKey = canonicalDevicePublicKeyB64(args.publicKeySpki);
 
   const [existingDevice] = await dbx
@@ -233,6 +253,11 @@ export async function approvePairing(
  * `src/services/session.ts`'s convention) and the approving account's
  * `DeviceCatalogue`.
  *
+ * Rechecks, transactionally and with row locks, that the request's
+ * approving account is STILL a current Member-tier account (membership can
+ * change between `approvePairing` and this call) and mutates nothing if it
+ * is not.
+ *
  * A device key that is not yet on file is inserted fresh, bound to this
  * completion's approving account. One that already is on file — the same
  * local key pairing again for the SAME account (e.g. the app simply
@@ -276,6 +301,22 @@ export async function completePairing(
       );
     }
     const approvedAccountId = row.approvedAccountId;
+
+    // Controller security ruling: recheck the approving account is STILL a
+    // current Member-tier account at completion time, not just at approval
+    // time — locked (`for("update")`) inside this same transaction so a
+    // concurrent tier change cannot race past it. No write has happened yet
+    // on this path, so a refusal here mutates nothing.
+    const [approvingAccount] = await tx
+      .select({ tier: account.tier })
+      .from(account)
+      .where(eq(account.id, approvedAccountId))
+      .for("update");
+    if (!approvingAccount || approvingAccount.tier !== "member") {
+      throw new NonMemberApprovalError(
+        "the approving account is no longer a current Member-tier account",
+      );
+    }
 
     // Defensive: the stored digest should always match what beginPairing
     // wrote for this exact id. A mismatch means this row predates a protocol
@@ -420,10 +461,16 @@ export async function revokeFleetRelayForAccount(
   now: Date,
 ): Promise<void> {
   await dbx.transaction(async (tx) => {
+    // Locked (`for("update")`) before any dependent delete: without it, a
+    // concurrent `completePairing` reusing one of these device rows (the
+    // same account re-pairing its own key) could insert a fresh session
+    // between this select and the delete below, and that session would
+    // silently outlive the revoke it should have been swept up by.
     const devices = await tx
       .select({ id: fleetDevice.id })
       .from(fleetDevice)
-      .where(and(eq(fleetDevice.accountId, accountId), isNull(fleetDevice.revokedAt)));
+      .where(and(eq(fleetDevice.accountId, accountId), isNull(fleetDevice.revokedAt)))
+      .for("update");
     for (const d of devices) {
       await tx
         .update(fleetDevice)
