@@ -689,3 +689,186 @@ export const structureEvent = pgTable(
     index("structure_event_pending_idx").on(t.corporationId, t.alertStatus, t.sentAt),
   ],
 );
+
+/**
+ * Fleet telemetry relay: six ephemeral tables backing the signed device
+ * protocol in `src/lib/fleet-signature.ts`. Every row here is short-lived
+ * operational state — pairing/session material and a few seconds of DPS/EWAR —
+ * never a durable log. None of these tables store raw combat log content,
+ * attacker/target text, EVE tokens, or browser session cookies.
+ *
+ * Public key material is stored as base64 text (SPKI DER), matching this
+ * codebase's existing convention of encoding binary blobs as text rather than
+ * native `bytea` — drizzle-orm's pg-core has no bytea column helper, and every
+ * other binary value here (`crypto.ts`, `pkceVerifier`, hashed session ids)
+ * already does the same.
+ */
+
+/**
+ * A paired device: one Ed25519 public key, tied to the account that approved
+ * it. `revokedAt` is a soft revoke — the row survives so `fleet_pairing_
+ * request.approvedDeviceId` keeps meaning — while `revokeFleetDevice`
+ * (Task 4) deletes its sessions/leases/rows explicitly. The CASCADE from
+ * `accountId` is the schema-level backstop: deleting an account tears down
+ * every device (and, transitively, every session/lease/row) it ever paired,
+ * even if a future code path forgets to call that service first.
+ */
+export const fleetDevice = pgTable("fleet_device", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  accountId: uuid("account_id")
+    .notNull()
+    .references(() => account.id, { onDelete: "cascade" }),
+  publicKeySpkiB64: text("public_key_spki_b64").notNull().unique(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  revokedAt: timestamp("revoked_at", { withTimezone: true }),
+});
+
+/**
+ * A device's request to pair, before a browser-approved account exists for it.
+ * The device submits its candidate Ed25519 public key and must later prove
+ * possession of the matching private key by signing `challengeDigest`'s
+ * pre-image to complete pairing — approval alone is not enough.
+ *
+ * `approvedAccountId`/`approvedDeviceId` are set once, at approval and at
+ * completion respectively, and both CASCADE: this row has no independent
+ * value once its account or device is gone, unlike the audit-quality
+ * `bootstrap_admin_grant` pattern elsewhere in this schema.
+ */
+export const fleetPairingRequest = pgTable(
+  "fleet_pairing_request",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    publicKeySpkiB64: text("public_key_spki_b64").notNull(),
+    challengeDigest: text("challenge_digest").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    approvedAt: timestamp("approved_at", { withTimezone: true }),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    approvedAccountId: uuid("approved_account_id").references(() => account.id, {
+      onDelete: "cascade",
+    }),
+    approvedDeviceId: uuid("approved_device_id").references(() => fleetDevice.id, {
+      onDelete: "cascade",
+    }),
+  },
+  (t) => [index("fleet_pairing_request_expires_at_idx").on(t.expiresAt)],
+);
+
+/**
+ * A short-lived signed-in device session. `id` is the SHA-256 digest of the
+ * opaque session value the device holds — the same "store the hash, not the
+ * secret" shape as the browser `session` table above — so a leaked database
+ * row cannot be replayed as a session. `lastRevision` is the server's high-
+ * water mark for `X-Fleet-Revision`: a publish must submit a strictly greater
+ * value, which is what makes a captured-and-replayed signed request inert.
+ */
+export const fleetDeviceSession = pgTable(
+  "fleet_device_session",
+  {
+    id: text("id").primaryKey(),
+    deviceId: uuid("device_id")
+      .notNull()
+      .references(() => fleetDevice.id, { onDelete: "cascade" }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    lastRevision: integer("last_revision").notNull().default(0),
+    lastPublishAt: timestamp("last_publish_at", { withTimezone: true }),
+    lastReadAt: timestamp("last_read_at", { withTimezone: true }),
+  },
+  (t) => [index("fleet_device_session_expires_at_idx").on(t.expiresAt)],
+);
+
+/**
+ * A materialized, expiring cache of one linked character's ESI-observed fleet
+ * membership — the only place `esi-fleets.read_fleet.v1` evidence lands.
+ * Relay routes read only this row; they never call ESI (Global Constraints).
+ * `rosterCharacterIds` holds ONLY character ids: no name, ship, or system, so
+ * a leaked row exposes fleet composition by id and nothing else about it.
+ * `outcomeCode` is stored verbatim as text, not an enum — like `structure.
+ * state` above, a new outcome this schema doesn't yet branch on must not be
+ * able to fail a read.
+ */
+export const fleetEligibility = pgTable(
+  "fleet_eligibility",
+  {
+    characterId: bigint("character_id", { mode: "number" })
+      .primaryKey()
+      .references(() => character.id, { onDelete: "cascade" }),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => account.id, { onDelete: "cascade" }),
+    fleetId: bigint("fleet_id", { mode: "number" }).notNull(),
+    rosterCharacterIds: jsonb("roster_character_ids")
+      .$type<number[]>()
+      .notNull()
+      .default([]),
+    verifiedAt: timestamp("verified_at", { withTimezone: true }).notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    outcomeCode: text("outcome_code").notNull(),
+  },
+  (t) => [
+    index("fleet_eligibility_account_id_idx").on(t.accountId),
+    index("fleet_eligibility_expires_at_idx").on(t.expiresAt),
+  ],
+);
+
+/**
+ * One EVE character publishes through at most one device/session at a time,
+ * globally — this is what a global `characterId` primary key enforces. A
+ * second device claiming the same character must fail closed rather than
+ * silently taking over, which is why the relay core (Task 5) checks this
+ * row's device/session before accepting a publish.
+ */
+export const fleetPublisherLease = pgTable(
+  "fleet_publisher_lease",
+  {
+    characterId: bigint("character_id", { mode: "number" })
+      .primaryKey()
+      .references(() => character.id, { onDelete: "cascade" }),
+    deviceId: uuid("device_id")
+      .notNull()
+      .references(() => fleetDevice.id, { onDelete: "cascade" }),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => fleetDeviceSession.id, { onDelete: "cascade" }),
+    fleetId: bigint("fleet_id", { mode: "number" }).notNull(),
+    leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }).notNull(),
+  },
+  (t) => [index("fleet_publisher_lease_expires_at_idx").on(t.leaseExpiresAt)],
+);
+
+/**
+ * The current sparse remote row for one character — the only thing a reader
+ * ever sees. Deliberately narrow: character id, fleet id, DPS, EWAR, and
+ * three timestamps. No log content, no target/source, no event time, no
+ * fleet name, no system, no ship, no EVE token — an accepted empty publish
+ * batch deletes this row immediately (Task 5), so its mere presence already
+ * means "live as of `receivedAt`".
+ *
+ * `staleAt`/`hardExpiresAt` are stored, not recomputed at read time, so the
+ * per-fleet expiry sweep and the filtered read (Task 5) can use a plain index
+ * instead of an expression on `receivedAt` — this table's `(fleet_id,
+ * hard_expires_at)` index below is exactly that sweep's shape.
+ */
+export const fleetTelemetryRow = pgTable(
+  "fleet_telemetry_row",
+  {
+    characterId: bigint("character_id", { mode: "number" })
+      .primaryKey()
+      .references(() => character.id, { onDelete: "cascade" }),
+    fleetId: bigint("fleet_id", { mode: "number" }).notNull(),
+    deviceId: uuid("device_id")
+      .notNull()
+      .references(() => fleetDevice.id, { onDelete: "cascade" }),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => fleetDeviceSession.id, { onDelete: "cascade" }),
+    dps: integer("dps").notNull(),
+    ewar: jsonb("ewar").$type<string[]>().notNull().default([]),
+    receivedAt: timestamp("received_at", { withTimezone: true }).notNull(),
+    staleAt: timestamp("stale_at", { withTimezone: true }).notNull(),
+    hardExpiresAt: timestamp("hard_expires_at", { withTimezone: true }).notNull(),
+  },
+  (t) => [
+    index("fleet_telemetry_row_hard_expires_at_idx").on(t.hardExpiresAt),
+    index("fleet_telemetry_row_fleet_hard_expires_idx").on(t.fleetId, t.hardExpiresAt),
+  ],
+);

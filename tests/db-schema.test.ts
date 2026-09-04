@@ -1,6 +1,19 @@
 import { eq, sql } from "drizzle-orm";
+import { createHash } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { account, character, discordLink, universeName } from "@/db/schema";
+import {
+  account,
+  character,
+  discordLink,
+  fleetDevice,
+  fleetDeviceSession,
+  fleetEligibility,
+  fleetPairingRequest,
+  fleetPublisherLease,
+  fleetTelemetryRow,
+  universeName,
+} from "@/db/schema";
+import { MANAGED_TABLE_NAMES } from "@/db/tables";
 import { setupTestDb } from "./helpers/db";
 import { testConfig } from "./helpers/config";
 import { seedAccount, seedCharacter } from "./helpers/seed";
@@ -147,5 +160,113 @@ describe("universe_name", () => {
         .insert(universeName)
         .values({ id: 31000999, kind: "system", name: "J999999" }),
     ).rejects.toThrow();
+  });
+});
+
+describe("fleet relay schema", () => {
+  it("exports all six relay tables and registers them in MANAGED_TABLES", () => {
+    expect(fleetPairingRequest).toBeDefined();
+    expect(fleetDevice).toBeDefined();
+    expect(fleetDeviceSession).toBeDefined();
+    expect(fleetEligibility).toBeDefined();
+    expect(fleetPublisherLease).toBeDefined();
+    expect(fleetTelemetryRow).toBeDefined();
+
+    for (const name of [
+      "fleet_pairing_request",
+      "fleet_device",
+      "fleet_device_session",
+      "fleet_eligibility",
+      "fleet_publisher_lease",
+      "fleet_telemetry_row",
+    ]) {
+      expect(MANAGED_TABLE_NAMES).toContain(name);
+    }
+  });
+
+  it("stores an inserted session's hash, never a raw session id column", async () => {
+    const acc = await seedAccount(ctx.db);
+    const [device] = await ctx.db
+      .insert(fleetDevice)
+      .values({ accountId: acc.id, publicKeySpkiB64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==" })
+      .returning();
+
+    // A raw opaque session value never touches this table: only its SHA-256
+    // digest does, mirroring the browser `session` table above.
+    const rawSessionValue = "test-only-raw-session-value-not-a-real-secret";
+    const sessionId = createHash("sha256").update(rawSessionValue).digest("base64url");
+    const [row] = await ctx.db
+      .insert(fleetDeviceSession)
+      .values({
+        id: sessionId,
+        deviceId: device.id,
+        expiresAt: new Date(Date.now() + 60_000),
+      })
+      .returning();
+
+    expect(row.id).toBe(sessionId);
+    expect(row.id).not.toBe(rawSessionValue);
+    // Enumerates every column the table actually has: proves there is no
+    // second column anywhere that could hold the raw session value.
+    expect(Object.keys(row).sort()).toEqual(
+      [
+        "id",
+        "deviceId",
+        "expiresAt",
+        "lastRevision",
+        "lastPublishAt",
+        "lastReadAt",
+      ].sort(),
+    );
+  });
+
+  it("stores only the documented columns on a current relay row", async () => {
+    const acc = await seedAccount(ctx.db);
+    const ch = await seedCharacter(ctx.db, cfg, { id: 91500001, accountId: acc.id });
+    const [device] = await ctx.db
+      .insert(fleetDevice)
+      .values({ accountId: acc.id, publicKeySpkiB64: "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBB==" })
+      .returning();
+    const [session] = await ctx.db
+      .insert(fleetDeviceSession)
+      .values({
+        id: createHash("sha256").update("another-test-only-value").digest("base64url"),
+        deviceId: device.id,
+        expiresAt: new Date(Date.now() + 60_000),
+      })
+      .returning();
+
+    const now = new Date("2026-09-04T12:00:00.000Z");
+    const [row] = await ctx.db
+      .insert(fleetTelemetryRow)
+      .values({
+        characterId: ch.id,
+        fleetId: 5000001,
+        deviceId: device.id,
+        sessionId: session.id,
+        dps: 1234,
+        ewar: ["SCRAM/POINT"],
+        receivedAt: now,
+        staleAt: new Date(now.getTime() + 3_000),
+        hardExpiresAt: new Date(now.getTime() + 10_000),
+      })
+      .returning();
+
+    // No column for log content, target/source, an event timestamp beyond
+    // receivedAt, fleet name, system, ship, or an EVE token — only exactly
+    // these nine columns exist on the table.
+    expect(Object.keys(row).sort()).toEqual(
+      [
+        "characterId",
+        "fleetId",
+        "deviceId",
+        "sessionId",
+        "dps",
+        "ewar",
+        "receivedAt",
+        "staleAt",
+        "hardExpiresAt",
+      ].sort(),
+    );
   });
 });

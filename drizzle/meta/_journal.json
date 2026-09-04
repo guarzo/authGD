@@ -99,6 +99,13 @@
       "when": 1787548177354,
       "tag": "0013_bumpy_kid_colt",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1788556552011,
+      "tag": "0014_dapper_red_hulk",
+      "breakpoints": true
     }
   ]
 }
