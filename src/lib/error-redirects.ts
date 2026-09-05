@@ -152,6 +152,13 @@ export const ACCOUNT_ERRORS = {
   stale_character:
     "That character isn't on this account anymore. The page below is current.",
   not_admin: "Your admin access was removed. This is your account page.",
+  // Task 6 (fleet telemetry tracer): the /fleet/pair/[id] browser approval
+  // page requires a current Member-tier account (approvePairing's own rule —
+  // src/services/fleet-pairing.ts — deliberately ignores cryo, same as this
+  // gate). A non-Member visiting a pairing link is sent here rather than
+  // shown an inert page with no action on it.
+  fleet_pairing_member_required:
+    "Fleet device pairing requires a current Member-tier account.",
 } as const;
 
 /** Codes reaching `/admin/accounts`. Every one of these is a race between two
