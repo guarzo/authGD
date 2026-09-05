@@ -427,6 +427,129 @@ describe("replaceDeviceProjection: lease conflicts", () => {
     expect(result).toEqual({ ok: true });
     expect((await rowFor(ctx.db, 95400302))?.dps).toBe(999);
   });
+
+  it("does not delete a withdrawn character's row/lease if a DIFFERENT device's takeover lands between the pre-lock read and the lock (regression, fix round 1 finding M1)", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "member" });
+    const { sessionId: sessionA } = await pairDevice(ctx.db, acc.id, NOW);
+    const { device: deviceB } = await pairDevice(ctx.db, acc.id, NOW);
+    // X (95400320) is the character fought over; Y (95400321) is a second
+    // character A keeps publishing, chosen with a HIGHER id than X so the
+    // deterministic ascending lock order locks X first — exactly where A's
+    // call will block on B's held advisory lock below.
+    await seedEligibleCharacter(ctx.db, {
+      characterId: 95400320,
+      accountId: acc.id,
+      fleetId: 6100023,
+      rosterCharacterIds: [95400320, 95400321],
+      now: NOW,
+    });
+    await seedEligibleCharacter(ctx.db, {
+      characterId: 95400321,
+      accountId: acc.id,
+      fleetId: 6100023,
+      rosterCharacterIds: [95400320, 95400321],
+      now: NOW,
+    });
+
+    // Device A initially claims both X and Y.
+    const initial = await replaceDeviceProjection(ctx.db, {
+      sessionId: sessionA,
+      now: NOW,
+      revision: 1,
+      rows: [row(95400320, 100), row(95400321, 200)],
+    });
+    expect(initial).toEqual({ ok: true });
+
+    const [sessionRowB] = await ctx.db
+      .select()
+      .from(fleetDeviceSession)
+      .where(eq(fleetDeviceSession.deviceId, deviceB.id));
+
+    const takeoverNow = new Date(NOW.getTime() + 11_000); // past X's 10s hard expiry
+
+    // Simulate device B's in-flight, NOT YET COMMITTED takeover of X (its
+    // lease has expired by `takeoverNow`) on a raw connection held open
+    // deliberately — the same advisory lock class/key `lockCharacterForRelay`
+    // uses, so A's own call below genuinely blocks on it rather than merely
+    // approximating the race.
+    const client = await ctx.pool.connect();
+    let withdrawal: ReturnType<typeof replaceDeviceProjection> | undefined;
+    try {
+      await client.query("begin");
+      await client.query("select pg_advisory_xact_lock(2, hashint8($1))", [95400320]);
+      await client.query(
+        `update fleet_publisher_lease set device_id = $1, session_id = $2, lease_expires_at = $3 where character_id = $4`,
+        [deviceB.id, sessionRowB.id, new Date(takeoverNow.getTime() + 10_000), 95400320],
+      );
+      await client.query(
+        `update fleet_telemetry_row set device_id = $1, session_id = $2, dps = $3, received_at = $4, stale_at = $5, hard_expires_at = $6 where character_id = $7`,
+        [
+          deviceB.id,
+          sessionRowB.id,
+          999,
+          takeoverNow,
+          new Date(takeoverNow.getTime() + 3_000),
+          new Date(takeoverNow.getTime() + 10_000),
+          95400320,
+        ],
+      );
+      // Deliberately NOT committed yet: A's pre-lock `existingLeases` read
+      // below must still see the OLD (device A) row, exactly as it would in
+      // the real race, since B's change stays invisible to any OTHER
+      // transaction under read-committed isolation until this commits.
+
+      // Device A publishes again, resubmitting Y but omitting X (withdrawing
+      // it). X sorts first in ascending lock order, so this call's lock loop
+      // blocks on the advisory lock B is holding above — it cannot proceed
+      // past that point until B's transaction below commits.
+      withdrawal = replaceDeviceProjection(ctx.db, {
+        sessionId: sessionA,
+        now: takeoverNow,
+        revision: 2,
+        rows: [row(95400321, 250)],
+      });
+
+      // Confirm A's call is ACTUALLY blocked on a lock before releasing B's
+      // transaction — a self-verifying guard against a silently-degenerate
+      // race (one that never truly interleaved and so would prove nothing).
+      let blocked = false;
+      for (let i = 0; i < 50; i++) {
+        const { rows: waiters } = await ctx.pool.query(
+          "select count(*)::int as n from pg_stat_activity where wait_event_type = 'Lock'",
+        );
+        if ((waiters[0] as { n: number }).n > 0) {
+          blocked = true;
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      expect(blocked).toBe(true);
+
+      await client.query("commit");
+    } finally {
+      // Always attempt to end the transaction here, even if the assertion
+      // above failed: otherwise the advisory lock stays held and A's
+      // `withdrawal` call above never settles, hanging this test (and,
+      // since it shares the connection pool, potentially the suite after
+      // it) instead of failing cleanly.
+      await client.query("commit").catch(() => client.query("rollback").catch(() => {}));
+      client.release();
+    }
+
+    const result = await withdrawal;
+    expect(result).toEqual({ ok: true });
+
+    // B's takeover must survive untouched — A's withdrawal must NOT have
+    // deleted the row/lease that now belongs to a different device.
+    const xRow = await rowFor(ctx.db, 95400320);
+    expect(xRow?.deviceId).toBe(deviceB.id);
+    expect(xRow?.dps).toBe(999);
+    const xLease = await leaseFor(ctx.db, 95400320);
+    expect(xLease?.deviceId).toBe(deviceB.id);
+
+    // Y, meanwhile, was correctly updated by A's own request.
+    expect((await rowFor(ctx.db, 95400321))?.dps).toBe(250);
+  });
 });
 
 describe("replaceDeviceProjection: revision and cadence", () => {
@@ -578,7 +701,7 @@ describe("replaceDeviceProjection: session validity", () => {
 });
 
 describe("readFleetProjection: liveness", () => {
-  it("is live just under 3s, stale at exactly 3s, and absent at exactly 10s", async () => {
+  it("is live at 2,999ms and stale at exactly 3,000ms (each boundary read via its own reader session, so the 500ms read cadence cannot mask the real transition)", async () => {
     const acc = await seedAccount(ctx.db, { tier: "member" });
     const { sessionId: publisherSession } = await pairDevice(ctx.db, acc.id, NOW);
     await seedEligibleCharacter(ctx.db, {
@@ -595,31 +718,57 @@ describe("readFleetProjection: liveness", () => {
       rows: [row(95500001, 500, ["SCRAM/POINT"])],
     });
 
-    const { sessionId: readerSession } = await pairDevice(ctx.db, acc.id, NOW);
-
+    // A read at 2,999ms and a read at 3,000ms are only 1ms apart -- reusing
+    // one reader session for both would make the second read fail the
+    // 500ms cadence check (`rate_limited`) instead of ever reaching the
+    // liveness computation, silently "proving" the 3,000ms boundary without
+    // actually exercising it (fix round 1, finding M2). A fresh, already-
+    // paired reader session per read has no prior `lastReadAt` at all, so
+    // cadence never applies to either read below.
+    const { sessionId: readerAtLive } = await pairDevice(ctx.db, acc.id, NOW);
     const almostStale = await readFleetProjection(ctx.db, {
-      sessionId: readerSession,
+      sessionId: readerAtLive,
       now: new Date(NOW.getTime() + 2_999),
     });
     expect(almostStale.ok).toBe(true);
     if (!almostStale.ok) throw new Error("unreachable");
     expect(almostStale.rows.find((r) => r.characterId === 95500001)?.state).toBe("live");
 
+    const { sessionId: readerAtStale } = await pairDevice(ctx.db, acc.id, NOW);
     const stale = await readFleetProjection(ctx.db, {
-      sessionId: readerSession,
-      now: new Date(NOW.getTime() + 4_500), // past the 500ms read cadence too
+      sessionId: readerAtStale,
+      now: new Date(NOW.getTime() + 3_000),
     });
     expect(stale.ok).toBe(true);
     if (!stale.ok) throw new Error("unreachable");
     expect(stale.rows.find((r) => r.characterId === 95500001)?.state).toBe("stale");
+  });
 
+  it("is absent at exactly 10,000ms", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "member" });
+    const { sessionId: publisherSession } = await pairDevice(ctx.db, acc.id, NOW);
+    await seedEligibleCharacter(ctx.db, {
+      characterId: 95500002,
+      accountId: acc.id,
+      fleetId: 6200002,
+      now: NOW,
+      expiresAt: new Date(NOW.getTime() + 60_000),
+    });
+    await replaceDeviceProjection(ctx.db, {
+      sessionId: publisherSession,
+      now: NOW,
+      revision: 1,
+      rows: [row(95500002, 500)],
+    });
+
+    const { sessionId: readerSession } = await pairDevice(ctx.db, acc.id, NOW);
     const gone = await readFleetProjection(ctx.db, {
       sessionId: readerSession,
       now: new Date(NOW.getTime() + 10_000),
     });
     expect(gone.ok).toBe(true);
     if (!gone.ok) throw new Error("unreachable");
-    expect(gone.rows.find((r) => r.characterId === 95500001)).toBeUndefined();
+    expect(gone.rows.find((r) => r.characterId === 95500002)).toBeUndefined();
   });
 });
 

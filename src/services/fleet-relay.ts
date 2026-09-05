@@ -308,6 +308,9 @@ export async function replaceDeviceProjection(
       // Deterministic ascending lock order over the UNION of submitted
       // character ids and this DEVICE's existing published characters (see
       // this function's own doc comment for why "device", not "session").
+      // `existingLeases` is an UNLOCKED, pre-lock snapshot: it exists only to
+      // discover WHICH character ids might need a lock, never to decide what
+      // gets deleted below — see the withdrawal comment further down for why.
       const existingLeases = await tx
         .select({ characterId: fleetPublisherLease.characterId })
         .from(fleetPublisherLease)
@@ -349,18 +352,40 @@ export async function replaceDeviceProjection(
         }
       }
 
-      // Every check above passed: mutate. Withdraw this device's rows that
-      // were not resubmitted, then upsert every submitted row/lease, then
-      // advance the session — all inside the same transaction, so any
-      // later throw would have rolled back everything already done here.
-      const toWithdraw = existingIds.filter((id) => !submittedIdSet.has(id));
+      // Every check above passed: mutate. Withdraw only characters that are
+      // BOTH not resubmitted AND, per the lock just taken above, STILL
+      // currently leased to THIS device — never decided from the pre-lock
+      // `existingIds` snapshot alone. A character can legitimately change
+      // owners between that early, unlocked snapshot and this device's own
+      // lock acquisition on it: a DIFFERENT device's publish can validly
+      // take over a character whose lease had expired, landing exactly in
+      // that window. Withdrawing by the stale snapshot would delete that
+      // OTHER device's fresh row instead of this device's own now-absent
+      // claim (fix round 1, finding M1).
+      const toWithdraw = allIds.filter((id) => {
+        if (submittedIdSet.has(id)) return false;
+        return leaseByCharacterId.get(id)?.deviceId === device.id;
+      });
       if (toWithdraw.length > 0) {
+        // Belt-and-suspenders: qualify the delete itself by `deviceId`, so
+        // even a future defect in `toWithdraw`'s membership could never
+        // delete a row/lease this device does not currently own.
         await tx
           .delete(fleetTelemetryRow)
-          .where(inArray(fleetTelemetryRow.characterId, toWithdraw));
+          .where(
+            and(
+              inArray(fleetTelemetryRow.characterId, toWithdraw),
+              eq(fleetTelemetryRow.deviceId, device.id),
+            ),
+          );
         await tx
           .delete(fleetPublisherLease)
-          .where(inArray(fleetPublisherLease.characterId, toWithdraw));
+          .where(
+            and(
+              inArray(fleetPublisherLease.characterId, toWithdraw),
+              eq(fleetPublisherLease.deviceId, device.id),
+            ),
+          );
       }
 
       for (const row of args.rows) {
