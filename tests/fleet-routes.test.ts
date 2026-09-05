@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import { NextRequest } from "next/server";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Db } from "@/db";
-import { fleetDevice, fleetEligibility } from "@/db/schema";
+import { account, fleetDevice, fleetEligibility } from "@/db/schema";
 import { FLEET_READ_SCOPE } from "@/lib/esi/client";
 import {
   authenticateFleetRequest,
@@ -53,6 +53,7 @@ const { POST: completeRoute } =
 const { GET: catalogueRoute } = await import("@/app/api/fleet/v1/catalogue/route");
 const { PUT: snapshotPut, GET: snapshotGet } =
   await import("@/app/api/fleet/v1/snapshot/route");
+const { PUT: sessionRenewRoute } = await import("@/app/api/fleet/v1/session/route");
 
 const cfg = testConfig();
 // Real wall-clock time, deliberately, unlike the fixed literal `NOW` fleet-
@@ -548,6 +549,177 @@ describe("GET /api/fleet/v1/catalogue", () => {
     expect(res.status).toBe(401);
     expect((await res.json()).error).toBe("unauthorized");
   });
+
+  it("rejects a signed request carrying a query string, even though nothing in the handler reads one", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "member" });
+    const { sessionId, privateKey } = await pairDevice(ctx.db, acc.id, NOW);
+    const headers = signedHeaders({
+      privateKey,
+      method: "GET",
+      path: "/api/fleet/v1/catalogue",
+      sessionId,
+      issuedAt: NOW.toISOString(),
+      revision: 1,
+      body: new Uint8Array(0),
+    });
+    const res = await catalogueRoute(
+      new NextRequest("http://localhost/api/fleet/v1/catalogue?foo=bar", {
+        method: "GET",
+        headers,
+      }),
+    );
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toBe("bad_headers");
+  });
+
+  it("refuses a replayed (non-increasing) revision and enforces the read cadence, exactly like GET /snapshot", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "member" });
+    await seedCharacter(ctx.db, cfg, { id: 92900040, accountId: acc.id });
+    const { sessionId, privateKey } = await pairDevice(ctx.db, acc.id, NOW);
+
+    const first = await catalogueRoute(
+      new NextRequest("http://localhost/api/fleet/v1/catalogue", {
+        method: "GET",
+        headers: signedHeaders({
+          privateKey,
+          method: "GET",
+          path: "/api/fleet/v1/catalogue",
+          sessionId,
+          issuedAt: NOW.toISOString(),
+          revision: 1,
+          body: new Uint8Array(0),
+        }),
+      }),
+    );
+    expect(first.status).toBe(200);
+
+    const replay = await catalogueRoute(
+      new NextRequest("http://localhost/api/fleet/v1/catalogue", {
+        method: "GET",
+        headers: signedHeaders({
+          privateKey,
+          method: "GET",
+          path: "/api/fleet/v1/catalogue",
+          sessionId,
+          issuedAt: new Date().toISOString(),
+          revision: 1,
+          body: new Uint8Array(0),
+        }),
+      }),
+    );
+    expect(replay.status).toBe(409);
+    expect((await replay.json()).error).toBe("revision_replayed");
+
+    // Cadence is enforced against the SERVER's own real clock (this file's
+    // top-of-file note: these route handlers call `new Date()` internally,
+    // not an injected one), so this relies on real elapsed time rather than
+    // a fabricated `issuedAt` offset -- a call immediately after `first`,
+    // with no delay, is always well under the 500ms bound.
+    const tooSoon = await catalogueRoute(
+      new NextRequest("http://localhost/api/fleet/v1/catalogue", {
+        method: "GET",
+        headers: signedHeaders({
+          privateKey,
+          method: "GET",
+          path: "/api/fleet/v1/catalogue",
+          sessionId,
+          issuedAt: new Date().toISOString(),
+          revision: 2,
+          body: new Uint8Array(0),
+        }),
+      }),
+    );
+    expect(tooSoon.status).toBe(429);
+    expect((await tooSoon.json()).error).toBe("rate_limited");
+  });
+
+  it("shares its revision counter and read cadence bucket with GET /snapshot -- a catalogue fetch cannot dodge either by switching endpoints", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "member" });
+    await seedEligibleCharacter(ctx.db, {
+      characterId: 92900041,
+      accountId: acc.id,
+      fleetId: 6300041,
+      now: NOW,
+    });
+    const { sessionId, privateKey } = await pairDevice(ctx.db, acc.id, NOW);
+
+    const catalogueRes = await catalogueRoute(
+      new NextRequest("http://localhost/api/fleet/v1/catalogue", {
+        method: "GET",
+        headers: signedHeaders({
+          privateKey,
+          method: "GET",
+          path: "/api/fleet/v1/catalogue",
+          sessionId,
+          issuedAt: NOW.toISOString(),
+          revision: 1,
+          body: new Uint8Array(0),
+        }),
+      }),
+    );
+    expect(catalogueRes.status).toBe(200);
+
+    // A snapshot GET replaying the SAME revision the catalogue fetch just
+    // consumed is refused, even on a different endpoint.
+    const snapshotReplay = await snapshotGet(
+      new NextRequest("http://localhost/api/fleet/v1/snapshot", {
+        method: "GET",
+        headers: signedHeaders({
+          privateKey,
+          method: "GET",
+          path: "/api/fleet/v1/snapshot",
+          sessionId,
+          issuedAt: new Date(NOW.getTime() + 600).toISOString(),
+          revision: 1,
+          body: new Uint8Array(0),
+        }),
+      }),
+    );
+    expect(snapshotReplay.status).toBe(409);
+    expect((await snapshotReplay.json()).error).toBe("revision_replayed");
+
+    // A snapshot GET arriving too soon after the catalogue fetch (same read
+    // cadence bucket) is refused too, even with a strictly greater revision.
+    // Cadence is enforced against the SERVER's own real clock (these route
+    // handlers call `new Date()` internally, per this file's own top-of-file
+    // note -- `issuedAt` is the caller's claim, not what is compared), so
+    // this relies on real elapsed time rather than a fabricated `issuedAt`
+    // offset: back-to-back calls with no delay are always well under the
+    // 500ms bound.
+    const snapshotTooSoon = await snapshotGet(
+      new NextRequest("http://localhost/api/fleet/v1/snapshot", {
+        method: "GET",
+        headers: signedHeaders({
+          privateKey,
+          method: "GET",
+          path: "/api/fleet/v1/snapshot",
+          sessionId,
+          issuedAt: new Date().toISOString(),
+          revision: 2,
+          body: new Uint8Array(0),
+        }),
+      }),
+    );
+    expect(snapshotTooSoon.status).toBe(429);
+    expect((await snapshotTooSoon.json()).error).toBe("rate_limited");
+
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    const snapshotOk = await snapshotGet(
+      new NextRequest("http://localhost/api/fleet/v1/snapshot", {
+        method: "GET",
+        headers: signedHeaders({
+          privateKey,
+          method: "GET",
+          path: "/api/fleet/v1/snapshot",
+          sessionId,
+          issuedAt: new Date().toISOString(),
+          revision: 2,
+          body: new Uint8Array(0),
+        }),
+      }),
+    );
+    expect(snapshotOk.status).toBe(200);
+  });
 });
 
 describe("PUT /api/fleet/v1/snapshot", () => {
@@ -730,6 +902,29 @@ describe("PUT /api/fleet/v1/snapshot", () => {
     expect(res.status).toBe(401);
     expect((await res.json()).error).toBe("unauthorized");
   });
+
+  it("rejects a signed request carrying a query string", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "member" });
+    const { sessionId, privateKey } = await pairDevice(ctx.db, acc.id, NOW);
+    const bodyBytes = new TextEncoder().encode(JSON.stringify({ protocol: 1, rows: [] }));
+    const res = await snapshotPut(
+      new NextRequest("http://localhost/api/fleet/v1/snapshot?x=1", {
+        method: "PUT",
+        headers: signedHeaders({
+          privateKey,
+          method: "PUT",
+          path: "/api/fleet/v1/snapshot",
+          sessionId,
+          issuedAt: NOW.toISOString(),
+          revision: 1,
+          body: bodyBytes,
+        }),
+        body: bodyBytes,
+      }),
+    );
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toBe("bad_headers");
+  });
 });
 
 describe("GET /api/fleet/v1/snapshot", () => {
@@ -782,7 +977,10 @@ describe("GET /api/fleet/v1/snapshot", () => {
       path: "/api/fleet/v1/snapshot",
       sessionId: publisherSession,
       issuedAt: new Date().toISOString(),
-      revision: 1,
+      // The prior PUT above already consumed revision 1 on this SAME
+      // session/counter (fleet-relay.ts's shared gateSignedSession) -- this
+      // read must use a strictly greater value or it is refused as a replay.
+      revision: 2,
       body: new Uint8Array(0),
     });
     const res = await snapshotGet(
@@ -824,6 +1022,27 @@ describe("GET /api/fleet/v1/snapshot", () => {
     expect(res.status).toBe(401);
     expect((await res.json()).error).toBe("unauthorized");
   });
+
+  it("rejects a signed request carrying a query string", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "member" });
+    const { sessionId, privateKey } = await pairDevice(ctx.db, acc.id, NOW);
+    const res = await snapshotGet(
+      new NextRequest("http://localhost/api/fleet/v1/snapshot?x=1", {
+        method: "GET",
+        headers: signedHeaders({
+          privateKey,
+          method: "GET",
+          path: "/api/fleet/v1/snapshot",
+          sessionId,
+          issuedAt: NOW.toISOString(),
+          revision: 1,
+          body: new Uint8Array(0),
+        }),
+      }),
+    );
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toBe("bad_headers");
+  });
 });
 
 describe("authenticateFleetRequest: canonical-path guard", () => {
@@ -856,5 +1075,171 @@ describe("authenticateFleetRequest: canonical-path guard", () => {
       },
     );
     expect(result).toEqual({ ok: false, code: "bad_headers" });
+  });
+});
+
+describe("PUT /api/fleet/v1/session", () => {
+  it("extends a validly signed device's session and returns its new expiry", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "member" });
+    const { sessionId, privateKey } = await pairDevice(ctx.db, acc.id, NOW);
+    const headers = signedHeaders({
+      privateKey,
+      method: "PUT",
+      path: "/api/fleet/v1/session",
+      sessionId,
+      issuedAt: NOW.toISOString(),
+      revision: 1,
+      body: new Uint8Array(0),
+    });
+    const res = await sessionRenewRoute(
+      new NextRequest("http://localhost/api/fleet/v1/session", {
+        method: "PUT",
+        headers,
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.protocol).toBe(1);
+    expect(typeof body.expires_at).toBe("string");
+    expect(Number.isNaN(Date.parse(body.expires_at as string))).toBe(false);
+    expect(Date.parse(body.expires_at as string)).toBeGreaterThan(NOW.getTime());
+  });
+
+  it("refuses an unauthenticated request with 401 unauthorized", async () => {
+    const { privateKey: wrongKey } = newKeyPair();
+    const acc = await seedAccount(ctx.db, { tier: "member" });
+    const { sessionId } = await pairDevice(ctx.db, acc.id, NOW);
+    const res = await sessionRenewRoute(
+      new NextRequest("http://localhost/api/fleet/v1/session", {
+        method: "PUT",
+        headers: signedHeaders({
+          privateKey: wrongKey,
+          method: "PUT",
+          path: "/api/fleet/v1/session",
+          sessionId,
+          issuedAt: NOW.toISOString(),
+          revision: 1,
+          body: new Uint8Array(0),
+        }),
+      }),
+    );
+    expect(res.status).toBe(401);
+    expect((await res.json()).error).toBe("unauthorized");
+  });
+
+  it("refuses a replayed revision with 409, and a too-soon retry with 429, then succeeds once past both", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "member" });
+    const { sessionId, privateKey } = await pairDevice(ctx.db, acc.id, NOW);
+
+    const first = await sessionRenewRoute(
+      new NextRequest("http://localhost/api/fleet/v1/session", {
+        method: "PUT",
+        headers: signedHeaders({
+          privateKey,
+          method: "PUT",
+          path: "/api/fleet/v1/session",
+          sessionId,
+          issuedAt: NOW.toISOString(),
+          revision: 1,
+          body: new Uint8Array(0),
+        }),
+      }),
+    );
+    expect(first.status).toBe(200);
+
+    const replay = await sessionRenewRoute(
+      new NextRequest("http://localhost/api/fleet/v1/session", {
+        method: "PUT",
+        headers: signedHeaders({
+          privateKey,
+          method: "PUT",
+          path: "/api/fleet/v1/session",
+          sessionId,
+          issuedAt: new Date(NOW.getTime() + 600).toISOString(),
+          revision: 1,
+          body: new Uint8Array(0),
+        }),
+      }),
+    );
+    expect(replay.status).toBe(409);
+    expect((await replay.json()).error).toBe("revision_replayed");
+
+    const tooSoon = await sessionRenewRoute(
+      new NextRequest("http://localhost/api/fleet/v1/session", {
+        method: "PUT",
+        headers: signedHeaders({
+          privateKey,
+          method: "PUT",
+          path: "/api/fleet/v1/session",
+          sessionId,
+          issuedAt: new Date().toISOString(),
+          revision: 2,
+          body: new Uint8Array(0),
+        }),
+      }),
+    );
+    expect(tooSoon.status).toBe(429);
+    expect((await tooSoon.json()).error).toBe("rate_limited");
+
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    const later = await sessionRenewRoute(
+      new NextRequest("http://localhost/api/fleet/v1/session", {
+        method: "PUT",
+        headers: signedHeaders({
+          privateKey,
+          method: "PUT",
+          path: "/api/fleet/v1/session",
+          sessionId,
+          issuedAt: new Date().toISOString(),
+          revision: 2,
+          body: new Uint8Array(0),
+        }),
+      }),
+    );
+    expect(later.status).toBe(200);
+  });
+
+  it("refuses with 403 not_eligible once the account has dropped below Member tier", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "member" });
+    const { sessionId, privateKey } = await pairDevice(ctx.db, acc.id, NOW);
+    await ctx.db.update(account).set({ tier: "alumni" }).where(eq(account.id, acc.id));
+
+    const res = await sessionRenewRoute(
+      new NextRequest("http://localhost/api/fleet/v1/session", {
+        method: "PUT",
+        headers: signedHeaders({
+          privateKey,
+          method: "PUT",
+          path: "/api/fleet/v1/session",
+          sessionId,
+          issuedAt: NOW.toISOString(),
+          revision: 1,
+          body: new Uint8Array(0),
+        }),
+      }),
+    );
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toBe("not_eligible");
+  });
+
+  it("rejects a signed request carrying a query string", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "member" });
+    const { sessionId, privateKey } = await pairDevice(ctx.db, acc.id, NOW);
+    const res = await sessionRenewRoute(
+      new NextRequest("http://localhost/api/fleet/v1/session?x=1", {
+        method: "PUT",
+        headers: signedHeaders({
+          privateKey,
+          method: "PUT",
+          path: "/api/fleet/v1/session",
+          sessionId,
+          issuedAt: NOW.toISOString(),
+          revision: 1,
+          body: new Uint8Array(0),
+        }),
+      }),
+    );
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toBe("bad_headers");
   });
 });

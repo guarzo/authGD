@@ -19,6 +19,7 @@ import {
   revokeFleetDevice,
 } from "@/services/fleet-pairing";
 import {
+  isRetryableRelayError,
   type PublishedRow,
   pruneExpiredFleetRelay,
   readFleetProjection,
@@ -26,6 +27,7 @@ import {
 } from "@/services/fleet-relay";
 import { testConfig } from "./helpers/config";
 import { setupTestDb } from "./helpers/db";
+import { withInjectedPgFault } from "./helpers/pg-fault";
 import { seedAccount, seedCharacter } from "./helpers/seed";
 
 const cfg = testConfig();
@@ -728,6 +730,7 @@ describe("readFleetProjection: liveness", () => {
     const { sessionId: readerAtLive } = await pairDevice(ctx.db, acc.id, NOW);
     const almostStale = await readFleetProjection(ctx.db, {
       sessionId: readerAtLive,
+      revision: 1,
       now: new Date(NOW.getTime() + 2_999),
     });
     expect(almostStale.ok).toBe(true);
@@ -737,6 +740,7 @@ describe("readFleetProjection: liveness", () => {
     const { sessionId: readerAtStale } = await pairDevice(ctx.db, acc.id, NOW);
     const stale = await readFleetProjection(ctx.db, {
       sessionId: readerAtStale,
+      revision: 1,
       now: new Date(NOW.getTime() + 3_000),
     });
     expect(stale.ok).toBe(true);
@@ -764,6 +768,7 @@ describe("readFleetProjection: liveness", () => {
     const { sessionId: readerSession } = await pairDevice(ctx.db, acc.id, NOW);
     const gone = await readFleetProjection(ctx.db, {
       sessionId: readerSession,
+      revision: 1,
       now: new Date(NOW.getTime() + 10_000),
     });
     expect(gone.ok).toBe(true);
@@ -820,6 +825,7 @@ describe("readFleetProjection: filtered read", () => {
 
     const readerResult = await readFleetProjection(ctx.db, {
       sessionId: readerSession,
+      revision: 1,
       now: new Date(NOW.getTime() + 1_000),
     });
     expect(readerResult.ok).toBe(true);
@@ -838,6 +844,7 @@ describe("readFleetProjection: filtered read", () => {
 
     const outsiderResult = await readFleetProjection(ctx.db, {
       sessionId: outsiderSession,
+      revision: 1,
       now: new Date(NOW.getTime() + 1_000),
     });
     expect(outsiderResult.ok).toBe(true);
@@ -864,6 +871,7 @@ describe("readFleetProjection: filtered read", () => {
 
     const result = await readFleetProjection(ctx.db, {
       sessionId,
+      revision: 2,
       now: new Date(NOW.getTime() + 1_000),
     });
     expect(result.ok).toBe(true);
@@ -876,6 +884,7 @@ describe("readFleetProjection: session validity and cadence", () => {
   it("returns the same generic forbidden code for an unknown session and for a non-eligible account", async () => {
     const unknown = await readFleetProjection(ctx.db, {
       sessionId: "not-a-real-session-id",
+      revision: 1,
       now: NOW,
     });
     expect(unknown).toEqual({ ok: false, code: "forbidden" });
@@ -883,11 +892,15 @@ describe("readFleetProjection: session validity and cadence", () => {
     const acc = await seedAccount(ctx.db, { tier: "member" });
     const { sessionId } = await pairDevice(ctx.db, acc.id, NOW);
     // No fleet_eligibility row at all for this account.
-    const noEligibility = await readFleetProjection(ctx.db, { sessionId, now: NOW });
+    const noEligibility = await readFleetProjection(ctx.db, {
+      sessionId,
+      revision: 1,
+      now: NOW,
+    });
     expect(noEligibility).toEqual({ ok: false, code: "forbidden" });
   });
 
-  it("enforces the minimum read interval", async () => {
+  it("enforces the minimum read interval, and a rejected cadence attempt does not consume the revision (retry reuses it)", async () => {
     const acc = await seedAccount(ctx.db, { tier: "member" });
     await seedEligibleCharacter(ctx.db, {
       characterId: 95500200,
@@ -897,20 +910,59 @@ describe("readFleetProjection: session validity and cadence", () => {
     });
     const { sessionId } = await pairDevice(ctx.db, acc.id, NOW);
 
-    const first = await readFleetProjection(ctx.db, { sessionId, now: NOW });
+    const first = await readFleetProjection(ctx.db, { sessionId, revision: 1, now: NOW });
     expect(first.ok).toBe(true);
 
     const tooSoon = await readFleetProjection(ctx.db, {
       sessionId,
+      revision: 2,
       now: new Date(NOW.getTime() + 100),
     });
     expect(tooSoon).toEqual({ ok: false, code: "rate_limited" });
 
     const later = await readFleetProjection(ctx.db, {
       sessionId,
+      revision: 2,
       now: new Date(NOW.getTime() + 600),
     });
     expect(later.ok).toBe(true);
+  });
+
+  it("rejects a replayed (non-increasing) read revision, sharing the SAME monotonic counter a prior publish already advanced", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "member" });
+    await seedEligibleCharacter(ctx.db, {
+      characterId: 95500210,
+      accountId: acc.id,
+      fleetId: 6200031,
+      now: NOW,
+    });
+    const { sessionId } = await pairDevice(ctx.db, acc.id, NOW);
+
+    // The session's own PUT already consumed revision 1 -- a GET replaying
+    // that same value (or anything not strictly greater) must be refused,
+    // proving the read path shares fleet_device_session's ONE counter with
+    // publish rather than keeping an independent one.
+    const published = await replaceDeviceProjection(ctx.db, {
+      sessionId,
+      now: NOW,
+      revision: 1,
+      rows: [row(95500210, 100)],
+    });
+    expect(published).toEqual({ ok: true });
+
+    const replay = await readFleetProjection(ctx.db, {
+      sessionId,
+      revision: 1,
+      now: new Date(NOW.getTime() + 600),
+    });
+    expect(replay).toEqual({ ok: false, code: "revision_replayed" });
+
+    const accepted = await readFleetProjection(ctx.db, {
+      sessionId,
+      revision: 2,
+      now: new Date(NOW.getTime() + 600),
+    });
+    expect(accepted.ok).toBe(true);
   });
 });
 
@@ -968,5 +1020,115 @@ describe("device/account revocation cleanup", () => {
       .from(fleetDeviceSession)
       .where(eq(fleetDeviceSession.deviceId, device.id));
     expect(session).toBeUndefined();
+  });
+});
+
+describe("cross-module lock order (deadlock avoidance)", () => {
+  it("a concurrent publish blocks on (never deadlocks against) another transaction already holding this device's row lock -- the fix for the publish/revoke cross-order deadlock", async () => {
+    // Before the fix, `replaceDeviceProjection` locked SESSION then DEVICE,
+    // while `revokeFleetDevice`'s cleanup locked DEVICE then SESSION -- a
+    // classic AB-BA deadlock between the two. Every signed-session path now
+    // goes through `gateSignedSession`, which locks DEVICE first (see
+    // fleet-relay.ts's own LOCK ORDER doc); `revokeFleetDevice` locks the
+    // SAME device row first too. This proves the publish side of that
+    // agreement directly and deterministically: a raw connection holds the
+    // device row's FOR UPDATE lock (standing in for ANY other transaction
+    // that locks it first, revoke included), and a REAL, concurrent
+    // `replaceDeviceProjection` call is confirmed to BLOCK on it (not
+    // proceed, not throw, not deadlock) until it is released, then
+    // completes successfully once it is.
+    const acc = await seedAccount(ctx.db, { tier: "member" });
+    const { sessionId, device } = await pairDevice(ctx.db, acc.id, NOW);
+    await seedEligibleCharacter(ctx.db, {
+      characterId: 95500500,
+      accountId: acc.id,
+      fleetId: 6200060,
+      now: NOW,
+    });
+
+    const client = await ctx.pool.connect();
+    let publishResult: ReturnType<typeof replaceDeviceProjection> | undefined;
+    try {
+      await client.query("begin");
+      await client.query("select 1 from fleet_device where id = $1 for update", [
+        device.id,
+      ]);
+
+      publishResult = replaceDeviceProjection(ctx.db, {
+        sessionId,
+        now: NOW,
+        revision: 1,
+        rows: [row(95500500, 100)],
+      });
+
+      // Confirm the publish call is ACTUALLY blocked on a lock before
+      // releasing the raw client's transaction -- a self-verifying guard
+      // against a silently-degenerate race, the same discipline the
+      // existing M1 regression test above uses.
+      let blocked = false;
+      for (let i = 0; i < 50; i++) {
+        const { rows: waiters } = await ctx.pool.query(
+          "select count(*)::int as n from pg_stat_activity where wait_event_type = 'Lock'",
+        );
+        if ((waiters[0] as { n: number }).n > 0) {
+          blocked = true;
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      expect(blocked).toBe(true);
+
+      await client.query("commit");
+    } finally {
+      client.release();
+    }
+
+    const result = await publishResult;
+    expect(result).toEqual({ ok: true });
+  });
+});
+
+describe("isRetryableRelayError", () => {
+  it("recognizes Postgres deadlock (40P01) and serialization-failure (40001) SQLSTATEs", () => {
+    expect(isRetryableRelayError({ code: "40P01" })).toBe(true);
+    expect(isRetryableRelayError({ code: "40001" })).toBe(true);
+  });
+
+  it("rejects any other shape: unrelated codes, missing code, and non-error values", () => {
+    expect(isRetryableRelayError({ code: "23505" })).toBe(false); // unique_violation
+    expect(isRetryableRelayError(new Error("plain error, no code"))).toBe(false);
+    expect(isRetryableRelayError(null)).toBe(false);
+    expect(isRetryableRelayError("40P01")).toBe(false);
+    expect(isRetryableRelayError({ code: 40001 })).toBe(false); // number, not string
+  });
+});
+
+describe("retryable Postgres errors map to try_again, not a raw 500", () => {
+  it('replaceDeviceProjection returns { ok: false, code: "try_again" } instead of throwing when its transaction hits a synthetic deadlock', async () => {
+    const acc = await seedAccount(ctx.db, { tier: "member" });
+    const { sessionId } = await pairDevice(ctx.db, acc.id, NOW);
+    await seedEligibleCharacter(ctx.db, {
+      characterId: 95500510,
+      accountId: acc.id,
+      fleetId: 6200061,
+      now: NOW,
+    });
+
+    const result = await withInjectedPgFault(
+      ctx.pool,
+      { matchSql: /^\s*select/i, code: "40P01" },
+      () =>
+        replaceDeviceProjection(ctx.db, {
+          sessionId,
+          now: NOW,
+          revision: 1,
+          rows: [row(95500510, 100)],
+        }),
+    );
+
+    expect(result).toEqual({ ok: false, code: "try_again" });
+    // Nothing was left half-mutated: the transaction rolled back, so no
+    // lease/row exists for this character at all.
+    expect(await rowFor(ctx.db, 95500510)).toBeUndefined();
   });
 });

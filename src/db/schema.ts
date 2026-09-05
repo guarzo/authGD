@@ -708,7 +708,7 @@ export const structureEvent = pgTable(
  * A paired device: one Ed25519 public key, tied to the account that approved
  * it. `revokedAt` is a soft revoke — the row survives so `fleet_pairing_
  * request.approvedDeviceId` keeps meaning — while `revokeFleetDevice`
- * (Task 4) deletes its sessions/leases/rows explicitly. The CASCADE from
+ * deletes its sessions/leases/rows explicitly. The CASCADE from
  * `accountId` is the schema-level backstop: deleting an account tears down
  * every device (and, transitively, every session/lease/row) it ever paired,
  * even if a future code path forgets to call that service first.
@@ -828,7 +828,7 @@ export const fleetEligibility = pgTable(
  * One EVE character publishes through at most one device/session at a time,
  * globally — this is what a global `characterId` primary key enforces. A
  * second device claiming the same character must fail closed rather than
- * silently taking over, which is why the relay core (Task 5) checks this
+ * silently taking over, which is why the relay core checks this
  * row's device/session before accepting a publish.
  */
 export const fleetPublisherLease = pgTable(
@@ -854,11 +854,11 @@ export const fleetPublisherLease = pgTable(
  * ever sees. Deliberately narrow: character id, fleet id, DPS, EWAR, and
  * three timestamps. No log content, no target/source, no event time, no
  * fleet name, no system, no ship, no EVE token — an accepted empty publish
- * batch deletes this row immediately (Task 5), so its mere presence already
+ * batch deletes this row immediately, so its mere presence already
  * means "live as of `receivedAt`".
  *
  * `staleAt`/`hardExpiresAt` are stored, not recomputed at read time, so the
- * per-fleet expiry sweep and the filtered read (Task 5) can use a plain index
+ * per-fleet expiry sweep and the filtered read can use a plain index
  * instead of an expression on `receivedAt` — this table's `(fleet_id,
  * hard_expires_at)` index below is exactly that sweep's shape.
  */
@@ -876,8 +876,8 @@ export const fleetTelemetryRow = pgTable(
       .notNull()
       .references(() => fleetDeviceSession.id, { onDelete: "cascade" }),
     dps: integer("dps").notNull(),
-    // Only `[]` or `["SCRAM/POINT"]` are meaningful values (Task 5's
-    // `PublishedRow.ewar` union) — the CHECK constraint below is the only
+    // Only `[]` or `["SCRAM/POINT"]` are meaningful values (`PublishedRow.
+    // ewar`'s union, `src/services/fleet-relay.ts`) — the CHECK constraint below is the only
     // thing stopping an arbitrary JSON array from being persisted here, since
     // jsonb has no way to express "array of this one literal, 0 or 1 times"
     // in its column type.

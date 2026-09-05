@@ -4,9 +4,11 @@ import { getDb } from "@/db";
 import {
   authenticateFleetRequest,
   extractFleetAuthHeaders,
+  hasUnsignedQueryString,
 } from "@/lib/fleet-route-auth";
 import {
   FLEET_RELAY_PROTOCOL,
+  FLEET_RELAY_STATUS_BY_CODE,
   type PublishedRow,
   readFleetProjection,
   replaceDeviceProjection,
@@ -76,28 +78,15 @@ function hasUnsupportedProtocol(value: unknown): boolean {
   );
 }
 
-/** authGD-side codes `replaceDeviceProjection`/`readFleetProjection` already
- *  return (Task 5) — this route only maps each to an HTTP status, never
- *  invents or renames one. */
-const STATUS_BY_RELAY_CODE: Record<string, number> = {
-  invalid_session: 401,
-  invalid_batch: 400,
-  character_not_linked: 403,
-  character_not_eligible: 403,
-  lease_conflict: 409,
-  revision_replayed: 409,
-  rate_limited: 429,
-  forbidden: 403,
-};
-
 export async function PUT(req: NextRequest) {
+  if (hasUnsignedQueryString(req)) return authError("bad_headers");
   const headers = extractFleetAuthHeaders(req);
   if (!headers) return authError("bad_headers");
 
   const raw = new Uint8Array(await req.arrayBuffer());
-  // Read and size-checked before any JSON.parse (brief Step 3): an oversized
-  // body is refused as the same `invalid_batch` code the service layer would
-  // have used for it, without ever paying to parse it.
+  // Read and size-checked before any JSON.parse: an oversized body is
+  // refused as the same `invalid_batch` code the service layer would have
+  // used for it, without ever paying to parse it.
   if (raw.byteLength > MAX_PUT_BODY_BYTES) return jsonError("invalid_batch", 400);
 
   const now = new Date();
@@ -136,12 +125,15 @@ export async function PUT(req: NextRequest) {
     rows,
     now,
   });
-  if (!result.ok) return jsonError(result.code, STATUS_BY_RELAY_CODE[result.code] ?? 400);
+  if (!result.ok) {
+    return jsonError(result.code, FLEET_RELAY_STATUS_BY_CODE[result.code] ?? 400);
+  }
 
   return NextResponse.json({ protocol: FLEET_RELAY_PROTOCOL });
 }
 
 export async function GET(req: NextRequest) {
+  if (hasUnsignedQueryString(req)) return authError("bad_headers");
   const headers = extractFleetAuthHeaders(req);
   if (!headers) return authError("bad_headers");
 
@@ -156,11 +148,18 @@ export async function GET(req: NextRequest) {
   });
   if (!auth.ok) return authError(auth.code);
 
+  // The signed request's own revision is consumed here too, atomically
+  // against the SAME per-session monotonic counter/cadence bucket a PUT
+  // publish uses (fleet-relay.ts's gateSignedSession) — a captured-and-
+  // replayed signed GET is exactly as inert as a replayed PUT.
   const result = await readFleetProjection(getDb(), {
     sessionId: auth.auth.sessionId,
+    revision: headers.revision,
     now,
   });
-  if (!result.ok) return jsonError(result.code, STATUS_BY_RELAY_CODE[result.code] ?? 400);
+  if (!result.ok) {
+    return jsonError(result.code, FLEET_RELAY_STATUS_BY_CODE[result.code] ?? 400);
+  }
 
   return NextResponse.json({
     protocol: FLEET_RELAY_PROTOCOL,

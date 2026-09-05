@@ -28,15 +28,18 @@ import {
   PairingExpiredError,
   PairingNotApprovedError,
   PairingNotFoundError,
+  RelayContentionError,
   RevokedDeviceKeyError,
   approvePairing,
   beginPairing,
   completePairing,
   pairingChallengePreimage,
+  renewFleetDeviceSession,
   revokeFleetDevice,
   revokeFleetRelayForAccount,
 } from "@/services/fleet-pairing";
 import { setupTestDb } from "./helpers/db";
+import { withInjectedPgFault } from "./helpers/pg-fault";
 import { seedAccount, seedCharacter } from "./helpers/seed";
 import { testConfig } from "./helpers/config";
 import fixture from "./fixtures/fleet-pairing-v1.json";
@@ -392,16 +395,59 @@ describe("beginPairing / approvePairing / completePairing", () => {
     );
   });
 
-  it("refuses completion when an active device key is presented by a pairing request approved by a different account, leaving the existing device/session/account binding unchanged", async () => {
+  it("refuses approval early when the pairing request's key is already bound to an ACTIVE device on a different account, before any browser sees a false 'Approved' state", async () => {
+    const accA = await seedAccount(ctx.db, { tier: "member" });
+    const accB = await seedAccount(ctx.db, { tier: "member" });
+    await seedCharacter(ctx.db, cfg, { id: 92300073, accountId: accA.id });
+    const { spki, privateKey } = newKeyPair();
+
+    const first = await beginPairing(ctx.db, { publicKeySpki: spki, now: NOW });
+    await approvePairing(ctx.db, first.pairingId, accA.id, NOW);
+    await completePairing(ctx.db, {
+      pairingId: first.pairingId,
+      completionSignature: signCompletion(privateKey, first.pairingId),
+      now: NOW,
+    });
+
+    // A second pairing request for the SAME (now actively-bound) key is
+    // refused at APPROVAL, not left to fail later at completion.
+    const second = await beginPairing(ctx.db, { publicKeySpki: spki, now: NOW });
+    await expect(approvePairing(ctx.db, second.pairingId, accB.id, NOW)).rejects.toThrow(
+      DeviceBoundToAnotherAccountError,
+    );
+
+    // Refused before any mutation: the request is still pending, not approved.
+    const [secondRow] = await ctx.db
+      .select()
+      .from(fleetPairingRequest)
+      .where(eq(fleetPairingRequest.id, second.pairingId));
+    expect(secondRow.approvedAt).toBeNull();
+    expect(secondRow.approvedAccountId).toBeNull();
+
+    // A same-account re-approval of a fresh request for its OWN key is
+    // unaffected -- the comparison is against THIS account, not "any".
+    const third = await beginPairing(ctx.db, { publicKeySpki: spki, now: NOW });
+    await expect(
+      approvePairing(ctx.db, third.pairingId, accA.id, NOW),
+    ).resolves.toBeUndefined();
+  });
+
+  it("refuses completion when the approving account no longer matches the device's account by completion time (approved before a concurrent pairing bound the key elsewhere), leaving the existing device/session/account binding unchanged", async () => {
     const accA = await seedAccount(ctx.db, { tier: "member" });
     const accB = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, cfg, { id: 92300070, accountId: accA.id });
     await seedCharacter(ctx.db, cfg, { id: 92300071, accountId: accB.id });
     const { spki, privateKey } = newKeyPair();
 
-    // First pairing binds the key to accA.
+    // Two pairing requests for the SAME key, both approved while the key is
+    // still unbound to anyone (approvePairing's early check cannot yet see a
+    // conflict, since no device row exists until the FIRST one completes) --
+    // exactly the race completePairing's own recheck exists to close.
     const first = await beginPairing(ctx.db, { publicKeySpki: spki, now: NOW });
+    const second = await beginPairing(ctx.db, { publicKeySpki: spki, now: NOW });
     await approvePairing(ctx.db, first.pairingId, accA.id, NOW);
+    await approvePairing(ctx.db, second.pairingId, accB.id, NOW);
+
     const { sessionId: originalSessionId } = await completePairing(ctx.db, {
       pairingId: first.pairingId,
       completionSignature: signCompletion(privateKey, first.pairingId),
@@ -412,10 +458,6 @@ describe("beginPairing / approvePairing / completePairing", () => {
       .from(fleetDevice)
       .where(eq(fleetDevice.publicKeySpkiB64, canonicalDevicePublicKeyB64(spki)));
 
-    // A second pairing request for the SAME key, approved by a DIFFERENT
-    // account, is a stable refusal at completion.
-    const second = await beginPairing(ctx.db, { publicKeySpki: spki, now: NOW });
-    await approvePairing(ctx.db, second.pairingId, accB.id, NOW);
     await expect(
       completePairing(ctx.db, {
         pairingId: second.pairingId,
@@ -659,6 +701,36 @@ describe("revokeFleetDevice", () => {
         .where(eq(fleetTelemetryRow.deviceId, device.id)),
     ).toHaveLength(0);
   });
+
+  it("throws RelayContentionError, not a raw driver error, when its transaction hits a synthetic deadlock", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "member" });
+    await seedCharacter(ctx.db, cfg, { id: 92300042, accountId: acc.id });
+    const { spki, privateKey } = newKeyPair();
+    const { pairingId } = await beginPairing(ctx.db, { publicKeySpki: spki, now: NOW });
+    await approvePairing(ctx.db, pairingId, acc.id, NOW);
+    await completePairing(ctx.db, {
+      pairingId,
+      completionSignature: signCompletion(privateKey, pairingId),
+      now: NOW,
+    });
+    const [device] = await ctx.db
+      .select()
+      .from(fleetDevice)
+      .where(eq(fleetDevice.accountId, acc.id));
+
+    await expect(
+      withInjectedPgFault(ctx.pool, { matchSql: /^\s*select/i, code: "40P01" }, () =>
+        revokeFleetDevice(ctx.db, device.id, acc.id, NOW),
+      ),
+    ).rejects.toThrow(RelayContentionError);
+
+    // Nothing was left half-mutated: the transaction rolled back.
+    const [unchanged] = await ctx.db
+      .select()
+      .from(fleetDevice)
+      .where(eq(fleetDevice.id, device.id));
+    expect(unchanged.revokedAt).toBeNull();
+  });
 });
 
 describe("revokeFleetRelayForAccount", () => {
@@ -743,5 +815,195 @@ describe("audit logging", () => {
       action: "fleet_device.revoked",
       target: device.id,
     });
+  });
+});
+
+describe("renewFleetDeviceSession", () => {
+  // Duplicated from fleet-pairing.ts's own private DEVICE_SESSION_TTL_MS,
+  // the same "not exported, both copies independently agree" convention
+  // fleet-relay.ts's MAX_REVISION comment documents.
+  const DEVICE_SESSION_TTL_MS = 30 * 60 * 1000;
+
+  it("extends the SAME session's expiresAt by a full window from now, and leaves its live telemetry/lease rows (same session id) completely untouched", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "member" });
+    const ch = await seedCharacter(ctx.db, cfg, { id: 92300180, accountId: acc.id });
+    const { spki, privateKey } = newKeyPair();
+    const { pairingId } = await beginPairing(ctx.db, { publicKeySpki: spki, now: NOW });
+    await approvePairing(ctx.db, pairingId, acc.id, NOW);
+    const { sessionId } = await completePairing(ctx.db, {
+      pairingId,
+      completionSignature: signCompletion(privateKey, pairingId),
+      now: NOW,
+    });
+    const [deviceRow] = await ctx.db
+      .select()
+      .from(fleetDevice)
+      .where(eq(fleetDevice.accountId, acc.id));
+    const [sessionBefore] = await ctx.db
+      .select()
+      .from(fleetDeviceSession)
+      .where(eq(fleetDeviceSession.deviceId, deviceRow.id));
+
+    // A live lease + telemetry row bound to THIS session -- renewal extending
+    // the session in place, rather than replacing it, must never cascade
+    // these away (the whole point of "extend, don't rotate").
+    await ctx.db.insert(fleetPublisherLease).values({
+      characterId: ch.id,
+      deviceId: deviceRow.id,
+      sessionId: sessionBefore.id,
+      fleetId: 5200010,
+      leaseExpiresAt: new Date(NOW.getTime() + 60_000),
+    });
+    await ctx.db.insert(fleetTelemetryRow).values({
+      characterId: ch.id,
+      fleetId: 5200010,
+      deviceId: deviceRow.id,
+      sessionId: sessionBefore.id,
+      dps: 250,
+      ewar: [],
+      receivedAt: NOW,
+      staleAt: new Date(NOW.getTime() + 3_000),
+      hardExpiresAt: new Date(NOW.getTime() + 10_000),
+    });
+
+    const renewAt = new Date(NOW.getTime() + 25 * 60 * 1000); // near the old cliff
+    const result = await renewFleetDeviceSession(ctx.db, {
+      sessionId,
+      revision: 1,
+      now: renewAt,
+    });
+    expect(result).toEqual({
+      ok: true,
+      expiresAt: new Date(renewAt.getTime() + DEVICE_SESSION_TTL_MS),
+    });
+
+    const [sessionAfter] = await ctx.db
+      .select()
+      .from(fleetDeviceSession)
+      .where(eq(fleetDeviceSession.deviceId, deviceRow.id));
+    expect(sessionAfter.id).toBe(sessionBefore.id); // same session, not rotated
+    expect(sessionAfter.expiresAt).toEqual(
+      new Date(renewAt.getTime() + DEVICE_SESSION_TTL_MS),
+    );
+    expect(sessionAfter.lastRevision).toBe(1);
+    expect(sessionAfter.lastReadAt).toEqual(renewAt);
+
+    // Still exactly the same lease/telemetry rows, same session id -- no
+    // cascade-driven flicker.
+    const [lease] = await ctx.db
+      .select()
+      .from(fleetPublisherLease)
+      .where(eq(fleetPublisherLease.characterId, ch.id));
+    const [telemetry] = await ctx.db
+      .select()
+      .from(fleetTelemetryRow)
+      .where(eq(fleetTelemetryRow.characterId, ch.id));
+    expect(lease.sessionId).toBe(sessionBefore.id);
+    expect(telemetry.sessionId).toBe(sessionBefore.id);
+  });
+
+  it("rejects a replayed (non-increasing) revision, and shares its read cadence bucket with readFleetProjection", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "member" });
+    const { spki, privateKey } = newKeyPair();
+    const { pairingId } = await beginPairing(ctx.db, { publicKeySpki: spki, now: NOW });
+    await approvePairing(ctx.db, pairingId, acc.id, NOW);
+    const { sessionId } = await completePairing(ctx.db, {
+      pairingId,
+      completionSignature: signCompletion(privateKey, pairingId),
+      now: NOW,
+    });
+
+    const first = await renewFleetDeviceSession(ctx.db, {
+      sessionId,
+      revision: 1,
+      now: NOW,
+    });
+    expect(first.ok).toBe(true);
+
+    const replay = await renewFleetDeviceSession(ctx.db, {
+      sessionId,
+      revision: 1,
+      now: new Date(NOW.getTime() + 600),
+    });
+    expect(replay).toEqual({ ok: false, code: "revision_replayed" });
+
+    // Too soon (within the shared 500ms read-cadence bucket) even with a
+    // strictly greater revision.
+    const tooSoon = await renewFleetDeviceSession(ctx.db, {
+      sessionId,
+      revision: 2,
+      now: new Date(NOW.getTime() + 100),
+    });
+    expect(tooSoon).toEqual({ ok: false, code: "rate_limited" });
+
+    const later = await renewFleetDeviceSession(ctx.db, {
+      sessionId,
+      revision: 2,
+      now: new Date(NOW.getTime() + 600),
+    });
+    expect(later.ok).toBe(true);
+  });
+
+  it("rejects with invalid_session for an unknown session and for a revoked device's session", async () => {
+    const unknown = await renewFleetDeviceSession(ctx.db, {
+      sessionId: "not-a-real-session-id",
+      revision: 1,
+      now: NOW,
+    });
+    expect(unknown).toEqual({ ok: false, code: "invalid_session" });
+
+    const acc = await seedAccount(ctx.db, { tier: "member" });
+    const { spki, privateKey } = newKeyPair();
+    const { pairingId } = await beginPairing(ctx.db, { publicKeySpki: spki, now: NOW });
+    await approvePairing(ctx.db, pairingId, acc.id, NOW);
+    const { sessionId } = await completePairing(ctx.db, {
+      pairingId,
+      completionSignature: signCompletion(privateKey, pairingId),
+      now: NOW,
+    });
+    const [device] = await ctx.db
+      .select()
+      .from(fleetDevice)
+      .where(eq(fleetDevice.accountId, acc.id));
+    await revokeFleetDevice(ctx.db, device.id, acc.id, NOW);
+
+    const afterRevoke = await renewFleetDeviceSession(ctx.db, {
+      sessionId,
+      revision: 1,
+      now: NOW,
+    });
+    expect(afterRevoke).toEqual({ ok: false, code: "invalid_session" });
+  });
+
+  it("rejects with not_eligible, mutating nothing, once the account has dropped below Member tier", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "member" });
+    const { spki, privateKey } = newKeyPair();
+    const { pairingId } = await beginPairing(ctx.db, { publicKeySpki: spki, now: NOW });
+    await approvePairing(ctx.db, pairingId, acc.id, NOW);
+    const { sessionId } = await completePairing(ctx.db, {
+      pairingId,
+      completionSignature: signCompletion(privateKey, pairingId),
+      now: NOW,
+    });
+
+    await ctx.db.update(account).set({ tier: "associate" }).where(eq(account.id, acc.id));
+
+    const result = await renewFleetDeviceSession(ctx.db, {
+      sessionId,
+      revision: 1,
+      now: NOW,
+    });
+    expect(result).toEqual({ ok: false, code: "not_eligible" });
+
+    const [device] = await ctx.db
+      .select()
+      .from(fleetDevice)
+      .where(eq(fleetDevice.accountId, acc.id));
+    const [sessionAfter] = await ctx.db
+      .select()
+      .from(fleetDeviceSession)
+      .where(eq(fleetDeviceSession.deviceId, device.id));
+    expect(sessionAfter.lastRevision).toBe(0);
+    expect(sessionAfter.lastReadAt).toBeNull();
   });
 });

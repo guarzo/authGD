@@ -20,8 +20,9 @@ const MAX_CLOCK_SKEW_MS = 60_000;
  * rendered as base-10 canonical text, is far below int4's range at the
  * intended cadence). A revision beyond int4's max is still a valid JS safe
  * integer, so `Number.isSafeInteger` alone would accept it here and only fail
- * once Task 5 tries to persist it — rejecting it in this contract instead
- * turns that into an immediate, diagnosable `bad_headers` at the boundary.
+ * once the relay service tries to persist it — rejecting it in this contract
+ * instead turns that into an immediate, diagnosable `bad_headers` at the
+ * boundary.
  */
 const MAX_REVISION = 2_147_483_647; // Postgres int4 max
 
@@ -142,7 +143,7 @@ export function verifyFleetRequest(
       type: "spki",
     });
     // No dedicated status exists for "right key material, wrong algorithm" —
-    // a paired device can only ever record an Ed25519 SPKI key (Task 4), so a
+    // a paired device can only ever record an Ed25519 SPKI key, so a
     // mismatched key type is exactly as untrusted as a bad signature.
     if (key.asymmetricKeyType !== "ed25519") return "bad_signature";
     const signature = Buffer.from(headers.signature, "base64url");
@@ -163,7 +164,7 @@ export function verifyFleetRequest(
  * JSON field or an HTTP header), and those encode to a *different* literal
  * string than padded standard base64 — so without a single canonical form,
  * the same key could be persisted twice under different text, silently
- * defeating the uniqueness constraint. Task 4's pairing service MUST
+ * defeating the uniqueness constraint. Every pairing service call site MUST
  * canonicalize a device's submitted public key through this function before
  * it ever reaches `fleetPairingRequest`/`fleetDevice`; never persist a
  * caller-supplied encoding directly.
@@ -172,8 +173,7 @@ export function verifyFleetRequest(
  * scoped by it: a public key that was ever inserted — revoked or not — can
  * never be inserted again. Re-pairing after revocation therefore requires
  * generating a brand-new local key pair, not reusing the old one. This is
- * intentional (see the Task 3 fix report), not a bug for Task 4 to work
- * around.
+ * intentional, not a bug to work around.
  */
 export function canonicalDevicePublicKeyB64(spki: Uint8Array): string {
   return Buffer.from(spki).toString("base64");
@@ -190,7 +190,7 @@ export function decodeDevicePublicKeyB64(canonical: string): Uint8Array {
  * false for anything else — malformed/non-DER bytes, or DER for a different
  * key algorithm — never throwing. The same defensive shape
  * `verifyFleetRequest` and `verifyCompletionProof` already apply to a
- * *stored* key's bytes, exposed here as a single reusable check so Task 4's
+ * *stored* key's bytes, exposed here as a single reusable check so the
  * pairing service can apply it to a *candidate* key BEFORE ever
  * canonicalizing, persisting it, or creating a pairing request a browser
  * could approve — rather than hand-rolling the same `createPublicKey`/

@@ -170,6 +170,22 @@ type TargetKind = "account" | "character" | "discord" | "payout";
  * from its own `details` payload (`summarize.ts`'s `accessListRef`), not from
  * this resolution, so nothing user-facing depends on the id being "right"
  * here.
+ *
+ * `fleet_device.*` is registered but never resolves to a name today:
+ * `fleet_device.pairing_approved` targets a pairing-request id and
+ * `fleet_device.revoked` targets a device id, and neither is an account,
+ * character, discord, or payout id, so no existing `TargetKind` actually
+ * fits. Classified as `account` anyway — both are UUIDs, the same shape
+ * `account.`/`payout.` targets already are — purely so the namespace is
+ * registered at all (offered in `/admin/audit`'s filter datalist via
+ * `ACTION_NAMESPACES`, and no longer silently absent from
+ * `targetKindFromAction`). The lookup this causes (`accountIds.add(target)`
+ * in `resolveAuditIdentities`) simply never matches a real account row, so
+ * these rows render `unresolved` exactly as they did before registration —
+ * the actor column (always an account uuid or `"system"`, resolved
+ * independently of any namespace) already names who acted; only the raw
+ * device/pairing id is unresolved, same as `token.subject_mismatch`'s raw-id
+ * fallback elsewhere in this file.
  */
 const NAMESPACE_TARGET_KIND = {
   "access_list.": "character",
@@ -177,6 +193,7 @@ const NAMESPACE_TARGET_KIND = {
   "admin.": "account",
   "character.": "character",
   "discord.": "discord",
+  "fleet_device.": "account",
   "payout.": "payout",
   "status.": "account",
   "structure.": "character",

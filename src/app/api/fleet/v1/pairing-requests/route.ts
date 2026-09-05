@@ -17,9 +17,9 @@ import { FLEET_RELAY_PROTOCOL } from "@/services/fleet-relay";
 export const dynamic = "force-dynamic";
 
 /** Defense-in-depth bound on the raw wire body, measured and checked BEFORE
- *  any `JSON.parse` (Task 5's report flags the route layer as the PRIMARY
- *  defense against an oversized body; the service layer's own bound is a
- *  secondary backstop). A genuine request here is a small fraction of this:
+ *  any `JSON.parse` (the route layer is the PRIMARY defense against an
+ *  oversized body; the service layer's own bound is a secondary backstop).
+ *  A genuine request here is a small fraction of this:
  *  an Ed25519 SPKI public key base64url-encodes to 59 characters. */
 const MAX_BODY_BYTES = 2048;
 

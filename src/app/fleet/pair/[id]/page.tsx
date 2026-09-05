@@ -27,8 +27,8 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 /**
  * A short, human-checkable derived form of a device's public key — never
- * the key material itself (the brief: "Do not reveal device key material
- * beyond a short derived public-key fingerprint"). SHA-256 of the raw SPKI
+ * the key material itself: this page must never reveal device key material
+ * beyond a short derived public-key fingerprint. SHA-256 of the raw SPKI
  * bytes, truncated to 10 bytes/20 hex characters and grouped for reading;
  * this is a display aid, not a security boundary — a fingerprint collision
  * would only ever mislead a human comparing two approvals, never let a

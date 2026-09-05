@@ -9,18 +9,16 @@ import {
 } from "@/lib/fleet-signature";
 
 /**
- * Task 6's route-layer half of the `fleet-v1` signed-request contract
+ * The route-layer half of the `fleet-v1` signed-request contract
  * (`src/lib/fleet-signature.ts`, `src/services/fleet-relay.ts`): extracting
  * the five `X-Fleet-*` headers from a live `NextRequest` and authenticating
  * the calling device against the database, shared by every route that
- * requires "all signed headers" (`GET /catalogue`, `PUT /snapshot`,
- * `GET /snapshot` — the brief's own wording). Not listed in Task 6's literal
- * file list, which names only route/page files; extracted here rather than
- * duplicated three times because all three routes need the identical
+ * requires all signed headers (`GET /catalogue`, `PUT`/`GET /snapshot`,
+ * `PUT /session`). Not itself a route or page file — extracted here rather
+ * than duplicated across each one, since every route needs the identical
  * extract-then-verify-then-look-up-the-device flow, mirroring
  * `src/lib/request-session.ts`'s existing role as a shared helper multiple
- * routes import rather than reimplement. See the task report's "Concerns /
- * deviations" for the full reasoning.
+ * routes import rather than reimplement.
  */
 
 const SESSION_HEADER = "x-fleet-session";
@@ -33,7 +31,7 @@ const SIGNATURE_HEADER = "x-fleet-signature";
  * Canonical base-10 text only: no leading zero (other than the bare literal
  * "0"), no leading `+`/`-`, no decimal point, no whitespace. This is the
  * ONLY shape `Number(...)` may safely parse into `FleetAuthHeaders.revision`
- * (a `number`, per Task 3's contract).
+ * (a `number`, per `FleetAuthHeaders`'s contract).
  *
  * This is also where a duplicate `X-Fleet-Revision` header is rejected.
  * `NextRequest.headers` is a Fetch `Headers` object, which per spec joins a
@@ -48,6 +46,20 @@ const SIGNATURE_HEADER = "x-fleet-signature";
  * `verifyFleetRequest`'s own `hasWellFormedHeaders` check the same way.
  */
 const CANONICAL_INTEGER_RE = /^(0|[1-9][0-9]*)$/;
+
+/**
+ * A signed fleet route accepts NO query string at all: the canonical `path`
+ * every route signs (each route's own hardcoded `CANONICAL_PATH` literal) is
+ * a bare path with no query component, so anything a caller appended to the
+ * live request's query string is never covered by the signature. Rejecting
+ * it outright, before any other check, closes that gap rather than
+ * silently accepting and ignoring a query string today's handlers happen
+ * not to read — a future change that DOES read one would otherwise inherit
+ * an unauthenticated input by default.
+ */
+export function hasUnsignedQueryString(req: { nextUrl: { search: string } }): boolean {
+  return req.nextUrl.search !== "";
+}
 
 /**
  * Extracts and shape-validates the five `X-Fleet-*` headers. Returns `null`
@@ -117,8 +129,8 @@ export type FleetRouteAuthResult =
  * the SAME generic `"unauthorized"` code: an unknown session id, an expired
  * session, a revoked device, and a signature that fails to verify for a
  * perfectly real session are all indistinguishable in the response. This
- * mirrors `readFleetProjection`'s own generic `"forbidden"` ruling
- * (Task 5) — a caller must not be able to use this boundary to learn
+ * mirrors `readFleetProjection`'s own generic `"forbidden"` ruling — a
+ * caller must not be able to use this boundary to learn
  * whether a guessed session id exists.
  */
 export async function authenticateFleetRequest(
