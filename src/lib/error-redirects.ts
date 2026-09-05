@@ -31,7 +31,8 @@
  * — with each branch checked against its own page's union. A per-file helper
  * could not: the code and its destination have to be typed together.
  *
- * THREE MAPS, NOT ONE, and codes are deliberately NOT globally unique.
+ * THREE MAPS, NOT ONE (a fourth, `FLEET_DEVICES_ERRORS`, joined them for the
+ * same reason below), and codes are deliberately NOT globally unique.
  * `not_admin` appears in both `/account` and `/admin/accounts` with different
  * copy, and both are correct for where they land: `/account` is where a
  * genuinely de-roled admin is sent ("your admin access was removed"), while
@@ -177,9 +178,21 @@ export const ADMIN_ACCOUNTS_ERRORS = {
     "That account is gone: its character was linked to another account and merged in. There's nothing left to act on.",
 } as const;
 
+/** Codes reaching `/account/fleet-devices`. One entry today, the same
+ *  "the list below is current" shape `ACCOUNT_ERRORS.stale_character` gives
+ *  a race that already resolved itself by the time the redirect lands — a
+ *  device this account no longer owns (already revoked in another tab, or
+ *  never this account's to begin with) is a stale row, not a fault worth an
+ *  error-boundary throw. */
+export const FLEET_DEVICES_ERRORS = {
+  stale_device:
+    "That device isn't paired to this account anymore. The list below is current.",
+} as const;
+
 export type LoginErrorCode = keyof typeof LOGIN_ERRORS;
 export type AccountErrorCode = keyof typeof ACCOUNT_ERRORS;
 export type AdminAccountsErrorCode = keyof typeof ADMIN_ACCOUNTS_ERRORS;
+export type FleetDevicesErrorCode = keyof typeof FLEET_DEVICES_ERRORS;
 
 /** `/login?error=<code>`. */
 export function loginErrorUrl(code: LoginErrorCode): string {
@@ -189,6 +202,11 @@ export function loginErrorUrl(code: LoginErrorCode): string {
 /** `/account?error=<code>`. */
 export function accountErrorUrl(code: AccountErrorCode): string {
   return `/account?error=${code}`;
+}
+
+/** `/account/fleet-devices?error=<code>`. */
+export function fleetDevicesErrorUrl(code: FleetDevicesErrorCode): string {
+  return `/account/fleet-devices?error=${code}`;
 }
 
 /**

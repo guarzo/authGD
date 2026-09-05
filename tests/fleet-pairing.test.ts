@@ -37,6 +37,7 @@ import {
   renewFleetDeviceSession,
   revokeFleetDevice,
   revokeFleetRelayForAccount,
+  listFleetDevicesForAccount,
 } from "@/services/fleet-pairing";
 import { setupTestDb } from "./helpers/db";
 import { withInjectedPgFault } from "./helpers/pg-fault";
@@ -603,6 +604,153 @@ describe("beginPairing / approvePairing / completePairing", () => {
       .from(fleetPairingRequest)
       .where(eq(fleetPairingRequest.id, second.pairingId));
     expect(secondRow.consumedAt).toBeNull();
+  });
+});
+
+describe("listFleetDevicesForAccount", () => {
+  it("returns an empty list for an account with no paired devices", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "member" });
+    expect(await listFleetDevicesForAccount(ctx.db, acc.id)).toEqual([]);
+  });
+
+  it("lists a paired device with its paired-at time and its session's expiry", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "member" });
+    const { spki, privateKey } = newKeyPair();
+    const { pairingId } = await beginPairing(ctx.db, { publicKeySpki: spki, now: NOW });
+    await approvePairing(ctx.db, pairingId, acc.id, NOW);
+    await completePairing(ctx.db, {
+      pairingId,
+      completionSignature: signCompletion(privateKey, pairingId),
+      now: NOW,
+    });
+    const [device] = await ctx.db
+      .select()
+      .from(fleetDevice)
+      .where(eq(fleetDevice.accountId, acc.id));
+    const [session] = await ctx.db
+      .select()
+      .from(fleetDeviceSession)
+      .where(eq(fleetDeviceSession.deviceId, device.id));
+
+    const list = await listFleetDevicesForAccount(ctx.db, acc.id);
+
+    expect(list).toEqual([
+      { id: device.id, pairedAt: device.createdAt, sessionExpiresAt: session.expiresAt },
+    ]);
+  });
+
+  it("never lists a revoked device, even though its row survives the revoke", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "member" });
+    const { spki, privateKey } = newKeyPair();
+    const { pairingId } = await beginPairing(ctx.db, { publicKeySpki: spki, now: NOW });
+    await approvePairing(ctx.db, pairingId, acc.id, NOW);
+    await completePairing(ctx.db, {
+      pairingId,
+      completionSignature: signCompletion(privateKey, pairingId),
+      now: NOW,
+    });
+    const [device] = await ctx.db
+      .select()
+      .from(fleetDevice)
+      .where(eq(fleetDevice.accountId, acc.id));
+
+    await revokeFleetDevice(ctx.db, device.id, acc.id, NOW);
+
+    expect(await listFleetDevicesForAccount(ctx.db, acc.id)).toEqual([]);
+  });
+
+  it("never lists another account's device", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "member" });
+    const other = await seedAccount(ctx.db, { tier: "member" });
+    const { spki, privateKey } = newKeyPair();
+    const { pairingId } = await beginPairing(ctx.db, { publicKeySpki: spki, now: NOW });
+    await approvePairing(ctx.db, pairingId, other.id, NOW);
+    await completePairing(ctx.db, {
+      pairingId,
+      completionSignature: signCompletion(privateKey, pairingId),
+      now: NOW,
+    });
+
+    expect(await listFleetDevicesForAccount(ctx.db, acc.id)).toEqual([]);
+  });
+
+  it("reports the LATEST of a device's several accumulated sessions, not merely the first or the last inserted", async () => {
+    // A device can accumulate more than one session row across its lifetime
+    // (completePairing reuses an existing, un-revoked device across a
+    // re-pairing rather than deleting its prior session first) — this test's
+    // own reason this function reads the union rather than assuming one row.
+    const acc = await seedAccount(ctx.db, { tier: "member" });
+    const { spki, privateKey } = newKeyPair();
+    const first = await beginPairing(ctx.db, { publicKeySpki: spki, now: NOW });
+    await approvePairing(ctx.db, first.pairingId, acc.id, NOW);
+    await completePairing(ctx.db, {
+      pairingId: first.pairingId,
+      completionSignature: signCompletion(privateKey, first.pairingId),
+      now: NOW,
+    });
+    const [device] = await ctx.db
+      .select()
+      .from(fleetDevice)
+      .where(eq(fleetDevice.accountId, acc.id));
+
+    // A second pairing cycle for the SAME device key, completed later —
+    // idempotent reuse of the existing device row, per completePairing's own
+    // doc — inserts a SECOND, later-expiring session alongside the first.
+    const later = new Date(NOW.getTime() + 60_000);
+    const second = await beginPairing(ctx.db, { publicKeySpki: spki, now: later });
+    await approvePairing(ctx.db, second.pairingId, acc.id, later);
+    await completePairing(ctx.db, {
+      pairingId: second.pairingId,
+      completionSignature: signCompletion(privateKey, second.pairingId),
+      now: later,
+    });
+
+    const sessions = await ctx.db
+      .select()
+      .from(fleetDeviceSession)
+      .where(eq(fleetDeviceSession.deviceId, device.id));
+    expect(sessions).toHaveLength(2);
+    const latestExpiry = sessions
+      .map((s) => s.expiresAt.getTime())
+      .reduce((a, b) => Math.max(a, b));
+
+    const [listed] = await listFleetDevicesForAccount(ctx.db, acc.id);
+    expect(listed.sessionExpiresAt?.getTime()).toBe(latestExpiry);
+  });
+
+  it("orders devices oldest-paired-first", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "member" });
+    const first = newKeyPair();
+    const secondKey = newKeyPair();
+    const firstPairing = await beginPairing(ctx.db, {
+      publicKeySpki: first.spki,
+      now: NOW,
+    });
+    await approvePairing(ctx.db, firstPairing.pairingId, acc.id, NOW);
+    await completePairing(ctx.db, {
+      pairingId: firstPairing.pairingId,
+      completionSignature: signCompletion(first.privateKey, firstPairing.pairingId),
+      now: NOW,
+    });
+    const later = new Date(NOW.getTime() + 60_000);
+    const secondPairing = await beginPairing(ctx.db, {
+      publicKeySpki: secondKey.spki,
+      now: later,
+    });
+    await approvePairing(ctx.db, secondPairing.pairingId, acc.id, later);
+    await completePairing(ctx.db, {
+      pairingId: secondPairing.pairingId,
+      completionSignature: signCompletion(secondKey.privateKey, secondPairing.pairingId),
+      now: later,
+    });
+
+    const list = await listFleetDevicesForAccount(ctx.db, acc.id);
+
+    // `fleetDevice.createdAt` is DB-generated (`defaultNow()`), not the
+    // `now` argument threaded through pairing — so this asserts relative
+    // insertion order, not exact instants.
+    expect(list).toHaveLength(2);
+    expect(list[0].pairedAt.getTime()).toBeLessThan(list[1].pairedAt.getTime());
   });
 });
 
