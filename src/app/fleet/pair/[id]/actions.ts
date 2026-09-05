@@ -6,6 +6,7 @@ import { cookies } from "next/headers";
 import { getConfig } from "@/config";
 import { getDb } from "@/db";
 import {
+  DeviceBoundToAnotherAccountError,
   NonMemberApprovalError,
   PairingAlreadyApprovedError,
   PairingAlreadyConsumedError,
@@ -24,10 +25,14 @@ import { getSessionAccount } from "@/services/session";
  * caught here, not assumed away by the page having looked fine a moment ago.
  *
  * Every refusal `approvePairing` can throw for THIS pairing request
- * (not-found/expired/already-approved/already-consumed/non-Member) is
- * swallowed rather than escalated to `error.tsx`: none of them is something
- * this press typed, and the page's own next render re-reads the row directly
- * from the database, so it already shows whichever of those is now true.
+ * (not-found/expired/already-approved/already-consumed/non-Member/bound to
+ * another account) is swallowed rather than escalated to `error.tsx`: none
+ * of them is something this press typed, and the page's own next render
+ * re-derives its state directly from the database (including its own copy
+ * of the bound-elsewhere check, `page.tsx`'s `derivePairingState`), so it
+ * already shows whichever of those is now true — a terminal,
+ * non-approvable state for `DeviceBoundToAnotherAccountError`, never the
+ * same Approve control handed back for another doomed retry.
  * `revalidatePath` is what makes that next render happen.
  */
 export async function approvePairingAction(pairingId: string): Promise<void> {
@@ -45,7 +50,8 @@ export async function approvePairingAction(pairingId: string): Promise<void> {
       err instanceof PairingExpiredError ||
       err instanceof PairingAlreadyApprovedError ||
       err instanceof PairingAlreadyConsumedError ||
-      err instanceof NonMemberApprovalError
+      err instanceof NonMemberApprovalError ||
+      err instanceof DeviceBoundToAnotherAccountError
     ) {
       revalidatePath(`/fleet/pair/${pairingId}`);
       return;

@@ -5,7 +5,7 @@ import { eq } from "drizzle-orm";
 import type { Metadata } from "next";
 import { getConfig } from "@/config";
 import { getDb } from "@/db";
-import { account, fleetPairingRequest } from "@/db/schema";
+import { account, fleetDevice, fleetPairingRequest } from "@/db/schema";
 import { accountErrorUrl, loginErrorUrl } from "@/lib/error-redirects";
 import { canReadPayouts } from "@/services/payouts";
 import { getSessionAccount } from "@/services/session";
@@ -45,7 +45,32 @@ function fingerprint(publicKeySpkiB64: string): string {
   return digest.match(/.{1,4}/g)!.join(" ");
 }
 
-type PairingState = "closed" | "pending" | "approved";
+type PairingState = "closed" | "pending" | "approved" | "device_bound_elsewhere";
+
+/**
+ * The state this page renders, extracted so its branches are unit-testable
+ * without a database. `"device_bound_elsewhere"` is this page's own copy of
+ * the SAME early refusal `approvePairing` throws
+ * (`DeviceBoundToAnotherAccountError`, fleet-pairing.ts): an ACTIVE device
+ * already bound to a different account than this viewer can never complete
+ * this pairing. Computed here, not left for the Approve action's swallowed
+ * error alone to surface -- the pairing request row's own columns are never
+ * written when that refusal fires, so without this check the very next
+ * render would still read `approvedAt === null` and show "pending" again,
+ * handing the viewer back an Approve control that can never succeed.
+ */
+export function derivePairingState(args: {
+  row: { expiresAt: Date; consumedAt: Date | null; approvedAt: Date | null } | undefined;
+  now: Date;
+  deviceBoundToAnotherAccount: boolean;
+}): PairingState {
+  const { row, now, deviceBoundToAnotherAccount } = args;
+  if (!row || row.expiresAt.getTime() <= now.getTime() || row.consumedAt !== null) {
+    return "closed";
+  }
+  if (row.approvedAt !== null) return "approved";
+  return deviceBoundToAnotherAccount ? "device_bound_elsewhere" : "pending";
+}
 
 export default async function FleetPairPage({
   params,
@@ -85,12 +110,22 @@ export default async function FleetPairPage({
         .where(eq(fleetPairingRequest.id, id))
     : [];
 
-  const state: PairingState =
-    !row || row.expiresAt.getTime() <= now.getTime() || row.consumedAt !== null
-      ? "closed"
-      : row.approvedAt !== null
-        ? "approved"
-        : "pending";
+  // Mirrors approvePairing's own early bound-elsewhere check (fleet-pairing.ts):
+  // only meaningful while the request is still open for approval, so this is
+  // skipped once it is already approved/consumed/expired/missing.
+  let deviceBoundToAnotherAccount = false;
+  if (row && row.approvedAt === null && row.consumedAt === null) {
+    const [existingDevice] = await getDb()
+      .select({ accountId: fleetDevice.accountId, revokedAt: fleetDevice.revokedAt })
+      .from(fleetDevice)
+      .where(eq(fleetDevice.publicKeySpkiB64, row.publicKeySpkiB64));
+    deviceBoundToAnotherAccount =
+      existingDevice !== undefined &&
+      existingDevice.revokedAt === null &&
+      existingDevice.accountId !== sess.accountId;
+  }
+
+  const state = derivePairingState({ row, now, deviceBoundToAnotherAccount });
 
   return (
     <>
@@ -108,6 +143,14 @@ export default async function FleetPairPage({
         {state === "approved" && (
           <Notice tone="info">
             Approved. Waiting for the desktop app to finish pairing.
+          </Notice>
+        )}
+
+        {state === "device_bound_elsewhere" && (
+          <Notice tone="info">
+            This device is already paired to a different authGD account and cannot be
+            approved from this one. Generate a new key pair on the device and start
+            pairing again from Wingman.
           </Notice>
         )}
 
