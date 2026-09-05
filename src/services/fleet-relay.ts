@@ -23,6 +23,13 @@ import {
  * browser session cookie as desktop credentials; they authenticate the
  * signed request, then call exactly one of these functions).
  *
+ * `docs/fleet-protocol.md` is the wire-level contract this module
+ * implements — the shared per-session revision counter/cadence bucket every
+ * signed request kind consumes, and the "at most one fleet-v1 signed
+ * request in flight per device" rule that follows from it. Read it before
+ * changing any client against these routes; this module's own comments
+ * cover the DATABASE side (locking, transactions) of the same rules.
+ *
  * Every non-eligibility-leaking, non-obviously-derivable rule lives here,
  * not in the thin route layer:
  *   - `replaceDeviceProjection` atomically replaces one DEVICE's entire
@@ -80,7 +87,14 @@ import {
  * sessions/leases/rows touched) deadlock against each other —
  * `gateSignedSession` and `lockFleetCharactersAscending` below are the two
  * functions that now make every path agree on this order instead of each
- * hand-rolling its own.
+ * hand-rolling its own. `revokeFleetRelayForAccount` (fleet-pairing.ts) is
+ * scoped to every device an account has, not one — its own level-3 lock is
+ * the UNION of ALL of those devices' characters, taken ascending in one pass
+ * BEFORE any of them is individually touched, precisely because visiting
+ * device N's own (already-ascending) characters, then device N+1's, is only
+ * ascending WITHIN a device: across an account's several devices it is
+ * whatever order those devices are found in, which no other caller's own
+ * ascending walk agrees with in general.
  *
  * Even with this order in place, Postgres can still report a deadlock or a
  * serialization failure under enough concurrent contention (the detector

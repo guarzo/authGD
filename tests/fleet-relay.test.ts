@@ -1,5 +1,5 @@
 import { generateKeyPairSync, sign as ed25519Sign } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Db } from "@/db";
 import {
@@ -16,7 +16,9 @@ import {
   beginPairing,
   completePairing,
   pairingChallengePreimage,
+  renewFleetDeviceSession,
   revokeFleetDevice,
+  revokeFleetRelayForAccount,
 } from "@/services/fleet-pairing";
 import {
   isRetryableRelayError,
@@ -1085,6 +1087,211 @@ describe("cross-module lock order (deadlock avoidance)", () => {
 
     const result = await publishResult;
     expect(result).toEqual({ ok: true });
+  });
+
+  // This is the regression the previous version of this describe block
+  // claimed to cover and did not: that single-device test proves
+  // `gateSignedSession`'s device-before-session order, never anything about
+  // `revokeFleetRelayForAccount`'s OWN character-lock order across MULTIPLE
+  // devices -- it never called that function at all, so it stayed green
+  // whether or not this test's own bug existed (vacuous exactly the way
+  // AGENTS.md's "a test written to prove a fix must be shown to fail
+  // without it" warns against). This test calls the real function, revoking
+  // a real two-device account, and stands in for any OTHER caller
+  // (`RELAY_CHARACTER_LOCK_CLASS = 2`, the identical advisory-lock class
+  // `lockFleetCharactersAscending` uses) that touches the SAME two
+  // characters in the correct, globally ascending order.
+  it("revokeFleetRelayForAccount locks the UNION of every device's characters ascending, globally, before any per-device delete -- not device-by-device, which could lock a later device's higher character id before an earlier device's lower one, an AB-BA deadlock against anything else that locks the same two ascending", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "member" });
+    const { device: deviceX } = await pairDevice(ctx.db, acc.id, NOW);
+    const { device: deviceY } = await pairDevice(ctx.db, acc.id, NOW);
+
+    // `revokeFleetRelayForAccount`'s own device select carries no ORDER BY,
+    // so this test does not assume which of the two devices it visits
+    // first -- it asks, with a read of the exact same shape, then assigns
+    // the HIGHER character id to whichever device that turns out to be. A
+    // per-device (not globally ascending) revoke would then lock that HIGH
+    // character while processing the device found first, and the LOW one
+    // only once it reaches the device found second -- backwards from the
+    // ascending order this test's raw client (standing in for any other
+    // correctly-ordered caller) always uses.
+    const devicesInScanOrder = await ctx.db
+      .select()
+      .from(fleetDevice)
+      .where(and(eq(fleetDevice.accountId, acc.id), isNull(fleetDevice.revokedAt)));
+    expect(devicesInScanOrder).toHaveLength(2);
+    const [deviceProcessedFirst, deviceProcessedSecond] = devicesInScanOrder;
+    const deviceById = new Map([
+      [deviceX.id, deviceX],
+      [deviceY.id, deviceY],
+    ]);
+    expect(deviceById.has(deviceProcessedFirst.id)).toBe(true);
+    expect(deviceById.has(deviceProcessedSecond.id)).toBe(true);
+
+    const CHAR_HIGH = 95990900;
+    const CHAR_LOW = 95990100;
+    await seedCharacter(ctx.db, cfg, { id: CHAR_HIGH, accountId: acc.id });
+    await seedCharacter(ctx.db, cfg, { id: CHAR_LOW, accountId: acc.id });
+
+    async function seedRelayState(characterId: number, deviceId: string): Promise<void> {
+      const [session] = await ctx.db
+        .select({ id: fleetDeviceSession.id })
+        .from(fleetDeviceSession)
+        .where(eq(fleetDeviceSession.deviceId, deviceId));
+      await ctx.db.insert(fleetPublisherLease).values({
+        characterId,
+        deviceId,
+        sessionId: session.id,
+        fleetId: 5300001,
+        leaseExpiresAt: new Date(NOW.getTime() + 60_000),
+      });
+      await ctx.db.insert(fleetTelemetryRow).values({
+        characterId,
+        fleetId: 5300001,
+        deviceId,
+        sessionId: session.id,
+        dps: 100,
+        ewar: [],
+        receivedAt: NOW,
+        staleAt: new Date(NOW.getTime() + 3_000),
+        hardExpiresAt: new Date(NOW.getTime() + 10_000),
+      });
+    }
+    // Whichever device is processed FIRST gets the HIGH character; whichever
+    // is processed SECOND gets the LOW one -- exactly the crossed order a
+    // per-device loop would lock in.
+    await seedRelayState(CHAR_HIGH, deviceProcessedFirst.id);
+    await seedRelayState(CHAR_LOW, deviceProcessedSecond.id);
+
+    const client = await ctx.pool.connect();
+    try {
+      await client.query("begin");
+      // Standing in for any other correctly-ordered caller already holding
+      // the LOW character's lock -- exactly where a per-device revoke,
+      // having already locked HIGH while processing the first device, would
+      // next need to wait.
+      await client.query("select pg_advisory_xact_lock(2, hashint8($1))", [CHAR_LOW]);
+
+      const revokePromise = revokeFleetRelayForAccount(ctx.db, acc.id, NOW);
+
+      let blocked = false;
+      for (let i = 0; i < 50; i++) {
+        const { rows: waiters } = await ctx.pool.query(
+          "select count(*)::int as n from pg_stat_activity where wait_event_type = 'Lock'",
+        );
+        if ((waiters[0] as { n: number }).n > 0) {
+          blocked = true;
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      expect(blocked).toBe(true);
+
+      // A globally-ascending revoke's FIRST character lock for this whole
+      // account is CHAR_LOW (already held above), so it cannot have reached
+      // CHAR_HIGH yet -- this must succeed immediately. A per-device revoke
+      // would already hold CHAR_HIGH from processing the first device,
+      // creating exactly the AB-BA cycle this query would then wait on:
+      // Postgres's own deadlock detector would abort one side of it, and
+      // whichever side that is, either this query or the final assertion
+      // below fails rather than resolving cleanly.
+      await client.query("select pg_advisory_xact_lock(2, hashint8($1))", [CHAR_HIGH]);
+
+      await client.query("commit");
+      await expect(revokePromise).resolves.toBeUndefined();
+    } finally {
+      client.release();
+    }
+
+    const devicesAfter = await ctx.db
+      .select()
+      .from(fleetDevice)
+      .where(eq(fleetDevice.accountId, acc.id));
+    expect(devicesAfter).toHaveLength(2);
+    for (const d of devicesAfter) {
+      expect(d.revokedAt).toEqual(NOW);
+    }
+    expect(await leaseFor(ctx.db, CHAR_HIGH)).toBeUndefined();
+    expect(await leaseFor(ctx.db, CHAR_LOW)).toBeUndefined();
+    expect(await rowFor(ctx.db, CHAR_HIGH)).toBeUndefined();
+    expect(await rowFor(ctx.db, CHAR_LOW)).toBeUndefined();
+  });
+});
+
+// docs/fleet-protocol.md's own contract: ONE monotonic revision counter and
+// ONE pair of cadence timestamps per session, shared by every signed-request
+// KIND (publish, catalogue read, snapshot read, session renewal) -- never one
+// sequence per kind. These are the tests that contract's own doc references.
+describe("protocol contract: revision/cadence are shared across every signed-request kind, not per-route (docs/fleet-protocol.md)", () => {
+  it("a renewal's revision blocks a later publish at the identical revision, proving one shared counter rather than an independent one per route", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "member" });
+    const { sessionId } = await pairDevice(ctx.db, acc.id, NOW);
+    await seedEligibleCharacter(ctx.db, {
+      characterId: 95600100,
+      accountId: acc.id,
+      fleetId: 6400040,
+      now: NOW,
+    });
+
+    const renewed = await renewFleetDeviceSession(ctx.db, {
+      sessionId,
+      revision: 1,
+      now: NOW,
+    });
+    expect(renewed.ok).toBe(true);
+
+    // Same revision, a DIFFERENT route (publish) and cadence bucket
+    // ("publish", not the renewal's "read") -- still refused, because the
+    // counter it is checked against is the session's, not this route's own.
+    const replay = await replaceDeviceProjection(ctx.db, {
+      sessionId,
+      now: new Date(NOW.getTime() + 600),
+      revision: 1,
+      rows: [row(95600100, 100)],
+    });
+    expect(replay).toEqual({ ok: false, code: "revision_replayed" });
+  });
+
+  // The concrete hazard docs/fleet-protocol.md's "one-in-flight-request"
+  // section warns about: a device that constructs two signed requests
+  // correctly (a strictly increasing revision each) but sends them
+  // CONCURRENTLY has no guarantee they are applied in that same order.
+  // Here the higher-revision request (a publish) is simply made to COMMIT
+  // first -- standing in for "won the race" -- and the lower-revision one
+  // (a renewal), despite being a validly-constructed request when it was
+  // sent, is refused anyway. Nothing here is a bug: this IS the replay
+  // defense working exactly as designed against the wrong input, which is
+  // the whole point of the client-side contract -- never have two of
+  // these in flight at once.
+  it("a lower revision is refused once a higher one has already committed, even though it was a validly-constructed request -- the hazard the one-in-flight contract exists to avoid", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "member" });
+    const { sessionId } = await pairDevice(ctx.db, acc.id, NOW);
+    await seedEligibleCharacter(ctx.db, {
+      characterId: 95600101,
+      accountId: acc.id,
+      fleetId: 6400041,
+      now: NOW,
+    });
+
+    // The "second" concurrent request (by send order) commits FIRST.
+    const higherFirst = await replaceDeviceProjection(ctx.db, {
+      sessionId,
+      now: NOW,
+      revision: 2,
+      rows: [row(95600101, 100)],
+    });
+    expect(higherFirst).toEqual({ ok: true });
+
+    // The "first" concurrent request (by send order, revision 1 -- correctly
+    // one greater than the session's counter AT THE TIME IT WAS SENT)
+    // arrives and commits second, against a session counter that has since
+    // moved past it.
+    const lowerSecond = await renewFleetDeviceSession(ctx.db, {
+      sessionId,
+      revision: 1,
+      now: new Date(NOW.getTime() + 600),
+    });
+    expect(lowerSecond).toEqual({ ok: false, code: "revision_replayed" });
   });
 });
 

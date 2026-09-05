@@ -5,7 +5,7 @@ import {
   randomUUID,
   verify as ed25519Verify,
 } from "node:crypto";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import type { Dbx, DbTx } from "@/db";
 import {
   account,
@@ -493,12 +493,92 @@ async function deleteFleetRelayStateForDevice(tx: DbTx, deviceId: string): Promi
 }
 
 /**
+ * Every fleet device an account currently has paired — revoked devices are
+ * excluded, the same "gone from the member's own view" posture `unlinkAction`
+ * gives an unlinked character, since a revoked device's public key can never
+ * be paired again (`fleetDevice.publicKeySpkiB64`'s own uniqueness comment,
+ * db/schema.ts) and there is nothing left for a member to act on for one.
+ *
+ * `sessionExpiresAt` is the LATEST `fleet_device_session.expiresAt` this
+ * device currently holds — `null` only if this device somehow has none at
+ * all, which should not happen for a non-revoked row (every path that ever
+ * deletes a device's sessions, `revokeFleetDevice`/
+ * `revokeFleetRelayForAccount`, stamps `revokedAt` in the SAME transaction),
+ * but is not asserted against here: a device can accumulate more than one
+ * session row over its lifetime (`completePairing` reuses an existing,
+ * un-revoked device across a re-pairing rather than deleting its prior
+ * session first), so this reads the union and keeps only the one still
+ * furthest from expiry, rather than assuming exactly one row exists.
+ *
+ * Ordered oldest-paired-first, matching the crew manifest's own
+ * `character.id`-ascending convention (fleet-eligibility.ts) for the same
+ * reason: a stable order across renders, rather than one that depends on
+ * Postgres's own row layout.
+ */
+export type FleetDeviceListItem = {
+  id: string;
+  pairedAt: Date;
+  sessionExpiresAt: Date | null;
+};
+
+export async function listFleetDevicesForAccount(
+  dbx: Dbx,
+  accountId: string,
+): Promise<FleetDeviceListItem[]> {
+  const devices = await dbx
+    .select({ id: fleetDevice.id, pairedAt: fleetDevice.createdAt })
+    .from(fleetDevice)
+    .where(and(eq(fleetDevice.accountId, accountId), isNull(fleetDevice.revokedAt)))
+    .orderBy(fleetDevice.createdAt);
+  if (devices.length === 0) return [];
+
+  const deviceIds = devices.map((d) => d.id);
+  const sessions = await dbx
+    .select({
+      deviceId: fleetDeviceSession.deviceId,
+      expiresAt: fleetDeviceSession.expiresAt,
+    })
+    .from(fleetDeviceSession)
+    .where(inArray(fleetDeviceSession.deviceId, deviceIds));
+
+  const latestExpiryByDevice = new Map<string, Date>();
+  for (const session of sessions) {
+    const current = latestExpiryByDevice.get(session.deviceId);
+    if (!current || session.expiresAt > current) {
+      latestExpiryByDevice.set(session.deviceId, session.expiresAt);
+    }
+  }
+
+  return devices.map((d) => ({
+    id: d.id,
+    pairedAt: d.pairedAt,
+    sessionExpiresAt: latestExpiryByDevice.get(d.id) ?? null,
+  }));
+}
+
+/**
  * Soft-revokes one device and tears down everything that trusted its
  * sessions — its device sessions, publisher leases, and current telemetry
  * rows — all inside one transaction. The device row itself survives
  * (`revokedAt` stamped, never deleted) so `fleet_pairing_request.
  * approvedDeviceId` keeps meaning, and its public key can never be paired
  * again.
+ *
+ * Carries no ownership check of its own — `actorAccountId` here is audit
+ * metadata only (who to blame this on), never a gate on WHICH device may be
+ * revoked. Every caller today is a trusted, narrowly-scoped one: the member
+ * self-serve action at `src/app/account/fleet-devices/actions.ts` checks
+ * `deviceId` belongs to the caller's own account BEFORE ever calling this
+ * (mirroring `account/actions.ts`'s `unlinkAction` pre-check — safe as the
+ * sole check, and not merely a friendly fast path, because `fleetDevice.
+ * accountId` is immutable for the lifetime of a row: nothing in this module
+ * ever reassigns an existing device to a different account, and
+ * `completePairing`'s own `DeviceBoundToAnotherAccountError` refuses the one
+ * path that could have tried). A future admin-facing caller would need its
+ * own equivalent authorization check before calling this, not a change
+ * here — this function trusts its caller by design, the same posture
+ * `deleteFleetRelayStateForDevice` and `lockFleetCharactersAscending`
+ * already hold one level down.
  */
 export async function revokeFleetDevice(
   dbx: Dbx,
@@ -550,6 +630,27 @@ export async function revokeFleetDevice(
  * this owns its own audit entry under its own action vocabulary (e.g.
  * `tier.changed`), and logging here too would duplicate that row for the
  * same underlying event.
+ *
+ * LOCK ORDER (`fleet-relay.ts`'s own doc): a naive per-device loop — lock
+ * device N, then (via `deleteFleetRelayStateForDevice`) lock device N's OWN
+ * characters ascending, then move to device N+1 — is only ascending WITHIN
+ * one device. Across devices it is whatever order this account's devices
+ * happen to be found in, which agrees with none of their characters' ids:
+ * an account with device A (leasing a HIGH character id) processed before
+ * device B (leasing a LOW one) would lock high-then-low overall, backwards
+ * from the ascending order every other caller that could touch either of
+ * these same two characters (a publish, a prune) always uses — an AB-BA
+ * deadlock opportunity between an account-wide revoke and anything else,
+ * even though each INDIVIDUAL device's own characters were locked correctly
+ * ascending. Closed by locking the UNION of every one of this account's
+ * devices' characters, ascending, in ONE pass BEFORE the per-device loop
+ * below runs at all, so the first character lock this whole call ever
+ * attempts is already the lowest id across every device, never a later
+ * device's higher id acquired first. The per-device loop's own call into
+ * `deleteFleetRelayStateForDevice` still re-locks its device's characters —
+ * already held by this point, so an instant no-op re-acquisition within the
+ * same transaction — rather than being special-cased to skip it, so this
+ * function and `revokeFleetDevice` keep sharing the exact same cleanup step.
  */
 export async function revokeFleetRelayForAccount(
   dbx: Dbx,
@@ -568,6 +669,31 @@ export async function revokeFleetRelayForAccount(
         .from(fleetDevice)
         .where(and(eq(fleetDevice.accountId, accountId), isNull(fleetDevice.revokedAt)))
         .for("update");
+      if (devices.length === 0) return;
+
+      // The union of every one of THESE devices' characters, locked
+      // ascending in one pass before any device below is touched — see this
+      // function's own LOCK ORDER doc for why per-device order alone stops
+      // being enough once an account has more than one device.
+      const deviceIds = devices.map((d) => d.id);
+      const [leaseCharacterIds, telemetryCharacterIds] = await Promise.all([
+        tx
+          .select({ characterId: fleetPublisherLease.characterId })
+          .from(fleetPublisherLease)
+          .where(inArray(fleetPublisherLease.deviceId, deviceIds)),
+        tx
+          .select({ characterId: fleetTelemetryRow.characterId })
+          .from(fleetTelemetryRow)
+          .where(inArray(fleetTelemetryRow.deviceId, deviceIds)),
+      ]);
+      const allCharacterIds = [
+        ...leaseCharacterIds.map((r) => r.characterId),
+        ...telemetryCharacterIds.map((r) => r.characterId),
+      ];
+      if (allCharacterIds.length > 0) {
+        await lockFleetCharactersAscending(tx, allCharacterIds);
+      }
+
       for (const d of devices) {
         await tx
           .update(fleetDevice)
