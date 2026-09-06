@@ -31,11 +31,13 @@
  * been reported, never inside a catch block.
  */
 import { eq } from "drizzle-orm";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { loadConfig } from "@/config";
 import { createDb } from "@/db";
 import { character } from "@/db/schema";
 import { createEsiClient, EsiError } from "@/lib/esi/client";
-import { getFreshAccessToken } from "@/services/tokens";
+import { getFreshAccessToken, type CharacterTokenRow } from "@/services/tokens";
 
 function cacheControlLine(cacheControl: string | null): string {
   return cacheControl ?? "absent";
@@ -48,6 +50,58 @@ function etagLine(etag: string | null): string {
 /** Never prints `err` itself: it may embed a raw ESI response body. */
 function redactedStatus(err: unknown): number | "error" {
   return err instanceof EsiError ? err.status : "error";
+}
+
+/**
+ * Fixed vocabulary only — every failure reported at this granularity names
+ * which of the two non-ESI steps was running, so "FAIL: DrizzleQueryError"
+ * (previously the only outcome an uncaught error here ever produced) does
+ * not leave a reader guessing whether the database read or the token
+ * refresh is what broke. "startup" covers everything before either: config
+ * loading, opening the pool, or a failure severe enough to skip both.
+ */
+type Stage = "startup" | "db-lookup" | "token-refresh";
+
+/**
+ * A Postgres SQLSTATE (postgresql.org/docs/current/errcodes-appendix.html)
+ * is a fixed five-character code the server assigns from its own published
+ * table — never derived from a query, a parameter, or a row this database
+ * holds — so it is safe to print even though the driver error carrying it
+ * is not (see classifyError). Matched by shape only: some other `.code`
+ * (e.g. node-postgres's own "ECONNREFUSED") does not fit this pattern and
+ * is deliberately left unrecognized rather than guessed at.
+ */
+export function isSqlState(code: unknown): code is string {
+  return typeof code === "string" && /^[0-9A-Z]{5}$/.test(code);
+}
+
+/**
+ * Classifies an outer (non-ESI) failure into safe, fixed-vocabulary text:
+ * the error's own constructor name, plus a SQLSTATE if the driver reported
+ * one. Deliberately never reads `err.message` — a Drizzle `DrizzleQueryError`
+ * IS its raw SQL and bound parameters (drizzle-orm's errors.js builds the
+ * message from exactly those two) — nor any property of the underlying
+ * node-postgres `DatabaseError` besides `.code`: `.detail`, `.table`,
+ * `.column`, `.constraint`, `.hint`, `.where`, and `.internalQuery` can each
+ * embed row values, names, or schema (pg-protocol's messages.ts). This is
+ * intentionally generic rather than importing `DrizzleQueryError`/
+ * `DatabaseError` to narrow the check: the probe fails identically — and
+ * this still reports the SQLSTATE — whether pg, pg-boss, or drizzle itself
+ * is what threw.
+ */
+export function classifyError(err: unknown): string {
+  if (!(err instanceof Error)) return "unknown error";
+  const name = err.constructor.name;
+  const cause = err.cause;
+  const code =
+    cause && typeof cause === "object" ? (cause as { code?: unknown }).code : undefined;
+  return isSqlState(code) ? `${name} sqlstate=${code}` : name;
+}
+
+/** Reports a fixed stage plus the safe classification above, then exits. */
+function failStage(stage: Stage, err: unknown): never {
+  console.error(`FAIL: stage=${stage} ${classifyError(err)}`);
+  process.exit(1);
 }
 
 async function main(): Promise<void> {
@@ -79,20 +133,33 @@ async function main(): Promise<void> {
 
   const { db, pool } = createDb(cfg.databaseUrl);
   try {
-    const [row] = await db
-      .select({
-        id: character.id,
-        refreshTokenEnc: character.refreshTokenEnc,
-        tokenStatus: character.tokenStatus,
-      })
-      .from(character)
-      .where(eq(character.id, characterId));
+    let row: CharacterTokenRow | undefined;
+    try {
+      [row] = await db
+        .select({
+          id: character.id,
+          refreshTokenEnc: character.refreshTokenEnc,
+          tokenStatus: character.tokenStatus,
+        })
+        .from(character)
+        .where(eq(character.id, characterId));
+    } catch (err) {
+      failStage("db-lookup", err);
+    }
     if (!row) {
       console.error("no linked character found for that id in this environment");
       process.exit(2);
     }
 
-    const token = await getFreshAccessToken(db, cfg, row);
+    let token: Awaited<ReturnType<typeof getFreshAccessToken>>;
+    try {
+      token = await getFreshAccessToken(db, cfg, row);
+    } catch (err) {
+      // getFreshAccessToken normally reports its own failures via `.ok`
+      // (see the branch below); reaching here means something it does NOT
+      // catch itself threw — e.g. invalidateTokenIfUnchanged's own query.
+      failStage("token-refresh", err);
+    }
     if (!token.ok) {
       // token.detail may echo an upstream OAuth error string; token.reason is
       // the stable, safe-to-print classification (no_token/invalid/transient).
@@ -144,7 +211,18 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((err: unknown) => {
-  console.error("FAIL:", err instanceof Error ? err.constructor.name : "unknown error");
-  process.exit(1);
-});
+// Compared as RESOLVED paths rather than by filename: an endsWith(...)
+// check silently stops running main() if the file is ever renamed or emitted
+// as .js, and importing this module for its tested helpers (isSqlState,
+// classifyError) would otherwise run main() as a side effect of import, per
+// scripts/seed-dev.ts's identical guard.
+const invokedDirectly =
+  process.argv[1] !== undefined &&
+  resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url));
+if (invokedDirectly) {
+  main().catch((err: unknown) => {
+    // Reached only for a failure outside the two staged try/catches above —
+    // in practice loadConfig, createDb, or pool.end() itself.
+    failStage("startup", err);
+  });
+}
