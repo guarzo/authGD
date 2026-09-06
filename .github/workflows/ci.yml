@@ -180,6 +180,10 @@ jobs:
       - name: E2E tests
         run: npm run test:e2e
 
+      # Shares this job's build/database; never run alongside the dry-run suite.
+      - name: Fleet integration E2E tests
+        run: npm run test:e2e:fleet
+
       - name: Upload Playwright report
         if: failure()
         uses: actions/upload-artifact@v7

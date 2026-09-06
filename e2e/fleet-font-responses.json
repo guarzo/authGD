@@ -1,0 +1,4 @@
+{
+  "https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;700&display=swap": "/* Test-only offline fallback; not production Archivo metrics. */\n@font-face { font-family: 'Archivo'; font-style: normal; font-weight: 400 700; font-display: swap; src: local('Arial'); }",
+  "https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&display=swap": "/* Test-only offline fallback; not production IBM Plex Mono metrics. */\n@font-face { font-family: 'IBM Plex Mono'; font-style: normal; font-weight: 400 600; font-display: swap; src: local('Courier New'); }"
+}

@@ -88,8 +88,16 @@ function portOverride(name: string, fallback: number): number {
   return port;
 }
 
-/** Dev server port. `E2E_PORT` overrides, e.g. to dodge a hash collision. */
-export const APP_PORT = portOverride("E2E_PORT", portFor("app", 3200, 400));
+export const FLEET_INTEGRATIONS = process.env.E2E_FLEET_INTEGRATIONS === "1";
+
+/** The integration profile must never attach to the ordinary dry-run server. */
+const normalPort = portOverride("E2E_PORT", portFor("app", 3200, 400));
+export const APP_PORT = FLEET_INTEGRATIONS
+  ? portOverride("E2E_FLEET_PORT", portFor("fleet-app", 3700, 300))
+  : normalPort;
+if (FLEET_INTEGRATIONS && APP_PORT === normalPort) {
+  throw new Error("[fleet-e2e] E2E_FLEET_PORT must differ from E2E_PORT");
+}
 
 export const BASE_URL = `http://localhost:${APP_PORT}`;
 
@@ -132,3 +140,39 @@ export const SHOULD_PROVISION = IS_RUNNER && !IS_CI && !process.env.TEST_DATABAS
  * inferred.
  */
 export const MANAGED_ENV_KEY = "E2E_MANAGED_WORKTREE";
+
+// Full synthetic config shared by both profiles. getConfig() validates lazily,
+// so every required setting must be present even for a dry-run browsable app.
+export const SYNTHETIC_APP_ENV = {
+  TOKEN_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64"),
+  ALLIANCE_ID: "99000001",
+  BOOTSTRAP_ADMIN_CHARACTER_IDS: "",
+  EVE_SSO_CLIENT_ID: "cid",
+  EVE_SSO_CLIENT_SECRET: "sec",
+  EVE_SSO_SCOPES:
+    "esi-characters.read_contacts.v1 esi-characters.write_contacts.v1 esi-ui.open_window.v1 esi-location.read_location.v1 esi-universe.read_structures.v1 esi-location.read_online.v1",
+  DISCORD_CLIENT_ID: "d-cid",
+  DISCORD_CLIENT_SECRET: "d-sec",
+  DISCORD_BOT_TOKEN: "bot",
+  DISCORD_GUILD_ID: "9000",
+  DISCORD_ROLE_ID_MEMBER: "10",
+  DISCORD_ROLE_ID_ASSOCIATE: "11",
+  DISCORD_ROLE_ID_ALUMNI: "12",
+  WANDERER_BASE_URL: "https://wanderer.example",
+  WANDERER_API_KEY: "wkey",
+  WANDERER_ACL_ID: "acl-1",
+  STANDINGS_LABEL: "authgd",
+  STANDINGS_VALUE: "5",
+  ESI_CONTACT: "ops@example.com",
+  // Deliberately not the defaults. A DOM assertion against these proves config
+  // was read, rather than coincidentally matching hardcoded fallback strings.
+  BRAND_NAME: "Test Corp",
+  BRAND_TAGLINE: "Test Ops",
+  BRAND_MARK_URL: "/brand/emblem.webp",
+  BRAND_MOTTO: "Test motto line",
+  BRAND_FOOTER: "Test footer line",
+  TIER_LABEL_MEMBER: "Testers",
+  TIER_LABEL_ASSOCIATE: "Friends",
+  TIER_LABEL_ALUMNI: "Veterans",
+  TIER_LABEL_PENDING: "Queued",
+};
