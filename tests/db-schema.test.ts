@@ -1,6 +1,20 @@
 import { eq, sql } from "drizzle-orm";
+import { createHash } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { account, character, discordLink, universeName } from "@/db/schema";
+import {
+  account,
+  character,
+  discordLink,
+  fleetDevice,
+  fleetDeviceSession,
+  fleetEligibility,
+  fleetPairingRequest,
+  fleetPublisherLease,
+  fleetTelemetryRow,
+  universeName,
+} from "@/db/schema";
+import { MANAGED_TABLE_NAMES } from "@/db/tables";
+import { canonicalDevicePublicKeyB64 } from "@/lib/fleet-signature";
 import { setupTestDb } from "./helpers/db";
 import { testConfig } from "./helpers/config";
 import { seedAccount, seedCharacter } from "./helpers/seed";
@@ -146,6 +160,178 @@ describe("universe_name", () => {
       ctx.db
         .insert(universeName)
         .values({ id: 31000999, kind: "system", name: "J999999" }),
+    ).rejects.toThrow();
+  });
+});
+
+describe("fleet relay schema", () => {
+  it("exports all six relay tables and registers them in MANAGED_TABLES", () => {
+    expect(fleetPairingRequest).toBeDefined();
+    expect(fleetDevice).toBeDefined();
+    expect(fleetDeviceSession).toBeDefined();
+    expect(fleetEligibility).toBeDefined();
+    expect(fleetPublisherLease).toBeDefined();
+    expect(fleetTelemetryRow).toBeDefined();
+
+    for (const name of [
+      "fleet_pairing_request",
+      "fleet_device",
+      "fleet_device_session",
+      "fleet_eligibility",
+      "fleet_publisher_lease",
+      "fleet_telemetry_row",
+    ]) {
+      expect(MANAGED_TABLE_NAMES).toContain(name);
+    }
+  });
+
+  it("stores an inserted session's hash, never a raw session id column", async () => {
+    const acc = await seedAccount(ctx.db);
+    const [device] = await ctx.db
+      .insert(fleetDevice)
+      .values({ accountId: acc.id, publicKeySpkiB64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==" })
+      .returning();
+
+    // A raw opaque session value never touches this table: only its SHA-256
+    // digest does, mirroring the browser `session` table above.
+    const rawSessionValue = "test-only-raw-session-value-not-a-real-secret";
+    const sessionId = createHash("sha256").update(rawSessionValue).digest("base64url");
+    const [row] = await ctx.db
+      .insert(fleetDeviceSession)
+      .values({
+        id: sessionId,
+        deviceId: device.id,
+        expiresAt: new Date(Date.now() + 60_000),
+      })
+      .returning();
+
+    expect(row.id).toBe(sessionId);
+    expect(row.id).not.toBe(rawSessionValue);
+    // Enumerates every column the table actually has: proves there is no
+    // second column anywhere that could hold the raw session value.
+    expect(Object.keys(row).sort()).toEqual(
+      [
+        "id",
+        "deviceId",
+        "expiresAt",
+        "lastRevision",
+        "lastPublishAt",
+        "lastReadAt",
+      ].sort(),
+    );
+  });
+
+  it("stores only the documented columns on a current relay row", async () => {
+    const acc = await seedAccount(ctx.db);
+    const ch = await seedCharacter(ctx.db, cfg, { id: 91500001, accountId: acc.id });
+    const [device] = await ctx.db
+      .insert(fleetDevice)
+      .values({ accountId: acc.id, publicKeySpkiB64: "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBB==" })
+      .returning();
+    const [session] = await ctx.db
+      .insert(fleetDeviceSession)
+      .values({
+        id: createHash("sha256").update("another-test-only-value").digest("base64url"),
+        deviceId: device.id,
+        expiresAt: new Date(Date.now() + 60_000),
+      })
+      .returning();
+
+    const now = new Date("2026-09-04T12:00:00.000Z");
+    const [row] = await ctx.db
+      .insert(fleetTelemetryRow)
+      .values({
+        characterId: ch.id,
+        fleetId: 5000001,
+        deviceId: device.id,
+        sessionId: session.id,
+        dps: 1234,
+        ewar: ["SCRAM/POINT"],
+        receivedAt: now,
+        staleAt: new Date(now.getTime() + 3_000),
+        hardExpiresAt: new Date(now.getTime() + 10_000),
+      })
+      .returning();
+
+    // No column for log content, target/source, an event timestamp beyond
+    // receivedAt, fleet name, system, ship, or an EVE token — only exactly
+    // these nine columns exist on the table.
+    expect(Object.keys(row).sort()).toEqual(
+      [
+        "characterId",
+        "fleetId",
+        "deviceId",
+        "sessionId",
+        "dps",
+        "ewar",
+        "receivedAt",
+        "staleAt",
+        "hardExpiresAt",
+      ].sort(),
+    );
+  });
+
+  it("permanently bars a revoked device's public key from ever being reused", async () => {
+    const acc = await seedAccount(ctx.db);
+    const keyB64 = canonicalDevicePublicKeyB64(
+      new Uint8Array(Array.from({ length: 32 }, (_, i) => i)),
+    );
+
+    const [device] = await ctx.db
+      .insert(fleetDevice)
+      .values({ accountId: acc.id, publicKeySpkiB64: keyB64 })
+      .returning();
+    await ctx.db
+      .update(fleetDevice)
+      .set({ revokedAt: new Date() })
+      .where(eq(fleetDevice.id, device.id));
+
+    // Re-pairing with the SAME (now-revoked) key must fail: the unique
+    // constraint is not scoped by revokedAt, by design.
+    await expect(
+      ctx.db.insert(fleetDevice).values({ accountId: acc.id, publicKeySpkiB64: keyB64 }),
+    ).rejects.toThrow();
+  });
+
+  it('permits ewar to be exactly [] or ["SCRAM/POINT"], and rejects any other JSON', async () => {
+    const acc = await seedAccount(ctx.db);
+    const [device] = await ctx.db
+      .insert(fleetDevice)
+      .values({
+        accountId: acc.id,
+        publicKeySpkiB64: canonicalDevicePublicKeyB64(new Uint8Array([9, 9, 9])),
+      })
+      .returning();
+    const [session] = await ctx.db
+      .insert(fleetDeviceSession)
+      .values({
+        id: createHash("sha256").update("ewar-check-session").digest("base64url"),
+        deviceId: device.id,
+        expiresAt: new Date(Date.now() + 60_000),
+      })
+      .returning();
+
+    const now = new Date("2026-09-04T12:00:00.000Z");
+    const insertWithEwar = async (characterId: number, ewar: string[]) => {
+      const ch = await seedCharacter(ctx.db, cfg, { id: characterId, accountId: acc.id });
+      return ctx.db.insert(fleetTelemetryRow).values({
+        characterId: ch.id,
+        fleetId: 5000002,
+        deviceId: device.id,
+        sessionId: session.id,
+        dps: 0,
+        ewar,
+        receivedAt: now,
+        staleAt: new Date(now.getTime() + 3_000),
+        hardExpiresAt: new Date(now.getTime() + 10_000),
+      });
+    };
+
+    await expect(insertWithEwar(91500010, [])).resolves.toBeDefined();
+    await expect(insertWithEwar(91500011, ["SCRAM/POINT"])).resolves.toBeDefined();
+    await expect(insertWithEwar(91500012, ["WARP_SCRAMBLE"])).rejects.toThrow();
+    await expect(
+      insertWithEwar(91500013, ["SCRAM/POINT", "SCRAM/POINT"]),
     ).rejects.toThrow();
   });
 });

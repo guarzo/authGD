@@ -362,4 +362,35 @@ describe("EVE link route — ?grant= is the only attacker-controllable input", (
       expect(scopes).toContain("esi-characters.read_contacts.v1");
     }
   });
+
+  it("grant=fleet-read asks EVE for the fleet scope, alongside the base set", async () => {
+    const { createSession } = await import("@/services/session");
+    const { FLEET_READ_SCOPE } = await import("@/lib/esi/client");
+    const [acc] = await ctx.db.insert(account).values({}).returning();
+    const sid = await createSession(ctx.db, acc.id);
+    const req = new NextRequest("http://localhost:3000/auth/eve/link?grant=fleet-read");
+    req.cookies.set("authgd_session", sid);
+
+    const res = await linkRoute(req);
+    expect(res.status).toBe(307);
+    const authorize = new URL(res.headers.get("location")!);
+    const scopes = authorize.searchParams.get("scope")!.split(" ");
+    expect(scopes).toContain(FLEET_READ_SCOPE);
+    expect(scopes).toContain("esi-characters.read_contacts.v1");
+  });
+
+  it("a plain link (no grant) does not gain the fleet scope", async () => {
+    const { createSession } = await import("@/services/session");
+    const { FLEET_READ_SCOPE } = await import("@/lib/esi/client");
+    const [acc] = await ctx.db.insert(account).values({}).returning();
+    const sid = await createSession(ctx.db, acc.id);
+    const req = new NextRequest("http://localhost:3000/auth/eve/link");
+    req.cookies.set("authgd_session", sid);
+
+    const res = await linkRoute(req);
+    expect(res.status).toBe(307);
+    const authorize = new URL(res.headers.get("location")!);
+    const scopes = authorize.searchParams.get("scope")!.split(" ");
+    expect(scopes).not.toContain(FLEET_READ_SCOPE);
+  });
 });

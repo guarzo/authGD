@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { auditLog, discordLink, payoutOperation } from "@/db/schema";
 import {
+  ACTION_NAMESPACES,
   logAudit,
   queryAuditLog,
   resolveAuditIdentities,
@@ -614,5 +615,44 @@ describe("resolveFilterIdentity: payout operation names", () => {
     );
     expect(resolution).toEqual({ kind: "raw", ids: [someUuid] });
     expect(calls).toBe(0);
+  });
+});
+
+describe("fleet_device.* namespace registration", () => {
+  it("is registered in ACTION_NAMESPACES, offered in the /admin/audit filter", () => {
+    expect(ACTION_NAMESPACES).toContain("fleet_device.");
+  });
+
+  it("resolves the actor (the approving/revoking account) even though the target -- a pairing/device id, not an account id -- stays unresolved", async () => {
+    const acc = await seedAccount(ctx.db);
+    await seedCharacter(ctx.db, cfg, {
+      id: 90099,
+      accountId: acc.id,
+      name: "Fleet Admin",
+      main: true,
+    });
+    const pairingId = "11111111-1111-1111-1111-111111111111";
+    await logAudit(ctx.db, {
+      actor: acc.id,
+      action: "fleet_device.pairing_approved",
+      target: pairingId,
+    });
+    const deviceId = "33333333-3333-3333-3333-333333333333";
+    await logAudit(ctx.db, {
+      actor: acc.id,
+      action: "fleet_device.revoked",
+      target: deviceId,
+    });
+
+    const rows = await queryAuditLog(ctx.db);
+    const approved = rows.find((r) => r.action === "fleet_device.pairing_approved");
+    const revoked = rows.find((r) => r.action === "fleet_device.revoked");
+    expect(approved?.actorKind).toBe("account");
+    expect(approved?.actorName).toBe("Fleet Admin");
+    expect(approved?.targetKind).toBe("unresolved");
+    expect(approved?.target).toBe(pairingId);
+    expect(revoked?.actorKind).toBe("account");
+    expect(revoked?.targetKind).toBe("unresolved");
+    expect(revoked?.target).toBe(deviceId);
   });
 });

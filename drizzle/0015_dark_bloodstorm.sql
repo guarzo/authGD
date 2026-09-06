@@ -1,0 +1,1 @@
+ALTER TABLE "fleet_telemetry_row" ADD CONSTRAINT "fleet_telemetry_row_ewar_ck" CHECK ("fleet_telemetry_row"."ewar" = '[]'::jsonb OR "fleet_telemetry_row"."ewar" = '["SCRAM/POINT"]'::jsonb);

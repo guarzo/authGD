@@ -1,0 +1,7 @@
+{
+  "_comment": "Public test vector for the fleet-pairing-v1 completion-proof preimage. No private key; the public key/signature pair below are generated solely for this fixture and are never inserted as a live fleet_device/fleet_pairing_request row in any test or environment, so they cannot be replayed to gain access to anything. authGD's tests/fleet-pairing.test.ts verifies this exact vector. Task 7 (Wingman) must copy this file byte-for-byte into its own tests/fixtures/ and verify the identical preimage/signature pair, the same way tests/fixtures/fleet-signature-v1.json is shared between the two repositories.",
+  "pairing_id": "3f9c1de2-7b8a-4c1f-9a2e-6d4b8f1c9a00",
+  "preimage_utf8": "fleet-pairing-v1\n3f9c1de2-7b8a-4c1f-9a2e-6d4b8f1c9a00",
+  "public_key_spki_b64": "MCowBQYDK2VwAyEApR1qAXi+ZYIIPs/SNwYaubiQobOqfWqyKb4I1AizI4E=",
+  "signature_b64url": "DlQ7fIDWRCqyLPgWY4fIelkaScH4GnXQWo3gbxGcDyitulqhlRuE8cgNMv7nJzo135fgWjcAdz2NJmGazFEJDQ"
+}

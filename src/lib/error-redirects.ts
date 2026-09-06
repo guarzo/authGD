@@ -31,7 +31,8 @@
  * — with each branch checked against its own page's union. A per-file helper
  * could not: the code and its destination have to be typed together.
  *
- * THREE MAPS, NOT ONE, and codes are deliberately NOT globally unique.
+ * THREE MAPS, NOT ONE (a fourth, `FLEET_DEVICES_ERRORS`, joined them for the
+ * same reason below), and codes are deliberately NOT globally unique.
  * `not_admin` appears in both `/account` and `/admin/accounts` with different
  * copy, and both are correct for where they land: `/account` is where a
  * genuinely de-roled admin is sent ("your admin access was removed"), while
@@ -152,6 +153,13 @@ export const ACCOUNT_ERRORS = {
   stale_character:
     "That character isn't on this account anymore. The page below is current.",
   not_admin: "Your admin access was removed. This is your account page.",
+  // The /fleet/pair/[id] browser approval page requires a current
+  // Member-tier account (approvePairing's own rule —
+  // src/services/fleet-pairing.ts — deliberately ignores cryo, same as this
+  // gate). A non-Member visiting a pairing link is sent here rather than
+  // shown an inert page with no action on it.
+  fleet_pairing_member_required:
+    "Fleet device pairing requires a current Member-tier account.",
 } as const;
 
 /** Codes reaching `/admin/accounts`. Every one of these is a race between two
@@ -170,9 +178,28 @@ export const ADMIN_ACCOUNTS_ERRORS = {
     "That account is gone: its character was linked to another account and merged in. There's nothing left to act on.",
 } as const;
 
+/** Codes reaching `/account/fleet-devices`. One entry today, the same
+ *  "the list below is current" shape `ACCOUNT_ERRORS.stale_character` gives
+ *  a race that already resolved itself by the time the redirect lands — a
+ *  device this account no longer owns (already revoked in another tab, or
+ *  never this account's to begin with) is a stale row, not a fault worth an
+ *  error-boundary throw. */
+export const FLEET_DEVICES_ERRORS = {
+  stale_device:
+    "That device isn't paired to this account anymore. The list below is current.",
+  // `revokeFleetDevice` throws `RelayContentionError` (services/fleet-pairing.ts)
+  // when its transaction collides with a concurrent relay operation on the
+  // SAME device (a publish, another revoke) — a retryable race, not a
+  // permanent refusal, so the copy asks for a retry rather than describing a
+  // fault the member cannot act on.
+  relay_contention:
+    "Revoking that device collided with other fleet activity in progress. Try again.",
+} as const;
+
 export type LoginErrorCode = keyof typeof LOGIN_ERRORS;
 export type AccountErrorCode = keyof typeof ACCOUNT_ERRORS;
 export type AdminAccountsErrorCode = keyof typeof ADMIN_ACCOUNTS_ERRORS;
+export type FleetDevicesErrorCode = keyof typeof FLEET_DEVICES_ERRORS;
 
 /** `/login?error=<code>`. */
 export function loginErrorUrl(code: LoginErrorCode): string {
@@ -182,6 +209,11 @@ export function loginErrorUrl(code: LoginErrorCode): string {
 /** `/account?error=<code>`. */
 export function accountErrorUrl(code: AccountErrorCode): string {
   return `/account?error=${code}`;
+}
+
+/** `/account/fleet-devices?error=<code>`. */
+export function fleetDevicesErrorUrl(code: FleetDevicesErrorCode): string {
+  return `/account/fleet-devices?error=${code}`;
 }
 
 /**

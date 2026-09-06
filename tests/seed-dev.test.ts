@@ -147,4 +147,20 @@ describe("MANAGED_TABLES", () => {
       .sort();
     expect([...MANAGED_TABLE_NAMES].sort()).toEqual(actual);
   });
+
+  // Regression guard for the fleet telemetry tracer: a table present in the
+  // database but missing from this list leaks rows past both TRUNCATE
+  // helpers and --reset silently, per this file's header comment.
+  it("includes every fleet relay table added for the tracer", () => {
+    for (const name of [
+      "fleet_pairing_request",
+      "fleet_device",
+      "fleet_device_session",
+      "fleet_eligibility",
+      "fleet_publisher_lease",
+      "fleet_telemetry_row",
+    ]) {
+      expect(MANAGED_TABLE_NAMES).toContain(name);
+    }
+  });
 });

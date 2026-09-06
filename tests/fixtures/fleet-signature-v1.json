@@ -1,0 +1,14 @@
+{
+  "_comment": "Public test vector for the fleet-v1 canonical request signature contract. No private key, no session usable outside tests, no real endpoint path. authGD's tests/fleet-signature.test.ts and Wingman's tests/test_fleetsharing_crypto.py both verify this exact vector; copy this file byte-for-byte between the two repositories.",
+  "protocol": 1,
+  "method": "PUT",
+  "path": "/api/fleet/v1/test-vector",
+  "session_id": "Nlqj2RnqvX1BU0624tVd_MExSPfPboSN_2Q_oe2kTDY",
+  "issued_at": "2026-01-01T00:00:00.000Z",
+  "revision": 7,
+  "body_utf8": "{\"protocol\":1,\"rows\":[]}",
+  "body_sha256": "36805d25619d92174262b492510f4170fb2af284895139acd2d186a77632d371",
+  "canonical_text": "fleet-v1\nPUT\n/api/fleet/v1/test-vector\nNlqj2RnqvX1BU0624tVd_MExSPfPboSN_2Q_oe2kTDY\n2026-01-01T00:00:00.000Z\n7\n36805d25619d92174262b492510f4170fb2af284895139acd2d186a77632d371",
+  "public_key_spki_b64": "MCowBQYDK2VwAyEAsUKygdkkm6VAqtW4IPyIm1p0INeplwmmxO5/ZnvP8yM=",
+  "signature_b64url": "Y6Ec0lCJPUYmywFYhu5ahrjKkCEuky4QRIysSAB3ifc5Y9zKgt4XfZ7hrOkTAPqxTR_vsILw_6KDDBXxGOPbAA"
+}

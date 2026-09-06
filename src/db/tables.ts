@@ -39,6 +39,12 @@ export const MANAGED_TABLES = [
   "structure_read_state",
   "structure",
   "structure_event",
+  "fleet_pairing_request",
+  "fleet_device",
+  "fleet_device_session",
+  "fleet_eligibility",
+  "fleet_publisher_lease",
+  "fleet_telemetry_row",
 ] as const;
 
 /** Bare table names, unquoted — for comparing against information_schema. */
