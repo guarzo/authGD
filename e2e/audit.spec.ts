@@ -113,6 +113,7 @@ const EXPECTED_ACTION_NAMESPACES = [
   "admin.",
   "character.",
   "discord.",
+  "fleet_device.",
   "payout.",
   "status.",
   "structure.",
