@@ -6,6 +6,7 @@ import {
   extractFleetAuthHeaders,
   hasUnsignedQueryString,
 } from "@/lib/fleet-route-auth";
+import { readBoundedRequestBody } from "@/lib/fleet-request-body";
 import {
   FLEET_RELAY_PROTOCOL,
   FLEET_RELAY_STATUS_BY_CODE,
@@ -83,11 +84,12 @@ export async function PUT(req: NextRequest) {
   const headers = extractFleetAuthHeaders(req);
   if (!headers) return authError("bad_headers");
 
-  const raw = new Uint8Array(await req.arrayBuffer());
+  const bodyResult = await readBoundedRequestBody(req, MAX_PUT_BODY_BYTES);
   // Read and size-checked before any JSON.parse: an oversized body is
   // refused as the same `invalid_batch` code the service layer would have
   // used for it, without ever paying to parse it.
-  if (raw.byteLength > MAX_PUT_BODY_BYTES) return jsonError("invalid_batch", 400);
+  if (!bodyResult.ok) return jsonError("invalid_batch", 400);
+  const raw = bodyResult.bytes;
 
   const now = new Date();
   const auth = await authenticateFleetRequest(getDb(), headers, raw, {
@@ -137,8 +139,9 @@ export async function GET(req: NextRequest) {
   const headers = extractFleetAuthHeaders(req);
   if (!headers) return authError("bad_headers");
 
-  const raw = new Uint8Array(await req.arrayBuffer());
-  if (raw.byteLength > MAX_GET_BODY_BYTES) return authError("bad_headers");
+  const bodyResult = await readBoundedRequestBody(req, MAX_GET_BODY_BYTES);
+  if (!bodyResult.ok) return authError("bad_headers");
+  const raw = bodyResult.bytes;
 
   const now = new Date();
   const auth = await authenticateFleetRequest(getDb(), headers, raw, {

@@ -1,5 +1,6 @@
 import { generateKeyPairSync, sign as ed25519Sign } from "node:crypto";
 import { and, eq, isNull } from "drizzle-orm";
+import type { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Db } from "@/db";
 import {
@@ -121,6 +122,33 @@ function row(
   ewar: PublishedRow["ewar"] = [],
 ): PublishedRow {
   return { characterId, dps, ewar };
+}
+
+/**
+ * Polls until some backend is observed BLOCKED specifically by `holderPid`
+ * -- i.e. `holderPid` appears in `pg_blocking_pids(waiter.pid)` for a
+ * genuinely waiting backend -- rather than merely observing that SOME
+ * backend, anywhere in the shared test database, is waiting on a lock.
+ * `ctx.db` and `ctx.pool` are different connections drawn from the same
+ * pool, and a bare `wait_event_type = 'Lock'` count would also pass for an
+ * unrelated same-database waiter (a concurrent test, a stray connection),
+ * proving nothing about the specific block a test sets up. Pinning to the
+ * exact holder pid is authoritative: `pg_blocking_pids` reflects Postgres's
+ * own internal wait-for graph, not a query-text guess.
+ */
+async function waitUntilBlockedBy(pool: Pool, holderPid: number): Promise<boolean> {
+  for (let i = 0; i < 50; i++) {
+    const { rows } = await pool.query(
+      `select count(*)::int as n
+       from pg_stat_activity waiter
+       where waiter.wait_event_type = 'Lock'
+         and $1 = any(pg_blocking_pids(waiter.pid))`,
+      [holderPid],
+    );
+    if ((rows[0] as { n: number }).n > 0) return true;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  return false;
 }
 
 describe("replaceDeviceProjection: sparse replacement and withdrawal", () => {
@@ -480,6 +508,9 @@ describe("replaceDeviceProjection: lease conflicts", () => {
     let withdrawal: ReturnType<typeof replaceDeviceProjection> | undefined;
     try {
       await client.query("begin");
+      const {
+        rows: [{ pid: holderPid }],
+      } = await client.query<{ pid: number }>("select pg_backend_pid() as pid");
       await client.query("select pg_advisory_xact_lock(2, hashint8($1))", [95400320]);
       await client.query(
         `update fleet_publisher_lease set device_id = $1, session_id = $2, lease_expires_at = $3 where character_id = $4`,
@@ -513,21 +544,12 @@ describe("replaceDeviceProjection: lease conflicts", () => {
         rows: [row(95400321, 250)],
       });
 
-      // Confirm A's call is ACTUALLY blocked on a lock before releasing B's
-      // transaction — a self-verifying guard against a silently-degenerate
-      // race (one that never truly interleaved and so would prove nothing).
-      let blocked = false;
-      for (let i = 0; i < 50; i++) {
-        const { rows: waiters } = await ctx.pool.query(
-          "select count(*)::int as n from pg_stat_activity where wait_event_type = 'Lock'",
-        );
-        if ((waiters[0] as { n: number }).n > 0) {
-          blocked = true;
-          break;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 20));
-      }
-      expect(blocked).toBe(true);
+      // Confirm A's call is ACTUALLY blocked on THIS transaction's own
+      // advisory lock before releasing it -- asserting `holderPid` is the
+      // specific blocker, not merely that some unrelated same-database
+      // waiter exists (CodeRabbit finding on the bare
+      // `wait_event_type = 'Lock'` count this replaces).
+      expect(await waitUntilBlockedBy(ctx.pool, holderPid)).toBe(true);
 
       await client.query("commit");
     } finally {
@@ -1052,6 +1074,9 @@ describe("cross-module lock order (deadlock avoidance)", () => {
     let publishResult: ReturnType<typeof replaceDeviceProjection> | undefined;
     try {
       await client.query("begin");
+      const {
+        rows: [{ pid: holderPid }],
+      } = await client.query<{ pid: number }>("select pg_backend_pid() as pid");
       await client.query("select 1 from fleet_device where id = $1 for update", [
         device.id,
       ]);
@@ -1063,25 +1088,22 @@ describe("cross-module lock order (deadlock avoidance)", () => {
         rows: [row(95500500, 100)],
       });
 
-      // Confirm the publish call is ACTUALLY blocked on a lock before
-      // releasing the raw client's transaction -- a self-verifying guard
-      // against a silently-degenerate race, the same discipline the
-      // existing M1 regression test above uses.
-      let blocked = false;
-      for (let i = 0; i < 50; i++) {
-        const { rows: waiters } = await ctx.pool.query(
-          "select count(*)::int as n from pg_stat_activity where wait_event_type = 'Lock'",
-        );
-        if ((waiters[0] as { n: number }).n > 0) {
-          blocked = true;
-          break;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 20));
-      }
-      expect(blocked).toBe(true);
+      // Confirm the publish call is ACTUALLY blocked on THIS transaction's
+      // own `fleet_device` row lock before releasing it -- asserting
+      // `holderPid` is the specific blocker, not merely that some
+      // unrelated same-database waiter exists (CodeRabbit finding on the
+      // bare `wait_event_type = 'Lock'` count this replaces).
+      expect(await waitUntilBlockedBy(ctx.pool, holderPid)).toBe(true);
 
       await client.query("commit");
     } finally {
+      // Always attempt to end the transaction here, even if the assertion
+      // above failed: otherwise this held row lock (and the advisory lock
+      // it stands in for on any OTHER caller) never releases, so
+      // `publishResult` never settles -- hanging this test (and, since it
+      // shares the connection pool, potentially the suite after it) instead
+      // of failing cleanly.
+      await client.query("commit").catch(() => client.query("rollback").catch(() => {}));
       client.release();
     }
 
@@ -1166,6 +1188,9 @@ describe("cross-module lock order (deadlock avoidance)", () => {
     const client = await ctx.pool.connect();
     try {
       await client.query("begin");
+      const {
+        rows: [{ pid: holderPid }],
+      } = await client.query<{ pid: number }>("select pg_backend_pid() as pid");
       // Standing in for any other correctly-ordered caller already holding
       // the LOW character's lock -- exactly where a per-device revoke,
       // having already locked HIGH while processing the first device, would
@@ -1174,18 +1199,10 @@ describe("cross-module lock order (deadlock avoidance)", () => {
 
       const revokePromise = revokeFleetRelayForAccount(ctx.db, acc.id, NOW);
 
-      let blocked = false;
-      for (let i = 0; i < 50; i++) {
-        const { rows: waiters } = await ctx.pool.query(
-          "select count(*)::int as n from pg_stat_activity where wait_event_type = 'Lock'",
-        );
-        if ((waiters[0] as { n: number }).n > 0) {
-          blocked = true;
-          break;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 20));
-      }
-      expect(blocked).toBe(true);
+      // Asserting `holderPid` is the specific blocker, not merely that some
+      // unrelated same-database waiter exists (CodeRabbit finding on the
+      // bare `wait_event_type = 'Lock'` count this replaces).
+      expect(await waitUntilBlockedBy(ctx.pool, holderPid)).toBe(true);
 
       // A globally-ascending revoke's FIRST character lock for this whole
       // account is CHAR_LOW (already held above), so it cannot have reached
@@ -1200,6 +1217,12 @@ describe("cross-module lock order (deadlock avoidance)", () => {
       await client.query("commit");
       await expect(revokePromise).resolves.toBeUndefined();
     } finally {
+      // Always attempt to end the transaction here, even if an assertion
+      // above failed: otherwise the CHAR_LOW advisory lock stays held and
+      // `revokePromise` never settles, hanging this test (and, since it
+      // shares the connection pool, potentially the suite after it) instead
+      // of failing cleanly.
+      await client.query("commit").catch(() => client.query("rollback").catch(() => {}));
       client.release();
     }
 

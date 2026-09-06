@@ -927,7 +927,7 @@ describe("revokeFleetRelayForAccount", () => {
 });
 
 describe("audit logging", () => {
-  it("logs only pairing approval and device revocation, never begin or complete", async () => {
+  it("logs pairing approval, pairing completion (targeting the device, not the pairing request) and device revocation, but never begin", async () => {
     const acc = await seedAccount(ctx.db, { tier: "member" });
     await seedCharacter(ctx.db, cfg, { id: 92300060, accountId: acc.id });
     const { spki, privateKey } = newKeyPair();
@@ -949,16 +949,29 @@ describe("audit logging", () => {
       completionSignature: signCompletion(privateKey, pairingId),
       now: NOW,
     });
-    expect(await auditRowsFor(ctx.db, pairingId)).toHaveLength(1); // unchanged
+    // Completion's own audit row targets the DEVICE, not the pairing
+    // request — the pairing request's own target-keyed history stays
+    // exactly what approval left it (this is the retained approval audit,
+    // unchanged by this fix).
+    expect(await auditRowsFor(ctx.db, pairingId)).toHaveLength(1);
 
     const [device] = await ctx.db
       .select()
       .from(fleetDevice)
       .where(eq(fleetDevice.accountId, acc.id));
+    const completionRows = await auditRowsFor(ctx.db, device.id);
+    expect(completionRows).toHaveLength(1);
+    expect(completionRows[0]).toMatchObject({
+      actor: acc.id,
+      action: "fleet_device.pairing_completed",
+      target: device.id,
+    });
+
     await revokeFleetDevice(ctx.db, device.id, acc.id, NOW);
-    const revokeRows = await auditRowsFor(ctx.db, device.id);
-    expect(revokeRows).toHaveLength(1);
-    expect(revokeRows[0]).toMatchObject({
+    const deviceRows = await auditRowsFor(ctx.db, device.id);
+    expect(deviceRows).toHaveLength(2); // completion, then revocation
+    const revokeRow = deviceRows.find((r) => r.action === "fleet_device.revoked");
+    expect(revokeRow).toMatchObject({
       actor: acc.id,
       action: "fleet_device.revoked",
       target: device.id,

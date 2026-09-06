@@ -51,8 +51,24 @@ vi.mock("@/services/session", () => ({
   getSessionAccount: async () => ({ accountId: sessionAccountId }),
 }));
 
+vi.mock("@/services/fleet-pairing", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/services/fleet-pairing")>();
+  return {
+    ...actual,
+    // A pass-through spy, not a stub: every existing test below still runs
+    // the real `revokeFleetDevice` against the real database. Only the new
+    // `RelayContentionError` test overrides this with `mockRejectedValueOnce`
+    // for its one call, the same "keep every real error class, override only
+    // the one call under test" shape `fleet-pair-actions-validation.test.ts`
+    // uses for `approvePairing`.
+    revokeFleetDevice: vi.fn(actual.revokeFleetDevice),
+  };
+});
+
 const { revokeFleetDeviceAction } = await import("@/app/account/fleet-devices/actions");
 const { getDb } = await import("@/db");
+const { revokeFleetDevice, RelayContentionError } =
+  await import("@/services/fleet-pairing");
 
 let ctx: Awaited<ReturnType<typeof setupTestDb>>;
 beforeAll(async () => {
@@ -145,5 +161,35 @@ describe("revokeFleetDeviceAction", () => {
     await expect(
       revokeFleetDeviceAction("00000000-0000-0000-0000-000000000000"),
     ).rejects.toThrow("redirected:/account/fleet-devices?error=stale_device");
+  });
+
+  it("rejects a malformed device id as stale, before it ever reaches the ownership query", async () => {
+    const acc = await seedAccount(getDb(), { tier: "member" });
+    sessionAccountId = acc.id;
+
+    // `fleetDevice.id` is a Postgres `uuid` column -- unparsed, this would
+    // raise a raw 22P02 out of the ownership query instead of redirecting.
+    await expect(revokeFleetDeviceAction("not-a-uuid")).rejects.toThrow(
+      "redirected:/account/fleet-devices?error=stale_device",
+    );
+  });
+
+  it("redirects to a retry notice, without escaping to error.tsx, when revocation collides with concurrent relay contention", async () => {
+    const acc = await seedAccount(getDb(), { tier: "member" });
+    const device = await seedDevice(acc.id);
+    sessionAccountId = acc.id;
+    vi.mocked(revokeFleetDevice).mockRejectedValueOnce(
+      new RelayContentionError("synthetic contention for this test"),
+    );
+
+    await expect(revokeFleetDeviceAction(device.id)).rejects.toThrow(
+      "redirected:/account/fleet-devices?error=relay_contention",
+    );
+
+    const [unchanged] = await ctx.db
+      .select()
+      .from(fleetDevice)
+      .where(eq(fleetDevice.id, device.id));
+    expect(unchanged.revokedAt).toBeNull();
   });
 });

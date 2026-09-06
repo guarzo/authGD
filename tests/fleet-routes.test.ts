@@ -395,7 +395,7 @@ describe("POST /api/fleet/v1/pairing-requests/[id]/complete", () => {
       pairingChallengePreimage(approvedId),
       privateKey,
     ).toString("base64url");
-    await completeRoute(
+    const firstCompletion = await completeRoute(
       new NextRequest(
         `http://localhost/api/fleet/v1/pairing-requests/${approvedId}/complete`,
         {
@@ -405,6 +405,12 @@ describe("POST /api/fleet/v1/pairing-requests/[id]/complete", () => {
       ),
       { params: Promise.resolve({ id: approvedId }) },
     );
+    // Pins that this call actually consumed the request -- without this,
+    // any OTHER reason it could fail (wrong signature, a tier change, an
+    // expiry) would still land on the second call's `not_completable`
+    // below, since every refusal collapses to that same code, and the test
+    // would prove nothing about consumption specifically.
+    expect(firstCompletion.status).toBe(200);
     const consumedRes = await completeRoute(
       new NextRequest(
         `http://localhost/api/fleet/v1/pairing-requests/${approvedId}/complete`,

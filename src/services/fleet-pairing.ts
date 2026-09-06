@@ -293,10 +293,10 @@ export async function approvePairing(
 /**
  * The desktop-side completion step: proves possession of the pairing
  * request's public key, consumes the request exactly once, and creates the
- * device/session — all in one transaction. Returns only `sessionId` (the
- * raw opaque value; only its SHA-256 digest is ever persisted, matching
- * `src/services/session.ts`'s convention) and the approving account's
- * `DeviceCatalogue`.
+ * device/session and its own audit row — all in one transaction. Returns
+ * only `sessionId` (the raw opaque value; only its SHA-256 digest is ever
+ * persisted, matching `src/services/session.ts`'s convention) and the
+ * approving account's `DeviceCatalogue`.
  *
  * Rechecks, transactionally and with row locks, that the request's
  * approving account is STILL a current Member-tier account (membership can
@@ -433,6 +433,27 @@ export async function completePairing(
       id: hashOpaqueValue(rawSessionId),
       deviceId,
       expiresAt: new Date(args.now.getTime() + DEVICE_SESSION_TTL_MS),
+    });
+
+    // Completion's own audit row, in the SAME transaction as every write
+    // above (device/session creation, the pairing request's own consumed/
+    // approvedDeviceId columns) — a partial write here can only ever be the
+    // whole transaction rolling back, never this row landing without the
+    // rest. Actor is the APPROVING account, not any caller identity (this
+    // call has none: it is the unauthenticated device-side completion,
+    // proven only by the completion signature) — the account that vouched
+    // for the device is who this event is attributed to, the same actor
+    // `pairing_approved` already uses. Targets the DEVICE, not the pairing
+    // request: `fleet_device.pairing_approved` (above, in `approvePairing`)
+    // already owns the pairing request's own audit history and is left
+    // completely unchanged by this — this is a SEPARATE event, keyed the
+    // same way `fleet_device.revoked` keys the device's own later history,
+    // so an admin scanning one device's audit trail sees both under the
+    // same target.
+    await logAudit(tx, {
+      actor: approvedAccountId,
+      action: "fleet_device.pairing_completed",
+      target: deviceId,
     });
 
     const catalogue = await buildDeviceCatalogue(tx, approvedAccountId);

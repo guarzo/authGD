@@ -5,6 +5,7 @@ import {
   extractFleetAuthHeaders,
   hasUnsignedQueryString,
 } from "@/lib/fleet-route-auth";
+import { readBoundedRequestBody } from "@/lib/fleet-request-body";
 import { renewFleetDeviceSession } from "@/services/fleet-pairing";
 import { FLEET_RELAY_PROTOCOL, FLEET_RELAY_STATUS_BY_CODE } from "@/services/fleet-relay";
 
@@ -36,8 +37,9 @@ export async function PUT(req: NextRequest) {
   const headers = extractFleetAuthHeaders(req);
   if (!headers) return authError("bad_headers");
 
-  const raw = new Uint8Array(await req.arrayBuffer());
-  if (raw.byteLength > MAX_BODY_BYTES) return authError("bad_headers");
+  const bodyResult = await readBoundedRequestBody(req, MAX_BODY_BYTES);
+  if (!bodyResult.ok) return authError("bad_headers");
+  const raw = bodyResult.bytes;
 
   const now = new Date();
   const auth = await authenticateFleetRequest(getDb(), headers, raw, {

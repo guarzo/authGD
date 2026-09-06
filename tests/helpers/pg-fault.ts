@@ -8,9 +8,17 @@ import type { Pool, PoolClient } from "pg";
  * without needing to actually force one (impossible to force organically
  * through the fleet-relay public API once every path locks characters in
  * the same ascending order -- exactly the property that fix establishes).
- * Restores `pool.connect` immediately after the one faulted checkout, so
- * later queries in the same test (assertions against the shared test db
- * connection) are unaffected.
+ *
+ * Restores `pool.connect` AND every checked-out client's own `query` method
+ * once `fn()` settles -- not only the former. Every checkout during `fn()`
+ * receives a wrapped `query`, and only the FIRST matching query across all
+ * of them ever faults (the shared `faulted` flag); a checkout whose query
+ * never happens to match keeps its wrapper armed for as long as the client
+ * object survives, and node-postgres pools (reuses) that same physical
+ * connection afterward. Left unrestored, a later, unrelated caller reusing
+ * that pooled connection can trip the exact same regex (both call sites
+ * today use the broad `/^\s*select/i`) and fail with a spurious SQLSTATE
+ * that has nothing to do with whatever it was actually running.
  */
 export async function withInjectedPgFault<T>(
   pool: Pool,
@@ -19,6 +27,7 @@ export async function withInjectedPgFault<T>(
 ): Promise<T> {
   const origConnect = pool.connect.bind(pool);
   let faulted = false;
+  const restoreClientQueries: Array<() => void> = [];
   (pool as unknown as { connect: typeof pool.connect }).connect = (async (
     ...args: unknown[]
   ) => {
@@ -26,6 +35,9 @@ export async function withInjectedPgFault<T>(
       ...args,
     );
     const origQuery = client.query.bind(client);
+    restoreClientQueries.push(() => {
+      (client as unknown as { query: typeof client.query }).query = origQuery;
+    });
     (client as unknown as { query: typeof client.query }).query = ((
       ...qargs: unknown[]
     ) => {
@@ -45,5 +57,6 @@ export async function withInjectedPgFault<T>(
     return await fn();
   } finally {
     (pool as unknown as { connect: typeof pool.connect }).connect = origConnect;
+    for (const restore of restoreClientQueries) restore();
   }
 }

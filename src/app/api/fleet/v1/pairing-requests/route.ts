@@ -3,6 +3,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { getDb } from "@/db";
 import { fleetPairingRequest } from "@/db/schema";
+import { readBoundedRequestBody } from "@/lib/fleet-request-body";
 import {
   InvalidDevicePublicKeyError,
   RevokedDeviceKeyError,
@@ -58,8 +59,9 @@ function hasUnsupportedProtocol(value: unknown): boolean {
 }
 
 export async function POST(req: NextRequest) {
-  const raw = new Uint8Array(await req.arrayBuffer());
-  if (raw.byteLength > MAX_BODY_BYTES) return jsonError("bad_request", 400);
+  const bodyResult = await readBoundedRequestBody(req, MAX_BODY_BYTES);
+  if (!bodyResult.ok) return jsonError("bad_request", 400);
+  const raw = bodyResult.bytes;
 
   let parsed: unknown;
   try {

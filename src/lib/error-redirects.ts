@@ -187,6 +187,13 @@ export const ADMIN_ACCOUNTS_ERRORS = {
 export const FLEET_DEVICES_ERRORS = {
   stale_device:
     "That device isn't paired to this account anymore. The list below is current.",
+  // `revokeFleetDevice` throws `RelayContentionError` (services/fleet-pairing.ts)
+  // when its transaction collides with a concurrent relay operation on the
+  // SAME device (a publish, another revoke) — a retryable race, not a
+  // permanent refusal, so the copy asks for a retry rather than describing a
+  // fault the member cannot act on.
+  relay_contention:
+    "Revoking that device collided with other fleet activity in progress. Try again.",
 } as const;
 
 export type LoginErrorCode = keyof typeof LOGIN_ERRORS;

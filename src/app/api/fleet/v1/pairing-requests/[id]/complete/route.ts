@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { getDb } from "@/db";
+import { readBoundedRequestBody } from "@/lib/fleet-request-body";
 import {
   DeviceBoundToAnotherAccountError,
   InvalidCompletionProofError,
@@ -55,8 +56,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   // reported distinctly rather than folded into the generic refusal below.
   if (!UUID_RE.test(id)) return jsonError("not_found", 404);
 
-  const raw = new Uint8Array(await req.arrayBuffer());
-  if (raw.byteLength > MAX_BODY_BYTES) return jsonError("bad_request", 400);
+  const bodyResult = await readBoundedRequestBody(req, MAX_BODY_BYTES);
+  if (!bodyResult.ok) return jsonError("bad_request", 400);
+  const raw = bodyResult.bytes;
 
   let parsed: unknown;
   try {

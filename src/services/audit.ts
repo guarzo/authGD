@@ -172,12 +172,13 @@ type TargetKind = "account" | "character" | "discord" | "payout";
  * here.
  *
  * `fleet_device.*` is registered but never resolves to a name today:
- * `fleet_device.pairing_approved` targets a pairing-request id and
- * `fleet_device.revoked` targets a device id, and neither is an account,
- * character, discord, or payout id, so no existing `TargetKind` actually
- * fits. Classified as `account` anyway — both are UUIDs, the same shape
- * `account.`/`payout.` targets already are — purely so the namespace is
- * registered at all (offered in `/admin/audit`'s filter datalist via
+ * `fleet_device.pairing_approved` targets a pairing-request id, and both
+ * `fleet_device.pairing_completed` and `fleet_device.revoked` target a
+ * device id, and none of these is an account, character, discord, or payout
+ * id, so no existing `TargetKind` actually fits. Classified as `account`
+ * anyway — all are UUIDs, the same shape `account.`/`payout.` targets
+ * already are — purely so the namespace is registered at all (offered in
+ * `/admin/audit`'s filter datalist via
  * `ACTION_NAMESPACES`, and no longer silently absent from
  * `targetKindFromAction`). The lookup this causes (`accountIds.add(target)`
  * in `resolveAuditIdentities`) simply never matches a real account row, so
