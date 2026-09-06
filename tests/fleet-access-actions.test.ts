@@ -74,10 +74,10 @@ beforeEach(async () => {
     }),
   );
 });
-async function fixture() {
+async function fixture(anchorId = 90000001) {
   const acc = await seedAccount(ctx.db, { tier: "member" });
   await seedCharacter(ctx.db, cfg, {
-    id: 90000001,
+    id: anchorId,
     accountId: acc.id,
     name: "Anchor",
     scopes: [FLEET_READ_SCOPE],
@@ -204,14 +204,15 @@ it("returns account-wide cooldown without carrying a previous roster", async () 
   expect(calls).toEqual(["refresh", "membership", "roster"]);
 });
 it("reads only safe owned setup state, prefers an authorized non-main, and never calls providers", async () => {
-  const { acc } = await fixture();
+  // Ascending IDs alone would put the ungranted main first.
+  const { acc } = await fixture(90000004);
   const { getFleetSharingSetup } = await import("@/services/fleet-sharing-view");
   expect(await getFleetSharingSetup(ctx.db, acc.id)).toEqual({
     eligible: true,
     isAdmin: false,
     characters: [
       {
-        characterId: 90000001,
+        characterId: 90000004,
         characterName: "Anchor",
         hasFleetRead: true,
         tokenUsable: true,
@@ -236,7 +237,7 @@ it("reads only safe owned setup state, prefers an authorized non-main, and never
   );
   expect(html).toContain("Fleet Read authorized. Check fleet");
   expect(html).toContain('href="/account/fleet-devices"');
-  expect(html).toContain('value="90000001" selected=""');
+  expect(html).toContain('value="90000004" selected=""');
   // A native change before hydration must not leave the displayed selection
   // disagreeing with the authorization URL and action's anchor.
   expect(html).toMatch(/<select[^>]*disabled=""/);

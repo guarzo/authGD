@@ -61,7 +61,12 @@ function authorized(ch: CheckCharacter | undefined): ch is CheckCharacter {
   );
 }
 
-/** Explicit user-request check. The future caller MUST derive accountId from its session. */
+/**
+ * Approved exception to "enqueue, don't execute": this bounded, user-triggered
+ * point-in-time read is not background sync. Queuing would answer a later fleet
+ * question; neither the outcome nor roster is persisted. The caller MUST derive
+ * accountId from its session. Credential settlement keeps its existing audit.
+ */
 export async function checkFleetAccess(
   db: Db,
   cfg: Config,
@@ -89,6 +94,10 @@ export async function checkFleetAccess(
     if (!authorized(ch)) return failure("not_authorized");
     anchor = ch;
 
+    // This gate is operational cooldown metadata: one overwritten deadline per
+    // account, not an audit/business record or a history of checks. Its timing-only
+    // claims/extensions deliberately add no audit history; token and domain
+    // mutations retain their existing audit behavior.
     const claim = await shortTransaction(db, async (tx) => {
       const [won] = await tx
         .insert(fleetAccessCheckGate)

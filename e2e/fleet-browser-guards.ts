@@ -1,9 +1,14 @@
 import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { createServer } from "node:http";
-import { test, expect, installFleetBrowserBoundary } from "./fleet-browser";
+import {
+  test,
+  expect,
+  installFleetBrowserBoundary,
+  disposeFleetResources,
+} from "./fleet-browser";
 import { startFleetFixtures } from "./fleet-fixtures";
-import { IS_CI, WORKTREE_ROOT } from "./env";
+import { IS_CI, SYNTHETIC_APP_ENV, WORKTREE_ROOT } from "./env";
 
 // Browser-dependent harness coverage belongs to the fleet E2E job, which owns
 // Chromium. The unit job intentionally has no browser installation.
@@ -25,7 +30,12 @@ test("browser boundary preserves picker state/code/PKCE and denies unknown egres
     const address = callbackServer.address();
     if (!address || typeof address === "string") throw new Error("missing listener");
     const localApp = `http://127.0.0.1:${address.port}`;
-    const f = await startFleetFixtures({ appUrl: localApp, worktree: WORKTREE_ROOT });
+    // Direct callers accept a trailing slash; proxy, picker and browser routing
+    // must all still recognize the same canonical app origin.
+    const f = await startFleetFixtures({
+      appUrl: `${localApp}/`,
+      worktree: WORKTREE_ROOT,
+    });
     disposers.push(() => f.close());
     await f.client.scenario({
       characters: [
@@ -45,8 +55,11 @@ test("browser boundary preserves picker state/code/PKCE and denies unknown egres
     });
     const drain = await installFleetBrowserBoundary(context, f.client);
     disposers.push(async () => {
-      await drain();
-      await context.close();
+      try {
+        await drain();
+      } finally {
+        await context.close();
+      }
     });
     const page = await context.newPage();
     const verifier = "synthetic-pkce-verifier";
@@ -81,6 +94,21 @@ test("browser boundary preserves picker state/code/PKCE and denies unknown egres
     expect((await exchange()).status).toBe(200);
     expect((await exchange()).status).toBe(400);
     await f.client.assertClean();
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve, reject) => {
+          const timeout = setTimeout(() => reject(new Error("socket not closed")), 3000);
+          const socket = new WebSocket("wss://unknown.invalid/denied");
+          socket.onclose = () => {
+            clearTimeout(timeout);
+            resolve();
+          };
+        }),
+    );
+    expect((await f.client.snapshot()).violations).toContainEqual({
+      source: "browser-websocket",
+      destination: "wss://unknown.invalid/denied",
+    });
     await page.evaluate(async () => {
       await fetch("https://unknown.invalid/denied").catch(() => null);
     });
@@ -103,18 +131,21 @@ test("browser boundary preserves picker state/code/PKCE and denies unknown egres
     const target = destination.address();
     if (!target || typeof target === "string") throw new Error("missing listener");
     await context.unrouteAll({ behavior: "wait" });
+    // No routing fallback: exercise the proxy's own normalized-origin comparison.
+    await page.goto(`${localApp}/callback`);
+    await expect(page.locator("body")).toHaveText("callback received");
     await page.goto(`http://127.0.0.1:${target.port}/denied`).catch(() => null);
     expect(connections).toBe(0);
     expect((await f.client.snapshot()).violations).toEqual(
       expect.arrayContaining([expect.objectContaining({ source: "browser-proxy" })]),
     );
   } finally {
-    for (const dispose of disposers.reverse()) await dispose();
+    await disposeFleetResources(disposers);
   }
 });
 
 test("the owned intercepted Next server renders in Chromium", async ({ page, fleet }) => {
   await page.goto("/login");
-  await expect(page).toHaveTitle(/.+/);
+  await expect(page).toHaveTitle(`Sign in · ${SYNTHETIC_APP_ENV.BRAND_NAME}`);
   expect((await fleet.snapshot()).preloads.length).toBeGreaterThanOrEqual(IS_CI ? 1 : 2);
 });

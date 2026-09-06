@@ -158,6 +158,7 @@ export async function startFleetFixtures(input: { appUrl: string; worktree: stri
     app.hash
   )
     throw new Error("[fleet-e2e] fixture proxy requires an explicit loopback app origin");
+  const appOrigin = app.origin;
   const token = randomBytes(32).toString("hex");
   const { privateKey, publicKey } = await generateKeyPair("RS256");
   const jwk = { ...(await exportJWK(publicKey)), alg: "RS256", kid: "fleet-test" };
@@ -324,7 +325,7 @@ export async function startFleetFixtures(input: { appUrl: string; worktree: stri
     // redirects are returned as-is, never followed by the proxy.
     if (req.url?.startsWith("http://")) {
       const target = new URL(req.url);
-      if (target.origin !== input.appUrl || target.username || target.password) {
+      if (target.origin !== appOrigin || target.username || target.password) {
         violation("browser-proxy", req.url);
         res.writeHead(502).end("denied egress");
         return;
@@ -353,7 +354,7 @@ export async function startFleetFixtures(input: { appUrl: string; worktree: stri
       let result: unknown = {};
       switch (req.url) {
         case "/health":
-          result = input;
+          result = { appUrl: appOrigin, worktree: input.worktree };
           break;
         case "/scenario":
           scenario = scenarioSchema.parse(data);
@@ -420,8 +421,7 @@ export async function startFleetFixtures(input: { appUrl: string; worktree: stri
             url.origin !== "https://login.eveonline.com" ||
             url.pathname !== "/v2/oauth/authorize" ||
             url.searchParams.get("client_id") !== "cid" ||
-            url.searchParams.get("redirect_uri") !==
-              `${input.appUrl}/auth/eve/callback` ||
+            url.searchParams.get("redirect_uri") !== `${appOrigin}/auth/eve/callback` ||
             url.searchParams.get("code_challenge_method") !== "S256" ||
             !url.searchParams.get("state") ||
             !url.searchParams.get("code_challenge") ||
@@ -433,7 +433,7 @@ export async function startFleetFixtures(input: { appUrl: string; worktree: stri
             characterId: value.characterId,
             challenge: url.searchParams.get("code_challenge")!,
           });
-          const callback = new URL("/auth/eve/callback", input.appUrl);
+          const callback = new URL("/auth/eve/callback", appOrigin);
           callback.searchParams.set("state", url.searchParams.get("state")!);
           callback.searchParams.set("code", code);
           result = { callback: callback.href };
@@ -458,7 +458,6 @@ export async function startFleetFixtures(input: { appUrl: string; worktree: stri
     socket.on("close", () => sockets.delete(socket));
   });
   server.on("connect", (req, socket, head) => {
-    const app = new URL(input.appUrl);
     // Playwright's APIRequestContext tunnels even plain HTTP through CONNECT.
     // Only the exact owned app socket is allowed; this is NOT a TLS passthrough
     // to EVE or a general-purpose proxy.
@@ -482,6 +481,7 @@ export async function startFleetFixtures(input: { appUrl: string; worktree: stri
   if (!address || typeof address === "string") throw new Error("fixture did not bind");
   const connection: FixtureConnection = {
     ...input,
+    appUrl: appOrigin,
     token,
     url: `http://127.0.0.1:${address.port}`,
   };

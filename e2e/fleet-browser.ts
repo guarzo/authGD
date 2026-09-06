@@ -11,6 +11,19 @@ function escapeHtml(value: string): string {
   );
 }
 
+export async function disposeFleetResources(disposers: Array<() => Promise<void>>) {
+  const failures: unknown[] = [];
+  // A failed boundary drain must not strand the fixture and callback listeners.
+  for (const dispose of disposers.reverse()) {
+    try {
+      await dispose();
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length) throw new AggregateError(failures, "[fleet-e2e] cleanup failed");
+}
+
 /** Install before creating pages. The context must also use the fixture proxy. */
 export async function installFleetBrowserBoundary(
   context: BrowserContext,
@@ -18,6 +31,7 @@ export async function installFleetBrowserBoundary(
 ) {
   const appUrl = client.connection.appUrl;
   const active = new Set<Promise<void>>();
+  const failures: unknown[] = [];
   let draining = false;
   const handle = async (route: Route) => {
     const request = route.request();
@@ -120,13 +134,29 @@ export async function installFleetBrowserBoundary(
       socket.connectToServer();
       return;
     }
-    void client.violation("browser-websocket", socket.url()).then(() => socket.close());
+    // A failed ledger write must fail teardown too, even after this work has
+    // settled. Still close the denied socket on rejection or channel timeout.
+    const work = client
+      .violation("browser-websocket", socket.url())
+      .catch((error: unknown) => {
+        failures.push(error);
+      })
+      .then(() => socket.close())
+      .catch((error: unknown) => {
+        failures.push(error);
+      });
+    active.add(work);
+    void work.then(() => {
+      active.delete(work);
+    });
   });
   // Keep interception installed while draining: unrouteAll can release newly
   // queued requests while earlier route.fetch responses are still being fulfilled.
   return async () => {
     draining = true;
     await Promise.all(active);
+    if (failures.length)
+      throw new AggregateError(failures, "[fleet-e2e] browser boundary failed");
   };
 }
 
@@ -165,8 +195,11 @@ export const test = base.extend<{ fleet: FleetClient }>({
       } finally {
         // Close only after fetched responses settle; otherwise close disposes
         // their storage while a routing handler is still trying to fulfill it.
-        await drain();
-        await context.close();
+        try {
+          await drain();
+        } finally {
+          await context.close();
+        }
         await drain();
         await client.assertClean();
       }

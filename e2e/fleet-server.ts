@@ -67,9 +67,12 @@ function assertAppUrl(raw: string): URL {
     url.password ||
     url.search ||
     url.hash ||
-    url.pathname !== "/"
+    url.pathname !== "/" ||
+    raw !== url.origin
   ) {
-    throw new Error("[fleet-e2e] app must use an explicit loopback port");
+    throw new Error(
+      "[fleet-e2e] app must be a canonical explicit loopback origin without a trailing slash",
+    );
   }
   return url;
 }
@@ -200,7 +203,7 @@ export function fleetEnvironment(input: {
   return env;
 }
 
-async function assertFreePort(appUrl: string) {
+export async function assertFreePort(appUrl: string) {
   const url = assertAppUrl(appUrl);
   // Refuse any holder, even a matching worktree/DB. Never stop it or attach.
   for (const host of ["127.0.0.1", "::1"]) {
@@ -209,6 +212,10 @@ async function assertFreePort(appUrl: string) {
       server.listen(Number(url.port), host);
       await once(server, "listening");
     } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      // Next binds IPv4. Missing IPv6 loopback is not an occupied app port.
+      if (host === "::1" && (code === "EADDRNOTAVAIL" || code === "EAFNOSUPPORT"))
+        continue;
       throw new Error(`[fleet-e2e] app port ${url.port} unavailable; refusing reuse`, {
         cause: error,
       });

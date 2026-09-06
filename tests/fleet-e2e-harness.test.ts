@@ -1,15 +1,23 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { createServer } from "node:http";
-import { connect } from "node:net";
+import { connect, Server } from "node:net";
 import { join } from "node:path";
-import { existsSync, mkdtempSync, readFileSync, renameSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+} from "node:fs";
 import { buildSync } from "esbuild";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { setupTestDb, TEST_URL } from "./helpers/db";
 import { WORKTREE_ROOT } from "../e2e/env";
 import {
   assertFleetEnvironment,
+  assertFreePort,
   FLEET_CONNECTION_FILE,
   fleetEnvironment,
   startFleetServer,
@@ -32,6 +40,7 @@ const appUrl = "http://localhost:3987";
 const disposers: Array<() => Promise<void>> = [];
 afterEach(async () => {
   for (const dispose of disposers.splice(0).reverse()) await dispose();
+  vi.restoreAllMocks();
   vi.unstubAllEnvs();
   vi.resetModules();
 });
@@ -130,6 +139,37 @@ describe("fleet browser harness isolation", () => {
     const env = fleetEnvironment({ databaseUrl, appUrl, fixture: f.connection });
     expect(() => assertFleetEnvironment({ ...env, [key]: value })).toThrow();
     expect((await f.client.snapshot()).preloads).toEqual([]);
+  });
+
+  it("refuses a trailing-slash launcher origin even when its descriptor agrees", async () => {
+    const f = await fixture();
+    const slashUrl = `${appUrl}/`;
+    expect(() =>
+      fleetEnvironment({
+        databaseUrl,
+        appUrl: slashUrl,
+        fixture: { ...f.connection, appUrl: slashUrl },
+      }),
+    ).toThrow(/canonical.*origin/i);
+    await expect(startFleetServer({ databaseUrl, appUrl: slashUrl })).rejects.toThrow(
+      /canonical.*origin/i,
+    );
+  });
+
+  it("normalizes a direct fixture's trailing slash for health, environment and inherited preload identity", async () => {
+    const f = await startFleetFixtures({
+      appUrl: `${appUrl}/`,
+      worktree: WORKTREE_ROOT,
+    });
+    disposers.push(() => f.close());
+    expect(f.connection.appUrl).toBe(appUrl);
+    expect(await f.client.health()).toEqual({ appUrl, worktree: WORKTREE_ROOT });
+    const env = fleetEnvironment({ databaseUrl, appUrl, fixture: f.connection });
+    expect(assertFleetEnvironment(env).appUrl).toBe(env.APP_BASE_URL);
+    const result = await child(env, "bootstrap");
+    expect(result, result.output).toMatchObject({ code: 0 });
+    expect((await f.client.snapshot()).preloads.length).toBeGreaterThanOrEqual(1);
+    await f.client.assertClean();
   });
 
   it("preloads real Node children before imports and uses actual SSO JWT and ESI parsers", async () => {
@@ -315,6 +355,42 @@ describe("fleet browser harness isolation", () => {
     ).rejects.toThrow();
   });
 
+  it.each([
+    ["::1", "EADDRNOTAVAIL", true],
+    ["::1", "EAFNOSUPPORT", true],
+    ["::1", "EADDRINUSE", false],
+    ["::1", "EACCES", false],
+    ["127.0.0.1", "EADDRNOTAVAIL", false],
+    ["127.0.0.1", "EAFNOSUPPORT", false],
+    ["127.0.0.1", "EADDRINUSE", false],
+    ["127.0.0.1", "EACCES", false],
+  ])(
+    "handles %s bind error %s without weakening port ownership",
+    async (host, code, allowed) => {
+      const error = Object.assign(new Error(`synthetic bind: ${code}`), { code });
+      // eslint-disable-next-line @typescript-eslint/unbound-method -- Reflect.apply below retains the actual server as receiver.
+      const listen = Server.prototype.listen;
+      // Substitute only the OS bind error; other addresses really bind and close.
+      vi.spyOn(Server.prototype, "listen").mockImplementation(function (
+        this: Server,
+        ...args: unknown[]
+      ) {
+        if (args[1] === host) {
+          queueMicrotask(() => this.emit("error", error));
+          return this;
+        }
+        Reflect.apply(listen, this, args);
+        return this;
+      });
+      if (allowed) await expect(assertFreePort(appUrl)).resolves.toBeUndefined();
+      else
+        await expect(assertFreePort(appUrl)).rejects.toMatchObject({
+          message: expect.stringContaining("unavailable; refusing reuse"),
+          cause: error,
+        });
+    },
+  );
+
   it("refuses an occupied app port without reusing or stopping its owner", async () => {
     const occupied = createServer((_req, res) => res.end("dry-run"));
     occupied.listen(0, "127.0.0.1");
@@ -411,6 +487,7 @@ describe("fleet browser harness isolation", () => {
   it("cold-boots Next with offline font CSS, inherited interception and owned-listener cleanup", async () => {
     // Preserve the caller's useful dev cache; remove only this test's cold output.
     // Profiles already run sequentially against this worktree and database.
+    mkdirSync(join(WORKTREE_ROOT, "tmp"), { recursive: true });
     const saved = mkdtempSync(join(WORKTREE_ROOT, "tmp/fleet-cold-cache-"));
     const devCache = join(WORKTREE_ROOT, ".next/dev");
     const hadCache = existsSync(devCache);
