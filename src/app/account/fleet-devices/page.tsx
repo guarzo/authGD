@@ -104,7 +104,7 @@ export default async function FleetDevicesPage({
 
         {devices.length === 0 ? (
           <p className="dim">
-            No devices paired. Pair one from Wingman&rsquo;s fleet-sharing settings.
+            No devices paired. Pairing from Wingman is not available yet.
           </p>
         ) : (
           <>

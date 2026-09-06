@@ -61,6 +61,47 @@ export const NOTIFICATIONS_SCOPE = "esi-characters.read_notifications.v1";
  */
 export const FLEET_READ_SCOPE = "esi-fleets.read_fleet.v1";
 
+// Bound untrusted timing metadata: no giant header parsing, indefinite cooldown,
+// or timer overflow. Missing/malformed values remain unknown, never evidence of
+// an ESI cache lifetime. Durations above a day are capped for this manual check.
+const MAX_RETRY_MS = 86_400_000;
+function headerSeconds(value: string | null): number | null {
+  if (value === null || !/^\d{1,10}$/.test(value)) return null;
+  return Number(value);
+}
+
+function httpDate(value: string | null): number | null {
+  if (value === null || value.length !== 29) return null;
+  const time = Date.parse(value);
+  return Number.isFinite(time) && new Date(time).toUTCString() === value ? time : null;
+}
+
+/** Safe timing only, shared by the explicit check's SSO and ESI fetch boundary. */
+export function upstreamRetryAt(headers: Headers, now: number): number | null {
+  const delays: number[] = [];
+  const retry = headers.get("retry-after");
+  const seconds = headerSeconds(retry);
+  const retryDate = httpDate(retry);
+  if (seconds !== null) delays.push(seconds * 1000);
+  else if (retryDate !== null) delays.push(retryDate - now);
+
+  const cache = headers.get("cache-control");
+  if (cache !== null && cache.length <= 1024) {
+    const age = headerSeconds(headers.get("age")) ?? 0;
+    for (const directive of cache.split(",")) {
+      const match = /^max-age=(\d{1,10})$/i.exec(directive.trim());
+      if (match) delays.push((Number(match[1]) - age) * 1000);
+    }
+  }
+  const expires = httpDate(headers.get("expires"));
+  if (expires !== null) delays.push(expires - now);
+  const remain = headerSeconds(headers.get("x-esi-error-limit-remain"));
+  const reset = headerSeconds(headers.get("x-esi-error-limit-reset"));
+  if (remain !== null && remain <= 5 && reset !== null) delays.push(reset * 1000);
+  if (delays.length === 0) return null;
+  return now + Math.min(MAX_RETRY_MS, Math.max(0, ...delays));
+}
+
 export class EsiError extends Error {
   status: number;
   kind: EsiErrorClass;
@@ -327,14 +368,11 @@ export function createEsiClient(opts: EsiClientOptions = {}) {
     });
     const remainHeader = res.headers.get("x-esi-error-limit-remain");
     const resetHeader = res.headers.get("x-esi-error-limit-reset");
-    if (remainHeader !== null) {
-      const parsed = Number(remainHeader);
-      if (Number.isFinite(parsed)) remain = parsed;
-    }
-    if (resetHeader !== null) {
-      const parsed = Number(resetHeader);
-      if (Number.isFinite(parsed)) resetAt = now() + parsed * 1000;
-    }
+    const parsedRemain = headerSeconds(remainHeader);
+    const parsedReset = headerSeconds(resetHeader);
+    if (parsedRemain !== null) remain = parsedRemain;
+    if (parsedReset !== null)
+      resetAt = now() + Math.min(MAX_RETRY_MS, parsedReset * 1000);
     if (!res.ok) {
       const body = (await res.json().catch(() => undefined)) as
         { error?: string } | undefined;

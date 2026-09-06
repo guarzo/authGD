@@ -14,9 +14,10 @@ import {
   session,
 } from "@/db/schema";
 import { encryptToken } from "@/lib/crypto";
+import { FLEET_READ_SCOPE } from "@/lib/esi/client";
 import { logAudit } from "@/services/audit";
 import { enqueueSync } from "@/services/outbox";
-import { revokeAccountSessions } from "@/services/session";
+import { getSessionAccount, revokeAccountSessions } from "@/services/session";
 
 // LOCK ORDER (deadlock avoidance), applied top to bottom:
 //   1. pg_advisory_xact_lock(characterId) — serializes even when no character
@@ -161,6 +162,49 @@ async function reauthCharacter(
     target: String(ch.characterId),
   });
   await enqueueSync(dbx, { kind: "account", accountId });
+}
+
+/**
+ * Optional grant only: never link, merge or reclaim the character the picker
+ * returned. SSO happens upstream; all identity and scope checks below use the
+ * locked current rows, including scopes granted concurrently in another tab.
+ */
+export async function completeFleetReadGrant(
+  dbx: DbTx,
+  cfg: Config,
+  accountId: string,
+  expectedCharacterId: number,
+  ch: EveCallbackCharacter,
+  sessionId: string,
+): Promise<
+  | { ok: true }
+  | {
+      ok: false;
+      code: "not_eligible" | "wrong_character" | "identity_changed" | "scope_missing";
+    }
+> {
+  if (ch.characterId !== expectedCharacterId) {
+    return { ok: false, code: "wrong_character" };
+  }
+  const existing = await findCharacterForUpdate(dbx, expectedCharacterId);
+  if (
+    !existing ||
+    existing.accountId !== accountId ||
+    existing.ownerHash !== ch.ownerHash
+  ) {
+    return { ok: false, code: "identity_changed" };
+  }
+  const acc = await lockAccount(dbx, accountId);
+  if (!acc || acc.tier !== "member") return { ok: false, code: "not_eligible" };
+  const sess = await getSessionAccount(dbx, sessionId, { forUpdate: true });
+  if (sess?.accountId !== accountId) return { ok: false, code: "identity_changed" };
+  const required = [...cfg.eveSso.scopes, ...existing.scopes, FLEET_READ_SCOPE];
+  if (!required.every((scope) => ch.scopes.includes(scope))) {
+    return { ok: false, code: "scope_missing" };
+  }
+  // Store exactly the actual JWT scopes, not a union with stale labels.
+  await reauthCharacter(dbx, cfg, accountId, ch);
+  return { ok: true };
 }
 
 /** No-main rule: atomically clear main, demote unless locked, enqueue sync. */

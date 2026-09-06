@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { loadConfig, type Config } from "@/config";
 import {
@@ -14,6 +14,7 @@ import {
   session,
 } from "@/db/schema";
 import {
+  completeFleetReadGrant,
   demoteAdmin,
   handleEveLogin,
   linkCharacter,
@@ -83,6 +84,256 @@ const setMain = (accountId: string, characterId: number, actor = accountId) =>
 const demote = (actor: string, accountId: string) =>
   ctx.db.transaction((tx) => demoteAdmin(tx, actor, accountId));
 const wake = (accountId: string) => ctx.db.transaction((tx) => wakeSelf(tx, accountId));
+
+describe("completeFleetReadGrant", () => {
+  const fleetScope = "esi-fleets.read_fleet.v1";
+  const optionalScope = "esi-characters.read_access_lists.v1";
+  async function fixture() {
+    const acc = await seedAccount(ctx.db, { tier: "member" });
+    await seedCharacter(ctx.db, cfg, {
+      id: 90000002,
+      accountId: acc.id,
+      main: true,
+      ownerHash: "oh-1",
+    });
+    await seedCharacter(ctx.db, cfg, {
+      id: 90000001,
+      accountId: acc.id,
+      ownerHash: "oh-1",
+      scopes: [...cfg.eveSso.scopes, optionalScope],
+    });
+    const sid = await createSession(ctx.db, acc.id);
+    const incoming = ch({
+      scopes: [...cfg.eveSso.scopes, optionalScope, fleetScope],
+      refreshToken: "fleet-refresh",
+    });
+    return { acc, sid, incoming };
+  }
+  async function snapshot() {
+    return {
+      characters: await ctx.db.select().from(character).orderBy(character.id),
+      accounts: await ctx.db.select().from(account).orderBy(account.id),
+      audits: await ctx.db.select().from(auditLog),
+      outbox: await ctx.db.select().from(outbox),
+      sessions: await ctx.db.select().from(session).orderBy(session.id),
+    };
+  }
+  it("reauths a non-main anchor using actual scopes and existing bookkeeping", async () => {
+    const { acc, sid, incoming } = await fixture();
+    await ctx.db
+      .insert(contactSyncState)
+      .values({ characterId: 90000001, lastResult: "token_invalid", lastDetail: "old" });
+    const extra = "esi-location.read_location.v1";
+    incoming.scopes.push(extra);
+    const before = await snapshot();
+    expect(
+      await ctx.db.transaction((tx) =>
+        completeFleetReadGrant(tx, cfg, acc.id, 90000001, incoming, sid),
+      ),
+    ).toEqual({ ok: true });
+    const after = await snapshot();
+    const anchor = after.characters.find((c) => c.id === 90000001)!;
+    expect(anchor.scopes).toEqual(incoming.scopes);
+    expect(decryptToken(anchor.refreshTokenEnc!, cfg.tokenEncryptionKey)).toBe(
+      "fleet-refresh",
+    );
+    expect(anchor.tokenStatus).toBe("valid");
+    expect(after.characters.find((c) => c.id === 90000002)).toEqual(
+      before.characters.find((c) => c.id === 90000002),
+    );
+    expect(after.accounts).toEqual(before.accounts);
+    expect(after.sessions).toEqual(before.sessions);
+    expect(after.audits.map((a) => a.action)).toEqual(["character.reauthed"]);
+    expect(after.outbox.map((o) => o.payload)).toEqual([
+      { kind: "account", accountId: acc.id },
+    ]);
+    expect((await ctx.db.select().from(contactSyncState))[0].lastResult).toBeNull();
+  });
+
+  it("rejects the wrong character even when both are owned by this Member", async () => {
+    const { acc, sid, incoming } = await fixture();
+    // Even a matching owner hash must not substitute for the selected ID.
+    incoming.characterId = 90000002;
+    const before = await snapshot();
+    expect(
+      await ctx.db.transaction((tx) =>
+        completeFleetReadGrant(tx, cfg, acc.id, 90000001, incoming, sid),
+      ),
+    ).toEqual({ ok: false, code: "wrong_character" });
+    expect(await snapshot()).toEqual(before);
+  });
+
+  it.each(["owner", "ownership", "deleted", "session"] as const)(
+    "rejects changed %s without credential/link/bookkeeping mutation",
+    async (change) => {
+      const { acc, sid, incoming } = await fixture();
+      if (change === "owner") incoming.ownerHash = "sold-owner";
+      if (change === "ownership") {
+        const other = await seedAccount(ctx.db);
+        await ctx.db
+          .update(character)
+          .set({ accountId: other.id })
+          .where(eq(character.id, 90000001));
+      }
+      if (change === "deleted")
+        await ctx.db.delete(character).where(eq(character.id, 90000001));
+      if (change === "session")
+        await ctx.db.delete(session).where(eq(session.accountId, acc.id));
+      const before = await snapshot();
+      expect(
+        await ctx.db.transaction((tx) =>
+          completeFleetReadGrant(tx, cfg, acc.id, 90000001, incoming, sid),
+        ),
+      ).toEqual({ ok: false, code: "identity_changed" });
+      expect(await snapshot()).toEqual(before);
+    },
+  );
+
+  it.each(["pending", "associate", "alumni"] as const)(
+    "rejects current %s tier even with admin rights",
+    async (tier) => {
+      const { acc, sid, incoming } = await fixture();
+      await ctx.db
+        .update(account)
+        .set({ tier, isAdmin: true })
+        .where(eq(account.id, acc.id));
+      const before = await snapshot();
+      expect(
+        await ctx.db.transaction((tx) =>
+          completeFleetReadGrant(tx, cfg, acc.id, 90000001, incoming, sid),
+        ),
+      ).toEqual({ ok: false, code: "not_eligible" });
+      expect(await snapshot()).toEqual(before);
+    },
+  );
+
+  it("allows a cryo Member without waking them", async () => {
+    const { acc, sid, incoming } = await fixture();
+    await ctx.db.update(account).set({ status: "cryo" }).where(eq(account.id, acc.id));
+    expect(
+      await ctx.db.transaction((tx) =>
+        completeFleetReadGrant(tx, cfg, acc.id, 90000001, incoming, sid),
+      ),
+    ).toEqual({ ok: true });
+    expect((await ctx.db.select().from(account))[0].status).toBe("cryo");
+  });
+
+  it.each([fleetScope, optionalScope, "esi-characters.write_contacts.v1"])(
+    "refuses actual scope loss: %s",
+    async (missing) => {
+      const { acc, sid, incoming } = await fixture();
+      incoming.scopes = incoming.scopes.filter((s) => s !== missing);
+      const before = await snapshot();
+      expect(
+        await ctx.db.transaction((tx) =>
+          completeFleetReadGrant(tx, cfg, acc.id, 90000001, incoming, sid),
+        ),
+      ).toEqual({ ok: false, code: "scope_missing" });
+      expect(await snapshot()).toEqual(before);
+    },
+  );
+
+  it("a concurrent optional grant cannot be overwritten by a narrower Fleet Read callback", async () => {
+    const { acc, sid, incoming } = await fixture();
+    const broader = ch({
+      ...incoming,
+      scopes: [...incoming.scopes, "esi-location.read_location.v1"],
+      refreshToken: "concurrent-winner",
+    });
+    const locked = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const writer = ctx.db.transaction(async (tx) => {
+      await linkCharacter(tx, cfg, acc.id, broader);
+      locked.resolve();
+      await release.promise;
+    });
+    await locked.promise;
+    const started = Promise.withResolvers<number>();
+    const grant = ctx.db.transaction(async (tx) => {
+      const pid = await tx.execute<{ pid: number }>(sql`SELECT pg_backend_pid() AS pid`);
+      started.resolve(pid.rows[0].pid);
+      return completeFleetReadGrant(tx, cfg, acc.id, 90000001, incoming, sid);
+    });
+    try {
+      const pid = await started.promise;
+      await expect
+        .poll(async () => {
+          const result = await ctx.pool.query<{ blocked: boolean }>(
+            "SELECT cardinality(pg_blocking_pids($1)) > 0 AS blocked",
+            [pid],
+          );
+          return result.rows[0].blocked;
+        })
+        .toBe(true);
+    } finally {
+      release.resolve();
+      await writer;
+    }
+    expect(await grant).toEqual({ ok: false, code: "scope_missing" });
+    const [anchor] = await ctx.db
+      .select()
+      .from(character)
+      .where(eq(character.id, 90000001));
+    expect(anchor.scopes).toEqual(broader.scopes);
+    expect(decryptToken(anchor.refreshTokenEnc!, cfg.tokenEncryptionKey)).toBe(
+      "concurrent-winner",
+    );
+    expect((await ctx.db.select().from(auditLog)).map((a) => a.action)).toEqual([
+      "character.reauthed",
+    ]);
+  });
+
+  it("refuses a session that expires while completion waits for its row lock", async () => {
+    const { acc, sid, incoming } = await fixture();
+    const expiresAt = new Date(Date.now() + 1500);
+    await ctx.db.update(session).set({ expiresAt }).where(eq(session.accountId, acc.id));
+    const locked = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const holder = ctx.db.transaction(async (tx) => {
+      await tx.select().from(session).where(eq(session.accountId, acc.id)).for("update");
+      locked.resolve();
+      await release.promise;
+    });
+    await locked.promise;
+    const before = await snapshot();
+    const started = Promise.withResolvers<number>();
+    const grant = ctx.db.transaction(async (tx) => {
+      const pid = await tx.execute<{ pid: number }>(sql`SELECT pg_backend_pid() AS pid`);
+      started.resolve(pid.rows[0].pid);
+      return completeFleetReadGrant(tx, cfg, acc.id, 90000001, incoming, sid);
+    });
+    try {
+      const pid = await started.promise;
+      await expect
+        .poll(async () => {
+          const result = await ctx.pool.query<{ blocked: boolean }>(
+            "SELECT cardinality(pg_blocking_pids($1)) > 0 AS blocked",
+            [pid],
+          );
+          return result.rows[0].blocked;
+        })
+        .toBe(true);
+      await expect
+        .poll(() => Date.now() > expiresAt.getTime(), { timeout: 3000 })
+        .toBe(true);
+    } finally {
+      release.resolve();
+      await holder;
+    }
+    expect(await grant).toEqual({ ok: false, code: "identity_changed" });
+    expect(await snapshot()).toEqual(before);
+  });
+
+  it("generic login still records a narrower real grant, never stale optional labels", async () => {
+    const { acc } = await fixture();
+    expect(await login(ch())).toEqual({ accountId: acc.id });
+    const [anchor] = await ctx.db
+      .select()
+      .from(character)
+      .where(eq(character.id, 90000001));
+    expect(anchor.scopes).toEqual(cfg.eveSso.scopes);
+  });
+});
 
 describe("handleEveLogin", () => {
   it("creates a pending account with outbox + audit, not an alumni one", async () => {

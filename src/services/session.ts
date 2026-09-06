@@ -29,14 +29,20 @@ export async function createSession(dbx: Dbx, accountId: string): Promise<string
 export async function getSessionAccount(
   dbx: Dbx,
   sessionId: string,
+  opts: { forUpdate?: boolean } = {},
 ): Promise<{ accountId: string } | null> {
   const key = sessionKey(sessionId);
-  const rows = await dbx
+  const query = dbx
     .select()
     .from(session)
     .where(and(eq(session.id, key), gt(session.expiresAt, new Date())));
+  // Grant completion takes this lock AFTER character/account locks. Keep
+  // sign-out/revocation from racing credential storage after the SSO roundtrip.
+  const rows = await (opts.forUpdate ? query.for("update") : query);
   const row = rows[0];
-  if (!row) return null;
+  // The WHERE timestamp predates a possible lock wait. A grant must still have
+  // a live session when the lock is finally acquired, not just when queued.
+  if (!row || (opts.forUpdate && row.expiresAt.getTime() <= Date.now())) return null;
   if (Date.now() - row.lastSeenAt.getTime() > TOUCH_INTERVAL_MS) {
     await dbx.update(session).set({ lastSeenAt: new Date() }).where(eq(session.id, key));
   }

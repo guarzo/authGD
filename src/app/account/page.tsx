@@ -1313,6 +1313,11 @@ export default async function AccountPage({
               >
                 Add character
               </a>
+              {view.tier === "member" && (
+                <a className="btn" href="/account/fleet-sharing">
+                  Fleet sharing
+                </a>
+              )}
             </p>
 
             {/* Omitted entirely when there are none: an empty table under

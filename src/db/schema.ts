@@ -30,6 +30,7 @@ export const oauthIntentEnum = pgEnum("oauth_intent", [
   "login",
   "link-character",
   "link-discord",
+  "grant-fleet-read",
 ]);
 export const syncRunStatusEnum = pgEnum("sync_run_status", ["ok", "partial", "failed"]);
 export const accessListReadStatusEnum = pgEnum("access_list_read_status", [
@@ -223,6 +224,9 @@ export const oauthTransaction = pgTable("oauth_transaction", {
   intent: oauthIntentEnum("intent").notNull(),
   sessionId: text("session_id"),
   accountId: uuid("account_id"),
+  // Required by grant-fleet-read handlers, nullable for legacy intents. No FK:
+  // deleting/unlinking a character must not erase the grant's intended identity.
+  fleetReadCharacterId: bigint("fleet_read_character_id", { mode: "number" }),
   pkceVerifier: text("pkce_verifier").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
@@ -789,6 +793,14 @@ export const fleetDeviceSession = pgTable(
   },
   (t) => [index("fleet_device_session_expires_at_idx").on(t.expiresAt)],
 );
+
+/** One operational cooldown per account; the manual check retains no roster evidence. */
+export const fleetAccessCheckGate = pgTable("fleet_access_check_gate", {
+  accountId: uuid("account_id")
+    .primaryKey()
+    .references(() => account.id, { onDelete: "cascade" }),
+  nextAllowedAt: timestamp("next_allowed_at", { withTimezone: true }).notNull(),
+});
 
 /**
  * A materialized, expiring cache of one linked character's ESI-observed fleet

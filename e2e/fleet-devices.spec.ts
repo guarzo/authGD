@@ -75,6 +75,10 @@ test("a member with no paired devices sees the empty state, not a broken table",
 
   await page.goto("/account/fleet-devices");
 
-  await expect(page.getByText("No devices paired.")).toBeVisible();
+  await expect(
+    page.getByText("No devices paired. Pairing from Wingman is not available yet.", {
+      exact: true,
+    }),
+  ).toBeVisible();
   await expect(page.getByRole("button", { name: /^revoke/ })).toHaveCount(0);
 });

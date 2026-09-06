@@ -196,6 +196,37 @@ export const FLEET_DEVICES_ERRORS = {
     "Revoking that device collided with other fleet activity in progress. Try again.",
 } as const;
 
+/** Optional authorization notices for `/account/fleet-sharing`. No provider
+ * messages, identity values or caller-supplied return paths belong in these. */
+export const FLEET_SHARING_ERRORS = {
+  not_eligible: "Fleet sharing requires a current Member-tier account.",
+  wrong_character:
+    "EVE returned a different character. Start again and choose the selected character.",
+  identity_changed:
+    "Your session or linked character changed. Refresh and authorize again.",
+  scope_missing:
+    "EVE did not return all required permissions. Start authorization again.",
+  authorization_expired:
+    "That authorization is no longer valid for this session. Start again.",
+  authorization_failed: "Authorization could not be completed. Try again.",
+} as const;
+
+export const FLEET_SHARING_NOTICES = {
+  authorized: "Fleet Read authorized. Check fleet to verify your linked characters.",
+  authorization_cancelled: "Fleet Read authorization was cancelled. Nothing changed.",
+} as const;
+
+export type FleetSharingErrorCode = keyof typeof FLEET_SHARING_ERRORS;
+export type FleetSharingNoticeCode = keyof typeof FLEET_SHARING_NOTICES;
+
+export function fleetSharingErrorUrl(code: FleetSharingErrorCode): string {
+  return `/account/fleet-sharing?error=${code}`;
+}
+
+export function fleetSharingNoticeUrl(code: FleetSharingNoticeCode): string {
+  return `/account/fleet-sharing?notice=${code}`;
+}
+
 export type LoginErrorCode = keyof typeof LOGIN_ERRORS;
 export type AccountErrorCode = keyof typeof ACCOUNT_ERRORS;
 export type AdminAccountsErrorCode = keyof typeof ADMIN_ACCOUNTS_ERRORS;

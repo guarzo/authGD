@@ -1,7 +1,7 @@
 import { http, HttpResponse } from "msw";
 import { setupServer } from "msw/node";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { createEsiClient, EsiError } from "@/lib/esi/client";
+import { createEsiClient, EsiError, upstreamRetryAt } from "@/lib/esi/client";
 import { chunk } from "@/core/chunk";
 
 const server = setupServer();
@@ -11,6 +11,40 @@ afterAll(() => server.close());
 
 const BASE = "https://esi.evetech.net/latest";
 const ROOT = "https://esi.evetech.net";
+
+describe("safe retry/cache boundaries", () => {
+  const now = Date.parse("2026-09-06T00:00:00Z");
+  it("ignores oversized retry/cache headers rather than creating an unbounded wait", () => {
+    expect(
+      upstreamRetryAt(
+        new Headers({
+          "retry-after": "9".repeat(10000),
+          "cache-control": "max-age=240,".repeat(1000),
+        }),
+        now,
+      ),
+    ).toBeNull();
+  });
+  it.each([
+    [{}, null],
+    [{ "retry-after": "180" }, 180_000],
+    [{ "retry-after": "Sun, 06 Sep 2026 00:03:00 GMT" }, 180_000],
+    [{ expires: "Sun, 06 Sep 2026 00:04:00 GMT" }, 240_000],
+    [{ "cache-control": "private, max-age=240", age: "60" }, 180_000],
+    [{ "retry-after": "120", "cache-control": "max-age=240" }, 240_000],
+    [{ "x-esi-error-limit-remain": "0", "x-esi-error-limit-reset": "120" }, 120_000],
+    [{ "retry-after": "-1", "cache-control": "max-age=Infinity" }, null],
+    [{ "retry-after": "2026-09-06" }, null],
+    [{ "retry-after": "1e9", expires: "garbage" }, null],
+    [{ "cache-control": "max-age=60junk" }, null],
+    [{ "cache-control": "max-age=999999999999999999999999999999999999" }, null],
+    [{ "retry-after": "172800" }, 86_400_000],
+  ])("returns only bounded timing for %j", (headers, delta) => {
+    expect(upstreamRetryAt(new Headers(headers as Record<string, string>), now)).toBe(
+      delta === null ? null : now + delta,
+    );
+  });
+});
 
 describe("chunk", () => {
   it("splits into fixed-size chunks", () => {
