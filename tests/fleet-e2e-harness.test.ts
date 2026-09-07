@@ -91,6 +91,7 @@ const scenario = {
     },
   ],
   fleetId: 123456,
+  fleetBossId: 90000001,
   rosterIds: [90000001, 90000002, 90000099],
 };
 
@@ -269,6 +270,67 @@ describe("fleet browser harness isolation", () => {
     ).toBe(200);
     await f.client.assertClean();
   });
+
+  it.each([false, true])(
+    "only the fleet boss can read the roster, even with a synthetic success override: %s",
+    async (override) => {
+      const f = await fixture();
+      await f.client.scenario({
+        ...scenario,
+        characters: [
+          ...scenario.characters,
+          {
+            id: 90000002,
+            name: "Ordinary Member",
+            ownerHash: "oh-90000002",
+            scopes: ["esi-fleets.read_fleet.v1"],
+          },
+        ],
+        // Boss need not be first in the roster or occupy a command position.
+        rosterIds: [90000002, 90000001, 90000099],
+        ...(override
+          ? { responses: { roster: { status: 200, body: [{ character_id: 90000002 }] } } }
+          : {}),
+      });
+      const ordinary = await f.client.credentials(90000002);
+      const headers = { authorization: `Bearer ${ordinary.accessToken}` };
+      const membership = await f.client.provider({
+        url: "https://esi.evetech.net/latest/characters/90000002/fleet/",
+        method: "GET",
+        headers,
+      });
+      expect(membership).toMatchObject({
+        status: 200,
+        body: { fleet_boss_id: 90000001 },
+      });
+      expect(
+        await f.client.provider({
+          url: "https://esi.evetech.net/latest/fleets/123456/members/",
+          method: "GET",
+          headers,
+        }),
+      ).toEqual({ status: 403, body: { error: "forbidden" } });
+      const boss = await f.client.credentials(90000001);
+      expect(
+        await f.client.provider({
+          url: "https://esi.evetech.net/latest/characters/90000001/fleet/",
+          method: "GET",
+          headers: { authorization: `Bearer ${boss.accessToken}` },
+        }),
+      ).toMatchObject({
+        status: 200,
+        body: { fleet_boss_id: 90000001, fleet_job: "fleet_member" },
+      });
+      const roster = await f.client.provider({
+        url: "https://esi.evetech.net/latest/fleets/123456/members/",
+        method: "GET",
+        headers: { authorization: `Bearer ${boss.accessToken}` },
+      });
+      expect(roster.status).toBe(200);
+      if (override) expect(roster.body).toEqual([{ character_id: 90000002 }]);
+      await f.client.assertClean();
+    },
+  );
 
   it("holds a real provider response until release, snapshots the old scenario, and closes pending work", async () => {
     const f = await fixture();

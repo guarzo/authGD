@@ -51,7 +51,7 @@ beforeEach(async () => {
       calls.push("membership");
       return HttpResponse.json({
         fleet_id: 123,
-        fleet_boss_id: 90000099,
+        fleet_boss_id: 90000001,
         role: "fleet_member",
         squad_id: 1,
         wing_id: 1,
@@ -236,6 +236,9 @@ it("reads only safe owned setup state, prefers an authorized non-main, and never
     await Page({ searchParams: Promise.resolve({ notice: "authorized" }) }),
   );
   expect(html).toContain("Fleet Read authorized. Check fleet");
+  expect(html).toContain("Authorize the current fleet boss");
+  expect(html).toContain("linked to this account");
+  expect(html).toContain("Fleet boss character");
   expect(html).toContain('href="/account/fleet-devices"');
   expect(html).toContain('value="90000004" selected=""');
   // A native change before hydration must not leave the displayed selection
@@ -301,12 +304,24 @@ it.each(["absent", "expired"])(
     expect(calls).toEqual([]);
   },
 );
-it("renders a normal account link without changing the manifest", async () => {
-  await fixture();
-  const { default: Page } = await import("@/app/account/page");
-  const html = renderToStaticMarkup(await Page({ searchParams: Promise.resolve({}) }));
-  expect(html).toContain('href="/account/fleet-sharing"');
-  expect(html).toContain("Fleet sharing");
-  expect(html).toContain("Crew manifest");
-  expect(calls).toEqual([]);
-});
+it.each([
+  { tier: "member", status: "active", isAdmin: false, visible: true },
+  { tier: "member", status: "cryo", isAdmin: false, visible: true },
+  { tier: "alumni", status: "active", isAdmin: true, visible: false },
+  { tier: "associate", status: "active", isAdmin: false, visible: false },
+  { tier: "pending", status: "active", isAdmin: true, visible: false },
+] as const)(
+  "keeps the account Fleet sharing entry tier-gated: $tier/$status/admin=$isAdmin",
+  async ({ tier, status, isAdmin, visible }) => {
+    const { acc } = await fixture();
+    await ctx.db
+      .update(account)
+      .set({ tier, status, isAdmin })
+      .where(eq(account.id, acc.id));
+    const { default: Page } = await import("@/app/account/page");
+    const html = renderToStaticMarkup(await Page({ searchParams: Promise.resolve({}) }));
+    expect(html.includes('href="/account/fleet-sharing"')).toBe(visible);
+    expect(html).toContain("Crew manifest");
+    expect(calls).toEqual([]);
+  },
+);

@@ -894,6 +894,20 @@ h1[tabindex="-1"] {
   max-width: calc(var(--measure-page-narrow) - 2 * var(--s-5));
 }
 
+/* A bordered Fleet sharing button in the H1 row cost a manifest row at both
+   1280px and 390px. Keep the standard text link beside account setup instead;
+   this 16px gap fits the nominal account's three items at 390px without changing
+   verdict geometry. */
+.page__meta--fleet {
+  column-gap: var(--s-4);
+}
+
+.account-fleet-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.25rem;
+}
+
 /* One fact and its controls. The row-level gap above separates facts; this one
    holds a badge, a qualifier and a button together as a single fact. */
 .page__meta-item {

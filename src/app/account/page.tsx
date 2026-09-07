@@ -415,7 +415,11 @@ export default async function AccountPage({
               line inside the head. The h2 that grouped them is not replaced:
               two facts are not a section, and the labels below carry the
               naming the heading was doing by proximity. */}
-          <div className="page__meta">
+          <div
+            className={
+              view.tier === "member" ? "page__meta page__meta--fleet" : "page__meta"
+            }
+          >
             <div className="page__meta-item" data-field="tier">
               {/* Visually hidden because the approved layout puts the token on
                   its own — but `StandingTier` renders "Testers", a word that
@@ -586,6 +590,12 @@ export default async function AccountPage({
                 </a>
               )}
             </div>
+            {/* Beside account setup, not another row above the dense manifest. */}
+            {view.tier === "member" && (
+              <a className="account-fleet-link" href="/account/fleet-sharing">
+                Fleet sharing
+              </a>
+            )}
           </div>
         </div>
 
@@ -1313,11 +1323,6 @@ export default async function AccountPage({
               >
                 Add character
               </a>
-              {view.tier === "member" && (
-                <a className="btn" href="/account/fleet-sharing">
-                  Fleet sharing
-                </a>
-              )}
             </p>
 
             {/* Omitted entirely when there are none: an empty table under
