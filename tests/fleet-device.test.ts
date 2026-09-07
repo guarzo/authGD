@@ -20,7 +20,11 @@ import {
 } from "@/services/fleet-pairing";
 import { SHARED_CAPABILITY } from "@/core/fleet-sharing";
 import { transitionFleetSharingMode } from "@/services/fleet-sharing-mode";
-import { pairDevice, waitUntilBlockedBy } from "./helpers/fleet-sharing";
+import {
+  pairDevice,
+  waitUntilBlockedBy,
+  reconcileFleetKeys,
+} from "./helpers/fleet-sharing";
 import { readDeviceCatalogueForSession } from "@/services/fleet-relay";
 import { seedAccount } from "./helpers/seed";
 import {
@@ -40,9 +44,10 @@ afterEach(() => vi.useRealTimers());
 
 describe("explicit shared fleet capability consent", () => {
   it("cannot self-grant shared capabilities from a legacy pairing", async () => {
+    const ready = await reconcileFleetKeys(ctx.db);
     await transitionFleetSharingMode(ctx.db, {
       enabled: true,
-      expectedRevision: 0,
+      expectedRevision: ready.revision,
       now: NOW,
     });
     const member = await seedAccount(ctx.db, { tier: "member" });
@@ -68,9 +73,10 @@ describe("explicit shared fleet capability consent", () => {
     });
   });
   it("a retained-key upgrade grants a new session, never a previously-issued session", async () => {
+    const ready = await reconcileFleetKeys(ctx.db);
     await transitionFleetSharingMode(ctx.db, {
       enabled: true,
-      expectedRevision: 0,
+      expectedRevision: ready.revision,
       now: NOW,
     });
     const member = await seedAccount(ctx.db, { tier: "member", status: "cryo" });
@@ -133,9 +139,10 @@ describe("explicit shared fleet capability consent", () => {
   });
 
   it("requires the current device grant as well as the immutable session ceiling", async () => {
+    const ready = await reconcileFleetKeys(ctx.db);
     await transitionFleetSharingMode(ctx.db, {
       enabled: true,
-      expectedRevision: 0,
+      expectedRevision: ready.revision,
       now: NOW,
     });
     const member = await seedAccount(ctx.db, { tier: "member" });
@@ -155,9 +162,10 @@ describe("explicit shared fleet capability consent", () => {
   });
 
   it("never moves a retained key to another account during capability approval", async () => {
+    const ready = await reconcileFleetKeys(ctx.db);
     await transitionFleetSharingMode(ctx.db, {
       enabled: true,
-      expectedRevision: 0,
+      expectedRevision: ready.revision,
       now: NOW,
     });
     const first = await seedAccount(ctx.db, { tier: "member" });
@@ -179,9 +187,10 @@ describe("explicit shared fleet capability consent", () => {
   });
 
   it("shares cadence and revision with catalogue and distinguishes Member from admin standing", async () => {
+    const ready = await reconcileFleetKeys(ctx.db);
     await transitionFleetSharingMode(ctx.db, {
       enabled: true,
-      expectedRevision: 0,
+      expectedRevision: ready.revision,
       now: NOW,
     });
     const member = await seedAccount(ctx.db, { tier: "member" });
@@ -251,9 +260,10 @@ describe("explicit shared fleet capability consent", () => {
   });
 
   it("rechecks enrollment at approval and completion after the operator disables sharing", async () => {
+    const ready = await reconcileFleetKeys(ctx.db);
     await transitionFleetSharingMode(ctx.db, {
       enabled: true,
-      expectedRevision: 0,
+      expectedRevision: ready.revision,
       now: NOW,
     });
     const member = await seedAccount(ctx.db, { tier: "member" });
@@ -268,7 +278,7 @@ describe("explicit shared fleet capability consent", () => {
     await approvePairing(ctx.db, approved.pairingId, member.id, NOW);
     await transitionFleetSharingMode(ctx.db, {
       enabled: false,
-      expectedRevision: 1,
+      expectedRevision: ready.revision + 1,
       now: NOW,
     });
     await expect(
@@ -358,9 +368,10 @@ describe("explicit shared fleet capability consent", () => {
   });
 
   it("binds the browser-approved requested capability without enabling participation", async () => {
+    const ready = await reconcileFleetKeys(ctx.db);
     await transitionFleetSharingMode(ctx.db, {
       enabled: true,
-      expectedRevision: 0,
+      expectedRevision: ready.revision,
       now: NOW,
     });
     const member = await seedAccount(ctx.db, { tier: "member" });

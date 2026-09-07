@@ -18,7 +18,11 @@ import { FLEET_READ_SCOPE } from "@/lib/esi/client";
 import { setupTestDb, truncateAll } from "./helpers/db";
 import { testConfig } from "./helpers/config";
 import { seedAccount, seedCharacter } from "./helpers/seed";
-import { pairDevice, waitUntilBlockedBy } from "./helpers/fleet-sharing";
+import {
+  pairDevice,
+  waitUntilBlockedBy,
+  reconcileFleetKeys,
+} from "./helpers/fleet-sharing";
 
 const NOW = new Date("2026-09-07T12:00:00Z");
 let ctx: Awaited<ReturnType<typeof setupTestDb>>;
@@ -111,13 +115,14 @@ describe("operator-only fleet sharing cutover", () => {
     expect(
       await readFleetProjection(ctx.db, { sessionId, revision: 2, now: NOW }),
     ).toMatchObject({ ok: true, rows: [{ dps: 42 }] });
+    const ready = await reconcileFleetKeys(ctx.db);
     expect(
       await transitionFleetSharingMode(ctx.db, {
         enabled: true,
-        expectedRevision: 0,
+        expectedRevision: ready.revision,
         now: NOW,
       }),
-    ).toEqual({ enabled: true, revision: 1, transitionedAt: NOW });
+    ).toEqual({ enabled: true, revision: ready.revision + 1, transitionedAt: NOW });
     for (const table of [
       fleetDeviceSession,
       fleetEligibility,
@@ -138,9 +143,10 @@ describe("operator-only fleet sharing cutover", () => {
   it("never admits legacy authority into shared mode even if a fixture restores the old cache", async () => {
     const { member } = await legacyFixture();
     const [legacyAuthority] = await ctx.db.select().from(fleetEligibility);
+    const ready = await reconcileFleetKeys(ctx.db);
     await transitionFleetSharingMode(ctx.db, {
       enabled: true,
-      expectedRevision: 0,
+      expectedRevision: ready.revision,
       now: NOW,
     });
     const fresh = await pairDevice(ctx.db, member.id, NOW);
@@ -164,9 +170,10 @@ describe("operator-only fleet sharing cutover", () => {
   });
 
   it("rejects stale revisions without draining and drains again on rollback", async () => {
+    const ready = await reconcileFleetKeys(ctx.db);
     await transitionFleetSharingMode(ctx.db, {
       enabled: true,
-      expectedRevision: 0,
+      expectedRevision: ready.revision,
       now: NOW,
     });
     const member = await seedAccount(ctx.db, { tier: "member" });
@@ -181,20 +188,21 @@ describe("operator-only fleet sharing cutover", () => {
     expect(await ctx.db.select().from(fleetDeviceSession)).toHaveLength(1);
     await transitionFleetSharingMode(ctx.db, {
       enabled: false,
-      expectedRevision: 1,
+      expectedRevision: ready.revision + 1,
       now: NOW,
     });
     expect(await ctx.db.select().from(fleetDeviceSession)).toEqual([]);
     expect((await ctx.db.select().from(fleetDevice))[0].id).toBe(paired.device.id);
     expect(await readFleetSharingMode(ctx.db)).toEqual({
       enabled: false,
-      revision: 2,
+      revision: ready.revision + 2,
       transitionedAt: NOW,
     });
   });
 
   it("waits for a held old-reader session; that retired session cannot select a new row after cutover", async () => {
     const { device, sessionId, member } = await legacyFixture();
+    const ready = await reconcileFleetKeys(ctx.db);
     const key = createHash("sha256").update(sessionId).digest("base64url");
     const client = await ctx.pool.connect();
     let transition: ReturnType<typeof transitionFleetSharingMode> | undefined;
@@ -210,7 +218,7 @@ describe("operator-only fleet sharing cutover", () => {
       ]);
       transition = transitionFleetSharingMode(ctx.db, {
         enabled: true,
-        expectedRevision: 0,
+        expectedRevision: ready.revision,
         now: NOW,
       });
       expect(await waitUntilBlockedBy(ctx.pool, pid)).toBe(true);

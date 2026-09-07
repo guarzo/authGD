@@ -34,8 +34,20 @@ export async function transitionFleetSharingMode(
 ): Promise<FleetSharingMode> {
   return dbx.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(3, 0)`);
-    const prior = await readFleetSharingMode(tx);
+    const prior = await readFleetKeyIdentityState(tx);
     if (prior.revision !== args.expectedRevision) throw new Error("conflict");
+    // Fail BEFORE any drain/write. Reconciliation is explicit, never a side
+    // effect of enabling; readiness is permanent across ordinary mode toggles.
+    if (args.enabled && prior.keyIdentityPhase !== "ready")
+      throw new FleetSharingDisabledError();
+    if (args.enabled) {
+      // Operator runs bounded independent cleanup until the expired backlog is
+      // gone. Enabling does not disguise an unbounded purge as a mode toggle.
+      const expired = await tx.execute(
+        sql`select id from fleet_recovery_challenge where expires_at <= ${args.now ? sql`${args.now}` : sql`clock_timestamp()`} limit 1`,
+      );
+      if (expired.rows.length) throw new Error("recovery_cleanup_required");
+    }
     await tx
       .select({ id: fleetDevice.id })
       .from(fleetDevice)
@@ -91,10 +103,33 @@ export async function readFleetSharingMode(dbx: Dbx): Promise<FleetSharingMode> 
   return gate ?? { enabled: false, revision: 0, transitionedAt: null };
 }
 
-/** Mode lock precedes pairing/account/device/session locks. Shared admission cannot
- * race a cutover, even when the singleton row does not exist yet. Class 3 is
- * separate from identity (1) and relay-character (2) advisory locks. */
-export async function lockFleetSharingMode(tx: DbTx): Promise<FleetSharingMode> {
+export type FleetKeyIdentityState = FleetSharingMode & {
+  keyIdentityPhase: "pending" | "reconciling" | "ready";
+  keyIdentityCursor: string | null;
+};
+
+export async function readFleetKeyIdentityState(
+  dbx: Dbx,
+): Promise<FleetKeyIdentityState> {
+  const [gate] = await dbx
+    .select()
+    .from(fleetSharingGate)
+    .where(eq(fleetSharingGate.id, 1));
+  return (
+    gate ?? {
+      enabled: false,
+      revision: 0,
+      transitionedAt: null,
+      keyIdentityPhase: "pending",
+      keyIdentityCursor: null,
+    }
+  );
+}
+
+/** Mode precedes canonical key, pairing/account/device/session locks. Shared
+ * admission cannot race cutover even without a singleton row. Class 3 is separate
+ * from account identity (1), relay-character (2), admission (4) and key (5). */
+export async function lockFleetSharingMode(tx: DbTx): Promise<FleetKeyIdentityState> {
   await tx.execute(sql`select pg_advisory_xact_lock_shared(3, 0)`);
-  return readFleetSharingMode(tx);
+  return readFleetKeyIdentityState(tx);
 }

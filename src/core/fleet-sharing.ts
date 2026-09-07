@@ -20,6 +20,18 @@ export type FleetCode =
   | "service_unavailable";
 export type FleetReply<T> = { ok: true; value: T } | { ok: false; code: FleetCode };
 export type Participation = { enabled: boolean; generation: number };
+export type RecoveryResult =
+  | {
+      result: "reconnected";
+      deviceId: string;
+      sessionId: string;
+      sessionExpiresAt: Date;
+      approvedCapabilities: string[];
+      participation: Participation;
+    }
+  | { result: "device_revoked" }
+  | { result: "device_key_conflict" }
+  | { result: "account_ineligible" | "retry_later"; retryAfterMs: number };
 export type DeviceView = {
   deviceId: string;
   sessionExpiresAt: Date;

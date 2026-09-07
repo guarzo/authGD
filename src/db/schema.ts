@@ -715,8 +715,19 @@ export const fleetSharingGate = pgTable(
     enabled: boolean("enabled").notNull().default(false),
     revision: integer("revision").notNull().default(0),
     transitionedAt: timestamp("transitioned_at", { withTimezone: true }),
+    keyIdentityPhase: text("key_identity_phase")
+      .$type<"pending" | "reconciling" | "ready">()
+      .notNull()
+      .default("pending"),
+    keyIdentityCursor: uuid("key_identity_cursor"),
   },
-  (t) => [check("fleet_sharing_gate_singleton_ck", sql`${t.id} = 1`)],
+  (t) => [
+    check("fleet_sharing_gate_singleton_ck", sql`${t.id} = 1`),
+    check(
+      "fleet_sharing_gate_identity_phase_ck",
+      sql`${t.keyIdentityPhase} in ('pending', 'reconciling', 'ready')`,
+    ),
+  ],
 );
 
 /**
@@ -736,8 +747,10 @@ export const fleetSharingGate = pgTable(
  * insert successfully and defeat it. The constraint is also NOT scoped by
  * `revokedAt`: a key that was ever inserted here, revoked or not, can never
  * be inserted again. Re-pairing after revocation is by design a new local
- * key pair, not the old one — see this table's fix-report entry in
- * `task-3-report.md` for the ruling.
+ * key pair, not the old one. This raw-DER text uniqueness is the legacy
+ * constraint, not DER identity: after explicit reconciliation, registration
+ * additionally uses fleetDeviceKeyIdentity and stores re-exported canonical DER.
+ * Original raw legacy records are never rewritten or merged.
  */
 export const fleetDevice = pgTable("fleet_device", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -791,6 +804,52 @@ export const fleetPairingRequest = pgTable(
     }),
   },
   (t) => [index("fleet_pairing_request_expires_at_idx").on(t.expiresAt)],
+);
+
+/** Derived, collision-aware key identity. Null/nonconflicted is a deleted-binding
+ * tombstone, never a free key. No original device, grants or revocations are merged. */
+export const fleetDeviceKeyIdentity = pgTable(
+  "fleet_device_key_identity",
+  {
+    canonicalSpkiB64: text("canonical_spki_b64").primaryKey(),
+    deviceId: uuid("device_id")
+      .unique()
+      .references(() => fleetDevice.id, { onDelete: "set null" }),
+    conflicted: boolean("conflicted").notNull().default(false),
+  },
+  (t) => [
+    check(
+      "fleet_device_key_identity_conflict_ck",
+      sql`not ${t.conflicted} or ${t.deviceId} is null`,
+    ),
+  ],
+);
+
+/** Signer-authorized challenges have no device/account FK so conflicts/revocations
+ * remain completion-only outcomes. Consumed rows remain until expiry for replay
+ * protection and admission bounds. Legacy null request fields never authorize. */
+export const fleetRecoveryChallenge = pgTable(
+  "fleet_recovery_challenge",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    publicKeySpkiB64: text("public_key_spki_b64").notNull(),
+    nonceDigest: text("nonce_digest").notNull(),
+    requestId: text("request_id"),
+    requestIssuedAt: timestamp("request_issued_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    attempts: integer("attempts").notNull().default(0),
+  },
+  (t) => [
+    unique("fleet_recovery_challenge_key_request_uq").on(t.publicKeySpkiB64, t.requestId),
+    index("fleet_recovery_challenge_expires_at_idx").on(t.expiresAt),
+    index("fleet_recovery_challenge_key_expires_idx").on(t.publicKeySpkiB64, t.expiresAt),
+    check(
+      "fleet_recovery_challenge_attempts_ck",
+      sql`${t.attempts} >= 0 AND ${t.attempts} <= 5`,
+    ),
+  ],
 );
 
 /**

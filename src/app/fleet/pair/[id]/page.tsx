@@ -5,9 +5,13 @@ import { eq } from "drizzle-orm";
 import type { Metadata } from "next";
 import { getConfig } from "@/config";
 import { SHARED_CAPABILITY } from "@/core/fleet-sharing";
-import { readFleetSharingMode } from "@/services/fleet-sharing-mode";
+import { readFleetKeyIdentityState } from "@/services/fleet-sharing-mode";
+import {
+  FleetDeviceKeyUnavailableError,
+  resolveFleetDeviceKey,
+} from "@/services/fleet-key-identity";
 import { getDb } from "@/db";
-import { account, fleetDevice, fleetPairingRequest } from "@/db/schema";
+import { account, fleetPairingRequest } from "@/db/schema";
 import { accountErrorUrl, loginErrorUrl } from "@/lib/error-redirects";
 import { canReadPayouts } from "@/services/payouts";
 import { getSessionAccount } from "@/services/session";
@@ -48,7 +52,13 @@ function fingerprint(publicKeySpkiB64: string): string {
 }
 
 type PairingState =
-  "closed" | "pending" | "approved" | "device_bound_elsewhere" | "feature_disabled";
+  | "closed"
+  | "pending"
+  | "approved"
+  | "device_bound_elsewhere"
+  | "feature_disabled"
+  | "maintenance"
+  | "key_unavailable";
 
 /**
  * The state this page renders, extracted so its branches are unit-testable
@@ -67,12 +77,16 @@ export function derivePairingState(args: {
   now: Date;
   deviceBoundToAnotherAccount: boolean;
   sharingDisabled?: boolean;
+  identityMaintenance?: boolean;
+  keyUnavailable?: boolean;
 }): PairingState {
   const { row, now, deviceBoundToAnotherAccount } = args;
   if (!row || row.expiresAt.getTime() <= now.getTime() || row.consumedAt !== null) {
     return "closed";
   }
+  if (args.identityMaintenance) return "maintenance";
   if (args.sharingDisabled) return "feature_disabled";
+  if (args.keyUnavailable) return "key_unavailable";
   if (row.approvedAt !== null) return "approved";
   return deviceBoundToAnotherAccount ? "device_bound_elsewhere" : "pending";
 }
@@ -115,29 +129,42 @@ export default async function FleetPairPage({
         .where(eq(fleetPairingRequest.id, id))
     : [];
 
-  // Mirrors approvePairing's own early bound-elsewhere check (fleet-pairing.ts):
-  // only meaningful while the request is still open for approval, so this is
-  // skipped once it is already approved/consumed/expired/missing.
+  const mode = await readFleetKeyIdentityState(getDb());
+  const identityMaintenance =
+    mode.keyIdentityPhase === "reconciling" ||
+    (mode.enabled && mode.keyIdentityPhase !== "ready");
   let deviceBoundToAnotherAccount = false;
-  if (row && row.approvedAt === null && row.consumedAt === null) {
-    const [existingDevice] = await getDb()
-      .select({ accountId: fleetDevice.accountId, revokedAt: fleetDevice.revokedAt })
-      .from(fleetDevice)
-      .where(eq(fleetDevice.publicKeySpkiB64, row.publicKeySpkiB64));
-    deviceBoundToAnotherAccount =
-      existingDevice !== undefined &&
-      existingDevice.revokedAt === null &&
-      existingDevice.accountId !== sess.accountId;
+  let keyUnavailable = false;
+  if (
+    row &&
+    row.consumedAt === null &&
+    !identityMaintenance &&
+    (mode.keyIdentityPhase === "ready" || row.approvedAt === null)
+  ) {
+    try {
+      const resolution = await resolveFleetDeviceKey(getDb(), row.publicKeySpkiB64, mode);
+      keyUnavailable =
+        resolution.unavailable ||
+        (mode.keyIdentityPhase === "ready" && resolution.device?.revokedAt != null);
+      deviceBoundToAnotherAccount =
+        resolution.device !== undefined &&
+        resolution.device.revokedAt === null &&
+        resolution.device.accountId !== sess.accountId;
+    } catch (err) {
+      if (!(err instanceof FleetDeviceKeyUnavailableError)) throw err;
+      keyUnavailable = true;
+    }
   }
 
   const requestsSharing = row?.requestedCapabilities.includes(SHARED_CAPABILITY) ?? false;
-  const sharingDisabled =
-    requestsSharing && !(await readFleetSharingMode(getDb())).enabled;
+  const sharingDisabled = requestsSharing && !mode.enabled;
   const state = derivePairingState({
     row,
     now,
     deviceBoundToAnotherAccount,
     sharingDisabled,
+    identityMaintenance,
+    keyUnavailable,
   });
 
   return (
@@ -157,6 +184,20 @@ export default async function FleetPairPage({
           <Notice tone="info">
             Shared fleet setup is currently unavailable. No sharing permission has been
             added. Try again from Wingman when setup is available.
+          </Notice>
+        )}
+
+        {state === "maintenance" && (
+          <Notice tone="info">
+            Device setup is temporarily unavailable for maintenance. No approval has been
+            added. Keep your existing key and try again shortly.
+          </Notice>
+        )}
+
+        {state === "key_unavailable" && (
+          <Notice tone="info">
+            This device key cannot be used for pairing. Keep existing bindings unchanged;
+            explicitly generate a fresh key in Wingman to start a new pairing.
           </Notice>
         )}
 

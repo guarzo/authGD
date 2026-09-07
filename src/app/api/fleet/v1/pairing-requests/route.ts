@@ -11,6 +11,10 @@ import {
   RevokedDeviceKeyError,
   beginPairing,
 } from "@/services/fleet-pairing";
+import {
+  FleetDeviceKeyUnavailableError,
+  FleetIdentityMaintenanceError,
+} from "@/services/fleet-key-identity";
 import { FLEET_RELAY_PROTOCOL } from "@/services/fleet-relay";
 
 // This route is unauthenticated by design: it is the very first call a
@@ -96,6 +100,8 @@ export async function POST(req: NextRequest) {
       expires_at: row.expiresAt.toISOString(),
     });
   } catch (err) {
+    if (err instanceof FleetIdentityMaintenanceError)
+      return jsonError("service_unavailable", 503);
     if (err instanceof FleetSharingDisabledError)
       return jsonError("feature_disabled", 503);
     // Non-oracle: a malformed key and a previously-revoked key collapse to
@@ -103,7 +109,8 @@ export async function POST(req: NextRequest) {
     // specific submitted key was ever paired and revoked before.
     if (
       err instanceof InvalidDevicePublicKeyError ||
-      err instanceof RevokedDeviceKeyError
+      err instanceof RevokedDeviceKeyError ||
+      err instanceof FleetDeviceKeyUnavailableError
     ) {
       return jsonError("invalid_key", 400);
     }

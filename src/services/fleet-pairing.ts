@@ -15,6 +15,7 @@ import {
 import {
   account,
   fleetDevice,
+  fleetDeviceKeyIdentity,
   fleetDeviceSession,
   fleetPairingRequest,
   fleetPublisherLease,
@@ -24,7 +25,15 @@ import {
   canonicalDevicePublicKeyB64,
   decodeDevicePublicKeyB64,
   isEd25519SpkiPublicKey,
+  normalizeDevicePublicKeyB64,
 } from "@/lib/fleet-signature";
+import {
+  assertPairingIdentityAvailable,
+  FleetDeviceKeyUnavailableError,
+  lockFleetDeviceKey,
+  resolveFleetDeviceKey,
+} from "@/services/fleet-key-identity";
+import type { FleetKeyIdentityState } from "@/services/fleet-sharing-mode";
 import { logAudit } from "@/services/audit";
 import { buildDeviceCatalogue, type DeviceCatalogue } from "@/services/fleet-eligibility";
 import {
@@ -85,7 +94,7 @@ export class RelayContentionError extends Error {}
 const PAIRING_REQUEST_TTL_MS = 10 * 60 * 1000;
 /** A device session's lifetime, both freshly issued (`completePairing`) and
  *  renewed in place (`renewFleetDeviceSession`). */
-const DEVICE_SESSION_TTL_MS = 30 * 60 * 1000;
+export const DEVICE_SESSION_TTL_MS = 30 * 60 * 1000;
 
 const PAIRING_CHALLENGE_PREFIX = "fleet-pairing-v1";
 
@@ -168,9 +177,9 @@ function verifyCompletionProof(
  * canonicalizing, before the revoked-key lookup, and before a row exists for
  * any browser to approve. Persists ONLY the key's
  * `canonicalDevicePublicKeyB64()` form — never the
- * caller-supplied encoding — so base64/base64url and padded/unpadded
- * spellings of the identical key always resolve to the same stored
- * identity. A key already recorded on a soft-revoked device is permanently
+ * caller-supplied encoding. Pending/off preserves raw DER registration; after
+ * explicit reconciliation, ready mode always resolves re-exported DER through
+ * the collision-aware index, including when sharing is later switched off. A key already recorded on a soft-revoked device is permanently
  * barred: this returns a stable refusal rather than silently reviving it,
  * and the caller must generate a new local key pair instead.
  */
@@ -187,17 +196,23 @@ export async function beginPairing(
   const requestedCapabilities = args.requestedCapabilities ?? [];
   if (!validFleetCapabilities(requestedCapabilities))
     throw new InvalidFleetCapabilitiesError();
-  const canonicalKey = canonicalDevicePublicKeyB64(args.publicKeySpki);
+  const rawKey = canonicalDevicePublicKeyB64(args.publicKeySpki);
 
   return dbx.transaction(async (tx) => {
     const mode = await lockFleetSharingMode(tx);
+    assertPairingIdentityAvailable(mode);
+    const canonicalKey =
+      mode.keyIdentityPhase === "ready"
+        ? normalizeDevicePublicKeyB64(args.publicKeySpki)
+        : rawKey;
+    if (!canonicalKey) throw new InvalidDevicePublicKeyError();
+    if (mode.keyIdentityPhase === "ready") await lockFleetDeviceKey(tx, canonicalKey);
     if (requestedCapabilities.length > 0 && !mode.enabled)
       throw new FleetSharingDisabledError();
     const now = args.now ?? new Date();
-    const [existingDevice] = await tx
-      .select({ revokedAt: fleetDevice.revokedAt })
-      .from(fleetDevice)
-      .where(eq(fleetDevice.publicKeySpkiB64, canonicalKey));
+    const resolution = await resolveFleetDeviceKey(tx, canonicalKey, mode);
+    if (resolution.unavailable) throw new FleetDeviceKeyUnavailableError();
+    const existingDevice = resolution.device;
     if (existingDevice?.revokedAt != null) {
       throw new RevokedDeviceKeyError(
         "this device key was revoked and can never be reused; generate a new key pair",
@@ -215,6 +230,38 @@ export async function beginPairing(
 
     return { pairingId, approvalUrl: `/fleet/pair/${pairingId}` };
   });
+}
+
+async function lockPairingRequest(tx: DbTx, mode: FleetKeyIdentityState, id: string) {
+  assertPairingIdentityAvailable(mode);
+  const [selector] = await tx
+    .select({ key: fleetPairingRequest.publicKeySpkiB64 })
+    .from(fleetPairingRequest)
+    .where(eq(fleetPairingRequest.id, id));
+  // Do not admit a row first appearing in the second read without its key lock.
+  if (!selector) return undefined;
+  let key: string | null = null;
+  if (mode.keyIdentityPhase === "ready") {
+    key =
+      selector.key.length <= 120
+        ? normalizeDevicePublicKeyB64(Buffer.from(selector.key, "base64"))
+        : null;
+    if (!key) throw new FleetDeviceKeyUnavailableError();
+    await lockFleetDeviceKey(tx, key);
+  }
+  const [row] = await tx
+    .select()
+    .from(fleetPairingRequest)
+    .where(eq(fleetPairingRequest.id, id))
+    .for("update");
+  if (
+    row &&
+    key &&
+    (row.publicKeySpkiB64.length > 120 ||
+      normalizeDevicePublicKeyB64(Buffer.from(row.publicKeySpkiB64, "base64")) !== key)
+  )
+    throw new FleetDeviceKeyUnavailableError();
+  return row;
 }
 
 /**
@@ -261,11 +308,7 @@ export async function approvePairing(
 
   await dbx.transaction(async (tx) => {
     const mode = await lockFleetSharingMode(tx);
-    const [row] = await tx
-      .select()
-      .from(fleetPairingRequest)
-      .where(eq(fleetPairingRequest.id, pairingId))
-      .for("update");
+    const row = await lockPairingRequest(tx, mode, pairingId);
     if (!row) throw new PairingNotFoundError(`no fleet pairing request ${pairingId}`);
     const now = testNow ?? new Date();
     if (row.requestedCapabilities.length > 0 && !mode.enabled)
@@ -283,11 +326,31 @@ export async function approvePairing(
         `fleet pairing request ${pairingId} was already approved`,
       );
     }
+    const [owner] = await tx
+      .select({ tier: account.tier })
+      .from(account)
+      .where(eq(account.id, accountId))
+      .for("update");
+    if (owner?.tier !== "member") throw new NonMemberApprovalError();
 
-    const [existingDevice] = await tx
-      .select({ accountId: fleetDevice.accountId, revokedAt: fleetDevice.revokedAt })
-      .from(fleetDevice)
-      .where(eq(fleetDevice.publicKeySpkiB64, row.publicKeySpkiB64));
+    const resolution = await resolveFleetDeviceKey(tx, row.publicKeySpkiB64, mode);
+    if (resolution.unavailable) throw new FleetDeviceKeyUnavailableError();
+    let existingDevice = resolution.device;
+    if (mode.keyIdentityPhase === "ready") {
+      if (existingDevice) {
+        [existingDevice] = await tx
+          .select()
+          .from(fleetDevice)
+          .where(eq(fleetDevice.id, existingDevice.id))
+          .for("update");
+      }
+      const current = await resolveFleetDeviceKey(tx, row.publicKeySpkiB64, mode);
+      if (current.unavailable || current.device?.id !== existingDevice?.id)
+        throw new FleetDeviceKeyUnavailableError();
+      if (existingDevice?.revokedAt != null) throw new RevokedDeviceKeyError();
+      if (row.expiresAt.getTime() <= (testNow ?? new Date()).getTime())
+        throw new PairingExpiredError();
+    }
     if (
       existingDevice &&
       existingDevice.revokedAt === null &&
@@ -345,11 +408,7 @@ export async function completePairing(
 ): Promise<{ sessionId: string; catalogue: DeviceCatalogue }> {
   return dbx.transaction(async (tx) => {
     const mode = await lockFleetSharingMode(tx);
-    const [row] = await tx
-      .select()
-      .from(fleetPairingRequest)
-      .where(eq(fleetPairingRequest.id, args.pairingId))
-      .for("update");
+    const row = await lockPairingRequest(tx, mode, args.pairingId);
     if (!row) {
       throw new PairingNotFoundError(`no fleet pairing request ${args.pairingId}`);
     }
@@ -390,11 +449,22 @@ export async function completePairing(
       );
     }
 
-    const [existingDevice] = await tx
-      .select()
-      .from(fleetDevice)
-      .where(eq(fleetDevice.publicKeySpkiB64, row.publicKeySpkiB64))
-      .for("update");
+    const resolution = await resolveFleetDeviceKey(tx, row.publicKeySpkiB64, mode);
+    if (resolution.unavailable) throw new FleetDeviceKeyUnavailableError();
+    const [existingDevice] = resolution.device
+      ? await tx
+          .select()
+          .from(fleetDevice)
+          .where(eq(fleetDevice.id, resolution.device.id))
+          .for("update")
+      : [];
+    // FK cascades do not hold mode/key locks. Re-read after device waits; an
+    // index tombstone cannot be converted back into a fresh registration.
+    if (mode.keyIdentityPhase === "ready") {
+      const current = await resolveFleetDeviceKey(tx, row.publicKeySpkiB64, mode);
+      if (current.unavailable || current.device?.id !== existingDevice?.id)
+        throw new FleetDeviceKeyUnavailableError();
+    }
     const now = args.now ?? new Date();
     if (row.expiresAt.getTime() <= now.getTime()) {
       throw new PairingExpiredError(
@@ -457,11 +527,15 @@ export async function completePairing(
         .insert(fleetDevice)
         .values({
           accountId: approvedAccountId,
-          publicKeySpkiB64: row.publicKeySpkiB64,
+          publicKeySpkiB64: resolution.canonicalKey,
           approvedCapabilities: row.requestedCapabilities,
         })
         .returning({ id: fleetDevice.id });
       deviceId = inserted.id;
+      if (mode.keyIdentityPhase === "ready")
+        await tx
+          .insert(fleetDeviceKeyIdentity)
+          .values({ canonicalSpkiB64: resolution.canonicalKey, deviceId });
     }
 
     await tx
@@ -507,8 +581,8 @@ export async function completePairing(
 }
 
 /** Deletes every dependent relay row for one device: its sessions, publisher
- *  leases, and current telemetry rows. Shared by `revokeFleetDevice` and
- *  `revokeFleetRelayForAccount` so relay cleanup lives in exactly one place,
+ *  leases, and current telemetry rows. Shared by revocation and key-proven
+ *  recovery so relay cleanup lives in exactly one place,
  *  never scattered as raw deletes across call sites.
  *
  *  LOCK ORDER (see `fleet-relay.ts`'s own doc): the caller already holds the
@@ -525,7 +599,10 @@ export async function completePairing(
  *  same way publish does. So the character rows are explicitly deleted
  *  here FIRST (already locked, so this is immediate), and the session rows
  *  are deleted LAST, once there is nothing left for their cascade to reach. */
-async function deleteFleetRelayStateForDevice(tx: DbTx, deviceId: string): Promise<void> {
+export async function deleteFleetRelayStateForDevice(
+  tx: DbTx,
+  deviceId: string,
+): Promise<void> {
   const sessions = await tx
     .select({ id: fleetDeviceSession.id })
     .from(fleetDeviceSession)

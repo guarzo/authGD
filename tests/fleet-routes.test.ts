@@ -17,6 +17,7 @@ import {
   waitUntilBlockedBy,
   pairDevice as pairSharingDevice,
 } from "./helpers/fleet-sharing";
+import { reconcileFleetKeys } from "./helpers/fleet-sharing";
 import { SHARED_CAPABILITY } from "@/core/fleet-sharing";
 import { transitionFleetSharingMode } from "@/services/fleet-sharing-mode";
 import { FLEET_READ_SCOPE } from "@/lib/esi/client";
@@ -300,13 +301,20 @@ describe("explicit shared device wire contract", () => {
     const disabled = await pairingRequestsRoute(request());
     expect(disabled.status).toBe(503);
     expect(await disabled.json()).toEqual({ protocol: 1, error: "feature_disabled" });
-    await transitionFleetSharingMode(ctx.db, { enabled: true, expectedRevision: 0 });
+    const ready = await reconcileFleetKeys(ctx.db);
+    await transitionFleetSharingMode(ctx.db, {
+      enabled: true,
+      expectedRevision: ready.revision,
+    });
     const enabled = await pairingRequestsRoute(request());
     expect(enabled.status).toBe(200);
     const { pairing_id: id } = (await enabled.json()) as { pairing_id: string };
     const member = await seedAccount(ctx.db, { tier: "member" });
     await approvePairing(ctx.db, id, member.id);
-    await transitionFleetSharingMode(ctx.db, { enabled: false, expectedRevision: 1 });
+    await transitionFleetSharingMode(ctx.db, {
+      enabled: false,
+      expectedRevision: ready.revision + 1,
+    });
     const refused = await completeRoute(
       new NextRequest(`http://localhost/api/fleet/v1/pairing-requests/${id}/complete`, {
         method: "POST",
@@ -319,7 +327,11 @@ describe("explicit shared device wire contract", () => {
   });
 
   it("acknowledges the approved ceiling via the real signed PUT and shares read cadence", async () => {
-    await transitionFleetSharingMode(ctx.db, { enabled: true, expectedRevision: 0 });
+    const ready = await reconcileFleetKeys(ctx.db);
+    await transitionFleetSharingMode(ctx.db, {
+      enabled: true,
+      expectedRevision: ready.revision,
+    });
     const member = await seedAccount(ctx.db, { tier: "member" });
     const paired = await pairSharingDevice(ctx.db, member.id, NOW, [SHARED_CAPABILITY]);
     const body = Buffer.from(
@@ -340,7 +352,11 @@ describe("explicit shared device wire contract", () => {
   });
 
   it("legacy signed sessions cannot approve themselves into the shared model", async () => {
-    await transitionFleetSharingMode(ctx.db, { enabled: true, expectedRevision: 0 });
+    const ready = await reconcileFleetKeys(ctx.db);
+    await transitionFleetSharingMode(ctx.db, {
+      enabled: true,
+      expectedRevision: ready.revision,
+    });
     const member = await seedAccount(ctx.db, { tier: "member" });
     const paired = await pairDevice(ctx.db, member.id, NOW);
     const ack = await devicePut(

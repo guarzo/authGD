@@ -1,15 +1,35 @@
-import { generateKeyPairSync, sign as ed25519Sign } from "node:crypto";
+import { createHash, generateKeyPairSync, sign as ed25519Sign } from "node:crypto";
 import { eq } from "drizzle-orm";
 import type { Dbx } from "@/db";
 import type { Pool } from "pg";
-import { fleetDevice } from "@/db/schema";
-import { canonicalDevicePublicKeyB64 } from "@/lib/fleet-signature";
+import { fleetDevice, fleetDeviceSession } from "@/db/schema";
+import {
+  startFleetKeyIdentityReconciliation,
+  reconcileFleetKeyIdentityBatch,
+} from "@/services/fleet-key-identity";
+import { readFleetKeyIdentityState } from "@/services/fleet-sharing-mode";
 import {
   approvePairing,
   beginPairing,
   completePairing,
   pairingChallengePreimage,
 } from "@/services/fleet-pairing";
+
+/** Explicit test operator action, never called by generic setup or legacy/off
+ * fixtures. Exercises real bounded reconciliation rather than seeding ready. */
+export async function reconcileFleetKeys(db: Dbx) {
+  const prior = await readFleetKeyIdentityState(db);
+  let state = await startFleetKeyIdentityReconciliation(db, {
+    expectedRevision: prior.revision,
+    oldWritersDrained: true,
+    deletionWritersQuiescent: true,
+  });
+  while (state.keyIdentityPhase !== "ready")
+    state = await reconcileFleetKeyIdentityBatch(db, {
+      expectedRevision: state.revision,
+    });
+  return state;
+}
 
 /** Observe the actual PostgreSQL wait-for edge, not an arbitrary sleep. */
 export async function waitUntilBlockedBy(
@@ -60,11 +80,15 @@ export async function pairDevice(
     completionSignature,
     now,
   });
-  const [device] = await db
-    .select()
+  const [{ device }] = await db
+    .select({ device: fleetDevice })
     .from(fleetDevice)
+    .innerJoin(fleetDeviceSession, eq(fleetDeviceSession.deviceId, fleetDevice.id))
     .where(
-      eq(fleetDevice.publicKeySpkiB64, canonicalDevicePublicKeyB64(keys.publicKeySpki)),
+      eq(
+        fleetDeviceSession.id,
+        createHash("sha256").update(sessionId).digest("base64url"),
+      ),
     );
   return {
     sessionId,
