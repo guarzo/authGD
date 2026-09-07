@@ -321,15 +321,13 @@ describe("fleet browser harness isolation", () => {
         status: 200,
         body: { fleet_boss_id: 90000001, fleet_job: "fleet_member" },
       });
-      expect(
-        (
-          await f.client.provider({
-            url: "https://esi.evetech.net/latest/fleets/123456/members/",
-            method: "GET",
-            headers: { authorization: `Bearer ${boss.accessToken}` },
-          })
-        ).status,
-      ).toBe(200);
+      const roster = await f.client.provider({
+        url: "https://esi.evetech.net/latest/fleets/123456/members/",
+        method: "GET",
+        headers: { authorization: `Bearer ${boss.accessToken}` },
+      });
+      expect(roster.status).toBe(200);
+      if (override) expect(roster.body).toEqual([{ character_id: 90000002 }]);
       await f.client.assertClean();
     },
   );
