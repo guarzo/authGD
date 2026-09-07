@@ -5,11 +5,13 @@ import {
   fleetDeviceSession,
   fleetEligibility,
   fleetPublisherLease,
+  fleetSourceAuthority,
   fleetSharingGate,
   fleetTelemetryRow,
 } from "@/db/schema";
 import { logAudit } from "@/services/audit";
 import { lockFleetCharactersAscending } from "@/services/fleet-relay";
+import { invalidateFleetSources, lockFleetLifecycle } from "@/services/fleet-lifecycle";
 
 export type FleetSharingMode = {
   enabled: boolean;
@@ -23,9 +25,9 @@ export class FleetSharingDisabledError extends Error {
 }
 
 /** Operator-only and never called on deploy or by a public route. Caller verifies
- * compatible web/worker deployment first. Task 1 drains current legacy state;
- * source invalidation MUST be integrated before this is release-ready.
- * Lock order: exclusive mode → ALL devices by id → ALL sessions by id → union
+ * compatible web/worker deployment first. The operator CLI remains blocked until
+ * source control and shared admission are release-ready.
+ * Lock order: exclusive mode → ALL authority/source slots → devices → sessions → union
  * of relay characters ascending. Old readers do not know the mode lock, so the
  * session/device drain (not the flag alone) is the compatibility boundary. */
 export async function transitionFleetSharingMode(
@@ -48,6 +50,20 @@ export async function transitionFleetSharingMode(
       );
       if (expired.rows.length) throw new Error("recovery_cleanup_required");
     }
+    const lifecycle = await lockFleetLifecycle(tx, { all: true });
+    await invalidateFleetSources(tx, lifecycle, "mode_transition", "system", args.now);
+    // Clear even an orphaned proof slot: EX mode excludes all source writers.
+    await tx
+      .update(fleetSourceAuthority)
+      .set({
+        sourceId: null,
+        sourceGeneration: null,
+        authorityGeneration: sql`${fleetSourceAuthority.authorityGeneration} + 1`,
+        linkedCharacters: [],
+        verifiedAt: null,
+        expiresAt: null,
+      })
+      .where(sql`${fleetSourceAuthority.sourceId} is not null`);
     await tx
       .select({ id: fleetDevice.id })
       .from(fleetDevice)

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { and, eq, gt, inArray, lte, sql } from "drizzle-orm";
 import type { Dbx, DbTx } from "@/db";
 import { lockFleetSharingMode } from "@/services/fleet-sharing-mode";
+import { lockFleetIdentityCharacters } from "@/services/fleet-lifecycle";
 import {
   character,
   fleetDevice,
@@ -73,7 +74,10 @@ import {
  * `revokeFleetRelayForAccount` (fleet-pairing.ts), and
  * `pruneExpiredFleetRelay`:
  *   0. Shared mode advisory lock for signed calls; exclusive for cutover.
- *      Lifecycle cleanup that takes no mode lock still uses levels 1–3.
+ *      Lifecycle writers prepare identity/account/authority/source locks BEFORE
+ *      levels 1–3 (fleet-lifecycle.ts). Legacy publication takes its submitted
+ *      character identity locks here too, before its character-FK inserts.
+ *      Independent expiry pruning needs only level 3.
  *   1. `fleetDevice` row FOR UPDATE.
  *   2. `fleetDeviceSession` row(s) FOR UPDATE.
  *   3. `pg_advisory_xact_lock(RELAY_CHARACTER_LOCK_CLASS, characterId)`, then
@@ -432,7 +436,8 @@ export async function gateSignedSession(
     .from(fleetDeviceSession)
     .where(eq(fleetDeviceSession.id, key))
     .for("update");
-  if (!session) throw new RelayRefusal(args.invalidSessionCode);
+  if (!session || session.deviceId !== device.id)
+    throw new RelayRefusal(args.invalidSessionCode);
   const now = sampleFleetSessionAdmission(session, args);
   return { session, device, now, featureEnabled: mode.enabled };
 }
@@ -543,6 +548,14 @@ export async function replaceDeviceProjection(
 
   try {
     await dbx.transaction(async (tx) => {
+      await lockFleetSharingMode(tx);
+      // Inserts below take FK key-share locks on character. Take identity/rows
+      // BEFORE device/session locks so an unlink cannot hold character waiting
+      // for our device while we wait for its character FK lock.
+      await lockFleetIdentityCharacters(
+        tx,
+        args.rows.map((row) => row.characterId),
+      );
       const { session, device, featureEnabled } = await gateSignedSession(tx, {
         sessionId: args.sessionId,
         revision: args.revision,

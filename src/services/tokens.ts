@@ -7,6 +7,14 @@ import { decryptToken, encryptToken } from "@/lib/crypto";
 import { EveSsoError, refreshEveToken } from "@/lib/esi/sso";
 import { isDryRun, logSuppressedWrite } from "@/lib/sync-mode";
 import { logAudit } from "@/services/audit";
+import {
+  fleetLifecycleTransaction,
+  invalidateFleetSources,
+  lockFleetAccounts,
+  lockFleetIdentityCharacters,
+  lockFleetLifecycle,
+} from "@/services/fleet-lifecycle";
+import { lockFleetSharingMode } from "@/services/fleet-sharing-mode";
 
 export type CharacterTokenRow = {
   id: number;
@@ -34,7 +42,12 @@ export async function invalidateTokenIfUnchanged(
   expectedEnc: string,
   audit: { action: string; details?: Record<string, unknown> },
 ): Promise<boolean> {
-  return db.transaction(async (tx) => {
+  return fleetLifecycleTransaction(db, async (tx) => {
+    await lockFleetSharingMode(tx);
+    const old = (await lockFleetIdentityCharacters(tx, [characterId])).get(characterId);
+    if (!old || old.refreshTokenEnc !== expectedEnc) return false;
+    await lockFleetAccounts(tx, [old.accountId]);
+    const locked = await lockFleetLifecycle(tx, { bossCharacterIds: [characterId] });
     const rows = await tx
       .update(character)
       .set({ tokenStatus: "invalid" })
@@ -43,6 +56,7 @@ export async function invalidateTokenIfUnchanged(
       )
       .returning({ id: character.id });
     if (rows.length === 0) return false;
+    await invalidateFleetSources(tx, locked, "token_invalid");
     await logAudit(tx, {
       actor: "system",
       action: audit.action,

@@ -6,7 +6,13 @@ import {
   verify as ed25519Verify,
 } from "node:crypto";
 import { and, eq, inArray, isNull } from "drizzle-orm";
-import type { Dbx, DbTx } from "@/db";
+import type { Db, Dbx, DbTx } from "@/db";
+import {
+  fleetLifecycleTransaction,
+  invalidateFleetSources,
+  lockFleetAccounts,
+  lockFleetLifecycle,
+} from "@/services/fleet-lifecycle";
 import { validFleetCapabilities } from "@/core/fleet-sharing";
 import {
   FleetSharingDisabledError,
@@ -607,6 +613,7 @@ export async function deleteFleetRelayStateForDevice(
     .select({ id: fleetDeviceSession.id })
     .from(fleetDeviceSession)
     .where(eq(fleetDeviceSession.deviceId, deviceId))
+    .orderBy(fleetDeviceSession.id)
     .for("update");
 
   const [leaseCharacterIds, telemetryCharacterIds] = await Promise.all([
@@ -720,19 +727,28 @@ export async function listFleetDevicesForAccount(
  * already hold one level down.
  */
 export async function revokeFleetDevice(
-  dbx: Dbx,
+  dbx: Db,
   deviceId: string,
   actorAccountId: string,
   now: Date,
 ): Promise<void> {
   try {
-    await dbx.transaction(async (tx) => {
+    await fleetLifecycleTransaction(dbx, async (tx) => {
+      await lockFleetSharingMode(tx);
+      const [probe] = await tx
+        .select()
+        .from(fleetDevice)
+        .where(eq(fleetDevice.id, deviceId));
+      if (!probe) throw new DeviceNotFoundError(`no fleet device ${deviceId}`);
+      await lockFleetAccounts(tx, [probe.accountId]);
+      const lifecycle = await lockFleetLifecycle(tx, { deviceIds: [deviceId] });
       const [device] = await tx
         .select({ id: fleetDevice.id })
         .from(fleetDevice)
         .where(eq(fleetDevice.id, deviceId))
         .for("update");
       if (!device) throw new DeviceNotFoundError(`no fleet device ${deviceId}`);
+      await invalidateFleetSources(tx, lifecycle, "device_revoked", actorAccountId, now);
 
       await tx
         .update(fleetDevice)
@@ -759,11 +775,11 @@ export async function revokeFleetDevice(
 
 /**
  * Every fleet device an account has ever paired, revoked and torn down the
- * same way `revokeFleetDevice` does for one device — the single, narrowly
- * named entry point for a future tier/scope/character lifecycle hook
- * (losing Member tier, unlinking the character that paired a device,
- * account deletion) to cut off fleet relay access, rather than each such
- * call site hand-rolling its own relay cleanup.
+ * same way `revokeFleetDevice` does for one device. This PERMANENT key
+ * teardown has no production caller; Member/grant loss must never call it.
+ * Those paths use source invalidation and relay-only withdrawal while keeping
+ * registrations and sessions. Mode/account and authority/source preparation
+ * below also locks ALL devices, then ALL sessions, before union relay cleanup.
  *
  * Deliberately does not call `logAudit`: the lifecycle event that invokes
  * this owns its own audit entry under its own action vocabulary (e.g.
@@ -792,12 +808,16 @@ export async function revokeFleetDevice(
  * function and `revokeFleetDevice` keep sharing the exact same cleanup step.
  */
 export async function revokeFleetRelayForAccount(
-  dbx: Dbx,
+  dbx: Db,
   accountId: string,
   now: Date,
 ): Promise<void> {
   try {
-    await dbx.transaction(async (tx) => {
+    await fleetLifecycleTransaction(dbx, async (tx) => {
+      await lockFleetSharingMode(tx);
+      await lockFleetAccounts(tx, [accountId]);
+      const lifecycle = await lockFleetLifecycle(tx, { accountIds: [accountId] });
+      await invalidateFleetSources(tx, lifecycle, "devices_revoked");
       // Locked (`for("update")`) before any dependent delete: without it, a
       // concurrent `completePairing` reusing one of these device rows (the
       // same account re-pairing its own key) could insert a fresh session
@@ -807,6 +827,7 @@ export async function revokeFleetRelayForAccount(
         .select({ id: fleetDevice.id })
         .from(fleetDevice)
         .where(and(eq(fleetDevice.accountId, accountId), isNull(fleetDevice.revokedAt)))
+        .orderBy(fleetDevice.id)
         .for("update");
       if (devices.length === 0) return;
 
@@ -815,6 +836,12 @@ export async function revokeFleetRelayForAccount(
       // function's own LOCK ORDER doc for why per-device order alone stops
       // being enough once an account has more than one device.
       const deviceIds = devices.map((d) => d.id);
+      await tx
+        .select()
+        .from(fleetDeviceSession)
+        .where(inArray(fleetDeviceSession.deviceId, deviceIds))
+        .orderBy(fleetDeviceSession.id)
+        .for("update");
       const [leaseCharacterIds, telemetryCharacterIds] = await Promise.all([
         tx
           .select({ characterId: fleetPublisherLease.characterId })

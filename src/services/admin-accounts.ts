@@ -4,6 +4,8 @@ import { account } from "@/db/schema";
 import { setMainCharacter } from "@/services/accounts";
 import { logAudit } from "@/services/audit";
 import { enqueueSync } from "@/services/outbox";
+import { lockFleetSharingMode } from "@/services/fleet-sharing-mode";
+import { invalidateFleetSources, lockFleetLifecycle } from "@/services/fleet-lifecycle";
 
 /**
  * `changed` is what the press actually did, not whether it was allowed. Every
@@ -67,6 +69,7 @@ export async function setTierManual(
   accountId: string,
   tier: "member" | "associate" | "alumni",
 ): Promise<SetTierResult> {
+  await lockFleetSharingMode(dbx);
   if (!(await isAuthorized(dbx, actor))) return { ok: false, error: "not_authorized" };
   const acc = await lockTarget(dbx, accountId);
   if (!acc) return { ok: false, error: "not_found" };
@@ -77,6 +80,10 @@ export async function setTierManual(
   // first.
   if (acc.tier === tier && acc.tierLocked)
     return { ok: true, tierLocked: true, changed: false };
+  if (acc.tier === "member" && tier !== "member") {
+    const locked = await lockFleetLifecycle(dbx, { accountIds: [accountId] });
+    await invalidateFleetSources(dbx, locked, "member_lost", actor);
+  }
   await dbx
     .update(account)
     .set({ tier, tierLocked: true, tierChangedAt: new Date(), tierChangedBy: actor })

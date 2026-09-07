@@ -435,9 +435,16 @@ describe("fleet relay schema", () => {
       })
       .returning();
 
-    // No column for log content, target/source, an event timestamp beyond
-    // receivedAt, fleet name, system, ship, or an EVE token — only exactly
-    // these nine columns exist on the table.
+    // No log content, combat actor/target text, event timestamp, fleet name,
+    // system, ship or EVE token. Nullable consent provenance is permitted for
+    // cleanup, but a legacy insert never fabricates shared admission evidence.
+    expect(row).toMatchObject({
+      sourceId: null,
+      sourceGeneration: null,
+      authorityGeneration: null,
+      linkEpoch: null,
+      participationGeneration: null,
+    });
     expect(Object.keys(row).sort()).toEqual(
       [
         "characterId",
@@ -449,6 +456,11 @@ describe("fleet relay schema", () => {
         "receivedAt",
         "staleAt",
         "hardExpiresAt",
+        "sourceId",
+        "sourceGeneration",
+        "authorityGeneration",
+        "linkEpoch",
+        "participationGeneration",
       ].sort(),
     );
   });

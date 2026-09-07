@@ -148,6 +148,20 @@
       "when": 1788808317496,
       "tag": "0020_chief_machine_man",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1788812520167,
+      "tag": "0021_fantastic_goblin_queen",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1788816824590,
+      "tag": "0022_nostalgic_sage",
+      "breakpoints": true
     }
   ]
 }

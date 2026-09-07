@@ -8,6 +8,13 @@ import type { EsiClient } from "@/lib/esi/client";
 import { logAudit } from "@/services/audit";
 import { enqueueSync } from "@/services/outbox";
 import { runJob, type JobResult } from "@/services/sync-run";
+import { lockFleetSharingMode } from "@/services/fleet-sharing-mode";
+import {
+  fleetLifecycleTransaction,
+  invalidateFleetSources,
+  lockFleetIdentityCharacters,
+  lockFleetLifecycle,
+} from "@/services/fleet-lifecycle";
 
 /**
  * Applies one system tier transition. Exported so tests can pin the
@@ -26,12 +33,11 @@ export async function applyTierTransition(
     checkedAt: Date;
   },
 ): Promise<boolean> {
-  return db.transaction(async (tx) => {
-    const [mainRow] = await tx
-      .select()
-      .from(character)
-      .where(eq(character.id, input.mainCharacterId))
-      .for("update");
+  return fleetLifecycleTransaction(db, async (tx) => {
+    await lockFleetSharingMode(tx);
+    const mainRow = (await lockFleetIdentityCharacters(tx, [input.mainCharacterId])).get(
+      input.mainCharacterId,
+    );
     if (
       !mainRow ||
       mainRow.affiliationCheckedAt?.getTime() !== input.checkedAt.getTime()
@@ -50,6 +56,10 @@ export async function applyTierTransition(
       locked.mainCharacterId !== input.mainCharacterId
     ) {
       return false; // changed underneath us — leave it to the next run
+    }
+    if (locked.tier === "member" && input.next !== "member") {
+      const lifecycle = await lockFleetLifecycle(tx, { accountIds: [input.accountId] });
+      await invalidateFleetSources(tx, lifecycle, "member_lost");
     }
     await tx
       .update(account)

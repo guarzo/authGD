@@ -20,6 +20,7 @@ import {
 } from "@/services/accounts";
 import { consumeOauthTransaction, hasFleetReadContext } from "@/services/oauth-tx";
 import { createSession } from "@/services/session";
+import { fleetLifecycleTransaction } from "@/services/fleet-lifecycle";
 
 /**
  * A refused merge's reason, as the code whose copy explains it.
@@ -103,7 +104,7 @@ export async function GET(req: NextRequest) {
     if (tx.intent === "grant-fleet-read") {
       // Explicit grant-only dispatch. A nullable target on link-character would
       // let old callback replicas ignore the binding and merge the wrong account.
-      const result = await db.transaction((dbtx) =>
+      const result = await fleetLifecycleTransaction(db, (dbtx) =>
         completeFleetReadGrant(
           dbtx,
           cfg,
@@ -121,7 +122,7 @@ export async function GET(req: NextRequest) {
     }
 
     if (tx.intent === "link-character") {
-      const result = await db.transaction((dbtx) =>
+      const result = await fleetLifecycleTransaction(db, (dbtx) =>
         linkCharacter(dbtx, cfg, sess!.accountId, ch),
       );
       if (result.ok) return to("/account");
@@ -132,7 +133,9 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const { accountId } = await db.transaction((dbtx) => handleEveLogin(dbtx, cfg, ch));
+    const { accountId } = await fleetLifecycleTransaction(db, (dbtx) =>
+      handleEveLogin(dbtx, cfg, ch),
+    );
     const sid = await createSession(db, accountId);
     const res = to("/account");
     res.cookies.set(cfg.sessionCookieName, sid, {

@@ -1,4 +1,5 @@
-import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import type { Config } from "@/config";
 import { TOKEN_FAULT_RESULTS } from "@/core/contact-result";
 import type { DbTx } from "@/db";
@@ -18,13 +19,17 @@ import { FLEET_READ_SCOPE } from "@/lib/esi/client";
 import { logAudit } from "@/services/audit";
 import { enqueueSync } from "@/services/outbox";
 import { getSessionAccount, revokeAccountSessions } from "@/services/session";
+import {
+  hasUsableFleetRead,
+  invalidateFleetSources,
+  lockFleetLifecycle,
+  prepareFleetCharacterMutation,
+} from "@/services/fleet-lifecycle";
 
-// LOCK ORDER (deadlock avoidance), applied top to bottom:
-//   1. pg_advisory_xact_lock(characterId) — serializes even when no character
-//      row exists yet (two first-logins for the same character cannot race).
-//   2. character row(s) FOR UPDATE.
-//   3. account row(s) FOR UPDATE, ALWAYS in sorted-id order when more than one
-//      account is involved (opposite-direction transfers cannot deadlock).
+// Identity lifecycle entries start with prepareFleetCharacterMutation: mode,
+// possible merge keys/requests, character identity, sorted accounts and browser
+// sessions. Aggregate all invalidation before authority/source/device/relay locks.
+// See fleet-lifecycle.ts for the complete relative order and outer retry contract.
 // demoteAdmin locks account rows only.
 export interface EveCallbackCharacter {
   characterId: number;
@@ -32,37 +37,6 @@ export interface EveCallbackCharacter {
   ownerHash: string;
   scopes: string[];
   refreshToken: string;
-}
-
-/**
- * Advisory-lock class id for character locks. Two-arg (namespaced) form so
- * future advisory-lock users (outbox dispatcher, job leader election) cannot
- * collide with character ids. Character ids can exceed int4, so they are
- * reduced to a 32-bit key with hashint8 — a hash collision merely serializes
- * two unrelated characters, which is safe.
- */
-const CHARACTER_LOCK_CLASS = 1;
-
-/**
- * Transaction-scoped advisory lock on the character id. Unlike FOR UPDATE this
- * also serializes callers when NO row exists yet, so two concurrent first
- * logins for the same character cannot both take the insert path.
- */
-async function lockCharacterId(dbx: DbTx, characterId: number) {
-  await dbx.execute(
-    sql`SELECT pg_advisory_xact_lock(${CHARACTER_LOCK_CLASS}, hashint8(${characterId}))`,
-  );
-}
-
-/** Advisory lock + row lock, in that order. */
-async function findCharacterForUpdate(dbx: DbTx, characterId: number) {
-  await lockCharacterId(dbx, characterId);
-  const rows = await dbx
-    .select()
-    .from(character)
-    .where(eq(character.id, characterId))
-    .for("update");
-  return rows[0];
 }
 
 /** Lock several account rows deterministically (sorted id order). */
@@ -132,9 +106,32 @@ async function reauthCharacter(
   cfg: Config,
   accountId: string,
   ch: EveCallbackCharacter,
+  sourceAlreadyEnded = false,
 ) {
   const fields = tokenFields(cfg, ch);
-  await dbx.update(character).set(fields).where(eq(character.id, ch.characterId));
+  const [old] = await dbx
+    .select()
+    .from(character)
+    .where(eq(character.id, ch.characterId));
+  const identityChanged = old.ownerHash !== ch.ownerHash || old.accountId !== accountId;
+  if (!sourceAlreadyEnded && (identityChanged || !hasUsableFleetRead(fields))) {
+    const locked = await lockFleetLifecycle(
+      dbx,
+      identityChanged
+        ? { characterIds: [ch.characterId] }
+        : { bossCharacterIds: [ch.characterId] },
+    );
+    await invalidateFleetSources(
+      dbx,
+      locked,
+      identityChanged ? "identity_changed" : "fleet_read_invalid",
+      accountId,
+    );
+  }
+  await dbx
+    .update(character)
+    .set({ ...fields, ...(identityChanged ? { fleetLinkEpoch: randomUUID() } : {}) })
+    .where(eq(character.id, ch.characterId));
   // A fresh, fully-scoped token retires whatever token-fault verdict is sitting
   // on contact_sync_state — otherwise /account keeps telling the member their
   // token is dead, with a re-auth link, until the sync enqueued below actually
@@ -186,7 +183,11 @@ export async function completeFleetReadGrant(
   if (ch.characterId !== expectedCharacterId) {
     return { ok: false, code: "wrong_character" };
   }
-  const existing = await findCharacterForUpdate(dbx, expectedCharacterId);
+  const { existing } = await prepareFleetCharacterMutation(
+    dbx,
+    expectedCharacterId,
+    accountId,
+  );
   if (
     !existing ||
     existing.accountId !== accountId ||
@@ -239,7 +240,27 @@ async function applyNoMainRule(dbx: DbTx, accountId: string, cause: string) {
   await enqueueSync(dbx, { kind: "account", accountId });
 }
 
+/** The character loss and actual no-main Member loss form ONE ordered lock set. */
+async function endFleetCharacterLink(
+  dbx: DbTx,
+  existing: { id: number; accountId: string },
+  reason: string,
+) {
+  const [acc] = await dbx
+    .select()
+    .from(account)
+    .where(eq(account.id, existing.accountId));
+  const losesMember =
+    acc?.mainCharacterId === existing.id && acc.tier === "member" && !acc.tierLocked;
+  const locked = await lockFleetLifecycle(dbx, {
+    characterIds: [existing.id],
+    accountIds: losesMember ? [existing.accountId] : [],
+  });
+  await invalidateFleetSources(dbx, locked, reason);
+}
+
 async function reclaimCharacter(dbx: DbTx, existing: { id: number; accountId: string }) {
+  await endFleetCharacterLink(dbx, existing, "character_reclaimed");
   const [oldAcc] = await dbx
     .select()
     .from(account)
@@ -298,7 +319,7 @@ export async function handleEveLogin(
   cfg: Config,
   ch: EveCallbackCharacter,
 ): Promise<{ accountId: string }> {
-  const existing = await findCharacterForUpdate(dbx, ch.characterId);
+  const { existing } = await prepareFleetCharacterMutation(dbx, ch.characterId);
   if (existing && existing.ownerHash === ch.ownerHash) {
     await reauthCharacter(dbx, cfg, existing.accountId, ch);
     return { accountId: existing.accountId };
@@ -414,13 +435,18 @@ async function mergeAccountInto(
   targetId: string,
   characterId: number,
 ): Promise<void> {
+  const locked = await lockFleetLifecycle(dbx, {
+    accountIds: [sourceId],
+    characterIds: [characterId],
+  });
+  await invalidateFleetSources(dbx, locked, "account_merged", targetId);
   await dbx
     .update(account)
     .set({ mainCharacterId: null })
     .where(eq(account.id, sourceId));
   await dbx
     .update(character)
-    .set({ accountId: targetId })
+    .set({ accountId: targetId, fleetLinkEpoch: randomUUID() })
     .where(eq(character.id, characterId));
   await dbx.delete(session).where(eq(session.accountId, sourceId));
   await dbx.delete(account).where(eq(account.id, sourceId));
@@ -440,7 +466,12 @@ export async function linkCharacter(
 ): Promise<
   { ok: true } | { ok: false; error: "already_linked"; blocker?: MergeBlocker }
 > {
-  const existing = await findCharacterForUpdate(dbx, ch.characterId);
+  const { existing } = await prepareFleetCharacterMutation(
+    dbx,
+    ch.characterId,
+    accountId,
+    ch.ownerHash,
+  );
   if (existing) {
     if (existing.accountId === accountId) {
       await reauthCharacter(dbx, cfg, accountId, ch);
@@ -468,7 +499,9 @@ export async function linkCharacter(
       await mergeAccountInto(dbx, existing.accountId, accountId, ch.characterId);
       // Store the credentials this SSO round just produced, audit the re-auth
       // and enqueue the target's sync — all three are reauthCharacter's job.
-      await reauthCharacter(dbx, cfg, accountId, ch);
+      // Merge already locked/ended the aggregate source set before its cascade.
+      // Do not begin another authority/source lock phase under its device locks.
+      await reauthCharacter(dbx, cfg, accountId, ch, true);
       // Plain select, no FOR UPDATE: lockAccounts above already holds this row.
       const [target] = await dbx.select().from(account).where(eq(account.id, accountId));
       if (target && target.mainCharacterId === null) {
@@ -530,7 +563,7 @@ export async function unlinkCharacter(
   characterId: number,
   opts: { revokeSessions?: boolean; expectedAccountId?: string } = {},
 ): Promise<UnlinkResult> {
-  const existing = await findCharacterForUpdate(dbx, characterId);
+  const { existing } = await prepareFleetCharacterMutation(dbx, characterId);
   if (!existing) return { ok: false, error: "not_found" };
   // Re-check ownership under the lock: a caller's pre-lock SELECT can be
   // stale if a transfer-reclaim committed between its check and this lock.
@@ -545,6 +578,7 @@ export async function unlinkCharacter(
     .from(character)
     .where(eq(character.accountId, existing.accountId));
   if (siblings.length <= 1) return { ok: false, error: "last_character" };
+  await endFleetCharacterLink(dbx, existing, "character_unlinked");
   await dbx.delete(contactSyncState).where(eq(contactSyncState.characterId, characterId));
   await dbx.delete(character).where(eq(character.id, characterId));
   const [acc] = await dbx
@@ -663,7 +697,7 @@ export async function reclaimTransferredCharacter(
   characterId: number,
   expected: { accountId: string; ownerHash: string },
 ): Promise<{ ok: true } | { ok: false; error: "not_found" | "changed" }> {
-  const existing = await findCharacterForUpdate(dbx, characterId);
+  const { existing } = await prepareFleetCharacterMutation(dbx, characterId);
   if (!existing) return { ok: false, error: "not_found" };
   // Stale-decision guard: re-verify under the lock. If the row already
   // changed hands (the new owner's login reclaimed it, or a re-auth updated

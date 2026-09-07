@@ -46,6 +46,8 @@ export const MANAGED_TABLES = [
   "fleet_device_key_identity",
   "fleet_device_session",
   "fleet_eligibility",
+  "fleet_source_intent",
+  "fleet_source_authority",
   "fleet_access_check_gate",
   "fleet_publisher_lease",
   "fleet_telemetry_row",
