@@ -39,6 +39,7 @@ export const MANAGED_TABLES = [
   "structure_read_state",
   "structure",
   "structure_event",
+  "fleet_sharing_gate",
   "fleet_pairing_request",
   "fleet_device",
   "fleet_device_session",

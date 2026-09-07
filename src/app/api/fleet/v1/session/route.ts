@@ -52,7 +52,6 @@ export async function PUT(req: NextRequest) {
   const result = await renewFleetDeviceSession(getDb(), {
     sessionId: auth.auth.sessionId,
     revision: headers.revision,
-    now,
   });
   if (!result.ok) {
     return jsonError(result.code, FLEET_RELAY_STATUS_BY_CODE[result.code] ?? 400);

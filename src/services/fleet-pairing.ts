@@ -7,6 +7,11 @@ import {
 } from "node:crypto";
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import type { Dbx, DbTx } from "@/db";
+import { validFleetCapabilities } from "@/core/fleet-sharing";
+import {
+  FleetSharingDisabledError,
+  lockFleetSharingMode,
+} from "@/services/fleet-sharing-mode";
 import {
   account,
   fleetDevice,
@@ -24,6 +29,7 @@ import { logAudit } from "@/services/audit";
 import { buildDeviceCatalogue, type DeviceCatalogue } from "@/services/fleet-eligibility";
 import {
   gateSignedSession,
+  commitSessionCadence,
   isRetryableRelayError,
   lockFleetCharactersAscending,
   RelayRefusal,
@@ -44,6 +50,7 @@ export class PairingNotApprovedError extends Error {}
  *  way. */
 export class NonMemberApprovalError extends Error {}
 export class InvalidCompletionProofError extends Error {}
+export class InvalidFleetCapabilitiesError extends Error {}
 /** A candidate public key is not valid Ed25519 SPKI DER. Thrown by
  *  `beginPairing` before the key is canonicalized, persisted, or offered to
  *  a browser for approval — a malformed/garbage/wrong-algorithm key never
@@ -169,7 +176,7 @@ function verifyCompletionProof(
  */
 export async function beginPairing(
   dbx: Dbx,
-  args: { publicKeySpki: Uint8Array; now: Date },
+  args: { publicKeySpki: Uint8Array; now?: Date; requestedCapabilities?: string[] },
 ): Promise<{ pairingId: string; approvalUrl: string }> {
   if (!isEd25519SpkiPublicKey(args.publicKeySpki)) {
     throw new InvalidDevicePublicKeyError(
@@ -177,27 +184,37 @@ export async function beginPairing(
     );
   }
 
+  const requestedCapabilities = args.requestedCapabilities ?? [];
+  if (!validFleetCapabilities(requestedCapabilities))
+    throw new InvalidFleetCapabilitiesError();
   const canonicalKey = canonicalDevicePublicKeyB64(args.publicKeySpki);
 
-  const [existingDevice] = await dbx
-    .select({ revokedAt: fleetDevice.revokedAt })
-    .from(fleetDevice)
-    .where(eq(fleetDevice.publicKeySpkiB64, canonicalKey));
-  if (existingDevice?.revokedAt != null) {
-    throw new RevokedDeviceKeyError(
-      "this device key was revoked and can never be reused; generate a new key pair",
-    );
-  }
+  return dbx.transaction(async (tx) => {
+    const mode = await lockFleetSharingMode(tx);
+    if (requestedCapabilities.length > 0 && !mode.enabled)
+      throw new FleetSharingDisabledError();
+    const now = args.now ?? new Date();
+    const [existingDevice] = await tx
+      .select({ revokedAt: fleetDevice.revokedAt })
+      .from(fleetDevice)
+      .where(eq(fleetDevice.publicKeySpkiB64, canonicalKey));
+    if (existingDevice?.revokedAt != null) {
+      throw new RevokedDeviceKeyError(
+        "this device key was revoked and can never be reused; generate a new key pair",
+      );
+    }
 
-  const pairingId = randomUUID();
-  await dbx.insert(fleetPairingRequest).values({
-    id: pairingId,
-    publicKeySpkiB64: canonicalKey,
-    challengeDigest: challengeDigestFor(pairingId),
-    expiresAt: new Date(args.now.getTime() + PAIRING_REQUEST_TTL_MS),
+    const pairingId = randomUUID();
+    await tx.insert(fleetPairingRequest).values({
+      id: pairingId,
+      publicKeySpkiB64: canonicalKey,
+      challengeDigest: challengeDigestFor(pairingId),
+      expiresAt: new Date(now.getTime() + PAIRING_REQUEST_TTL_MS),
+      requestedCapabilities,
+    });
+
+    return { pairingId, approvalUrl: `/fleet/pair/${pairingId}` };
   });
-
-  return { pairingId, approvalUrl: `/fleet/pair/${pairingId}` };
 }
 
 /**
@@ -230,7 +247,7 @@ export async function approvePairing(
   dbx: Dbx,
   pairingId: string,
   accountId: string,
-  now: Date,
+  testNow?: Date,
 ): Promise<void> {
   const [acc] = await dbx
     .select({ tier: account.tier })
@@ -243,12 +260,16 @@ export async function approvePairing(
   }
 
   await dbx.transaction(async (tx) => {
+    const mode = await lockFleetSharingMode(tx);
     const [row] = await tx
       .select()
       .from(fleetPairingRequest)
       .where(eq(fleetPairingRequest.id, pairingId))
       .for("update");
     if (!row) throw new PairingNotFoundError(`no fleet pairing request ${pairingId}`);
+    const now = testNow ?? new Date();
+    if (row.requestedCapabilities.length > 0 && !mode.enabled)
+      throw new FleetSharingDisabledError();
     if (row.consumedAt !== null) {
       throw new PairingAlreadyConsumedError(
         `fleet pairing request ${pairingId} was already completed`,
@@ -286,6 +307,7 @@ export async function approvePairing(
       actor: accountId,
       action: "fleet_device.pairing_approved",
       target: pairingId,
+      details: { requestedCapabilities: row.requestedCapabilities },
     });
   });
 }
@@ -319,9 +341,10 @@ export async function approvePairing(
  */
 export async function completePairing(
   dbx: Dbx,
-  args: { pairingId: string; completionSignature: string; now: Date },
+  args: { pairingId: string; completionSignature: string; now?: Date },
 ): Promise<{ sessionId: string; catalogue: DeviceCatalogue }> {
   return dbx.transaction(async (tx) => {
+    const mode = await lockFleetSharingMode(tx);
     const [row] = await tx
       .select()
       .from(fleetPairingRequest)
@@ -333,11 +356,6 @@ export async function completePairing(
     if (row.consumedAt !== null) {
       throw new PairingAlreadyConsumedError(
         `fleet pairing request ${args.pairingId} was already completed`,
-      );
-    }
-    if (row.expiresAt.getTime() <= args.now.getTime()) {
-      throw new PairingExpiredError(
-        `fleet pairing request ${args.pairingId} has expired`,
       );
     }
     if (row.approvedAt === null || row.approvedAccountId === null) {
@@ -377,6 +395,14 @@ export async function completePairing(
       .from(fleetDevice)
       .where(eq(fleetDevice.publicKeySpkiB64, row.publicKeySpkiB64))
       .for("update");
+    const now = args.now ?? new Date();
+    if (row.expiresAt.getTime() <= now.getTime()) {
+      throw new PairingExpiredError(
+        `fleet pairing request ${args.pairingId} has expired`,
+      );
+    }
+    if (row.requestedCapabilities.length > 0 && !mode.enabled)
+      throw new FleetSharingDisabledError();
     if (existingDevice?.revokedAt != null) {
       throw new RevokedDeviceKeyError(
         "this device key was revoked and can never be reused; generate a new key pair",
@@ -407,7 +433,7 @@ export async function completePairing(
 
     await tx
       .update(fleetPairingRequest)
-      .set({ consumedAt: args.now })
+      .set({ consumedAt: now })
       .where(eq(fleetPairingRequest.id, args.pairingId));
 
     let deviceId: string;
@@ -415,10 +441,25 @@ export async function completePairing(
       // Already bound to this exact account (checked above) — reuse is
       // idempotent, no account reassignment needed.
       deviceId = existingDevice.id;
+      await tx
+        .update(fleetDevice)
+        .set({
+          approvedCapabilities: [
+            ...new Set([
+              ...existingDevice.approvedCapabilities,
+              ...row.requestedCapabilities,
+            ]),
+          ],
+        })
+        .where(eq(fleetDevice.id, deviceId));
     } else {
       const [inserted] = await tx
         .insert(fleetDevice)
-        .values({ accountId: approvedAccountId, publicKeySpkiB64: row.publicKeySpkiB64 })
+        .values({
+          accountId: approvedAccountId,
+          publicKeySpkiB64: row.publicKeySpkiB64,
+          approvedCapabilities: row.requestedCapabilities,
+        })
         .returning({ id: fleetDevice.id });
       deviceId = inserted.id;
     }
@@ -432,7 +473,10 @@ export async function completePairing(
     await tx.insert(fleetDeviceSession).values({
       id: hashOpaqueValue(rawSessionId),
       deviceId,
-      expiresAt: new Date(args.now.getTime() + DEVICE_SESSION_TTL_MS),
+      expiresAt: new Date(now.getTime() + DEVICE_SESSION_TTL_MS),
+      // Initial/updated pairing grants only the scope the browser saw for THIS
+      // request. Recovery later snapshots the device grant after key proof.
+      approvedCapabilities: row.requestedCapabilities,
     });
 
     // Completion's own audit row, in the SAME transaction as every write
@@ -521,11 +565,8 @@ async function deleteFleetRelayStateForDevice(tx: DbTx, deviceId: string): Promi
  * db/schema.ts) and there is nothing left for a member to act on for one.
  *
  * `sessionExpiresAt` is the LATEST `fleet_device_session.expiresAt` this
- * device currently holds — `null` only if this device somehow has none at
- * all, which should not happen for a non-revoked row (every path that ever
- * deletes a device's sessions, `revokeFleetDevice`/
- * `revokeFleetRelayForAccount`, stamps `revokedAt` in the SAME transaction),
- * but is not asserted against here: a device can accumulate more than one
+ * device currently holds — `null` after cutover retires its sessions while
+ * retaining its registration. A device can accumulate more than one
  * session row over its lifetime (`completePairing` reuses an existing,
  * un-revoked device across a re-pairing rather than deleting its prior
  * session first), so this reads the union and keeps only the one still
@@ -783,11 +824,11 @@ export async function revokeFleetRelayForAccount(
  */
 export async function renewFleetDeviceSession(
   dbx: Dbx,
-  args: { sessionId: string; revision: number; now: Date },
+  args: { sessionId: string; revision: number; now?: Date },
 ): Promise<{ ok: true; expiresAt: Date } | { ok: false; code: string }> {
   try {
     const expiresAt = await dbx.transaction(async (tx) => {
-      const { session, device } = await gateSignedSession(tx, {
+      const { session, device, now } = await gateSignedSession(tx, {
         sessionId: args.sessionId,
         revision: args.revision,
         now: args.now,
@@ -803,14 +844,15 @@ export async function renewFleetDeviceSession(
         throw new RelayRefusal("not_eligible");
       }
 
-      const newExpiresAt = new Date(args.now.getTime() + DEVICE_SESSION_TTL_MS);
+      const newExpiresAt = new Date(now.getTime() + DEVICE_SESSION_TTL_MS);
+      await commitSessionCadence(tx, session.id, {
+        revision: args.revision,
+        now,
+        cadence: "read",
+      });
       await tx
         .update(fleetDeviceSession)
-        .set({
-          lastRevision: args.revision,
-          lastReadAt: args.now,
-          expiresAt: newExpiresAt,
-        })
+        .set({ expiresAt: newExpiresAt })
         .where(eq(fleetDeviceSession.id, session.id));
       return newExpiresAt;
     });

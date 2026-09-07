@@ -128,8 +128,12 @@ export type FleetRouteAuthResult =
  * Every refusal past a pure, self-evident header-shape problem collapses to
  * the SAME generic `"unauthorized"` code: an unknown session id, an expired
  * session, a revoked device, and a signature that fails to verify for a
- * perfectly real session are all indistinguishable in the response. This
- * mirrors `readFleetProjection`'s own generic `"forbidden"` ruling — a
+ * perfectly real session are all indistinguishable in the response.
+ * This is a cryptographic preflight, not an admission-clock grant: services
+ * must revalidate after their locks with their own current clock. Never forward
+ * this preflight's timestamp into production service calls.
+ *
+ * This mirrors `readFleetProjection`'s own generic `"forbidden"` ruling — a
  * caller must not be able to use this boundary to learn
  * whether a guessed session id exists.
  */

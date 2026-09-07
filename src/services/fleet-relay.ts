@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { and, eq, gt, inArray, lte, sql } from "drizzle-orm";
 import type { Dbx, DbTx } from "@/db";
+import { lockFleetSharingMode } from "@/services/fleet-sharing-mode";
 import {
   character,
   fleetDevice,
@@ -71,6 +72,8 @@ import {
  * `renewFleetDeviceSession` (fleet-pairing.ts), `revokeFleetDevice` /
  * `revokeFleetRelayForAccount` (fleet-pairing.ts), and
  * `pruneExpiredFleetRelay`:
+ *   0. Shared mode advisory lock for signed calls; exclusive for cutover.
+ *      Lifecycle cleanup that takes no mode lock still uses levels 1–3.
  *   1. `fleetDevice` row FOR UPDATE.
  *   2. `fleetDeviceSession` row(s) FOR UPDATE.
  *   3. `pg_advisory_xact_lock(RELAY_CHARACTER_LOCK_CLASS, characterId)`, then
@@ -126,6 +129,12 @@ export const FLEET_RELAY_STATUS_BY_CODE: Readonly<Record<string, number>> = {
   forbidden: 403,
   not_eligible: 403,
   try_again: 503,
+  unauthorized: 401,
+  feature_disabled: 503,
+  capability_required: 403,
+  conflict: 409,
+  invalid_intent: 400,
+  service_unavailable: 503,
 };
 
 const MAX_ROWS_PER_BATCH = 32;
@@ -391,14 +400,17 @@ export async function gateSignedSession(
   args: {
     sessionId: string;
     revision: number;
-    now: Date;
+    now?: Date;
     invalidSessionCode: string;
     cadence: "publish" | "read";
   },
 ): Promise<{
   session: typeof fleetDeviceSession.$inferSelect;
   device: typeof fleetDevice.$inferSelect;
+  now: Date;
+  featureEnabled: boolean;
 }> {
+  const mode = await lockFleetSharingMode(tx);
   const key = sessionKey(args.sessionId);
 
   const [probe] = await tx
@@ -420,31 +432,50 @@ export async function gateSignedSession(
     .from(fleetDeviceSession)
     .where(eq(fleetDeviceSession.id, key))
     .for("update");
-  if (!session || session.expiresAt.getTime() <= args.now.getTime()) {
-    throw new RelayRefusal(args.invalidSessionCode);
-  }
+  if (!session) throw new RelayRefusal(args.invalidSessionCode);
+  const now = sampleFleetSessionAdmission(session, args);
+  return { session, device, now, featureEnabled: mode.enabled };
+}
 
+/** Recheck after any later lock wait (notably relay-character locks). Carry the
+ * returned clock into admission/expiry writes and commitSessionCadence. Never
+ * pass a route's pre-authentication timestamp as the production clock. */
+export function sampleFleetSessionAdmission(
+  session: typeof fleetDeviceSession.$inferSelect,
+  args: {
+    revision: number;
+    now?: Date;
+    invalidSessionCode: string;
+    cadence: "read" | "publish";
+  },
+): Date {
+  const now = args.now ?? new Date();
+  if (session.expiresAt.getTime() <= now.getTime())
+    throw new RelayRefusal(args.invalidSessionCode);
+  if (
+    !Number.isSafeInteger(args.revision) ||
+    args.revision < 0 ||
+    args.revision > MAX_REVISION
+  )
+    throw new RelayRefusal("invalid_intent");
   if (args.revision <= session.lastRevision) {
     throw new RelayRefusal("revision_replayed");
   }
   const lastAt = args.cadence === "publish" ? session.lastPublishAt : session.lastReadAt;
-  if (
-    lastAt !== null &&
-    args.now.getTime() - lastAt.getTime() < MIN_REQUEST_INTERVAL_MS
-  ) {
+  if (lastAt !== null && now.getTime() - lastAt.getTime() < MIN_REQUEST_INTERVAL_MS) {
     throw new RelayRefusal("rate_limited");
   }
 
-  return { session, device };
+  return now;
 }
 
 /** Writes back the SAME two fields `gateSignedSession` just gated on —
  *  `lastRevision` and the cadence column for `cadence` — called by each
  *  caller only once its own operation has otherwise fully succeeded, so a
  *  refused/failed attempt (this function never reached) never advances
- *  either. `renewFleetDeviceSession` (fleet-pairing.ts) does not use this:
- *  it also changes `expiresAt` in the same update, so it writes its own. */
-async function commitSessionCadence(
+ *  either. Renewal and device controls intentionally share this helper too;
+ *  the caller passes the post-lock admission clock, not request arrival time. */
+export async function commitSessionCadence(
   tx: DbTx,
   sessionId: string,
   args: { revision: number; now: Date; cadence: "publish" | "read" },
@@ -478,16 +509,14 @@ function currentFleetIdFor(eligibility: Eligibility, characterId: number): numbe
  * Validation order: pure body/revision shape first (no DB access at all);
  * then, inside one transaction, `gateSignedSession` (device, then session,
  * per this module's LOCK ORDER doc — revision-greater-than-`lastRevision`
- * and publish cadence); per-row character ownership (`character.accountId`)
- * and current-fleet membership via `readEligibleAccount`'s materialized
- * cache (unlocked reads, run BEFORE any lease/row is locked, validated
- * before acquiring any lease); THEN, in deterministic ascending
- * character-id order, an advisory lock plus a row lock on every target
- * lease/telemetry row (the union of this request's characters and this
- * DEVICE's existing published characters, so an omitted row from an older,
- * still-live session of the SAME device still withdraws) — where a
- * submitted row's existing lease belongs to a DIFFERENT, still-unexpired
- * device, the whole request refuses. Only once every check has passed does
+ * and publish cadence); then, in deterministic ascending character-id order,
+ * locks the union of submitted and already-published characters. Only after
+ * those waits does it resample time and recheck session expiry, character
+ * ownership and current-fleet membership via `readEligibleAccount`'s legacy
+ * cache. Shared mode refuses this legacy path entirely until source-based
+ * admission replaces it. An omitted row from another session of the SAME
+ * device still withdraws; a submitted row leased to a DIFFERENT, unexpired
+ * device refuses the whole request. Only once every check has passed does
  * this function delete withdrawn rows, upsert submitted rows/leases, and
  * advance the session's revision/`lastPublishAt` — a single Postgres
  * transaction makes every one of those a no-op if anything above throws.
@@ -506,7 +535,7 @@ export async function replaceDeviceProjection(
     sessionId: string;
     revision: number;
     rows: readonly PublishedRow[];
-    now: Date;
+    now?: Date;
   },
 ): Promise<{ ok: true } | { ok: false; code: string }> {
   const shapeCode = validatePublishShape(args.revision, args.rows);
@@ -514,19 +543,36 @@ export async function replaceDeviceProjection(
 
   try {
     await dbx.transaction(async (tx) => {
-      const { session, device } = await gateSignedSession(tx, {
+      const { session, device, featureEnabled } = await gateSignedSession(tx, {
         sessionId: args.sessionId,
         revision: args.revision,
         now: args.now,
         invalidSessionCode: "invalid_session",
         cadence: "publish",
       });
+      // The legacy authority reader cannot admit shared-mode data. Task 5
+      // replaces this with source/participation admission; no fallback cache.
+      if (featureEnabled) throw new RelayRefusal("forbidden");
 
-      // Row eligibility, validated entirely through UNLOCKED reads, before
-      // any lease/row lock is acquired.
+      // This probe only discovers locks. Withdrawal below uses the re-locked
+      // lease, never this snapshot, since another device may win a stale lease.
+      const existingLeases = await tx
+        .select({ characterId: fleetPublisherLease.characterId })
+        .from(fleetPublisherLease)
+        .where(eq(fleetPublisherLease.deviceId, device.id));
+      const submittedIds = args.rows.map((r) => r.characterId);
+      const allIds = [...submittedIds, ...existingLeases.map((l) => l.characterId)];
+      const leaseByCharacterId = await lockFleetCharactersAscending(tx, allIds);
+      const now = sampleFleetSessionAdmission(session, {
+        ...args,
+        invalidSessionCode: "invalid_session",
+        cadence: "publish",
+      });
+
+      // Eligibility is sampled after every lock wait, never with pre-lock time.
       let eligibility: Eligibility | null = null;
       if (args.rows.length > 0) {
-        eligibility = await readEligibleAccount(tx, device.accountId, args.now);
+        eligibility = await readEligibleAccount(tx, device.accountId, now);
       }
 
       const ownerByCharacterId = new Map<number, string>();
@@ -555,28 +601,13 @@ export async function replaceDeviceProjection(
         fleetIdByCharacterId.set(row.characterId, fleetId);
       }
 
-      // Deterministic ascending lock order over the UNION of submitted
-      // character ids and this DEVICE's existing published characters (see
-      // this function's own doc comment for why "device", not "session").
-      // `existingLeases` is an UNLOCKED, pre-lock snapshot: it exists only to
-      // discover WHICH character ids might need a lock, never to decide what
-      // gets deleted below — see the withdrawal comment further down for why.
-      const existingLeases = await tx
-        .select({ characterId: fleetPublisherLease.characterId })
-        .from(fleetPublisherLease)
-        .where(eq(fleetPublisherLease.deviceId, device.id));
-      const submittedIds = args.rows.map((r) => r.characterId);
-      const allIds = [...submittedIds, ...existingLeases.map((l) => l.characterId)];
-
-      const leaseByCharacterId = await lockFleetCharactersAscending(tx, allIds);
-
       const submittedIdSet = new Set(submittedIds);
       for (const row of args.rows) {
         const lease = leaseByCharacterId.get(row.characterId);
         if (
           lease &&
           lease.deviceId !== device.id &&
-          lease.leaseExpiresAt.getTime() > args.now.getTime()
+          lease.leaseExpiresAt.getTime() > now.getTime()
         ) {
           throw new RelayRefusal("lease_conflict");
         }
@@ -621,7 +652,7 @@ export async function replaceDeviceProjection(
       for (const row of args.rows) {
         const fleetId = fleetIdByCharacterId.get(row.characterId);
         if (fleetId === undefined) throw new RelayRefusal("character_not_eligible");
-        const leaseExpiresAt = new Date(args.now.getTime() + HARD_EXPIRE_MS);
+        const leaseExpiresAt = new Date(now.getTime() + HARD_EXPIRE_MS);
         await tx
           .insert(fleetPublisherLease)
           .values({
@@ -649,9 +680,9 @@ export async function replaceDeviceProjection(
             sessionId: session.id,
             dps: row.dps,
             ewar: [...row.ewar],
-            receivedAt: args.now,
-            staleAt: new Date(args.now.getTime() + STALE_AGE_MS),
-            hardExpiresAt: new Date(args.now.getTime() + HARD_EXPIRE_MS),
+            receivedAt: now,
+            staleAt: new Date(now.getTime() + STALE_AGE_MS),
+            hardExpiresAt: new Date(now.getTime() + HARD_EXPIRE_MS),
           })
           .onConflictDoUpdate({
             target: fleetTelemetryRow.characterId,
@@ -661,16 +692,16 @@ export async function replaceDeviceProjection(
               sessionId: session.id,
               dps: row.dps,
               ewar: [...row.ewar],
-              receivedAt: args.now,
-              staleAt: new Date(args.now.getTime() + STALE_AGE_MS),
-              hardExpiresAt: new Date(args.now.getTime() + HARD_EXPIRE_MS),
+              receivedAt: now,
+              staleAt: new Date(now.getTime() + STALE_AGE_MS),
+              hardExpiresAt: new Date(now.getTime() + HARD_EXPIRE_MS),
             },
           });
       }
 
       await commitSessionCadence(tx, session.id, {
         revision: args.revision,
-        now: args.now,
+        now,
         cadence: "publish",
       });
     });
@@ -755,22 +786,31 @@ export async function pruneExpiredFleetRelay(dbx: Dbx, now: Date): Promise<void>
  */
 export async function readFleetProjection(
   dbx: Dbx,
-  args: { sessionId: string; revision: number; now: Date },
+  args: { sessionId: string; revision: number; now?: Date },
 ): Promise<{ ok: true; rows: readonly RelayReadRow[] } | { ok: false; code: string }> {
   try {
     const rows = await dbx.transaction(async (tx) => {
-      const { session, device } = await gateSignedSession(tx, {
+      const {
+        session,
+        device,
+        now: gatedAt,
+        featureEnabled,
+      } = await gateSignedSession(tx, {
         sessionId: args.sessionId,
         revision: args.revision,
         now: args.now,
         invalidSessionCode: "forbidden",
         cadence: "read",
       });
-
-      const eligibility = await readEligibleAccount(tx, device.accountId, args.now);
+      if (featureEnabled) throw new RelayRefusal("forbidden");
+      await pruneExpiredFleetRelay(tx, gatedAt);
+      const now = sampleFleetSessionAdmission(session, {
+        ...args,
+        invalidSessionCode: "forbidden",
+        cadence: "read",
+      });
+      const eligibility = await readEligibleAccount(tx, device.accountId, now);
       if (!eligibility) throw new RelayRefusal("forbidden");
-
-      await pruneExpiredFleetRelay(tx, args.now);
 
       const joined = await tx
         .select({
@@ -785,18 +825,18 @@ export async function readFleetProjection(
         .where(
           and(
             inArray(fleetTelemetryRow.fleetId, [...eligibility.fleetIds]),
-            gt(fleetTelemetryRow.hardExpiresAt, args.now),
+            gt(fleetTelemetryRow.hardExpiresAt, now),
           ),
         );
 
       await commitSessionCadence(tx, session.id, {
         revision: args.revision,
-        now: args.now,
+        now,
         cadence: "read",
       });
 
       return joined.map((r): RelayReadRow => {
-        const ageMs = args.now.getTime() - r.receivedAt.getTime();
+        const ageMs = now.getTime() - r.receivedAt.getTime();
         return {
           characterId: r.characterId,
           dps: r.dps,
@@ -827,11 +867,11 @@ export async function readFleetProjection(
  */
 export async function readDeviceCatalogueForSession(
   dbx: Dbx,
-  args: { sessionId: string; revision: number; now: Date },
+  args: { sessionId: string; revision: number; now?: Date },
 ): Promise<{ ok: true; catalogue: DeviceCatalogue } | { ok: false; code: string }> {
   try {
     const catalogue = await dbx.transaction(async (tx) => {
-      const { session, device } = await gateSignedSession(tx, {
+      const { session, device, now } = await gateSignedSession(tx, {
         sessionId: args.sessionId,
         revision: args.revision,
         now: args.now,
@@ -841,7 +881,7 @@ export async function readDeviceCatalogueForSession(
       const catalogue = await buildDeviceCatalogue(tx, device.accountId);
       await commitSessionCadence(tx, session.id, {
         revision: args.revision,
-        now: args.now,
+        now,
         cadence: "read",
       });
       return catalogue;

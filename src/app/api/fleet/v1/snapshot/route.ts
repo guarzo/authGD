@@ -125,7 +125,6 @@ export async function PUT(req: NextRequest) {
     sessionId: auth.auth.sessionId,
     revision: headers.revision,
     rows,
-    now,
   });
   if (!result.ok) {
     return jsonError(result.code, FLEET_RELAY_STATUS_BY_CODE[result.code] ?? 400);
@@ -158,7 +157,6 @@ export async function GET(req: NextRequest) {
   const result = await readFleetProjection(getDb(), {
     sessionId: auth.auth.sessionId,
     revision: headers.revision,
-    now,
   });
   if (!result.ok) {
     return jsonError(result.code, FLEET_RELAY_STATUS_BY_CODE[result.code] ?? 400);

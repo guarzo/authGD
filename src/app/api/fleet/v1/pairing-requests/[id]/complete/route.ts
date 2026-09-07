@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { getDb } from "@/db";
+import { FleetSharingDisabledError } from "@/services/fleet-sharing-mode";
 import { readBoundedRequestBody } from "@/lib/fleet-request-body";
 import {
   DeviceBoundToAnotherAccountError,
@@ -75,7 +76,6 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const { sessionId, catalogue } = await completePairing(getDb(), {
       pairingId: id,
       completionSignature: body.data.completion_signature,
-      now: new Date(),
     });
     return NextResponse.json({
       protocol: FLEET_RELAY_PROTOCOL,
@@ -96,6 +96,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     // "no such request" from "wrong proof" would let a caller guessing
     // pairing ids learn which ones exist.
     if (
+      err instanceof FleetSharingDisabledError ||
       err instanceof PairingNotFoundError ||
       err instanceof PairingExpiredError ||
       err instanceof PairingAlreadyConsumedError ||

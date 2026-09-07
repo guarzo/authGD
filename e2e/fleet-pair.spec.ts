@@ -1,4 +1,8 @@
 import { expect, test } from "@playwright/test";
+import { eq } from "drizzle-orm";
+import { fleetPairingRequest } from "../src/db/schema";
+import { SHARED_CAPABILITY } from "../src/core/fleet-sharing";
+import { transitionFleetSharingMode } from "../src/services/fleet-sharing-mode";
 import { resetDb, seedMember, sessionCookieFor, testDb } from "./helpers";
 import { generateKeyPairSync, sign as ed25519Sign } from "node:crypto";
 import {
@@ -26,12 +30,68 @@ test.beforeEach(() => resetDb(db));
  * the request under test is what the BROWSER does once that id exists, not
  * how the id was minted.
  */
-async function seedPendingPairing() {
+async function seedPendingPairing(requestedCapabilities: string[] = []) {
   const { publicKey } = generateKeyPairSync("ed25519");
   const spki = new Uint8Array(publicKey.export({ type: "spki", format: "der" }));
-  const { pairingId } = await beginPairing(db, { publicKeySpki: spki, now: new Date() });
+  const { pairingId } = await beginPairing(db, {
+    publicKeySpki: spki,
+    now: new Date(),
+    requestedCapabilities,
+  });
   return pairingId;
 }
+
+test("shared capability consent names roster management and keeps participation separate", async ({
+  page,
+  context,
+}) => {
+  await transitionFleetSharingMode(db, { enabled: true, expectedRevision: 0 });
+  const member = await seedMember(db, { name: "Shared Consent Crew", tier: "member" });
+  await context.addCookies([await sessionCookieFor(db, member.id)]);
+  const pairingId = await seedPendingPairing([SHARED_CAPABILITY]);
+  await page.goto(`/fleet/pair/${pairingId}`);
+  await expect(
+    page.getByText(/managing roster verification through an eligible fleet boss/),
+  ).toBeVisible();
+  await expect(
+    page.getByText(/Participation is a separate, default-off choice in Wingman/),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Approve" }).click();
+  await expect(
+    page.getByText("Approved. Waiting for the desktop app to finish pairing."),
+  ).toBeVisible();
+  const [request] = await db
+    .select()
+    .from(fleetPairingRequest)
+    .where(eq(fleetPairingRequest.id, pairingId));
+  expect(request.requestedCapabilities).toEqual([SHARED_CAPABILITY]);
+  expect(request.approvedAccountId).toBe(member.id);
+  expect(request.approvedDeviceId).toBeNull();
+  expect(request.consumedAt).toBeNull();
+});
+
+test("disabling shared setup while approval is open refuses the action and removes Approve", async ({
+  page,
+  context,
+}) => {
+  await transitionFleetSharingMode(db, { enabled: true, expectedRevision: 0 });
+  const member = await seedMember(db, { name: "Paused Setup Crew", tier: "member" });
+  await context.addCookies([await sessionCookieFor(db, member.id)]);
+  const pairingId = await seedPendingPairing([SHARED_CAPABILITY]);
+  await page.goto(`/fleet/pair/${pairingId}`);
+  await expect(page.getByRole("button", { name: "Approve" })).toBeVisible();
+  await transitionFleetSharingMode(db, { enabled: false, expectedRevision: 1 });
+  await page.getByRole("button", { name: "Approve" }).click();
+  await expect(
+    page.getByText(/Shared fleet setup is currently unavailable/),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "Approve" })).toHaveCount(0);
+  const [request] = await db
+    .select()
+    .from(fleetPairingRequest)
+    .where(eq(fleetPairingRequest.id, pairingId));
+  expect(request.approvedAt).toBeNull();
+});
 
 test("a non-Member account is refused the pairing page", async ({ page, context }) => {
   const associate = await seedMember(db, { name: "Not Yet Crew", tier: "associate" });

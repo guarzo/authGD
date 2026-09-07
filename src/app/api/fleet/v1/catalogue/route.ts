@@ -58,7 +58,6 @@ export async function GET(req: NextRequest) {
   const result = await readDeviceCatalogueForSession(getDb(), {
     sessionId: auth.auth.sessionId,
     revision: headers.revision,
-    now,
   });
   if (!result.ok) {
     return jsonError(result.code, FLEET_RELAY_STATUS_BY_CODE[result.code] ?? 400);

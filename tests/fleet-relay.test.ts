@@ -1,7 +1,7 @@
 import { generateKeyPairSync, sign as ed25519Sign } from "node:crypto";
 import { and, eq, isNull } from "drizzle-orm";
 import type { Pool } from "pg";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Db } from "@/db";
 import {
   fleetDevice,
@@ -1048,6 +1048,48 @@ describe("device/account revocation cleanup", () => {
 });
 
 describe("cross-module lock order (deadlock avoidance)", () => {
+  it("rechecks session expiry after a relay-character lock wait before writing any rows", async () => {
+    const member = await seedAccount(ctx.db, { tier: "member" });
+    const paired = await pairDevice(ctx.db, member.id, NOW);
+    const characterId = 95999101;
+    await seedEligibleCharacter(ctx.db, {
+      characterId,
+      accountId: member.id,
+      fleetId: 6200081,
+      now: NOW,
+    });
+    await ctx.db
+      .update(fleetDeviceSession)
+      .set({ expiresAt: new Date(NOW.getTime() + 1000) })
+      .where(eq(fleetDeviceSession.deviceId, paired.device.id));
+    const client = await ctx.pool.connect();
+    let pending: ReturnType<typeof replaceDeviceProjection> | undefined;
+    try {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(NOW);
+      await client.query("begin");
+      const {
+        rows: [{ pid }],
+      } = await client.query<{ pid: number }>("select pg_backend_pid() as pid");
+      await client.query("select pg_advisory_xact_lock(2, hashint8($1))", [characterId]);
+      pending = replaceDeviceProjection(ctx.db, {
+        sessionId: paired.sessionId,
+        revision: 1,
+        rows: [row(characterId, 123)],
+      });
+      expect(await waitUntilBlockedBy(ctx.pool, pid)).toBe(true);
+      vi.setSystemTime(new Date(NOW.getTime() + 1000));
+      await client.query("commit");
+      expect(await pending).toEqual({ ok: false, code: "invalid_session" });
+      expect(await rowFor(ctx.db, characterId)).toBeUndefined();
+      expect(await leaseFor(ctx.db, characterId)).toBeUndefined();
+    } finally {
+      await client.query("rollback");
+      client.release();
+      await pending;
+      vi.useRealTimers();
+    }
+  });
   it("a concurrent publish blocks on (never deadlocks against) another transaction already holding this device's row lock -- the fix for the publish/revoke cross-order deadlock", async () => {
     // Before the fix, `replaceDeviceProjection` locked SESSION then DEVICE,
     // while `revokeFleetDevice`'s cleanup locked DEVICE then SESSION -- a

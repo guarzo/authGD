@@ -24,6 +24,24 @@ function pendingRow(
 // different account) that row's own columns never record. This suite covers
 // every branch without a database.
 describe("derivePairingState", () => {
+  it("offers no approval for shared enrollment while the gate is disabled", () => {
+    expect(
+      derivePairingState({
+        row: pendingRow(),
+        now: NOW,
+        deviceBoundToAnotherAccount: false,
+        sharingDisabled: true,
+      }),
+    ).toBe("feature_disabled");
+    expect(
+      derivePairingState({
+        row: pendingRow({ approvedAt: NOW }),
+        now: NOW,
+        deviceBoundToAnotherAccount: false,
+        sharingDisabled: true,
+      }),
+    ).toBe("feature_disabled");
+  });
   it("is closed when there is no row at all (missing/malformed id)", () => {
     expect(
       derivePairingState({

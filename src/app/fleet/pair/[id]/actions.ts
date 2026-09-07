@@ -6,6 +6,7 @@ import { cookies } from "next/headers";
 import { z } from "zod";
 import { getConfig } from "@/config";
 import { getDb } from "@/db";
+import { FleetSharingDisabledError } from "@/services/fleet-sharing-mode";
 import {
   DeviceBoundToAnotherAccountError,
   NonMemberApprovalError,
@@ -66,9 +67,10 @@ export async function approvePairingAction(pairingId: string): Promise<void> {
   if (!parsedId.success) return;
 
   try {
-    await approvePairing(getDb(), parsedId.data, sess.accountId, new Date());
+    await approvePairing(getDb(), parsedId.data, sess.accountId);
   } catch (err) {
     if (
+      err instanceof FleetSharingDisabledError ||
       err instanceof PairingNotFoundError ||
       err instanceof PairingExpiredError ||
       err instanceof PairingAlreadyApprovedError ||

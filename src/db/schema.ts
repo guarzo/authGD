@@ -695,10 +695,9 @@ export const structureEvent = pgTable(
 );
 
 /**
- * Fleet telemetry relay: six ephemeral tables backing the signed device
- * protocol in `src/lib/fleet-signature.ts`. Every row here is short-lived
- * operational state — pairing/session material and a few seconds of DPS/EWAR —
- * never a durable log. None of these tables store raw combat log content,
+ * Fleet telemetry relay: durable device consent plus short-lived pairing,
+ * session material and a few seconds of DPS/EWAR backing the signed device
+ * protocol in `src/lib/fleet-signature.ts` — never a telemetry history. None of these tables store raw combat log content,
  * attacker/target text, EVE tokens, or browser session cookies.
  *
  * Public key material is stored as base64 text (SPKI DER), matching this
@@ -707,6 +706,18 @@ export const structureEvent = pgTable(
  * other binary value here (`crypto.ts`, `pkceVerifier`, hashed session ids)
  * already does the same.
  */
+
+/** Empty means disabled. Only the explicit operator transition writes this row. */
+export const fleetSharingGate = pgTable(
+  "fleet_sharing_gate",
+  {
+    id: integer("id").primaryKey().default(1),
+    enabled: boolean("enabled").notNull().default(false),
+    revision: integer("revision").notNull().default(0),
+    transitionedAt: timestamp("transitioned_at", { withTimezone: true }),
+  },
+  (t) => [check("fleet_sharing_gate_singleton_ck", sql`${t.id} = 1`)],
+);
 
 /**
  * A paired device: one Ed25519 public key, tied to the account that approved
@@ -734,6 +745,12 @@ export const fleetDevice = pgTable("fleet_device", {
     .notNull()
     .references(() => account.id, { onDelete: "cascade" }),
   publicKeySpkiB64: text("public_key_spki_b64").notNull().unique(),
+  approvedCapabilities: jsonb("approved_capabilities")
+    .$type<string[]>()
+    .notNull()
+    .default([]),
+  participationEnabled: boolean("participation_enabled").notNull().default(false),
+  participationGeneration: integer("participation_generation").notNull().default(0),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   revokedAt: timestamp("revoked_at", { withTimezone: true }),
 });
@@ -758,6 +775,11 @@ export const fleetPairingRequest = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     publicKeySpkiB64: text("public_key_spki_b64").notNull(),
     challengeDigest: text("challenge_digest").notNull(),
+    // Immutable request scope: the browser approves this, not completion input.
+    requestedCapabilities: jsonb("requested_capabilities")
+      .$type<string[]>()
+      .notNull()
+      .default([]),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     approvedAt: timestamp("approved_at", { withTimezone: true }),
     consumedAt: timestamp("consumed_at", { withTimezone: true }),
@@ -787,6 +809,15 @@ export const fleetDeviceSession = pgTable(
       .notNull()
       .references(() => fleetDevice.id, { onDelete: "cascade" }),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    // Write once at issuance. A later pairing may upgrade the device, never this ceiling.
+    approvedCapabilities: jsonb("approved_capabilities")
+      .$type<string[]>()
+      .notNull()
+      .default([]),
+    acknowledgedCapabilities: jsonb("acknowledged_capabilities")
+      .$type<string[]>()
+      .notNull()
+      .default([]),
     lastRevision: integer("last_revision").notNull().default(0),
     lastPublishAt: timestamp("last_publish_at", { withTimezone: true }),
     lastReadAt: timestamp("last_read_at", { withTimezone: true }),
@@ -803,9 +834,10 @@ export const fleetAccessCheckGate = pgTable("fleet_access_check_gate", {
 });
 
 /**
- * A materialized, expiring cache of one linked character's ESI-observed fleet
- * membership — the only place `esi-fleets.read_fleet.v1` evidence lands.
- * Relay routes read only this row; they never call ESI (Global Constraints).
+ * Legacy materialized fleet eligibility. No supported production writer or
+ * compatibility mirror may populate it; the cutover deletes it and shared
+ * admission never uses it. Retained for additive-schema/old-reader compatibility.
+ * Legacy relay routes only read it; they never call ESI (Global Constraints).
  * `rosterCharacterIds` holds ONLY character ids: no name, ship, or system, so
  * a leaked row exposes fleet composition by id and nothing else about it.
  * `outcomeCode` is stored verbatim as text, not an enum — like `structure.

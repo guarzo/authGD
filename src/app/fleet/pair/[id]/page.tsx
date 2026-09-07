@@ -4,6 +4,8 @@ import { redirect } from "next/navigation";
 import { eq } from "drizzle-orm";
 import type { Metadata } from "next";
 import { getConfig } from "@/config";
+import { SHARED_CAPABILITY } from "@/core/fleet-sharing";
+import { readFleetSharingMode } from "@/services/fleet-sharing-mode";
 import { getDb } from "@/db";
 import { account, fleetDevice, fleetPairingRequest } from "@/db/schema";
 import { accountErrorUrl, loginErrorUrl } from "@/lib/error-redirects";
@@ -45,7 +47,8 @@ function fingerprint(publicKeySpkiB64: string): string {
   return digest.match(/.{1,4}/g)!.join(" ");
 }
 
-type PairingState = "closed" | "pending" | "approved" | "device_bound_elsewhere";
+type PairingState =
+  "closed" | "pending" | "approved" | "device_bound_elsewhere" | "feature_disabled";
 
 /**
  * The state this page renders, extracted so its branches are unit-testable
@@ -63,11 +66,13 @@ export function derivePairingState(args: {
   row: { expiresAt: Date; consumedAt: Date | null; approvedAt: Date | null } | undefined;
   now: Date;
   deviceBoundToAnotherAccount: boolean;
+  sharingDisabled?: boolean;
 }): PairingState {
   const { row, now, deviceBoundToAnotherAccount } = args;
   if (!row || row.expiresAt.getTime() <= now.getTime() || row.consumedAt !== null) {
     return "closed";
   }
+  if (args.sharingDisabled) return "feature_disabled";
   if (row.approvedAt !== null) return "approved";
   return deviceBoundToAnotherAccount ? "device_bound_elsewhere" : "pending";
 }
@@ -125,7 +130,15 @@ export default async function FleetPairPage({
       existingDevice.accountId !== sess.accountId;
   }
 
-  const state = derivePairingState({ row, now, deviceBoundToAnotherAccount });
+  const requestsSharing = row?.requestedCapabilities.includes(SHARED_CAPABILITY) ?? false;
+  const sharingDisabled =
+    requestsSharing && !(await readFleetSharingMode(getDb())).enabled;
+  const state = derivePairingState({
+    row,
+    now,
+    deviceBoundToAnotherAccount,
+    sharingDisabled,
+  });
 
   return (
     <>
@@ -137,6 +150,13 @@ export default async function FleetPairPage({
           <Notice tone="info">
             This pairing request is no longer available. It may have expired, already been
             completed, or never existed. Start pairing again from Wingman.
+          </Notice>
+        )}
+
+        {state === "feature_disabled" && (
+          <Notice tone="info">
+            Shared fleet setup is currently unavailable. No sharing permission has been
+            added. Try again from Wingman when setup is available.
           </Notice>
         )}
 
@@ -162,6 +182,15 @@ export default async function FleetPairPage({
               <span className="mono">SCRAM/POINT</span> for your linked characters, only
               while you are both in the same ESI-verified fleet.
             </p>
+            {requestsSharing && (
+              <p>
+                This request also asks for shared fleet capabilities: managing roster
+                verification through an eligible fleet boss on your account, and sharing
+                telemetry with other participating accounts in that verified fleet.
+                Pairing does not start roster verification or turn on participation.
+                Participation is a separate, default-off choice in Wingman.
+              </p>
+            )}
             <dl className="facts">
               <dt>Key fingerprint</dt>
               <dd className="mono">{fingerprint(row.publicKeySpkiB64)}</dd>
