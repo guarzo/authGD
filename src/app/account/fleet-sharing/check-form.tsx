@@ -12,7 +12,7 @@ const messages: Record<Exclude<FleetAccessCode, "checked">, string> = {
     "Not authorized. Authorize Fleet Read for this character before checking.",
   not_in_fleet: "Not in a fleet. Join a fleet with this character, then check again.",
   authorization_rejected:
-    "EVE rejected the authorization. Authorize Fleet Read again, then retry. The response does not establish the cause.",
+    "EVE rejected fleet access. Check that you selected the current fleet boss, linked to this account. The authorization may also be invalid; authorize Fleet Read again if needed, then retry.",
   roster_unavailable:
     "Fleet roster unavailable. EVE did not provide a usable roster; no linked characters were verified.",
   identity_changed:
@@ -120,10 +120,11 @@ export function FleetCheckForm({ characters }: { characters: FleetSharingCharact
     <>
       <RuleHead as="h2">Fleet Read authorization</RuleHead>
       <div className="form-stack__field">
-        <label htmlFor="fleet-anchor">Authorization character</label>
+        <label htmlFor="fleet-anchor">Fleet boss character</label>
         <select
           className="field"
           id="fleet-anchor"
+          aria-describedby="fleet-boss-hint"
           disabled={!ready}
           value={selected}
           onChange={(event) => setSelected(Number(event.target.value))}
@@ -134,6 +135,10 @@ export function FleetCheckForm({ characters }: { characters: FleetSharingCharact
             </option>
           ))}
         </select>
+        <p className="table-note" id="fleet-boss-hint">
+          Choose the current fleet boss, not just any fleet member. Only characters linked
+          to this account are listed.
+        </p>
         {!ready && <p className="table-note">Loading character controls…</p>}
       </div>
       {/* A selection owns its action state. Unmounting discards late responses,

@@ -47,6 +47,7 @@ test("browser boundary preserves picker state/code/PKCE and denies unknown egres
         },
       ],
       fleetId: 123456,
+      fleetBossId: 90000001,
       rosterIds: [90000001],
     });
     const context = await browser.newContext({

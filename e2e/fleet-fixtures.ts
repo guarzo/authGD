@@ -27,6 +27,7 @@ const scenarioSchema = z
         .strict(),
     ),
     fleetId: z.number().int().positive().safe(),
+    fleetBossId: z.number().int().positive().safe(),
     rosterIds: z.array(z.number().int().positive().safe()),
     responses: z
       .object({
@@ -162,7 +163,12 @@ export async function startFleetFixtures(input: { appUrl: string; worktree: stri
   const token = randomBytes(32).toString("hex");
   const { privateKey, publicKey } = await generateKeyPair("RS256");
   const jwk = { ...(await exportJWK(publicKey)), alg: "RS256", kid: "fleet-test" };
-  let scenario: FleetScenario = { characters: [], fleetId: 123456, rosterIds: [] };
+  let scenario: FleetScenario = {
+    characters: [],
+    fleetId: 123456,
+    fleetBossId: 90000001,
+    rosterIds: [],
+  };
   const requests: FixtureSnapshot["requests"] = [];
   const violations: FixtureSnapshot["violations"] = [];
   const preloads: FixtureSnapshot["preloads"] = [];
@@ -267,7 +273,7 @@ export async function startFleetFixtures(input: { appUrl: string; worktree: stri
       if (scenario.characters.some((ch) => ch.id === id)) {
         body = {
           fleet_id: scenario.fleetId,
-          fleet_boss_id: scenario.rosterIds[0],
+          fleet_boss_id: scenario.fleetBossId,
           fleet_job: "fleet_member",
           squad_id: -1,
           wing_id: -1,
@@ -296,7 +302,10 @@ export async function startFleetFixtures(input: { appUrl: string; worktree: stri
       if (!identity) return { status: 401, body: { error: "invalid token" } };
       if (
         !identity.scopes.includes("esi-fleets.read_fleet.v1") ||
-        (stage === "membership" && identity.id !== Number(url.pathname.split("/")[3]))
+        (stage === "membership" && identity.id !== Number(url.pathname.split("/")[3])) ||
+        // Boss authority is independent of command position and checked before
+        // response overrides, so a synthetic 200 cannot grant roster access.
+        (stage === "roster" && identity.id !== scenario.fleetBossId)
       )
         return { status: 403, body: { error: "forbidden" } };
     }
@@ -362,7 +371,12 @@ export async function startFleetFixtures(input: { appUrl: string; worktree: stri
         case "/reset":
           if (violations.length || held.size)
             throw new Error("cannot reset unasserted egress or pending responses");
-          scenario = { characters: [], fleetId: 123456, rosterIds: [] };
+          scenario = {
+            characters: [],
+            fleetId: 123456,
+            fleetBossId: 90000001,
+            rosterIds: [],
+          };
           requests.length = 0;
           codes.clear();
           refreshes.clear();

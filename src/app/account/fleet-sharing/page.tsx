@@ -45,9 +45,9 @@ export default async function FleetSharingPage({
         <div className="page__head">
           <h1>Fleet sharing</h1>
           <p className="page__lede">
-            Authorize one linked character to read its fleet. Your linked in-fleet alts
-            are included automatically, without their own Fleet Read authorization or
-            individual selection.
+            Authorize the current fleet boss to read the roster. The boss must be linked
+            to this account. Your other linked in-fleet alts are included automatically,
+            without their own Fleet Read authorization or individual selection.
           </p>
         </div>
         <Notice tone="bad">{lookupErrorMessage(FLEET_SHARING_ERRORS, error)}</Notice>

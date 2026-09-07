@@ -1985,6 +1985,63 @@ test("arming the Discord unlink does not move it out from under the pointer", as
   expect(armed?.y).toBe(rest?.y);
 });
 
+for (const width of [840, 320]) {
+  test(`Fleet sharing is visible without scrolling a long account at ${width}px`, async ({
+    page,
+    context,
+  }) => {
+    const acc = await seedNominalCrew();
+    await context.addCookies([await sessionCookieFor(db, acc.id)]);
+    await page.setViewportSize({ width, height: 720 });
+    await page.goto("/account");
+    await page.evaluate(() => document.fonts.ready);
+    await expect(manifest(page).locator("tbody tr:not(.drawer-row)")).toHaveCount(10);
+    const link = page.getByRole("link", { name: "Fleet sharing", exact: true });
+    await expect(link).toHaveCount(1);
+    // Visibility alone accepts an off-screen link, and click/focus auto-scrolls.
+    // Measure the entire real control before either can conceal a buried link.
+    expect(await page.evaluate(() => scrollY)).toBe(0);
+    await expect(link).toBeInViewport({ ratio: 1 });
+    const box = (await link.boundingBox())!;
+    expect(box.width).toBeGreaterThan(80);
+    expect(box.height).toBeGreaterThanOrEqual(36);
+    await expect(
+      page.locator(".page__head").getByRole("link", { name: "Fleet sharing" }),
+    ).toHaveCount(1);
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
+    ).toBe(true);
+    await page.screenshot({ path: `tmp/boss-account-${width}.png` });
+    if (width === 840) {
+      // Headless Chromium's layout-zoom equivalent of 200% browser zoom.
+      await page.evaluate(() => {
+        document.documentElement.style.zoom = "2";
+      });
+      await expect(link).toBeInViewport({ ratio: 1 });
+      expect(
+        await page.evaluate(() => {
+          window.scrollTo({ left: 10_000, behavior: "instant" });
+          return scrollX;
+        }),
+      ).toBe(0);
+      await page.evaluate(() => {
+        document.documentElement.style.zoom = "1";
+      });
+    }
+    for (let n = 0; n < 20; n++) {
+      await page.keyboard.press("Tab");
+      if (await link.evaluate((el) => el === document.activeElement)) break;
+    }
+    await expect(link).toBeFocused();
+    expect(await link.evaluate((el) => getComputedStyle(el).outlineStyle)).not.toBe(
+      "none",
+    );
+    expect(await page.evaluate(() => scrollY)).toBe(0);
+    await page.keyboard.press("Enter");
+    await expect(page).toHaveURL(/\/account\/fleet-sharing$/);
+  });
+}
+
 // The success criterion, written as an assertion. Round 1 shipped a change
 // that collapsed a cell from three lines to one and moved this number by
 // zero, because the metric it was measured against was lines per cell. This

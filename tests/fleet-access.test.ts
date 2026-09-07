@@ -39,7 +39,7 @@ const member = (id: number) => ({
 const roster = [member(90000001), member(90000002), member(90000099)];
 const fleet = {
   fleet_id: 123456789,
-  fleet_boss_id: 90000099,
+  fleet_boss_id: 90000001,
   role: "fleet_member",
   squad_id: 1,
   wing_id: 1,
@@ -161,6 +161,27 @@ it("refreshes one anchor and returns only its currently linked in-fleet alts wit
   expect(JSON.stringify(result)).not.toMatch(
     /123456789|90000099|synthetic-at|rotated|fleetId|ownerHash/,
   );
+});
+
+it("returns no characters when an authorized non-boss has membership but roster access is denied", async () => {
+  const { input } = await fixture();
+  server.use(
+    http.get(membershipUrl, () => {
+      calls.push("membership");
+      return HttpResponse.json({ ...fleet, fleet_boss_id: 90000099 });
+    }),
+    http.get(rosterUrl, () => {
+      calls.push("roster");
+      return HttpResponse.json({ error: "not fleet boss" }, { status: 403 });
+    }),
+  );
+  expect(await checkFleetAccess(ctx.db, cfg, input)).toEqual({
+    code: "authorization_rejected",
+    checkedAt: null,
+    retryAt: expect.any(String),
+    characters: [],
+  });
+  expect(calls).toEqual(["refresh", "membership", "roster"]);
 });
 
 it("allows a cryo Member and needs_reauth when the actual Fleet Read grant remains", async () => {
@@ -331,6 +352,14 @@ it("uses one atomic account slot across pools and different anchors, then permit
       tokenStatus: "valid",
     })
     .where(eq(character.id, 90000002));
+  // Only the account-slot winner reaches ESI. Model that selected character
+  // as the boss whichever request wins, rather than granting a non-boss roster.
+  server.use(
+    http.get(`${BASE}/characters/:id/fleet/`, ({ params }) => {
+      calls.push("membership");
+      return HttpResponse.json({ ...fleet, fleet_boss_id: Number(params.id) });
+    }),
+  );
   const peer = createDb(TEST_URL);
   try {
     const results = await Promise.all([
