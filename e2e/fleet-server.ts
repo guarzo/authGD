@@ -114,6 +114,7 @@ export function fleetFontWorkerPort(): string | null {
 export function assertFleetEnvironment(env: NodeJS.ProcessEnv): FixtureConnection {
   if (
     env.E2E_FLEET_INTEGRATIONS !== "1" ||
+    env.E2E_DB_ISOLATION !== "1" ||
     env.SYNC_MODE !== "live" ||
     env.E2E_MANAGED_WORKTREE !== WORKTREE_ROOT ||
     (resolve(process.cwd()) !== WORKTREE_ROOT && fleetFontWorkerPort() === null)
@@ -191,6 +192,7 @@ export function fleetEnvironment(input: {
     E2E_FLEET_INTEGRATIONS: "1",
     E2E_MANAGED_WORKTREE: WORKTREE_ROOT,
     E2E_FLEET_FIXTURE: JSON.stringify(input.fixture),
+    E2E_DB_ISOLATION: "1",
     NODE_OPTIONS: `--import=${preload}`,
     NODE_ENV: input.mode === "start" ? "production" : "development",
     NEXT_TELEMETRY_DISABLED: "1",

@@ -7,6 +7,7 @@ import { resetDb, seedMember, testDb } from "./helpers";
 import { loadConfig } from "../src/config";
 import {
   character,
+  fleetEligibility,
   fleetSourceAuthority,
   fleetSourceIntent,
   outbox,
@@ -30,10 +31,9 @@ import {
 import { createQueues, QUEUES } from "../src/worker/queues";
 import { pairDevice, reconcileFleetKeys } from "../tests/helpers/fleet-sharing";
 
-/** Synthetic end-to-end SOURCE authority only, NOT shared read/write eligibility.
- * Real signed HTTP enters the owned Next server, then committed outbox, actual
- * pg-boss dispatcher/registered handler and the actual ESI/SSO/JWT parsers. */
-test("signed HTTP source Start flows through real outbox and pg-boss without requiring sharingOn or an alt grant", async ({
+/** Real signed HTTP -> outbox/pg-boss -> actual SSO/JWT/ESI -> shared relay.
+ * Only the provider boundary is synthetic; native/TLS desktop proof is later. */
+test("signed HTTP source Start, worker authority and two-account shared snapshots without any participant token", async ({
   page,
   context,
   fleet,
@@ -70,24 +70,48 @@ test("signed HTTP source Start flows through real outbox and pg-boss without req
       SYNC_MODE: "live",
     });
     const pair = await pairDevice(db, acc.id, new Date(), [SHARED_CAPABILITY]);
-    let revision = 0;
-    const send = async (method: "GET" | "PUT", path: string, body?: unknown) => {
+    const participant = await seedMember(db, {
+      name: "Quiet Member",
+      tier: "member",
+      status: "cryo",
+      alts: ["Included Alt", "Unmatched Alt"],
+    });
+    const bChars = await db
+      .select()
+      .from(character)
+      .where(eq(character.accountId, participant.id))
+      .orderBy(character.id);
+    await db
+      .update(character)
+      .set({ tokenStatus: "missing" })
+      .where(eq(character.accountId, participant.id));
+    const b = await pairDevice(db, participant.id, new Date(), [SHARED_CAPABILITY]);
+    const revisions = new Map<string, number>();
+    const send = async (
+      method: "GET" | "PUT",
+      path: string,
+      body?: unknown,
+      device = pair,
+    ) => {
       const text = body === undefined ? "" : JSON.stringify(body);
       const hash = createHash("sha256").update(text).digest("hex");
       const issued = new Date().toISOString();
-      const n = ++revision;
+      const n = (revisions.get(device.sessionId) ?? 0) + 1;
+      revisions.set(device.sessionId, n);
       const signature = sign(
         null,
         Buffer.from(
-          ["fleet-v1", method, path, pair.sessionId, issued, String(n), hash].join("\n"),
+          ["fleet-v1", method, path, device.sessionId, issued, String(n), hash].join(
+            "\n",
+          ),
         ),
-        pair.privateKey,
+        device.privateKey,
       ).toString("base64url");
       return context.request.fetch(`${BASE_URL}${path}`, {
         method,
         ...(body === undefined ? {} : { data: text }),
         headers: {
-          "x-fleet-session": pair.sessionId,
+          "x-fleet-session": device.sessionId,
           "x-fleet-issued-at": issued,
           "x-fleet-revision": String(n),
           "x-fleet-body-sha256": hash,
@@ -103,6 +127,16 @@ test("signed HTTP source Start flows through real outbox and pg-boss without req
         })
       ).status(),
     ).toBe(200);
+    expect(
+      (
+        await send(
+          "PUT",
+          "/api/fleet/v1/device",
+          { protocol: 1, capabilities: [SHARED_CAPABILITY] },
+          b,
+        )
+      ).status(),
+    ).toBe(200);
     await fleet.scenario({
       characters: [
         {
@@ -115,7 +149,7 @@ test("signed HTTP source Start flows through real outbox and pg-boss without req
       ],
       fleetId: 123456,
       fleetBossId: anchor.id,
-      rosterIds: [anchor.id, alt.id],
+      rosterIds: [anchor.id, alt.id, bChars[0].id, bChars[1].id],
       responses: {
         membership: {
           headers: { Date: new Date().toUTCString(), "Cache-Control": "max-age=60" },
@@ -213,7 +247,7 @@ test("signed HTTP source Start flows through real outbox and pg-boss without req
     );
     const [authority] = await db.select().from(fleetSourceAuthority);
     expect(authority.linkedCharacters.map((ch) => ch.characterId).sort()).toEqual(
-      [anchor.id, alt.id].sort(),
+      [anchor.id, alt.id, bChars[0].id, bChars[1].id].sort(),
     );
     expect(authority.expiresAt!.getTime() - authority.verifiedAt!.getTime()).toBe(10000);
     const status = await send("GET", "/api/fleet/v1/sources");
@@ -227,6 +261,81 @@ test("signed HTTP source Start flows through real outbox and pg-boss without req
       token_usable: false,
     });
     expect(JSON.stringify(dto)).not.toMatch(/fleet_id|owner_hash|access_token/);
+    await new Promise((r) => setTimeout(r, 510));
+    // Source-only bootstrap above deliberately happened before either On.
+    for (const device of [pair, b])
+      expect(
+        (
+          await send(
+            "PUT",
+            "/api/fleet/v1/participation",
+            {
+              protocol: 1,
+              enabled: true,
+              expected_generation: 0,
+            },
+            device,
+          )
+        ).status(),
+      ).toBe(200);
+    await new Promise((r) => setTimeout(r, 510));
+    const eligibility = await send("GET", "/api/fleet/v1/eligibility", undefined, b);
+    expect(eligibility.status()).toBe(200);
+    const view = (await eligibility.json()) as {
+      state: string;
+      characters: { character_id: number }[];
+    };
+    expect(view.state).toBe("ready");
+    expect(view.characters.map((ch) => ch.character_id)).toEqual([
+      bChars[0].id,
+      bChars[1].id,
+    ]);
+    expect(JSON.stringify(view)).not.toMatch(/fleet_id|character_name|roster/);
+    expect(
+      (
+        await send("PUT", "/api/fleet/v1/snapshot", {
+          protocol: 1,
+          rows: [{ character_id: anchor.id, dps: 42, ewar: [] }],
+        })
+      ).status(),
+    ).toBe(200);
+    await new Promise((r) => setTimeout(r, 510));
+    const quiet = await send("GET", "/api/fleet/v1/snapshot", undefined, b);
+    expect(quiet.status()).toBe(200);
+    expect((await quiet.json()).rows).toEqual([
+      expect.objectContaining({ character_id: anchor.id, dps: 42 }),
+    ]);
+    expect(
+      (
+        await send(
+          "PUT",
+          "/api/fleet/v1/snapshot",
+          {
+            protocol: 1,
+            rows: [{ character_id: bChars[1].id, dps: 77, ewar: ["SCRAM/POINT"] }],
+          },
+          b,
+        )
+      ).status(),
+    ).toBe(200);
+    const back = await send("GET", "/api/fleet/v1/snapshot");
+    expect(back.status()).toBe(200);
+    expect((await back.json()).rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ character_id: bChars[1].id, dps: 77 }),
+      ]),
+    );
+    expect(await db.select().from(fleetEligibility)).toEqual([]);
+    expect(
+      (
+        await db.select().from(character).where(eq(character.accountId, participant.id))
+      ).every(
+        (ch) =>
+          ch.refreshTokenEnc === null &&
+          ch.scopes.length === 0 &&
+          ch.tokenStatus === "missing",
+      ),
+    ).toBe(true);
     await new Promise((r) => setTimeout(r, 510));
     const stopped = await send("PUT", "/api/fleet/v1/sources", {
       protocol: 1,

@@ -2,7 +2,17 @@ import { createHash, randomUUID, sign } from "node:crypto";
 import { NextRequest } from "next/server";
 import { createLocalJWKSet } from "jose";
 import { afterAll, beforeAll, beforeEach, expect, it } from "vitest";
-import { fleetSourceAuthority, fleetSourceIntent, outbox } from "@/db/schema";
+import {
+  character,
+  fleetDeviceSession,
+  fleetEligibility,
+  fleetSourceAuthority,
+  fleetSourceIntent,
+  fleetTelemetryRow,
+  outbox,
+} from "@/db/schema";
+import { eq } from "drizzle-orm";
+import { setFleetParticipation } from "@/services/fleet-participation";
 import { SHARED_CAPABILITY } from "@/core/fleet-sharing";
 import { FLEET_READ_SCOPE, createEsiClient } from "@/lib/esi/client";
 import { createDiscordClient } from "@/lib/discord/rest";
@@ -15,7 +25,11 @@ import { startFleetFixtures } from "../e2e/fleet-fixtures";
 import { setupTestDb, TEST_URL, truncateAll } from "./helpers/db";
 import { seedAccount, seedCharacter } from "./helpers/seed";
 import { testConfig } from "./helpers/config";
-import { pairDevice, reconcileFleetKeys } from "./helpers/fleet-sharing";
+import {
+  pairDevice,
+  reconcileFleetKeys,
+  waitUntilBlockedBy,
+} from "./helpers/fleet-sharing";
 process.env.DATABASE_URL = TEST_URL;
 const { GET, PUT } = await import("@/app/api/fleet/v1/sources/route");
 let ctx: Awaited<ReturnType<typeof setupTestDb>>;
@@ -35,13 +49,13 @@ afterAll(async () => {
   await fixture.close();
   await ctx.cleanup();
 });
-const path = "/api/fleet/v1/sources";
 function request(
   p: Awaited<ReturnType<typeof pairDevice>>,
   method: "GET" | "PUT",
   body: unknown,
   revision: number,
   query = "",
+  path = "/api/fleet/v1/sources",
 ) {
   const text = method === "GET" ? "" : JSON.stringify(body);
   const hash = createHash("sha256").update(text).digest("hex");
@@ -85,6 +99,31 @@ it("signed route -> committed outbox -> dispatcher -> strict registered handler 
     scopes: [],
     refreshToken: null,
   });
+  const participant = await seedAccount(ctx.db, { tier: "member", status: "cryo" });
+  const included = await seedCharacter(ctx.db, testConfig(), {
+    id: 99003,
+    accountId: participant.id,
+    scopes: [],
+    refreshToken: null,
+    tokenStatus: "missing",
+  });
+  const unmatched = await seedCharacter(ctx.db, testConfig(), {
+    id: 99004,
+    accountId: participant.id,
+    scopes: [],
+    refreshToken: null,
+    tokenStatus: "missing",
+  });
+  const receiver = await pairDevice(ctx.db, participant.id, now, [SHARED_CAPABILITY]);
+  expect(
+    (
+      await acknowledgeFleetCapabilities(ctx.db, {
+        sessionId: receiver.sessionId,
+        revision: 1,
+        capabilities: [SHARED_CAPABILITY],
+      })
+    ).ok,
+  ).toBe(true);
   const p = await pairDevice(ctx.db, owner.id, now, [SHARED_CAPABILITY]);
   await acknowledgeFleetCapabilities(ctx.db, {
     sessionId: p.sessionId,
@@ -114,7 +153,7 @@ it("signed route -> committed outbox -> dispatcher -> strict registered handler 
     ],
     fleetId: 123,
     fleetBossId: boss.id,
-    rosterIds: [boss.id, alt.id, 777],
+    rosterIds: [boss.id, alt.id, included.id, 777],
     responses: {
       membership: {
         headers: { Date: new Date().toUTCString(), "Cache-Control": "max-age=60" },
@@ -187,6 +226,7 @@ it("signed route -> committed outbox -> dispatcher -> strict registered handler 
   expect((await ctx.db.select().from(fleetSourceAuthority))[0].linkedCharacters).toEqual([
     { characterId: boss.id, linkEpoch: boss.fleetLinkEpoch },
     { characterId: alt.id, linkEpoch: alt.fleetLinkEpoch },
+    { characterId: included.id, linkEpoch: included.fleetLinkEpoch },
   ]);
   await new Promise((r) => setTimeout(r, 510));
   const status = await GET(request(p, "GET", null, 3));
@@ -203,6 +243,168 @@ it("signed route -> committed outbox -> dispatcher -> strict registered handler 
   await new Promise((r) => setTimeout(r, 510));
   expect((await PUT(request(p, "PUT", { ...start, fleet_id: 123 }, 4))).status).toBe(400);
   expect((await GET(request(p, "GET", null, 4, "?source_id=123"))).status).toBe(400);
+  // Real signed routes in both directions after the actual outbox/worker proof.
+  // The quiet participant owns neither a lease nor any Fleet Read token.
+  for (const [device, revision] of [
+    [p, 4],
+    [receiver, 2],
+  ] as const)
+    expect(
+      (
+        await setFleetParticipation(ctx.db, {
+          sessionId: device.sessionId,
+          revision,
+          enabled: true,
+          expectedGeneration: 0,
+        })
+      ).ok,
+    ).toBe(true);
+  await new Promise((r) => setTimeout(r, 510));
+  const eligibility = await import("@/app/api/fleet/v1/eligibility/route");
+  const snapshot = await import("@/app/api/fleet/v1/snapshot/route");
+  const own = await eligibility.GET(
+    request(receiver, "GET", null, 3, "", "/api/fleet/v1/eligibility"),
+  );
+  expect(own.status).toBe(200);
+  expect(own.headers.get("cache-control")).toBe("no-store");
+  const ownDto = await own.json();
+  expect(ownDto).toMatchObject({
+    protocol: 1,
+    participation_generation: 1,
+    state: "ready",
+    characters: [
+      {
+        character_id: included.id,
+        source_id: sourceId,
+        source_generation: 1,
+        authority_generation: 1,
+      },
+    ],
+  });
+  expect(ownDto.characters).toHaveLength(1);
+  expect(ownDto.characters[0].expires_at).toMatch(/Z$/);
+  expect(JSON.stringify(ownDto)).not.toMatch(/fleet_id|character_name|roster/);
+  expect(
+    (
+      await eligibility.GET(
+        request(receiver, "GET", null, 4, "?fleet_id=123", "/api/fleet/v1/eligibility"),
+      )
+    ).status,
+  ).toBe(400);
+  const aPut = await snapshot.PUT(
+    request(
+      p,
+      "PUT",
+      { protocol: 1, rows: [{ character_id: boss.id, dps: 42, ewar: [] }] },
+      5,
+      "",
+      "/api/fleet/v1/snapshot",
+    ),
+  );
+  expect(aPut.status).toBe(200);
+  expect(aPut.headers.get("cache-control")).toBe("no-store");
+  // Eligibility shares the snapshot read bucket and revision, including failures.
+  expect(
+    (await snapshot.GET(request(receiver, "GET", null, 4, "", "/api/fleet/v1/snapshot")))
+      .status,
+  ).toBe(429);
+  await new Promise((r) => setTimeout(r, 510));
+  const quiet = await snapshot.GET(
+    request(receiver, "GET", null, 4, "", "/api/fleet/v1/snapshot"),
+  );
+  expect(quiet.status).toBe(200);
+  expect((await quiet.json()).rows).toEqual([
+    expect.objectContaining({ character_id: boss.id, dps: 42 }),
+  ]);
+  const bad = await snapshot.PUT(
+    request(
+      receiver,
+      "PUT",
+      {
+        protocol: 1,
+        rows: [
+          { character_id: included.id, dps: 7, ewar: [] },
+          { character_id: unmatched.id, dps: 1, ewar: [] },
+        ],
+      },
+      5,
+      "",
+      "/api/fleet/v1/snapshot",
+    ),
+  );
+  expect(bad.status).toBe(403);
+  const bPut = await snapshot.PUT(
+    request(
+      receiver,
+      "PUT",
+      {
+        protocol: 1,
+        rows: [{ character_id: included.id, dps: 77, ewar: ["SCRAM/POINT"] }],
+      },
+      5,
+      "",
+      "/api/fleet/v1/snapshot",
+    ),
+  );
+  expect(bPut.status).toBe(200);
+  const back = await snapshot.GET(
+    request(p, "GET", null, 6, "", "/api/fleet/v1/snapshot"),
+  );
+  expect(back.status).toBe(200);
+  expect((await back.json()).rows).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        character_id: included.id,
+        dps: 77,
+        ewar: ["SCRAM/POINT"],
+      }),
+    ]),
+  );
+  expect(await ctx.db.select().from(fleetEligibility)).toEqual([]);
+  expect(
+    (
+      await ctx.db.select().from(character).where(eq(character.accountId, participant.id))
+    ).every(
+      (ch) =>
+        ch.scopes.length === 0 &&
+        ch.refreshTokenEnc === null &&
+        ch.tokenStatus === "missing",
+    ),
+  ).toBe(true);
+  // Production path uses PostgreSQL clock_timestamp AFTER a real final relay
+  // wait, not the route's pre-authentication timestamp or a supplied test clock.
+  const beforeWait = await ctx.db.select().from(fleetTelemetryRow);
+  const holder = await ctx.pool.connect();
+  let waiting: ReturnType<typeof snapshot.PUT> | undefined;
+  try {
+    await ctx.db
+      .update(fleetDeviceSession)
+      .set({ expiresAt: new Date(Date.now() + 1000) })
+      .where(eq(fleetDeviceSession.deviceId, receiver.device.id));
+    await holder.query("begin");
+    const pid = (await holder.query<{ pid: number }>("select pg_backend_pid() as pid"))
+      .rows[0].pid;
+    await holder.query("select pg_advisory_xact_lock(2, hashint8($1))", [included.id]);
+    waiting = snapshot.PUT(
+      request(
+        receiver,
+        "PUT",
+        { protocol: 1, rows: [] },
+        6,
+        "",
+        "/api/fleet/v1/snapshot",
+      ),
+    );
+    expect(await waitUntilBlockedBy(ctx.pool, pid)).toBe(true);
+    await new Promise((r) => setTimeout(r, 1100));
+    await holder.query("commit");
+    expect((await waiting).status).toBe(403);
+    expect(await ctx.db.select().from(fleetTelemetryRow)).toEqual(beforeWait);
+  } finally {
+    await holder.query("rollback");
+    holder.release();
+    await waiting;
+  }
   const second = await pairDevice(ctx.db, owner.id, new Date(), [SHARED_CAPABILITY]);
   const foreignOwner = await seedAccount(ctx.db, { tier: "member" });
   const foreign = await pairDevice(ctx.db, foreignOwner.id, new Date(), [

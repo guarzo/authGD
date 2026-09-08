@@ -63,7 +63,10 @@ const BodySchema = z
   .strict();
 
 function jsonError(code: string, status: number) {
-  return NextResponse.json({ protocol: FLEET_RELAY_PROTOCOL, error: code }, { status });
+  return NextResponse.json(
+    { protocol: FLEET_RELAY_PROTOCOL, error: code },
+    { status, headers: { "Cache-Control": "no-store" } },
+  );
 }
 
 function authError(code: "bad_headers" | "unauthorized") {
@@ -130,7 +133,10 @@ export async function PUT(req: NextRequest) {
     return jsonError(result.code, FLEET_RELAY_STATUS_BY_CODE[result.code] ?? 400);
   }
 
-  return NextResponse.json({ protocol: FLEET_RELAY_PROTOCOL });
+  return NextResponse.json(
+    { protocol: FLEET_RELAY_PROTOCOL },
+    { headers: { "Cache-Control": "no-store" } },
+  );
 }
 
 export async function GET(req: NextRequest) {
@@ -162,15 +168,18 @@ export async function GET(req: NextRequest) {
     return jsonError(result.code, FLEET_RELAY_STATUS_BY_CODE[result.code] ?? 400);
   }
 
-  return NextResponse.json({
-    protocol: FLEET_RELAY_PROTOCOL,
-    rows: result.rows.map((r) => ({
-      character_id: r.characterId,
-      character_name: r.characterName,
-      dps: r.dps,
-      ewar: r.ewar,
-      state: r.state,
-      age_ms: r.ageMs,
-    })),
-  });
+  return NextResponse.json(
+    {
+      protocol: FLEET_RELAY_PROTOCOL,
+      rows: result.rows.map((r) => ({
+        character_id: r.characterId,
+        character_name: r.characterName,
+        dps: r.dps,
+        ewar: r.ewar,
+        state: r.state,
+        age_ms: r.ageMs,
+      })),
+    },
+    { headers: { "Cache-Control": "no-store" } },
+  );
 }

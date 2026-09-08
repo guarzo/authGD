@@ -549,15 +549,17 @@ describe("registered-key recovery", () => {
     });
   });
 
-  it.each(["device", "account", "session", "character"])(
-    "rechecks expiry after the %s lock wait using the production clock",
-    async (level) => {
+  it.each([
+    ["device", 0],
+    ["account", 0],
+    ["session", 0],
+    ["character", 0],
+    ["device", 1100],
+  ] as const)(
+    "rechecks expiry after the %s lock wait using the production clock (observation delayed %i ms)",
+    async (level, observationDelayMs) => {
       const paired = await pairedMember();
       const proof = await proofFor(paired, new Date());
-      await ctx.pool.query(
-        "update fleet_recovery_challenge set expires_at = clock_timestamp() + interval '1 second' where id = $1",
-        [proof.challengeId],
-      );
       let pending: ReturnType<typeof completeFleetRecovery> | undefined;
       if (level === "character") {
         const ch = await seedCharacter(ctx.db, testConfig(), {
@@ -574,6 +576,7 @@ describe("registered-key recovery", () => {
         });
       }
       const client = await ctx.pool.connect();
+      let bodyFailed = false;
       try {
         await client.query("begin");
         const {
@@ -594,19 +597,48 @@ describe("registered-key recovery", () => {
           );
         if (level === "character")
           await client.query("select pg_advisory_xact_lock(2, hashint8(95900002))");
+        // Start the expiry budget only after fixture and holder setup is complete.
+        await ctx.pool.query(
+          "update fleet_recovery_challenge set expires_at = clock_timestamp() + interval '1 second' where id = $1",
+          [proof.challengeId],
+        );
         pending = completeFleetRecovery(ctx.db, { ...proof, now: undefined });
-        expect(await waitUntilBlockedBy(ctx.pool, pid)).toBe(true);
-        await client.query("select pg_sleep(1.1)");
+        // Own rejection while holding the lock, but still require exact expiry below.
+        const outcome = pending.then(
+          (reply) => reply,
+          (err: unknown) => err,
+        );
+        const blocked = await waitUntilBlockedBy(ctx.pool, pid);
+        // Exercise a late observation without faking the clock or the PG wait edge.
+        if (observationDelayMs)
+          await client.query("select pg_sleep($1)", [observationDelayMs / 1000]);
+        expect(blocked).toBe(true);
+        // Observation has already spent part (or all) of the expiry budget. An
+        // unconditional extra sleep can instead hit the production 2s lock timeout.
+        await client.query(
+          "select pg_sleep_until(expires_at) from fleet_recovery_challenge where id = $1",
+          [proof.challengeId],
+        );
         await client.query("commit");
-        expect(await pending).toEqual({ ok: false, code: "unauthorized" });
+        expect(await outcome).toEqual({ ok: false, code: "unauthorized" });
         const [session] = await ctx.db.select().from(fleetDeviceSession);
         expect(session.expiresAt.getTime()).toBeLessThan(NOW.getTime());
         if (level === "character")
           expect(await ctx.db.select().from(fleetPublisherLease)).toHaveLength(1);
+      } catch (error) {
+        bodyFailed = true;
+        throw error;
       } finally {
-        await client.query("rollback");
-        client.release();
-        await pending;
+        try {
+          await client.query("rollback").catch((error: unknown) => {
+            // A secondary cleanup failure must not replace the original assertion.
+            if (!bodyFailed) throw error;
+          });
+        } finally {
+          // Discard the holder even if rollback fails, then drain its waiter.
+          client.release(true);
+          await pending?.catch(() => {});
+        }
       }
     },
   );

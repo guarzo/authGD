@@ -121,6 +121,7 @@ describe("fleet browser harness isolation", () => {
 
   it.each([
     ["E2E_FLEET_INTEGRATIONS", ""],
+    ["E2E_DB_ISOLATION", ""],
     ["DATABASE_URL", "postgres://authgd:authgd@db.example:5639/authgd_test"],
     ["DATABASE_URL", "postgres://authgd:authgd@localhost:5639/authgd"],
     [

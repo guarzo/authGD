@@ -33,6 +33,7 @@ interface PortOwner {
   databaseUrl: string | null;
   /** Worktree recorded by the harness that started this process, if any. */
   managedBy: string | null;
+  databaseIsolation: string | null;
 }
 
 function listenerPid(port: number): number | null {
@@ -60,6 +61,7 @@ function describeOwner(pid: number): PortOwner {
   let cwd: string | null = null;
   let databaseUrl: string | null = null;
   let managedBy: string | null = null;
+  let databaseIsolation: string | null = null;
   try {
     cwd = readlinkSync(`/proc/${pid}/cwd`);
   } catch {
@@ -71,11 +73,12 @@ function describeOwner(pid: number): PortOwner {
       environ.find((e) => e.startsWith(`${key}=`))?.slice(key.length + 1) ?? null;
     databaseUrl = read("DATABASE_URL");
     managedBy = read(MANAGED_ENV_KEY);
+    databaseIsolation = read("E2E_DB_ISOLATION");
   } catch {
     databaseUrl = null;
     managedBy = null;
   }
-  return { pid, cwd, databaseUrl, managedBy };
+  return { pid, cwd, databaseUrl, managedBy, databaseIsolation };
 }
 
 function isPortFree(port: number): boolean {
@@ -156,7 +159,8 @@ export function resolveServerReuse(dbRecreated: boolean): boolean {
     return false;
   }
 
-  if (dbRecreated) {
+  // A pre-isolation harness server is ours to restart, not safe to reuse.
+  if (dbRecreated || owner.databaseIsolation !== "1") {
     stop(pid);
     return false;
   }

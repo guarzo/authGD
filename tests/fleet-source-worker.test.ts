@@ -974,14 +974,21 @@ describe("actual source job and ESI parser (synthetic provider only)", () => {
   it("actual pg-boss expiry/stop cannot abandon rotated-token settlement or activate an expired first intent", async () => {
     const p = await setup();
     const boss = new PgBoss({ connectionString: TEST_URL });
-    boss.on("error", () => {});
+    const errors: unknown[] = [];
+    boss.on("error", (error) => errors.push(error));
+    const queue = `fleet-source-expiry-${randomUUID()}`;
     const owner = createFleetSourceOwner();
     const holder = await ctx.pool.connect();
     let pid = 0;
+    let currentJobId: string | undefined;
+    let tokenJobId: string | undefined;
+    const tasks: Promise<void>[] = [];
+    const jobIds: string[] = [];
     const upstream = p.deps.fetchImpl;
     const fetchImpl: typeof fetch = async (url, init) => {
       const response = await upstream(url, init);
       if (String(url).endsWith("/oauth/token")) {
+        tokenJobId = currentJobId;
         await holder.query("begin");
         pid = (await holder.query<{ pid: number }>("select pg_backend_pid() as pid"))
           .rows[0].pid;
@@ -991,41 +998,76 @@ describe("actual source job and ESI parser (synthetic provider only)", () => {
       }
       return response;
     };
-    const handler = owner.wrap(async () =>
+    const handler = owner.wrap(async (data) =>
       runFleetSourceJob(
         { ...p.deps, fetchImpl, signal: owner.signal },
-        { sourceId: p.sourceId, generation: 1 },
+        data as { sourceId: string; generation: number },
       ),
     );
     let draining: Promise<void> | undefined;
     try {
       await boss.start();
       await createQueues(boss);
-      await boss.work(
-        QUEUES.fleetSource,
-        { pollingIntervalSeconds: 0.5 },
-        async (jobs) => {
-          for (const job of jobs) await handler(job.data);
-        },
+      // App-table truncation leaves pg-boss jobs intact. Keep real source queue
+      // policy, but own this queue so another fixture's work cannot satisfy us.
+      const sourceQueue = await boss.getQueue(QUEUES.fleetSource);
+      expect(sourceQueue).not.toBeNull();
+      const { deadLetter, ...sourceOptions } = sourceQueue!;
+      expect(deadLetter).toBeNull();
+      await boss.createQueue(queue, { ...sourceOptions, name: queue });
+      // Regression: old unkeyed work must neither coalesce the intended send
+      // nor run this fixture's source through a callback that ignores job.data.
+      const residueId = await boss.send(
+        queue,
+        { jobType: "fleet-source", sourceId: randomUUID(), generation: 1 },
+        { priority: 100 },
       );
-      const id = await boss.send(
-        QUEUES.fleetSource,
-        { jobType: "fleet-source", sourceId: p.sourceId, generation: 1 },
-        { expireInSeconds: 1 },
-      );
+      if (residueId) jobIds.push(residueId);
+      expect(residueId).not.toBeNull();
+      const data = { jobType: "fleet-source", sourceId: p.sourceId, generation: 1 };
+      const id = await boss.send(queue, data, {
+        expireInSeconds: 1,
+        singletonKey: `fleet-source:${p.sourceId}:1`,
+      });
+      if (id) jobIds.push(id);
+      expect(
+        id,
+        "the intended expiry job must be inserted, not coalesced",
+      ).not.toBeNull();
+      await boss.work(queue, { pollingIntervalSeconds: 0.5 }, async (jobs) => {
+        for (const job of jobs) {
+          currentJobId = job.id;
+          const task = handler(job.data);
+          tasks.push(task);
+          await task;
+        }
+      });
       for (let i = 0; !pid && i < 100; i++) await new Promise((r) => setTimeout(r, 20));
       expect(pid).not.toBe(0);
+      expect(tokenJobId === id, "credential CAS must belong to the intended job").toBe(
+        true,
+      );
+      expect((await boss.getJobById(queue, residueId!))?.state).toBe("completed");
+      const started = await boss.getJobById(queue, id!);
+      expect(started?.data).toEqual(data);
+      expect(started?.state).toBe("active");
+      expect(Number(started?.expireInSeconds)).toBe(1);
       expect(await waitUntilBlockedBy(ctx.pool, pid)).toBe(true);
       p.setNow(61000);
       for (
         let i = 0;
-        i < 100 && (await boss.getJobById(QUEUES.fleetSource, id!))?.state !== "failed";
+        i < 100 && (await boss.getJobById(queue, id!))?.state !== "failed";
         i++
       )
         await new Promise((r) => setTimeout(r, 20));
-      expect((await boss.getJobById(QUEUES.fleetSource, id!))?.state).toBe("failed");
+      expect(await boss.getJobById(queue, id!)).toMatchObject({
+        state: "failed",
+        retryLimit: 0,
+        retryCount: 0,
+        output: { message: "handler execution exceeded 1000ms" },
+      });
       owner.stopAdmission();
-      await boss.offWork(QUEUES.fleetSource);
+      await boss.offWork(queue);
       let drained = false;
       draining = owner.drain().then(() => {
         drained = true;
@@ -1043,14 +1085,24 @@ describe("actual source job and ESI parser (synthetic provider only)", () => {
         terminalReason: "expired",
         activatedAt: null,
       });
+      expect(p.requests).toEqual(["token"]);
     } finally {
+      owner.stopAdmission();
+      await boss.offWork(queue);
       await holder.query("rollback");
       holder.release();
-      owner.stopAdmission();
       await owner.drain();
       await draining;
-      await boss.stop({ graceful: true, wait: true });
+      // Also settle callbacks in teardown if the ownership assertion fails.
+      await Promise.allSettled(tasks);
+      try {
+        if (jobIds.length) await boss.deleteJob(queue, jobIds);
+        await boss.deleteQueue(queue);
+      } finally {
+        await boss.stop({ graceful: true, wait: true });
+      }
     }
+    expect(errors).toEqual([]);
   }, 15000);
   it("Stop during held roster cannot be undone by late success or token settlement", async () => {
     const p = await setup();
