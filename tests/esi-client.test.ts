@@ -46,6 +46,59 @@ describe("safe retry/cache boundaries", () => {
   });
 });
 
+describe("source-only unknown error-budget recovery", () => {
+  it.each(["network", "absent", "malformed"])(
+    "a %s probe leaves a bounded next probe; healthy headers release it without another caller",
+    async (failure) => {
+      let now = 0;
+      let response = "malformed";
+      let calls = 0;
+      const fetchImpl: typeof fetch = async () => {
+        calls++;
+        if (response === "network") throw new Error("synthetic transport failure");
+        return Response.json([], {
+          headers:
+            response === "absent"
+              ? {}
+              : {
+                  "x-esi-error-limit-remain": "0",
+                  "x-esi-error-limit-reset": response === "healthy" ? "0" : "bad",
+                },
+        });
+      };
+      const esi = createEsiClient({
+        fetchImpl,
+        now: () => now,
+        sleep: async () => {
+          throw new Error("source must schedule, not sleep");
+        },
+      });
+      const options = { fetchImpl, now: () => now };
+      await expect(esi.getFleetMembers(123, "synthetic", options)).rejects.toBeInstanceOf(
+        EsiError,
+      );
+      expect(esi.getFleetRetryAt()).toBe(60000);
+      now = 59999;
+      await expect(esi.getFleetMembers(123, "synthetic", options)).rejects.toBeInstanceOf(
+        EsiError,
+      );
+      expect(calls).toBe(1);
+      now = 60000;
+      response = failure;
+      await expect(esi.getFleetMembers(123, "synthetic", options)).rejects.toThrow();
+      expect(calls).toBe(2);
+      expect(esi.getFleetRetryAt()).toBe(120000);
+      now = 120000;
+      response = "healthy";
+      await expect(esi.getFleetMembers(123, "synthetic", options)).resolves.toMatchObject(
+        { value: [] },
+      );
+      expect(calls).toBe(3);
+      expect(esi.getFleetRetryAt()).toBeNull();
+    },
+  );
+});
+
 describe("chunk", () => {
   it("splits into fixed-size chunks", () => {
     expect(chunk([1, 2, 3, 4, 5], 2)).toEqual([[1, 2], [3, 4], [5]]);
@@ -818,12 +871,17 @@ describe("fleet reads", () => {
         ),
       ),
     );
-    const esi = createEsiClient();
+    const esi = createEsiClient({ now: () => 0 });
     expect(await esi.getCharacterFleet(7, "token")).toEqual({
       status: 200,
       value: { fleetId: 42, fleetBossId: 8 },
       cacheControl: "max-age=5",
       etag: '"fleet-v1"',
+      date: null,
+      age: null,
+      expires: null,
+      requestStartedAt: new Date(0),
+      responseCompletedAt: new Date(0),
     });
   });
 
@@ -901,12 +959,17 @@ describe("fleet reads", () => {
         ),
       ),
     );
-    const esi = createEsiClient();
+    const esi = createEsiClient({ now: () => 0 });
     expect(await esi.getFleetMembers(42, "token")).toEqual({
       status: 200,
       value: [{ characterId: 90000002 }],
       cacheControl: "no-cache",
       etag: '"members-v1"',
+      date: null,
+      age: null,
+      expires: null,
+      requestStartedAt: new Date(0),
+      responseCompletedAt: new Date(0),
     });
   });
 

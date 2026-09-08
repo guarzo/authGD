@@ -1,4 +1,4 @@
-import { inArray, isNull, min } from "drizzle-orm";
+import { and, inArray, isNull, min, sql } from "drizzle-orm";
 import type { Dbx } from "@/db";
 import type { OutboxPayload } from "@/core/dispatch-plan";
 import { outbox } from "@/db/schema";
@@ -20,11 +20,21 @@ export async function enqueueSync(dbx: Dbx, payload: OutboxPayload): Promise<voi
 export async function takeUndispatched(
   dbx: Dbx,
   limit = 100,
+  scope: "all" | "scheduled" | "fleet-source" = "all",
 ): Promise<Array<{ id: number; payload: OutboxPayload }>> {
   const rows = await dbx
     .select()
     .from(outbox)
-    .where(isNull(outbox.dispatchedAt))
+    .where(
+      and(
+        isNull(outbox.dispatchedAt),
+        scope === "all"
+          ? undefined
+          : scope === "fleet-source"
+            ? sql`${outbox.payload}->>'kind' = 'fleet-source'`
+            : sql`${outbox.payload}->>'kind' is distinct from 'fleet-source'`,
+      ),
+    )
     .orderBy(outbox.id)
     .limit(limit)
     .for("update", { skipLocked: true });

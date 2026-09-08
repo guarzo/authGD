@@ -20,10 +20,16 @@ import type {
 } from "@/lib/esi/client";
 import type { WandererClient } from "@/lib/wanderer/client";
 import { QUEUES } from "@/worker/queues";
+import {
+  runFleetSourceJob,
+  createFleetSourceMemory,
+  type FleetSourceDeps,
+} from "@/jobs/fleet-source";
 
 // Fail closed: every payload must carry the queue's literal jobType and no
-// unknown fields — garbage never triggers a job (it rejects, retries, and
-// surfaces via the dead-letter alert).
+// unknown fields — garbage never triggers a job. Ordinary queues retry and
+// surface via the dead-letter alert; source jobs have neither generic retries
+// nor DLQ.
 const membershipSchema = z
   .object({
     jobType: z.literal(QUEUES.membership),
@@ -63,18 +69,41 @@ export type JobDeps = {
   wanderer: WandererClient;
   discord: DiscordClient;
   fetchImpl?: typeof fetch;
+  fleetSource?: Pick<FleetSourceDeps, "getKey" | "now" | "memory" | "signal" | "esi">;
 };
 
 /**
  * One handler per job queue: parse the payload (fail closed — an unparseable
- * payload throws and the job retries into the dead-letter alert) and run the
- * job. The worker registers these with boss.work; tests drive them directly
- * with dispatcher-emitted payloads, so routing and parsing stay covered.
+ * payload throws; ordinary jobs retry into the dead-letter alert, source jobs
+ * do not) and run the job. The worker registers these with boss.work; tests drive
+ * them directly with dispatcher-emitted payloads, so routing and parsing stay covered.
  */
 export function buildJobHandlers(
   deps: JobDeps,
 ): Record<string, (data: unknown) => Promise<void>> {
+  const memory = deps.fleetSource?.memory ?? createFleetSourceMemory();
   return {
+    [QUEUES.fleetSource]: async (data) => {
+      const parsed = z
+        .object({
+          jobType: z.literal("fleet-source"),
+          sourceId: z.uuid(),
+          generation: z.number().int().positive().max(2_147_483_646),
+        })
+        .strict()
+        .safeParse(data);
+      if (!parsed.success) throw new Error("fleet_source_payload_invalid");
+      await runFleetSourceJob(
+        {
+          db: deps.db,
+          cfg: deps.cfg,
+          fetchImpl: deps.fetchImpl,
+          ...deps.fleetSource,
+          memory,
+        },
+        parsed.data,
+      );
+    },
     [QUEUES.membership]: async (data) => {
       const { accountId } = membershipSchema.parse(data);
       await runMembershipJob(deps, { accountId });

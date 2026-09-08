@@ -202,8 +202,9 @@ export const outbox = pgTable(
         | { kind: "discord-user"; discordUserId: string }
         | { kind: "membership-recheck" }
         | { kind: "all" }
-        // one named job, re-run on demand; jobType is validated against QUEUES
-        // at dispatch time, so an unknown value drops rather than enqueueing
+        | { kind: "fleet-source"; sourceId: string; generation: number }
+        // one scheduled/admin-rerunnable job; jobType is validated at dispatch
+        // time, so an unknown value drops rather than enqueueing
         // to an arbitrary queue name
         | { kind: "job"; jobType: string }
       >()
@@ -908,6 +909,11 @@ export const fleetSourceIntent = pgTable(
     fetchGeneration: integer("fetch_generation").notNull().default(0),
     lastAttemptAt: timestamp("last_attempt_at", { withTimezone: true }),
     nextFetchAt: timestamp("next_fetch_at", { withTimezone: true }),
+    fetchClaimExpiresAt: timestamp("fetch_claim_expires_at", { withTimezone: true }),
+    enqueueUntil: timestamp("enqueue_until", { withTimezone: true }),
+    latestOutcome: text("latest_outcome").$type<
+      "verified" | "service_unavailable" | "untrustworthy_evidence" | "timed_out"
+    >(),
     endedAt: timestamp("ended_at", { withTimezone: true }),
     terminalReason: text("terminal_reason"),
     retainUntil: timestamp("retain_until", { withTimezone: true }).notNull(),
@@ -917,6 +923,16 @@ export const fleetSourceIntent = pgTable(
     index("fleet_source_intent_boss_idx").on(t.bossCharacterId),
     index("fleet_source_intent_device_idx").on(t.deviceId),
     index("fleet_source_intent_retention_idx").on(t.retainUntil),
+    index("fleet_source_intent_due_idx")
+      .on(t.nextFetchAt)
+      .where(sql`${t.state} <> 'ended'`),
+    index("fleet_source_intent_pending_expiry_idx")
+      .on(t.intentExpiresAt)
+      .where(sql`${t.activatedAt} is null and ${t.state} <> 'ended'`),
+    check(
+      "fleet_source_intent_outcome_ck",
+      sql`${t.latestOutcome} is null or ${t.latestOutcome} in ('verified', 'service_unavailable', 'untrustworthy_evidence', 'timed_out')`,
+    ),
     check(
       "fleet_source_intent_state_ck",
       sql`${t.state} in ('pending', 'active', 'paused', 'ended')`,
@@ -959,6 +975,7 @@ export const fleetSourceAuthority = pgTable(
   },
   (t) => [
     index("fleet_source_authority_source_idx").on(t.sourceId),
+    index("fleet_source_authority_expiry_idx").on(t.expiresAt),
     check(
       "fleet_source_authority_generation_ck",
       sql`${t.authorityGeneration} >= 0 and (${t.sourceGeneration} is null or ${t.sourceGeneration} > 0)`,

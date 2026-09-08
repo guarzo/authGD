@@ -162,6 +162,13 @@
       "when": 1788816824590,
       "tag": "0022_nostalgic_sage",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1788820044219,
+      "tag": "0023_long_meltdown",
+      "breakpoints": true
     }
   ]
 }

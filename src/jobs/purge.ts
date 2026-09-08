@@ -3,6 +3,7 @@ import type { Db } from "@/db";
 import { oauthTransaction, outbox, session } from "@/db/schema";
 import { runJob, type JobResult } from "@/services/sync-run";
 import { purgeExpiredFleetRecovery } from "@/services/fleet-recovery";
+import { cleanupFleetSources } from "@/services/fleet-source-maintenance";
 
 const OUTBOX_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -13,6 +14,7 @@ export async function runPurgeJob(deps: { db: Db }): Promise<JobResult> {
   return runJob(db, "purge", async () => {
     const now = new Date();
     const fleetRecoveryChallenges = await purgeExpiredFleetRecovery(db, now);
+    const fleetSourceCleanup = await cleanupFleetSources(db);
     const sessions = await db.delete(session).where(lt(session.expiresAt, now));
     const oauth = await db
       .delete(oauthTransaction)
@@ -34,6 +36,7 @@ export async function runPurgeJob(deps: { db: Db }): Promise<JobResult> {
         oauthTransactions: oauth.rowCount ?? 0,
         outbox: outboxRows.rowCount ?? 0,
         fleetRecoveryChallenges,
+        fleetSourceCleanup,
       },
     };
   });

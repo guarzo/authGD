@@ -105,6 +105,7 @@ describe("runPurgeJob", () => {
       oauthTransactions: 2,
       outbox: 1,
       fleetRecoveryChallenges: 0,
+      fleetSourceCleanup: 0,
     });
 
     expect((await ctx.db.select().from(session)).map((s) => s.id)).toEqual(["live"]);

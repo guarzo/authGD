@@ -1,4 +1,5 @@
 import "./fleet-browser-guards";
+import "./fleet-source-flow";
 import { eq } from "drizzle-orm";
 import type { Locator, Page } from "@playwright/test";
 import { test, expect } from "./fleet-browser";

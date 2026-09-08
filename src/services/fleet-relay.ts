@@ -136,6 +136,7 @@ export const FLEET_RELAY_STATUS_BY_CODE: Readonly<Record<string, number>> = {
   unauthorized: 401,
   feature_disabled: 503,
   capability_required: 403,
+  fleet_read_required: 403,
   conflict: 409,
   invalid_intent: 400,
   service_unavailable: 503,

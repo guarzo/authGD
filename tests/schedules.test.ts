@@ -114,7 +114,11 @@ describe("cadenceFor", () => {
     // Guards the page's claim: a queue registered without a JOB_CRON entry
     // would render no cadence at all, so the two must stay in step.
     for (const name of Object.values(QUEUES)) {
-      if (name === QUEUES.deadLetter) continue; // not scheduled
+      if (name === QUEUES.deadLetter || name === QUEUES.fleetSource) {
+        expect(cronFor(name)).toBeNull();
+        expect(isJobType(name)).toBe(false);
+        continue;
+      }
       expect(JOB_CRON[name], `${name} has no cron`).toBeTruthy();
       expect(cadenceFor(name)).not.toBeNull();
       // `not.toBeNull()` alone cannot fail for a scheduled queue: `cadenceFor`

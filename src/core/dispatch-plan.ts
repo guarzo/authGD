@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { outbox } from "@/db/schema";
 import { isJobType, type JobType } from "@/core/schedules";
 
@@ -22,6 +23,7 @@ export type OutboxPayload = typeof outbox.$inferSelect.payload;
  * `sendFor`'s switch exhaustively checkable.
  */
 export type PlannedJob =
+  | { scope: "source"; jobType: "fleet-source"; sourceId: string; generation: number }
   | { scope: "global"; jobType: JobType }
   | { scope: "account"; jobType: JobType; accountId: string }
   | { scope: "discord-user"; jobType: JobType; discordUserId: string };
@@ -43,6 +45,26 @@ export function jobsFor(payload: OutboxPayload): PlannedJob[] {
   if (raw === null || typeof raw !== "object" || !("kind" in raw)) return [];
 
   switch (payload.kind) {
+    case "fleet-source": {
+      const parsed = z
+        .object({
+          kind: z.literal("fleet-source"),
+          sourceId: z.uuid(),
+          generation: z.number().int().positive().max(2_147_483_646),
+        })
+        .strict()
+        .safeParse(payload);
+      return parsed.success
+        ? [
+            {
+              scope: "source",
+              jobType: "fleet-source",
+              sourceId: parsed.data.sourceId,
+              generation: parsed.data.generation,
+            },
+          ]
+        : [];
+    }
     case "account":
       // Membership and Discord roles are account-scopable; the desired
       // contact/ACL sets are GLOBAL (every member pushes every other

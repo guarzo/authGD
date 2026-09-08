@@ -36,7 +36,8 @@ export const JOB_CRON = {
 } as const satisfies Record<string, string>;
 
 /**
- * The job types this table schedules. `as const` above is what makes this a
+ * The scheduled/admin-rerunnable job types. Source polling is worker-owned and
+ * intentionally not part of this cron vocabulary. `as const` above makes this a
  * union of the eight literals rather than `string`: indexing `JOB_CRON` with an
  * arbitrary string is now a compile error, so every lookup has to come through
  * `cronFor` and prove it handled the absent case. Typing the table as

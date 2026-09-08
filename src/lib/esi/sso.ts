@@ -124,11 +124,13 @@ let remoteJwks: JWTVerifyGetKey | undefined;
 export async function verifyEveAccessToken(
   accessToken: string,
   getKey?: JWTVerifyGetKey,
-): Promise<EveIdentity> {
+  metadata?: { includeExpiry?: boolean; currentDate?: Date },
+): Promise<EveIdentity & { expiresAt?: Date }> {
   remoteJwks ??= createRemoteJWKSet(new URL(JWKS_URL));
   const { payload } = await jwtVerify(accessToken, getKey ?? remoteJwks, {
     issuer: ISSUER,
     audience: AUDIENCE,
+    currentDate: metadata?.currentDate,
   });
   const sub = String(payload.sub ?? "");
   const match = /^CHARACTER:EVE:(\d+)$/.exec(sub);
@@ -150,5 +152,13 @@ export async function verifyEveAccessToken(
     characterName: name,
     ownerHash: owner,
     scopes: Array.isArray(scp) ? scp.map(String) : typeof scp === "string" ? [scp] : [],
+    // Only verified JWT NumericDate is authority. Keep generic callers' shape
+    // and missing-exp behavior; the source cache explicitly requires this field.
+    ...(metadata?.includeExpiry &&
+    typeof payload.exp === "number" &&
+    Number.isFinite(payload.exp) &&
+    Number.isFinite(new Date(payload.exp * 1000).getTime())
+      ? { expiresAt: new Date(payload.exp * 1000) }
+      : {}),
   };
 }

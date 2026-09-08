@@ -1,7 +1,7 @@
 import type { Db } from "@/db";
 import { jobsFor, type PlannedJob } from "@/core/dispatch-plan";
 import { markDispatched, takeUndispatched, type OutboxPayload } from "@/services/outbox";
-import { globalSingletonKey, QUEUES } from "@/worker/queues";
+import { globalSingletonKey, SCHEDULED_QUEUES, QUEUES } from "@/worker/queues";
 
 export type QueueSend = (
   queue: string,
@@ -10,8 +10,8 @@ export type QueueSend = (
 ) => Promise<unknown>;
 
 /**
- * Queues a "job" payload is allowed to name. Built from QUEUES minus the
- * dead-letter queue, which is ops plumbing and not a job anyone re-runs.
+ * Queues a "job" payload is allowed to name. Only scheduled/admin-rerunnable
+ * queues belong here; source polling and dead-letter plumbing do not.
  * `isJobType` (`@/core/dispatch-plan`) is the actual runtime gate on a `job`
  * re-run now; this set has no production consumer of its own. Its remaining
  * job is as the fixture for the set-equality test in tests/dispatcher.test.ts:
@@ -19,9 +19,7 @@ export type QueueSend = (
  * no queue here would render a button whose outbox row this module silently
  * drops.
  */
-export const RERUNNABLE: ReadonlySet<string> = new Set(
-  Object.values(QUEUES).filter((q) => q !== QUEUES.deadLetter),
-);
+export const RERUNNABLE: ReadonlySet<string> = new Set(SCHEDULED_QUEUES);
 
 /**
  * Account-scoped sends whose singleton-key prefix differs from their queue
@@ -49,6 +47,12 @@ function sendFor(job: PlannedJob): {
 } {
   const queue = job.jobType;
   switch (job.scope) {
+    case "source":
+      return {
+        queue,
+        data: { jobType: queue, sourceId: job.sourceId, generation: job.generation },
+        singletonKey: `fleet-source:${job.sourceId}:${job.generation}`,
+      };
     case "account": {
       const prefix = ACCOUNT_SINGLETON_PREFIX[queue] ?? queue;
       return {
@@ -101,7 +105,6 @@ export function planDispatch(
   if (raw === null || typeof raw !== "object" || !("kind" in raw)) {
     console.error("outbox payload is not an object with a kind; dropping row", {
       rowId,
-      payload,
     });
     return [];
   }
@@ -113,9 +116,9 @@ export function planDispatch(
     // jobType must NOT throw: planDispatch runs inside dispatchOutbox's
     // transaction, so a throw rolls the claim back for every row in the batch
     // and the 2s retry loop then wedges all sync dispatch behind that one
-    // row. Drop it instead — it gets marked dispatched, and the log names
-    // both the row and what was lost.
-    console.error("outbox payload not dispatchable; dropping row", { rowId, payload });
+    // row. Drop it instead — it gets marked dispatched, with a fixed
+    // classification and row ID in the log, never the untrusted payload.
+    console.error("outbox payload not dispatchable; dropping row", { rowId });
     return [];
   }
   return jobs.map(sendFor);
@@ -135,9 +138,13 @@ export function planDispatch(
  * re-claim and re-send the same rows; pg-boss's singleton keys coalesce the
  * resulting duplicates, so this is safe but not exactly-once.
  */
-export async function dispatchOutbox(db: Db, send: QueueSend): Promise<number> {
+export async function dispatchOutbox(
+  db: Db,
+  send: QueueSend,
+  scope: "all" | "scheduled" | "fleet-source" = "all",
+): Promise<number> {
   return db.transaction(async (tx) => {
-    const rows = await takeUndispatched(tx);
+    const rows = await takeUndispatched(tx, 100, scope);
     if (rows.length === 0) return 0;
     for (const row of rows) {
       for (const job of planDispatch(row.payload, row.id)) {
@@ -156,14 +163,15 @@ export function startDispatcher(
   db: Db,
   send: QueueSend,
   intervalMs = 2000,
+  scope: "all" | "scheduled" | "fleet-source" = "all",
 ): () => Promise<void> {
   let running = false;
   let inFlight: Promise<unknown> = Promise.resolve();
   const timer = setInterval(() => {
     if (running) return;
     running = true;
-    inFlight = dispatchOutbox(db, send)
-      .catch((err) => console.error("outbox dispatch failed", err))
+    inFlight = dispatchOutbox(db, send, scope)
+      .catch(() => console.error("outbox dispatch failed"))
       .finally(() => {
         running = false;
       });
