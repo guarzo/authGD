@@ -9,6 +9,7 @@ import {
 } from "../src/services/fleet-key-identity";
 
 import { resetDb, seedMember, sessionCookieFor, testDb } from "./helpers";
+import { BASE_URL } from "./env";
 import { generateKeyPairSync, sign as ed25519Sign } from "node:crypto";
 import {
   approvePairing,
@@ -31,7 +32,12 @@ async function reconcileKeys() {
   return state;
 }
 test.afterAll(() => pool.end());
-test.beforeEach(() => resetDb(db));
+test.beforeEach(async ({ context }) => {
+  await context.route("**/*", (route) =>
+    new URL(route.request().url()).origin === BASE_URL ? route.continue() : route.abort(),
+  );
+  await resetDb(db);
+});
 
 /**
  * `/fleet/pair/[id]` — the one browser surface Task 6 adds. Everything else
@@ -77,6 +83,7 @@ test("shared capability consent names roster management and keeps participation 
   await expect(
     page.getByText(/Participation is a separate, default-off choice in Wingman/),
   ).toBeVisible();
+  await expect(page.getByText(/Wingman build with Fleet sharing controls/)).toBeVisible();
   await page.getByRole("button", { name: "Approve" }).click();
   await expect(
     page.getByText("Approved. Waiting for the desktop app to finish pairing."),
@@ -271,4 +278,8 @@ test("a device already bound to a different account cannot be approved, and the 
   await expect(
     page.getByText("This device is already paired to a different authGD account"),
   ).toBeVisible();
+  await expect(
+    page.getByText(/Sign in to the account that owns this device/),
+  ).toBeVisible();
+  await expect(page.getByText(/Generate a new key pair/)).toHaveCount(0);
 });

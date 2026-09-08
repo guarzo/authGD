@@ -196,8 +196,9 @@ export default async function FleetPairPage({
 
         {state === "key_unavailable" && (
           <Notice tone="info">
-            This device key cannot be used for pairing. Keep existing bindings unchanged;
-            explicitly generate a fresh key in Wingman to start a new pairing.
+            This device key cannot be used for pairing. Keep existing bindings unchanged.
+            A Wingman build with Fleet sharing controls offers Fresh setup only after
+            checking the device key.
           </Notice>
         )}
 
@@ -210,8 +211,9 @@ export default async function FleetPairPage({
         {state === "device_bound_elsewhere" && (
           <Notice tone="info">
             This device is already paired to a different authGD account and cannot be
-            approved from this one. Generate a new key pair on the device and start
-            pairing again from Wingman.
+            approved from this one. Sign in to the account that owns this device, then
+            reopen this approval. A browser-account mismatch is not a reason to replace
+            the device key.
           </Notice>
         )}
 
@@ -229,7 +231,9 @@ export default async function FleetPairPage({
                 verification through an eligible fleet boss on your account, and sharing
                 telemetry with other participating accounts in that verified fleet.
                 Pairing does not start roster verification or turn on participation.
-                Participation is a separate, default-off choice in Wingman.
+                Participation is a separate, default-off choice in Wingman. In a Wingman
+                build with Fleet sharing controls, use Settings › Previews to choose
+                sharing On or Off and explicitly Start or Stop verification.
               </p>
             )}
             <dl className="facts">

@@ -9,10 +9,16 @@ import {
   pairingChallengePreimage,
 } from "../src/services/fleet-pairing";
 import { resetDb, seedMember, sessionCookieFor, testDb } from "./helpers";
+import { BASE_URL } from "./env";
 
 const { db, pool } = testDb();
 test.afterAll(() => pool.end());
-test.beforeEach(() => resetDb(db));
+test.beforeEach(async ({ context }) => {
+  await context.route("**/*", (route) =>
+    new URL(route.request().url()).origin === BASE_URL ? route.continue() : route.abort(),
+  );
+  await resetDb(db);
+});
 
 /**
  * `/account/fleet-devices` — final-review finding I5's authenticated
@@ -76,9 +82,12 @@ test("a member with no paired devices sees the empty state, not a broken table",
   await page.goto("/account/fleet-devices");
 
   await expect(
-    page.getByText("No devices paired. Pairing from Wingman is not available yet.", {
-      exact: true,
-    }),
+    page.getByText(
+      "No devices paired. In a Wingman build with Fleet sharing controls, open Settings › Previews and choose Connect.",
+      {
+        exact: true,
+      },
+    ),
   ).toBeVisible();
   await expect(page.getByRole("button", { name: /^revoke/ })).toHaveCount(0);
 });

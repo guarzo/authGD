@@ -210,9 +210,12 @@ test("normal account keyboard journey authorizes a non-main fleet boss and autom
   });
   await page.getByRole("link", { name: "Manage paired devices" }).click();
   await expect(
-    page.getByText("No devices paired. Pairing from Wingman is not available yet.", {
-      exact: true,
-    }),
+    page.getByText(
+      "No devices paired. In a Wingman build with Fleet sharing controls, open Settings › Previews and choose Connect.",
+      {
+        exact: true,
+      },
+    ),
   ).toBeVisible();
 });
 
