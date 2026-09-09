@@ -93,6 +93,18 @@ async function probePython(
 
 /** HTTPS is the logical identity, not a relaxed production client origin. */
 describe("joint fleet fixture boundary", () => {
+  it("hydrates only the factory-created Fleet page and refuses missing, replaced and retired identities", async () => {
+    let removedRoot = "";
+    await withFleetResources(async (own) => {
+      const trust = own(createFleetTrust(), (trust) => trust.close());
+      removedRoot = trust.root;
+      expect(await probePython(trust, "page-identity")).toEqual({
+        identity: "verified",
+        denials: 0,
+      });
+    });
+    expect(existsSync(removedRoot)).toBe(false);
+  });
   it("verifies fixture CA and hostname, preserves signed bytes/cookies and refuses redirects", async () => {
     let removedRoot = "";
     const send = (host: string, ca?: Buffer) =>

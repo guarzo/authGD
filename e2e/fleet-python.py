@@ -16,6 +16,8 @@ import sys
 import time
 from collections import deque
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 from urllib.error import URLError
 from urllib.parse import urlsplit
 from urllib.request import Request
@@ -97,7 +99,7 @@ from wingman.fleetsharing.worker import FleetSharingWorker
 
 # Closed bootstrap regressions; never accept a general URL/HTTP executor.
 probe = os.environ.get("FLEET_PROBE")
-if probe:
+if probe and probe != "page-identity":
     if probe == "legacy-recovery":
         import secrets
         from dataclasses import replace
@@ -237,6 +239,7 @@ if probe:
 from tests.test_api import FakeWindow, make_api, pushes
 from wingman import paths, settings
 from wingman.telemetry.model import FleetRow, FleetSnapshot, StreamHealth
+from wingman.ui import fleetbar
 
 logging.disable(logging.CRITICAL)
 state_path = root / "fleet.json"
@@ -256,14 +259,110 @@ class OwnedWindow(FakeWindow):
         self.deliveries += 1
 
 
+class OwnedFleetWindow(OwnedWindow):
+    """Native-only seam; identity is captured once from the real factory URL."""
+
+    def __init__(self, title, page_url, *, js_api, **options):
+        super().__init__()
+        assert title == "Wingman Fleet Bar" and js_api is api
+        fragment = urlsplit(page_url).fragment
+        assert fragment.startswith("fleet-page=")
+        self.page_id = fragment.removeprefix("fleet-page=")
+        assert len(self.page_id) == 64 and all(
+            c in "0123456789abcdef" for c in self.page_id
+        )
+        assert options["hidden"] is True
+        self.width, self.height = options["width"], options["height"]
+        self.x, self.y = options["x"], options["y"]
+        self.alive = True
+
+    def resize(self, width, height):
+        self.width, self.height = width, height
+
+    def move(self, x, y):
+        self.x, self.y = x, y
+
+    def destroy(self):
+        super().destroy()
+        self.alive = False
+
+
+def create_fleet_window():
+    # Linux fixture only: production owns creation/publication/retirement. No
+    # platform switch or replacement of the Api's identity admission helpers.
+    with patch.dict(
+        sys.modules, {"webview": SimpleNamespace(create_window=OwnedFleetWindow)}
+    ):
+        return fleetbar.create(api)
+
+
 api = make_api(root, window=OwnedWindow())
-api._fleetbar_window = OwnedWindow()
+api._state.settings["fleet_bar"] = settings.validated_fleet_bar({"enabled": True})
+fleet_window = create_fleet_window()
+
+if probe == "page-identity":
+    windows = [fleet_window]
+
+    def assert_refused(page_id, *bars):
+        before = [(bar.width, bar.height, bar.x, bar.y, bar.shown) for bar in bars]
+        saved = settings.load(paths.settings_file())
+        assert api.fleet_bar_snapshot(page_id) is None
+        api.fleet_bar_ready(page_id)
+        api.fit_fleet_bar(page_id, 111, 222)
+        api.move_fleet_bar(page_id, 333, 444)
+        api.save_fleet_bar_pos(page_id, 555, 666)
+        after = [(bar.width, bar.height, bar.x, bar.y, bar.shown) for bar in bars]
+        assert after == before, "refused Fleet callbacks changed a window"
+        assert settings.load(paths.settings_file()) == saved
+
+    try:
+        assert api.fleet_bar_snapshot() is None
+        for invalid in (None, "", "invalid", "0" * 64):
+            assert invalid != fleet_window.page_id
+            assert_refused(invalid, fleet_window)
+        # These public callbacks must still have real effects for this creation;
+        # otherwise rejection by a nonexistent window would be a vacuous proof.
+        current = api.fleet_bar_snapshot(fleet_window.page_id)
+        assert current is not None and current["rows"] == []
+        api.fit_fleet_bar(fleet_window.page_id, 420, 120)
+        api.move_fleet_bar(fleet_window.page_id, 70, 80)
+        api.save_fleet_bar_pos(fleet_window.page_id, 90, 100)
+        api.fleet_bar_ready(fleet_window.page_id)
+        assert (fleet_window.width, fleet_window.height) == (420, 120)
+        assert (fleet_window.x, fleet_window.y, fleet_window.shown) == (70, 80, 1)
+        saved = settings.load(paths.settings_file())["fleet_bar"]
+        assert (saved["x"], saved["y"]) == (90, 100)
+
+        replacement = create_fleet_window()
+        windows.append(replacement)
+        assert replacement.page_id != fleet_window.page_id
+        assert (replacement.x, replacement.y, replacement.shown) == (90, 100, 0)
+        # Leave the old native double alive: rejection must be creation identity,
+        # not just is_alive returning false. Stale calls cannot retarget either.
+        # Snapshot both targets before one sequence: a repeated fit could hide
+        # a wrongly resized replacement behind its already-changed dimensions.
+        assert_refused(fleet_window.page_id, *windows)
+        assert api.fleet_bar_snapshot(replacement.page_id) is not None
+        api.fleet_bar_ready(replacement.page_id)
+        assert replacement.shown == 1
+
+        api.shutdown_previews()
+        assert_refused(replacement.page_id, *windows)
+        assert_refused(fleet_window.page_id, *windows)
+        assert create_fleet_window() is None
+        assert not denials
+        print(json.dumps({"identity": "verified", "denials": 0}), flush=True)
+    finally:
+        api.shutdown_previews()
+        for bar in windows:
+            bar.destroy()
+    sys.exit(0)
+
 local_names = (
     ("Task10 Boss", "Task10 Boss Alt", "Task10 Outside A")
     if os.environ["FLEET_INSTALL_SLOT"] == "a"
     else ("Task10 Quiet", "Task10 Included Alt", "Task10 Outside B")
 )
-api._state.settings["fleet_bar"] = settings.validated_fleet_bar({"enabled": True})
 api._install_fleet_generation(1)
 worker = FleetSharingWorker(
     load_state=lambda: state_module.load(state_path),
@@ -399,7 +498,9 @@ signal.signal(signal.SIGINT, stop_signal)
 def status():
     current = worker.status()
     saved = state_module.load(state_path)
-    payload = api.fleet_bar_snapshot()
+    payload = api.fleet_bar_snapshot(fleet_window.page_id)
+    assert payload is not None, "current factory-created Fleet page must hydrate"
+    assert all(r["incoming_dps"] is None for r in payload["rows"] if r.get("remote"))
     settings_payload = api.fleet_bar_settings()
     persisted = settings.load(paths.settings_file())["fleet_bar"]
     with api._fleet_presentation_lock:
@@ -435,7 +536,7 @@ def status():
         if current.sources
         else 0,
         "remote": [
-            {"dps": r["dps"], "state": r["state"], "ewar": r["ewar"]}
+            {"dps": r["outgoing_dps"], "state": r["state"], "ewar": r["ewar"]}
             for r in payload["rows"]
             if r.get("remote")
         ],
@@ -510,6 +611,8 @@ def command(data):
 next_snapshot = time.monotonic()
 try:
     assert api._start_fleet_presentation()
+    api.fit_fleet_bar(fleet_window.page_id, 420, 90)
+    api.fleet_bar_ready(fleet_window.page_id)
     worker.start()
     print(json.dumps({"ready": True, "trust_anchors": 1}), flush=True)
     while not stopping:
@@ -537,5 +640,6 @@ finally:
         unsubscribe()
     stopped = worker.stop(6)
     presentation_stopped = api._stop_fleet_presentation(2)
+    fleet_window.destroy()
     if not stopped or not presentation_stopped or denials:
         sys.exit(1)

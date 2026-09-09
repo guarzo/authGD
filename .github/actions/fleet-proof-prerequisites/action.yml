@@ -3,12 +3,12 @@ description: Install the immutable Wingman test boundary and isolated TLS toolin
 runs:
   using: composite
   steps:
-    # This pin is currently local/unpublished. The owner must separately authorize
-    # publishing it before hosted CI can resolve it; never float to main.
+    # Publish each replacement pin with separate owner authorization before
+    # hosted CI can resolve it; never float to main.
     - uses: actions/checkout@v7
       with:
         repository: guarzo/FlyGD-Wingman
-        ref: 3aa1cf28668d159ff42763ac542009bbcd727af7
+        ref: 8334ea024c559fa9c4a6edc378488bdb0c53b3e6
         path: tmp/task-10/wingman
         persist-credentials: false
     - uses: actions/setup-python@v7
