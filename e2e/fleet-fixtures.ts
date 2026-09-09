@@ -11,6 +11,7 @@ const responseSchema = z
     body: z.unknown().optional(),
     headers: z.record(z.string(), z.string()).optional(),
     hold: z.string().min(1).optional(),
+    freshness: z.literal("live").optional(),
   })
   .strict();
 const scenarioSchema = z
@@ -29,6 +30,26 @@ const scenarioSchema = z
     fleetId: z.number().int().positive().safe(),
     fleetBossId: z.number().int().positive().safe(),
     rosterIds: z.array(z.number().int().positive().safe()),
+    fleets: z
+      .array(
+        z
+          .object({
+            fleetId: z.number().int().positive().safe(),
+            fleetBossId: z.number().int().positive().safe(),
+            memberIds: z.array(z.number().int().positive().safe()).max(32),
+            rosterIds: z.array(z.number().int().positive().safe()).max(32),
+            responses: z
+              .object({
+                membership: responseSchema.optional(),
+                roster: responseSchema.optional(),
+              })
+              .strict()
+              .optional(),
+          })
+          .strict(),
+      )
+      .max(4)
+      .optional(),
     responses: z
       .object({
         token: responseSchema.optional(),
@@ -83,7 +104,7 @@ function localOrigin(raw: string): URL {
 
 export function fleetClient(connection: FixtureConnection) {
   localOrigin(connection.url);
-  async function call<T>(path: string, body?: unknown): Promise<T> {
+  async function call<T>(path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
     const res = await fetch(`${connection.url}/${path}`, {
       method: "POST",
       headers: {
@@ -94,7 +115,9 @@ export function fleetClient(connection: FixtureConnection) {
       // Next keeps its own request budget. Fixture holds deliberately remain
       // visible until release/close, even after the app aborts; this independent
       // ceiling keeps a broken control channel from hanging the test runner.
-      signal: AbortSignal.timeout(30_000),
+      signal: signal
+        ? AbortSignal.any([signal, AbortSignal.timeout(30_000)])
+        : AbortSignal.timeout(30_000),
     });
     if (!res.ok) throw new Error(`[fleet-e2e] ${path}: ${await res.text()}`);
     return (await res.json()) as T;
@@ -105,6 +128,15 @@ export function fleetClient(connection: FixtureConnection) {
     scenario: (value: FleetScenario) => call("scenario", value),
     reset: () => call("reset"),
     release: (name: string) => call("release", { name }),
+    relayMode: (
+      mode?: "normal" | "capture" | "replay" | "disconnect",
+      signal?: AbortSignal,
+    ) =>
+      call<{ mode: "normal" | "capture" | "replay" | "disconnect" }>(
+        "relay-mode",
+        mode === undefined ? {} : { mode },
+        signal,
+      ),
     snapshot: () => call<FixtureSnapshot>("snapshot"),
     provider: (request: ProviderRequest) => call<ProviderResponse>("provider", request),
     picker: () => call<Array<{ id: number; name: string }>>("picker"),
@@ -149,7 +181,7 @@ async function readJson(req: IncomingMessage): Promise<unknown> {
 export async function startFleetFixtures(input: { appUrl: string; worktree: string }) {
   const app = new URL(input.appUrl);
   if (
-    app.protocol !== "http:" ||
+    !["http:", "https:"].includes(app.protocol) ||
     !["localhost", "127.0.0.1"].includes(app.hostname) ||
     !app.port ||
     app.username ||
@@ -179,6 +211,7 @@ export async function startFleetFixtures(input: { appUrl: string; worktree: stri
   const accessTokens = new Map<string, { id: number; scopes: string[] }>();
   let serial = 0;
   let closed = false;
+  let relayMode: "normal" | "capture" | "replay" | "disconnect" = "normal";
   const sockets = new Set<Socket>();
   const release = (name: string) => {
     for (const resolve of held.get(name) ?? []) resolve();
@@ -213,6 +246,13 @@ export async function startFleetFixtures(input: { appUrl: string; worktree: stri
     let stage: "token" | "jwks" | "membership" | "roster";
     let body: unknown;
     let status = 200;
+    const membershipId = Number(url.pathname.split("/")[3]);
+    const fleet =
+      scenario.fleets?.find((f) =>
+        url.pathname.includes("/characters/")
+          ? f.memberIds.includes(membershipId)
+          : url.pathname === `/latest/fleets/${f.fleetId}/members/`,
+      ) ?? scenario;
     if (
       url.href === "https://login.eveonline.com/oauth/jwks" &&
       request.method === "GET"
@@ -272,8 +312,8 @@ export async function startFleetFixtures(input: { appUrl: string; worktree: stri
       const id = Number(url.pathname.split("/")[3]);
       if (scenario.characters.some((ch) => ch.id === id)) {
         body = {
-          fleet_id: scenario.fleetId,
-          fleet_boss_id: scenario.fleetBossId,
+          fleet_id: fleet.fleetId,
+          fleet_boss_id: fleet.fleetBossId,
           fleet_job: "fleet_member",
           squad_id: -1,
           wing_id: -1,
@@ -284,11 +324,11 @@ export async function startFleetFixtures(input: { appUrl: string; worktree: stri
       }
     } else if (
       url.origin === "https://esi.evetech.net" &&
-      url.pathname === `/latest/fleets/${scenario.fleetId}/members/` &&
+      url.pathname === `/latest/fleets/${fleet.fleetId}/members/` &&
       request.method === "GET"
     ) {
       stage = "roster";
-      body = scenario.rosterIds.map((character_id) => ({ character_id }));
+      body = fleet.rosterIds.map((character_id) => ({ character_id }));
     } else {
       violation("server-provider", request.url);
       return { status: 599, body: { error: "denied egress" } };
@@ -305,16 +345,28 @@ export async function startFleetFixtures(input: { appUrl: string; worktree: stri
         (stage === "membership" && identity.id !== Number(url.pathname.split("/")[3])) ||
         // Boss authority is independent of command position and checked before
         // response overrides, so a synthetic 200 cannot grant roster access.
-        (stage === "roster" && identity.id !== scenario.fleetBossId)
+        (stage === "roster" && identity.id !== fleet.fleetBossId)
       )
         return { status: 403, body: { error: "forbidden" } };
     }
-    const rule = stage === "jwks" ? undefined : scenario.responses?.[stage];
+    const rule =
+      stage === "jwks"
+        ? undefined
+        : stage === "token"
+          ? scenario.responses?.token
+          : fleet.responses?.[stage];
     // Capture before the hold. Changing anchor/scenario must not rewrite a
     // response already in flight, or the late-result test becomes vacuous.
     const result = structuredClone({
       status: rule?.status ?? status,
-      headers: rule?.headers,
+      headers:
+        rule?.freshness === "live"
+          ? {
+              Date: new Date().toUTCString(),
+              "Cache-Control": `max-age=${stage === "membership" ? 60 : 5}`,
+              ...rule.headers,
+            }
+          : rule?.headers,
       body: rule && "body" in rule ? rule.body : body,
     });
     if (rule?.hold) {
@@ -334,7 +386,12 @@ export async function startFleetFixtures(input: { appUrl: string; worktree: stri
     // redirects are returned as-is, never followed by the proxy.
     if (req.url?.startsWith("http://")) {
       const target = new URL(req.url);
-      if (target.origin !== appOrigin || target.username || target.password) {
+      if (
+        app.protocol !== "http:" ||
+        target.origin !== appOrigin ||
+        target.username ||
+        target.password
+      ) {
         violation("browser-proxy", req.url);
         res.writeHead(502).end("denied egress");
         return;
@@ -365,6 +422,17 @@ export async function startFleetFixtures(input: { appUrl: string; worktree: stri
         case "/health":
           result = { appUrl: appOrigin, worktree: input.worktree };
           break;
+        case "/relay-mode": {
+          const value = z
+            .object({
+              mode: z.enum(["normal", "capture", "replay", "disconnect"]).optional(),
+            })
+            .strict()
+            .parse(data);
+          if (value.mode !== undefined) relayMode = value.mode;
+          result = { mode: relayMode };
+          break;
+        }
         case "/scenario":
           scenario = scenarioSchema.parse(data);
           break;
@@ -377,6 +445,7 @@ export async function startFleetFixtures(input: { appUrl: string; worktree: stri
             fleetBossId: 90000001,
             rosterIds: [],
           };
+          relayMode = "normal";
           requests.length = 0;
           codes.clear();
           refreshes.clear();

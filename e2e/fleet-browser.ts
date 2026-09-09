@@ -128,7 +128,7 @@ export async function installFleetBrowserBoundary(
   await context.routeWebSocket("**/*", (socket) => {
     const url = new URL(socket.url());
     if (
-      url.origin === appUrl.replace("http:", "ws:") &&
+      url.origin === appUrl.replace(/^http/, "ws") &&
       ["/_next/hmr", "/_next/webpack-hmr"].includes(url.pathname)
     ) {
       socket.connectToServer();

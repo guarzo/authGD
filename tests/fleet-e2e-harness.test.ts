@@ -15,6 +15,7 @@ import { buildSync } from "esbuild";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { setupTestDb, TEST_URL } from "./helpers/db";
 import { WORKTREE_ROOT } from "../e2e/env";
+import { createFleetTrust } from "../e2e/fleet-tls";
 import {
   assertFleetEnvironment,
   assertFreePort,
@@ -107,7 +108,10 @@ describe("fleet browser harness isolation", () => {
       env: { SYNC_MODE: "dry-run" },
       reuseExistingServer: true,
     });
-    expect(normal.testIgnore).toEqual(["**/fleet-access.spec.ts"]);
+    expect(normal.testIgnore).toEqual([
+      "**/fleet-access.spec.ts",
+      "**/fleet-joint.spec.ts",
+    ]);
     vi.resetModules();
     vi.stubEnv("E2E_FLEET_INTEGRATIONS", "1");
     const fleet = (await import("../playwright.config")).default;
@@ -116,7 +120,10 @@ describe("fleet browser harness isolation", () => {
       reuseExistingServer: false,
     });
     expect(fleet.use?.baseURL).not.toBe(normal.use?.baseURL);
-    expect(fleet.testMatch).toBe("**/fleet-access.spec.ts");
+    expect(fleet.testMatch).toEqual([
+      "**/fleet-access.spec.ts",
+      "**/fleet-joint.spec.ts",
+    ]);
   });
 
   it.each([
@@ -468,6 +475,43 @@ describe("fleet browser harness isolation", () => {
     expect(await (await fetch(url)).text()).toBe("dry-run");
   });
 
+  it("cancels owned HTTPS startup and reclaims both listeners without changing caller trust", async () => {
+    const trust = createFleetTrust();
+    vi.stubEnv("NODE_EXTRA_CA_CERTS", trust.ca);
+    const controller = new AbortController();
+    const pending = startFleetServer({
+      databaseUrl,
+      appUrl: "https://localhost:3988",
+      upstreamUrl: "http://127.0.0.1:3987",
+      tls: { cert: trust.cert, key: trust.key },
+      signal: controller.signal,
+    });
+    const connected = () =>
+      new Promise<boolean>((done) => {
+        const socket = connect({ host: "127.0.0.1", port: 3988 });
+        socket.on("connect", () => {
+          socket.destroy();
+          done(true);
+        });
+        socket.on("error", () => done(false));
+      });
+    try {
+      await vi.waitFor(async () => expect(await connected()).toBe(true));
+      controller.abort(new Error("cancelled TLS startup"));
+      await expect(pending).rejects.toThrow(/cancelled TLS startup/);
+      await assertFreePort("https://localhost:3988");
+      await assertFreePort(appUrl);
+    } finally {
+      controller.abort();
+      await pending.then(
+        (owned) => owned.close(),
+        () => undefined,
+      );
+      trust.close();
+    }
+    expect(existsSync(trust.root)).toBe(false);
+  });
+
   it("cleans up a Next child cancelled while startup is still pending", async () => {
     const controller = new AbortController();
     const pending = startFleetServer({
@@ -495,6 +539,25 @@ describe("fleet browser harness isolation", () => {
     await expect(pending).rejects.toThrow(/cancelled/);
     expect(await connected()).toBe(false);
   }, 30_000);
+
+  it("a concurrent close waits for the same actual child and fixture drain", async () => {
+    const owned = await startFleetServer({ databaseUrl, appUrl, mode: "start" });
+    let reaped = false;
+    owned.child.once("close", () => {
+      reaped = true;
+    });
+    const first = owned.close();
+    try {
+      await owned.close();
+      expect(reaped).toBe(true);
+      expect(owned.child.exitCode !== null || owned.child.signalCode !== null).toBe(true);
+      await expect(owned.fixtures.client.health()).rejects.toThrow();
+      await assertFreePort(appUrl);
+    } finally {
+      // Even the RED second-call path cannot abandon the first owned drain.
+      await first;
+    }
+  }, 15_000);
 
   it("the CLI publishes readiness only with a usable fixture and removes its descriptor on SIGTERM", async () => {
     const cli = spawn(process.execPath, ["--import", "tsx", "e2e/fleet-server.ts"], {

@@ -3,7 +3,12 @@ import PgBoss from "pg-boss";
 import { eq } from "drizzle-orm";
 import { test, expect } from "./fleet-browser";
 import { getFleetHttp } from "../tests/helpers/fleet-http";
-import { BASE_URL, SYNTHETIC_APP_ENV, TEST_DATABASE_URL } from "./env";
+import {
+  BASE_URL,
+  FLEET_UPSTREAM_URL,
+  SYNTHETIC_APP_ENV,
+  TEST_DATABASE_URL,
+} from "./env";
 import { resetDb, seedMember, testDb } from "./helpers";
 import { loadConfig } from "../src/config";
 import {
@@ -172,13 +177,12 @@ test("signed HTTP source Start, worker authority and two-account shared snapshot
       fleetId: 123456,
       fleetBossId: anchor.id,
       rosterIds: [anchor.id, alt.id, bChars[0].id, bChars[1].id],
+      // This is the healthy raw-Next framing control, not a replayed-evidence
+      // case. Let actual source refreshes observe fresh fixture responses;
+      // freezing Date here expires authority during the longer framing matrix.
       responses: {
-        membership: {
-          headers: { Date: new Date().toUTCString(), "Cache-Control": "max-age=60" },
-        },
-        roster: {
-          headers: { Date: new Date().toUTCString(), "Cache-Control": "max-age=5" },
-        },
+        membership: { freshness: "live" },
+        roster: { freshness: "live" },
       },
     });
     await db
@@ -379,7 +383,7 @@ test("signed HTTP source Start, worker authority and two-account shared snapshot
       });
       return {
         response: await getFleetHttp(
-          `${BASE_URL}/api/fleet/v1/snapshot`,
+          `${FLEET_UPSTREAM_URL}/api/fleet/v1/snapshot`,
           headers,
           framing,
           bytes,

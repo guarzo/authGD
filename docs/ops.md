@@ -1126,3 +1126,83 @@ if their defaults suit you. See `.env.example` for the full list.
 is a valid state rather than a broken one. To go back to the previous code as
 well, `fly deploy --image <previous image ref>` — no database work, because
 this deploy did none.
+
+## Shared fleet release remains separately gated
+
+Shared enrollment is default-disabled. A green synthetic suite is **not**
+permission to enable it. `scripts/fleet-sharing-mode.ts` still refuses every
+apply operation, including when all deployment flags are supplied. There is no
+new production bypass or automatic migration/startup cutover.
+
+Before a separately authorized release, record these checks in order:
+
+1. Deploy compatible web **and fleet-source worker** code while admission stays
+   off. The pinned pre-feature dispatcher actually drops the new outbox kind;
+   successful dispatch by an old worker is not evidence of source processing.
+2. Drain old pairing writers and quiesce deletion-capable writers for the entire
+   key-index reconciliation. The service's prerequisite booleans acknowledge
+   these external checks; they cannot discover deployment quiescence. Reconcile
+   in bounded resumable batches, inspect alias/conflict outcomes, and require
+   `ready` before shared-mode enablement. Keep original registrations, sticky
+   conflicts and deleted-binding tombstones. Never merge ambiguous keys.
+3. Drain old readers/in-flight requests. The disposable mixed-version rehearsal
+   loads genuine reader, signature and dispatcher modules from
+   `62b2c6cd8d5ad7cc346ad4f96205e96e19f3e07d`, recording transitive source hashes.
+   Actual old-reader locks block cutover; an authenticated request queued behind
+   the drain subsequently fails. Do not substitute a current reader in legacy
+   mode or infer that process deployment has been checked by this DB test.
+4. Complete Windows/WebView2/DPAPI and separately authorized live acceptance:
+   two consenting Member accounts, one boss grant, no participant grants,
+   quiet receiving, all eligible linked local alts, an outside alt, source
+   handover/Stop and measured continuity/departure/cache expiry. Verify normal
+   restart/session recovery needs no browser, remote data never enters Settings
+   or publication, and network-failed withdrawal never claims acknowledgement.
+5. Only a separate operator authorization and reviewed release tool may enable
+   admission. This change deliberately does not supply that tool's apply path.
+
+Rollback order is also an operator action: disable admission, terminate sources,
+await owned verification/token settlement, drain sessions/rows/leases and verify
+legacy eligibility is empty **before** old readers return. Retain additive schema,
+registrations and the ready key index. Reverting code alone is not a safe rollback.
+
+### Reproducing the joint synthetic proof
+
+`npm run test:e2e:fleet` explicitly discovers both fleet-access and fleet-joint
+specs, one worker and zero retries, after the ordinary profile. It requires an
+explicit absolute `E2E_WINGMAN_ROOT` at immutable Task9b revision
+`3aa1cf28668d159ff42763ac542009bbcd727af7` and an `E2E_WINGMAN_PYTHON` pointing into
+that checkout's locked dev environment. The same variables are required by the
+Python transport unit probes; a missing checkout is an error, not skipped proof.
+CI pins `guarzo/FlyGD-Wingman`, not floating main. That commit is currently local
+and unpublished: hosted CI cannot be claimed until its separately authorized
+publication and an actual successful run.
+
+Local commands must name the approved disposable database explicitly:
+
+```bash
+# Set the two absolute Wingman variables on each invocation or in the test shell.
+TEST_DATABASE_URL=postgres://authgd:authgd@localhost:5639/authgd_test NEXT_TELEMETRY_DISABLED=1 npm test
+TEST_DATABASE_URL=postgres://authgd:authgd@localhost:5639/authgd_test NEXT_TELEMETRY_DISABLED=1 E2E_DB_PORT=5639 CI=true npm run test:e2e
+TEST_DATABASE_URL=postgres://authgd:authgd@localhost:5639/authgd_test NEXT_TELEMETRY_DISABLED=1 E2E_DB_PORT=5639 CI=true npm run test:e2e:fleet
+# Separate owned dev-mode proof, still one worker / zero retries:
+TEST_DATABASE_URL=postgres://authgd:authgd@localhost:5639/authgd_test NEXT_TELEMETRY_DISABLED=1 E2E_DB_PORT=5639 CI=true E2E_FLEET_SERVER_MODE=dev npm run test:e2e:fleet -- -g 'HTTPS serves'
+```
+
+OpenSSL and NSS `certutil` are test prerequisites. The launcher creates a
+short-lived CA/leaf, isolated HOME/NSS store and fresh Chrome profiles under
+`tmp/task-10`; no system/user trust store is modified. Node trust is bootstrapped
+before child imports. Python uses its real default verifying urllib transport,
+trusts only the fixture CA, and denies non-fixture sockets/DNS before Wingman
+imports. No insecure TLS switch is used. A distinct private HTTP upstream retains
+the raw Next GET-framing regression, while browser approvals/cookies, signing and
+recovery share one logical HTTPS origin. TLS, Python and worker owners are closed
+before owned certificates/install roots are removed; the supplied DB/container is
+never destroyed. Do not capture HAR, traces, cookies, keys or roster payloads.
+
+The two installations are Linux synthetic roots using the existing key-protection
+injection seam, **not installed Windows applications and not DPAPI or live EVE
+proof**. Source work goes through actual fleet-only outbox/pg-boss dispatch and
+strict job handlers against bounded fake SSO/JWT/ESI providers. The real worker
+and transient API/store path handle receiving; only synthetic local telemetry is
+submitted. The optional third service-paired device is a lease-conflict fixture,
+not a shortcut for either installation's real browser approval.
