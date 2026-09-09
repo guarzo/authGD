@@ -917,20 +917,14 @@ h1[tabindex="-1"] {
   flex-wrap: wrap;
 }
 
-/* The revealed confirm cost takes its own line, always. Without it the
-   sentence is just another flex item: at widths where it still fits beside
-   the button it grows the line box, `align-items: center` re-centres the
-   button vertically out from under a stationary pointer, and the
-   `pointerLeave` that fires disarms the control the member armed a moment
-   ago. That is the #112 mechanism.
-   `flex-basis: 100%` costs nothing at rest, because at rest the span is
-   `.visually-hidden` and out of flow.
-   The `>` combinator depends on `ConfirmArmScope` staying a pass-through: it
-   renders no DOM element of its own, so `.confirm-cost` is a genuine direct
-   child of `.page__meta-item` today. If `ConfirmArmScope` ever grows a
-   wrapper element, this selector stops matching and the #112 fix silently
-   goes dark — update it alongside that change. */
-.page__meta-item > .confirm-cost {
+/* The revealed Discord cost owns the last OUTER flex line. Keeping it inside
+   `.page__meta-item` with the same basis still let its intrinsic width grow
+   that item and wrap the button below the tier, firing pointerLeave under a
+   stationary mouse. A separate outer row grows only downward, never changing
+   the action item's size or placement. At rest the cost is `.visually-hidden`
+   and out of flow, so it adds neither a row nor a gap.
+   ConfirmArmScope renders no DOM; the cost is a direct child of page__meta. */
+.page__meta > .confirm-cost {
   flex-basis: 100%;
 }
 
@@ -1705,7 +1699,7 @@ h3.rule-head__label {
    same row as the two controls it describes; without its own basis it would
    try to squeeze onto the end of that line instead of reading as a caption
    underneath both. `flex-basis: 100%` is the same device the Discord row's own
-   revealed cost uses (`.page__meta-item > .confirm-cost`, near the top of this
+   revealed cost uses (`.page__meta > .confirm-cost`, near the top of this
    file), and it is load-bearing for the same reason: at rest the sentence is
    `.visually-hidden` and out of flow, so revealing it on arm claims a whole
    new line rather than joining the line the buttons are on. With

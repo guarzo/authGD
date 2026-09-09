@@ -1950,15 +1950,68 @@ test("the page head's meta line keeps a programmatic label on each fact", async 
   await expect(page.getByRole("heading", { name: "Standing" })).toHaveCount(0);
 });
 
-// #112, as geometry. Arming reveals the cost sentence; if that sentence lands
-// as another flex item on the same line rather than taking its own, it grows
-// the line box, `align-items: center` re-centres the button, and the button
-// slides out from under a pointer that never moved — firing pointerLeave,
-// which disarms the control the member just armed.
-//
-// ~700px on purpose: wide enough that the sentence would still FIT beside the
-// button, which is the only band where the bug can happen. At 390px it wraps
-// anyway and the test would pass with the CSS rule deleted.
+// The revealed cost must not enlarge the Discord item in the OUTER flex row.
+// An inner `flex-basis: 100%` alone still lets that item wrap below the tier,
+// moving the button out from under a stationary pointer and disarming it.
+async function assertDiscordUnlinkStaysArmed(page: Page) {
+  // The name changes on arm/disarm; retaining this identity prevents a lost
+  // arm from turning the geometry assertion into a locator timeout.
+  const unlink = page.locator('button[aria-describedby="discord-unlink-cost"]');
+  const cost = page.locator("#discord-unlink-cost");
+  await expect(unlink).toHaveAccessibleName("unlink Discord");
+  await expect(unlink).toHaveAccessibleDescription(
+    "Queues removal of the Discord roles authGD manages. Relink any time.",
+  );
+  await page.evaluate(() => document.fonts.ready);
+  const rest = await unlink.evaluate((el) => {
+    const { x, y, width, height } = el.getBoundingClientRect();
+    return { x, y, width, height };
+  });
+  expect(rest.height).toBeGreaterThanOrEqual(36);
+  // The clip is one CSS pixel; its screen rectangle scales with browser zoom.
+  const clippedWidth = await cost.evaluate((el) => el.clientWidth);
+  expect(clippedWidth).toBeGreaterThan(0);
+  expect(clippedWidth).toBeLessThanOrEqual(1);
+  const pointer = { x: rest.x + rest.width / 2, y: rest.y + rest.height / 2 };
+  await page.mouse.click(pointer.x, pointer.y);
+
+  const armed = await unlink.evaluate(async (el, point) => {
+    // Let the reveal render and Chromium perform its next hit-test turn. A
+    // synchronous read can catch the brief arm before layout causes leave.
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+    );
+    const { x, y, width, height } = el.getBoundingClientRect();
+    const hit = document.elementFromPoint(point.x, point.y);
+    return {
+      x,
+      y,
+      width,
+      height,
+      armed: el.getAttribute("aria-label") === "confirm unlink Discord",
+      hit: hit !== null && el.contains(hit),
+    };
+  }, pointer);
+  // Returning to the same resting box AFTER self-disarm must not pass.
+  expect(armed.armed, JSON.stringify({ rest, armed })).toBe(true);
+  expect(armed.y).toBe(rest.y);
+  expect(armed.x).toBe(rest.x);
+  expect(armed.width).toBe(rest.width);
+  expect(armed.height).toBe(rest.height);
+  expect(armed.hit).toBe(true);
+  await expect(unlink).toBeVisible();
+  await expect(unlink).toBeFocused();
+  await expect(cost).not.toHaveClass(/visually-hidden/);
+  expect(await cost.evaluate((el) => el.getBoundingClientRect().width)).toBeGreaterThan(
+    1,
+  );
+  await expect(unlink).toHaveAccessibleDescription(
+    "Queues removal of the Discord roles authGD manages. Relink any time.",
+  );
+}
+
+// The original 700px regression remains: with fallback metrics the cost
+// widens the Discord item enough to move it onto a second outer flex line.
 test("arming the Discord unlink does not move it out from under the pointer", async ({
   page,
   context,
@@ -1972,17 +2025,134 @@ test("arming the Discord unlink does not move it out from under the pointer", as
   await page.setViewportSize({ width: 700, height: 900 });
   await page.goto("/account");
 
-  const unlink = page.getByRole("button", { name: "unlink Discord", exact: true });
-  const rest = await unlink.boundingBox();
-  await unlink.click();
+  await assertDiscordUnlinkStaysArmed(page);
+});
 
-  const confirm = page.getByRole("button", {
-    name: "confirm unlink Discord",
-    exact: true,
+for (const { width, zoom } of [
+  { width: 320, zoom: 1 },
+  { width: 390, zoom: 1 },
+  { width: 650, zoom: 1 },
+  { width: 840, zoom: 1 },
+  { width: 1440, zoom: 1 },
+  { width: 840, zoom: 2 },
+]) {
+  for (const linked of [false, true]) {
+    test(`Discord account setup reflows at ${width}px / ${zoom}x, ${linked ? "linked" : "unlinked"}`, async ({
+      page,
+      context,
+    }) => {
+      const acc = await seedNominalCrew();
+      if (linked) {
+        await db
+          .insert(discordLink)
+          .values({ accountId: acc.id, discordUserId: "duid-layout" });
+      }
+      await context.addCookies([await sessionCookieFor(db, acc.id)]);
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto("/account");
+      // Same Chromium layout-zoom equivalent used by the Fleet sharing gate.
+      await page.evaluate((scale) => {
+        document.documentElement.style.zoom = String(scale);
+      }, zoom);
+      await page.evaluate(() => document.fonts.ready);
+      const fleet = page.getByRole("link", { name: "Fleet sharing", exact: true });
+      await expect(fleet).toBeInViewport({ ratio: 1 });
+      if (linked) {
+        await assertDiscordUnlinkStaysArmed(page);
+        const readable = await page.locator("#discord-unlink-cost").evaluate((el) => {
+          const cost = el.getBoundingClientRect();
+          const controls = Array.from(
+            document.querySelectorAll(".page__meta .btn, .account-fleet-link"),
+          );
+          const style = getComputedStyle(el);
+          return {
+            below: controls.every(
+              (control) => control.getBoundingClientRect().bottom <= cost.top,
+            ),
+            withinPage: cost.left >= 0 && cost.right <= innerWidth,
+            visible:
+              style.display !== "none" &&
+              style.visibility === "visible" &&
+              style.clipPath === "none",
+          };
+        });
+        expect(readable).toEqual({ below: true, withinPage: true, visible: true });
+        await expect(fleet).toBeInViewport({ ratio: 1 });
+      } else {
+        await expect(
+          page.getByRole("link", { name: "Link Discord", exact: true }),
+        ).toBeVisible();
+        await expect(page.locator("#discord-unlink-cost")).toHaveCount(0);
+      }
+      expect(
+        await page.evaluate(() => {
+          window.scrollTo({ left: 10_000, behavior: "instant" });
+          return scrollX;
+        }),
+      ).toBe(0);
+    });
+  }
+}
+
+for (const cancellation of ["Escape", "Tab", "pointer leave"] as const) {
+  test(`Discord unlink still cancels on ${cancellation}`, async ({ page, context }) => {
+    const acc = await seedMember(db, { name: "Cancel Pilot", tier: "member" });
+    await db
+      .insert(discordLink)
+      .values({ accountId: acc.id, discordUserId: "duid-cancel" });
+    await context.addCookies([await sessionCookieFor(db, acc.id)]);
+    await page.setViewportSize({ width: 700, height: 900 });
+    await page.goto("/account");
+    let posts = 0;
+    page.on("request", (request) => {
+      if (request.method() === "POST") posts++;
+    });
+    await assertDiscordUnlinkStaysArmed(page);
+    if (cancellation === "pointer leave") await page.mouse.move(0, 0);
+    else await page.keyboard.press(cancellation);
+    await expect(
+      page.locator('button[aria-describedby="discord-unlink-cost"]'),
+    ).toHaveAccessibleName("unlink Discord");
+    await expect(page.locator("#discord-unlink-cost")).toHaveClass(/visually-hidden/);
+    expect(posts).toBe(0);
+    expect(
+      await db.select().from(discordLink).where(eq(discordLink.accountId, acc.id)),
+    ).toHaveLength(1);
   });
-  await expect(confirm).toBeVisible();
-  const armed = await confirm.boundingBox();
-  expect(armed?.y).toBe(rest?.y);
+}
+
+test("Discord unlink can be armed and confirmed from the keyboard", async ({
+  page,
+  context,
+}) => {
+  const acc = await seedMember(db, { name: "Keyboard Pilot", tier: "member" });
+  await db
+    .insert(discordLink)
+    .values({ accountId: acc.id, discordUserId: "duid-keyboard" });
+  await context.addCookies([await sessionCookieFor(db, acc.id)]);
+  await page.goto("/account");
+  const unlink = page.locator('button[aria-describedby="discord-unlink-cost"]');
+  for (let n = 0; n < 20; n++) {
+    await page.keyboard.press("Tab");
+    if (await unlink.evaluate((el) => el === document.activeElement)) break;
+  }
+  await expect(unlink).toBeFocused();
+  await page.keyboard.press("Space");
+  await expect(unlink).toHaveAccessibleName("confirm unlink Discord");
+  await expect(page.locator("#discord-unlink-cost")).not.toHaveClass(/visually-hidden/);
+  await expect(unlink.locator("..").getByRole("status")).toHaveText(
+    "confirm unlink Discord",
+  );
+  expect(
+    await db.select().from(discordLink).where(eq(discordLink.accountId, acc.id)),
+  ).toHaveLength(1);
+  await page.keyboard.press("Enter");
+  await expect(
+    page.getByRole("link", { name: "Link Discord", exact: true }),
+  ).toBeVisible();
+  expect(
+    await db.select().from(discordLink).where(eq(discordLink.accountId, acc.id)),
+  ).toHaveLength(0);
 });
 
 for (const width of [840, 320]) {

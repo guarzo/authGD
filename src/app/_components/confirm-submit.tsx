@@ -131,17 +131,14 @@ export function ConfirmArmScope({ children }: { children: ReactNode }) {
  * for a permanently-visible sentence to shove; the row simply grows downward
  * from a fixed left edge, same as the account page's Discord row (below).
  *
- * The account page's Discord row uses `"reveal"`, because a `.page__meta-item`
- * is a place a sentence belongs — but only because `.page__meta-item >
- * .confirm-cost` gives the revealed cost `flex-basis: 100%`, which puts it on
- * its own line and leaves the button where it was. That was not true when this
- * comment first called the row safe. The row is a flex line with
- * `align-items: center` and `flex-wrap: wrap`, and between roughly 641px and
- * 851px the revealed sentence fit *beside* the button, grew the line box, and
- * re-centred the button vertically — out from under a stationary pointer,
- * firing `pointerLeave` and disarming the control the member had just armed.
- * The `flex-basis: 100%` is what makes this paragraph true; do not remove it on
- * the grounds that the row "already wraps".
+ * The account page's Discord cost uses `"reveal"` as the last direct child of
+ * `.page__meta`, with `flex-basis: 100%` giving it its own OUTER line. An inner
+ * line inside `.page__meta-item` was not sufficient: the sentence's intrinsic
+ * width enlarged that item, wrapped it below the tier, and fired pointerLeave
+ * under a stationary mouse. The cost now shares the button's arm scope but
+ * not its flex item, so revealing it cannot change the action item's size.
+ * Keep both the placement and the outer-line basis; the account browser tests
+ * measure retained arm and exact button geometry after rendering/hit-testing.
  *
  * Before reaching for `"reveal"` in a new dense layout, check all three: what
  * it reflows, at every width rather than the two you have open, and whether
