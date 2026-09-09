@@ -444,6 +444,7 @@ describe("fleet relay schema", () => {
       authorityGeneration: null,
       linkEpoch: null,
       participationGeneration: null,
+      publicationId: null,
     });
     expect(Object.keys(row).sort()).toEqual(
       [
@@ -461,6 +462,7 @@ describe("fleet relay schema", () => {
         "authorityGeneration",
         "linkEpoch",
         "participationGeneration",
+        "publicationId",
       ].sort(),
     );
   });

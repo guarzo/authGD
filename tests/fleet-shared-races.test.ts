@@ -284,6 +284,8 @@ it.each(["publish", "read", "eligibility"] as const)(
         rows: [{ characterId: p.alts[0].id, dps: 77, ewar: [] }],
       }),
     ).toEqual({ ok: true });
+    const before = await ctx.db.select().from(fleetTelemetryRow);
+    expect(before[0].publicationId).toMatch(/^[0-9a-f-]{36}$/);
     let now = at(3000);
     const call = {
       sessionId: p.b.sessionId,
@@ -327,7 +329,7 @@ it.each(["publish", "read", "eligibility"] as const)(
           value: { state: "not_verified", characters: [] },
         });
       else expect(result).toMatchObject({ ok: false });
-      expect((await ctx.db.select().from(fleetTelemetryRow))[0].dps).toBe(77);
+      expect(await ctx.db.select().from(fleetTelemetryRow)).toEqual(before);
     } finally {
       await holder.query("rollback");
       holder.release();

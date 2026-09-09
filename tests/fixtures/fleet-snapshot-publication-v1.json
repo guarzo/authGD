@@ -1,0 +1,26 @@
+{
+  "_comment": "Public request-binding vectors, not server signatures. Byte-identical in authGD and Wingman. Existing fleet-v1 signing bytes are unchanged.",
+  "domain": "fleet-snapshot-publication-v1\n",
+  "vectors": [
+    {
+      "protocol": 1,
+      "method": "PUT",
+      "path": "/api/fleet/v1/test-vector",
+      "session_id": "Nlqj2RnqvX1BU0624tVd_MExSPfPboSN_2Q_oe2kTDY",
+      "issued_at": "2026-01-01T00:00:00.000Z",
+      "revision": 7,
+      "body_sha256": "36805d25619d92174262b492510f4170fb2af284895139acd2d186a77632d371",
+      "binding": "593b051fbc5d21ea7a562b7cbb332f3f4d02493120b28c2d64ee5af2203adae0"
+    },
+    {
+      "protocol": 1,
+      "method": "GET",
+      "path": "/api/fleet/v1/snapshot",
+      "session_id": "Nlqj2RnqvX1BU0624tVd_MExSPfPboSN_2Q_oe2kTDY",
+      "issued_at": "2026-01-01T00:00:00.000Z",
+      "revision": 7,
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "binding": "7199c4da4622589e4c50661598964f66bad7a30ac3eaa8e78a87560af27b6733"
+    }
+  ]
+}

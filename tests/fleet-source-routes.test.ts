@@ -76,6 +76,9 @@ function request(
       "x-fleet-revision": String(revision),
       "x-fleet-body-sha256": hash,
       "x-fleet-signature": signature,
+      ...(method === "GET" && path === "/api/fleet/v1/snapshot"
+        ? { "x-fleet-snapshot-format": "publication-v1" }
+        : {}),
     },
   });
 }
@@ -309,12 +312,37 @@ it("signed route -> committed outbox -> dispatcher -> strict registered handler 
       .status,
   ).toBe(429);
   await new Promise((r) => setTimeout(r, 510));
-  const quiet = await snapshot.GET(
-    request(receiver, "GET", null, 4, "", "/api/fleet/v1/snapshot"),
-  );
+  const quietRequest = request(receiver, "GET", null, 4, "", "/api/fleet/v1/snapshot");
+  const quiet = await snapshot.GET(quietRequest);
   expect(quiet.status).toBe(200);
+  expect(quiet.headers.get("x-fleet-snapshot-format")).toBe("publication-v1");
+  const h = quietRequest.headers;
+  expect(quiet.headers.get("x-fleet-request-binding")).toBe(
+    createHash("sha256")
+      .update(
+        [
+          "fleet-snapshot-publication-v1",
+          "fleet-v1",
+          "GET",
+          "/api/fleet/v1/snapshot",
+          receiver.sessionId,
+          h.get("x-fleet-issued-at"),
+          "4",
+          h.get("x-fleet-body-sha256"),
+        ].join("\n"),
+      )
+      .digest("hex"),
+  );
+  const published = (await ctx.db.select().from(fleetTelemetryRow))[0];
+  expect(published.publicationId).toMatch(
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+  );
   expect((await quiet.json()).rows).toEqual([
-    expect.objectContaining({ character_id: boss.id, dps: 42 }),
+    expect.objectContaining({
+      character_id: boss.id,
+      dps: 42,
+      publication_id: published.publicationId,
+    }),
   ]);
   const bad = await snapshot.PUT(
     request(

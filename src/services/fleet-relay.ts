@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { and, eq, gt, inArray, lte, sql } from "drizzle-orm";
 import type { Db, Dbx, DbTx } from "@/db";
 import {
@@ -267,6 +267,7 @@ export type PublishedRow = {
 };
 
 export type RelayReadRow = PublishedRow & {
+  publicationId: string | null;
   characterName: string;
   state: "live" | "stale";
   ageMs: number;
@@ -742,9 +743,13 @@ export async function replaceDeviceProjection(
               ...provenance,
             },
           });
+        // Per ROW, not per batch: shared IDs would reveal cross-character
+        // publication grouping. Candidates remain private if this tx rolls back.
+        const publicationId = randomUUID();
         await tx
           .insert(fleetTelemetryRow)
           .values({
+            publicationId,
             characterId: row.characterId,
             fleetId,
             deviceId: device.id,
@@ -759,6 +764,7 @@ export async function replaceDeviceProjection(
           .onConflictDoUpdate({
             target: fleetTelemetryRow.characterId,
             set: {
+              publicationId,
               fleetId,
               deviceId: device.id,
               sessionId: session.id,
@@ -859,11 +865,16 @@ export async function pruneExpiredFleetRelay(dbx: Dbx, now: Date): Promise<void>
  */
 export async function readFleetProjection(
   dbx: Db,
-  args: { sessionId: string; revision: number; now?: Date },
+  args: { sessionId: string; revision: number; now?: Date; requireSharedMode?: boolean },
 ): Promise<{ ok: true; rows: readonly RelayReadRow[] } | { ok: false; code: string }> {
   try {
     const rows = await fleetLifecycleTransaction(dbx, async (tx) => {
       const mode = await lockFleetSharingMode(tx);
+      // The existing cutover is the rollout fence, in the SAME transaction as
+      // admission. Never fall into legacy pruning/cadence for negotiated reads.
+      // Operators must still drain old server writers before enabling shared mode.
+      if (args.requireSharedMode && !mode.enabled)
+        throw new RelayRefusal("feature_disabled");
       if (mode.enabled) {
         const p = await prepareSharedAdmission(tx, args, "read");
         if (!sharedDeviceAllowed(p, p.actor.device.id, p.actor.session.id))
@@ -915,6 +926,7 @@ export async function readFleetProjection(
           )
             continue;
           rows.push({
+            publicationId: row.publicationId,
             characterId: row.characterId,
             characterName: ch.name,
             dps: row.dps,
@@ -955,6 +967,7 @@ export async function readFleetProjection(
       const joined = await tx
         .select({
           characterId: fleetTelemetryRow.characterId,
+          publicationId: fleetTelemetryRow.publicationId,
           dps: fleetTelemetryRow.dps,
           ewar: fleetTelemetryRow.ewar,
           receivedAt: fleetTelemetryRow.receivedAt,
@@ -978,6 +991,7 @@ export async function readFleetProjection(
       return joined.map((r): RelayReadRow => {
         const ageMs = now.getTime() - r.receivedAt.getTime();
         return {
+          publicationId: r.publicationId,
           characterId: r.characterId,
           dps: r.dps,
           ewar: toEwar(r.ewar),

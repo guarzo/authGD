@@ -2,12 +2,16 @@ import { createHash, randomUUID, sign } from "node:crypto";
 import PgBoss from "pg-boss";
 import { eq } from "drizzle-orm";
 import { test, expect } from "./fleet-browser";
+import { getFleetHttp } from "../tests/helpers/fleet-http";
 import { BASE_URL, SYNTHETIC_APP_ENV, TEST_DATABASE_URL } from "./env";
 import { resetDb, seedMember, testDb } from "./helpers";
 import { loadConfig } from "../src/config";
 import {
   character,
   fleetEligibility,
+  fleetDeviceSession,
+  fleetPublisherLease,
+  fleetTelemetryRow,
   fleetSourceAuthority,
   fleetSourceIntent,
   outbox,
@@ -98,16 +102,20 @@ test("signed HTTP source Start, worker authority and two-account shared snapshot
       const issued = new Date().toISOString();
       const n = (revisions.get(device.sessionId) ?? 0) + 1;
       revisions.set(device.sessionId, n);
-      const signature = sign(
-        null,
-        Buffer.from(
-          ["fleet-v1", method, path, device.sessionId, issued, String(n), hash].join(
-            "\n",
-          ),
-        ),
-        device.privateKey,
-      ).toString("base64url");
-      return context.request.fetch(`${BASE_URL}${path}`, {
+      const canonical = [
+        "fleet-v1",
+        method,
+        path,
+        device.sessionId,
+        issued,
+        String(n),
+        hash,
+      ].join("\n");
+      const signature = sign(null, Buffer.from(canonical), device.privateKey).toString(
+        "base64url",
+      );
+      const publication = method === "GET" && path === "/api/fleet/v1/snapshot";
+      const response = await context.request.fetch(`${BASE_URL}${path}`, {
         method,
         ...(body === undefined ? {} : { data: text }),
         headers: {
@@ -116,8 +124,22 @@ test("signed HTTP source Start, worker authority and two-account shared snapshot
           "x-fleet-revision": String(n),
           "x-fleet-body-sha256": hash,
           "x-fleet-signature": signature,
+          ...(publication ? { "x-fleet-snapshot-format": "publication-v1" } : {}),
         },
       });
+      if (publication && response.status() === 200) {
+        expect(response.headers()["x-fleet-snapshot-format"]).toBe("publication-v1");
+        expect(response.headers()["x-fleet-request-binding"]).toBe(
+          createHash("sha256")
+            .update("fleet-snapshot-publication-v1\n" + canonical)
+            .digest("hex"),
+        );
+        for (const row of (await response.json()).rows)
+          expect(row.publication_id).toMatch(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+          );
+      }
+      return response;
     };
     expect(
       (
@@ -325,6 +347,105 @@ test("signed HTTP source Start, worker authority and two-account shared snapshot
         expect.objectContaining({ character_id: bChars[1].id, dps: 77 }),
       ]),
     );
+    // A real Node HTTP peer can attach GET bytes which Fetch clients prohibit.
+    // Sign EMPTY bytes, then send framing/bytes independently through managed Next.
+    const framedSnapshot = async (
+      publication: boolean,
+      framing: string[],
+      bytes = "",
+    ) => {
+      const n = (revisions.get(pair.sessionId) ?? 0) + 1;
+      revisions.set(pair.sessionId, n);
+      const issued = new Date().toISOString();
+      const digest = createHash("sha256").update("").digest("hex");
+      const canonical = [
+        "fleet-v1",
+        "GET",
+        "/api/fleet/v1/snapshot",
+        pair.sessionId,
+        issued,
+        String(n),
+        digest,
+      ].join("\n");
+      const headers = new Headers({
+        "x-fleet-session": pair.sessionId,
+        "x-fleet-issued-at": issued,
+        "x-fleet-revision": String(n),
+        "x-fleet-body-sha256": digest,
+        "x-fleet-signature": sign(null, Buffer.from(canonical), pair.privateKey).toString(
+          "base64url",
+        ),
+        ...(publication ? { "x-fleet-snapshot-format": "publication-v1" } : {}),
+      });
+      return {
+        response: await getFleetHttp(
+          `${BASE_URL}/api/fleet/v1/snapshot`,
+          headers,
+          framing,
+          bytes,
+        ),
+        canonical,
+      };
+    };
+    const retainedRelay = async () => ({
+      rows: await db
+        .select()
+        .from(fleetTelemetryRow)
+        .orderBy(fleetTelemetryRow.characterId),
+      leases: await db
+        .select()
+        .from(fleetPublisherLease)
+        .orderBy(fleetPublisherLease.characterId),
+      sessions: await db.select().from(fleetDeviceSession).orderBy(fleetDeviceSession.id),
+    });
+    for (const publication of [false, true]) {
+      for (const framing of [
+        ["Content-Length", "2"],
+        ["Transfer-Encoding", "chunked"],
+      ]) {
+        // Ensure a buggy admitted read would succeed, not fail cadence instead.
+        await new Promise((r) => setTimeout(r, 510));
+        const before = await retainedRelay();
+        const { response } = await framedSnapshot(publication, framing, "{}");
+        expect(response.status).toBe(400);
+        expect(JSON.parse(response.body)).toEqual({ protocol: 1, error: "bad_headers" });
+        expect(response.headers["x-fleet-snapshot-format"]).toBeUndefined();
+        expect(response.headers["x-fleet-request-binding"]).toBeUndefined();
+        expect(await retainedRelay()).toEqual(before);
+      }
+      for (const framing of [[], ["Content-Length", "0"]]) {
+        await new Promise((r) => setTimeout(r, 510));
+        const { response, canonical } = await framedSnapshot(publication, framing);
+        expect(response.status).toBe(200);
+        const rows = (JSON.parse(response.body) as { rows: Record<string, unknown>[] })
+          .rows;
+        expect(rows.length).toBeGreaterThan(0);
+        if (publication) {
+          expect(response.headers["x-fleet-snapshot-format"]).toBe("publication-v1");
+          expect(response.headers["x-fleet-request-binding"]).toBe(
+            createHash("sha256")
+              .update("fleet-snapshot-publication-v1\n" + canonical)
+              .digest("hex"),
+          );
+          for (const row of rows)
+            expect(row.publication_id).toMatch(
+              /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+            );
+        } else {
+          expect(response.headers["x-fleet-snapshot-format"]).toBeUndefined();
+          expect(response.headers["x-fleet-request-binding"]).toBeUndefined();
+          for (const row of rows)
+            expect(Object.keys(row).sort()).toEqual([
+              "age_ms",
+              "character_id",
+              "character_name",
+              "dps",
+              "ewar",
+              "state",
+            ]);
+        }
+      }
+    }
     expect(await db.select().from(fleetEligibility)).toEqual([]);
     expect(
       (

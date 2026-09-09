@@ -79,6 +79,15 @@ export function canonicalFleetRequest(input: {
   return new TextEncoder().encode(lines.join("\n"));
 }
 
+/** Response correlation, NOT a server signature. The caller supplies the exact
+ * authenticated fleet-v1 canonical bytes; signing and its goldens stay unchanged. */
+export function snapshotRequestBinding(canonical: Uint8Array): string {
+  return createHash("sha256")
+    .update("fleet-snapshot-publication-v1\n", "utf8")
+    .update(canonical)
+    .digest("hex");
+}
+
 /**
  * True when every string-valued header field is well-formed on its own.
  * Catches a naive multi-value header join (a raw comma) and any malformed

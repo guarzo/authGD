@@ -856,7 +856,12 @@ describe("readFleetProjection: filtered read", () => {
     if (!readerResult.ok) throw new Error("unreachable");
     expect(readerResult.rows).toHaveLength(1);
     const seen = readerResult.rows[0];
+    const [published] = await ctx.db
+      .select()
+      .from(fleetTelemetryRow)
+      .where(eq(fleetTelemetryRow.characterId, 95500101));
     expect(seen).toEqual({
+      publicationId: published.publicationId,
       characterId: 95500101,
       dps: 700,
       ewar: ["SCRAM/POINT"],

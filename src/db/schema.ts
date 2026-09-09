@@ -1096,6 +1096,9 @@ export const fleetTelemetryRow = pgTable(
     authorityGeneration: integer("authority_generation"),
     linkEpoch: uuid("link_epoch"),
     participationGeneration: integer("participation_generation"),
+    // Only accepted publications stamp this. Existing rows remain unobserved;
+    // no default/backfill can invent a publication at migration or read time.
+    publicationId: uuid("publication_id"),
     dps: integer("dps").notNull(),
     // Only `[]` or `["SCRAM/POINT"]` are meaningful values (`PublishedRow.
     // ewar`'s union, `src/services/fleet-relay.ts`) — the CHECK constraint below is the only
