@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { createRequire } from "node:module";
 import PgBoss from "pg-boss";
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from "jose";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { eq, gte } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import * as schema from "@/db/schema";
@@ -28,6 +29,8 @@ import { createFleetSourceOwner } from "@/worker/fleet-source-scheduler";
 import { createQueues, QUEUES } from "@/worker/queues";
 import { seedAccount, seedCharacter } from "./helpers/seed";
 import { testConfig } from "./helpers/config";
+import { withFleetResources } from "../e2e/fleet-resources";
+import { createFleetQueueErrorOwner } from "../e2e/fleet-source-errors";
 import {
   pairDevice,
   reconcileFleetKeys,
@@ -94,6 +97,7 @@ async function setup(id = 99001, fleet = 123, initialize = true) {
   ).toBe(true);
   let now = at(1000);
   let rosterStatus = 200;
+  let membershipStatus = 200;
   let observation = 1000;
   let expiry = true;
   let membershipFleet = fleet;
@@ -130,8 +134,11 @@ async function setup(id = 99001, fleet = 123, initialize = true) {
     if (url === `https://esi.evetech.net/latest/characters/${boss.id}/fleet/`) {
       requests.push("membership");
       const response = Response.json(
-        { fleet_id: membershipFleet, fleet_boss_id: 999 },
+        membershipStatus === 200
+          ? { fleet_id: membershipFleet, fleet_boss_id: 999 }
+          : { error: "synthetic refusal" },
         {
+          status: membershipStatus,
           headers: {
             Date: now.toUTCString(),
             Expires: new Date(now.getTime() + 60000).toUTCString(),
@@ -224,6 +231,10 @@ async function setup(id = 99001, fleet = 123, initialize = true) {
     membershipHold: (value: () => Promise<void>) => {
       membershipHold = value;
     },
+    httpStatus: (stage: "membership" | "roster", status: number) => {
+      if (stage === "membership") membershipStatus = status;
+      else rosterStatus = status;
+    },
     membershipHeaders: (value: Record<string, string | null>) => {
       membershipHeaders = value;
     },
@@ -245,6 +256,248 @@ async function setup(id = 99001, fleet = 123, initialize = true) {
   };
 }
 describe("actual source job and ESI parser (synthetic provider only)", () => {
+  it.each([false, true])(
+    "eventual actual source activation cannot hide a recovered queue fetch error (fault=%s)",
+    async (fault) => {
+      const p = await setup();
+      let injected = false;
+      let observedError = false;
+      let active = false;
+      const queue = `fleet-source-error-${randomUUID()}`;
+      const result = withFleetResources(async (own) => {
+        const errors = own(createFleetQueueErrorOwner(), (errors) => errors.close());
+        // Fault the fetch promise consumed by the real worker loop. The installed
+        // manager swallows SQL rejections itself; faulting executeSql would never
+        // reach the error event this regression is intended to own.
+        const Manager = createRequire(import.meta.url)("pg-boss/src/manager.js") as {
+          prototype: { fetch(name: string, options: object): Promise<unknown[]> };
+        };
+        // eslint-disable-next-line @typescript-eslint/unbound-method -- The wrapper below explicitly restores the real manager receiver with call(this).
+        const fetch = Manager.prototype.fetch;
+        own(
+          vi.spyOn(Manager.prototype, "fetch").mockImplementation(async function (
+            this: typeof Manager.prototype,
+            name,
+            options,
+          ) {
+            if (fault && !injected && name === queue) {
+              injected = true;
+              throw new Error("synthetic private fetch detail");
+            }
+            return fetch.call(this, name, options);
+          }),
+          (spy) => spy.mockRestore(),
+        );
+        const boss = own(new PgBoss({ connectionString: TEST_URL }), (boss) =>
+          boss.stop({ graceful: true, wait: true }),
+        );
+        boss.on("error", () => {
+          observedError = true;
+          errors.record();
+        });
+        let jobId: string | null = null;
+        own(queue, async (queue) => {
+          if (jobId) await boss.deleteJob(queue, jobId);
+          await boss.deleteQueue(queue);
+        });
+        const owner = own(createFleetSourceOwner(), (owner) => owner.drain());
+        own(boss, (boss) => boss.offWork(queue));
+        own(owner, (owner) => owner.stopAdmission());
+        await boss.start();
+        await boss.createQueue(queue);
+        const id = (jobId = await boss.send(queue, {
+          sourceId: p.sourceId,
+          generation: 1,
+        }));
+        expect(id).not.toBeNull();
+        const handler = owner.wrap(async (data) =>
+          runFleetSourceJob(
+            { ...p.deps, signal: owner.signal },
+            data as { sourceId: string; generation: number },
+          ),
+        );
+        await boss.work(queue, { pollingIntervalSeconds: 0.5 }, async (jobs) => {
+          for (const job of jobs) await handler(job.data);
+        });
+        for (
+          let i = 0;
+          i < 100 && (await boss.getJobById(queue, id!))?.state !== "completed";
+          i++
+        )
+          await new Promise((r) => setTimeout(r, 20));
+        expect((await boss.getJobById(queue, id!))?.state).toBe("completed");
+        expect(injected).toBe(fault);
+        expect(observedError).toBe(fault);
+        expect((await ctx.db.select().from(fleetSourceIntent))[0]).toMatchObject({
+          state: "active",
+          activatedAt: at(1000),
+        });
+        expect((await ctx.db.select().from(fleetSourceAuthority))[0].sourceId).toBe(
+          p.sourceId,
+        );
+        active = true;
+      });
+      if (fault) {
+        const failure = await result.catch((error: unknown) => error);
+        expect(failure).toBeInstanceOf(AggregateError);
+        expect((failure as AggregateError).errors).toEqual([
+          new Error("[fleet-e2e] unexpected queue error event"),
+        ]);
+      } else await expect(result).resolves.toBeUndefined();
+      expect(active).toBe(true);
+    },
+  );
+  describe.each(["absent", "malformed"])("HTTP with %s budget", (budget) => {
+    const headers = {
+      "x-esi-error-limit-remain": budget === "absent" ? null : "bad",
+      "x-esi-error-limit-reset": budget === "absent" ? null : "bad",
+    };
+    it.each([
+      ["membership", 404, "not_in_fleet"],
+      ["membership", 401, "fleet_read_invalid"],
+      ["roster", 401, "fleet_read_invalid"],
+      ["roster", 403, "boss_lost"],
+      ["membership", 403, null],
+      ["roster", 404, null],
+      ["roster", 429, null],
+      ["roster", 503, null],
+    ] as const)(
+      "%s %s keeps its stage-specific refusal (%s)",
+      async (stage, status, terminal) => {
+        const p = await setup();
+        p.httpStatus(stage, status);
+        if (stage === "membership") p.membershipHeaders(headers);
+        else p.rosterHeaders(headers);
+        const esi = createEsiClient({ now: () => p.deps.now().getTime() });
+        await runFleetSourceJob(
+          { ...p.deps, esi },
+          { sourceId: p.sourceId, generation: 1 },
+        );
+        expect(p.requests).toEqual(
+          stage === "membership"
+            ? ["token", "membership"]
+            : ["token", "membership", "roster"],
+        );
+        expect((await ctx.db.select().from(fleetSourceIntent))[0]).toMatchObject({
+          state: terminal ? "ended" : "paused",
+          terminalReason: terminal,
+          generation: terminal ? 2 : 1,
+          ...(terminal ? {} : { nextFetchAt: at(61000) }),
+        });
+        expect(esi.getFleetRetryAt()).toBe(at(61000).getTime());
+        // A source HTTP refusal never infers device-key revocation.
+        expect((await ctx.db.select().from(schema.fleetDevice))[0].revokedAt).toBeNull();
+        expect(
+          (await ctx.db.select().from(character).where(eq(character.id, p.boss.id)))[0]
+            .tokenStatus,
+        ).toBe("valid");
+      },
+    );
+    it.each(["credential", "claim", "Stop"])(
+      "HTTP 401 still requires current %s proof",
+      async (loss) => {
+        const p = await setup();
+        await runFleetSourceJob(p.deps, { sourceId: p.sourceId, generation: 1 });
+        p.setNow(6000);
+        p.httpStatus("roster", 401);
+        p.rosterHeaders(headers);
+        p.hold(async () => {
+          if (loss === "credential")
+            await ctx.db
+              .update(character)
+              .set({
+                refreshTokenEnc: encryptToken(
+                  "newer-synthetic-credential",
+                  testConfig().tokenEncryptionKey,
+                ),
+              })
+              .where(eq(character.id, p.boss.id));
+          else if (loss === "claim") p.setNow(36000);
+          else
+            expect(
+              (
+                await controlFleetSource(ctx.db, {
+                  sessionId: p.sessionId,
+                  revision: 3,
+                  now: at(6500),
+                  command: {
+                    operation: "stop",
+                    sourceId: p.sourceId,
+                    expectedGeneration: 1,
+                  },
+                })
+              ).ok,
+            ).toBe(true);
+        });
+        await runFleetSourceJob(p.deps, { sourceId: p.sourceId, generation: 1 });
+        expect((await ctx.db.select().from(fleetSourceIntent))[0]).toMatchObject({
+          state: loss === "Stop" ? "ended" : "paused",
+          terminalReason: loss === "Stop" ? "stopped" : null,
+          generation: loss === "Stop" ? 2 : 1,
+          activatedAt: at(1000),
+        });
+        expect((await ctx.db.select().from(schema.fleetDevice))[0].revokedAt).toBeNull();
+      },
+    );
+    it.each([
+      ["membership", 404],
+      ["membership", 401],
+      ["roster", 401],
+      ["roster", 403],
+    ] as const)(
+      "%s %s cannot terminate with JWT expired after final row-lock wait",
+      async (stage, status) => {
+        const p = await setup();
+        p.shortToken();
+        p.httpStatus(stage, status);
+        if (stage === "membership") p.membershipHeaders(headers);
+        else p.rosterHeaders(headers);
+        const holder = await ctx.pool.connect();
+        let pid = 0;
+        const lock = async () => {
+          await holder.query("begin");
+          pid = (await holder.query<{ pid: number }>("select pg_backend_pid() as pid"))
+            .rows[0].pid;
+          await holder.query(
+            "select id from fleet_source_intent where id = $1 for update",
+            [p.sourceId],
+          );
+        };
+        if (stage === "membership") p.membershipHold(lock);
+        else p.hold(lock);
+        const pending = runFleetSourceJob(p.deps, {
+          sourceId: p.sourceId,
+          generation: 1,
+        });
+        void pending.catch(() => {});
+        try {
+          for (let i = 0; !pid && i < 100; i++)
+            await new Promise((r) => setTimeout(r, 10));
+          expect(pid).not.toBe(0);
+          expect(await waitUntilBlockedBy(ctx.pool, pid)).toBe(true);
+          p.setNow(2000);
+        } finally {
+          try {
+            await holder.query("rollback");
+          } finally {
+            holder.release();
+            await pending;
+          }
+        }
+        expect((await ctx.db.select().from(fleetSourceIntent))[0]).toMatchObject({
+          state: "paused",
+          terminalReason: null,
+          generation: 1,
+        });
+        expect((await ctx.db.select().from(schema.fleetDevice))[0].revokedAt).toBeNull();
+        expect(
+          (await ctx.db.select().from(fleetSourceAuthority)).every(
+            (row) => row.sourceId === null,
+          ),
+        ).toBe(true);
+      },
+    );
+  });
   it("roster access establishes boss proof even when membership boss hint differs; retains linked ungranted alt only", async () => {
     const p = await setup();
     await runFleetSourceJob(p.deps, { sourceId: p.sourceId, generation: 1 });

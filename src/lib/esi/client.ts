@@ -428,8 +428,6 @@ export function createEsiClient(opts: EsiClientOptions = {}) {
     if (parsedRemain !== null) remain = parsedRemain;
     if (parsedReset !== null)
       resetAt = clock() + Math.min(MAX_RETRY_MS, parsedReset * 1000);
-    if (fleetRequest && !fleetBudgetKnown)
-      throw new EsiError("Fleet error budget unavailable", 0, "transient");
     if (!res.ok) {
       const body = (await res.json().catch(() => undefined)) as
         { error?: string } | undefined;
@@ -439,6 +437,10 @@ export function createEsiClient(opts: EsiClientOptions = {}) {
         classifyEsiError(res.status, body),
       );
     }
+    // Unknown budget still reserves pacing above, but cannot erase a real
+    // HTTP refusal. Only successful evidence depends on usable budget headers.
+    if (fleetRequest && !fleetBudgetKnown)
+      throw new EsiError("Fleet error budget unavailable", 0, "transient");
     return res;
   }
 

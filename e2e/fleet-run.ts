@@ -6,7 +6,7 @@ import { createFleetTrust } from "./fleet-tls";
 import { withFleetResources } from "./fleet-resources";
 import { WORKTREE_ROOT } from "./env";
 
-export const WINGMAN_REVISION = "f81c14dc734ed5e3132946d113839935aab5f05f";
+export const WINGMAN_REVISION = "51cdf1ba3200f09bd0b4ec539b3b69289bba0d7c";
 export function pinnedWingmanRoot() {
   const root = process.env.E2E_WINGMAN_ROOT;
   if (!root || resolve(root) !== root)

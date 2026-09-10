@@ -82,6 +82,86 @@ export async function stopOwnedChild(child: ChildProcess) {
   }
 }
 
+/** Pipe chunks are not records. Bound bytes before copying/UTF-8 decoding;
+ * only closed classifications leave the decoder, never library/job payloads. */
+function workerStderr() {
+  const classifications = new Set<string>();
+  const buffer = Buffer.alloc(4096);
+  // Preserve a BOM as text: stripping it could turn unknown output into an
+  // allowed warning that was not actually present as a complete record.
+  const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+  let bytes = 0;
+  let overflow = false;
+  let warningHint = false;
+  function record(complete: boolean) {
+    let text: string;
+    try {
+      text = decoder.decode(buffer.subarray(0, bytes));
+    } catch {
+      classifications.add("unclassified-worker-stderr");
+      bytes = 0;
+      warningHint = false;
+      return;
+    }
+    bytes = 0;
+    const matches = [
+      "fleet_source_scheduler_failed",
+      "outbox dispatch failed",
+      "ExperimentalWarning",
+      "DeprecationWarning",
+      "denied outbound socket",
+      "ERR_REQUIRE_ESM",
+    ].filter((code) => text.includes(code));
+    // Fatal markers win even inside an otherwise standard warning record.
+    const fatal = matches.some((code) => code !== "ExperimentalWarning");
+    if (
+      complete &&
+      !fatal &&
+      /^\(node:\d+\) ExperimentalWarning: [^\r\n]+\r?$/.test(text)
+    ) {
+      warningHint = true;
+      return;
+    }
+    if (
+      complete &&
+      warningHint &&
+      text === "(Use `node --trace-warnings ...` to show where the warning was created)"
+    ) {
+      warningHint = false;
+      return;
+    }
+    warningHint = false;
+    for (const code of matches) classifications.add(code);
+    if (!complete || !matches.length) classifications.add("unclassified-worker-stderr");
+  }
+  return {
+    classifications,
+    write: (chunk: Buffer) => {
+      if (overflow) return;
+      let offset = 0;
+      while (offset < chunk.length) {
+        const newline = chunk.indexOf(10, offset);
+        const end = newline < 0 ? chunk.length : newline;
+        const length = end - offset;
+        if (bytes + length > buffer.length) {
+          overflow = true;
+          bytes = 0;
+          classifications.add("oversized-worker-stderr");
+          return;
+        }
+        chunk.copy(buffer, bytes, offset, end);
+        bytes += length;
+        if (newline < 0) return;
+        record(true);
+        offset = newline + 1;
+      }
+    },
+    end() {
+      if (bytes) record(false); // A truncated warning is not an allowed record.
+    },
+  };
+}
+
 export async function startFleetWorker(
   connection: FixtureConnection,
   signal?: AbortSignal,
@@ -118,28 +198,13 @@ export async function startFleetWorker(
     if (signal?.aborted) onAbort();
   });
   // Never print arbitrary library error objects or job data.
-  const stderr = new Set<string>();
-  child.stderr!.on("data", (chunk: Buffer) => {
-    const text = chunk.toString();
-    const known = [
-      "fleet_source_scheduler_failed",
-      "outbox dispatch failed",
-      "ExperimentalWarning",
-      "DeprecationWarning",
-      "denied outbound socket",
-      "ERR_REQUIRE_ESM",
-    ];
-    const matches = known.filter((code) => text.includes(code));
-    // Node runtime warnings are not swallowed job failures. Keep all unknown
-    // output fatal; only the standard warning record is a separate class.
-    if (
-      /^\(node:\d+\) ExperimentalWarning: [^\n]+\n(?:\(Use `node --trace-warnings[^\n]+\n)?$/.test(
-        text,
-      )
-    )
-      return;
-    for (const code of matches.length ? matches : ["unclassified-worker-stderr"])
-      stderr.add(code);
+  const stderr = workerStderr();
+  child.stderr!.on("data", stderr.write);
+  const closed = new Promise<void>((resolve) => {
+    child.once("close", () => {
+      stderr.end();
+      resolve();
+    });
   });
   let readyTimer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -162,10 +227,14 @@ export async function startFleetWorker(
     return {
       async close() {
         if (onAbort) signal?.removeEventListener("abort", onAbort);
-        await stopOwnedChild(child);
-        if (stderr.size)
+        try {
+          await stopOwnedChild(child);
+        } finally {
+          await closed; // exit may precede the final stderr bytes.
+        }
+        if (stderr.classifications.size)
           throw new Error(
-            `[fleet-e2e] worker error classifications: ${[...stderr].join(",")}`,
+            `[fleet-e2e] worker error classifications: ${[...stderr.classifications].join(",")}`,
           );
       },
     };
@@ -178,6 +247,8 @@ export async function startFleetWorker(
         [error, cleanup],
         "[fleet-e2e] worker startup and cleanup failed",
       );
+    } finally {
+      await closed;
     }
     throw error;
   } finally {

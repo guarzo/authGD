@@ -40,6 +40,7 @@ import {
 import { createQueues, QUEUES } from "../src/worker/queues";
 import { pairDevice, reconcileFleetKeys } from "../tests/helpers/fleet-sharing";
 import { withFleetResources } from "./fleet-resources";
+import { createFleetQueueErrorOwner } from "./fleet-source-errors";
 
 /** Real signed HTTP -> outbox/pg-boss -> actual SSO/JWT/ESI -> shared relay.
  * Only the provider boundary is synthetic; native/TLS desktop proof is later. */
@@ -49,13 +50,14 @@ test("signed HTTP source Start, worker authority and two-account shared snapshot
   fleet,
 }) => {
   await withFleetResources(async (own) => {
+    const errors = own(createFleetQueueErrorOwner(), (errors) => errors.close());
     // Reverse disposal: producers/admission first, original credentials next,
     // then pg-boss and finally the application pool, even when a stop fails.
     const { db } = own(testDb(), ({ pool }) => pool.end());
     const boss = own(new PgBoss({ connectionString: TEST_DATABASE_URL }), (boss) =>
       boss.stop({ graceful: true, wait: true }),
     );
-    boss.on("error", () => {});
+    boss.on("error", errors.record);
     const owner = own(createFleetSourceOwner(), (owner) => owner.drain());
     own(boss, (boss) => boss.offWork(QUEUES.fleetSource));
     const producers: {

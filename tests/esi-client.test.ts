@@ -47,7 +47,58 @@ describe("safe retry/cache boundaries", () => {
 });
 
 describe("source-only unknown error-budget recovery", () => {
-  it.each(["absent", "network"])(
+  it.each(["absent", "malformed", "long-reset"])(
+    "%s budget retains HTTP errors independently of the shared probe",
+    async (budget) => {
+      for (const [status, kind] of [
+        [401, "permanent"],
+        [403, "permanent"],
+        [404, "permanent"],
+        [429, "transient"],
+        [503, "transient"],
+      ] as const) {
+        let now = 0;
+        let calls = 0;
+        const fetchImpl: typeof fetch = async () => {
+          calls++;
+          return Response.json(
+            { error: "synthetic refusal" },
+            {
+              status,
+              headers:
+                budget === "absent"
+                  ? {}
+                  : {
+                      "x-esi-error-limit-remain": "bad",
+                      "x-esi-error-limit-reset":
+                        budget === "long-reset" ? "86401" : "bad",
+                    },
+            },
+          );
+        };
+        const esi = createEsiClient({ fetchImpl, now: () => now });
+        const options = { fetchImpl, now: () => now };
+        await expect(esi.getFleetMembers(123, "source", options)).rejects.toMatchObject({
+          status,
+          kind,
+        });
+        const next = budget === "long-reset" ? 86401000 : 60000;
+        expect(esi.getFleetRetryAt()).toBe(next);
+        now = next - 1;
+        await expect(
+          esi.getFleetMembers(124, "other-source", options),
+        ).rejects.toMatchObject({ status: 0, kind: "transient" });
+        expect(calls).toBe(1);
+        // Existing callers neither acquire a fleet probe nor lose real status.
+        await expect(esi.getFleetMembers(124, "generic")).rejects.toMatchObject({
+          status,
+          kind,
+        });
+        expect(calls).toBe(2);
+      }
+    },
+  );
+  it.each(["absent", "malformed", "network"])(
     "FIRST %s response reserves a shared probe and recovers on healthy headers",
     async (first) => {
       let now = 0;
@@ -60,7 +111,9 @@ describe("source-only unknown error-budget recovery", () => {
         return Response.json([], {
           headers: healthy
             ? { "x-esi-error-limit-remain": "100", "x-esi-error-limit-reset": "60" }
-            : {},
+            : first === "malformed"
+              ? { "x-esi-error-limit-remain": "bad", "x-esi-error-limit-reset": "bad" }
+              : {},
         });
       };
       const esi = createEsiClient({

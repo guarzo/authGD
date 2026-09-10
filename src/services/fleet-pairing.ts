@@ -35,6 +35,7 @@ import {
 } from "@/lib/fleet-signature";
 import {
   assertPairingIdentityAvailable,
+  fleetDatabaseNow,
   FleetDeviceKeyUnavailableError,
   lockFleetDeviceKey,
   resolveFleetDeviceKey,
@@ -316,7 +317,7 @@ export async function approvePairing(
     const mode = await lockFleetSharingMode(tx);
     const row = await lockPairingRequest(tx, mode, pairingId);
     if (!row) throw new PairingNotFoundError(`no fleet pairing request ${pairingId}`);
-    const now = testNow ?? new Date();
+    const beforeWait = await fleetDatabaseNow(tx, testNow);
     if (row.requestedCapabilities.length > 0 && !mode.enabled)
       throw new FleetSharingDisabledError();
     if (row.consumedAt !== null) {
@@ -324,7 +325,7 @@ export async function approvePairing(
         `fleet pairing request ${pairingId} was already completed`,
       );
     }
-    if (row.expiresAt.getTime() <= now.getTime()) {
+    if (row.expiresAt.getTime() <= beforeWait.getTime()) {
       throw new PairingExpiredError(`fleet pairing request ${pairingId} has expired`);
     }
     if (row.approvedAt !== null) {
@@ -354,9 +355,12 @@ export async function approvePairing(
       if (current.unavailable || current.device?.id !== existingDevice?.id)
         throw new FleetDeviceKeyUnavailableError();
       if (existingDevice?.revokedAt != null) throw new RevokedDeviceKeyError();
-      if (row.expiresAt.getTime() <= (testNow ?? new Date()).getTime())
-        throw new PairingExpiredError();
     }
+    // Both identity phases can wait for the account; ready can also wait for
+    // the device. Check the exclusive deadline only after all those waits and
+    // use the same database instant for the approval we are about to persist.
+    const now = await fleetDatabaseNow(tx, testNow);
+    if (row.expiresAt.getTime() <= now.getTime()) throw new PairingExpiredError();
     if (
       existingDevice &&
       existingDevice.revokedAt === null &&

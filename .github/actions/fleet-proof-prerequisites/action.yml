@@ -8,7 +8,7 @@ runs:
     - uses: actions/checkout@v7
       with:
         repository: guarzo/FlyGD-Wingman
-        ref: f81c14dc734ed5e3132946d113839935aab5f05f
+        ref: 51cdf1ba3200f09bd0b4ec539b3b69289bba0d7c
         path: tmp/task-10/wingman
         persist-credentials: false
     - uses: actions/setup-python@v7
