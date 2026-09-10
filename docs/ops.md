@@ -1212,7 +1212,7 @@ registrations and the ready key index. Reverting code alone is not a safe rollba
 `npm run test:e2e:fleet` explicitly discovers both fleet-access and fleet-joint
 specs, one worker and zero retries, after the ordinary profile. It requires an
 explicit absolute `E2E_WINGMAN_ROOT` at immutable Task9b revision
-`51cdf1ba3200f09bd0b4ec539b3b69289bba0d7c` and an `E2E_WINGMAN_PYTHON` pointing into
+`9355c6adc26ab631c7e6697e7ef90746db8ae935` and an `E2E_WINGMAN_PYTHON` pointing into
 that checkout's locked dev environment. The same variables are required by the
 Python transport unit probes; a missing checkout is an error, not skipped proof.
 CI pins `guarzo/FlyGD-Wingman`, not floating main. Each replacement pin requires

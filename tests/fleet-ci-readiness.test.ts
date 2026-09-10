@@ -23,7 +23,7 @@ it.each(["npx playwright install --with-deps chromium", "npm run build"])(
 );
 
 it("keeps the public Wingman fork and immutable runner/action pins aligned", () => {
-  const revision = "51cdf1ba3200f09bd0b4ec539b3b69289bba0d7c";
+  const revision = "9355c6adc26ab631c7e6697e7ef90746db8ae935";
   const action = readFileSync(
     join(WORKTREE_ROOT, ".github/actions/fleet-proof-prerequisites/action.yml"),
     "utf8",
