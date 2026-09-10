@@ -1127,12 +1127,96 @@ is a valid state rather than a broken one. To go back to the previous code as
 well, `fly deploy --image <previous image ref>` — no database work, because
 this deploy did none.
 
-## Shared fleet release remains separately gated
+## Shared fleet: explicit first use and safe disable
 
 Shared enrollment is default-disabled. A green synthetic suite is **not**
-permission to enable it. `scripts/fleet-sharing-mode.ts` still refuses every
-apply operation, including when all deployment flags are supplied. There is no
-new production bypass or automatic migration/startup cutover.
+permission to enable it. The operator must separately authorize first use after
+normal review/CI and compatible Fly deployment. There is no deploy/startup hook,
+new credential, public route or caller-supplied actor. Existing authenticated
+Fly operator access is the operational boundary; the existing audit records
+`system`, not a verified individual operator identity.
+
+### Bounded empty first use
+
+This path is **only** for an absent gate (disabled/pending/revision 0), or its
+explicit initial equivalent: disabled, revision 0, pending key index, null cursor
+and null transition timestamp. It refuses **any** row in devices, pairing
+requests, key identities, fleet sessions, source intents, authority slots,
+recovery challenges, publisher leases, telemetry or legacy eligibility. Expired,
+consumed, revoked, conflicted and tombstone rows count; even an empty fenced
+authority slot is not first use. It does not delete, reset, merge or reconcile
+anything. The unrelated boss-readiness cooldown (`fleet_access_check_gate`),
+accounts, Fleet Read grants and browser sessions are neither blockers nor changed.
+
+1. Use the [normal Fly deployment](#deploy-flyio). Verify the migration ledger
+   matches the deployed chain and **both web and source worker** are compatible;
+   verify old replicas and their in-flight requests are drained. If the migration
+   chain has not yet been applied, the migration lock-window guidance below still
+   applies. Already-applied migrations are not rerun or edited for bootstrap.
+2. Open an existing authorized Fly machine shell on the new image. In `/app`, use
+   the deployed `DATABASE_URL`; do not copy it into commands, logs or env files.
+   These flags assert deployment checks performed by the operator; they do not
+   discover deployments or fabricate external quiescence.
+3. Run the read-only inspection, then the separately approved write:
+
+   ```bash
+   cd /app
+   node --import tsx scripts/fleet-sharing-mode.ts --dry-run --enable --first-use --expected-revision 0 --compatible-web --compatible-worker --old-replicas-drained
+   node --import tsx scripts/fleet-sharing-mode.ts --apply --enable --first-use --expected-revision 0 --compatible-web --compatible-worker --old-replicas-drained
+   ```
+
+   Dry-run reports `current`, `firstUseCounts`, `refusal` and `releaseReady`.
+   Require the initial state, every count zero and `refusal: null`. It is only a
+   read-only snapshot, **not** permission to trust those counts later. Apply
+   repeats the full check after acquiring the exclusive mode lock and table
+   write locks, then commits `ready` + enabled + revision **1** with the existing
+   key-ready/mode-transition audit rows in one transaction. No user/device is
+   opted in. Lock waits are bounded at 2 seconds and each statement at 5 seconds;
+   a failure rolls back, without internal retries or partial initialization.
+   Apply requires READ COMMITTED isolation so a snapshot cannot predate a lock
+   wait; a nonstandard isolation setting is refused, not silently overridden.
+4. Record the returned revision. Re-run the same dry-run with
+   `--expected-revision 1`: `current` must now be enabled/ready/revision 1, with
+   zero inventory counts before enrollment. `first_use_initial_state_required`
+   and `releaseReady: false` are expected now: replay is deliberately refused.
+   Inspect the existing system audit, then perform separately authorized live
+   acceptance with explicit user consents (see below). Normal pairing and source
+   operations, not bootstrap, grant capabilities and start sharing.
+
+On a timeout, conflict, nonempty count, or uncertain command outcome, inspect
+again and stop rather than deleting state or changing a revision to force it.
+There is no silent ongoing reconciliation. Generic `--enable` without
+`--first-use` remains blocked, including after a later disable.
+
+### Safe explicit disable
+
+Keep the compatible web/worker deployed. Dry-run and then apply using the
+**current** revision, not an assumed revision copied from an old result. Immediately
+after the first-use invocation above, the commands are:
+
+```bash
+node --import tsx scripts/fleet-sharing-mode.ts --dry-run --disable --expected-revision 1 --compatible-web --compatible-worker --old-replicas-drained
+node --import tsx scripts/fleet-sharing-mode.ts --apply --disable --expected-revision 1 --compatible-web --compatible-worker --old-replicas-drained
+```
+
+The returned revision is then **2**. Disable uses the existing transactional
+lifecycle drain: ends pending/active/paused source consent, advances source/fetch
+and occupied authority generations to fence late workers, clears source evidence,
+and deletes only fleet sessions, leases, telemetry and legacy eligibility.
+Registrations, key index/conflicts/tombstones, device participation preferences
+and capability grants, accounts, SSO grants and browser sessions survive. This
+is not device revocation and does not restore an old binary. Verify disabled
+mode, zero sessions/leases/telemetry/legacy eligibility and no live source consent
+or occupied authority before declaring the drain complete. The first-use dry-run
+reports counts only for the Fleet tables in its inventory; it does not verify
+preservation of accounts, SSO grants or browser sessions. Check those separately
+when verifying retention after disable. Refusal while retained Fleet rows exist
+is expected, not a cleanup request.
+
+Before returning old readers, additionally await owned in-flight verification
+and token settlement and follow the schema-retaining rollback guidance below.
+A code revert alone is never the off procedure. Re-enabling a previously used
+installation remains outside this bounded tool.
 
 ### Plan the migration lock window before the first deployment
 
@@ -1165,10 +1249,11 @@ cannot remove the rewrite already required by the preceding `0021`. Follow the
 schema-retaining rollback order
 below; any further database repair needs a separately reviewed plan.
 
-### Remaining release gates
+### Existing-data rollout remains separately blocked
 
-Before a separately authorized release, record these checks in order (after
-the migration maintenance plan above is approved):
+The bounded empty path above does not authorize migration of active Fleet users.
+For a nonempty installation, the following remain a separate rollout/design
+review, **not new prerequisites for empty first use**:
 
 1. Deploy compatible web **and fleet-source worker** code while admission stays
    off. The pinned pre-feature dispatcher actually drops the new outbox kind;
@@ -1185,27 +1270,30 @@ the migration maintenance plan above is approved):
    Actual old-reader locks block cutover; an authenticated request queued behind
    the drain subsequently fails. Do not substitute a current reader in legacy
    mode or infer that process deployment has been checked by this DB test.
-4. Complete Windows/WebView2/DPAPI and separately authorized live acceptance:
-   two consenting Member accounts, one boss grant, no participant grants,
-   quiet receiving, all eligible linked local alts, an outside alt, source
-   handover/Stop and measured continuity/departure/cache expiry. Verify normal
-   restart/session recovery needs no browser, remote data never enters Settings
-   or publication, and network-failed withdrawal never claims acknowledgement.
-5. Resolve the deferred persisted-audit decisions: whether and how to record
+4. Resolve the deferred persisted-audit decisions: whether and how to record
    first source activation and proven recovery-challenge consumption, including
    conflicted/deleted bindings without a unique account actor. Approve event
    semantics, actor attribution and retention before implementation; this
    runbook does not invent event names or payloads, nor authorize routine
    poll/roster history.
-6. Define the authenticated operator principal and its validation/audit contract
-   for a separately reviewed release tool. Caller-supplied actor text alone is
-   not authenticated attribution. Only separate operator authorization and that
-   reviewed tool may enable admission; the current apply path remains blocked.
+   These are not implemented by first use; the existing audit vocabulary remains
+   unchanged. Any future general cutover tool needs its own reviewed authorization
+   and audit contract, not an arbitrary actor argument or a bypass of this CLI.
 
 Rollback order is also an operator action: disable admission, terminate sources,
 await owned verification/token settlement, drain sessions/rows/leases and verify
 legacy eligibility is empty **before** old readers return. Retain additive schema,
 registrations and the ready key index. Reverting code alone is not a safe rollback.
+
+### Live acceptance after authorized first use
+
+Use the current Windows build for Windows/WebView2/DPAPI and separately authorized
+live acceptance: two consenting Member accounts, one boss grant, no participant
+grants, quiet receiving, all eligible linked local alts, an outside alt, source
+handover/Stop and measured continuity/departure/cache expiry. Verify normal
+restart/session recovery needs no browser, remote data never enters Settings or
+publication, and network-failed withdrawal never claims acknowledgement. Synthetic
+Linux verification does not establish these Windows or live-provider outcomes.
 
 ### Reproducing the joint synthetic proof
 
