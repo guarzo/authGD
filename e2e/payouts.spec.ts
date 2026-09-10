@@ -1334,6 +1334,11 @@ test("finalizing hands focus to the operation heading", async ({ page, context }
   await page.getByRole("button", { name: "Add flat pool" }).click();
   await page.getByLabel("Paste (names separated by /)").fill("Brain Tartare");
   await page.getByRole("button", { name: "Set roster" }).click();
+  // The roster commit inserts facts above Finalize. Wait for that UI before
+  // arming, so its movement cannot turn the confirmation into another arm.
+  await expect(
+    page.getByRole("cell", { name: "Brain Tartare", exact: true }),
+  ).toBeVisible();
 
   await page.getByRole("button", { name: "Finalize" }).click();
   await page.getByRole("button", { name: /^confirm finalize/ }).click();

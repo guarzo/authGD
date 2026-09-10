@@ -12,6 +12,7 @@ import { accountErrorUrl, loginErrorUrl } from "@/lib/error-redirects";
 import { setMainCharacter, unlinkCharacter, wakeSelf } from "@/services/accounts";
 import { unlinkDiscord } from "@/services/discord-link";
 import { getSessionAccount } from "@/services/session";
+import { fleetLifecycleTransaction } from "@/services/fleet-lifecycle";
 
 /** `setMainAction`/`unlinkAction`'s one bound argument. Neither action reads
  *  any FormData at all — `account/page.tsx` renders zero named controls — but
@@ -98,7 +99,7 @@ export async function unlinkAction(characterId: number): Promise<void> {
     .from(character)
     .where(and(eq(character.id, characterId), eq(character.accountId, accountId)));
   if (owned.length === 0) redirect(accountErrorUrl("stale_character"));
-  const result = await db.transaction((dbtx) =>
+  const result = await fleetLifecycleTransaction(db, (dbtx) =>
     // A last_character / not_owned rejection is a silent no-op here: the page
     // hides the unlink control for the final character, and a reclaim race
     // resolves itself on the revalidated render.

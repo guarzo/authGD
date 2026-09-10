@@ -1,5 +1,6 @@
 import { eq, sql } from "drizzle-orm";
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   account,
@@ -10,6 +11,7 @@ import {
   fleetEligibility,
   fleetPairingRequest,
   fleetPublisherLease,
+  fleetSharingGate,
   fleetTelemetryRow,
   universeName,
 } from "@/db/schema";
@@ -165,6 +167,184 @@ describe("universe_name", () => {
 });
 
 describe("fleet relay schema", () => {
+  it("replays the generated recovery migration additively with indexed expiry and bounded attempts", async () => {
+    const migration = readFileSync(
+      new URL("../drizzle/0019_first_spitfire.sql", import.meta.url),
+      "utf8",
+    );
+    const client = await ctx.pool.connect();
+    try {
+      await client.query("begin");
+      await client.query("create temp table fleet_device (id text primary key)");
+      await client.query("create temp table fleet_device_session (id text primary key)");
+      await client.query("set local search_path to pg_temp");
+      await client.query(
+        "insert into fleet_device values ('retained'); insert into fleet_device_session values ('retained-session')",
+      );
+      await client.query(migration);
+      expect((await client.query("select * from fleet_device")).rows).toEqual([
+        { id: "retained" },
+      ]);
+      expect((await client.query("select * from fleet_device_session")).rows).toEqual([
+        { id: "retained-session" },
+      ]);
+      const {
+        rows: [challenge],
+      } = await client.query<Record<string, unknown>>(
+        "insert into fleet_recovery_challenge(public_key_spki_b64, nonce_digest, expires_at) values ('public-test-key', 'digest-only', now()) returning *",
+      );
+      expect(challenge).toMatchObject({ attempts: 0, consumed_at: null });
+      expect(Object.keys(challenge).sort()).toEqual(
+        [
+          "id",
+          "public_key_spki_b64",
+          "nonce_digest",
+          "created_at",
+          "expires_at",
+          "consumed_at",
+          "attempts",
+        ].sort(),
+      );
+      const indexes = await client.query<{ indexdef: string }>(
+        "select indexdef from pg_indexes where tablename = 'fleet_recovery_challenge' and schemaname = current_schema()",
+      );
+      expect(indexes.rows.map((r) => r.indexdef)).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining("(expires_at)"),
+          expect.stringContaining("(public_key_spki_b64, expires_at)"),
+        ]),
+      );
+      await expect(
+        client.query("update fleet_recovery_challenge set attempts = -1"),
+      ).rejects.toMatchObject({ code: "23514" });
+    } finally {
+      await client.query("rollback");
+      client.release();
+    }
+    expect(MANAGED_TABLE_NAMES).toContain("fleet_recovery_challenge");
+  });
+
+  it("replays the additive identity migration without reconciling or rewriting old records", async () => {
+    const migration = readFileSync(
+      new URL("../drizzle/0020_chief_machine_man.sql", import.meta.url),
+      "utf8",
+    );
+    const client = await ctx.pool.connect();
+    try {
+      await client.query("begin");
+      // Generated FK names public.fleet_device explicitly. PostgreSQL forbids a
+      // temporary table referencing it, so replay unchanged SQL in a transaction-
+      // local throwaway schema in the SAME test DB; rollback removes everything.
+      await client.query("create schema task2_identity_migration_replay");
+      await client.query("set local search_path to task2_identity_migration_replay");
+      await client.query(
+        "create table fleet_recovery_challenge (id uuid primary key, public_key_spki_b64 text, nonce_digest text, attempts integer)",
+      );
+      await client.query(
+        "create table fleet_sharing_gate (id integer primary key, enabled boolean, revision integer)",
+      );
+      await client.query("insert into fleet_sharing_gate values (1, false, 7)");
+      await client.query(
+        "insert into fleet_recovery_challenge values ('00000000-0000-4000-8000-000000000020', 'old-public-key', 'digest-only', 4)",
+      );
+      await client.query(migration);
+      expect((await client.query("select * from fleet_sharing_gate")).rows).toEqual([
+        {
+          id: 1,
+          enabled: false,
+          revision: 7,
+          key_identity_phase: "pending",
+          key_identity_cursor: null,
+        },
+      ]);
+      expect(
+        (await client.query("select * from fleet_device_key_identity")).rows,
+      ).toEqual([]);
+      expect((await client.query("select * from fleet_recovery_challenge")).rows).toEqual(
+        [
+          {
+            id: "00000000-0000-4000-8000-000000000020",
+            public_key_spki_b64: "old-public-key",
+            nonce_digest: "digest-only",
+            attempts: 4,
+            request_id: null,
+            request_issued_at: null,
+          },
+        ],
+      );
+      await client.query(
+        "insert into fleet_device_key_identity(canonical_spki_b64, conflicted) values ('tombstone', false), ('conflict', true)",
+      );
+      await client.query("update fleet_recovery_challenge set request_id = 'same-id'");
+      await expect(
+        client.query(
+          "insert into fleet_recovery_challenge values ('00000000-0000-4000-8000-000000000021', 'old-public-key', 'digest', 0, 'same-id', null)",
+        ),
+      ).rejects.toMatchObject({ code: "23505" });
+    } finally {
+      await client.query("rollback");
+      client.release();
+    }
+    expect(MANAGED_TABLE_NAMES).toContain("fleet_device_key_identity");
+  });
+
+  it("keeps the singleton disabled by default and rejects other singleton ids", async () => {
+    const [gate] = await ctx.db.insert(fleetSharingGate).values({}).returning();
+    expect(gate).toEqual({
+      id: 1,
+      enabled: false,
+      revision: 0,
+      transitionedAt: null,
+      keyIdentityPhase: "pending",
+      keyIdentityCursor: null,
+    });
+    await expect(ctx.db.insert(fleetSharingGate).values({ id: 2 })).rejects.toThrow();
+    expect(MANAGED_TABLE_NAMES).toContain("fleet_sharing_gate");
+  });
+
+  it("the generated additive migration leaves pre-existing registrations and sessions unapproved and off", async () => {
+    const migration = readFileSync(
+      new URL("../drizzle/0018_amusing_iron_monger.sql", import.meta.url),
+      "utf8",
+    );
+    const client = await ctx.pool.connect();
+    try {
+      await client.query("begin");
+      // Connection-local throwaway old table shapes in the SAME disposable DB.
+      // Replay the generated bytes unchanged; never alter an applied migration
+      // or any public table to manufacture the pre-feature path.
+      await client.query("create temp table fleet_device (id text primary key)");
+      await client.query("create temp table fleet_device_session (id text primary key)");
+      await client.query("create temp table fleet_pairing_request (id text primary key)");
+      await client.query("set local search_path to pg_temp");
+      await client.query(
+        "insert into fleet_device values ('retained-device'); insert into fleet_device_session values ('retained-session'); insert into fleet_pairing_request values ('pending-request')",
+      );
+      await client.query(migration);
+      expect((await client.query("select * from fleet_device")).rows).toEqual([
+        {
+          id: "retained-device",
+          approved_capabilities: [],
+          participation_enabled: false,
+          participation_generation: 0,
+        },
+      ]);
+      expect((await client.query("select * from fleet_device_session")).rows).toEqual([
+        {
+          id: "retained-session",
+          approved_capabilities: [],
+          acknowledged_capabilities: [],
+        },
+      ]);
+      expect((await client.query("select * from fleet_pairing_request")).rows).toEqual([
+        { id: "pending-request", requested_capabilities: [] },
+      ]);
+      expect((await client.query("select * from fleet_sharing_gate")).rows).toEqual([]);
+    } finally {
+      await client.query("rollback");
+      client.release();
+    }
+  });
   it("exports all six relay tables and registers them in MANAGED_TABLES", () => {
     expect(fleetPairingRequest).toBeDefined();
     expect(fleetDevice).toBeDefined();
@@ -217,6 +397,8 @@ describe("fleet relay schema", () => {
         "lastRevision",
         "lastPublishAt",
         "lastReadAt",
+        "approvedCapabilities",
+        "acknowledgedCapabilities",
       ].sort(),
     );
   });
@@ -253,9 +435,17 @@ describe("fleet relay schema", () => {
       })
       .returning();
 
-    // No column for log content, target/source, an event timestamp beyond
-    // receivedAt, fleet name, system, ship, or an EVE token — only exactly
-    // these nine columns exist on the table.
+    // No log content, combat actor/target text, event timestamp, fleet name,
+    // system, ship or EVE token. Nullable consent provenance is permitted for
+    // cleanup, but a legacy insert never fabricates shared admission evidence.
+    expect(row).toMatchObject({
+      sourceId: null,
+      sourceGeneration: null,
+      authorityGeneration: null,
+      linkEpoch: null,
+      participationGeneration: null,
+      publicationId: null,
+    });
     expect(Object.keys(row).sort()).toEqual(
       [
         "characterId",
@@ -267,6 +457,12 @@ describe("fleet relay schema", () => {
         "receivedAt",
         "staleAt",
         "hardExpiresAt",
+        "sourceId",
+        "sourceGeneration",
+        "authorityGeneration",
+        "linkEpoch",
+        "participationGeneration",
+        "publicationId",
       ].sort(),
     );
   });

@@ -1,7 +1,7 @@
 import type { Pool, PoolClient } from "pg";
 
 /**
- * Monkeypatches `pool.connect` for exactly ONE checkout so the first query
+ * Monkeypatches promise-based transaction checkouts so the first query
  * matching `matchSql` on that connection rejects with a synthetic error
  * carrying Postgres's own SQLSTATE shape (`err.code`) -- reproducing what a
  * genuine deadlock/serialization failure looks like to node-postgres,
@@ -31,6 +31,12 @@ export async function withInjectedPgFault<T>(
   (pool as unknown as { connect: typeof pool.connect }).connect = (async (
     ...args: unknown[]
   ) => {
+    // pool.query uses connect(callback) and returns no client/Promise. Those
+    // autocommit reads surround real route/job transactions; leave them alone
+    // rather than treating undefined as a checked-out transaction client.
+    if (typeof args[0] === "function") {
+      return (origConnect as (...a: unknown[]) => unknown)(...args);
+    }
     const client = await (origConnect as (...a: unknown[]) => Promise<PoolClient>)(
       ...args,
     );

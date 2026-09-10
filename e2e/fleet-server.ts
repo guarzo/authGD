@@ -8,12 +8,14 @@ import { Client } from "pg";
 import { buildSync } from "esbuild";
 import {
   BASE_URL,
+  FLEET_UPSTREAM_URL,
   IS_CI,
   SYNTHETIC_APP_ENV,
   TEST_DATABASE_URL,
   WORKTREE_ROOT,
 } from "./env";
 import { startFleetFixtures, type FixtureConnection } from "./fleet-fixtures";
+import { startFleetTls } from "./fleet-tls";
 
 export const FLEET_CONNECTION_FILE = join(WORKTREE_ROOT, "tmp/e2e/fleet-connection.json");
 const preload = join(WORKTREE_ROOT, "tmp/e2e/fleet-preload.mjs");
@@ -60,7 +62,7 @@ export function assertFleetDatabaseUrl(raw: string): URL {
 function assertAppUrl(raw: string): URL {
   const url = new URL(raw);
   if (
-    url.protocol !== "http:" ||
+    !["http:", "https:"].includes(url.protocol) ||
     !["localhost", "127.0.0.1"].includes(url.hostname) ||
     !url.port ||
     url.username ||
@@ -114,6 +116,7 @@ export function fleetFontWorkerPort(): string | null {
 export function assertFleetEnvironment(env: NodeJS.ProcessEnv): FixtureConnection {
   if (
     env.E2E_FLEET_INTEGRATIONS !== "1" ||
+    env.E2E_DB_ISOLATION !== "1" ||
     env.SYNC_MODE !== "live" ||
     env.E2E_MANAGED_WORKTREE !== WORKTREE_ROOT ||
     (resolve(process.cwd()) !== WORKTREE_ROOT && fleetFontWorkerPort() === null)
@@ -174,6 +177,7 @@ export function fleetEnvironment(input: {
   appUrl: string;
   fixture: FixtureConnection;
   mode?: "dev" | "start";
+  upstreamUrl?: string;
 }): NodeJS.ProcessEnv {
   assertFleetDatabaseUrl(input.databaseUrl);
   assertAppUrl(input.appUrl);
@@ -187,10 +191,17 @@ export function fleetEnvironment(input: {
     DATABASE_URL: input.databaseUrl,
     TEST_DATABASE_URL: input.databaseUrl,
     APP_BASE_URL: input.appUrl,
+    E2E_FLEET_UPSTREAM: input.upstreamUrl ?? input.appUrl,
+    ...(input.appUrl.startsWith("https:")
+      ? {
+          NODE_EXTRA_CA_CERTS: process.env.NODE_EXTRA_CA_CERTS,
+        }
+      : {}),
     SYNC_MODE: "live",
     E2E_FLEET_INTEGRATIONS: "1",
     E2E_MANAGED_WORKTREE: WORKTREE_ROOT,
     E2E_FLEET_FIXTURE: JSON.stringify(input.fixture),
+    E2E_DB_ISOLATION: "1",
     NODE_OPTIONS: `--import=${preload}`,
     NODE_ENV: input.mode === "start" ? "production" : "development",
     NEXT_TELEMETRY_DISABLED: "1",
@@ -252,7 +263,7 @@ async function verifyDatabase(raw: string) {
   }
 }
 
-async function stopChild(child: ChildProcess) {
+async function stopChild(child: ChildProcess, closed: Promise<void>) {
   if (!child.pid) return;
   // A separate POSIX group owns Next's forked server too. Never discover/kill
   // processes by port or cwd; only signal the group this launcher created.
@@ -265,9 +276,20 @@ async function stopChild(child: ChildProcess) {
   };
   signal("SIGTERM");
   if (child.exitCode === null && child.signalCode === null) {
-    await Promise.race([once(child, "exit"), delay(3000)]);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        closed,
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, 3000);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
   }
   signal("SIGKILL");
+  await closed;
 }
 
 export async function startFleetServer(input: {
@@ -275,6 +297,8 @@ export async function startFleetServer(input: {
   appUrl: string;
   mode?: "dev" | "start";
   publishConnection?: boolean;
+  upstreamUrl?: string;
+  tls?: { cert: string; key: string };
   signal?: AbortSignal;
 }) {
   input.signal?.throwIfAborted();
@@ -283,24 +307,50 @@ export async function startFleetServer(input: {
   if (process.platform === "win32")
     throw new Error("[fleet-e2e] launcher requires POSIX process groups (Linux/CI)");
   await assertFreePort(input.appUrl);
+  const upstreamUrl = input.upstreamUrl ?? input.appUrl;
+  if (upstreamUrl !== input.appUrl) await assertFreePort(upstreamUrl);
+  if (input.appUrl.startsWith("https:") && (!input.tls || upstreamUrl === input.appUrl))
+    throw new Error("[fleet-e2e] HTTPS requires owned trust and private upstream");
   await verifyDatabase(input.databaseUrl);
   const fixtures = await startFleetFixtures({
     appUrl: input.appUrl,
     worktree: WORKTREE_ROOT,
   });
   let child: ChildProcess | undefined;
+  let childClosed: Promise<void> | undefined;
+  let tls: Awaited<ReturnType<typeof startFleetTls>> | undefined;
   let output = "";
-  let closed = false;
+  let closing: Promise<void> | undefined;
   let published = false;
-  async function close() {
-    if (closed) return;
-    closed = true;
+  function close() {
+    return (closing ??= dispose());
+  }
+  async function dispose() {
+    const failures: unknown[] = [];
+    for (const dispose of [
+      async () => {
+        await tls?.close();
+      },
+      async () => {
+        if (child) await stopChild(child, childClosed!);
+      },
+      async () => {
+        await fixtures.client.assertClean();
+      },
+      async () => {
+        await fixtures.close();
+      },
+    ]) {
+      try {
+        await dispose();
+      } catch (error) {
+        failures.push(error);
+      }
+    }
     try {
-      if (child) await stopChild(child);
-      // Include shutdown requests in the verdict, not just test-body traffic.
-      await fixtures.client.assertClean();
+      if (failures.length)
+        throw new AggregateError(failures, "[fleet-e2e] server cleanup failed");
     } finally {
-      await fixtures.close();
       if (published && existsSync(FLEET_CONNECTION_FILE)) {
         const stored = JSON.parse(
           readFileSync(FLEET_CONNECTION_FILE, "utf8"),
@@ -311,7 +361,14 @@ export async function startFleetServer(input: {
   }
   try {
     input.signal?.throwIfAborted();
-    const env = fleetEnvironment({ ...input, fixture: fixtures.connection });
+    const env = fleetEnvironment({ ...input, upstreamUrl, fixture: fixtures.connection });
+    if (input.tls)
+      tls = await startFleetTls({
+        ...input.tls,
+        appUrl: input.appUrl,
+        upstreamUrl,
+        relayMode: (signal) => fixtures.client.relayMode(undefined, signal),
+      });
     const mode = input.mode ?? "dev";
     child = spawn(
       process.execPath,
@@ -321,7 +378,7 @@ export async function startFleetServer(input: {
         "-H",
         "127.0.0.1",
         "-p",
-        new URL(input.appUrl).port,
+        new URL(upstreamUrl).port,
       ],
       {
         cwd: WORKTREE_ROOT,
@@ -330,6 +387,9 @@ export async function startFleetServer(input: {
         stdio: ["ignore", "pipe", "pipe"],
       },
     );
+    // Register before readiness awaits: even a leader that exits first may
+    // retain stdio in its descendants until group cleanup has completed.
+    childClosed = new Promise((resolve) => child!.once("close", () => resolve()));
     child.stdout!.on("data", (chunk: Buffer) => {
       output += chunk.toString();
     });
@@ -349,7 +409,7 @@ export async function startFleetServer(input: {
         });
       if (Date.now() > deadline)
         throw new Error(`[fleet-e2e] Next readiness timed out\n${output}`);
-      const res = await fetch(`${input.appUrl}/login`, {
+      const res = await fetch(`${upstreamUrl}/login`, {
         signal: AbortSignal.timeout(1000),
       }).catch(() => null);
       input.signal?.throwIfAborted();
@@ -371,7 +431,14 @@ export async function startFleetServer(input: {
     }
     return { fixtures, child, close, output: () => output };
   } catch (error) {
-    await close();
+    try {
+      await close();
+    } catch (cleanup) {
+      throw new AggregateError(
+        [error, cleanup],
+        "[fleet-e2e] startup and cleanup failed",
+      );
+    }
     throw error;
   }
 }
@@ -404,7 +471,16 @@ async function main() {
   owned = await startFleetServer({
     databaseUrl: TEST_DATABASE_URL,
     appUrl: BASE_URL,
-    mode: IS_CI ? "start" : "dev",
+    upstreamUrl: FLEET_UPSTREAM_URL,
+    ...(process.env.E2E_FLEET_TLS_ROOT
+      ? {
+          tls: {
+            cert: join(process.env.E2E_FLEET_TLS_ROOT, "leaf.pem"),
+            key: join(process.env.E2E_FLEET_TLS_ROOT, "leaf.key"),
+          },
+        }
+      : {}),
+    mode: process.env.E2E_FLEET_SERVER_MODE === "dev" ? "dev" : IS_CI ? "start" : "dev",
     publishConnection: true,
     signal: controller.signal,
   });

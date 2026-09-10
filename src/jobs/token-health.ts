@@ -8,6 +8,15 @@ import { reclaimTransferredCharacter } from "@/services/accounts";
 import { logAudit } from "@/services/audit";
 import { runJob, type JobResult } from "@/services/sync-run";
 import { getFreshAccessToken, invalidateTokenIfUnchanged } from "@/services/tokens";
+import {
+  fleetLifecycleTransaction,
+  hasUsableFleetRead,
+  invalidateFleetSources,
+  lockFleetAccounts,
+  lockFleetIdentityCharacters,
+  lockFleetLifecycle,
+} from "@/services/fleet-lifecycle";
+import { lockFleetSharingMode } from "@/services/fleet-sharing-mode";
 
 export async function runTokenHealthJob(deps: {
   db: Db;
@@ -77,7 +86,7 @@ export async function runTokenHealthJob(deps: {
         // No last-character guard: transfer legitimately empties accounts.
         // The service re-verifies account+owner under the character lock, so a
         // transfer that already completed concurrently is never double-applied.
-        const result = await db.transaction(async (tx) => {
+        const result = await fleetLifecycleTransaction(db, async (tx) => {
           const r = await reclaimTransferredCharacter(tx, ch.id, {
             accountId: ch.accountId,
             ownerHash: ch.ownerHash,
@@ -103,29 +112,46 @@ export async function runTokenHealthJob(deps: {
       const missingScopes = cfg.eveSso.scopes.filter((s) => !identity.scopes.includes(s));
       const covered = missingScopes.length === 0;
       const nextStatus = covered ? ("valid" as const) : ("needs_reauth" as const);
-      const statusRows = await db
-        .update(character)
-        .set({ scopes: identity.scopes, tokenStatus: nextStatus })
-        .where(
-          and(eq(character.id, ch.id), eq(character.refreshTokenEnc, token.tokenEnc)),
-        )
-        .returning({ id: character.id });
-      if (statusRows.length === 0) {
+      const outcome = await fleetLifecycleTransaction(db, async (tx) => {
+        await lockFleetSharingMode(tx);
+        const old = (await lockFleetIdentityCharacters(tx, [ch.id])).get(ch.id);
+        if (!old || old.refreshTokenEnc !== token.tokenEnc) return "stale";
+        await lockFleetAccounts(tx, [old.accountId]);
+        if (
+          !hasUsableFleetRead({
+            ...old,
+            scopes: identity.scopes,
+            tokenStatus: nextStatus,
+          })
+        ) {
+          const locked = await lockFleetLifecycle(tx, { bossCharacterIds: [ch.id] });
+          await invalidateFleetSources(tx, locked, "fleet_read_invalid");
+        }
+        const statusRows = await tx
+          .update(character)
+          .set({ scopes: identity.scopes, tokenStatus: nextStatus })
+          .where(
+            and(eq(character.id, ch.id), eq(character.refreshTokenEnc, token.tokenEnc)),
+          )
+          .returning({ id: character.id });
+        if (!statusRows.length) return "stale";
+        if (nextStatus === "needs_reauth" && old.tokenStatus !== "needs_reauth") {
+          await logAudit(tx, {
+            actor: "system",
+            action: "token.needs_reauth",
+            target: String(ch.id),
+            // Actual shortfall, not the whole configured scope set.
+            details: { missingScopes },
+          });
+          return "needs_reauth";
+        }
+        return "refreshed";
+      });
+      if (outcome === "stale") {
         transientFailures++;
         continue;
       }
-      if (nextStatus === "needs_reauth" && ch.tokenStatus !== "needs_reauth") {
-        await logAudit(db, {
-          actor: "system",
-          action: "token.needs_reauth",
-          target: String(ch.id),
-          // What is missing, not what is required: the required set is config
-          // an operator can read, and the difference is what tells an app-wide
-          // scope change apart from one member's revocation.
-          details: { missingScopes },
-        });
-        counts.needsReauth++;
-      }
+      if (outcome === "needs_reauth") counts.needsReauth++;
       counts.refreshed++;
     }
 

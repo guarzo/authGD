@@ -1,0 +1,2 @@
+ALTER TABLE "fleet_source_intent" DROP CONSTRAINT "fleet_source_intent_state_ck";--> statement-breakpoint
+ALTER TABLE "fleet_source_intent" ADD CONSTRAINT "fleet_source_intent_state_ck" CHECK ("fleet_source_intent"."state" in ('pending', 'active', 'paused', 'ended'));

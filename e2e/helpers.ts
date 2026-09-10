@@ -4,13 +4,20 @@ import { createDb } from "../src/db";
 import { account, character, session } from "../src/db/schema";
 import { TRUNCATE_ALL_SQL } from "../src/db/tables";
 import { BASE_URL, TEST_DATABASE_URL } from "./env";
+import { RESET_LOCK_KEY } from "./db-isolation";
 
 export function testDb() {
   return createDb(TEST_DATABASE_URL);
 }
 
 export async function resetDb(db: ReturnType<typeof testDb>["db"]) {
-  await db.execute(sql.raw(TRUNCATE_ALL_SQL));
+  // Exclusive admission precedes every table lock, in the same transaction as
+  // TRUNCATE. A failed reset rolls back both; later server leases wait here,
+  // even when their request/response closed before they reached the database.
+  await db.transaction(async (tx) => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(${RESET_LOCK_KEY})`);
+    await tx.execute(sql.raw(TRUNCATE_ALL_SQL));
+  });
 }
 
 let nextCharId = 90_000_001;

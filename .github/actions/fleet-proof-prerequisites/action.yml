@@ -1,0 +1,24 @@
+name: Pinned fleet proof prerequisites
+description: Install the immutable Wingman test boundary and isolated TLS tooling
+runs:
+  using: composite
+  steps:
+    # Publish each replacement pin with separate owner authorization before
+    # hosted CI can resolve it; never float to main.
+    - uses: actions/checkout@v7
+      with:
+        repository: guarzo/FlyGD-Wingman
+        ref: 9355c6adc26ab631c7e6697e7ef90746db8ae935
+        path: tmp/task-10/wingman
+        persist-credentials: false
+    - uses: actions/setup-python@v7
+      with:
+        python-version: "3.11"
+    - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+    - shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y openssl libnss3-tools
+        uv sync --project tmp/task-10/wingman --locked --extra dev
+        echo "E2E_WINGMAN_ROOT=$GITHUB_WORKSPACE/tmp/task-10/wingman" >> "$GITHUB_ENV"
+        echo "E2E_WINGMAN_PYTHON=$GITHUB_WORKSPACE/tmp/task-10/wingman/.venv/bin/python" >> "$GITHUB_ENV"

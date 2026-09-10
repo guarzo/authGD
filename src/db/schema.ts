@@ -115,6 +115,8 @@ export const character = pgTable(
     affiliationCheckedAt: timestamp("affiliation_checked_at", { withTimezone: true }),
     affiliationInvalid: boolean("affiliation_invalid").notNull().default(false),
     ownerHash: text("owner_hash").notNull(),
+    // New link/incarnation, including unlink/relink ABA and same-account transfers.
+    fleetLinkEpoch: uuid("fleet_link_epoch").notNull().defaultRandom(),
     refreshTokenEnc: text("refresh_token_enc"),
     scopes: jsonb("scopes").$type<string[]>().notNull().default([]),
     tokenStatus: tokenStatusEnum("token_status").notNull().default("missing"),
@@ -200,8 +202,9 @@ export const outbox = pgTable(
         | { kind: "discord-user"; discordUserId: string }
         | { kind: "membership-recheck" }
         | { kind: "all" }
-        // one named job, re-run on demand; jobType is validated against QUEUES
-        // at dispatch time, so an unknown value drops rather than enqueueing
+        | { kind: "fleet-source"; sourceId: string; generation: number }
+        // one scheduled/admin-rerunnable job; jobType is validated at dispatch
+        // time, so an unknown value drops rather than enqueueing
         // to an arbitrary queue name
         | { kind: "job"; jobType: string }
       >()
@@ -695,10 +698,9 @@ export const structureEvent = pgTable(
 );
 
 /**
- * Fleet telemetry relay: six ephemeral tables backing the signed device
- * protocol in `src/lib/fleet-signature.ts`. Every row here is short-lived
- * operational state — pairing/session material and a few seconds of DPS/EWAR —
- * never a durable log. None of these tables store raw combat log content,
+ * Fleet telemetry relay: durable device consent plus short-lived pairing,
+ * session material and a few seconds of DPS/EWAR backing the signed device
+ * protocol in `src/lib/fleet-signature.ts` — never a telemetry history. None of these tables store raw combat log content,
  * attacker/target text, EVE tokens, or browser session cookies.
  *
  * Public key material is stored as base64 text (SPKI DER), matching this
@@ -707,6 +709,29 @@ export const structureEvent = pgTable(
  * other binary value here (`crypto.ts`, `pkceVerifier`, hashed session ids)
  * already does the same.
  */
+
+/** Empty means disabled. Only the explicit operator transition writes this row. */
+export const fleetSharingGate = pgTable(
+  "fleet_sharing_gate",
+  {
+    id: integer("id").primaryKey().default(1),
+    enabled: boolean("enabled").notNull().default(false),
+    revision: integer("revision").notNull().default(0),
+    transitionedAt: timestamp("transitioned_at", { withTimezone: true }),
+    keyIdentityPhase: text("key_identity_phase")
+      .$type<"pending" | "reconciling" | "ready">()
+      .notNull()
+      .default("pending"),
+    keyIdentityCursor: uuid("key_identity_cursor"),
+  },
+  (t) => [
+    check("fleet_sharing_gate_singleton_ck", sql`${t.id} = 1`),
+    check(
+      "fleet_sharing_gate_identity_phase_ck",
+      sql`${t.keyIdentityPhase} in ('pending', 'reconciling', 'ready')`,
+    ),
+  ],
+);
 
 /**
  * A paired device: one Ed25519 public key, tied to the account that approved
@@ -725,8 +750,10 @@ export const structureEvent = pgTable(
  * insert successfully and defeat it. The constraint is also NOT scoped by
  * `revokedAt`: a key that was ever inserted here, revoked or not, can never
  * be inserted again. Re-pairing after revocation is by design a new local
- * key pair, not the old one — see this table's fix-report entry in
- * `task-3-report.md` for the ruling.
+ * key pair, not the old one. This raw-DER text uniqueness is the legacy
+ * constraint, not DER identity: after explicit reconciliation, registration
+ * additionally uses fleetDeviceKeyIdentity and stores re-exported canonical DER.
+ * Original raw legacy records are never rewritten or merged.
  */
 export const fleetDevice = pgTable("fleet_device", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -734,6 +761,12 @@ export const fleetDevice = pgTable("fleet_device", {
     .notNull()
     .references(() => account.id, { onDelete: "cascade" }),
   publicKeySpkiB64: text("public_key_spki_b64").notNull().unique(),
+  approvedCapabilities: jsonb("approved_capabilities")
+    .$type<string[]>()
+    .notNull()
+    .default([]),
+  participationEnabled: boolean("participation_enabled").notNull().default(false),
+  participationGeneration: integer("participation_generation").notNull().default(0),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   revokedAt: timestamp("revoked_at", { withTimezone: true }),
 });
@@ -758,6 +791,11 @@ export const fleetPairingRequest = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     publicKeySpkiB64: text("public_key_spki_b64").notNull(),
     challengeDigest: text("challenge_digest").notNull(),
+    // Immutable request scope: the browser approves this, not completion input.
+    requestedCapabilities: jsonb("requested_capabilities")
+      .$type<string[]>()
+      .notNull()
+      .default([]),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     approvedAt: timestamp("approved_at", { withTimezone: true }),
     consumedAt: timestamp("consumed_at", { withTimezone: true }),
@@ -769,6 +807,52 @@ export const fleetPairingRequest = pgTable(
     }),
   },
   (t) => [index("fleet_pairing_request_expires_at_idx").on(t.expiresAt)],
+);
+
+/** Derived, collision-aware key identity. Null/nonconflicted is a deleted-binding
+ * tombstone, never a free key. No original device, grants or revocations are merged. */
+export const fleetDeviceKeyIdentity = pgTable(
+  "fleet_device_key_identity",
+  {
+    canonicalSpkiB64: text("canonical_spki_b64").primaryKey(),
+    deviceId: uuid("device_id")
+      .unique()
+      .references(() => fleetDevice.id, { onDelete: "set null" }),
+    conflicted: boolean("conflicted").notNull().default(false),
+  },
+  (t) => [
+    check(
+      "fleet_device_key_identity_conflict_ck",
+      sql`not ${t.conflicted} or ${t.deviceId} is null`,
+    ),
+  ],
+);
+
+/** Signer-authorized challenges have no device/account FK so conflicts/revocations
+ * remain completion-only outcomes. Consumed rows remain until expiry for replay
+ * protection and admission bounds. Legacy null request fields never authorize. */
+export const fleetRecoveryChallenge = pgTable(
+  "fleet_recovery_challenge",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    publicKeySpkiB64: text("public_key_spki_b64").notNull(),
+    nonceDigest: text("nonce_digest").notNull(),
+    requestId: text("request_id"),
+    requestIssuedAt: timestamp("request_issued_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    attempts: integer("attempts").notNull().default(0),
+  },
+  (t) => [
+    unique("fleet_recovery_challenge_key_request_uq").on(t.publicKeySpkiB64, t.requestId),
+    index("fleet_recovery_challenge_expires_at_idx").on(t.expiresAt),
+    index("fleet_recovery_challenge_key_expires_idx").on(t.publicKeySpkiB64, t.expiresAt),
+    check(
+      "fleet_recovery_challenge_attempts_ck",
+      sql`${t.attempts} >= 0 AND ${t.attempts} <= 5`,
+    ),
+  ],
 );
 
 /**
@@ -787,11 +871,124 @@ export const fleetDeviceSession = pgTable(
       .notNull()
       .references(() => fleetDevice.id, { onDelete: "cascade" }),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    // Write once at issuance. A later pairing may upgrade the device, never this ceiling.
+    approvedCapabilities: jsonb("approved_capabilities")
+      .$type<string[]>()
+      .notNull()
+      .default([]),
+    acknowledgedCapabilities: jsonb("acknowledged_capabilities")
+      .$type<string[]>()
+      .notNull()
+      .default([]),
     lastRevision: integer("last_revision").notNull().default(0),
     lastPublishAt: timestamp("last_publish_at", { withTimezone: true }),
     lastReadAt: timestamp("last_read_at", { withTimezone: true }),
   },
   (t) => [index("fleet_device_session_expires_at_idx").on(t.expiresAt)],
+);
+
+/** Immutable consent bindings intentionally have NO cascading FKs. Ended intents
+ * are retry fences, including after character/account/device deletion. A later
+ * Start must still bound intentCreatedAt after retention cleanup (Task 4).
+ * These rows do not, by themselves, authorize any shared read or publication. */
+export const fleetSourceIntent = pgTable(
+  "fleet_source_intent",
+  {
+    id: uuid("id").primaryKey(),
+    accountId: uuid("account_id"),
+    deviceId: uuid("device_id"),
+    bossCharacterId: bigint("boss_character_id", { mode: "number" }),
+    bossOwnerHash: text("boss_owner_hash"),
+    bossLinkEpoch: uuid("boss_link_epoch"),
+    generation: integer("generation").notNull().default(1),
+    state: text("state").$type<"pending" | "active" | "paused" | "ended">().notNull(),
+    intentCreatedAt: timestamp("intent_created_at", { withTimezone: true }).notNull(),
+    intentExpiresAt: timestamp("intent_expires_at", { withTimezone: true }).notNull(),
+    activatedAt: timestamp("activated_at", { withTimezone: true }),
+    fleetId: bigint("fleet_id", { mode: "number" }),
+    fetchGeneration: integer("fetch_generation").notNull().default(0),
+    lastAttemptAt: timestamp("last_attempt_at", { withTimezone: true }),
+    nextFetchAt: timestamp("next_fetch_at", { withTimezone: true }),
+    fetchClaimExpiresAt: timestamp("fetch_claim_expires_at", { withTimezone: true }),
+    enqueueUntil: timestamp("enqueue_until", { withTimezone: true }),
+    latestOutcome: text("latest_outcome").$type<
+      "verified" | "service_unavailable" | "untrustworthy_evidence" | "timed_out"
+    >(),
+    endedAt: timestamp("ended_at", { withTimezone: true }),
+    terminalReason: text("terminal_reason"),
+    retainUntil: timestamp("retain_until", { withTimezone: true }).notNull(),
+  },
+  (t) => [
+    index("fleet_source_intent_account_idx").on(t.accountId),
+    index("fleet_source_intent_boss_idx").on(t.bossCharacterId),
+    index("fleet_source_intent_device_idx").on(t.deviceId),
+    index("fleet_source_intent_retention_idx").on(t.retainUntil),
+    index("fleet_source_intent_due_idx")
+      .on(t.nextFetchAt)
+      .where(sql`${t.state} <> 'ended'`),
+    index("fleet_source_intent_pending_expiry_idx")
+      .on(t.intentExpiresAt)
+      .where(sql`${t.activatedAt} is null and ${t.state} <> 'ended'`),
+    check(
+      "fleet_source_intent_outcome_ck",
+      sql`${t.latestOutcome} is null or ${t.latestOutcome} in ('verified', 'service_unavailable', 'untrustworthy_evidence', 'timed_out')`,
+    ),
+    check(
+      "fleet_source_intent_state_ck",
+      sql`${t.state} in ('pending', 'active', 'paused', 'ended')`,
+    ),
+    check(
+      "fleet_source_intent_generation_ck",
+      sql`${t.generation} > 0 and ${t.fetchGeneration} >= 0`,
+    ),
+    check(
+      "fleet_source_intent_identity_ck",
+      sql`${t.state} = 'ended' or (${t.accountId} is not null and ${t.deviceId} is not null and ${t.bossCharacterId} > 0 and ${t.bossCharacterId} is not null and ${t.bossOwnerHash} is not null and ${t.bossLinkEpoch} is not null)`,
+    ),
+    check(
+      "fleet_source_intent_terminal_ck",
+      sql`(${t.state} = 'ended') = (${t.endedAt} is not null and ${t.terminalReason} is not null)`,
+    ),
+    check(
+      "fleet_source_intent_time_ck",
+      sql`${t.intentExpiresAt} > ${t.intentCreatedAt} and ${t.retainUntil} > ${t.intentExpiresAt}`,
+    ),
+  ],
+);
+
+/** One durable slot per fleet, including empty slots. Authority generations never
+ * reset on withdrawal. Evidence contains linked IDs/epochs only, no ESI roster
+ * payload or unlinked character identities. Task 4 owns proof publication. */
+export const fleetSourceAuthority = pgTable(
+  "fleet_source_authority",
+  {
+    fleetId: bigint("fleet_id", { mode: "number" }).primaryKey(),
+    sourceId: uuid("source_id"),
+    sourceGeneration: integer("source_generation"),
+    authorityGeneration: integer("authority_generation").notNull().default(0),
+    linkedCharacters: jsonb("linked_characters")
+      .$type<{ characterId: number; linkEpoch: string }[]>()
+      .notNull()
+      .default([]),
+    verifiedAt: timestamp("verified_at", { withTimezone: true }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+  },
+  (t) => [
+    index("fleet_source_authority_source_idx").on(t.sourceId),
+    index("fleet_source_authority_expiry_idx").on(t.expiresAt),
+    check(
+      "fleet_source_authority_generation_ck",
+      sql`${t.authorityGeneration} >= 0 and (${t.sourceGeneration} is null or ${t.sourceGeneration} > 0)`,
+    ),
+    check(
+      "fleet_source_authority_binding_ck",
+      sql`(${t.sourceId} is null) = (${t.sourceGeneration} is null)`,
+    ),
+    check(
+      "fleet_source_authority_evidence_ck",
+      sql`jsonb_typeof(${t.linkedCharacters}) = 'array' and jsonb_array_length(${t.linkedCharacters}) <= 256 and octet_length(${t.linkedCharacters}::text) <= 32768 and (${t.sourceId} is not null or (${t.linkedCharacters} = '[]'::jsonb and ${t.verifiedAt} is null and ${t.expiresAt} is null))`,
+    ),
+  ],
 );
 
 /** One operational cooldown per account; the manual check retains no roster evidence. */
@@ -803,9 +1000,10 @@ export const fleetAccessCheckGate = pgTable("fleet_access_check_gate", {
 });
 
 /**
- * A materialized, expiring cache of one linked character's ESI-observed fleet
- * membership — the only place `esi-fleets.read_fleet.v1` evidence lands.
- * Relay routes read only this row; they never call ESI (Global Constraints).
+ * Legacy materialized fleet eligibility. No supported production writer or
+ * compatibility mirror may populate it; the cutover deletes it and shared
+ * admission never uses it. Retained for additive-schema/old-reader compatibility.
+ * Legacy relay routes only read it; they never call ESI (Global Constraints).
  * `rosterCharacterIds` holds ONLY character ids: no name, ship, or system, so
  * a leaked row exposes fleet composition by id and nothing else about it.
  * `outcomeCode` is stored verbatim as text, not an enum — like `structure.
@@ -857,6 +1055,11 @@ export const fleetPublisherLease = pgTable(
       .references(() => fleetDeviceSession.id, { onDelete: "cascade" }),
     fleetId: bigint("fleet_id", { mode: "number" }).notNull(),
     leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }).notNull(),
+    sourceId: uuid("source_id"),
+    sourceGeneration: integer("source_generation"),
+    authorityGeneration: integer("authority_generation"),
+    linkEpoch: uuid("link_epoch"),
+    participationGeneration: integer("participation_generation"),
   },
   (t) => [index("fleet_publisher_lease_expires_at_idx").on(t.leaseExpiresAt)],
 );
@@ -887,6 +1090,15 @@ export const fleetTelemetryRow = pgTable(
     sessionId: text("session_id")
       .notNull()
       .references(() => fleetDeviceSession.id, { onDelete: "cascade" }),
+    // Nullable provenance is only a targeted-cleanup seam, never admission proof.
+    sourceId: uuid("source_id"),
+    sourceGeneration: integer("source_generation"),
+    authorityGeneration: integer("authority_generation"),
+    linkEpoch: uuid("link_epoch"),
+    participationGeneration: integer("participation_generation"),
+    // Only accepted publications stamp this. Existing rows remain unobserved;
+    // no default/backfill can invent a publication at migration or read time.
+    publicationId: uuid("publication_id"),
     dps: integer("dps").notNull(),
     // Only `[]` or `["SCRAM/POINT"]` are meaningful values (`PublishedRow.
     // ewar`'s union, `src/services/fleet-relay.ts`) — the CHECK constraint below is the only

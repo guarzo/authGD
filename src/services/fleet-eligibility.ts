@@ -1,8 +1,120 @@
 import { createHash } from "node:crypto";
 import { and, eq, gt } from "drizzle-orm";
-import type { Dbx } from "@/db";
+import type { Db, Dbx } from "@/db";
+import type { FleetCode, FleetReply, SignedFleetCall } from "@/core/fleet-sharing";
+import {
+  fleetLifecycleTransaction,
+  FleetLifecycleRetry,
+} from "@/services/fleet-lifecycle";
+import {
+  commitSessionCadence,
+  isRetryableRelayError,
+  RelayRefusal,
+} from "@/services/fleet-relay";
+import {
+  prepareSharedAdmission,
+  currentSourceEvidence,
+  type SharedAdmission,
+} from "@/services/fleet-shared-admission";
 import { account, character, fleetEligibility } from "@/db/schema";
 import { FLEET_READ_SCOPE } from "@/lib/esi/client";
+
+export type EligibleCharacter = {
+  characterId: number;
+  sourceId: string;
+  sourceGeneration: number;
+  authorityGeneration: number;
+  expiresAt: Date;
+};
+export type EligibilityView = {
+  participationGeneration: number;
+  state: "ready" | "participation_off" | "not_verified";
+  characters: EligibleCharacter[];
+};
+export type SharedCharacterEligibility = EligibleCharacter & {
+  fleetId: number;
+  linkEpoch: string;
+};
+
+/** Ownership/epoch and exactly ONE current fleet. An ambiguity is withheld, not
+ * resolved by sorting fleet IDs. Independent unambiguous characters survive. */
+export function sharedCharacterEligibility(
+  p: SharedAdmission,
+): Map<number, SharedCharacterEligibility> {
+  const matches = new Map<number, Map<number, SharedCharacterEligibility>>();
+  for (const e of p.evidence) {
+    const ch = p.identities.find((row) => row.id === e.characterId);
+    if (!ch || ch.fleetLinkEpoch !== e.linkEpoch || !currentSourceEvidence(p, e))
+      continue;
+    const fleets = matches.get(ch.id) ?? new Map<number, SharedCharacterEligibility>();
+    fleets.set(e.fleetId, {
+      characterId: ch.id,
+      fleetId: e.fleetId,
+      linkEpoch: ch.fleetLinkEpoch,
+      sourceId: e.sourceId!,
+      sourceGeneration: e.sourceGeneration!,
+      authorityGeneration: e.authorityGeneration,
+      expiresAt: e.expiresAt!,
+    });
+    matches.set(ch.id, fleets);
+  }
+  return new Map(
+    [...matches].flatMap(([id, fleets]) =>
+      fleets.size === 1 ? [[id, [...fleets.values()][0]] as const] : [],
+    ),
+  );
+}
+
+export async function readDeviceEligibility(
+  db: Db,
+  call: SignedFleetCall,
+): Promise<FleetReply<EligibilityView>> {
+  try {
+    const value = await fleetLifecycleTransaction(db, async (tx) => {
+      const p = await prepareSharedAdmission(tx, call, "eligibility");
+      const d = p.actor.device;
+      const eligible = sharedCharacterEligibility(p);
+      const characters = d.participationEnabled
+        ? p.owned
+            .flatMap((ch) => {
+              const e = eligible.get(ch.id);
+              return e
+                ? [
+                    {
+                      characterId: e.characterId,
+                      sourceId: e.sourceId,
+                      sourceGeneration: e.sourceGeneration,
+                      authorityGeneration: e.authorityGeneration,
+                      expiresAt: e.expiresAt,
+                    },
+                  ]
+                : [];
+            })
+            .sort((a, b) => a.characterId - b.characterId)
+        : [];
+      await commitSessionCadence(tx, p.actor.session.id, {
+        revision: call.revision,
+        now: p.now,
+        cadence: "read",
+      });
+      return {
+        participationGeneration: d.participationGeneration,
+        state: !d.participationEnabled
+          ? ("participation_off" as const)
+          : characters.length
+            ? ("ready" as const)
+            : ("not_verified" as const),
+        characters,
+      };
+    });
+    return { ok: true, value };
+  } catch (err) {
+    if (err instanceof RelayRefusal) return { ok: false, code: err.code as FleetCode };
+    if (err instanceof FleetLifecycleRetry || isRetryableRelayError(err))
+      return { ok: false, code: "service_unavailable" };
+    throw err;
+  }
+}
 
 export type DeviceCatalogue = {
   revision: number;
@@ -51,9 +163,11 @@ export async function buildDeviceCatalogue(
 }
 
 /**
- * Reads the materialized `fleet_eligibility` cache — never a live ESI call
- * (Global Constraint: relay routes only ever read this cache). Returns
- * `null` for anything short of definite, current evidence: below Member
+ * Reads the materialized `fleet_eligibility` cache for legacy-mode snapshots.
+ * Relay routes never call live ESI: shared snapshot and eligibility authorization
+ * preparation uses `prepareSharedAdmission` and current worker source evidence
+ * instead of this cache. This legacy reader returns `null` for anything short of
+ * definite, current evidence: below Member
  * tier; no unexpired row; an `outcomeCode` other than `"ok"` (any other
  * recorded outcome — forbidden, not-in-fleet, an error — is not fleet-read
  * evidence, whatever else the row happens to hold); a linked character

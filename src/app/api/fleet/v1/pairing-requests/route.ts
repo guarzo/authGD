@@ -2,6 +2,8 @@ import { eq } from "drizzle-orm";
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { getDb } from "@/db";
+import { SHARED_CAPABILITY } from "@/core/fleet-sharing";
+import { FleetSharingDisabledError } from "@/services/fleet-sharing-mode";
 import { fleetPairingRequest } from "@/db/schema";
 import { readBoundedRequestBody } from "@/lib/fleet-request-body";
 import {
@@ -9,6 +11,10 @@ import {
   RevokedDeviceKeyError,
   beginPairing,
 } from "@/services/fleet-pairing";
+import {
+  FleetDeviceKeyUnavailableError,
+  FleetIdentityMaintenanceError,
+} from "@/services/fleet-key-identity";
 import { FLEET_RELAY_PROTOCOL } from "@/services/fleet-relay";
 
 // This route is unauthenticated by design: it is the very first call a
@@ -36,6 +42,7 @@ const BodySchema = z
   .object({
     protocol: z.literal(1),
     public_key_spki_b64url: z.string().regex(PUBLIC_KEY_B64URL_RE),
+    requested_capabilities: z.array(z.literal(SHARED_CAPABILITY)).max(1).optional(),
   })
   .strict();
 
@@ -75,13 +82,12 @@ export async function POST(req: NextRequest) {
   if (!body.success) return jsonError("bad_request", 400);
 
   const spki = new Uint8Array(Buffer.from(body.data.public_key_spki_b64url, "base64url"));
-  const now = new Date();
   const dbx = getDb();
 
   try {
     const { pairingId, approvalUrl } = await beginPairing(dbx, {
       publicKeySpki: spki,
-      now,
+      requestedCapabilities: body.data.requested_capabilities,
     });
     const [row] = await dbx
       .select({ expiresAt: fleetPairingRequest.expiresAt })
@@ -94,12 +100,17 @@ export async function POST(req: NextRequest) {
       expires_at: row.expiresAt.toISOString(),
     });
   } catch (err) {
+    if (err instanceof FleetIdentityMaintenanceError)
+      return jsonError("service_unavailable", 503);
+    if (err instanceof FleetSharingDisabledError)
+      return jsonError("feature_disabled", 503);
     // Non-oracle: a malformed key and a previously-revoked key collapse to
     // one generic code, so this endpoint never confirms to a caller that a
     // specific submitted key was ever paired and revoked before.
     if (
       err instanceof InvalidDevicePublicKeyError ||
-      err instanceof RevokedDeviceKeyError
+      err instanceof RevokedDeviceKeyError ||
+      err instanceof FleetDeviceKeyUnavailableError
     ) {
       return jsonError("invalid_key", 400);
     }

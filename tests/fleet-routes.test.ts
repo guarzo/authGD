@@ -1,9 +1,25 @@
 import { createHash, generateKeyPairSync, sign as ed25519Sign } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { NextRequest } from "next/server";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import type { Db } from "@/db";
-import { account, fleetDevice, fleetEligibility } from "@/db/schema";
+import { account, fleetDevice, fleetDeviceSession, fleetEligibility } from "@/db/schema";
+import {
+  waitUntilBlockedBy,
+  pairDevice as pairSharingDevice,
+} from "./helpers/fleet-sharing";
+import { reconcileFleetKeys } from "./helpers/fleet-sharing";
+import { SHARED_CAPABILITY } from "@/core/fleet-sharing";
+import { transitionFleetSharingMode } from "@/services/fleet-sharing-mode";
 import { FLEET_READ_SCOPE } from "@/lib/esi/client";
 import {
   authenticateFleetRequest,
@@ -20,7 +36,7 @@ import {
   pairingChallengePreimage,
   revokeFleetDevice,
 } from "@/services/fleet-pairing";
-import { setupTestDb, TEST_URL } from "./helpers/db";
+import { setupTestDb, TEST_URL, truncateAll } from "./helpers/db";
 import { seedAccount, seedCharacter } from "./helpers/seed";
 import { testConfig } from "./helpers/config";
 
@@ -54,6 +70,8 @@ const { GET: catalogueRoute } = await import("@/app/api/fleet/v1/catalogue/route
 const { PUT: snapshotPut, GET: snapshotGet } =
   await import("@/app/api/fleet/v1/snapshot/route");
 const { PUT: sessionRenewRoute } = await import("@/app/api/fleet/v1/session/route");
+const { GET: deviceGet, PUT: devicePut } =
+  await import("@/app/api/fleet/v1/device/route");
 
 const cfg = testConfig();
 // Real wall-clock time, deliberately, unlike the fixed literal `NOW` fleet-
@@ -156,6 +174,267 @@ function signedHeaders(opts: {
   headers.set("x-fleet-signature", signature);
   return headers;
 }
+
+describe("production signed-route admission clock", () => {
+  it.each([
+    {
+      method: "GET" as const,
+      path: "/api/fleet/v1/catalogue",
+      route: catalogueRoute,
+      status: 403,
+    },
+    {
+      method: "PUT" as const,
+      path: "/api/fleet/v1/session",
+      route: sessionRenewRoute,
+      status: 401,
+    },
+  ])(
+    "$path does not admit a session that expired while waiting for its device lock",
+    async ({ method, path, route, status }) => {
+      const member = await seedAccount(ctx.db, { tier: "member" });
+      const paired = await pairDevice(ctx.db, member.id, NOW);
+      await ctx.db
+        .update(fleetDeviceSession)
+        .set({ expiresAt: new Date(NOW.getTime() + 1000) })
+        .where(eq(fleetDeviceSession.deviceId, paired.device.id));
+      const client = await ctx.pool.connect();
+      let pending: ReturnType<typeof route> | undefined;
+      try {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(NOW);
+        await client.query("begin");
+        const {
+          rows: [{ pid }],
+        } = await client.query<{ pid: number }>("select pg_backend_pid() as pid");
+        await client.query("select id from fleet_device where id = $1 for update", [
+          paired.device.id,
+        ]);
+        const headers = signedHeaders({
+          privateKey: paired.privateKey,
+          method,
+          path,
+          sessionId: paired.sessionId,
+          issuedAt: NOW.toISOString(),
+          revision: 1,
+          body: new Uint8Array(),
+        });
+        pending = route(new NextRequest(`http://localhost${path}`, { method, headers }));
+        expect(await waitUntilBlockedBy(ctx.pool, pid)).toBe(true);
+        vi.setSystemTime(new Date(NOW.getTime() + 1000));
+        await client.query("commit");
+        expect((await pending).status).toBe(status);
+        const [session] = await ctx.db
+          .select()
+          .from(fleetDeviceSession)
+          .where(eq(fleetDeviceSession.deviceId, paired.device.id));
+        expect(session.lastRevision).toBe(0);
+      } finally {
+        await client.query("rollback");
+        client.release();
+        await pending;
+        vi.useRealTimers();
+      }
+    },
+  );
+});
+
+describe("explicit shared device wire contract", () => {
+  beforeEach(() => truncateAll(ctx.db));
+  afterEach(() => truncateAll(ctx.db));
+
+  function deviceRequest(
+    paired: {
+      sessionId: string;
+      privateKey: ReturnType<typeof newKeyPair>["privateKey"];
+    },
+    method: "GET" | "PUT",
+    body: Uint8Array,
+    revision = 1,
+    query = "",
+  ) {
+    const path = "/api/fleet/v1/device";
+    return new NextRequest(`http://localhost${path}${query}`, {
+      method,
+      headers: signedHeaders({
+        privateKey: paired.privateKey,
+        sessionId: paired.sessionId,
+        method,
+        path,
+        body,
+        revision,
+        issuedAt: new Date().toISOString(),
+      }),
+      ...(method === "PUT" ? { body: Buffer.from(body) } : {}),
+    });
+  }
+
+  it("returns explicit device versus session grants and participation without a browser cookie or roster", async () => {
+    const member = await seedAccount(ctx.db, { tier: "member" });
+    const paired = await pairDevice(ctx.db, member.id, NOW);
+    const res = await deviceGet(deviceRequest(paired, "GET", new Uint8Array()));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(await res.json()).toEqual({
+      protocol: 1,
+      device_id: paired.device.id,
+      session_expires_at: new Date(NOW.getTime() + 30 * 60000).toISOString(),
+      feature_enabled: false,
+      approved_capabilities: [],
+      session_approved_capabilities: [],
+      acknowledged_capabilities: [],
+      participation: { enabled: false, generation: 0 },
+    });
+  });
+
+  it("binds optional requested capabilities at enrollment and gates only shared requests while disabled", async () => {
+    const { spki } = newKeyPair();
+    const request = () =>
+      new NextRequest("http://localhost/api/fleet/v1/pairing-requests", {
+        method: "POST",
+        body: JSON.stringify({
+          protocol: 1,
+          public_key_spki_b64url: Buffer.from(spki).toString("base64url"),
+          requested_capabilities: [SHARED_CAPABILITY],
+        }),
+      });
+    const disabled = await pairingRequestsRoute(request());
+    expect(disabled.status).toBe(503);
+    expect(await disabled.json()).toEqual({ protocol: 1, error: "feature_disabled" });
+    const ready = await reconcileFleetKeys(ctx.db);
+    await transitionFleetSharingMode(ctx.db, {
+      enabled: true,
+      expectedRevision: ready.revision,
+    });
+    const enabled = await pairingRequestsRoute(request());
+    expect(enabled.status).toBe(200);
+    const { pairing_id: id } = (await enabled.json()) as { pairing_id: string };
+    const member = await seedAccount(ctx.db, { tier: "member" });
+    await approvePairing(ctx.db, id, member.id);
+    await transitionFleetSharingMode(ctx.db, {
+      enabled: false,
+      expectedRevision: ready.revision + 1,
+    });
+    const refused = await completeRoute(
+      new NextRequest(`http://localhost/api/fleet/v1/pairing-requests/${id}/complete`, {
+        method: "POST",
+        body: JSON.stringify({ protocol: 1, completion_signature: "A".repeat(86) }),
+      }),
+      { params: Promise.resolve({ id }) },
+    );
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toEqual({ protocol: 1, error: "not_completable" });
+  });
+
+  it("acknowledges the approved ceiling via the real signed PUT and shares read cadence", async () => {
+    const ready = await reconcileFleetKeys(ctx.db);
+    await transitionFleetSharingMode(ctx.db, {
+      enabled: true,
+      expectedRevision: ready.revision,
+    });
+    const member = await seedAccount(ctx.db, { tier: "member" });
+    const paired = await pairSharingDevice(ctx.db, member.id, NOW, [SHARED_CAPABILITY]);
+    const body = Buffer.from(
+      JSON.stringify({ protocol: 1, capabilities: [SHARED_CAPABILITY] }),
+    );
+    const ack = await devicePut(deviceRequest(paired, "PUT", body));
+    expect(ack.status).toBe(200);
+    expect(await ack.json()).toMatchObject({
+      approved_capabilities: [SHARED_CAPABILITY],
+      session_approved_capabilities: [SHARED_CAPABILITY],
+      acknowledged_capabilities: [SHARED_CAPABILITY],
+      participation: { enabled: false, generation: 0 },
+    });
+    expect(
+      (await deviceGet(deviceRequest(paired, "GET", new Uint8Array(), 2))).status,
+    ).toBe(429);
+    expect((await devicePut(deviceRequest(paired, "PUT", body))).status).toBe(409);
+  });
+
+  it("legacy signed sessions cannot approve themselves into the shared model", async () => {
+    const ready = await reconcileFleetKeys(ctx.db);
+    await transitionFleetSharingMode(ctx.db, {
+      enabled: true,
+      expectedRevision: ready.revision,
+    });
+    const member = await seedAccount(ctx.db, { tier: "member" });
+    const paired = await pairDevice(ctx.db, member.id, NOW);
+    const ack = await devicePut(
+      deviceRequest(
+        paired,
+        "PUT",
+        Buffer.from(JSON.stringify({ protocol: 1, capabilities: [SHARED_CAPABILITY] })),
+      ),
+    );
+    expect(ack.status).toBe(403);
+    expect(await ack.json()).toEqual({ protocol: 1, error: "capability_required" });
+  });
+
+  it.each([
+    { value: { protocol: 1, capabilities: ["unknown"] }, error: "bad_request" },
+    {
+      value: { protocol: 1, capabilities: [SHARED_CAPABILITY, SHARED_CAPABILITY] },
+      error: "bad_request",
+    },
+    {
+      value: { protocol: 1, capabilities: [], account_id: "forged" },
+      error: "bad_request",
+    },
+    { value: { protocol: 1, capabilities: [], fleet_id: 6200001 }, error: "bad_request" },
+    { value: { protocol: 2, capabilities: [] }, error: "update_required" },
+  ])("refuses unsigned selectors/unknown schema: $value", async ({ value, error }) => {
+    const member = await seedAccount(ctx.db, { tier: "member" });
+    const paired = await pairDevice(ctx.db, member.id, NOW);
+    const result = await devicePut(
+      deviceRequest(paired, "PUT", Buffer.from(JSON.stringify(value))),
+    );
+    expect(result.status).toBe(400);
+    expect(await result.json()).toEqual({ protocol: 1, error });
+    const [session] = await ctx.db
+      .select()
+      .from(fleetDeviceSession)
+      .where(eq(fleetDeviceSession.deviceId, paired.device.id));
+    expect(session.lastRevision).toBe(0);
+  });
+
+  it("refuses queries, oversized bodies, tampering, and unproven session states without an oracle", async () => {
+    const member = await seedAccount(ctx.db, { tier: "member" });
+    const paired = await pairDevice(ctx.db, member.id, NOW);
+    expect(
+      (
+        await deviceGet(
+          deviceRequest(paired, "GET", new Uint8Array(), 1, "?account_id=forged"),
+        )
+      ).status,
+    ).toBe(400);
+    expect(
+      (await devicePut(deviceRequest(paired, "PUT", Buffer.from("x".repeat(1025)))))
+        .status,
+    ).toBe(400);
+    const tampered = deviceRequest(
+      paired,
+      "PUT",
+      Buffer.from('{"protocol":1,"capabilities":[]}'),
+    );
+    tampered.headers.set("x-fleet-body-sha256", "0".repeat(64));
+    const badProof = await devicePut(tampered);
+    expect(badProof.status).toBe(401);
+    const unknown = await deviceGet(
+      deviceRequest({ ...paired, sessionId: "A".repeat(43) }, "GET", new Uint8Array()),
+    );
+    await ctx.db
+      .update(fleetDeviceSession)
+      .set({ expiresAt: new Date(0) })
+      .where(eq(fleetDeviceSession.deviceId, paired.device.id));
+    const expired = await deviceGet(deviceRequest(paired, "GET", new Uint8Array()));
+    await revokeFleetDevice(ctx.db, paired.device.id, member.id, new Date());
+    const revoked = await deviceGet(deviceRequest(paired, "GET", new Uint8Array()));
+    for (const response of [badProof, unknown, expired, revoked]) {
+      expect(response.status).toBe(401);
+      expect(await response.json()).toEqual({ protocol: 1, error: "unauthorized" });
+    }
+  });
+});
 
 describe("POST /api/fleet/v1/pairing-requests", () => {
   it("issues a pairing id, approval url and expiry for a valid Ed25519 public key", async () => {

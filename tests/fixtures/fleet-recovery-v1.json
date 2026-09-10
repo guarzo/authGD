@@ -1,0 +1,10 @@
+{
+  "_comment": "Public test-only Ed25519 recovery vector; private key discarded. No live registration or challenge is created from this vector. UTF-8 lines have no final newline. Existing pairing and signed-request vectors are unchanged.",
+  "canonical_origin": "https://auth.example",
+  "challenge_id": "3f9c1de2-7b8a-4c1f-9a2e-6d4b8f1c9a01",
+  "nonce": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+  "public_key_spki_b64": "MCowBQYDK2VwAyEA4S/PScLKsUqwZqs5vCMZiIw2alq+ab9WqnKn4/diWG4=",
+  "public_key_sha256": "ae34b1ac9afb3737c91055a0d7934bb2e625ab78bf002e8e2297394bfbdd90c9",
+  "preimage_utf8": "fleet-recovery-v1\nhttps://auth.example\n3f9c1de2-7b8a-4c1f-9a2e-6d4b8f1c9a01\nAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8\nae34b1ac9afb3737c91055a0d7934bb2e625ab78bf002e8e2297394bfbdd90c9",
+  "signature_b64url": "E7973_nTwJzkhmQvShLUTTauNfkcNawi_ZcGzr2cDWxC3weCh9nojIHaD7a_0g7V53Y7eYUt3lc-ezhVjQZaBw"
+}

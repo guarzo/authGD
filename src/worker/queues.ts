@@ -13,6 +13,7 @@ export const QUEUES = {
   accessLists: "access-lists",
   structures: "structures",
   structureEvents: "structure-events",
+  fleetSource: "fleet-source",
   deadLetter: "ops-dead-letter",
 } as const;
 
@@ -39,7 +40,7 @@ export function globalSingletonKey(queue: string): string {
   return GLOBAL_SINGLETON_KEYS[queue] ?? `${queue}:all`;
 }
 
-const JOB_QUEUES = [
+export const SCHEDULED_QUEUES = [
   QUEUES.membership,
   QUEUES.membershipRecheck,
   QUEUES.contacts,
@@ -73,7 +74,22 @@ export async function createQueues(boss: PgBoss): Promise<void> {
         `UPDATE pgboss.queue SET dead_letter = NULL WHERE name = '${QUEUES.deadLetter}'`,
     );
   }
-  for (const name of JOB_QUEUES) {
+  // Source cadence/recovery belongs to the persisted due scheduler, never the
+  // generic 60-second retry policy or a cron/admin rerun. No error-body DLQ.
+  const sourceOptions = {
+    name: QUEUES.fleetSource,
+    policy: "short" as const,
+    retryLimit: 0,
+    retryDelay: 0,
+    retryBackoff: false,
+    expireInSeconds: 30,
+    retentionMinutes: 1,
+  };
+  await boss.createQueue(QUEUES.fleetSource, sourceOptions);
+  await boss.updateQueue(QUEUES.fleetSource, sourceOptions);
+  if ((await boss.getQueue(QUEUES.fleetSource))?.deadLetter)
+    throw new Error("fleet_source_queue_has_dead_letter");
+  for (const name of SCHEDULED_QUEUES) {
     // policy "short": singletonKey uniqueness only exists under this policy
     // (pg-boss job_i1 partial index) — standard queues ignore singletonKey.
     // Final-retry failures dead-letter into ops-dead-letter → ops webhook.
@@ -103,7 +119,7 @@ export async function createQueues(boss: PgBoss): Promise<void> {
  * makes that display a fact rather than a second copy that can rot.
  */
 export async function scheduleJobs(boss: PgBoss): Promise<void> {
-  for (const name of JOB_QUEUES) {
+  for (const name of SCHEDULED_QUEUES) {
     const cron = cronFor(name);
     // A queue with no cron entry would silently never tick. Fail startup
     // instead: the boot watchdog turns that into an alert an admin can see.

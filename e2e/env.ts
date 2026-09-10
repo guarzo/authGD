@@ -99,7 +99,11 @@ if (FLEET_INTEGRATIONS && APP_PORT === normalPort) {
   throw new Error("[fleet-e2e] E2E_FLEET_PORT must differ from E2E_PORT");
 }
 
-export const BASE_URL = `http://localhost:${APP_PORT}`;
+export const BASE_URL = `${FLEET_INTEGRATIONS && process.env.E2E_FLEET_TLS_ROOT ? "https" : "http"}://localhost:${APP_PORT}`;
+/** Signed raw GET framing is tested against Next itself, not the TLS parser. */
+export const FLEET_UPSTREAM_URL = BASE_URL.startsWith("https:")
+  ? `http://127.0.0.1:${portOverride("E2E_FLEET_UPSTREAM_PORT", portFor("fleet-upstream", 4100, 300))}`
+  : BASE_URL;
 
 /** Host port for the per-worktree Postgres container. `E2E_DB_PORT` overrides. */
 export const DB_PORT = portOverride("E2E_DB_PORT", portFor("db", 5600, 300));

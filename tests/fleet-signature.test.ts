@@ -13,6 +13,50 @@ import {
   type FleetAuthHeaders,
 } from "@/lib/fleet-signature";
 import fixture from "./fixtures/fleet-signature-v1.json";
+import recoveryFixture from "./fixtures/fleet-recovery-v1.json";
+import {
+  recoveryChallengePreimage,
+  verifyRecoveryProof,
+} from "@/lib/fleet-recovery-proof";
+
+describe("recovery purpose/origin-separated golden proof", () => {
+  const input = {
+    canonicalOrigin: recoveryFixture.canonical_origin,
+    challengeId: recoveryFixture.challenge_id,
+    nonce: recoveryFixture.nonce,
+    publicKeySpkiB64: recoveryFixture.public_key_spki_b64,
+  };
+  it("pins exact UTF-8 bytes, canonical DER hash and real Ed25519 verification", () => {
+    expect(recoveryChallengePreimage(input).toString("utf8")).toBe(
+      recoveryFixture.preimage_utf8,
+    );
+    expect(
+      createHash("sha256")
+        .update(Buffer.from(input.publicKeySpkiB64, "base64"))
+        .digest("hex"),
+    ).toBe(recoveryFixture.public_key_sha256);
+    expect(verifyRecoveryProof(input, recoveryFixture.signature_b64url)).toBe(true);
+  });
+  it.each([
+    { canonicalOrigin: "https://other.example" },
+    { challengeId: "3f9c1de2-7b8a-4c1f-9a2e-6d4b8f1c9a02" },
+    { nonce: "B".repeat(43) },
+    { publicKeySpkiB64: "garbage" },
+  ])("refuses a changed recovery binding %j", (override) => {
+    expect(
+      verifyRecoveryProof({ ...input, ...override }, recoveryFixture.signature_b64url),
+    ).toBe(false);
+  });
+  it("refuses malformed and noncanonical signature encodings", () => {
+    for (const signature of [
+      "x",
+      recoveryFixture.signature_b64url + "=",
+      recoveryFixture.signature_b64url.slice(0, -1) + "x",
+    ]) {
+      expect(verifyRecoveryProof(input, signature)).toBe(false);
+    }
+  });
+});
 
 const DEFAULT_METHOD = "PUT" as const;
 const DEFAULT_PATH = "/api/fleet/v1/snapshot";

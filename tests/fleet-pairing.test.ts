@@ -565,46 +565,76 @@ describe("beginPairing / approvePairing / completePairing", () => {
     ).toHaveLength(0);
   });
 
-  it("refuses completion when the device is revoked after approval but before completion", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "member" });
-    await seedCharacter(ctx.db, cfg, { id: 92300080, accountId: acc.id });
-    const { spki, privateKey } = newKeyPair();
+  it.each([true, false])(
+    "legacy completion refuses revocation even if approval was written before revoke=%s",
+    async (approvedBeforeRevoke) => {
+      const acc = await seedAccount(ctx.db, { tier: "member" });
+      await seedCharacter(ctx.db, cfg, {
+        id: approvedBeforeRevoke ? 92300080 : 92300081,
+        accountId: acc.id,
+      });
+      const { spki, privateKey } = newKeyPair();
 
-    // First pairing creates the device.
-    const first = await beginPairing(ctx.db, { publicKeySpki: spki, now: NOW });
-    await approvePairing(ctx.db, first.pairingId, acc.id, NOW);
-    await completePairing(ctx.db, {
-      pairingId: first.pairingId,
-      completionSignature: signCompletion(privateKey, first.pairingId),
-      now: NOW,
-    });
-    const [device] = await ctx.db
-      .select()
-      .from(fleetDevice)
-      .where(eq(fleetDevice.accountId, acc.id));
-
-    // Second pairing request for the SAME key/account, approved...
-    const second = await beginPairing(ctx.db, { publicKeySpki: spki, now: NOW });
-    await approvePairing(ctx.db, second.pairingId, acc.id, NOW);
-
-    // ...but the device is revoked in the window between approval and
-    // completion, so completion must refuse rather than silently reviving it.
-    await revokeFleetDevice(ctx.db, device.id, acc.id, NOW);
-
-    await expect(
-      completePairing(ctx.db, {
-        pairingId: second.pairingId,
-        completionSignature: signCompletion(privateKey, second.pairingId),
+      // First pairing creates the device.
+      const first = await beginPairing(ctx.db, { publicKeySpki: spki, now: NOW });
+      await approvePairing(ctx.db, first.pairingId, acc.id, NOW);
+      await completePairing(ctx.db, {
+        pairingId: first.pairingId,
+        completionSignature: signCompletion(privateKey, first.pairingId),
         now: NOW,
-      }),
-    ).rejects.toThrow(RevokedDeviceKeyError);
+      });
+      const [device] = await ctx.db
+        .select()
+        .from(fleetDevice)
+        .where(eq(fleetDevice.accountId, acc.id));
 
-    const [secondRow] = await ctx.db
-      .select()
-      .from(fleetPairingRequest)
-      .where(eq(fleetPairingRequest.id, second.pairingId));
-    expect(secondRow.consumedAt).toBeNull();
-  });
+      expect(device.revokedAt).toBeNull();
+      expect(
+        await ctx.db
+          .select()
+          .from(fleetDeviceSession)
+          .where(eq(fleetDeviceSession.deviceId, device.id)),
+      ).toHaveLength(1);
+      // The request predates revocation. Pending/off approval may still write
+      // approvedAt from a stale page; this test preserves that service contract
+      // while pinning completion as the no-resurrection boundary in both orders.
+      const second = await beginPairing(ctx.db, { publicKeySpki: spki, now: NOW });
+      if (approvedBeforeRevoke)
+        await approvePairing(ctx.db, second.pairingId, acc.id, NOW);
+      await revokeFleetDevice(ctx.db, device.id, acc.id, NOW);
+      if (!approvedBeforeRevoke)
+        await approvePairing(ctx.db, second.pairingId, acc.id, NOW);
+
+      await expect(
+        completePairing(ctx.db, {
+          pairingId: second.pairingId,
+          completionSignature: signCompletion(privateKey, second.pairingId),
+          now: NOW,
+        }),
+      ).rejects.toThrow(RevokedDeviceKeyError);
+
+      const [secondRow] = await ctx.db
+        .select()
+        .from(fleetPairingRequest)
+        .where(eq(fleetPairingRequest.id, second.pairingId));
+      expect(secondRow).toMatchObject({
+        approvedAt: NOW,
+        approvedAccountId: acc.id,
+        consumedAt: null,
+        approvedDeviceId: null,
+        requestedCapabilities: [],
+      });
+      expect(
+        await ctx.db.select().from(fleetDevice).where(eq(fleetDevice.accountId, acc.id)),
+      ).toEqual([{ ...device, revokedAt: NOW }]);
+      expect(
+        await ctx.db
+          .select()
+          .from(fleetDeviceSession)
+          .where(eq(fleetDeviceSession.deviceId, device.id)),
+      ).toEqual([]);
+    },
+  );
 });
 
 describe("listFleetDevicesForAccount", () => {

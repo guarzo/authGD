@@ -7,6 +7,14 @@ import { createEsiClient } from "@/lib/esi/client";
 import { postOpsWebhookOrThrow, postOpsWebhookUrl } from "@/lib/ops-webhook";
 import { createWandererClient } from "@/lib/wanderer/client";
 import { startDispatcher } from "@/worker/dispatcher";
+import {
+  createFleetSourceOwner,
+  startFleetSourceScheduler,
+} from "@/worker/fleet-source-scheduler";
+import {
+  cleanupFleetSources,
+  reserveDueFleetSources,
+} from "@/services/fleet-source-maintenance";
 import { buildJobHandlers } from "@/worker/handlers";
 import { QUEUES, createQueues, scheduleJobs } from "@/worker/queues";
 
@@ -43,22 +51,30 @@ async function main(): Promise<void> {
   await boss.start();
   await createQueues(boss);
 
+  const sourceOwner = createFleetSourceOwner();
+  const esi = createEsiClient({
+    userAgent: `authgd/0.1.0 (${cfg.esiContact})`,
+    // The ESI factory takes no Config, so the guard's mode arrives here.
+    syncMode: cfg.syncMode,
+  });
   const handlers = buildJobHandlers({
     db,
+    fleetSource: { signal: sourceOwner.signal, esi },
     cfg,
-    esi: createEsiClient({
-      userAgent: `authgd/0.1.0 (${cfg.esiContact})`,
-      // The ESI factory takes no Config, so the guard's mode arrives here.
-      syncMode: cfg.syncMode,
-    }),
+    esi,
     wanderer: createWandererClient(cfg),
     discord: createDiscordClient(cfg),
   });
   // pg-boss v10 handlers receive an ARRAY of jobs.
   for (const [queue, handler] of Object.entries(handlers)) {
-    await boss.work(queue, async (jobs) => {
-      for (const job of jobs) await handler(job.data);
-    });
+    const owned = queue === QUEUES.fleetSource ? sourceOwner.wrap(handler) : handler;
+    await boss.work(
+      queue,
+      queue === QUEUES.fleetSource ? { pollingIntervalSeconds: 0.5 } : {},
+      async (jobs) => {
+        for (const job of jobs) await owned(job.data);
+      },
+    );
   }
 
   // Ops alerting (spec: Error handling): a job landing here exhausted its
@@ -82,16 +98,31 @@ async function main(): Promise<void> {
   });
 
   await scheduleJobs(boss);
-  const stopDispatcher = startDispatcher(db, (queue, data, options) =>
-    boss.send(queue, data, options),
-  );
+  const send = (
+    queue: string,
+    data: Record<string, unknown>,
+    options: { singletonKey: string },
+  ) => boss.send(queue, data, options);
+  const stopDispatcher = startDispatcher(db, send, 2000, "scheduled");
+  const stopSourceDispatcher = startDispatcher(db, send, 500, "fleet-source");
+  const stopSourceScheduler = startFleetSourceScheduler(async () => {
+    await cleanupFleetSources(db);
+    await reserveDueFleetSources(db);
+  });
 
   let shuttingDown = false;
   const shutdown = async (): Promise<void> => {
     if (shuttingDown) return; // re-entrant SIGTERM/SIGINT is a no-op
     shuttingDown = true;
     try {
+      sourceOwner.stopAdmission();
+      await stopSourceScheduler();
+      await stopSourceDispatcher();
       await stopDispatcher();
+      // Stop admitting source work before draining, but leave BOTH resource
+      // pools open until the original callback's credential CAS has settled.
+      await boss.offWork(QUEUES.fleetSource);
+      await sourceOwner.drain();
       await boss.stop({ graceful: true, wait: true });
       await pool.end();
     } catch (err) {

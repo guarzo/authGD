@@ -4,6 +4,7 @@ import { z } from "zod";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getDb } from "@/db";
+import { fleetLifecycleTransaction } from "@/services/fleet-lifecycle";
 import { requireAdminAction } from "@/lib/admin-guard";
 import { adminAccountsErrorUrl } from "@/lib/error-redirects";
 import { tierLabel } from "@/app/_components/labels";
@@ -232,7 +233,7 @@ export async function setTierAction(
   tier = assertValid(tierSchema, tier);
   listSearch = assertValid(listSearchSchema, listSearch);
   identity = assertValid(identitySchema, identity);
-  const result = await getDb().transaction((tx) =>
+  const result = await fleetLifecycleTransaction(getDb(), (tx) =>
     setTierManual(tx, actor, accountId, tier),
   );
   if (!result.ok) redirectOnMutationError(result.error, listSearch);

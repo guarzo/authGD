@@ -15,7 +15,15 @@ export async function installFleetInterception() {
   const connection = assertFleetEnvironment(process.env);
   const client = fleetClient(connection);
   const db = assertFleetDatabaseUrl(process.env.DATABASE_URL!);
+  const upstream = new URL(process.env.E2E_FLEET_UPSTREAM ?? connection.appUrl);
+  if (
+    upstream.protocol !== "http:" ||
+    !["localhost", "127.0.0.1"].includes(upstream.hostname) ||
+    !upstream.port
+  )
+    throw new Error("[fleet-e2e] invalid private upstream");
   const allowedPorts = new Set([
+    upstream.port,
     db.port,
     new URL(connection.url).port,
     new URL(connection.appUrl).port,
@@ -69,6 +77,7 @@ export async function installFleetInterception() {
       )
         return new HttpResponse(null, { status: 503 });
       if (
+        url.origin === upstream.origin ||
         url.origin === connection.url ||
         url.origin === connection.appUrl ||
         url.origin === connection.appUrl.replace("localhost", "127.0.0.1")

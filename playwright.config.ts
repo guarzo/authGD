@@ -14,6 +14,7 @@ import {
 import { ensureTestDatabase } from "./e2e/provision";
 import { resolveServerReuse } from "./e2e/server-guard";
 import { assertFleetDatabaseUrl } from "./e2e/fleet-server";
+import { databaseIsolationEnvironment } from "./e2e/db-isolation-bootstrap";
 
 // Provisioning runs at config load, not in globalSetup: Playwright starts
 // `webServer` during plugin setup, which the runner orders *before* global
@@ -32,7 +33,9 @@ const env = {
   // The same constant e2e/helpers.ts seeds through — see e2e/env.ts. These two
   // must never be able to disagree.
   DATABASE_URL: TEST_DATABASE_URL,
+  TEST_DATABASE_URL,
   ...SYNTHETIC_APP_ENV,
+  ...(FLEET_INTEGRATIONS ? { E2E_DB_ISOLATION: "1" } : databaseIsolationEnvironment()),
   APP_BASE_URL: BASE_URL,
   // Only the owned, intercepted server may exercise live integration code.
   SYNC_MODE: FLEET_INTEGRATIONS ? "live" : "dry-run",
@@ -45,8 +48,8 @@ const env = {
 export default defineConfig({
   testDir: "e2e",
   ...(FLEET_INTEGRATIONS
-    ? { testMatch: "**/fleet-access.spec.ts" }
-    : { testIgnore: ["**/fleet-access.spec.ts"] }),
+    ? { testMatch: ["**/fleet-access.spec.ts", "**/fleet-joint.spec.ts"] }
+    : { testIgnore: ["**/fleet-access.spec.ts", "**/fleet-joint.spec.ts"] }),
   workers: 1, // shared test database — never parallelize
   // Zero, deliberately, and it is the setting most likely to be "fixed" by
   // someone staring at a red CI run. Do not raise it.

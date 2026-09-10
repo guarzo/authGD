@@ -7,12 +7,18 @@ import { z } from "zod";
 import { getConfig } from "@/config";
 import { getDb } from "@/db";
 import {
+  FleetDeviceKeyUnavailableError,
+  FleetIdentityMaintenanceError,
+} from "@/services/fleet-key-identity";
+import { FleetSharingDisabledError } from "@/services/fleet-sharing-mode";
+import {
   DeviceBoundToAnotherAccountError,
   NonMemberApprovalError,
   PairingAlreadyApprovedError,
   PairingAlreadyConsumedError,
   PairingExpiredError,
   PairingNotFoundError,
+  RevokedDeviceKeyError,
   approvePairing,
 } from "@/services/fleet-pairing";
 import { getSessionAccount } from "@/services/session";
@@ -66,9 +72,13 @@ export async function approvePairingAction(pairingId: string): Promise<void> {
   if (!parsedId.success) return;
 
   try {
-    await approvePairing(getDb(), parsedId.data, sess.accountId, new Date());
+    await approvePairing(getDb(), parsedId.data, sess.accountId);
   } catch (err) {
     if (
+      err instanceof FleetSharingDisabledError ||
+      err instanceof FleetDeviceKeyUnavailableError ||
+      err instanceof FleetIdentityMaintenanceError ||
+      err instanceof RevokedDeviceKeyError ||
       err instanceof PairingNotFoundError ||
       err instanceof PairingExpiredError ||
       err instanceof PairingAlreadyApprovedError ||

@@ -1,0 +1,1 @@
+ALTER TABLE "fleet_telemetry_row" ADD COLUMN "publication_id" uuid;

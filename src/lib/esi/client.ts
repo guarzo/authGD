@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { isDryRun, logSuppressedWrite } from "@/lib/sync-mode";
 import { chunk } from "@/core/chunk";
+import { FLEET_CONSERVATIVE_PROBE_MS } from "@/core/fleet-freshness";
 import { classifyEsiError, type EsiErrorClass } from "@/core/errors";
 
 const ESI_BASE = "https://esi.evetech.net/latest";
@@ -54,10 +55,10 @@ export const NOTIFICATIONS_SCOPE = "esi-characters.read_notifications.v1";
 /**
  * Deliberately NOT in EVE_SSO_SCOPES, for the same reason as the other
  * optional scopes above: adding it there would flip every character to
- * needs_reauth at the next token-health run. Feasibility-only today — no job
- * reads it, and no UI grants it except through `?grant=fleet-read` — exported
- * so the link route and the manual probe script (scripts/fleet-esi-feasibility.ts)
- * spell it identically.
+ * needs_reauth at the next token-health run. The opt-in boss grant is shared
+ * by the explicit point-in-time check and the source worker, never required
+ * from every participant's alt. The link route and feasibility script reuse
+ * this spelling too.
  */
 export const FLEET_READ_SCOPE = "esi-fleets.read_fleet.v1";
 
@@ -291,6 +292,18 @@ export type FleetProbeResponse<T> = {
   value: T;
   cacheControl: string | null;
   etag: string | null;
+  date: string | null;
+  age: string | null;
+  expires: string | null;
+  requestStartedAt: Date;
+  responseCompletedAt: Date;
+};
+
+/** Source requests keep their owned abort/header boundary without creating an
+ * independent ESI error-budget limiter. Generic callers need no new options. */
+export type FleetRequestOptions = {
+  fetchImpl?: typeof fetch;
+  now?: () => number;
 };
 
 export interface EsiClientOptions {
@@ -320,6 +333,17 @@ export function createEsiClient(opts: EsiClientOptions = {}) {
   // ESI etiquette: honor X-ESI-Error-Limit-Remain/Reset across all calls.
   let remain = Number.POSITIVE_INFINITY;
   let resetAt = 0; // epoch ms
+  // Sources retain uncapped lower bounds independently of generic callers'
+  // capped waits. Unknown headers permit a coalesced 60s probe, not an embargo
+  // that only an unrelated caller can release. Healthy headers don't erase an
+  // already observed larger deadline.
+  let fleetResetAt = 0;
+  let fleetBudgetKnown = true;
+  let fleetProbeAt = 0;
+  function getFleetRetryAt(at = now()): number | null {
+    const boundary = Math.max(fleetResetAt, fleetBudgetKnown ? 0 : fleetProbeAt);
+    return boundary > at ? boundary : null;
+  }
 
   function safeParse<T>(
     schema: z.ZodSchema<T>,
@@ -347,13 +371,26 @@ export function createEsiClient(opts: EsiClientOptions = {}) {
       base?: string;
       /** Send X-Compatibility-Date; the versionless endpoints need it. */
       compatibilityDate?: boolean;
+      fleetRequest?: FleetRequestOptions;
     } = {},
   ): Promise<Response> {
-    if (remain <= floor && resetAt > now()) {
-      await sleep(resetAt - now());
+    const clock = init.fleetRequest?.now ?? now;
+    const boundary = init.fleetRequest
+      ? getFleetRetryAt(clock())
+      : remain <= floor
+        ? resetAt
+        : null;
+    if (init.fleetRequest) {
+      // Reserve synchronously before fetch: two source handlers must not both
+      // observe a due unknown-budget probe. No handler sleeps away its claim.
+      if (boundary !== null && boundary > clock())
+        throw new EsiError("Fleet error budget unavailable", 0, "transient");
+      if (!fleetBudgetKnown) fleetProbeAt = clock() + FLEET_CONSERVATIVE_PROBE_MS;
+    } else if (boundary !== null && boundary > clock()) {
+      await sleep(boundary - clock());
       remain = Number.POSITIVE_INFINITY;
     }
-    const { base, compatibilityDate, accessToken, ...rest } = init;
+    const { base, compatibilityDate, accessToken, fleetRequest, ...rest } = init;
     const headers: Record<string, string> = {
       accept: "application/json",
       ...(init.headers as Record<string, string> | undefined),
@@ -361,18 +398,36 @@ export function createEsiClient(opts: EsiClientOptions = {}) {
     if (accessToken) headers.authorization = `Bearer ${accessToken}`;
     if (opts.userAgent) headers["user-agent"] = opts.userAgent;
     if (compatibilityDate) headers["x-compatibility-date"] = COMPATIBILITY_DATE;
-    const res = await fetchImpl(`${base ?? ESI_BASE}${path}`, {
-      ...rest,
-      headers,
-      signal: AbortSignal.timeout(30_000),
-    });
+    let res: Response;
+    try {
+      res = await (fleetRequest?.fetchImpl ?? fetchImpl)(`${base ?? ESI_BASE}${path}`, {
+        ...rest,
+        headers,
+        signal: AbortSignal.timeout(30_000),
+      });
+    } catch (error) {
+      // No response is no budget evidence, including the first fleet request.
+      // Preserve generic callers and the original transport error/settlement.
+      if (fleetRequest) {
+        fleetBudgetKnown = false;
+        fleetProbeAt = Math.max(fleetProbeAt, clock() + FLEET_CONSERVATIVE_PROBE_MS);
+      }
+      throw error;
+    }
     const remainHeader = res.headers.get("x-esi-error-limit-remain");
     const resetHeader = res.headers.get("x-esi-error-limit-reset");
     const parsedRemain = headerSeconds(remainHeader);
     const parsedReset = headerSeconds(resetHeader);
+    if (fleetRequest || remainHeader !== null || resetHeader !== null) {
+      fleetBudgetKnown = parsedRemain !== null && parsedReset !== null;
+      if (!fleetBudgetKnown)
+        fleetProbeAt = Math.max(fleetProbeAt, clock() + FLEET_CONSERVATIVE_PROBE_MS);
+      if (parsedReset !== null && (parsedRemain === null || parsedRemain <= floor))
+        fleetResetAt = Math.max(fleetResetAt, clock() + parsedReset * 1000);
+    }
     if (parsedRemain !== null) remain = parsedRemain;
     if (parsedReset !== null)
-      resetAt = now() + Math.min(MAX_RETRY_MS, parsedReset * 1000);
+      resetAt = clock() + Math.min(MAX_RETRY_MS, parsedReset * 1000);
     if (!res.ok) {
       const body = (await res.json().catch(() => undefined)) as
         { error?: string } | undefined;
@@ -382,6 +437,10 @@ export function createEsiClient(opts: EsiClientOptions = {}) {
         classifyEsiError(res.status, body),
       );
     }
+    // Unknown budget still reserves pacing above, but cannot erase a real
+    // HTTP refusal. Only successful evidence depends on usable budget headers.
+    if (fleetRequest && !fleetBudgetKnown)
+      throw new EsiError("Fleet error budget unavailable", 0, "transient");
     return res;
   }
 
@@ -793,15 +852,23 @@ export function createEsiClient(opts: EsiClientOptions = {}) {
   async function getCharacterFleet(
     characterId: number,
     accessToken: string,
+    fleetRequest?: FleetRequestOptions,
   ): Promise<FleetProbeResponse<FleetInfo>> {
     const path = `/characters/${characterId}/fleet/`;
-    const res = await request(path, { accessToken });
+    const clock = fleetRequest?.now ?? now;
+    const requestStartedAt = new Date(clock());
+    const res = await request(path, { accessToken, fleetRequest });
     const parsed = safeParse(fleetInfoSchema, await res.json(), "GET", path, res.status);
     return {
       status: res.status,
       value: { fleetId: parsed.fleet_id, fleetBossId: parsed.fleet_boss_id },
       cacheControl: res.headers.get("cache-control"),
       etag: res.headers.get("etag"),
+      date: res.headers.get("date"),
+      age: res.headers.get("age"),
+      expires: res.headers.get("expires"),
+      requestStartedAt,
+      responseCompletedAt: new Date(clock()),
     };
   }
 
@@ -813,9 +880,12 @@ export function createEsiClient(opts: EsiClientOptions = {}) {
   async function getFleetMembers(
     fleetId: number,
     accessToken: string,
+    fleetRequest?: FleetRequestOptions,
   ): Promise<FleetProbeResponse<FleetMember[]>> {
     const path = `/fleets/${fleetId}/members/`;
-    const res = await request(path, { accessToken });
+    const clock = fleetRequest?.now ?? now;
+    const requestStartedAt = new Date(clock());
+    const res = await request(path, { accessToken, fleetRequest });
     const parsed = safeParse(
       fleetMembersSchema,
       await res.json(),
@@ -828,10 +898,16 @@ export function createEsiClient(opts: EsiClientOptions = {}) {
       value: parsed.map((m) => ({ characterId: m.character_id })),
       cacheControl: res.headers.get("cache-control"),
       etag: res.headers.get("etag"),
+      date: res.headers.get("date"),
+      age: res.headers.get("age"),
+      expires: res.headers.get("expires"),
+      requestStartedAt,
+      responseCompletedAt: new Date(clock()),
     };
   }
 
   return {
+    getFleetRetryAt,
     postAffiliation,
     resolveIds,
     openInformationWindow,

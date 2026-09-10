@@ -1,9 +1,32 @@
 import { eq } from "drizzle-orm";
-import { SignJWT, createLocalJWKSet, exportJWK, generateKeyPair } from "jose";
+import {
+  SignJWT,
+  createLocalJWKSet,
+  exportJWK,
+  generateKeyPair,
+  type JWTVerifyGetKey,
+} from "jose";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { account, auditLog, character, outbox, session } from "@/db/schema";
+import {
+  account,
+  auditLog,
+  character,
+  fleetSourceIntent,
+  fleetSourceAuthority,
+  fleetTelemetryRow,
+  fleetPublisherLease,
+  outbox,
+  session,
+} from "@/db/schema";
+import { FLEET_READ_SCOPE } from "@/lib/esi/client";
+import { pairDevice } from "./helpers/fleet-sharing";
+import {
+  seedLifecycleProjection,
+  seedLifecycleSource,
+} from "./helpers/fleet-source-lifecycle";
+import { withInjectedPgFault } from "./helpers/pg-fault";
 import { runTokenHealthJob } from "@/jobs/token-health";
-import { reclaimTransferredCharacter } from "@/services/accounts";
+import { handleEveLogin, reclaimTransferredCharacter } from "@/services/accounts";
 import { JobRetryError } from "@/services/sync-run";
 import { createSession } from "@/services/session";
 import { setupTestDb, truncateAll } from "./helpers/db";
@@ -75,6 +98,183 @@ async function getChar(id: number) {
   const rows = await ctx.db.select().from(character).where(eq(character.id, id));
   return rows[0];
 }
+
+describe("fleet source lifecycle through actual token health", () => {
+  async function fixture() {
+    const owner = await seedAccount(ctx.db, { tier: "member" });
+    const boss = await seedCharacter(ctx.db, cfg, {
+      id: 1,
+      accountId: owner.id,
+      main: true,
+      refreshToken: "rt1",
+      scopes: [...cfg.eveSso.scopes, FLEET_READ_SCOPE],
+    });
+    const paired = await pairDevice(ctx.db, owner.id, new Date());
+    const source = await seedLifecycleSource(ctx.db, {
+      boss,
+      deviceId: paired.device.id,
+      now: new Date(),
+    });
+    return { owner, boss, source };
+  }
+  it.each(["never granted", "grant removed", "permanent invalid"])(
+    "participant token health (%s) preserves another boss's row AND lease",
+    async (kind) => {
+      const p = await fixture();
+      const participantOwner = await seedAccount(ctx.db, { tier: "member" });
+      const participant = await seedCharacter(ctx.db, cfg, {
+        id: 2,
+        accountId: participantOwner.id,
+        refreshToken: "participant",
+        scopes:
+          kind === "grant removed"
+            ? [...cfg.eveSso.scopes, FLEET_READ_SCOPE]
+            : [...cfg.eveSso.scopes],
+      });
+      const device = await pairDevice(ctx.db, participantOwner.id, new Date());
+      // LIFECYCLE-ONLY shared provenance, not worker-verified or positive admission.
+      const projection = await seedLifecycleProjection(ctx.db, {
+        participant,
+        source: p.source,
+        deviceId: device.device.id,
+        sessionId: device.sessionId,
+        now: new Date(),
+      });
+      const authority = await ctx.db.select().from(fleetSourceAuthority);
+      const bossToken = await signAccessToken({
+        characterId: p.boss.id,
+        ownerHash: p.boss.ownerHash,
+        scopes: [...cfg.eveSso.scopes, FLEET_READ_SCOPE],
+      });
+      const participantToken = await signAccessToken({
+        characterId: participant.id,
+        ownerHash: participant.ownerHash,
+        scopes: [...cfg.eveSso.scopes],
+      });
+      const result = await runTokenHealthJob({
+        db: ctx.db,
+        cfg,
+        jwks,
+        fetchImpl: refreshFetchFor(
+          kind === "permanent invalid"
+            ? { rt1: bossToken }
+            : { rt1: bossToken, participant: participantToken },
+        ),
+      });
+      expect(result.status).toBe("ok");
+      expect(await ctx.db.select().from(fleetTelemetryRow)).toEqual([projection.row]);
+      expect(await ctx.db.select().from(fleetPublisherLease)).toEqual([projection.lease]);
+      expect(await ctx.db.select().from(fleetSourceIntent)).toEqual([p.source]);
+      expect(await ctx.db.select().from(fleetSourceAuthority)).toEqual(authority);
+      expect(await getChar(participant.id)).toMatchObject({
+        id: participant.id,
+        accountId: participant.accountId,
+        ownerHash: participant.ownerHash,
+        fleetLinkEpoch: participant.fleetLinkEpoch,
+        tokenStatus: kind === "permanent invalid" ? "invalid" : "valid",
+      });
+    },
+  );
+  it.each([
+    "required missing",
+    "unrelated missing",
+    "rotation",
+    "permanent invalid",
+    "owner mismatch",
+  ])("%s has only its intended consent effect", async (kind) => {
+    const p = await fixture();
+    const scopes =
+      kind === "required missing"
+        ? [...cfg.eveSso.scopes]
+        : kind === "unrelated missing"
+          ? [FLEET_READ_SCOPE]
+          : [...cfg.eveSso.scopes, FLEET_READ_SCOPE];
+    const at = await signAccessToken({
+      characterId: 1,
+      ownerHash: kind === "owner mismatch" ? "transferred" : p.boss.ownerHash,
+      scopes,
+    });
+    const result = await runTokenHealthJob({
+      db: ctx.db,
+      cfg,
+      jwks,
+      fetchImpl: refreshFetchFor(kind === "permanent invalid" ? {} : { rt1: at }),
+    });
+    expect(result.status).toBe("ok");
+    const ends = ["required missing", "permanent invalid", "owner mismatch"].includes(
+      kind,
+    );
+    expect((await ctx.db.select().from(fleetSourceIntent))[0]).toMatchObject({
+      state: ends ? "ended" : "active",
+      generation: ends ? 2 : 1,
+    });
+    expect(
+      (await ctx.db.select().from(fleetSourceAuthority))[0].authorityGeneration,
+    ).toBe(ends ? 8 : 7);
+    if (kind === "required missing") expect((await getChar(1)).tokenStatus).toBe("valid");
+    if (kind === "unrelated missing")
+      expect((await getChar(1)).tokenStatus).toBe("needs_reauth");
+  });
+  it("scope/status CAS loss after real rotation cannot terminate current consent", async () => {
+    const p = await fixture();
+    const at = await signAccessToken({
+      characterId: 1,
+      ownerHash: p.boss.ownerHash,
+      scopes: [...cfg.eveSso.scopes],
+    });
+    const staleJwks: JWTVerifyGetKey = async (...args) => {
+      // The newer login wins during JWT verification, after this job's rotation.
+      await ctx.db.transaction((tx) =>
+        handleEveLogin(tx, cfg, {
+          characterId: p.boss.id,
+          characterName: p.boss.name,
+          ownerHash: p.boss.ownerHash,
+          refreshToken: "newer-credential",
+          scopes: [...cfg.eveSso.scopes, FLEET_READ_SCOPE],
+        }),
+      );
+      return jwks(...args);
+    };
+    await expect(
+      runTokenHealthJob({
+        db: ctx.db,
+        cfg,
+        jwks: staleJwks,
+        fetchImpl: refreshFetchFor({ rt1: at }),
+      }),
+    ).rejects.toBeInstanceOf(JobRetryError);
+    expect((await ctx.db.select().from(fleetSourceIntent))[0]).toMatchObject({
+      state: "active",
+      generation: 1,
+    });
+  });
+  it("scope mutation and consent invalidation roll back if their common audit fails", async () => {
+    const p = await fixture();
+    const at = await signAccessToken({
+      characterId: 1,
+      ownerHash: p.boss.ownerHash,
+      scopes: [...cfg.eveSso.scopes],
+    });
+    await expect(
+      withInjectedPgFault(
+        ctx.pool,
+        { matchSql: /insert into "audit_log"/i, code: "40001" },
+        () =>
+          runTokenHealthJob({
+            db: ctx.db,
+            cfg,
+            jwks,
+            fetchImpl: refreshFetchFor({ rt1: at }),
+          }),
+      ),
+    ).rejects.toThrow();
+    expect((await getChar(1)).scopes).toContain(FLEET_READ_SCOPE);
+    expect((await ctx.db.select().from(fleetSourceIntent))[0]).toMatchObject({
+      state: "active",
+      generation: 1,
+    });
+  });
+});
 
 describe("runTokenHealthJob", () => {
   it("keeps healthy tokens valid and rotates them", async () => {

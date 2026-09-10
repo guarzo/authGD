@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { getDb } from "@/db";
+import { FleetSharingDisabledError } from "@/services/fleet-sharing-mode";
 import { readBoundedRequestBody } from "@/lib/fleet-request-body";
 import {
   DeviceBoundToAnotherAccountError,
@@ -13,6 +14,10 @@ import {
   RevokedDeviceKeyError,
   completePairing,
 } from "@/services/fleet-pairing";
+import {
+  FleetDeviceKeyUnavailableError,
+  FleetIdentityMaintenanceError,
+} from "@/services/fleet-key-identity";
 import { FLEET_RELAY_PROTOCOL } from "@/services/fleet-relay";
 
 // Unauthenticated by design, like its sibling: the device has no session yet
@@ -75,7 +80,6 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const { sessionId, catalogue } = await completePairing(getDb(), {
       pairingId: id,
       completionSignature: body.data.completion_signature,
-      now: new Date(),
     });
     return NextResponse.json({
       protocol: FLEET_RELAY_PROTOCOL,
@@ -89,6 +93,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       },
     });
   } catch (err) {
+    if (err instanceof FleetIdentityMaintenanceError)
+      return jsonError("service_unavailable", 503);
     // Non-oracle: every reason a completion cannot be issued right now —
     // unknown/expired/consumed/not-yet-approved request, a bad proof, the
     // approving account no longer qualifying, or the key being bound
@@ -96,6 +102,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     // "no such request" from "wrong proof" would let a caller guessing
     // pairing ids learn which ones exist.
     if (
+      err instanceof FleetSharingDisabledError ||
       err instanceof PairingNotFoundError ||
       err instanceof PairingExpiredError ||
       err instanceof PairingAlreadyConsumedError ||
@@ -103,7 +110,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       err instanceof InvalidCompletionProofError ||
       err instanceof NonMemberApprovalError ||
       err instanceof RevokedDeviceKeyError ||
-      err instanceof DeviceBoundToAnotherAccountError
+      err instanceof DeviceBoundToAnotherAccountError ||
+      err instanceof FleetDeviceKeyUnavailableError
     ) {
       return jsonError("not_completable", 409);
     }

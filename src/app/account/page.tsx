@@ -453,15 +453,14 @@ export default async function AccountPage({
               )}
             </div>
 
-            <div className="page__meta-item">
-              <span className="visually-hidden">Discord</span>
-              {view.discordLinked ? (
-                // Its own arm scope, not the manifest's: an arming ConfirmSubmit
-                // throws outside one (confirm-submit.tsx:281), and a scope of one
-                // is right here —
-                // arming this must not disarm a character row three sections down.
-                <ConfirmArmScope>
-                  {/* No `linked` token beside the button. The unlinked branch
+            {/* Its own scope, separate from the manifest. It renders no DOM,
+                so the action item and its cost can occupy separate outer rows. */}
+            <ConfirmArmScope>
+              <div className="page__meta-item">
+                <span className="visually-hidden">Discord</span>
+                {view.discordLinked ? (
+                  <>
+                    {/* No `linked` token beside the button. The unlinked branch
                       below has never rendered one either — it is a bare "Link
                       Discord" — so the row already trusts a verb to answer "is
                       Discord linked?" in one state. Rendering a status token in
@@ -473,7 +472,7 @@ export default async function AccountPage({
                       drops its Discord row rather than render an inert "not
                       linked" token, on the grounds that a nearby element states
                       the fact with the action attached. */}
-                  {/* ...but a name is not a status token. `linked` restated what
+                    {/* ...but a name is not a status token. `linked` restated what
                       the button already said; this says WHICH Discord account is
                       on the hook, which is the one thing the row could not
                       answer before and the only question a member with two
@@ -491,16 +490,18 @@ export default async function AccountPage({
                       Both null renders exactly what shipped in #115: the button
                       alone. That is the reason no backfill has to run before
                       this is correct. */}
-                  {(view.discordDisplayName || view.discordUsername) && (
-                    <span className="discord-id">
-                      {view.discordDisplayName && <span>{view.discordDisplayName}</span>}
-                      {view.discordUsername && (
-                        <span className="dim mono">@{view.discordUsername}</span>
-                      )}
-                    </span>
-                  )}
-                  <form action={unlinkDiscordAction} className="inline-form">
-                    {/* A grade heavier at rest than the character-row unlinks
+                    {(view.discordDisplayName || view.discordUsername) && (
+                      <span className="discord-id">
+                        {view.discordDisplayName && (
+                          <span>{view.discordDisplayName}</span>
+                        )}
+                        {view.discordUsername && (
+                          <span className="dim mono">@{view.discordUsername}</span>
+                        )}
+                      </span>
+                    )}
+                    <form action={unlinkDiscordAction} className="inline-form">
+                      {/* A grade heavier at rest than the character-row unlinks
                         below (`.btn--quiet .btn--danger-quiet`), and
                         deliberately so: those drop one character from an
                         account that keeps every other one, while this one
@@ -522,38 +523,39 @@ export default async function AccountPage({
                         dropping `--micro` is the whole fix, and the heavier
                         rest grade this comment argues for is a colour
                         decision that never depended on the size. */}
-                    {/* Stays the bare word UNLINK, deliberately. The critique
-                        behind this pass flagged it as a twin of each character
-                        row's UNLINK a few hundred pixels away, and putting the
-                        object in the visible label ("unlink Discord") does read
-                        better in isolation — but it was tried here and reverted.
-                        The longer label widens the button by roughly 64px, which
-                        at ~700px is enough that the arming live region no longer
-                        fits beside it; the line box grows on arm, `align-items:
-                        center` re-centres the button out from under a stationary
-                        pointer, and the `pointerLeave` disarms the control the
-                        member just armed. That is the #112 mechanism, and
-                        "arming the Discord unlink does not move it out from
-                        under the pointer" catches it.
-
-                        The twin is also less of a twin than it looked: this one
-                        is `.btn` at 36px, the character's is `.btn--quiet
-                        .btn--danger-quiet` at micro, and the accessible names
-                        already differ ("unlink Discord" vs "unlink <character>").
-                        Only the visible word is shared, and it is shared between
-                        two controls that do not sit in the same glance. Widening
-                        the meta row so the label fits is the real fix if this is
-                        ever worth doing; it is not worth destabilising #112's
-                        geometry for. */}
-                    <ConfirmSubmit
-                      className="btn"
-                      armedClassName="btn btn--danger"
-                      label="unlink"
-                      restName="unlink Discord"
-                      confirmName="confirm unlink Discord"
-                      describedBy="discord-unlink-cost"
-                    />
-                  </form>
+                      {/* Keep the established visible label. Its accessible name
+                        names Discord; the character-row controls name their own
+                        character. The reveal's layout is handled by placing the
+                        cost outside this action item, not by tuning label width. */}
+                      <ConfirmSubmit
+                        className="btn"
+                        armedClassName="btn btn--danger"
+                        label="unlink"
+                        restName="unlink Discord"
+                        confirmName="confirm unlink Discord"
+                        describedBy="discord-unlink-cost"
+                      />
+                    </form>
+                  </>
+                ) : (
+                  // Raised to the default button grade: high-value but was the
+                  // weakest affordance on the page. Not gold — DESIGN.md rations
+                  // that to one primary action per view, "Add character" below.
+                  <a className="btn" href="/auth/discord/link">
+                    Link Discord
+                  </a>
+                )}
+              </div>
+              {/* Beside account setup, not another row above the dense manifest. */}
+              {view.tier === "member" && (
+                <a className="account-fleet-link" href="/account/fleet-sharing">
+                  Fleet sharing
+                </a>
+              )}
+              {view.discordLinked && (
+                // Last in the outer row: revealing this must not enlarge the
+                // Discord item, wrap it below the tier, and disarm its button.
+                <ConfirmCost id="discord-unlink-cost">
                   {/* The unlink is not just a disconnected account: the deprovision
                       it enqueues strips every managed role
                       (jobs/discord-roles.ts:79), so a member who reads only the
@@ -577,25 +579,10 @@ export default async function AccountPage({
                       the truth rather than contradicted. The verb survived the
                       trim from 17 words to 11 because it is the one fact in the
                       sentence a member can catch this page being wrong about. */}
-                  <ConfirmCost id="discord-unlink-cost">
-                    Queues removal of the Discord roles authGD manages. Relink any time.
-                  </ConfirmCost>
-                </ConfirmArmScope>
-              ) : (
-                // Raised to the default button grade: high-value but was the
-                // weakest affordance on the page. Not gold — DESIGN.md rations
-                // that to one primary action per view, "Add character" below.
-                <a className="btn" href="/auth/discord/link">
-                  Link Discord
-                </a>
+                  Queues removal of the Discord roles authGD manages. Relink any time.
+                </ConfirmCost>
               )}
-            </div>
-            {/* Beside account setup, not another row above the dense manifest. */}
-            {view.tier === "member" && (
-              <a className="account-fleet-link" href="/account/fleet-sharing">
-                Fleet sharing
-              </a>
-            )}
+            </ConfirmArmScope>
           </div>
         </div>
 

@@ -100,9 +100,18 @@ jobs:
           cache: npm
       - run: npm ci
 
-      # No migrate step and no Playwright browser: tests/helpers/db.ts migrates
-      # in its own setupTestDb(), and nothing under tests/ drives a browser.
-      # The `e2e` job needs both; this one needs neither.
+      - uses: ./.github/actions/fleet-proof-prerequisites
+      - name: Fetch pinned pre-feature reader for the mixed-version rehearsal
+        run: git fetch --no-tags origin 62b2c6cd8d5ad7cc346ad4f96205e96e19f3e07d
+
+      # Runner lifecycle tests launch real Chromium and `next start` under CI.
+      # This job has neither the e2e job's browsers nor the build job's .next.
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+      - name: Build
+        run: npm run build
+
+      # No migrate step: tests/helpers/db.ts migrates in setupTestDb().
       - name: Unit tests
         run: npm test
 
@@ -180,6 +189,7 @@ jobs:
       - name: E2E tests
         run: npm run test:e2e
 
+      - uses: ./.github/actions/fleet-proof-prerequisites
       # Shares this job's build/database; never run alongside the dry-run suite.
       - name: Fleet integration E2E tests
         run: npm run test:e2e:fleet

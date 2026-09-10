@@ -64,8 +64,10 @@ export default async function FleetSharingPage({
         )}
         <RuleHead as="h2">Wingman devices</RuleHead>
         <p className="table-note">
-          This check does not start telemetry sharing. Pairing from Wingman is not
-          available yet.
+          This check does not start telemetry sharing. In a Wingman build with Fleet
+          sharing controls, open Settings › Previews to Connect, choose sharing On or Off,
+          and Start or Stop roster verification. Older builds without those controls need
+          an update.
         </p>
         <p className="btn-row">
           <a className="btn" href="/account/fleet-devices">

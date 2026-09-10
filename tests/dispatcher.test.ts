@@ -28,6 +28,31 @@ const collector = () => {
 };
 
 describe("planDispatch", () => {
+  it("routes source generations exactly and never exposes a global/admin source rerun", () => {
+    const sourceId = "e437aa3a-b344-4d2a-8888-3524cb2dc2df";
+    expect(planDispatch({ kind: "fleet-source", sourceId, generation: 1 })).toEqual([
+      {
+        queue: "fleet-source",
+        data: { jobType: "fleet-source", sourceId, generation: 1 },
+        singletonKey: `fleet-source:${sourceId}:1`,
+      },
+    ]);
+    expect(RERUNNABLE.has("fleet-source")).toBe(false);
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      for (const payload of [
+        { kind: "job", jobType: "fleet-source" },
+        { kind: "fleet-source", sourceId, generation: 0 },
+        { kind: "fleet-source", sourceId, generation: 2147483648 },
+        { kind: "fleet-source", sourceId: "bad", generation: 1 },
+        { kind: "fleet-source", sourceId, generation: 1, secret: "private-marker" },
+      ])
+        expect(planDispatch(payload as OutboxPayload, 42)).toEqual([]);
+      expect(JSON.stringify(spy.mock.calls)).not.toContain("private-marker");
+    } finally {
+      spy.mockRestore();
+    }
+  });
   it("fans an account payload out to scoped membership/roles and GLOBAL contacts/wanderer", () => {
     const plan = planDispatch({ kind: "account", accountId: "acc-1" });
     expect(plan.map((p) => p.queue).sort()).toEqual([

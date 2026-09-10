@@ -79,6 +79,15 @@ export function canonicalFleetRequest(input: {
   return new TextEncoder().encode(lines.join("\n"));
 }
 
+/** Response correlation, NOT a server signature. The caller supplies the exact
+ * authenticated fleet-v1 canonical bytes; signing and its goldens stay unchanged. */
+export function snapshotRequestBinding(canonical: Uint8Array): string {
+  return createHash("sha256")
+    .update("fleet-snapshot-publication-v1\n", "utf8")
+    .update(canonical)
+    .digest("hex");
+}
+
 /**
  * True when every string-valued header field is well-formed on its own.
  * Catches a naive multi-value header join (a raw comma) and any malformed
@@ -155,7 +164,10 @@ export function verifyFleetRequest(
 }
 
 /**
- * Canonicalizes an Ed25519 SPKI DER public key to the single text form
+ * Serializes RAW SPKI bytes, not key identity: this legacy helper intentionally
+ * does not re-export DER. V1 request/pairing proof bytes remain unchanged.
+ * Consistent registration identity uses normalizeDevicePublicKeyB64 instead.
+ * Converts an Ed25519 SPKI DER public key to the single text form
  * `fleet_device.publicKeySpkiB64` and `fleet_pairing_request.publicKeySpkiB64`
  * persist and compare by: padded, standard (not URL-safe) base64.
  *
@@ -177,6 +189,19 @@ export function verifyFleetRequest(
  */
 export function canonicalDevicePublicKeyB64(spki: Uint8Array): string {
   return Buffer.from(spki).toString("base64");
+}
+
+/** One bounded DER normalization boundary shared by reconciliation and runtime.
+ * Accepted legacy spellings (including trailing bytes) resolve to the same key. */
+export function normalizeDevicePublicKeyB64(spki: Uint8Array): string | null {
+  if (spki.byteLength === 0 || spki.byteLength > 90) return null;
+  try {
+    const key = createPublicKey({ key: Buffer.from(spki), format: "der", type: "spki" });
+    if (key.asymmetricKeyType !== "ed25519") return null;
+    return key.export({ format: "der", type: "spki" }).toString("base64");
+  } catch {
+    return null;
+  }
 }
 
 /** Inverse of {@link canonicalDevicePublicKeyB64}: decodes a stored/canonical
