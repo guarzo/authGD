@@ -115,16 +115,20 @@ for (const approval of ["unapproved", "approved", "stale approval"] as const) {
       await revokeFleetDevice(db, f.device.id, f.member.id, revokedAt);
       if (approval === "stale approval") {
         // Pending-mode approval may still be written from an old tab. The
-        // redirect must not claim it can finish; completion remains the fence.
-        const [response] = await Promise.all([
+        // re-render must not claim it can finish; completion remains the fence.
+        await Promise.all([
           page.waitForResponse(
             (response) =>
+              response.url() === `${BASE_URL}/fleet/pair/${id}` &&
               response.request().method() === "POST" &&
               !!response.request().headers()["next-action"],
           ),
           page.getByRole("button", { name: "Approve", exact: true }).click(),
         ]);
-        await response.finished();
+        // The action's RSC update can render despite a canceled fetch, for which
+        // Playwright 1.62's response.finished() never resolves. Wait for the real
+        // page, and prove the approval write below, not transport completion.
+        await expect(page.getByText(unavailableCopy)).toBeVisible();
       } else {
         await page.goto(`/fleet/pair/${id}`);
       }
