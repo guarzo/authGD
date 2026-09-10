@@ -1208,7 +1208,10 @@ and capability grants, accounts, SSO grants and browser sessions survive. This
 is not device revocation and does not restore an old binary. Verify disabled
 mode, zero sessions/leases/telemetry/legacy eligibility and no live source consent
 or occupied authority before declaring the drain complete. The first-use dry-run
-also reports these retained rows; its refusal is expected, not a cleanup request.
+reports counts only for the Fleet tables in its inventory; it does not verify
+preservation of accounts, SSO grants or browser sessions. Check those separately
+when verifying retention after disable. Refusal while retained Fleet rows exist
+is expected, not a cleanup request.
 
 Before returning old readers, additionally await owned in-flight verification
 and token settlement and follow the schema-retaining rollback guidance below.
