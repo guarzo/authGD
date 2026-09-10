@@ -1,21 +1,25 @@
-/** Intermediate Task 1 operator interface, NOT a release-ready cutover tool.
- * Dry-run is read-only. Apply remains blocked until source invalidation and the
- * compatible source worker/outbox deployment exist and pass final acceptance.
+/** Explicit operator-only empty first-use bootstrap and safe disable. General
+ * nonempty enable/reconciliation remains blocked. Existing operator shell access
+ * is the authorization boundary; audit uses system, not caller-supplied identity.
  * No dotenv loading, deploy hook, public route, or implicit mode transition. */
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { count } from "drizzle-orm";
+import { count, sql } from "drizzle-orm";
 import { createDb, type Dbx } from "@/db";
 import { fleetDeviceSession, fleetEligibility, fleetTelemetryRow } from "@/db/schema";
 import {
+  bootstrapFleetSharingMode,
+  boundFleetModeOperatorWaits,
+  FleetModeOperatorError as ModeOperatorError,
   readFleetSharingMode,
   transitionFleetSharingMode,
 } from "@/services/fleet-sharing-mode";
 
-export class ModeOperatorError extends Error {}
+export { ModeOperatorError };
 export type ModeOptions = {
   apply: boolean;
   enabled: boolean;
+  firstUse: boolean;
   expectedRevision: number;
   compatibleWeb: boolean;
   compatibleWorker: boolean;
@@ -28,6 +32,7 @@ export function parseModeOptions(args: string[]): ModeOptions {
     "--dry-run",
     "--enable",
     "--disable",
+    "--first-use",
     "--expected-revision",
     "--compatible-web",
     "--compatible-worker",
@@ -53,9 +58,12 @@ export function parseModeOptions(args: string[]): ModeOptions {
     expectedRevision === undefined
   )
     throw new ModeOperatorError("explicit_mode_target_and_revision_required");
+  if (flags.has("--first-use") && !flags.has("--enable"))
+    throw new ModeOperatorError("first_use_requires_enable");
   return {
     apply: flags.has("--apply"),
     enabled: flags.has("--enable"),
+    firstUse: flags.has("--first-use"),
     expectedRevision,
     compatibleWeb: flags.has("--compatible-web"),
     compatibleWorker: flags.has("--compatible-worker"),
@@ -63,39 +71,64 @@ export function parseModeOptions(args: string[]): ModeOptions {
   };
 }
 
-export function checkDeploymentPreconditions(options: ModeOptions): void {
+function deploymentRefusal(options: ModeOptions): string | null {
+  if (options.firstUse && !options.enabled) return "first_use_requires_enable";
   if (!options.compatibleWeb || !options.compatibleWorker || !options.oldReplicasDrained)
-    throw new ModeOperatorError(
-      "compatible_web_worker_and_drained_old_replicas_required",
-    );
-  // No CLI flag can bypass this incomplete integration. Remove only when the
-  // real source lifecycle/worker/outbox and rollback rehearsal are accepted.
-  throw new ModeOperatorError("full_source_model_not_release_ready");
+    return "compatible_web_worker_and_drained_old_replicas_required";
+  if (options.enabled && !options.firstUse) return "full_source_model_not_release_ready";
+  return null;
+}
+
+export function checkDeploymentPreconditions(options: ModeOptions): void {
+  const refusal = deploymentRefusal(options);
+  if (refusal) throw new ModeOperatorError(refusal);
 }
 
 export async function runFleetSharingMode(db: Dbx, options: ModeOptions) {
+  if (options.apply) checkDeploymentPreconditions(options);
+  if (options.firstUse) {
+    const result = await bootstrapFleetSharingMode(db, {
+      expectedRevision: options.expectedRevision,
+      dryRun: !options.apply,
+    });
+    if ("dryRun" in result) {
+      const refusal = deploymentRefusal(options) ?? result.refusal;
+      return { ...result, refusal, releaseReady: refusal === null };
+    }
+    return result;
+  }
   if (options.apply) {
-    checkDeploymentPreconditions(options);
     return transitionFleetSharingMode(db, {
       enabled: options.enabled,
       expectedRevision: options.expectedRevision,
     });
   }
-  const current = await readFleetSharingMode(db);
-  const [sessions] = await db.select({ count: count() }).from(fleetDeviceSession);
-  const [eligibility] = await db.select({ count: count() }).from(fleetEligibility);
-  const [telemetry] = await db.select({ count: count() }).from(fleetTelemetryRow);
-  return {
-    dryRun: true,
-    releaseReady: false,
-    current,
-    targetEnabled: options.enabled,
-    expectedRevision: options.expectedRevision,
-    revisionMatches: current.revision === options.expectedRevision,
-    sessionsToRetire: sessions.count,
-    legacyEligibilityToDelete: eligibility.count,
-    telemetryToDelete: telemetry.count,
-  };
+  // One coherent preview even if disable commits between the gate and counts.
+  // This snapshot never authorizes apply: the write path rechecks under its lock.
+  return db.transaction(async (tx) => {
+    await tx.execute(sql`set transaction isolation level repeatable read, read only`);
+    await boundFleetModeOperatorWaits(tx);
+    const current = await readFleetSharingMode(tx);
+    const [sessions] = await tx.select({ count: count() }).from(fleetDeviceSession);
+    const [eligibility] = await tx.select({ count: count() }).from(fleetEligibility);
+    const [telemetry] = await tx.select({ count: count() }).from(fleetTelemetryRow);
+    return {
+      dryRun: true,
+      releaseReady:
+        deploymentRefusal(options) === null &&
+        current.revision === options.expectedRevision,
+      refusal:
+        deploymentRefusal(options) ??
+        (current.revision !== options.expectedRevision ? "conflict" : null),
+      current,
+      targetEnabled: options.enabled,
+      expectedRevision: options.expectedRevision,
+      revisionMatches: current.revision === options.expectedRevision,
+      sessionsToRetire: sessions.count,
+      legacyEligibilityToDelete: eligibility.count,
+      telemetryToDelete: telemetry.count,
+    };
+  });
 }
 
 async function main() {

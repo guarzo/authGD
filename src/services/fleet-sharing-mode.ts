@@ -1,9 +1,13 @@
-import { eq, sql } from "drizzle-orm";
+import { count, eq, getTableName, sql } from "drizzle-orm";
 import type { DbTx, Dbx } from "@/db";
 import {
   fleetDevice,
+  fleetDeviceKeyIdentity,
   fleetDeviceSession,
   fleetEligibility,
+  fleetPairingRequest,
+  fleetRecoveryChallenge,
+  fleetSourceIntent,
   fleetPublisherLease,
   fleetSourceAuthority,
   fleetSharingGate,
@@ -25,8 +29,8 @@ export class FleetSharingDisabledError extends Error {
 }
 
 /** Operator-only and never called on deploy or by a public route. Caller verifies
- * compatible web/worker deployment first. The operator CLI remains blocked until
- * source control and shared admission are release-ready.
+ * compatible web/worker deployment and old-replica drain first. The CLI exposes
+ * disable; general nonempty enable/reconciliation remains separately blocked.
  * Lock order: exclusive mode → ALL authority/source slots → devices → sessions → union
  * of relay characters ascending. Old readers do not know the mode lock, so the
  * session/device drain (not the flag alone) is the compatibility boundary. */
@@ -35,9 +39,12 @@ export async function transitionFleetSharingMode(
   args: { enabled: boolean; expectedRevision: number; now?: Date },
 ): Promise<FleetSharingMode> {
   return dbx.transaction(async (tx) => {
+    await boundFleetModeOperatorWaits(tx);
+    await requireFleetModeReadCommitted(tx, "mode_read_committed_required");
     await tx.execute(sql`select pg_advisory_xact_lock(3, 0)`);
     const prior = await readFleetKeyIdentityState(tx);
-    if (prior.revision !== args.expectedRevision) throw new Error("conflict");
+    if (prior.revision !== args.expectedRevision)
+      throw new FleetModeOperatorError("conflict");
     // Fail BEFORE any drain/write. Reconciliation is explicit, never a side
     // effect of enabling; readiness is permanent across ordinary mode toggles.
     if (args.enabled && prior.keyIdentityPhase !== "ready")
@@ -97,6 +104,114 @@ export async function transitionFleetSharingMode(
       .insert(fleetSharingGate)
       .values({ id: 1, ...next })
       .onConflictDoUpdate({ target: fleetSharingGate.id, set: next });
+    await logAudit(tx, {
+      actor: "system",
+      action: "fleet_sharing.mode_transitioned",
+      target: "all",
+      details: { enabled: next.enabled, revision: next.revision },
+    });
+    return next;
+  });
+}
+
+export class FleetModeOperatorError extends Error {}
+
+export async function boundFleetModeOperatorWaits(tx: DbTx) {
+  await tx.execute(sql`set local lock_timeout = '2s'`);
+  await tx.execute(sql`set local statement_timeout = '5s'`);
+}
+
+async function requireFleetModeReadCommitted(tx: DbTx, refusal: string) {
+  // A repeatable snapshot can be fixed by the advisory SELECT before it waits.
+  // Reject it BEFORE locking, or a pairing committed during the wait can escape
+  // bootstrap's inventory check or the mode transition's session drain.
+  const isolation = await tx.execute<{ level: string }>(
+    sql`select current_setting('transaction_isolation') as level`,
+  );
+  if (isolation.rows[0].level !== "read committed")
+    throw new FleetModeOperatorError(refusal);
+}
+
+// One inventory drives both locking and counts. Include expired/consumed rows,
+// empty authority fences and deleted/conflicted key bindings. The boss-readiness
+// cooldown is not enrollment; accounts, SSO grants and browser sessions stay out.
+const FIRST_USE_TABLES = [
+  fleetDevice,
+  fleetPairingRequest,
+  fleetDeviceKeyIdentity,
+  fleetDeviceSession,
+  fleetSourceIntent,
+  fleetSourceAuthority,
+  fleetRecoveryChallenge,
+  fleetPublisherLease,
+  fleetTelemetryRow,
+  fleetEligibility,
+];
+
+/** Empty-index initialization, NOT reconciliation. No fabricated quiescence,
+ * registration rewrite or consent. Mode locks serialize compatible admissions;
+ * table locks also exclude legacy writers, FK cascades and mode-free cleanup.
+ * Take a fresh READ COMMITTED snapshot only AFTER all locks, including for an
+ * absent gate. A timeout/deadlock fails the whole transaction, never retries.
+ * Dry-run uses a read-only snapshot, not a promise about a later apply. */
+export async function bootstrapFleetSharingMode(
+  dbx: Dbx,
+  args: { expectedRevision: number; dryRun?: boolean },
+) {
+  return dbx.transaction(async (tx) => {
+    if (args.dryRun)
+      await tx.execute(sql`set transaction isolation level repeatable read, read only`);
+    await boundFleetModeOperatorWaits(tx);
+    if (!args.dryRun) {
+      await requireFleetModeReadCommitted(tx, "first_use_read_committed_required");
+      await tx.execute(sql`select pg_advisory_xact_lock(3, 0)`);
+      await tx.execute(
+        sql`lock table ${sql.join([fleetSharingGate, ...FIRST_USE_TABLES], sql`, `)} in share row exclusive mode`,
+      );
+    }
+    const current = await readFleetKeyIdentityState(tx);
+    const firstUseCounts: Record<string, number> = {};
+    for (const table of FIRST_USE_TABLES) {
+      const [row] = await tx.select({ n: count() }).from(table);
+      firstUseCounts[getTableName(table)] = row.n;
+    }
+    const refusal =
+      current.revision !== args.expectedRevision
+        ? "conflict"
+        : current.enabled ||
+            current.revision !== 0 ||
+            current.transitionedAt !== null ||
+            current.keyIdentityPhase !== "pending" ||
+            current.keyIdentityCursor !== null
+          ? "first_use_initial_state_required"
+          : Object.values(firstUseCounts).some((n) => n !== 0)
+            ? "first_use_empty_state_required"
+            : null;
+    if (args.dryRun)
+      return {
+        dryRun: true as const,
+        current,
+        firstUseCounts,
+        refusal,
+        releaseReady: refusal === null,
+      };
+    if (refusal) throw new FleetModeOperatorError(refusal);
+    const ready = {
+      enabled: true,
+      revision: 1,
+      keyIdentityPhase: "ready" as const,
+      transitionedAt: sql`clock_timestamp()`,
+    };
+    const [next] = await tx
+      .insert(fleetSharingGate)
+      .values({ id: 1, ...ready })
+      .onConflictDoUpdate({ target: fleetSharingGate.id, set: ready })
+      .returning();
+    await logAudit(tx, {
+      actor: "system",
+      action: "fleet_sharing.key_identity_ready",
+      target: "all",
+    });
     await logAudit(tx, {
       actor: "system",
       action: "fleet_sharing.mode_transitioned",
