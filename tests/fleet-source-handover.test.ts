@@ -95,11 +95,23 @@ async function scenario(
     fleetBossId: bossId,
     rosterIds: characters.map((p) => p.boss.id),
     responses: {
-      membership: { headers: { Date: now.toUTCString(), "Cache-Control": "max-age=60" } },
+      membership: {
+        headers: {
+          Date: now.toUTCString(),
+          "Cache-Control": "max-age=60",
+          "x-esi-error-limit-remain": "100",
+          "x-esi-error-limit-reset": "60",
+        },
+      },
       roster: {
         hold,
         status,
-        headers: { Date: now.toUTCString(), "Cache-Control": "max-age=5" },
+        headers: {
+          Date: now.toUTCString(),
+          "Cache-Control": "max-age=5",
+          "x-esi-error-limit-remain": "100",
+          "x-esi-error-limit-reset": "60",
+        },
       },
     },
   });

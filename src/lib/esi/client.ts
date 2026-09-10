@@ -398,19 +398,27 @@ export function createEsiClient(opts: EsiClientOptions = {}) {
     if (accessToken) headers.authorization = `Bearer ${accessToken}`;
     if (opts.userAgent) headers["user-agent"] = opts.userAgent;
     if (compatibilityDate) headers["x-compatibility-date"] = COMPATIBILITY_DATE;
-    const res = await (fleetRequest?.fetchImpl ?? fetchImpl)(
-      `${base ?? ESI_BASE}${path}`,
-      {
+    let res: Response;
+    try {
+      res = await (fleetRequest?.fetchImpl ?? fetchImpl)(`${base ?? ESI_BASE}${path}`, {
         ...rest,
         headers,
         signal: AbortSignal.timeout(30_000),
-      },
-    );
+      });
+    } catch (error) {
+      // No response is no budget evidence, including the first fleet request.
+      // Preserve generic callers and the original transport error/settlement.
+      if (fleetRequest) {
+        fleetBudgetKnown = false;
+        fleetProbeAt = Math.max(fleetProbeAt, clock() + FLEET_CONSERVATIVE_PROBE_MS);
+      }
+      throw error;
+    }
     const remainHeader = res.headers.get("x-esi-error-limit-remain");
     const resetHeader = res.headers.get("x-esi-error-limit-reset");
     const parsedRemain = headerSeconds(remainHeader);
     const parsedReset = headerSeconds(resetHeader);
-    if (remainHeader !== null || resetHeader !== null) {
+    if (fleetRequest || remainHeader !== null || resetHeader !== null) {
       fleetBudgetKnown = parsedRemain !== null && parsedReset !== null;
       if (!fleetBudgetKnown)
         fleetProbeAt = Math.max(fleetProbeAt, clock() + FLEET_CONSERVATIVE_PROBE_MS);

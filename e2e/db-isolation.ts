@@ -59,9 +59,26 @@ export function installDatabaseIsolation(databaseUrl: string) {
   // between BEGIN and COMMIT and can deadlock a reset against that transaction.
   // eslint-disable-next-line @typescript-eslint/unbound-method -- called with the original pool receiver.
   const connect = Pool.prototype.connect;
+  const ownedPools = new WeakMap<Pool, { failure?: Error }>();
   async function acquire(pool: Pool): Promise<PoolClient> {
     if (pool.options.connectionString !== databaseUrl)
       throw new Error("[e2e] server pool does not use the owned test database");
+    // createDb has no pool error listener. Own that harness-only channel before
+    // checkout, without replacing an existing owner's reporting/recovery policy.
+    if (!ownedPools.has(pool) && pool.listenerCount("error") === 0) {
+      const state: { failure?: Error } = {};
+      ownedPools.set(pool, state);
+      pool.on("error", () => {
+        if (state.failure) return;
+        state.failure = new Error("[e2e] database isolation pool failed");
+        // Closed diagnostics only: driver errors can include SQL or credentials.
+        // Keep cleanup possible, but never admit another query or exit green.
+        console.error(state.failure.message);
+        process.exitCode = 1;
+      });
+    }
+    const failure = ownedPools.get(pool)?.failure;
+    if (failure) throw failure;
     return new Promise<PoolClient>((resolve, reject) => {
       // Attach admission ownership in pg's callback, not an await continuation
       // that would leave a new listener-free checkout interval.

@@ -39,6 +39,7 @@ import {
 } from "../src/worker/fleet-source-scheduler";
 import { createQueues, QUEUES } from "../src/worker/queues";
 import { pairDevice, reconcileFleetKeys } from "../tests/helpers/fleet-sharing";
+import { withFleetResources } from "./fleet-resources";
 
 /** Real signed HTTP -> outbox/pg-boss -> actual SSO/JWT/ESI -> shared relay.
  * Only the provider boundary is synthetic; native/TLS desktop proof is later. */
@@ -47,13 +48,27 @@ test("signed HTTP source Start, worker authority and two-account shared snapshot
   context,
   fleet,
 }) => {
-  const { db, pool } = testDb();
-  const boss = new PgBoss({ connectionString: TEST_DATABASE_URL });
-  boss.on("error", () => {});
-  const owner = createFleetSourceOwner();
-  let stopDispatch: (() => Promise<void>) | undefined;
-  let stopScheduler: (() => Promise<void>) | undefined;
-  try {
+  await withFleetResources(async (own) => {
+    // Reverse disposal: producers/admission first, original credentials next,
+    // then pg-boss and finally the application pool, even when a stop fails.
+    const { db } = own(testDb(), ({ pool }) => pool.end());
+    const boss = own(new PgBoss({ connectionString: TEST_DATABASE_URL }), (boss) =>
+      boss.stop({ graceful: true, wait: true }),
+    );
+    boss.on("error", () => {});
+    const owner = own(createFleetSourceOwner(), (owner) => owner.drain());
+    own(boss, (boss) => boss.offWork(QUEUES.fleetSource));
+    const producers: {
+      stopDispatch?: () => Promise<void>;
+      stopScheduler?: () => Promise<void>;
+    } = {};
+    own(producers, async (producers) => {
+      await producers.stopDispatch?.();
+    });
+    own(producers, async (producers) => {
+      await producers.stopScheduler?.();
+    });
+    own(owner, (owner) => owner.stopAdmission());
     await resetDb(db);
     const ready = await reconcileFleetKeys(db);
     await transitionFleetSharingMode(db, {
@@ -238,13 +253,13 @@ test("signed HTTP source Start, worker authority and two-account shared snapshot
       for (const job of jobs) await handler(job.data);
     });
     const dispatchedAt = Date.now();
-    stopDispatch = startDispatcher(
+    producers.stopDispatch = startDispatcher(
       db,
       (queue, data, options) => boss.send(queue, data, options),
       500,
       "fleet-source",
     );
-    stopScheduler = startFleetSourceScheduler(async () => {
+    producers.stopScheduler = startFleetSourceScheduler(async () => {
       await cleanupFleetSources(db);
       await reserveDueFleetSources(db);
     });
@@ -473,13 +488,5 @@ test("signed HTTP source Start, worker authority and two-account shared snapshot
     expect((await fleet.snapshot()).requests.map((r) => r.stage)).toEqual(
       expect.arrayContaining(["token", "jwks", "membership", "roster"]),
     );
-  } finally {
-    owner.stopAdmission();
-    await stopScheduler?.();
-    await stopDispatch?.();
-    await boss.offWork(QUEUES.fleetSource);
-    await owner.drain();
-    await boss.stop({ graceful: true, wait: true });
-    await pool.end();
-  }
+  });
 });

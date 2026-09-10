@@ -329,11 +329,7 @@ async function run(
         deriveFleetPacingBoundary(roster).getTime(),
       );
       requireBudget();
-      if (
-        evidence &&
-        !unsupportedConstraint &&
-        roster.value.some((ch) => ch.characterId === ticket!.boss.id)
-      ) {
+      if (evidence && !unsupportedConstraint) {
         observation = {
           kind: "verified",
           evidence,
@@ -347,9 +343,6 @@ async function run(
           kind: "failure",
           reason: "untrustworthy_evidence",
           nextFetchAt: null,
-          ...(!roster.value.some((ch) => ch.characterId === ticket!.boss.id)
-            ? { terminal: "boss_lost" as const }
-            : {}),
         };
     }
   } catch (err) {

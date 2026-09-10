@@ -5,6 +5,12 @@ import { connect, type Socket } from "node:net";
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
 import { z } from "zod";
 
+// Healthy live source responses and actual authorization refusals carry a known
+// budget. Fixed-header scenarios remain exact, including an absent pair.
+const healthyFleetBudget = {
+  "x-esi-error-limit-remain": "100",
+  "x-esi-error-limit-reset": "60",
+};
 const responseSchema = z
   .object({
     status: z.number().int().min(200).max(599).optional(),
@@ -339,7 +345,12 @@ export async function startFleetFixtures(input: { appUrl: string; worktree: stri
       const identity = bearer.startsWith("Bearer ")
         ? accessTokens.get(bearer.slice(7))
         : undefined;
-      if (!identity) return { status: 401, body: { error: "invalid token" } };
+      if (!identity)
+        return {
+          status: 401,
+          headers: healthyFleetBudget,
+          body: { error: "invalid token" },
+        };
       if (
         !identity.scopes.includes("esi-fleets.read_fleet.v1") ||
         (stage === "membership" && identity.id !== Number(url.pathname.split("/")[3])) ||
@@ -347,7 +358,7 @@ export async function startFleetFixtures(input: { appUrl: string; worktree: stri
         // response overrides, so a synthetic 200 cannot grant roster access.
         (stage === "roster" && identity.id !== fleet.fleetBossId)
       )
-        return { status: 403, body: { error: "forbidden" } };
+        return { status: 403, headers: healthyFleetBudget, body: { error: "forbidden" } };
     }
     const rule =
       stage === "jwks"
@@ -364,6 +375,7 @@ export async function startFleetFixtures(input: { appUrl: string; worktree: stri
           ? {
               Date: new Date().toUTCString(),
               "Cache-Control": `max-age=${stage === "membership" ? 60 : 5}`,
+              ...healthyFleetBudget,
               ...rule.headers,
             }
           : rule?.headers,

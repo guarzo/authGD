@@ -649,6 +649,9 @@ test("two pinned Python installations pair in real HTTPS browsers and share thro
           Date: new Date(Date.now() - 20_000).toUTCString(),
           Age: "20",
           "Cache-Control": "max-age=5",
+          // Isolate stale evidence: an absent budget pair pauses ALL sources.
+          "x-esi-error-limit-remain": "100",
+          "x-esi-error-limit-reset": "60",
         },
       },
     };
@@ -667,6 +670,20 @@ test("two pinned Python installations pair in real HTTPS browsers and share thro
         timeout: 12_000,
       })
       .toBe(1);
+    expect(
+      (
+        await db
+          .select({ outcome: fleetSourceIntent.latestOutcome })
+          .from(fleetSourceIntent)
+          .where(eq(fleetSourceIntent.bossCharacterId, aChars[3].id))
+      ).map((s) => s.outcome),
+    ).toEqual(["untrustworthy_evidence"]);
+    expect(
+      (await second.command("status")).remote.map((row) => ({
+        dps: row.dps,
+        state: row.state,
+      })),
+    ).toEqual([{ dps: 43, state: "live" }]);
     await assertTokenless();
     await first.command("stop-sources");
     await expect

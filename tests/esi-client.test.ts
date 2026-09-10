@@ -47,6 +47,114 @@ describe("safe retry/cache boundaries", () => {
 });
 
 describe("source-only unknown error-budget recovery", () => {
+  it.each(["absent", "network"])(
+    "FIRST %s response reserves a shared probe and recovers on healthy headers",
+    async (first) => {
+      let now = 0;
+      let calls = 0;
+      let healthy = false;
+      const transportError = new Error("synthetic transport failure");
+      const fetchImpl: typeof fetch = async () => {
+        calls++;
+        if (!healthy && first === "network") throw transportError;
+        return Response.json([], {
+          headers: healthy
+            ? { "x-esi-error-limit-remain": "100", "x-esi-error-limit-reset": "60" }
+            : {},
+        });
+      };
+      const esi = createEsiClient({
+        fetchImpl,
+        now: () => now,
+        sleep: async () => {
+          throw new Error("source must schedule, not sleep");
+        },
+      });
+      const options = { fetchImpl, now: () => now };
+      const result = await esi
+        .getFleetMembers(123, "source-a", options)
+        .catch((e: unknown) => e);
+      if (first === "network") expect(result).toBe(transportError);
+      else expect(result).toBeInstanceOf(EsiError);
+      expect(esi.getFleetRetryAt()).toBe(60000);
+      now = 59999;
+      await expect(esi.getFleetMembers(124, "source-b", options)).rejects.toBeInstanceOf(
+        EsiError,
+      );
+      expect(calls).toBe(1);
+      now = 60000;
+      healthy = true;
+      await expect(esi.getFleetMembers(124, "source-b", options)).resolves.toMatchObject({
+        value: [],
+      });
+      expect(calls).toBe(2);
+      expect(esi.getFleetRetryAt()).toBeNull();
+    },
+  );
+  it.each(["absent", "network"])(
+    "generic FIRST %s response keeps its original result without a fleet probe",
+    async (first) => {
+      const transportError = new Error("synthetic generic transport failure");
+      let calls = 0;
+      const esi = createEsiClient({
+        now: () => 0,
+        fetchImpl: async () => {
+          calls++;
+          if (first === "network") throw transportError;
+          return Response.json([]);
+        },
+      });
+      for (const id of [123, 124]) {
+        const result = await esi.getFleetMembers(id, "generic").catch((e: unknown) => e);
+        if (first === "network") expect(result).toBe(transportError);
+        else expect(result).toMatchObject({ value: [] });
+        expect(esi.getFleetRetryAt()).toBeNull();
+      }
+      expect(calls).toBe(2);
+    },
+  );
+  it.each(["absent", "network"])(
+    "FIRST %s probe and healthy recovery never shorten an uncapped shared reset",
+    async (first) => {
+      let now = 0;
+      let response = first;
+      let calls = 0;
+      const fetchImpl: typeof fetch = async () => {
+        calls++;
+        if (response === "network") throw new Error("synthetic transport failure");
+        return Response.json([], {
+          headers:
+            response === "absent"
+              ? {}
+              : {
+                  "x-esi-error-limit-remain": response === "low" ? "0" : "100",
+                  "x-esi-error-limit-reset": response === "low" ? "86401" : "60",
+                },
+        });
+      };
+      const esi = createEsiClient({ fetchImpl, now: () => now, sleep: async () => {} });
+      const options = { fetchImpl, now: () => now };
+      await expect(esi.getFleetMembers(123, "source", options)).rejects.toThrow();
+      expect(esi.getFleetRetryAt()).toBe(60000);
+      response = "low";
+      await esi.getFleetMembers(124, "generic");
+      expect(esi.getFleetRetryAt()).toBe(86401000);
+      response = "healthy";
+      await esi.getFleetMembers(124, "generic");
+      expect(esi.getFleetRetryAt()).toBe(86401000);
+      now = 86400999;
+      await expect(esi.getFleetMembers(123, "source", options)).rejects.toBeInstanceOf(
+        EsiError,
+      );
+      expect(calls).toBe(3);
+      now = 86401000;
+      await expect(esi.getFleetMembers(123, "source", options)).resolves.toMatchObject({
+        value: [],
+      });
+      expect(calls).toBe(4);
+      expect(esi.getFleetRetryAt()).toBeNull();
+    },
+  );
   it.each(["network", "absent", "malformed"])(
     "a %s probe leaves a bounded next probe; healthy headers release it without another caller",
     async (failure) => {

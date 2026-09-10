@@ -1134,7 +1134,41 @@ permission to enable it. `scripts/fleet-sharing-mode.ts` still refuses every
 apply operation, including when all deployment flags are supplied. There is no
 new production bypass or automatic migration/startup cutover.
 
-Before a separately authorized release, record these checks in order:
+### Plan the migration lock window before the first deployment
+
+The first deployment carrying the shared-fleet migration chain runs
+`npm run db:migrate` as its release command, **before** shared admission is
+turned on. Keeping the feature disabled does not avoid DDL locks.
+`0021_fantastic_goblin_queen.sql` adds `character.fleet_link_epoch` with
+`uuid DEFAULT gen_random_uuid() NOT NULL`. This is a volatile per-row default,
+not PostgreSQL's metadata-only constant-default optimization: existing rows
+must be rewritten while `ALTER TABLE` holds an `ACCESS EXCLUSIVE` lock.
+Concurrent readers/writers and long transactions can delay that lock, and the
+rewrite can block application work once acquired. Other ALTERs in the chain
+also require their DDL lock windows.
+
+Before that first deployment, the release owner must approve the maintenance
+plan: assess table size, free space and expected lock contention in an
+appropriate rehearsal; decide the outage/lock-wait budget; arrange web and
+worker drain/quiescence and a verified backup/recovery path; and define who
+stops a stalled release and when compatible processes resume. Do this before
+starting the release command, not as a later shared-mode enablement check.
+No production row counts, rewrite duration or live lock measurements are
+established by this document or the synthetic suite.
+
+Applied migrations `0018`–`0024` are immutable. On a failed or interrupted
+release, inspect which transaction committed and retain the recorded schema
+and migration history; do not guess from the deployment status alone. Do not
+delete migration-ledger rows, drop/recreate link epochs, or edit/force
+reapplication of already-applied SQL to retry or roll back. A later migration
+cannot remove the rewrite already required by the preceding `0021`. Follow the
+schema-retaining rollback order
+below; any further database repair needs a separately reviewed plan.
+
+### Remaining release gates
+
+Before a separately authorized release, record these checks in order (after
+the migration maintenance plan above is approved):
 
 1. Deploy compatible web **and fleet-source worker** code while admission stays
    off. The pinned pre-feature dispatcher actually drops the new outbox kind;
@@ -1157,8 +1191,16 @@ Before a separately authorized release, record these checks in order:
    handover/Stop and measured continuity/departure/cache expiry. Verify normal
    restart/session recovery needs no browser, remote data never enters Settings
    or publication, and network-failed withdrawal never claims acknowledgement.
-5. Only a separate operator authorization and reviewed release tool may enable
-   admission. This change deliberately does not supply that tool's apply path.
+5. Resolve the deferred persisted-audit decisions: whether and how to record
+   first source activation and proven recovery-challenge consumption, including
+   conflicted/deleted bindings without a unique account actor. Approve event
+   semantics, actor attribution and retention before implementation; this
+   runbook does not invent event names or payloads, nor authorize routine
+   poll/roster history.
+6. Define the authenticated operator principal and its validation/audit contract
+   for a separately reviewed release tool. Caller-supplied actor text alone is
+   not authenticated attribution. Only separate operator authorization and that
+   reviewed tool may enable admission; the current apply path remains blocked.
 
 Rollback order is also an operator action: disable admission, terminate sources,
 await owned verification/token settlement, drain sessions/rows/leases and verify

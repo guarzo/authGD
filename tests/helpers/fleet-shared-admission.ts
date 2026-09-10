@@ -122,7 +122,12 @@ export async function realSource(
     }
     if (!new Headers(init?.headers).get("authorization")?.startsWith("Bearer "))
       throw new Error("missing synthetic bearer");
-    const headers = { Date: now.toUTCString(), "Cache-Control": "max-age=5" };
+    const headers = {
+      Date: now.toUTCString(),
+      "Cache-Control": "max-age=5",
+      "x-esi-error-limit-remain": "100",
+      "x-esi-error-limit-reset": "60",
+    };
     if (url === `https://esi.evetech.net/latest/characters/${boss.id}/fleet/`)
       return Response.json({ fleet_id: fleet, fleet_boss_id: boss.id }, { headers });
     if (url === `https://esi.evetech.net/latest/fleets/${fleet}/members/`)

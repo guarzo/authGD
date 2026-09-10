@@ -135,17 +135,12 @@ export default async function FleetPairPage({
     (mode.enabled && mode.keyIdentityPhase !== "ready");
   let deviceBoundToAnotherAccount = false;
   let keyUnavailable = false;
-  if (
-    row &&
-    row.consumedAt === null &&
-    !identityMaintenance &&
-    (mode.keyIdentityPhase === "ready" || row.approvedAt === null)
-  ) {
+  // Approval is not completion: even a legacy pending-mode approval can
+  // outlive revocation, and must not promise that the desktop can finish.
+  if (row && row.consumedAt === null && !identityMaintenance) {
     try {
       const resolution = await resolveFleetDeviceKey(getDb(), row.publicKeySpkiB64, mode);
-      keyUnavailable =
-        resolution.unavailable ||
-        (mode.keyIdentityPhase === "ready" && resolution.device?.revokedAt != null);
+      keyUnavailable = resolution.unavailable || resolution.device?.revokedAt != null;
       deviceBoundToAnotherAccount =
         resolution.device !== undefined &&
         resolution.device.revokedAt === null &&

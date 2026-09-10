@@ -159,10 +159,20 @@ it("signed route -> committed outbox -> dispatcher -> strict registered handler 
     rosterIds: [boss.id, alt.id, included.id, 777],
     responses: {
       membership: {
-        headers: { Date: new Date().toUTCString(), "Cache-Control": "max-age=60" },
+        headers: {
+          Date: new Date().toUTCString(),
+          "Cache-Control": "max-age=60",
+          "x-esi-error-limit-remain": "100",
+          "x-esi-error-limit-reset": "60",
+        },
       },
       roster: {
-        headers: { Date: new Date().toUTCString(), "Cache-Control": "max-age=5" },
+        headers: {
+          Date: new Date().toUTCString(),
+          "Cache-Control": "max-age=5",
+          "x-esi-error-limit-remain": "100",
+          "x-esi-error-limit-reset": "60",
+        },
       },
     },
   });

@@ -3,6 +3,7 @@ import { once } from "node:events";
 import { createServer } from "node:http";
 import { connect, Server } from "node:net";
 import { join } from "node:path";
+import { setImmediate } from "node:timers/promises";
 import {
   existsSync,
   mkdirSync,
@@ -45,6 +46,18 @@ afterEach(async () => {
   vi.unstubAllEnvs();
   vi.resetModules();
 });
+
+function observeServerStart(pending: ReturnType<typeof startFleetServer>) {
+  // Observe now, not after readiness. Keep the original rejected promise for
+  // the assertion, and retain successful ownership without closing it early.
+  void pending.then(
+    (owned) => {
+      disposers.push(() => owned.close());
+    },
+    () => undefined,
+  );
+  return pending;
+}
 
 async function fixture() {
   const f = await startFleetFixtures({ appUrl, worktree: WORKTREE_ROOT });
@@ -317,7 +330,14 @@ describe("fleet browser harness isolation", () => {
           method: "GET",
           headers,
         }),
-      ).toEqual({ status: 403, body: { error: "forbidden" } });
+      ).toEqual({
+        status: 403,
+        body: { error: "forbidden" },
+        headers: {
+          "x-esi-error-limit-remain": "100",
+          "x-esi-error-limit-reset": "60",
+        },
+      });
       const boss = await f.client.credentials(90000001);
       expect(
         await f.client.provider({
@@ -475,17 +495,58 @@ describe("fleet browser harness isolation", () => {
     expect(await (await fetch(url)).text()).toBe("dry-run");
   });
 
+  it("observes an early startup rejection before any readiness wait, retaining the original failure", async () => {
+    const failure = new Error("synthetic early startup failure");
+    const original = startFleetServer({
+      databaseUrl,
+      appUrl,
+      signal: AbortSignal.abort(failure),
+    });
+    const pending = observeServerStart(original);
+    await setImmediate();
+    expect(pending).toBe(original);
+    await expect(pending).rejects.toBe(failure);
+  });
+
+  it("owns an unexpected successful startup handle until teardown", async () => {
+    const original = startFleetServer({ databaseUrl, appUrl, mode: "start" });
+    const pending = observeServerStart(original);
+    try {
+      const owned = await pending;
+      expect(pending).toBe(original);
+      expect(await owned.fixtures.client.health()).toEqual({
+        appUrl,
+        worktree: WORKTREE_ROOT,
+      });
+      expect(owned.child.exitCode).toBeNull();
+      expect(owned.child.signalCode).toBeNull();
+      const dispose = disposers.pop();
+      expect(dispose).toBeDefined();
+      await dispose!();
+      expect(owned.child.exitCode !== null || owned.child.signalCode !== null).toBe(true);
+      await expect(owned.fixtures.client.health()).rejects.toThrow();
+      await assertFreePort(appUrl);
+    } finally {
+      await original.then(
+        (owned) => owned.close(),
+        () => undefined,
+      );
+    }
+  });
+
   it("cancels owned HTTPS startup and reclaims both listeners without changing caller trust", async () => {
     const trust = createFleetTrust();
     vi.stubEnv("NODE_EXTRA_CA_CERTS", trust.ca);
     const controller = new AbortController();
-    const pending = startFleetServer({
-      databaseUrl,
-      appUrl: "https://localhost:3988",
-      upstreamUrl: "http://127.0.0.1:3987",
-      tls: { cert: trust.cert, key: trust.key },
-      signal: controller.signal,
-    });
+    const pending = observeServerStart(
+      startFleetServer({
+        databaseUrl,
+        appUrl: "https://localhost:3988",
+        upstreamUrl: "http://127.0.0.1:3987",
+        tls: { cert: trust.cert, key: trust.key },
+        signal: controller.signal,
+      }),
+    );
     const connected = () =>
       new Promise<boolean>((done) => {
         const socket = connect({ host: "127.0.0.1", port: 3988 });
@@ -503,25 +564,27 @@ describe("fleet browser harness isolation", () => {
       await assertFreePort(appUrl);
     } finally {
       controller.abort();
-      await pending.then(
-        (owned) => owned.close(),
-        () => undefined,
-      );
-      trust.close();
+      try {
+        await pending.then(
+          (owned) => owned.close(),
+          () => undefined,
+        );
+      } finally {
+        trust.close();
+      }
     }
     expect(existsSync(trust.root)).toBe(false);
   });
 
   it("cleans up a Next child cancelled while startup is still pending", async () => {
     const controller = new AbortController();
-    const pending = startFleetServer({
-      databaseUrl,
-      appUrl,
-      signal: controller.signal,
-    }).then((owned) => {
-      disposers.push(() => owned.close());
-      return owned;
-    });
+    const pending = observeServerStart(
+      startFleetServer({
+        databaseUrl,
+        appUrl,
+        signal: controller.signal,
+      }),
+    );
     // Observe the owned TCP listener, without warming /login ourselves.
     const connected = () =>
       new Promise<boolean>((done) => {
@@ -532,12 +595,20 @@ describe("fleet browser harness isolation", () => {
         });
         socket.on("error", () => done(false));
       });
-    await vi.waitFor(async () => expect(await connected()).toBe(true), {
-      timeout: 20_000,
-    });
-    controller.abort(new Error("cancelled harness startup"));
-    await expect(pending).rejects.toThrow(/cancelled/);
-    expect(await connected()).toBe(false);
+    try {
+      await vi.waitFor(async () => expect(await connected()).toBe(true), {
+        timeout: 20_000,
+      });
+      controller.abort(new Error("cancelled harness startup"));
+      await expect(pending).rejects.toThrow(/cancelled/);
+      expect(await connected()).toBe(false);
+    } finally {
+      controller.abort();
+      await pending.then(
+        (owned) => owned.close(),
+        () => undefined,
+      );
+    }
   }, 30_000);
 
   it("a concurrent close waits for the same actual child and fixture drain", async () => {

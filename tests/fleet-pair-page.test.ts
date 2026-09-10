@@ -58,6 +58,7 @@ describe("derivePairingState", () => {
         now: NOW,
         deviceBoundToAnotherAccount: false,
         sharingDisabled: true,
+        keyUnavailable: true,
       }),
     ).toBe("feature_disabled");
     expect(
@@ -66,9 +67,28 @@ describe("derivePairingState", () => {
         now: NOW,
         deviceBoundToAnotherAccount: false,
         sharingDisabled: true,
+        keyUnavailable: true,
       }),
     ).toBe("feature_disabled");
   });
+  it.each([
+    pendingRow({ expiresAt: NOW, approvedAt: NOW }),
+    pendingRow({ consumedAt: NOW, approvedAt: NOW }),
+  ])(
+    "closed requests outrank maintenance, disabled sharing and unavailable keys",
+    (row) => {
+      expect(
+        derivePairingState({
+          row,
+          now: NOW,
+          deviceBoundToAnotherAccount: true,
+          identityMaintenance: true,
+          sharingDisabled: true,
+          keyUnavailable: true,
+        }),
+      ).toBe("closed");
+    },
+  );
   it("is closed when there is no row at all (missing/malformed id)", () => {
     expect(
       derivePairingState({

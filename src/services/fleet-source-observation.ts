@@ -442,8 +442,22 @@ export async function commitFleetSourceObservation(
       observation.kind === "verified" &&
       (observation.evidence.expiresAt <= now ||
         observation.evidence.observedAt > now ||
-        retained.length > 256 ||
-        !retained.some((ch) => ch.characterId === s.bossCharacterId))
+        retained.length > 256)
+    )
+      failure = "untrustworthy_evidence";
+    // Absence in a 200 roster is an upstream fact, not an HTTP refusal. Keep
+    // its evidence through the final lock wait before it can end consent.
+    if (
+      observation.kind === "verified" &&
+      failure === null &&
+      !observation.memberIds.includes(s.bossCharacterId!)
+    ) {
+      await end(tx, p, "boss_lost", now);
+      return;
+    }
+    if (
+      observation.kind === "verified" &&
+      !retained.some((ch) => ch.characterId === s.bossCharacterId)
     )
       failure = "untrustworthy_evidence";
     if (failure !== null) {

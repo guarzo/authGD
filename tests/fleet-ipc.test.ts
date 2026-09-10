@@ -21,9 +21,10 @@ afterEach(async () => {
     vi.unstubAllEnvs();
   }
 });
-function fixture() {
+function fixture(parent = join(WORKTREE_ROOT, "tmp/task-10/fix1")) {
   chmodSync(script, 0o700);
-  const trust = mkdtempSync(join(WORKTREE_ROOT, "tmp/task-10/fix1/ipc-"));
+  mkdirSync(parent, { recursive: true });
+  const trust = mkdtempSync(join(parent, "ipc-"));
   scopes.push(async () => rmSync(trust, { recursive: true, force: true }));
   vi.stubEnv("E2E_WINGMAN_PYTHON", script);
   vi.stubEnv("E2E_FLEET_TLS_ROOT", trust);
@@ -65,6 +66,20 @@ it("refuses a concurrent command without sending any bytes or breaking the first
   expect(await peer.command("status")).toEqual({ count: 2 });
   // This intentionally abrupt adversarial peer has no graceful signal handler.
 });
+it("creates its IPC scratch parent on a fresh owned path", async () => {
+  const scratch = join(WORKTREE_ROOT, "tmp");
+  mkdirSync(scratch, { recursive: true });
+  const root = mkdtempSync(join(scratch, "fleet-ipc-parent-"));
+  scopes.push(async () => rmSync(root, { recursive: true, force: true }));
+  const parent = join(root, "fresh", "scratch");
+  expect(existsSync(parent)).toBe(false);
+  const trust = fixture(parent);
+  await expect(runLegacyRecoveryProbe(Buffer.alloc(32))).rejects.toThrow(
+    "oversized Python probe",
+  );
+  expect(existsSync(trust)).toBe(true);
+});
+
 for (const newline of [0, 1])
   it(`bounds and reaps the ${newline ? "terminated" : "unterminated"} recovery probe`, async () => {
     const root = fixture();

@@ -78,7 +78,7 @@ extension headers. PUT body, catalogue, consent and capabilities are unchanged.
 
 **Rollout fence:** negotiated reads require shared mode under the existing
 transactional mode lock, before any legacy admission, pruning or cadence. Disabled
-mode returns `503 feature_disabled` (authentication can return401 first if the
+mode returns `503 feature_disabled` (authentication can return 401 first if the
 cutover already drained that session). Old **server writers must be drained before
 enabling shared mode**: old code could update metrics while retaining an existing
 ID. The flag alone cannot make mixed writers safe. Updated servers can stamp old
@@ -164,6 +164,34 @@ renewal (whichever are due) strictly sequentially inside one
 own loop, and `iterate_once`'s explicit refusal to run beside a live worker
 thread). See that module's docstring for the enforcement side of this same
 contract.
+
+## Recovery challenges are single-use, including retryable outcomes
+
+Recovery uses its own key-possession proofs at
+`POST /api/fleet/v1/recovery-challenges` and
+`POST /api/fleet/v1/recovery-challenges/:id/complete`, not a fleet session's
+five signed headers. It requires shared mode and the ready key index. A fresh
+recovery request ID identifies one initiation; replaying that initiation can
+return the same challenge only while it is unconsumed, unexpired and has the
+same issued-at value.
+
+A proven completion consumes the challenge **before** attempting session
+issuance. A committed `retry_later` or `account_ineligible` result consumes it
+just as a successful `reconnected` result does. Honor `retry_after_ms`, discard
+the pending challenge, and begin again with a **fresh request ID and challenge**
+when retrying. Do not replay the old completion or reuse its initiation ID.
+Revoked/conflicted-key results also consume the challenge; they are not
+permission to recover that key as an eligible device.
+
+If the completion response is lost or transport fails, the client cannot know
+whether issuance committed. Discard the pending challenge and use a fresh
+request ID/challenge for the next recovery attempt with the registered key.
+The current Wingman worker does this for completion errors and clears pending
+recovery on proven results. Initiation memoization is not completion replay:
+the server does **not** retain a raw recovered session to return again. A new
+successful recovery replaces the previous session rather than resurrecting an
+unknown response. Outer transaction failures do not promise durable consumption
+or a key-specific outcome; invalid proofs do not consume a challenge.
 
 ## Refusal codes
 

@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { join } from "node:path";
 import { Client } from "pg";
+import { buildSync } from "esbuild";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { resetDb } from "../e2e/helpers";
 import { WORKTREE_ROOT } from "../e2e/env";
@@ -35,6 +36,15 @@ function resetOwner() {
 }
 
 async function child(mode: string, entry = "db-isolation-child.mjs") {
+  if (mode === "application-unlock")
+    buildSync({
+      entryPoints: [join(WORKTREE_ROOT, "src/db/index.ts")],
+      outfile: join(WORKTREE_ROOT, "tmp/e2e/isolation-application-db.mjs"),
+      bundle: true,
+      packages: "external",
+      platform: "node",
+      format: "esm",
+    });
   const process = spawn(
     globalThis.process.execPath,
     [join(WORKTREE_ROOT, "tests/helpers", entry), mode],
@@ -47,7 +57,10 @@ async function child(mode: string, entry = "db-isolation-child.mjs") {
     if (message.event === "private-query") backendPid = message.pid;
   });
   process.stdout!.on("data", () => {});
-  process.stderr!.on("data", () => {});
+  let stderr = "";
+  process.stderr!.on("data", (chunk: Buffer) => {
+    stderr += chunk.toString();
+  });
   const exited = once(process, "exit");
   resources.push(async () => {
     if (process.exitCode === null && process.signalCode === null) {
@@ -62,12 +75,13 @@ async function child(mode: string, entry = "db-isolation-child.mjs") {
     process,
     events,
     backendPid: () => backendPid,
+    stderr: () => stderr,
     async wait(event: string) {
       await vi.waitFor(() => expect(events).toContain(event));
     },
-    async done() {
-      expect((await exited)[0], events.join(",")).toBe(0);
-      expect(events).toContain("done");
+    async done(code = 0) {
+      expect((await exited)[0], events.join(",")).toBe(code);
+      expect(events, events.join(",")).toContain("done");
     },
   };
 }
@@ -260,6 +274,19 @@ it.each(["admission-promise", "admission-callback", "unlock"])(
     await resetDb(fixture.db);
   },
 );
+
+it("fails visibly and drains the actual application pool after an unlock transport failure", async () => {
+  const server = await child("application-unlock", "db-isolation-transport.mjs");
+  await server.wait("release-void");
+  server.process.send("break-transport");
+  await server.done(1);
+  expect(server.events).toContain("harness-failure");
+  expect(server.events).not.toContain("uncaught-client-event");
+  expect(server.events).not.toContain("unhandled-rejection");
+  expect(server.stderr()).toContain("[e2e] database isolation pool failed");
+  expect(server.stderr()).not.toContain("secret-sentinel");
+  await resetDb(fixture.db);
+});
 
 it("uses the Vitest default for child configuration without changing the live override", async () => {
   const liveOverride = process.env.TEST_DATABASE_URL;

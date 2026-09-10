@@ -162,6 +162,8 @@ async function setup(id = 99001, fleet = 123, initialize = true) {
             Date: at(observation).toUTCString(),
             Expires: at(observation + 5000).toUTCString(),
             "Cache-Control": "max-age=5",
+            "x-esi-error-limit-remain": "100",
+            "x-esi-error-limit-reset": "60",
           },
         },
       );
@@ -493,6 +495,157 @@ describe("actual source job and ESI parser (synthetic provider only)", () => {
       expect(p.requests.filter((stage) => stage === "roster")).toHaveLength(3);
     },
   );
+  it.each([
+    ["missing Date", { Date: null }, 66000],
+    ["invalid Date", { Date: "bad" }, 66000],
+    ["invalid Expires", { Expires: "bad" }, 66000],
+    ["missing timing", { Date: null, Expires: null, "Cache-Control": null }, 66000],
+    [
+      "stale Date",
+      { Date: at(-5000).toUTCString(), Expires: at(0).toUTCString() },
+      11000,
+    ],
+    ["unsupported cache", { "Cache-Control": "max-age=5, unsupported=yes" }, 66000],
+    ["long Retry-After", { Date: null, "Retry-After": "86401" }, 86407000],
+    [
+      "long retry date",
+      { Date: null, "Retry-After": at(86407000).toUTCString() },
+      86407000,
+    ],
+    [
+      "long reset",
+      { Date: null, "x-esi-error-limit-remain": "0", "x-esi-error-limit-reset": "86401" },
+      86407000,
+    ],
+  ] as const)(
+    "rejected roster with absent boss (%s) pauses and recovers the same activation",
+    async (_label, headers, next) => {
+      const p = await setup();
+      p.shortToken(172800000);
+      const run = () =>
+        runFleetSourceJob(p.deps, { sourceId: p.sourceId, generation: 1 });
+      await run();
+      expect((await ctx.db.select().from(fleetSourceIntent))[0]).toMatchObject({
+        state: "active",
+        activatedAt: at(1000),
+      });
+      p.setNow(6000);
+      p.setObservation(6000);
+      p.rosterIds([p.alt.id]);
+      p.rosterHeaders(headers);
+      await run();
+      expect((await ctx.db.select().from(fleetSourceIntent))[0]).toMatchObject({
+        id: p.sourceId,
+        state: "paused",
+        generation: 1,
+        activatedAt: at(1000),
+        terminalReason: null,
+        latestOutcome: "untrustworthy_evidence",
+        nextFetchAt: at(next),
+      });
+      expect((await ctx.db.select().from(fleetSourceAuthority))[0]).toMatchObject({
+        sourceId: null,
+        linkedCharacters: [],
+        expiresAt: null,
+      });
+      const calls = p.requests.length;
+      p.setNow(next - 1);
+      await run();
+      expect(p.requests).toHaveLength(calls);
+      p.setNow(next);
+      p.setObservation(next);
+      p.rosterIds([p.boss.id, p.alt.id]);
+      p.rosterHeaders({});
+      await run();
+      expect((await ctx.db.select().from(fleetSourceIntent))[0]).toMatchObject({
+        id: p.sourceId,
+        state: "active",
+        generation: 1,
+        activatedAt: at(1000),
+        terminalReason: null,
+      });
+      expect((await ctx.db.select().from(fleetSourceAuthority))[0]).toMatchObject({
+        sourceId: p.sourceId,
+        sourceGeneration: 1,
+        expiresAt: at(next + 10000),
+      });
+      expect(p.requests.filter((stage) => stage === "roster")).toHaveLength(3);
+    },
+  );
+  it.each([
+    [15999, "ended"],
+    [16000, "paused"],
+  ] as const)(
+    "absent boss verdict uses freshness after final row-lock wait at %s (%s)",
+    async (completedAt, state) => {
+      const p = await setup();
+      const run = () =>
+        runFleetSourceJob(p.deps, { sourceId: p.sourceId, generation: 1 });
+      await run();
+      expect((await ctx.db.select().from(fleetSourceIntent))[0]).toMatchObject({
+        state: "active",
+        generation: 1,
+        activatedAt: at(1000),
+      });
+      p.setNow(6000);
+      p.setObservation(6000);
+      p.rosterIds([p.alt.id]);
+      const holder = await ctx.pool.connect();
+      let pid = 0;
+      p.hold(async () => {
+        await holder.query("begin");
+        pid = (await holder.query<{ pid: number }>("select pg_backend_pid() as pid"))
+          .rows[0].pid;
+        await holder.query(
+          "select id from fleet_source_intent where id = $1 for update",
+          [p.sourceId],
+        );
+      });
+      const pending = run();
+      void pending.catch(() => {}); // Observe immediately; await the original in cleanup.
+      try {
+        for (let i = 0; !pid && i < 100; i++) await new Promise((r) => setTimeout(r, 10));
+        expect(pid).not.toBe(0);
+        expect(await waitUntilBlockedBy(ctx.pool, pid)).toBe(true);
+        expect(p.requests.filter((stage) => stage === "roster")).toHaveLength(2);
+        p.setNow(completedAt);
+      } finally {
+        try {
+          await holder.query("rollback");
+        } finally {
+          holder.release();
+          await pending;
+        }
+      }
+      expect((await ctx.db.select().from(fleetSourceIntent))[0]).toMatchObject({
+        state,
+        activatedAt: at(1000),
+        generation: state === "paused" ? 1 : 2,
+        terminalReason: state === "paused" ? null : "boss_lost",
+      });
+      expect((await ctx.db.select().from(fleetSourceAuthority))[0]).toMatchObject({
+        sourceId: null,
+        linkedCharacters: [],
+        expiresAt: null,
+      });
+      if (state === "ended") return;
+      p.hold(async () => {});
+      p.setNow(21000);
+      p.setObservation(21000);
+      p.rosterIds([p.boss.id, p.alt.id]);
+      await run();
+      expect((await ctx.db.select().from(fleetSourceIntent))[0]).toMatchObject({
+        state: "active",
+        generation: 1,
+        activatedAt: at(1000),
+        terminalReason: null,
+      });
+      expect((await ctx.db.select().from(fleetSourceAuthority))[0]).toMatchObject({
+        sourceId: p.sourceId,
+        expiresAt: at(31000),
+      });
+    },
+  );
   it("missing membership Date automatically recovers after the independent discovery cache bound", async () => {
     const p = await setup();
     const tick = async () => {
@@ -584,6 +737,120 @@ describe("actual source job and ESI parser (synthetic provider only)", () => {
       p.setNow(66000);
       await runFleetSourceJob(p.deps, { sourceId: p.sourceId, generation: 1 });
       expect(p.requests).toHaveLength(calls);
+    },
+  );
+  it.each(["absent", "network"])(
+    "FIRST %s budget failure shares pacing and one held probe across activated sources",
+    async (failure) => {
+      const a = await setup();
+      const b = await setup(99003, 124, false);
+      for (const p of [a, b]) {
+        await runFleetSourceJob(p.deps, { sourceId: p.sourceId, generation: 1 });
+        p.setNow(6000);
+        p.setObservation(6000);
+      }
+      const esi = createEsiClient();
+      let failing = true;
+      if (failure === "absent")
+        a.rosterHeaders({
+          "x-esi-error-limit-remain": null,
+          "x-esi-error-limit-reset": null,
+        });
+      const run = (p: typeof a) =>
+        runFleetSourceJob(
+          {
+            ...p.deps,
+            esi,
+            fetchImpl: async (url, init) => {
+              const response = await p.deps.fetchImpl(url, init);
+              if (p === a && failing && failure === "network")
+                throw new Error("synthetic transport failure");
+              return response;
+            },
+          },
+          { sourceId: p.sourceId, generation: 1 },
+        );
+      const sources = () =>
+        ctx.db
+          .select()
+          .from(fleetSourceIntent)
+          .orderBy(fleetSourceIntent.bossCharacterId);
+      const calls = () => a.requests.length + b.requests.length;
+      expect((await sources()).map((s) => s.state)).toEqual(["active", "active"]);
+      const before = calls();
+      await run(a);
+      await run(b);
+      expect(calls()).toBe(before + 1);
+      expect(esi.getFleetRetryAt(at(6000).getTime())).toBe(at(66000).getTime());
+      expect(
+        (await sources()).map((s) => ({
+          state: s.state,
+          generation: s.generation,
+          activatedAt: s.activatedAt,
+          nextFetchAt: s.nextFetchAt,
+        })),
+      ).toEqual(
+        [a, b].map(() => ({
+          state: "paused",
+          generation: 1,
+          activatedAt: at(1000),
+          nextFetchAt: at(66000),
+        })),
+      );
+      expect(
+        (await ctx.db.select().from(fleetSourceAuthority)).map((s) => s.linkedCharacters),
+      ).toEqual([[], []]);
+      for (const p of [a, b]) {
+        p.setNow(65999);
+        await run(p);
+        p.setNow(66000);
+        p.setObservation(66000);
+      }
+      expect(calls()).toBe(before + 1);
+      failing = false;
+      a.rosterHeaders({});
+      let release!: () => void;
+      let reached!: () => void;
+      const held = new Promise<void>((r) => {
+        release = r;
+      });
+      const arrived = new Promise<void>((r) => {
+        reached = r;
+      });
+      a.membershipHold(async () => {
+        reached();
+        await held;
+      });
+      const pending = run(a);
+      void pending.catch(() => {}); // Retain the original job through settlement.
+      try {
+        await Promise.race([arrived, pending]);
+        expect(calls()).toBe(before + 2);
+        await run(b);
+        expect(calls()).toBe(before + 2);
+        expect((await sources())[1]).toMatchObject({
+          state: "paused",
+          nextFetchAt: at(126000),
+        });
+      } finally {
+        release();
+        await pending;
+      }
+      expect((await sources())[0]).toMatchObject({
+        state: "active",
+        generation: 1,
+        activatedAt: at(1000),
+      });
+      expect(esi.getFleetRetryAt(at(66000).getTime())).toBeNull();
+      b.setNow(126000);
+      b.setObservation(126000);
+      await run(b);
+      expect((await sources())[1]).toMatchObject({
+        state: "active",
+        generation: 1,
+        activatedAt: at(1000),
+      });
+      expect(calls()).toBe(before + 5);
     },
   );
   it("shared unknown-budget source probes coalesce before awaited I/O without unrelated callers", async () => {
