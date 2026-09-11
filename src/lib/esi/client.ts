@@ -1,7 +1,11 @@
 import { z } from "zod";
 import { isDryRun, logSuppressedWrite } from "@/lib/sync-mode";
 import { chunk } from "@/core/chunk";
-import { FLEET_CONSERVATIVE_PROBE_MS } from "@/core/fleet-freshness";
+import {
+  FLEET_CONSERVATIVE_PROBE_MS,
+  fleetHeaderSeconds,
+  fleetHttpDate,
+} from "@/core/fleet-freshness";
 import { classifyEsiError, type EsiErrorClass } from "@/core/errors";
 
 const ESI_BASE = "https://esi.evetech.net/latest";
@@ -75,6 +79,44 @@ function httpDate(value: string | null): number | null {
   if (value === null || value.length !== 29) return null;
   const time = Date.parse(value);
   return Number.isFinite(time) && new Date(time).toUTCString() === value ? time : null;
+}
+
+// Modern budgets count request tokens, not legacy IP-wide errors. Keep a reserve
+// for the most expensive documented response (4xx: 5 tokens), independent of
+// errorBudgetFloor. CCP's floating window gives no earliest refill timestamp.
+const FLEET_TOKEN_FLOOR = 5;
+function fleetTokenCount(value: string | null): number | null {
+  return value !== null && /^(?:0|[1-9]\d{0,7})$/.test(value) ? Number(value) : null;
+}
+function fleetTokenBudget(headers: Headers, status: number) {
+  const group = headers.get("x-ratelimit-group");
+  const limit = headers.get("x-ratelimit-limit");
+  const remaining = headers.get("x-ratelimit-remaining");
+  const used = headers.get("x-ratelimit-used");
+  if ([group, limit, remaining, used].every((value) => value === null)) return null;
+  const match = /^([1-9]\d{0,7})\/([1-9]\d{0,7})([mh])$/.exec(limit ?? "");
+  const capacity = match ? Number(match[1]) : null;
+  const seconds = match ? Number(match[2]) * (match[3] === "m" ? 60 : 3600) : null;
+  // Same bounded seconds domain as source pacing metadata; reject huge windows,
+  // never cap a supported window down to the legacy minute or generic day limit.
+  const windowMs = seconds !== null && seconds <= 99_999_999 ? seconds * 1000 : null;
+  const tokens = fleetTokenCount(remaining);
+  const cost = fleetTokenCount(used);
+  const expectedCost =
+    status < 300 ? 2 : status < 400 ? 1 : status === 429 || status >= 500 ? 0 : 5;
+  return {
+    group,
+    known:
+      group === "fleet" &&
+      capacity !== null &&
+      windowMs !== null &&
+      tokens !== null &&
+      cost === expectedCost &&
+      tokens + cost <= capacity,
+    // Even partial/contradictory evidence cannot erase an independently usable
+    // low-budget wait. Waiting a full window is conservative, not a reset claim.
+    waitMs: tokens === null || tokens <= FLEET_TOKEN_FLOOR ? windowMs : null,
+  };
 }
 
 /** Safe timing only, shared by the explicit check's SSO and ESI fetch boundary. */
@@ -336,7 +378,9 @@ export function createEsiClient(opts: EsiClientOptions = {}) {
   // Sources retain uncapped lower bounds independently of generic callers'
   // capped waits. Unknown headers permit a coalesced 60s probe, not an embargo
   // that only an unrelated caller can release. Healthy headers don't erase an
-  // already observed larger deadline.
+  // already observed larger deadline. Modern buckets are per group/application/
+  // character; this deliberately conservative GLOBAL Fleet gate may overthrottle
+  // another bucket, but a healthy bucket must never erase a held lower bound.
   let fleetResetAt = 0;
   let fleetBudgetKnown = true;
   let fleetProbeAt = 0;
@@ -418,12 +462,33 @@ export function createEsiClient(opts: EsiClientOptions = {}) {
     const resetHeader = res.headers.get("x-esi-error-limit-reset");
     const parsedRemain = headerSeconds(remainHeader);
     const parsedReset = headerSeconds(resetHeader);
-    if (fleetRequest || remainHeader !== null || resetHeader !== null) {
-      fleetBudgetKnown = parsedRemain !== null && parsedReset !== null;
-      if (!fleetBudgetKnown)
-        fleetProbeAt = Math.max(fleetProbeAt, clock() + FLEET_CONSERVATIVE_PROBE_MS);
+    const modern = fleetTokenBudget(res.headers, res.status);
+    const legacyPresent = remainHeader !== null || resetHeader !== null;
+    if (fleetRequest || legacyPresent || modern?.group === "fleet") {
+      // The two header families are mutually exclusive. Never hide partial or
+      // malformed modern evidence by falling back to apparently healthy legacy.
+      fleetBudgetKnown = modern
+        ? modern.known && !legacyPresent
+        : parsedRemain !== null && parsedReset !== null;
+      if (modern && modern.waitMs !== null)
+        fleetResetAt = Math.max(fleetResetAt, clock() + modern.waitMs);
       if (parsedReset !== null && (parsedRemain === null || parsedRemain <= floor))
         fleetResetAt = Math.max(fleetResetAt, clock() + parsedReset * 1000);
+      if (fleetRequest || modern?.group === "fleet") {
+        const retry = res.headers.get("retry-after");
+        if (retry !== null) {
+          const seconds = fleetHeaderSeconds(retry);
+          const date = fleetHttpDate(retry);
+          if (seconds === null && date === null) fleetBudgetKnown = false;
+          else
+            fleetResetAt = Math.max(
+              fleetResetAt,
+              seconds !== null ? clock() + seconds * 1000 : date!,
+            );
+        }
+      }
+      if (!fleetBudgetKnown)
+        fleetProbeAt = Math.max(fleetProbeAt, clock() + FLEET_CONSERVATIVE_PROBE_MS);
     }
     if (parsedRemain !== null) remain = parsedRemain;
     if (parsedReset !== null)
