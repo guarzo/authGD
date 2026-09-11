@@ -1300,7 +1300,7 @@ Linux verification does not establish these Windows or live-provider outcomes.
 `npm run test:e2e:fleet` explicitly discovers both fleet-access and fleet-joint
 specs, one worker and zero retries, after the ordinary profile. It requires an
 explicit absolute `E2E_WINGMAN_ROOT` at immutable Task9b revision
-`9355c6adc26ab631c7e6697e7ef90746db8ae935` and an `E2E_WINGMAN_PYTHON` pointing into
+`911ae540db00d822e01c80b6c5236c1fffe719c3` and an `E2E_WINGMAN_PYTHON` pointing into
 that checkout's locked dev environment. The same variables are required by the
 Python transport unit probes; a missing checkout is an error, not skipped proof.
 CI pins `guarzo/FlyGD-Wingman`, not floating main. Each replacement pin requires
@@ -1330,6 +1330,27 @@ the raw Next GET-framing regression, while browser approvals/cookies, signing an
 recovery share one logical HTTPS origin. TLS, Python and worker owners are closed
 before owned certificates/install roots are removed; the supplied DB/container is
 never destroyed. Do not capture HAR, traces, cookies, keys or roster payloads.
+
+The Fleet Bar adapter keeps the real factory, page-identity admission and
+presentation lifecycle. Its native window double uses boolean visibility: a
+height fit stages geometry while hidden, and readiness applies it before reveal.
+The readiness boolean reports native horizontal-resize capability, not reveal
+success; Linux legitimately returns `false`. The identity probe checks every
+page callback against missing, invalid, replaced and retired identities, as well
+as height fitting, position persistence, page Reset and Hide. With no completed
+native resize gesture, settlement returns `ignored` without geometry/settings
+changes; settlement returns `resizing` while an admitted header operation owns
+geometry.
+The position method's optional `begin`/`end` phases bracket pywebview's movement:
+begin does not move, activate or write; only the exact current drag ID may end.
+Position-only completion returns `None`, not a successful width-save result, so
+it cannot clear a prior width warning. Reset/Hide/replacement retire older drag
+owners. Legacy position-only calls remain covered. Linux activation/deactivation
+retain the honest unavailable result. Actual completed native resize persistence,
+including pending width plus a later header position, native-generation fencing,
+focus, resize chrome, DPI and monitor behavior need Wingman's native-seam tests
+and the separate Windows acceptance pass. Do not change a platform flag or
+replace production admission to manufacture that evidence.
 
 The two installations are Linux synthetic roots using the existing key-protection
 injection seam, **not installed Windows applications and not DPAPI or live EVE

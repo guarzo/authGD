@@ -93,7 +93,7 @@ async function probePython(
 
 /** HTTPS is the logical identity, not a relaxed production client origin. */
 describe("joint fleet fixture boundary", () => {
-  it("hydrates only the factory-created Fleet page and refuses missing, replaced and retired identities", async () => {
+  it("stages and reveals the factory-created Fleet page, checks Linux fallback, and refuses every stale page callback", async () => {
     let removedRoot = "";
     await withFleetResources(async (own) => {
       const trust = own(createFleetTrust(), (trust) => trust.close());
@@ -101,6 +101,20 @@ describe("joint fleet fixture boundary", () => {
       expect(await probePython(trust, "page-identity")).toEqual({
         identity: "verified",
         denials: 0,
+        native_resize: false,
+        native_activation: false,
+        callbacks: [
+          "fleet_bar_snapshot",
+          "fleet_bar_ready",
+          "fit_fleet_bar_height",
+          "save_fleet_bar_pos",
+          "settle_fleet_bar_resize",
+          "reset_fleet_bar_page_width",
+          "hide_fleet_bar",
+          "activate_fleet_bar",
+          "deactivate_fleet_bar",
+        ],
+        position_phases: ["begin", "end"],
       });
     });
     expect(existsSync(removedRoot)).toBe(false);
