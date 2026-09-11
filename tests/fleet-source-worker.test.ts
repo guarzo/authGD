@@ -39,6 +39,14 @@ import {
 
 const NOW = new Date("2026-09-07T12:00:00.000Z");
 const at = (ms: number) => new Date(NOW.getTime() + ms);
+const modernFleetHeaders = {
+  "x-esi-error-limit-remain": null,
+  "x-esi-error-limit-reset": null,
+  "x-ratelimit-group": "fleet",
+  "x-ratelimit-limit": "1800/15m",
+  "x-ratelimit-remaining": "1797",
+  "x-ratelimit-used": "2",
+};
 let ctx: Awaited<ReturnType<typeof setupTestDb>>;
 const keys = await generateKeyPair("RS256");
 const getKey = createLocalJWKSet({
@@ -256,6 +264,281 @@ async function setup(id = 99001, fleet = 123, initialize = true) {
   };
 }
 describe("actual source job and ESI parser (synthetic provider only)", () => {
+  it("modern-only Fleet responses activate through the real client within the original 60-second intent", async () => {
+    const p = await setup();
+    const headers = {
+      ...modernFleetHeaders,
+      "Cache-Control": "private",
+      Date: at(1000).toUTCString(),
+      Expires: at(61000).toUTCString(),
+      "Last-Modified": at(1000).toUTCString(),
+      ETag: '"synthetic-modern-fleet"',
+      Age: null,
+    };
+    p.membershipHeaders(headers);
+    p.rosterHeaders(headers);
+    const esi = createEsiClient({ now: () => p.deps.now().getTime() });
+    await runFleetSourceJob({ ...p.deps, esi }, { sourceId: p.sourceId, generation: 1 });
+    expect.soft((await ctx.db.select().from(fleetSourceIntent))[0]).toMatchObject({
+      state: "active",
+      generation: 1,
+      fleetId: 123,
+      activatedAt: at(1000),
+      intentExpiresAt: at(60000),
+      latestOutcome: "verified",
+      nextFetchAt: at(61000),
+    });
+    expect.soft(p.requests).toEqual(["token", "membership", "roster"]);
+    expect.soft(esi.getFleetRetryAt()).toBeNull();
+    expect.soft((await ctx.db.select().from(fleetSourceAuthority))[0]).toMatchObject({
+      sourceId: p.sourceId,
+      sourceGeneration: 1,
+      verifiedAt: at(1000),
+      expiresAt: at(11000),
+      linkedCharacters: [
+        { characterId: p.boss.id, linkEpoch: p.boss.fleetLinkEpoch },
+        { characterId: p.alt.id, linkEpoch: p.alt.fleetLinkEpoch },
+      ],
+    });
+    const [current] = await ctx.db
+      .select()
+      .from(character)
+      .where(eq(character.id, p.boss.id));
+    expect(current.refreshTokenEnc).not.toBe(p.boss.refreshTokenEnc);
+    expect(current.tokenStatus).toBe("valid");
+    expect(current.ownerHash).toBe(p.boss.ownerHash);
+    expect(current.fleetLinkEpoch).toBe(p.boss.fleetLinkEpoch);
+    expect(p.deps.memory.tokens.get(p.boss.id)).toMatchObject({
+      tokenEnc: current.refreshTokenEnc,
+      ownerHash: current.ownerHash,
+      expiresAt: at(3600000),
+    });
+  });
+  it.each([
+    ["low", { "x-ratelimit-remaining": "5" }, 901000],
+    ["exhausted", { "x-ratelimit-remaining": "0", "Retry-After": "120" }, 901000],
+    ["long retry", { "Retry-After": "86401" }, 86402000],
+    [
+      "ambiguous",
+      { "x-esi-error-limit-remain": "100", "x-esi-error-limit-reset": "60" },
+      61000,
+    ],
+    ["malformed", { "x-ratelimit-used": "bad" }, 61000],
+  ] as const)(
+    "modern %s membership preserves pacing and cannot resurrect an expired first intent",
+    async (_label, patch, next) => {
+      const p = await setup();
+      p.membershipHeaders({
+        ...modernFleetHeaders,
+        "Cache-Control": "private",
+        ...patch,
+      });
+      const esi = createEsiClient({ now: () => p.deps.now().getTime() });
+      const run = () =>
+        runFleetSourceJob({ ...p.deps, esi }, { sourceId: p.sourceId, generation: 1 });
+      await run();
+      expect((await ctx.db.select().from(fleetSourceIntent))[0]).toMatchObject({
+        state: "paused",
+        activatedAt: null,
+        nextFetchAt: at(next),
+        intentExpiresAt: at(60000),
+      });
+      expect(p.requests).toEqual(["token", "membership"]);
+      expect(
+        (await ctx.db.select().from(fleetSourceAuthority)).every(
+          (a) => a.sourceId === null,
+        ),
+      ).toBe(true);
+      p.setNow(59999);
+      await run();
+      expect(p.requests).toEqual(["token", "membership"]);
+      p.setNow(60000);
+      await cleanupFleetSources(ctx.db, p.deps.now);
+      p.membershipHeaders(modernFleetHeaders);
+      p.setNow(next);
+      await run();
+      expect((await ctx.db.select().from(fleetSourceIntent))[0]).toMatchObject({
+        state: "ended",
+        activatedAt: null,
+        generation: 2,
+        terminalReason: "expired",
+      });
+      expect(p.requests).toEqual(["token", "membership"]);
+    },
+  );
+  it.each([
+    ["missing used", { "x-ratelimit-used": null }, 66000],
+    ["unknown remaining", { "x-ratelimit-remaining": "bad" }, 906000],
+    [
+      "low long window",
+      {
+        "x-ratelimit-remaining": "0",
+        "x-ratelimit-limit": "1800/25h",
+        "x-ratelimit-used": "bad",
+      },
+      90006000,
+    ],
+  ] as const)(
+    "modern %s roster clears authority and recovers the same activation only after its bound",
+    async (_label, patch, next) => {
+      const p = await setup();
+      p.shortToken(172800000);
+      p.membershipHeaders(modernFleetHeaders);
+      p.rosterHeaders(modernFleetHeaders);
+      const esi = createEsiClient({ now: () => p.deps.now().getTime() });
+      const run = () =>
+        runFleetSourceJob({ ...p.deps, esi }, { sourceId: p.sourceId, generation: 1 });
+      await run();
+      expect((await ctx.db.select().from(fleetSourceIntent))[0].state).toBe("active");
+      p.setNow(6000);
+      p.setObservation(6000);
+      p.rosterHeaders({ ...modernFleetHeaders, ...patch });
+      p.rosterIds([p.alt.id]); // Invalid budget must not become terminal absent-boss proof.
+      await run();
+      expect((await ctx.db.select().from(fleetSourceIntent))[0]).toMatchObject({
+        state: "paused",
+        activatedAt: at(1000),
+        generation: 1,
+        terminalReason: null,
+        nextFetchAt: at(next),
+      });
+      expect((await ctx.db.select().from(fleetSourceAuthority))[0]).toMatchObject({
+        sourceId: null,
+        linkedCharacters: [],
+        expiresAt: null,
+      });
+      const calls = p.requests.length;
+      p.setNow(next - 1);
+      await run();
+      expect(p.requests).toHaveLength(calls);
+      p.setNow(next);
+      p.setObservation(next);
+      p.rosterHeaders(modernFleetHeaders);
+      p.rosterIds([p.boss.id, p.alt.id]);
+      await run();
+      expect((await ctx.db.select().from(fleetSourceIntent))[0]).toMatchObject({
+        state: "active",
+        activatedAt: at(1000),
+        generation: 1,
+      });
+      expect((await ctx.db.select().from(fleetSourceAuthority))[0]).toMatchObject({
+        sourceId: p.sourceId,
+        verifiedAt: at(next),
+        expiresAt: at(next + 10000),
+      });
+      expect(p.requests.filter((r) => r === "roster")).toHaveLength(3);
+    },
+  );
+  it.each([
+    ["membership", 404, "not_in_fleet"],
+    ["membership", 401, "fleet_read_invalid"],
+    ["roster", 401, "fleet_read_invalid"],
+    ["roster", 403, "boss_lost"],
+    ["membership", 403, null],
+    ["roster", 404, null],
+    ["roster", 429, null],
+    ["roster", 503, null],
+  ] as const)(
+    "modern %s HTTP %s retains the stage-specific refusal (%s) and uncapped wait",
+    async (stage, status, terminal) => {
+      const p = await setup();
+      p.membershipHeaders(modernFleetHeaders);
+      p.rosterHeaders(modernFleetHeaders);
+      p.httpStatus(stage, status);
+      const headers = {
+        ...modernFleetHeaders,
+        "x-ratelimit-remaining": "1794",
+        "x-ratelimit-used": status === 429 || status >= 500 ? "0" : "5",
+        "Retry-After": "86401",
+      };
+      if (stage === "membership") p.membershipHeaders(headers);
+      else p.rosterHeaders(headers);
+      const esi = createEsiClient({ now: () => p.deps.now().getTime() });
+      await runFleetSourceJob(
+        { ...p.deps, esi },
+        { sourceId: p.sourceId, generation: 1 },
+      );
+      expect(p.requests).toEqual(
+        stage === "membership"
+          ? ["token", "membership"]
+          : ["token", "membership", "roster"],
+      );
+      expect((await ctx.db.select().from(fleetSourceIntent))[0]).toMatchObject({
+        state: terminal ? "ended" : "paused",
+        terminalReason: terminal,
+        activatedAt: null,
+        ...(terminal ? {} : { nextFetchAt: at(86402000) }),
+      });
+      expect(esi.getFleetRetryAt()).toBe(at(86402000).getTime());
+      expect((await ctx.db.select().from(schema.fleetDevice))[0].revokedAt).toBeNull();
+      expect(
+        (await ctx.db.select().from(character).where(eq(character.id, p.boss.id)))[0]
+          .tokenStatus,
+      ).toBe("valid");
+      expect(
+        (await ctx.db.select().from(fleetSourceAuthority)).every(
+          (a) => a.sourceId === null,
+        ),
+      ).toBe(true);
+    },
+  );
+  it.each(["credential", "claim", "JWT", "Stop", "mode"])(
+    "modern success cannot activate after the %s fence is lost during roster I/O",
+    async (loss) => {
+      const p = await setup();
+      p.membershipHeaders(modernFleetHeaders);
+      p.rosterHeaders(modernFleetHeaders);
+      if (loss === "JWT") p.shortToken();
+      p.hold(async () => {
+        if (loss === "credential")
+          await ctx.db
+            .update(character)
+            .set({
+              refreshTokenEnc: encryptToken(
+                "newer-synthetic-credential",
+                testConfig().tokenEncryptionKey,
+              ),
+            })
+            .where(eq(character.id, p.boss.id));
+        else if (loss === "claim") p.setNow(31000);
+        else if (loss === "JWT") p.setNow(2000);
+        else if (loss === "mode") {
+          const [gate] = await ctx.db.select().from(schema.fleetSharingGate);
+          await transitionFleetSharingMode(ctx.db, {
+            enabled: false,
+            expectedRevision: gate.revision,
+            now: at(1500),
+          });
+        } else
+          expect(
+            (
+              await controlFleetSource(ctx.db, {
+                sessionId: p.sessionId,
+                revision: 3,
+                now: at(1500),
+                command: {
+                  operation: "stop",
+                  sourceId: p.sourceId,
+                  expectedGeneration: 1,
+                },
+              })
+            ).ok,
+          ).toBe(true);
+      });
+      await runFleetSourceJob(p.deps, { sourceId: p.sourceId, generation: 1 });
+      expect(p.requests).toEqual(["token", "membership", "roster"]);
+      expect((await ctx.db.select().from(fleetSourceIntent))[0]).toMatchObject({
+        activatedAt: null,
+        state: loss === "Stop" || loss === "mode" ? "ended" : "paused",
+      });
+      expect(
+        (await ctx.db.select().from(fleetSourceAuthority)).every(
+          (a) => a.sourceId === null && a.expiresAt === null,
+        ),
+      ).toBe(true);
+      expect((await ctx.db.select().from(schema.fleetDevice))[0].revokedAt).toBeNull();
+    },
+  );
   it.each([false, true])(
     "eventual actual source activation cannot hide a recovered queue fetch error (fault=%s)",
     async (fault) => {

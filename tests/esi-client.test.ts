@@ -46,6 +46,285 @@ describe("safe retry/cache boundaries", () => {
   });
 });
 
+describe("documented Fleet token-bucket headers", () => {
+  const modern = {
+    "x-ratelimit-group": "fleet",
+    "x-ratelimit-limit": "1800/15m",
+    "x-ratelimit-remaining": "1797",
+    "x-ratelimit-used": "2",
+  };
+  it.each([
+    ["1800/15m", "5", 900000],
+    ["1800/15m", "0", 900000],
+    ["1800/25h", "1", 90000000],
+  ])(
+    "retains low token budget %s remaining=%s through its floating window",
+    async (limit, remaining, next) => {
+      let now = 0;
+      let calls = 0;
+      const fetchImpl: typeof fetch = async () => {
+        calls++;
+        return Response.json([], {
+          headers:
+            calls === 1
+              ? {
+                  ...modern,
+                  "x-ratelimit-limit": limit,
+                  "x-ratelimit-remaining": remaining,
+                }
+              : modern,
+        });
+      };
+      const esi = createEsiClient({ fetchImpl, now: () => now, errorBudgetFloor: 0 });
+      const options = { fetchImpl, now: () => now };
+      await esi.getFleetMembers(123, "source", options);
+      expect(esi.getFleetRetryAt()).toBe(next);
+      now = Number(next) - 1;
+      await expect(
+        esi.getFleetMembers(124, "other-source", options),
+      ).rejects.toMatchObject({ status: 0, kind: "transient" });
+      expect(calls).toBe(1);
+      now = Number(next);
+      await expect(
+        esi.getFleetMembers(124, "other-source", options),
+      ).resolves.toMatchObject({ value: [] });
+      expect(calls).toBe(2);
+      expect(esi.getFleetRetryAt()).toBeNull();
+    },
+  );
+  it.each<Record<string, string | null>>([
+    { "x-ratelimit-group": null },
+    { "x-ratelimit-limit": null },
+    { "x-ratelimit-remaining": null },
+    { "x-ratelimit-used": null },
+    { "x-ratelimit-group": "other" },
+    { "x-ratelimit-group": "fleet, fleet" },
+    { "x-ratelimit-limit": "01800/15m" },
+    { "x-ratelimit-limit": "1800/015m" },
+    { "x-ratelimit-limit": "1800/0m" },
+    { "x-ratelimit-limit": "0/15m" },
+    { "x-ratelimit-limit": "1800/900s" },
+    { "x-ratelimit-limit": "1800/15M" },
+    { "x-ratelimit-limit": "1800/99999999h" },
+    { "x-ratelimit-limit": "9".repeat(10000) },
+    { "x-ratelimit-remaining": "-1" },
+    { "x-ratelimit-remaining": "01" },
+    { "x-ratelimit-remaining": "1.5" },
+    { "x-ratelimit-remaining": "1e3" },
+    { "x-ratelimit-remaining": "1797, 1797" },
+    { "x-ratelimit-remaining": "1801" },
+    { "x-ratelimit-remaining": "1799" },
+    { "x-ratelimit-remaining": "9".repeat(10000) },
+    { "x-ratelimit-used": "3" },
+    { "x-ratelimit-used": "1801" },
+    { "x-esi-error-limit-remain": "100", "x-esi-error-limit-reset": "60" },
+    { "x-esi-error-limit-remain": "bad" },
+    { "retry-after": "1e3" },
+  ])(
+    "fails closed on incomplete, ambiguous or malformed modern evidence %#",
+    async (patch) => {
+      let now = 0;
+      let calls = 0;
+      const invalid = new Headers(modern);
+      for (const [name, value] of Object.entries(patch)) {
+        if (value === null) invalid.delete(name);
+        else invalid.set(name, value);
+      }
+      const fetchImpl: typeof fetch = async () => {
+        calls++;
+        return Response.json([], { headers: calls === 1 ? invalid : modern });
+      };
+      const esi = createEsiClient({ fetchImpl, now: () => now });
+      const options = { fetchImpl, now: () => now };
+      await expect(esi.getFleetMembers(123, "source", options)).rejects.toMatchObject({
+        status: 0,
+        kind: "transient",
+      });
+      const next = esi.getFleetRetryAt();
+      expect(next).toBeGreaterThanOrEqual(60000);
+      now = next! - 1;
+      await expect(esi.getFleetMembers(124, "other", options)).rejects.toThrow();
+      expect(calls).toBe(1);
+      now = next!;
+      await expect(esi.getFleetMembers(124, "other", options)).resolves.toMatchObject({
+        value: [],
+      });
+      expect(esi.getFleetRetryAt()).toBeNull();
+    },
+  );
+  it.each([
+    [401, "5", "permanent"],
+    [403, "5", "permanent"],
+    [404, "5", "permanent"],
+    [429, "0", "transient"],
+    [503, "0", "transient"],
+  ] as const)(
+    "preserves real modern HTTP %s even with invalid budget evidence",
+    async (status, used, kind) => {
+      for (const invalid of [false, true]) {
+        const fetchImpl: typeof fetch = async () =>
+          Response.json(
+            { error: "synthetic refusal" },
+            {
+              status,
+              headers: {
+                ...modern,
+                "x-ratelimit-used": used,
+                "x-ratelimit-remaining": invalid ? "bad" : "1794",
+                "retry-after": "86401",
+              },
+            },
+          );
+        const esi = createEsiClient({ fetchImpl, now: () => 0 });
+        await expect(
+          esi.getFleetMembers(123, "source", { fetchImpl, now: () => 0 }),
+        ).rejects.toMatchObject({ status, kind });
+        expect(esi.getFleetRetryAt()).toBe(86401000);
+      }
+    },
+  );
+  it.each([
+    ["0", "120", 900000],
+    ["0", "1800", 1800000],
+    ["1797", "86401", 86401000],
+    ["1797", "Fri, 02 Jan 1970 00:00:01 GMT", 86401000],
+  ])(
+    "honors Retry-After %s/%s and never erases held bounds with another healthy bucket",
+    async (remaining, retry, next) => {
+      let low = true;
+      let calls = 0;
+      const fetchImpl: typeof fetch = async () => {
+        calls++;
+        return Response.json([], {
+          headers: low
+            ? { ...modern, "x-ratelimit-remaining": remaining, "retry-after": retry }
+            : modern,
+        });
+      };
+      const esi = createEsiClient({ fetchImpl, now: () => 0 });
+      await esi.getFleetMembers(123, "source", { fetchImpl, now: () => 0 });
+      expect(esi.getFleetRetryAt()).toBe(next);
+      low = false;
+      await esi.getFleetMembers(124, "generic-other-bucket");
+      expect(esi.getFleetRetryAt()).toBe(next);
+      await expect(
+        esi.getFleetMembers(124, "source", { fetchImpl, now: () => 0 }),
+      ).rejects.toThrow();
+      expect(calls).toBe(2);
+    },
+  );
+  it("retains an independently valid low window when other modern fields or legacy headers contradict it", async () => {
+    const patches: Record<string, string | null>[] = [
+      { "x-ratelimit-used": "bad" },
+      { "x-ratelimit-remaining": null },
+      { "x-esi-error-limit-remain": "100", "x-esi-error-limit-reset": "60" },
+    ];
+    for (const patch of patches) {
+      const headers = new Headers({
+        ...modern,
+        "x-ratelimit-limit": "1800/25h",
+        "x-ratelimit-remaining": "0",
+      });
+      for (const [name, value] of Object.entries(patch)) {
+        if (value === null) headers.delete(name);
+        else headers.set(name, value);
+      }
+      const fetchImpl: typeof fetch = async () => Response.json([], { headers });
+      const esi = createEsiClient({ fetchImpl, now: () => 0 });
+      await expect(
+        esi.getFleetMembers(123, "source", { fetchImpl, now: () => 0 }),
+      ).rejects.toThrow();
+      expect(esi.getFleetRetryAt()).toBe(90000000);
+    }
+  });
+  it("in-flight healthy modern evidence cannot erase either generic or shared legacy pacing", async () => {
+    let release!: (response: Response) => void;
+    const held = new Promise<Response>((resolve) => {
+      release = resolve;
+    });
+    let calls = 0;
+    const sleeps: number[] = [];
+    const fetchImpl: typeof fetch = async () =>
+      ++calls === 1
+        ? held
+        : Response.json([], {
+            headers: {
+              "x-esi-error-limit-remain": "0",
+              "x-esi-error-limit-reset": "86401",
+            },
+          });
+    const esi = createEsiClient({
+      fetchImpl,
+      now: () => 0,
+      sleep: async (ms) => {
+        sleeps.push(ms);
+      },
+    });
+    const pending = esi.getFleetMembers(123, "generic-in-flight");
+    try {
+      await esi.postAffiliation([1]);
+    } finally {
+      release(Response.json([], { headers: modern }));
+      await pending;
+    }
+    expect(esi.getFleetRetryAt()).toBe(86401000);
+    await esi.postAffiliation([2]);
+    expect(sleeps).toEqual([86400000]);
+    expect(esi.getFleetRetryAt()).toBe(86401000);
+  });
+  it("modern Fleet tokens neither overwrite generic legacy error pacing nor throttle unrelated generic calls", async () => {
+    let now = 0;
+    const sleeps: number[] = [];
+    let headers: Record<string, string> = {
+      "x-esi-error-limit-remain": "0",
+      "x-esi-error-limit-reset": "120",
+    };
+    const fetchImpl: typeof fetch = async () => Response.json([], { headers });
+    const esi = createEsiClient({
+      fetchImpl,
+      now: () => now,
+      sleep: async (ms) => {
+        sleeps.push(ms);
+        now += ms;
+      },
+    });
+    await esi.postAffiliation([1]);
+    headers = modern;
+    await esi.getFleetMembers(123, "generic");
+    expect(sleeps).toEqual([120000]);
+    headers = { ...modern, "x-ratelimit-remaining": "0" };
+    await esi.getFleetMembers(123, "source", { fetchImpl, now: () => now });
+    expect(esi.getFleetRetryAt()).toBe(1020000);
+    headers = {
+      "x-ratelimit-group": "other",
+      "x-ratelimit-limit": "150/15m",
+      "x-ratelimit-remaining": "0",
+      "x-ratelimit-used": "2",
+    };
+    await esi.postAffiliation([2]);
+    expect(sleeps).toEqual([120000]);
+    expect(esi.getFleetRetryAt()).toBe(1020000);
+  });
+  it("accepts healthy modern budget evidence without inventing a 60-second outage", async () => {
+    const fetchImpl: typeof fetch = async () =>
+      Response.json([], {
+        headers: {
+          "x-ratelimit-group": "fleet",
+          "x-ratelimit-limit": "1800/15m",
+          "x-ratelimit-remaining": "1798",
+          "x-ratelimit-used": "2",
+          "cache-control": "max-age=0",
+        },
+      });
+    const now = () => 0;
+    const esi = createEsiClient({ fetchImpl, now });
+    await expect(
+      esi.getFleetMembers(123, "synthetic", { fetchImpl, now }),
+    ).resolves.toMatchObject({ value: [] });
+    expect(esi.getFleetRetryAt()).toBeNull();
+  });
+});
+
 describe("source-only unknown error-budget recovery", () => {
   it.each(["absent", "malformed", "long-reset"])(
     "%s budget retains HTTP errors independently of the shared probe",
