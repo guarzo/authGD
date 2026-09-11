@@ -264,7 +264,7 @@ class OwnedFleetWindow(OwnedWindow):
 
     def __init__(self, title, page_url, *, js_api, **options):
         super().__init__()
-        assert title == "Wingman Fleet Bar" and js_api is api
+        assert title == "Fleet Bar" and js_api is api
         fragment = urlsplit(page_url).fragment
         assert fragment.startswith("fleet-page=")
         self.page_id = fragment.removeprefix("fleet-page=")
@@ -272,14 +272,26 @@ class OwnedFleetWindow(OwnedWindow):
             c in "0123456789abcdef" for c in self.page_id
         )
         assert options["hidden"] is True
+        # Api reads visibility, not FakeWindow's cumulative hide counter.
+        self.hidden = options["hidden"]
         self.width, self.height = options["width"], options["height"]
         self.x, self.y = options["x"], options["y"]
+        self.resized = self.moved = 0
         self.alive = True
 
+    def show(self):
+        super().show()
+        self.hidden = False
+
+    def hide(self):
+        self.hidden = True
+
     def resize(self, width, height):
+        self.resized += 1
         self.width, self.height = width, height
 
     def move(self, x, y):
+        self.moved += 1
         self.x, self.y = x, y
 
     def destroy(self):
@@ -303,55 +315,245 @@ fleet_window = create_fleet_window()
 if probe == "page-identity":
     windows = [fleet_window]
 
-    def assert_refused(page_id, *bars):
-        before = [(bar.width, bar.height, bar.x, bar.y, bar.shown) for bar in bars]
-        saved = settings.load(paths.settings_file())
-        assert api.fleet_bar_snapshot(page_id) is None
-        api.fleet_bar_ready(page_id)
-        api.fit_fleet_bar(page_id, 111, 222)
-        api.move_fleet_bar(page_id, 333, 444)
-        api.save_fleet_bar_pos(page_id, 555, 666)
-        after = [(bar.width, bar.height, bar.x, bar.y, bar.shown) for bar in bars]
-        assert after == before, "refused Fleet callbacks changed a window"
-        assert settings.load(paths.settings_file()) == saved
+    callbacks = (
+        (api.fleet_bar_snapshot, {}),
+        (api.fleet_bar_ready, {}),
+        (api.fit_fleet_bar_height, {"height": 222}),
+        (api.save_fleet_bar_pos, {"x": 555, "y": 666}),
+        (api.settle_fleet_bar_resize, {"content_width": 620, "x": 333}),
+        (api.reset_fleet_bar_page_width, {}),
+        (api.hide_fleet_bar, {}),
+        (api.activate_fleet_bar, {}),
+        (api.deactivate_fleet_bar, {}),
+    )
+
+    position_phases = ("begin", "end")
+
+    def observation(*bars, ownership=True):
+        saved_path = paths.settings_file()
+        # A no-op rewrite is still an unwanted write. Include file identity/time,
+        # not only decoded preferences, to catch atomic rewrites of equal values.
+        saved_file = (
+            (saved_path.read_bytes(), saved_path.stat().st_ino, saved_path.stat().st_mtime_ns)
+            if saved_path.exists()
+            else None
+        )
+        return (
+            [
+                (
+                    bar.width, bar.height, bar.x, bar.y, bar.shown, bar.hidden,
+                    bar.alive, bar.resized, bar.moved,
+                )
+                for bar in bars
+            ],
+            # A hidden fit changes only the staged rectangle, not the native
+            # double. Observe staging too or stale hidden callbacks pass silently.
+            api._fleetbar_applied_x,
+            api._fleetbar_applied_y,
+            api._fleetbar_applied_outer_width,
+            api._fleetbar_applied_outer_height,
+            api._fleetbar_ready,
+            api._fleetbar_return_hwnd,
+            json.dumps(api._state.settings, sort_keys=True),
+            settings.load(paths.settings_file()),
+            saved_file,
+            (api._fleetbar_geometry_revision, api._fleetbar_drag) if ownership else None,
+        )
+
+    def assert_refused(page_id, *bars, missing=False, drag_id=0):
+        before = observation(*bars)
+        phase_callbacks = tuple(
+            (api.save_fleet_bar_pos, {"x": 555, "y": 666, "phase": phase, "drag_id": drag_id})
+            for phase in position_phases
+        )
+        for callback, arguments in callbacks + phase_callbacks:
+            result = callback(**arguments) if missing else callback(page_id, **arguments)
+            assert result is None, f"{callback.__name__} admitted a refused page"
+            # Check each call separately: Reset must not mask an earlier resize.
+            assert observation(*bars) == before, (
+                f"refused {callback.__name__} changed geometry, visibility or settings"
+            )
+
+    def assert_ok(result):
+        assert result == {"applied": True, "persisted": True, "error": None}
+
+    def begin_drag(bar):
+        before = observation(bar, ownership=False)
+        # Observe the real helper, never substitute successful native activation.
+        with patch.object(fleetbar, "activate_bar", wraps=fleetbar.activate_bar) as activate:
+            result = api.save_fleet_bar_pos(bar.page_id, bar.x, bar.y, phase="begin")
+            assert activate.call_count == 0, "header admission attempted activation"
+        assert result["status"] == "dragging" and type(result["drag_id"]) is int
+        assert observation(bar, ownership=False) == before, "begin moved or wrote settings"
+        return result["drag_id"]
+
+    def assert_ignored_end(bar, drag_id, *others):
+        before = observation(bar, *others)
+        assert api.save_fleet_bar_pos(
+            bar.page_id, 555, 666, phase="end", drag_id=drag_id
+        ) == {"status": "ignored"}
+        assert observation(bar, *others) == before, "stale drag consumed ownership or wrote"
 
     try:
-        assert api.fleet_bar_snapshot() is None
-        for invalid in (None, "", "invalid", "0" * 64):
+        assert sys.platform == "linux", "this driver proves Linux fallback only"
+        assert_refused(None, fleet_window, missing=True)
+        for invalid in (None, "", "invalid", "0" * 64, 123, [], {}):
             assert invalid != fleet_window.page_id
             assert_refused(invalid, fleet_window)
-        # These public callbacks must still have real effects for this creation;
-        # otherwise rejection by a nonexistent window would be a vacuous proof.
         current = api.fleet_bar_snapshot(fleet_window.page_id)
         assert current is not None and current["rows"] == []
-        api.fit_fleet_bar(fleet_window.page_id, 420, 120)
-        api.move_fleet_bar(fleet_window.page_id, 70, 80)
-        api.save_fleet_bar_pos(fleet_window.page_id, 90, 100)
-        api.fleet_bar_ready(fleet_window.page_id)
-        assert (fleet_window.width, fleet_window.height) == (420, 120)
-        assert (fleet_window.x, fleet_window.y, fleet_window.shown) == (70, 80, 1)
+        assert (fleet_window.width, fleet_window.height) == (500, 90)
+        assert fleet_window.hidden is True and not fleetbar.is_visible(fleet_window)
+        api.fit_fleet_bar_height(fleet_window.page_id, 120)
+        assert (fleet_window.width, fleet_window.height, fleet_window.shown) == (
+            500, 90, 0
+        )
+        # False is native horizontal-resize capability, not a failed reveal.
+        assert api.fleet_bar_ready(fleet_window.page_id) is False
+        assert (fleet_window.width, fleet_window.height, fleet_window.shown) == (
+            500, 120, 1
+        )
+        assert fleet_window.hidden is False and fleetbar.is_visible(fleet_window)
+        api.fit_fleet_bar_height(fleet_window.page_id, 140)
+        assert (fleet_window.width, fleet_window.height) == (500, 140)
+
+        # Dragging is native. The page saves its observed position afterwards;
+        # this is not the removed general-purpose move endpoint.
+        fleet_window.move(90, 100)
+        assert api.save_fleet_bar_pos(fleet_window.page_id, 90, 100) is None
+        assert (fleet_window.x, fleet_window.y) == (90, 100)
         saved = settings.load(paths.settings_file())["fleet_bar"]
         assert (saved["x"], saved["y"]) == (90, 100)
 
+        # No chrome means no native provenance. Programmatic resize feedback
+        # must neither mutate geometry nor persist a width, even in range.
+        assert api._fleetbar_resize_gesture is None
+        for reported in (400, 420, 500, 620, 720, 740):
+            before = observation(fleet_window)
+            assert api.settle_fleet_bar_resize(
+                fleet_window.page_id, reported, 333
+            ) == {"status": "ignored"}
+            assert observation(fleet_window) == before
+        # Focus activation is unavailable on Linux, not a synthetic Windows pass.
+        # A valid creation returns False; all refused identities above return None.
+        assert api.activate_fleet_bar(fleet_window.page_id) is False
+        assert api.deactivate_fleet_bar(fleet_window.page_id) is False
+        assert api._fleetbar_return_hwnd is None
+        drag_id = begin_drag(fleet_window)
+        assert_refused(None, fleet_window, missing=True, drag_id=drag_id)
+        for invalid in (None, "", "invalid", "0" * 64, 123, [], {}):
+            assert_refused(invalid, fleet_window, drag_id=drag_id)
+        for wrong_owner in (None, True, str(drag_id), drag_id + 1):
+            assert_ignored_end(fleet_window, wrong_owner)
+        before = observation(fleet_window)
+        assert api.save_fleet_bar_pos(
+            fleet_window.page_id, 555, 666, phase="begin"
+        ) == {"status": "ignored"}
+        assert api.save_fleet_bar_pos(
+            fleet_window.page_id, 555, 666, phase="invalid"
+        ) == {"status": "ignored"}
+        assert api.save_fleet_bar_pos(fleet_window.page_id, 555, 666) == {"status": "ignored"}
+        api.fit_fleet_bar_height(fleet_window.page_id, 222)
+        assert api.settle_fleet_bar_resize(
+            fleet_window.page_id, 620, 333
+        ) == {"status": "resizing"}
+        assert observation(fleet_window) == before, "active drag lost geometry ownership"
+        # The native double stands in only for pywebview's actual movement.
+        # Position-only completion deliberately returns None, not width success.
+        fleet_window.move(110, 120)
+        assert api.save_fleet_bar_pos(
+            fleet_window.page_id, 110, 120, phase="end", drag_id=drag_id
+        ) is None
+        saved = settings.load(paths.settings_file())["fleet_bar"]
+        assert (saved["x"], saved["y"], saved["preferred_content_width"]) == (110, 120, 500)
+        assert_ignored_end(fleet_window, drag_id)
+        newer_drag = begin_drag(fleet_window)
+        assert newer_drag != drag_id
+        assert_ignored_end(fleet_window, drag_id)
+        before = observation(fleet_window, ownership=False)
+        assert api.save_fleet_bar_pos(
+            fleet_window.page_id, 110, 120, phase="end", drag_id=newer_drag
+        ) is None
+        assert observation(fleet_window, ownership=False) == before, "header click wrote settings"
+
+        reset_drag = begin_drag(fleet_window)
+        assert_ok(api.reset_fleet_bar_page_width(fleet_window.page_id))
+        assert_ignored_end(fleet_window, reset_drag)
+        hide_drag = begin_drag(fleet_window)
+        assert_ok(api.hide_fleet_bar(fleet_window.page_id))
+        assert_ignored_end(fleet_window, hide_drag)
+        assert fleet_window.hidden is True and not fleetbar.is_visible(fleet_window)
+        assert api.fleet_bar_settings()["enabled"] is False
+        assert settings.load(paths.settings_file())["fleet_bar"]["enabled"] is False
+        before = observation(fleet_window)
+        assert api.settle_fleet_bar_resize(fleet_window.page_id, 710, 110) is None
+        assert api.activate_fleet_bar(fleet_window.page_id) is False
+        assert api.save_fleet_bar_pos(
+            fleet_window.page_id, 555, 666, phase="begin"
+        ) == {"status": "ignored"}
+        assert observation(fleet_window) == before
+        api.fit_fleet_bar_height(fleet_window.page_id, 150)
+        assert (fleet_window.width, fleet_window.height) == (500, 140)
+        assert api.fleet_bar_ready(fleet_window.page_id) is False
+        assert fleet_window.hidden is True and fleet_window.shown == 1
+        assert_ok(api.toggle_fleet_bar(True))
+        assert (fleet_window.width, fleet_window.height, fleet_window.shown) == (
+            500, 150, 2
+        )
+        assert fleet_window.hidden is False
+        assert_ignored_end(fleet_window, hide_drag)
+        old_drag = begin_drag(fleet_window)
+        # Seed a saved preference for factory/Reset coverage, not fabricated
+        # Linux native resize acceptance. Never enable private resize capability.
+        settings.update_section(
+            api._state.settings, "fleet_bar", {"preferred_content_width": 620}
+        )
         replacement = create_fleet_window()
         windows.append(replacement)
         assert replacement.page_id != fleet_window.page_id
-        assert (replacement.x, replacement.y, replacement.shown) == (90, 100, 0)
+        assert (replacement.width, replacement.x, replacement.y, replacement.shown) == (
+            620, 110, 120, 0
+        )
+        assert replacement.hidden is True
         # Leave the old native double alive: rejection must be creation identity,
-        # not just is_alive returning false. Stale calls cannot retarget either.
-        # Snapshot both targets before one sequence: a repeated fit could hide
-        # a wrongly resized replacement behind its already-changed dimensions.
-        assert_refused(fleet_window.page_id, *windows)
+        # not just is_alive returning false. Observe both windows and hidden staging.
+        assert fleet_window.alive
+        assert_refused(fleet_window.page_id, *windows, drag_id=old_drag)
         assert api.fleet_bar_snapshot(replacement.page_id) is not None
-        api.fleet_bar_ready(replacement.page_id)
-        assert replacement.shown == 1
-
+        api.fit_fleet_bar_height(replacement.page_id, 160)
+        assert api.fleet_bar_ready(replacement.page_id) is False
+        assert (replacement.width, replacement.height, replacement.shown) == (
+            620, 160, 1
+        )
+        assert replacement.hidden is False
+        replacement_drag = begin_drag(replacement)
+        assert_ignored_end(replacement, old_drag, fleet_window)
+        assert_refused(fleet_window.page_id, *windows, drag_id=replacement_drag)
+        # Reset has a meaningful positive effect from a non-default saved width.
+        assert_ok(api.reset_fleet_bar_page_width(replacement.page_id))
+        assert (replacement.width, replacement.height) == (500, 160)
+        saved = settings.load(paths.settings_file())["fleet_bar"]
+        assert saved["preferred_content_width"] == 500
+        assert_ignored_end(replacement, replacement_drag, fleet_window)
+        retired_drag = begin_drag(replacement)
         api.shutdown_previews()
-        assert_refused(replacement.page_id, *windows)
-        assert_refused(fleet_window.page_id, *windows)
+        assert_refused(replacement.page_id, *windows, drag_id=retired_drag)
+        assert_refused(fleet_window.page_id, *windows, drag_id=retired_drag)
         assert create_fleet_window() is None
         assert not denials
-        print(json.dumps({"identity": "verified", "denials": 0}), flush=True)
+        print(
+            json.dumps(
+                {
+                    "identity": "verified",
+                    "denials": 0,
+                    "native_resize": False,
+                    "native_activation": False,
+                    "callbacks": [callback.__name__ for callback, _ in callbacks],
+                    "position_phases": list(position_phases),
+                }
+            ),
+            flush=True,
+        )
     finally:
         api.shutdown_previews()
         for bar in windows:
@@ -611,8 +813,9 @@ def command(data):
 next_snapshot = time.monotonic()
 try:
     assert api._start_fleet_presentation()
-    api.fit_fleet_bar(fleet_window.page_id, 420, 90)
-    api.fleet_bar_ready(fleet_window.page_id)
+    api.fit_fleet_bar_height(fleet_window.page_id, 90)
+    assert api.fleet_bar_ready(fleet_window.page_id) is False
+    assert fleet_window.hidden is False and fleetbar.is_visible(fleet_window)
     worker.start()
     print(json.dumps({"ready": True, "trust_anchors": 1}), flush=True)
     while not stopping:
