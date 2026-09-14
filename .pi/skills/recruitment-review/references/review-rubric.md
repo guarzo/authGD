@@ -99,9 +99,23 @@ Assessment status: DRAFT — human recruiter review required; not an admission d
 <Exactly one: No material inconsistencies found within stated coverage | Clarification needed | Insufficient evidence. Explain why, preserve material gaps, and make no admission recommendation.>
 ```
 
+## No-identity abort diagnostic
+
+When manual invocation lacks a validated packet identity because the packet is missing, preparation failed, or the packet cannot be interpreted safely, return exactly this diagnostic:
+
+```markdown
+Bundle: unavailable
+Review status: aborted
+Blocking reason: <specific safe error or missing mandatory input>
+Unreviewed inputs: <files or packet not reviewed>
+Corrective action: <provide or safely re-prepare the packet>
+```
+
+Include no applicant findings, citations, or invented skill, model, assessment, or time metadata. It is not submitted to `checkReport` and cannot count as a completed check.
+
 ## Aborted report template
 
-Use this form instead of the five sections when model review cannot safely proceed after successful preparation. Include no applicant findings or favourable conclusion. A model-aborted report contains no citations at all. It uses the validated bundle ID and revision because the checker receives a successfully prepared bundle. Preparation-abort diagnostics are distinct pipeline output, not model reports: they may use the exact degraded marker `Bundle: unavailable` when preparation cannot safely read a trustworthy identity, and they are not passed to the report checker. Never invent unknown model or skill-version metadata; use `unavailable` unless the trustworthy invocation supplies it. Host evaluation records the final instruction-content hashes separately.
+Use this model-report form instead of the five sections when review cannot safely proceed after successful preparation. Include no applicant findings or favourable conclusion. A model-aborted report contains no citations at all. It uses the validated bundle ID and revision because the checker receives a successfully prepared bundle. Never invent unknown model or skill-version metadata; use `unavailable` unless the trustworthy invocation supplies it. Host evaluation records the final instruction-content hashes separately.
 
 ```markdown
 Bundle: <bundleId>@<revision>

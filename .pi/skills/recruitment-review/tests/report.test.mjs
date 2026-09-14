@@ -13,6 +13,7 @@ import { makeBundle, writeBundle } from "./fixtures.mjs";
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const cliPath = join(packageRoot, "scripts", "check-report.mjs");
 const prepareCliPath = join(packageRoot, "scripts", "prepare.mjs");
+const skillPath = join(packageRoot, "SKILL.md");
 const inputFormatPath = join(packageRoot, "references", "input-format.md");
 const rubricPath = join(packageRoot, "references", "review-rubric.md");
 
@@ -267,8 +268,43 @@ test("references define citation-free model aborts separately from preparation d
   assert.match(inputFormat, /A model-aborted report contains no citations at all\./);
   assert.match(
     inputFormat,
-    /Preparation-abort diagnostics are pipeline output, not model reports/,
+    /If CLI preparation fails or manual invocation lacks a validated packet identity/,
   );
+});
+
+test("no-identity abort diagnostic is explicit and outside the report checker contract", async () => {
+  const [skill, inputFormat, rubric] = await Promise.all([
+    readFile(skillPath, "utf8"),
+    readFile(inputFormatPath, "utf8"),
+    readFile(rubricPath, "utf8"),
+  ]);
+  for (const source of [skill, inputFormat, rubric]) {
+    assert.match(
+      source,
+      /not submitted to `checkReport` and cannot count as a completed check/,
+    );
+  }
+
+  const diagnostic = fencedTemplate(rubric, "No-identity abort diagnostic")
+    .replace("<specific safe error or missing mandatory input>", "INVALID_SCHEMA")
+    .replace("<files or packet not reviewed>", "Complete prepared packet")
+    .replace("<provide or safely re-prepare the packet>", "Re-prepare the packet");
+
+  assert.equal(
+    diagnostic,
+    [
+      "Bundle: unavailable",
+      "Review status: aborted",
+      "Blocking reason: INVALID_SCHEMA",
+      "Unreviewed inputs: Complete prepared packet",
+      "Corrective action: Re-prepare the packet",
+    ].join("\n"),
+  );
+  assert.doesNotMatch(diagnostic, /\[(?:interview|record|context):/);
+  assert.doesNotMatch(diagnostic, /^(?:Skill version|Model|Assessment status):/m);
+  const checked = checkReport(`${diagnostic}\n`, prepared);
+  assert.equal(checked.ok, false);
+  assert.ok(checked.errors.includes("INVALID_BUNDLE_MARKER"));
 });
 
 test("rubric templates materialize to checker-compatible completed and aborted reports", async () => {
