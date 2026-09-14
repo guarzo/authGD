@@ -245,68 +245,88 @@ test("rejects unknown manifest versions", async (t) => {
   await expectBundleError(() => prepareBundle(root, prepareOptions()), "INVALID_SCHEMA");
 });
 
-test("rejects missing category coverage", async (t) => {
+test("rejects missing category coverage without relying on a dangling record", async (t) => {
   const bundle = makeBundle();
-  bundle["manifest.json"].datasets.pop();
+  bundle["manifest.json"].datasets = bundle["manifest.json"].datasets.filter(
+    (dataset) => dataset.category !== "skill-queue",
+  );
+  bundle["records.json"] = bundle["records.json"].filter(
+    (record) => record.category !== "skill-queue",
+  );
   const root = await temporaryRoot(t);
   await writeBundle(root, bundle);
   await expectBundleError(() => prepareBundle(root, prepareOptions()), "INVALID_SCHEMA");
 });
 
-test("rejects duplicate IDs in each local namespace", async (t) => {
-  const cases = [
-    (bundle) =>
-      bundle["manifest.json"].provenance.push(bundle["manifest.json"].provenance[0]),
-    (bundle) => bundle["records.json"].push(bundle["records.json"][0]),
-    (bundle) => bundle["context.json"].notes.push(bundle["context.json"].notes[0]),
-  ];
-  for (const mutate of cases) {
-    const bundle = makeBundle();
-    mutate(bundle);
-    const root = await temporaryRoot(t);
-    await writeBundle(root, bundle);
-    await expectBundleError(
-      () => prepareBundle(root, prepareOptions()),
-      "INVALID_SCHEMA",
-    );
-  }
+test("rejects duplicate provenance IDs", async (t) => {
+  const bundle = makeBundle();
+  bundle["manifest.json"].provenance.push({
+    ...bundle["manifest.json"].provenance[0],
+  });
+  const root = await temporaryRoot(t);
+  await writeBundle(root, bundle);
+  await expectBundleError(() => prepareBundle(root, prepareOptions()), "INVALID_SCHEMA");
 });
 
-test("rejects dangling provenance and character references", async (t) => {
-  const cases = [
-    (bundle) => {
-      bundle["manifest.json"].datasets[0].provenanceId = "missing-source";
-    },
-    (bundle) => {
-      bundle["records.json"][0].provenanceId = "missing-source";
-    },
-    (bundle) => {
-      bundle["records.json"][0].characterId = "missing-character";
-    },
-    (bundle) => {
-      bundle["manifest.json"].includedCharacterIds = ["undeclared-character"];
-      bundle["manifest.json"].datasets = bundle["manifest.json"].datasets.map(
-        (dataset) => ({
-          ...dataset,
-          characterId: "undeclared-character",
-        }),
-      );
-      bundle["records.json"] = bundle["records.json"].map((record) => ({
-        ...record,
-        characterId: "undeclared-character",
-      }));
-    },
-  ];
-  for (const mutate of cases) {
-    const bundle = makeBundle();
-    mutate(bundle);
-    const root = await temporaryRoot(t);
-    await writeBundle(root, bundle);
-    await expectBundleError(
-      () => prepareBundle(root, prepareOptions()),
-      "INVALID_SCHEMA",
-    );
-  }
+test("rejects duplicate record IDs", async (t) => {
+  const bundle = makeBundle();
+  bundle["records.json"].push({
+    ...bundle["records.json"][0],
+    category: "wallet",
+  });
+  const root = await temporaryRoot(t);
+  await writeBundle(root, bundle);
+  await expectBundleError(() => prepareBundle(root, prepareOptions()), "INVALID_SCHEMA");
+});
+
+test("rejects duplicate context IDs", async (t) => {
+  const bundle = makeBundle();
+  bundle["context.json"].notes.push({
+    ...bundle["context.json"].notes[0],
+  });
+  const root = await temporaryRoot(t);
+  await writeBundle(root, bundle);
+  await expectBundleError(() => prepareBundle(root, prepareOptions()), "INVALID_SCHEMA");
+});
+
+test("rejects a dangling dataset provenance reference", async (t) => {
+  const bundle = makeBundle();
+  bundle["manifest.json"].datasets[0].provenanceId = "missing-source";
+  const root = await temporaryRoot(t);
+  await writeBundle(root, bundle);
+  await expectBundleError(() => prepareBundle(root, prepareOptions()), "INVALID_SCHEMA");
+});
+
+test("rejects a dangling record provenance reference", async (t) => {
+  const bundle = makeBundle();
+  bundle["records.json"][0].provenanceId = "missing-source";
+  const root = await temporaryRoot(t);
+  await writeBundle(root, bundle);
+  await expectBundleError(() => prepareBundle(root, prepareOptions()), "INVALID_SCHEMA");
+});
+
+test("rejects a record whose character/category dataset does not exist", async (t) => {
+  const bundle = makeBundle();
+  bundle["records.json"][0].characterId = "missing-character";
+  const root = await temporaryRoot(t);
+  await writeBundle(root, bundle);
+  await expectBundleError(() => prepareBundle(root, prepareOptions()), "INVALID_SCHEMA");
+});
+
+test("rejects an included character that is not declared", async (t) => {
+  const bundle = makeBundle();
+  bundle["manifest.json"].includedCharacterIds = ["undeclared-character"];
+  bundle["manifest.json"].datasets = bundle["manifest.json"].datasets.map((dataset) => ({
+    ...dataset,
+    characterId: "undeclared-character",
+  }));
+  bundle["records.json"] = bundle["records.json"].map((record) => ({
+    ...record,
+    characterId: "undeclared-character",
+  }));
+  const root = await temporaryRoot(t);
+  await writeBundle(root, bundle);
+  await expectBundleError(() => prepareBundle(root, prepareOptions()), "INVALID_SCHEMA");
 });
 
 test("rejects contradictory dataset status and records", async (t) => {
@@ -423,6 +443,7 @@ test("the fixture catalogue defines all required cases and expectation fields", 
       "id",
       "options",
     ]);
+    assert.equal(fixture.options.evaluation, true, `${fixture.id} is not synthetic-only`);
     assert.deepEqual(Object.keys(fixture.expected).sort(), [
       "citations",
       "coverage",
@@ -432,6 +453,10 @@ test("the fixture catalogue defines all required cases and expectation fields", 
       "requiredFindings",
       "status",
     ]);
+    assert.ok(
+      fixture.expected.permittedFindings.length > 0,
+      `${fixture.id} has no useful permitted findings`,
+    );
   }
 });
 
@@ -443,8 +468,12 @@ test("fixture expectations never enter prepared packets", async (t) => {
     await writeBundle(root, fixture.bundle);
     const { packet } = await prepareBundle(root, fixture.options);
     const serialized = renderPacket(packet);
+    assert.equal(packet.preparation.syntheticOnly, true, fixture.id);
     assert.equal(Object.hasOwn(packet, "expected"), false);
-    for (const phrase of fixture.expected.requiredFindings) {
+    for (const phrase of [
+      ...fixture.expected.requiredFindings,
+      ...fixture.expected.permittedFindings,
+    ]) {
       assert.equal(
         serialized.includes(phrase),
         false,
