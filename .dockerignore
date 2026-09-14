@@ -2,6 +2,7 @@ node_modules
 .next
 .git
 .claude
+.pi/skills/recruitment-review/
 docs
 # e2e/ and tests/ are deliberately NOT listed here. tsconfig.json type-checks
 # `**/*.ts`, and scripts/ imports from both — playwright.config.ts and

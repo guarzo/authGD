@@ -35,6 +35,8 @@ jobs:
         run: npm run lint
       - name: Format check
         run: npm run format:check
+      - name: Recruitment review tooling tests
+        run: npm run test:recruitment-review
 
   build:
     name: Next build
