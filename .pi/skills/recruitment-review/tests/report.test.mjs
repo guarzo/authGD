@@ -268,7 +268,19 @@ test("references define citation-free model aborts separately from preparation d
   assert.match(inputFormat, /A model-aborted report contains no citations at all\./);
   assert.match(
     inputFormat,
-    /If CLI preparation fails or manual invocation lacks a validated packet identity/,
+    /A CLI preparation failure emits a pipeline diagnostic with the validated bundle identity when available, otherwise `Bundle: unavailable`, and includes a real attempted-review timestamp\./,
+  );
+  assert.match(
+    inputFormat,
+    /A manual model invocation without a validated identity instead emits the five-line no-identity diagnostic/,
+  );
+  assert.match(
+    inputFormat,
+    /After successful preparation, a model report uses the actual validated identity and is submitted to `checkReport`/,
+  );
+  assert.match(
+    rubric,
+    /This five-line manual diagnostic is not the CLI preparation-failure diagnostic/,
   );
 });
 
@@ -284,6 +296,7 @@ test("no-identity abort diagnostic is explicit and outside the report checker co
       /not submitted to `checkReport` and cannot count as a completed check/,
     );
   }
+  assert.match(skill, /a reported preparation failure supplied no validated identity/);
 
   const diagnostic = fencedTemplate(rubric, "No-identity abort diagnostic")
     .replace("<specific safe error or missing mandatory input>", "INVALID_SCHEMA")

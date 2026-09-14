@@ -111,7 +111,7 @@ Unreviewed inputs: <files or packet not reviewed>
 Corrective action: <provide or safely re-prepare the packet>
 ```
 
-Include no applicant findings, citations, or invented skill, model, assessment, or time metadata. It is not submitted to `checkReport` and cannot count as a completed check.
+Include no applicant findings, citations, or invented skill, model, assessment, or time metadata. It is not submitted to `checkReport` and cannot count as a completed check. This five-line manual diagnostic is not the CLI preparation-failure diagnostic: the CLI artifact also includes a real attempted-review timestamp and uses the validated bundle identity when one is available.
 
 ## Aborted report template
 
