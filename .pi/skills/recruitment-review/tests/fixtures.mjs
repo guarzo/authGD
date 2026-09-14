@@ -253,6 +253,19 @@ export const fixtureCases = [
   {
     id: "current-affiliation",
     bundle: makeBundle({
+      manifest: {
+        datasets: baseManifest().datasets.map((dataset) =>
+          dataset.category === "wallet"
+            ? {
+                ...dataset,
+                history: {
+                  ...dataset.history,
+                  earliestReturnedAt: "2025-03-01T00:00:00Z",
+                },
+              }
+            : dataset,
+        ),
+      },
       records: withRecords(
         {
           ...baseRecords().find((record) => record.category === "corporation-history"),
@@ -474,5 +487,3 @@ export const fixtureCases = [
     }),
   },
 ];
-
-export { categories };

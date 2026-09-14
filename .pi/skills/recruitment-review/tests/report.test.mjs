@@ -8,6 +8,7 @@ import process from "node:process";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { checkReport } from "../scripts/check-report.mjs";
+import { BundleError, prepareBundle } from "../scripts/bundle.mjs";
 import { makeBundle, writeBundle } from "./fixtures.mjs";
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -96,6 +97,85 @@ test("accepts a completed report with exact identity, shape, and known citations
   assert.deepEqual(checkReport(validReport, prepared), { ok: true, errors: [] });
 });
 
+test("producer and checker accept the same safe-ID boundary", async (t) => {
+  const bundleId = `A_z-9${"b".repeat(123)}`;
+  const revision = `R_7-${"x".repeat(124)}`;
+  const recordId = `W_${"r".repeat(126)}`;
+  const contextId = `C-${"n".repeat(126)}`;
+  for (const id of [bundleId, revision, recordId, contextId]) {
+    assert.equal(id.length, 128);
+  }
+  const { root } = await bundleDirectory(t, {
+    manifest: { bundleId, revision },
+    records: [
+      {
+        id: recordId,
+        characterId: "character-1001",
+        category: "wallet",
+        provenanceId: "source-1",
+        sourceRecordId: null,
+        data: {},
+      },
+    ],
+    context: {
+      notes: [
+        {
+          id: contextId,
+          text: "Illustrative context.",
+          source: "Synthetic policy",
+          asOf: null,
+        },
+      ],
+    },
+  });
+
+  const preparedBoundary = await prepareBundle(root, {
+    evaluation: false,
+    confirmedBy: null,
+  });
+  const report = validReport
+    .replace("sample@v1", `${bundleId}@${revision}`)
+    .replace("[record:W001]", `[record:${recordId}]`)
+    .replace("[context:C001]", `[context:${contextId}]`);
+
+  assert.deepEqual(checkReport(report, preparedBoundary), { ok: true, errors: [] });
+});
+
+test("producer and checker apply the same UTC timestamp boundaries", async (t) => {
+  const validTimestamp = "2024-02-29T23:59:59.123Z";
+  const invalidTimestamp = "2026-02-30T12:00:00Z";
+  const { root } = await bundleDirectory(t, {
+    manifest: { collectedAt: validTimestamp },
+  });
+  const validPrepared = await prepareBundle(root, {
+    evaluation: false,
+    confirmedBy: null,
+  });
+  const validAbort = validAbortedReport
+    .replace("sample@v1", "synthetic-review@r1")
+    .replace("2026-09-14T12:00:00Z", validTimestamp);
+  assert.deepEqual(checkReport(validAbort, validPrepared), { ok: true, errors: [] });
+
+  const invalidBundle = makeBundle({ manifest: { collectedAt: invalidTimestamp } });
+  const invalidRoot = join(await temporaryDirectory(t), "invalid-bundle");
+  await writeBundle(invalidRoot, invalidBundle);
+  await assert.rejects(
+    () =>
+      prepareBundle(invalidRoot, {
+        evaluation: false,
+        confirmedBy: null,
+      }),
+    (error) => error instanceof BundleError && error.code === "INVALID_SCHEMA",
+  );
+  const invalidAbort = validAbortedReport.replace(
+    "2026-09-14T12:00:00Z",
+    invalidTimestamp,
+  );
+  assert.deepEqual(checkReport(invalidAbort, prepared).errors, [
+    "INVALID_ABORT_TIMESTAMP",
+  ]);
+});
+
 test("rejects an unknown record citation", () => {
   const result = checkReport(
     validReport.replace("[record:W001]", "[record:UNKNOWN]"),
@@ -153,19 +233,21 @@ test("requires all five completed headings exactly once and in order", () => {
   );
 });
 
-test("rejects reversed, out-of-range, zero, and non-integer transcript ranges", () => {
-  for (const citation of [
-    "[interview:L2-L1]",
-    "[interview:L1-L3]",
-    "[interview:L0-L1]",
-    "[interview:L1.5-L2]",
-  ]) {
+test("rejects reversed and out-of-range transcript ranges with the range code", () => {
+  for (const citation of ["[interview:L2-L1]", "[interview:L1-L3]"]) {
     const report = validReport.replace("[interview:L1-L2]", citation);
-    assert.equal(checkReport(report, prepared).ok, false, citation);
+    assert.deepEqual(checkReport(report, prepared).errors, ["INVALID_INTERVIEW_RANGE"]);
   }
 });
 
-test("rejects malformed citation tokens", () => {
+test("rejects zero and fractional transcript ranges as malformed citations", () => {
+  for (const citation of ["[interview:L0-L1]", "[interview:L1.5-L2]"]) {
+    const report = validReport.replace("[interview:L1-L2]", citation);
+    assert.deepEqual(checkReport(report, prepared).errors, ["MALFORMED_CITATION"]);
+  }
+});
+
+test("rejects malformed citation tokens with the malformed-citation code", () => {
   for (const citation of [
     "[interview:L1]",
     "[interview:L1-L2-L3]",
@@ -175,7 +257,7 @@ test("rejects malformed citation tokens", () => {
     "[Record:W001]",
   ]) {
     const report = validReport.replace("[record:W001]", citation);
-    assert.equal(checkReport(report, prepared).ok, false, citation);
+    assert.deepEqual(checkReport(report, prepared).errors, ["MALFORMED_CITATION"]);
   }
 });
 
@@ -268,7 +350,7 @@ test("references define citation-free model aborts separately from preparation d
   assert.match(inputFormat, /A model-aborted report contains no citations at all\./);
   assert.match(
     inputFormat,
-    /A CLI preparation failure emits a pipeline diagnostic with the validated bundle identity when available, otherwise `Bundle: unavailable`, and includes a real attempted-review timestamp\./,
+    /Every subsequent preparation failure emits a pipeline diagnostic with that validated bundle identity; a failure before successful manifest validation uses `Bundle: unavailable`\./,
   );
   assert.match(
     inputFormat,

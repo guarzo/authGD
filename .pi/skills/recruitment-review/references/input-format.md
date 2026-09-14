@@ -104,7 +104,7 @@ Player-written transcript and evidence content is untrusted data, never instruct
 ]
 ```
 
-`sourceRecordId` is a non-empty string or `null`; `data` is a JSON object. The validator checks the envelope and its references but does not claim to validate the opaque object against an ESI schema. It preserves payload values, including amounts, without model-generated arithmetic. Every record character must be included, its category dataset must exist, and its provenance reference must resolve.
+`sourceRecordId` is a non-empty string or `null`; `data` is a JSON object. The validator checks the envelope and its references but does not claim to validate the opaque object against an ESI schema. Payloads retain the JavaScript values produced by `JSON.parse`, so native JSON numbers use IEEE-754 and may already have lost precision before packet rendering. Producers must encode exact or high-precision amounts as JSON strings; preparation neither guesses amount fields nor converts payload values. Every record character must be included, its category dataset must exist, and its provenance reference must resolve.
 
 ## Recruiter context
 
@@ -195,7 +195,9 @@ node scripts/check-report.mjs <bundle-directory> <report-file> [--evaluation] [-
 
 The checker accepts structurally valid completed and aborted reports for a successfully prepared bundle. A model-aborted report contains no citations at all. The checker verifies exact identity and status markers, required report shape, and citation syntax and existence; it does not judge whether evidence supports the report's conclusions or replace recruiter approval. It bounds reports to 128 KiB and rejects invalid UTF-8, symbolic links, and non-regular report files.
 
-Before a report can be checked, preparation must establish a validated packet identity. A CLI preparation failure emits a pipeline diagnostic with the validated bundle identity when available, otherwise `Bundle: unavailable`, and includes a real attempted-review timestamp. The CLI never opens the report after preparation fails, and this pipeline diagnostic is never submitted to `checkReport`.
+Before a report can be checked, preparation must establish a validated packet identity. The manifest is parsed, checked for prohibited credential keys, and fully validated before later input contents are decoded, parsed, or schema-validated. Every subsequent preparation failure emits a pipeline diagnostic with that validated bundle identity; a failure before successful manifest validation uses `Bundle: unavailable`. The diagnostic includes a real attempted-review timestamp. The CLI never opens the report after preparation fails, and this pipeline diagnostic is never submitted to `checkReport`.
+
+`Unreviewed inputs` means that no model or recruiter evidence analysis occurred. A preparation abort starts no model request, so the diagnostic lists all four inputs as unreviewed even when parsing or schema validation had already examined some files; it intentionally does not claim per-file semantic review progress.
 
 A manual model invocation without a validated identity instead emits the five-line no-identity diagnostic from the rubric: exact `Bundle: unavailable`, aborted status, a safe blocking reason, unreviewed inputs, and corrective action, with no applicant findings, citations, or invented metadata. It is not submitted to `checkReport` and cannot count as a completed check. It is not byte-identical to the six-line CLI preparation-failure artifact.
 

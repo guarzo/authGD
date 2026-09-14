@@ -3,6 +3,7 @@ import { constants } from "node:fs";
 import { lstat, open } from "node:fs/promises";
 import { join } from "node:path";
 import { TextDecoder } from "node:util";
+import { isSafeId, isUtcTimestamp } from "./syntax.mjs";
 
 const INPUT_LIMIT = 4 * 1024 * 1024;
 const PACKET_LIMIT = 128 * 1024;
@@ -37,8 +38,6 @@ const CREDENTIAL_KEYS = new Set([
   "authorization",
   "cookie",
 ]);
-const SAFE_ID = /^[A-Za-z0-9_-]{1,128}$/;
-const UTC_TIMESTAMP = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?Z$/;
 const SAFE_MESSAGES = {
   INVALID_SCHEMA: "The evidence bundle does not match the version 1 schema.",
   INVALID_UTF8: "A bundle input is not valid UTF-8.",
@@ -79,28 +78,6 @@ function hasExactKeys(value, keys) {
 
 function isNonEmptyString(value) {
   return typeof value === "string" && value.trim().length > 0;
-}
-
-function isSafeId(value) {
-  return typeof value === "string" && SAFE_ID.test(value);
-}
-
-function isUtcTimestamp(value) {
-  if (typeof value !== "string") return false;
-  const match = UTC_TIMESTAMP.exec(value);
-  if (match === null) return false;
-  const timestamp = Date.parse(value);
-  if (!Number.isFinite(timestamp)) return false;
-  const date = new Date(timestamp);
-  const [, year, month, day, hour, minute, second] = match.map(Number);
-  return (
-    date.getUTCFullYear() === year &&
-    date.getUTCMonth() + 1 === month &&
-    date.getUTCDate() === day &&
-    date.getUTCHours() === hour &&
-    date.getUTCMinutes() === minute &&
-    date.getUTCSeconds() === second
-  );
 }
 
 function hasUniqueValues(values) {
@@ -402,21 +379,17 @@ async function readBounded(path, remaining) {
   }
 }
 
-async function readInputs(root) {
-  const inspected = await inspectInputs(root);
-  const decoder = new TextDecoder("utf-8", { fatal: true });
-  const values = new Map();
-  let total = 0;
-  for (const { name, path } of inspected) {
-    const bytes = await readBounded(path, INPUT_LIMIT - total);
-    total += bytes.length;
-    try {
-      values.set(name, decoder.decode(bytes));
-    } catch {
-      fail("INVALID_UTF8");
-    }
+async function readInput(input, remaining) {
+  const bytes = await readBounded(input.path, remaining);
+  try {
+    return {
+      name: input.name,
+      text: new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+      byteLength: bytes.length,
+    };
+  } catch {
+    fail("INVALID_UTF8");
   }
-  return values;
 }
 
 function parseJson(text) {
@@ -440,70 +413,82 @@ export function renderPacket(packet) {
 
 export async function prepareBundle(root, options) {
   validateOptions(options);
-  const inputs = await readInputs(root);
-  const manifest = parseJson(inputs.get("manifest.json"));
-  const records = parseJson(inputs.get("records.json"));
-  const context = parseJson(inputs.get("context.json"));
-  for (const value of [manifest, records, context]) assertNoCredentialKeys(value);
-
+  const inspected = await inspectInputs(root);
+  const manifestInput = await readInput(inspected[0], INPUT_LIMIT);
+  const manifest = parseJson(manifestInput.text);
+  assertNoCredentialKeys(manifest);
   const manifestState = validateManifest(manifest);
-  validateRecords(records, manifestState);
-  validateContext(context);
-  const interviewLines = validateInterview(inputs.get("interview.txt"));
-  const sourceKinds = new Map(
-    manifest.provenance.map((entry) => [entry.id, entry.sourceKind]),
-  );
-  const isConfirmed = options.confirmedBy !== null;
-  const preparedRecords = records.map((record) => ({
-    ...record,
-    verification:
-      isConfirmed &&
-      ["authenticated-esi", "public-esi"].includes(sourceKinds.get(record.provenanceId))
-        ? "trusted-handoff"
-        : "unverified",
-  }));
-
-  const packet = {
-    bundle: {
-      id: manifest.bundleId,
-      revision: manifest.revision,
-      collectedAt: manifest.collectedAt,
-    },
-    preparation: {
-      evaluation: options.evaluation,
-      confirmedBy: options.confirmedBy,
-      syntheticOnly: options.evaluation,
-    },
-    interview: { lines: interviewLines },
-    coverage: {
-      declaredCharacterIds: manifest.declaredCharacterIds,
-      includedCharacterIds: manifest.includedCharacterIds,
-      datasets: manifest.datasets,
-    },
-    provenance: manifest.provenance,
-    context,
-    records: preparedRecords,
+  const identity = {
+    bundleId: manifest.bundleId,
+    revision: manifest.revision,
   };
 
   try {
+    const inputs = new Map([[manifestInput.name, manifestInput.text]]);
+    let total = manifestInput.byteLength;
+    for (const input of inspected.slice(1)) {
+      const result = await readInput(input, INPUT_LIMIT - total);
+      total += result.byteLength;
+      inputs.set(result.name, result.text);
+    }
+
+    const records = parseJson(inputs.get("records.json"));
+    const context = parseJson(inputs.get("context.json"));
+    for (const value of [records, context]) assertNoCredentialKeys(value);
+
+    validateRecords(records, manifestState);
+    validateContext(context);
+    const interviewLines = validateInterview(inputs.get("interview.txt"));
+    const sourceKinds = new Map(
+      manifest.provenance.map((entry) => [entry.id, entry.sourceKind]),
+    );
+    const isConfirmed = options.confirmedBy !== null;
+    const preparedRecords = records.map((record) => ({
+      ...record,
+      verification:
+        isConfirmed &&
+        ["authenticated-esi", "public-esi"].includes(sourceKinds.get(record.provenanceId))
+          ? "trusted-handoff"
+          : "unverified",
+    }));
+
+    const packet = {
+      bundle: {
+        id: manifest.bundleId,
+        revision: manifest.revision,
+        collectedAt: manifest.collectedAt,
+      },
+      preparation: {
+        evaluation: options.evaluation,
+        confirmedBy: options.confirmedBy,
+        syntheticOnly: options.evaluation,
+      },
+      interview: { lines: interviewLines },
+      coverage: {
+        declaredCharacterIds: manifest.declaredCharacterIds,
+        includedCharacterIds: manifest.includedCharacterIds,
+        datasets: manifest.datasets,
+      },
+      provenance: manifest.provenance,
+      context,
+      records: preparedRecords,
+    };
+
     renderPacket(packet);
-  } catch (error) {
-    if (error instanceof BundleError) {
-      throw new BundleError(error.code, {
+    return {
+      packet,
+      citationIndex: {
         bundleId: manifest.bundleId,
         revision: manifest.revision,
-      });
+        transcriptLineCount: interviewLines.length,
+        recordIds: records.map((record) => record.id),
+        contextIds: context.notes.map((note) => note.id),
+      },
+    };
+  } catch (error) {
+    if (error instanceof BundleError) {
+      throw new BundleError(error.code, identity);
     }
     throw error;
   }
-  return {
-    packet,
-    citationIndex: {
-      bundleId: manifest.bundleId,
-      revision: manifest.revision,
-      transcriptLineCount: interviewLines.length,
-      recordIds: records.map((record) => record.id),
-      contextIds: context.notes.map((note) => note.id),
-    },
-  };
 }

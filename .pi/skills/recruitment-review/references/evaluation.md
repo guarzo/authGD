@@ -4,9 +4,9 @@
 
 This skill is a **synthetic-only draft**. It is **not pilot-approved** and must not be used with real applicant data.
 
-The first full synthetic evaluation was executed on 2026-09-14. Preparation and mechanical checks passed, but the implementation agent's draft semantic review found 17/65 reports that omitted an exact expected interview-range citation token while using narrower, valid citations. The synthetic gate is therefore **blocked pending controller adjudication and a complete rerun after any fix**. Separately, no human recruiter has reviewed the outputs, so semantic sign-off is **awaiting human review**. Agent-produced assessments are not human sign-off, admission decisions, or evidence that the workflow is safe for real applicant data.
+The first full synthetic evaluation was executed on 2026-09-14. Preparation and mechanical checks passed, but the implementation agent's draft semantic review found 17/65 reports that omitted an exact expected interview-range citation token while using narrower, valid citations. The controller later adjudicated those 17 flags as scoring artifacts, not demonstrated semantic failures. Final-review fixes then changed instructions, helpers, and fixture bytes, so the recorded run and hashes below are preserved as historical evidence but are stale for acceptance; a complete fresh gate is required. Separately, no human recruiter has reviewed the outputs, so semantic sign-off is **awaiting human review**. Agent-produced assessments are not human sign-off, admission decisions, or evidence that the workflow is safe for real applicant data.
 
-Real-data disclosure, provider handling, retention/deletion, and recruiter-access approvals remain separate prerequisites even after a future synthetic pass.
+The synthetic gate remains **blocked pending that complete rerun and human review**. The fresh content identity must hash every instruction, helper, and fixture input, including the new `scripts/syntax.mjs`; the historical hash table below remains unchanged. Real-data disclosure, provider handling, retention/deletion, and recruiter-access approvals remain separate prerequisites even after a future synthetic pass.
 
 ## Ordinary manual invocation
 

@@ -74,7 +74,7 @@ Model: <actual host-reported model, or unavailable>
 Assessment status: DRAFT — human recruiter review required; not an admission decision
 
 ## Coverage and limitations
-<Snapshot; declared and included characters; all six dataset statuses and history limits; omissions; collector, method, source kind, transformations, confirmedBy, record verification; synthetic-only state; unexamined inputs.>
+<Snapshot; declared and included characters; every dataset entry's status and history limits for every included character and category; omissions; collector, method, source kind, transformations, confirmedBy, record verification; synthetic-only state; unexamined inputs.>
 
 ## Claim review
 ### Claim 1

@@ -8,7 +8,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { BundleError, prepareBundle, renderPacket } from "../scripts/bundle.mjs";
-import { categories, fixtureCases, makeBundle, writeBundle } from "./fixtures.mjs";
+import { fixtureCases, makeBundle, writeBundle } from "./fixtures.mjs";
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const cliPath = join(packageRoot, "scripts", "prepare.mjs");
@@ -41,7 +41,7 @@ function prepareOptions(overrides = {}) {
 }
 
 test("prepares a complete packet without changing opaque evidence", async (t) => {
-  const opaqueData = { amount: "900719925474099312345", nested: { illustrative: true } };
+  const opaqueData = { label: "opaque", nested: { illustrative: true } };
   const bundle = makeBundle();
   bundle["records.json"][1].data = opaqueData;
   const root = await temporaryRoot(t);
@@ -76,6 +76,20 @@ test("prepares a complete packet without changing opaque evidence", async (t) =>
     contextIds: ["context-1"],
   });
   assert.doesNotThrow(() => JSON.parse(renderPacket(packet)));
+});
+
+test("preserves exact high-precision amount strings through packet serialization", async (t) => {
+  const exactAmount = "900719925474099312345.678900";
+  const bundle = makeBundle();
+  bundle["records.json"][1].data = { amount: exactAmount };
+  const root = await temporaryRoot(t);
+  await writeBundle(root, bundle);
+
+  const { packet } = await prepareBundle(root, prepareOptions());
+  const rendered = JSON.parse(renderPacket(packet));
+
+  assert.equal(rendered.records[1].data.amount, exactAmount);
+  assert.equal(typeof rendered.records[1].data.amount, "string");
 });
 
 test("does not promote applicant records after a handoff assertion", async (t) => {
@@ -185,7 +199,7 @@ test("rejects a directory in place of a fixed input file", async (t) => {
   await expectBundleError(() => prepareBundle(root, prepareOptions()), "UNSAFE_FILE");
 });
 
-test("rejects a FIFO in place of a fixed input file without opening it", async (t) => {
+test("rejects a FIFO in place of a fixed input file", async (t) => {
   const root = await preparedRoot(t);
   const path = join(root, "context.json");
   await unlink(path);
@@ -402,16 +416,131 @@ test("rejects invalid identities, timestamps, transcript lines, and record paylo
 });
 
 test("the fixture factory explicitly covers all six categories", () => {
+  const requiredCategories = [
+    "corporation-history",
+    "wallet",
+    "contracts",
+    "assets",
+    "skills",
+    "skill-queue",
+  ];
   const bundle = makeBundle();
   assert.deepEqual(
     bundle["manifest.json"].datasets.map((dataset) => dataset.category),
-    categories,
+    requiredCategories,
   );
   assert.deepEqual(
     bundle["records.json"].map((record) => record.category),
-    categories,
+    requiredCategories,
   );
   assert.equal(Object.keys(bundle).length, 4);
+});
+
+test("preserves every per-character dataset entry in multi-character packets", async (t) => {
+  const fixture = fixtureCases.find(({ id }) => id === "empty-vs-failed");
+  assert.ok(fixture);
+  const root = await temporaryRoot(t);
+  await writeBundle(root, fixture.bundle);
+
+  const { packet } = await prepareBundle(root, fixture.options);
+
+  assert.deepEqual(
+    packet.coverage.datasets.map(({ characterId, category, status, history }) => ({
+      characterId,
+      category,
+      status,
+      history,
+    })),
+    [
+      {
+        characterId: "character-1001",
+        category: "corporation-history",
+        status: "empty",
+        history: { knownLimit: null, earliestReturnedAt: null },
+      },
+      {
+        characterId: "character-1001",
+        category: "wallet",
+        status: "empty",
+        history: { knownLimit: null, earliestReturnedAt: null },
+      },
+      {
+        characterId: "character-1001",
+        category: "contracts",
+        status: "empty",
+        history: { knownLimit: null, earliestReturnedAt: null },
+      },
+      {
+        characterId: "character-1001",
+        category: "assets",
+        status: "empty",
+        history: { knownLimit: null, earliestReturnedAt: null },
+      },
+      {
+        characterId: "character-1001",
+        category: "skills",
+        status: "empty",
+        history: { knownLimit: null, earliestReturnedAt: null },
+      },
+      {
+        characterId: "character-1001",
+        category: "skill-queue",
+        status: "empty",
+        history: { knownLimit: null, earliestReturnedAt: null },
+      },
+      {
+        characterId: "character-2002",
+        category: "corporation-history",
+        status: "empty",
+        history: { knownLimit: null, earliestReturnedAt: null },
+      },
+      {
+        characterId: "character-2002",
+        category: "wallet",
+        status: "failed",
+        history: { knownLimit: null, earliestReturnedAt: null },
+      },
+      {
+        characterId: "character-2002",
+        category: "contracts",
+        status: "empty",
+        history: { knownLimit: null, earliestReturnedAt: null },
+      },
+      {
+        characterId: "character-2002",
+        category: "assets",
+        status: "empty",
+        history: { knownLimit: null, earliestReturnedAt: null },
+      },
+      {
+        characterId: "character-2002",
+        category: "skills",
+        status: "empty",
+        history: { knownLimit: null, earliestReturnedAt: null },
+      },
+      {
+        characterId: "character-2002",
+        category: "skill-queue",
+        status: "empty",
+        history: { knownLimit: null, earliestReturnedAt: null },
+      },
+    ],
+  );
+});
+
+test("current-affiliation fixture history includes its older exchange", () => {
+  const fixture = fixtureCases.find(({ id }) => id === "current-affiliation");
+  assert.ok(fixture);
+  const walletDataset = fixture.bundle["manifest.json"].datasets.find(
+    ({ characterId, category }) =>
+      characterId === "character-1001" && category === "wallet",
+  );
+  const olderExchange = fixture.bundle["records.json"].find(
+    ({ id }) => id === "older-exchange-record",
+  );
+
+  assert.equal(walletDataset?.history.earliestReturnedAt, "2025-03-01T00:00:00Z");
+  assert.equal(olderExchange?.data.occurredAt, "2025-03-01T00:00:00Z");
 });
 
 test("the fixture catalogue defines all required cases and expectation fields", () => {
@@ -546,7 +675,7 @@ test("CLI does not expose an outside symlink sentinel", async (t) => {
   assert.equal(result.stderr.includes(sentinel), false);
 });
 
-test("CLI reports invalid bundles safely on stderr with exit 1", async (t) => {
+test("CLI preserves validated identity on a prohibited context credential", async (t) => {
   const root = await preparedRoot(t);
   const secret = "CLI-SECRET-MUST-NOT-LEAK";
   const bundle = makeBundle();
@@ -555,10 +684,71 @@ test("CLI reports invalid bundles safely on stderr with exit 1", async (t) => {
   const result = spawnSync(process.execPath, [cliPath, root], { encoding: "utf8" });
   assert.equal(result.status, 1);
   assert.equal(result.stdout, "");
-  assert.match(result.stderr, /^Bundle: unavailable\nReview status: aborted\n/);
+  assert.match(result.stderr, /^Bundle: synthetic-review@r1\nReview status: aborted\n/);
   assert.match(result.stderr, /Blocking reason: INVALID_CREDENTIAL_FIELD/);
   assert.match(result.stderr, /Attempted review timestamp: \d{4}-\d{2}-\d{2}T/);
+  assert.match(
+    result.stderr,
+    /Unreviewed inputs: manifest\.json, interview\.txt, records\.json, context\.json/,
+  );
   assert.equal(result.stderr.includes(secret), false);
+});
+
+test("CLI preserves validated identity when records JSON is malformed", async (t) => {
+  const root = await preparedRoot(t);
+  const sentinel = "MALFORMED-RECORDS-MUST-NOT-LEAK";
+  await writeFile(join(root, "records.json"), `{${sentinel}`);
+
+  const result = spawnSync(process.execPath, [cliPath, root], { encoding: "utf8" });
+
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /^Bundle: synthetic-review@r1\nReview status: aborted\n/);
+  assert.match(result.stderr, /Blocking reason: INVALID_SCHEMA/);
+  assert.equal(result.stderr.includes(sentinel), false);
+});
+
+test("CLI preserves validated identity when context validation fails", async (t) => {
+  const root = await preparedRoot(t);
+  const bundle = makeBundle();
+  const sentinel = "INVALID-CONTEXT-MUST-NOT-LEAK";
+  bundle["context.json"].preparedBy = sentinel;
+  bundle["context.json"].preparedAt = "not-a-timestamp";
+  await writeBundle(root, bundle);
+
+  const result = spawnSync(process.execPath, [cliPath, root], { encoding: "utf8" });
+
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /^Bundle: synthetic-review@r1\nReview status: aborted\n/);
+  assert.match(result.stderr, /Blocking reason: INVALID_SCHEMA/);
+  assert.equal(result.stderr.includes(sentinel), false);
+});
+
+test("CLI preserves validated identity when interview validation fails", async (t) => {
+  const sentinel = "INVALID-INTERVIEW-MUST-NOT-LEAK";
+  const root = await preparedRoot(t, { interview: sentinel });
+
+  const result = spawnSync(process.execPath, [cliPath, root], { encoding: "utf8" });
+
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /^Bundle: synthetic-review@r1\nReview status: aborted\n/);
+  assert.match(result.stderr, /Blocking reason: INVALID_SCHEMA/);
+  assert.equal(result.stderr.includes(sentinel), false);
+});
+
+test("CLI does not derive identity from an invalid manifest", async (t) => {
+  const invalidIdentity = "unsafe bundle identity";
+  const root = await preparedRoot(t, { manifest: { bundleId: invalidIdentity } });
+
+  const result = spawnSync(process.execPath, [cliPath, root], { encoding: "utf8" });
+
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /^Bundle: unavailable\nReview status: aborted\n/);
+  assert.match(result.stderr, /Blocking reason: INVALID_SCHEMA/);
+  assert.equal(result.stderr.includes(invalidIdentity), false);
 });
 
 test("CLI includes validated bundle identity in a late aborted result", async (t) => {

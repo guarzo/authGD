@@ -49,6 +49,7 @@ export function parseCheckReportArguments(args) {
 }
 
 // Preparation failures are pipeline diagnostics, not model reports consumed by checkReport.
+// "Unreviewed" means no model/recruitment analysis ran; parser progress is not review.
 export function renderPreparationAbort(error) {
   const bundle = error.identity
     ? `${error.identity.bundleId}@${error.identity.revision}`

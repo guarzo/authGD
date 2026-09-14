@@ -6,10 +6,13 @@ import process from "node:process";
 import { TextDecoder } from "node:util";
 import { BundleError, prepareBundle } from "./bundle.mjs";
 import { parseCheckReportArguments, renderPreparationAbort } from "./cli.mjs";
+import { SAFE_ID_PATTERN, isSafeId, isUtcTimestamp } from "./syntax.mjs";
 
 const REPORT_LIMIT = 128 * 1024;
-const SAFE_ID = /^[A-Za-z0-9_-]{1,128}$/;
-const UTC_TIMESTAMP = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?Z$/;
+const INTERVIEW_CITATION = /^\[interview:L([1-9]\d*)-L([1-9]\d*)\]/;
+const RECORD_CITATION = new RegExp(`^\\[record:(${SAFE_ID_PATTERN})\\]`);
+const CONTEXT_CITATION = new RegExp(`^\\[context:(${SAFE_ID_PATTERN})\\]`);
+const BUNDLE_MARKER = new RegExp(`^Bundle: (${SAFE_ID_PATTERN})@(${SAFE_ID_PATTERN})$`);
 const ASSESSMENT_MARKER =
   "Assessment status: DRAFT — human recruiter review required; not an admission decision";
 const COMPLETED_HEADINGS = [
@@ -35,23 +38,6 @@ class ReportInputError extends Error {
   }
 }
 
-function isUtcTimestamp(value) {
-  const match = UTC_TIMESTAMP.exec(value);
-  if (match === null) return false;
-  const timestamp = Date.parse(value);
-  if (!Number.isFinite(timestamp)) return false;
-  const date = new Date(timestamp);
-  const [, year, month, day, hour, minute, second] = match.map(Number);
-  return (
-    date.getUTCFullYear() === year &&
-    date.getUTCMonth() + 1 === month &&
-    date.getUTCDate() === day &&
-    date.getUTCHours() === hour &&
-    date.getUTCMinutes() === minute &&
-    date.getUTCSeconds() === second
-  );
-}
-
 function markerLines(lines, prefix) {
   return lines.filter((line) => line.startsWith(prefix));
 }
@@ -68,19 +54,19 @@ function scanCitations(text) {
   let candidate;
   while ((candidate = starts.exec(text)) !== null) {
     const remainder = text.slice(candidate.index);
-    const interview = /^\[interview:L([1-9]\d*)-L([1-9]\d*)\]/.exec(remainder);
+    const interview = INTERVIEW_CITATION.exec(remainder);
     if (interview !== null) {
       citations.push({ type: "interview", start: interview[1], end: interview[2] });
       starts.lastIndex = candidate.index + interview[0].length;
       continue;
     }
-    const record = /^\[record:([A-Za-z0-9_-]{1,128})\]/.exec(remainder);
+    const record = RECORD_CITATION.exec(remainder);
     if (record !== null) {
       citations.push({ type: "record", id: record[1] });
       starts.lastIndex = candidate.index + record[0].length;
       continue;
     }
-    const context = /^\[context:([A-Za-z0-9_-]{1,128})\]/.exec(remainder);
+    const context = CONTEXT_CITATION.exec(remainder);
     if (context !== null) {
       citations.push({ type: "context", id: context[1] });
       starts.lastIndex = candidate.index + context[0].length;
@@ -104,8 +90,8 @@ export function checkReport(text, prepared) {
   if (
     citationIndex === null ||
     typeof citationIndex !== "object" ||
-    !SAFE_ID.test(citationIndex.bundleId ?? "") ||
-    !SAFE_ID.test(citationIndex.revision ?? "") ||
+    !isSafeId(citationIndex.bundleId) ||
+    !isSafeId(citationIndex.revision) ||
     !Number.isSafeInteger(citationIndex.transcriptLineCount) ||
     citationIndex.transcriptLineCount < 1 ||
     !Array.isArray(citationIndex.recordIds) ||
@@ -118,9 +104,7 @@ export function checkReport(text, prepared) {
   const bundleMarkers = markerLines(lines, "Bundle:");
   const statusMarkers = markerLines(lines, "Review status:");
   const bundleMatch =
-    bundleMarkers.length === 1
-      ? /^Bundle: ([A-Za-z0-9_-]{1,128})@([A-Za-z0-9_-]{1,128})$/.exec(bundleMarkers[0])
-      : null;
+    bundleMarkers.length === 1 ? BUNDLE_MARKER.exec(bundleMarkers[0]) : null;
   const statusMatch =
     statusMarkers.length === 1
       ? /^Review status: (completed|aborted)$/.exec(statusMarkers[0])
