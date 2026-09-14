@@ -186,3 +186,11 @@ Reports use exactly these citation forms:
 ```
 
 A report is scoped by `Bundle: <bundleId>@<revision>`. The citation index establishes only that a target exists and a transcript range is in bounds; it does not prove that a citation supports an inference. Human review remains mandatory.
+
+Validate a report against the same preparation options with:
+
+```text
+node scripts/check-report.mjs <bundle-directory> <report-file> [--evaluation] [--confirmed-by <recruiter>]
+```
+
+The checker accepts structurally valid completed and aborted reports for a successfully prepared bundle. It verifies exact identity and status markers, required report shape, and citation syntax and existence; it does not judge whether evidence supports the report's conclusions or replace recruiter approval. It bounds reports to 128 KiB and rejects invalid UTF-8, symbolic links, and non-regular report files. Preparation runs first: an unsafe or uninterpretable bundle emits the preparation-abort artifact without opening the report. A valid report exits 0, an invalid input or report exits 1, and invalid invocation syntax exits 2. Diagnostics are fixed and do not echo report contents.

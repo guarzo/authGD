@@ -69,7 +69,7 @@ Use this form for every interpretable packet, including partial coverage. Replac
 ```markdown
 Bundle: <bundleId>@<revision>
 Review status: completed
-Skill version: task-2-draft
+Skill version: <trustworthy invocation-reported skill version, or unavailable>
 Model: <actual host-reported model, or unavailable>
 Assessment status: DRAFT — human recruiter review required; not an admission decision
 
@@ -101,15 +101,15 @@ Assessment status: DRAFT — human recruiter review required; not an admission d
 
 ## Aborted report template
 
-Use this form instead of the five sections when review cannot safely proceed. Include no applicant findings, favourable conclusion, or citations obtained by opening unsafe input.
+Use this form instead of the five sections when review cannot safely proceed. Include no applicant findings, favourable conclusion, or citations obtained by opening unsafe input. When preparation cannot safely read a trustworthy identity, use the exact degraded marker `Bundle: unavailable`; otherwise use the validated bundle ID and revision. Never invent unknown model or skill-version metadata; use `unavailable` unless the trustworthy invocation supplies it. Host evaluation records the final instruction-content hashes separately.
 
 ```markdown
-Bundle: <bundleId>@<revision, or unavailable>
+Bundle: <bundleId>@<revision>
 Review status: aborted
-Skill version: task-2-draft
+Skill version: <trustworthy invocation-reported skill version, or unavailable>
 Model: <actual host-reported model, or unavailable>
 Assessment status: DRAFT — human recruiter review required; not an admission decision
-Attempted review: <current UTC timestamp supplied by the host, or unavailable>
+Attempted review timestamp: <current UTC timestamp supplied by the host, or unavailable>
 Blocking reason: <specific safe error or missing mandatory input>
 Unreviewed inputs: <files, datasets, or complete packet not reviewed>
 Corrective action: <re-prepare safely, provide the missing reference or packet, or resolve the stated error>
