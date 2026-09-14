@@ -496,6 +496,25 @@ test("aborted catalogue fixtures fail with their declared preparation code", asy
   }
 });
 
+test("preparation CLI accepts both shared option orders", async (t) => {
+  const root = await preparedRoot(t);
+  for (const suffix of [
+    ["--evaluation", "--confirmed-by", "recruiter-1"],
+    ["--confirmed-by", "recruiter-1", "--evaluation"],
+  ]) {
+    const result = spawnSync(process.execPath, [cliPath, root, ...suffix], {
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 0, `${JSON.stringify(suffix)}: ${result.stderr}`);
+    assert.equal(result.stderr, "");
+    assert.deepEqual(JSON.parse(result.stdout).preparation, {
+      evaluation: true,
+      confirmedBy: "recruiter-1",
+      syntheticOnly: true,
+    });
+  }
+});
+
 test("CLI writes only packet JSON to stdout on success", async (t) => {
   const root = await preparedRoot(t, { sourceKind: "public-esi" });
   const result = spawnSync(
@@ -564,6 +583,8 @@ test("CLI rejects unknown, duplicate, missing-value, and misplaced arguments wit
     [root, "--confirmed-by", "one", "--confirmed-by", "two"],
     [root, "--confirmed-by"],
     [root, "--confirmed-by", "--evaluation"],
+    [root, "--confirmed-by", " "],
+    [root, "--confirmed-by", "x".repeat(129)],
     ["--evaluation", root],
     [root, "extra-root"],
   ];

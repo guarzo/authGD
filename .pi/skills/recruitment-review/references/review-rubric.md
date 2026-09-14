@@ -101,7 +101,7 @@ Assessment status: DRAFT — human recruiter review required; not an admission d
 
 ## Aborted report template
 
-Use this form instead of the five sections when review cannot safely proceed. Include no applicant findings, favourable conclusion, or citations obtained by opening unsafe input. When preparation cannot safely read a trustworthy identity, use the exact degraded marker `Bundle: unavailable`; otherwise use the validated bundle ID and revision. Never invent unknown model or skill-version metadata; use `unavailable` unless the trustworthy invocation supplies it. Host evaluation records the final instruction-content hashes separately.
+Use this form instead of the five sections when model review cannot safely proceed after successful preparation. Include no applicant findings or favourable conclusion. A model-aborted report contains no citations at all. It uses the validated bundle ID and revision because the checker receives a successfully prepared bundle. Preparation-abort diagnostics are distinct pipeline output, not model reports: they may use the exact degraded marker `Bundle: unavailable` when preparation cannot safely read a trustworthy identity, and they are not passed to the report checker. Never invent unknown model or skill-version metadata; use `unavailable` unless the trustworthy invocation supplies it. Host evaluation records the final instruction-content hashes separately.
 
 ```markdown
 Bundle: <bundleId>@<revision>

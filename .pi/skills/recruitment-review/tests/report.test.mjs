@@ -12,6 +12,8 @@ import { makeBundle, writeBundle } from "./fixtures.mjs";
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const cliPath = join(packageRoot, "scripts", "check-report.mjs");
+const prepareCliPath = join(packageRoot, "scripts", "prepare.mjs");
+const inputFormatPath = join(packageRoot, "references", "input-format.md");
 const rubricPath = join(packageRoot, "references", "review-rubric.md");
 
 const prepared = {
@@ -255,6 +257,20 @@ test("rejects reports above the 128 KiB UTF-8 limit without echoing content", ()
   );
 });
 
+test("references define citation-free model aborts separately from preparation diagnostics", async () => {
+  const [inputFormat, rubric] = await Promise.all([
+    readFile(inputFormatPath, "utf8"),
+    readFile(rubricPath, "utf8"),
+  ]);
+
+  assert.match(rubric, /A model-aborted report contains no citations at all\./);
+  assert.match(inputFormat, /A model-aborted report contains no citations at all\./);
+  assert.match(
+    inputFormat,
+    /Preparation-abort diagnostics are pipeline output, not model reports/,
+  );
+});
+
 test("rubric templates materialize to checker-compatible completed and aborted reports", async () => {
   const rubric = await readFile(rubricPath, "utf8");
   const normal = fencedTemplate(rubric, "Normal report template")
@@ -283,6 +299,71 @@ test("rubric templates materialize to checker-compatible completed and aborted r
 
   assert.equal(checkReport(`${normal}\n`, prepared).ok, true);
   assert.equal(checkReport(`${aborted}\n`, prepared).ok, true);
+});
+
+test("report CLI option parsing stays in parity with preparation", async (t) => {
+  const { root, sandbox } = await bundleDirectory(t, {
+    manifest: { bundleId: "sample", revision: "v1" },
+    records: [
+      {
+        id: "W001",
+        characterId: "character-1001",
+        category: "wallet",
+        provenanceId: "source-1",
+        sourceRecordId: null,
+        data: {},
+      },
+    ],
+    context: {
+      notes: [
+        {
+          id: "C001",
+          text: "Illustrative context.",
+          source: "Synthetic policy",
+          asOf: null,
+        },
+      ],
+    },
+  });
+  const reportPath = join(sandbox, "report.md");
+  await writeFile(reportPath, validReport);
+
+  const cases = [
+    { suffix: [], status: 0 },
+    { suffix: ["--evaluation"], status: 0 },
+    { suffix: ["--confirmed-by", "recruiter-1"], status: 0 },
+    {
+      suffix: ["--evaluation", "--confirmed-by", "recruiter-1"],
+      status: 0,
+    },
+    {
+      suffix: ["--confirmed-by", "recruiter-1", "--evaluation"],
+      status: 0,
+    },
+    { suffix: ["--unknown"], status: 2 },
+    { suffix: ["--evaluation", "--evaluation"], status: 2 },
+    {
+      suffix: ["--confirmed-by", "one", "--confirmed-by", "two"],
+      status: 2,
+    },
+    { suffix: ["--confirmed-by"], status: 2 },
+    { suffix: ["--confirmed-by", "--evaluation"], status: 2 },
+    { suffix: ["--confirmed-by", " "], status: 2 },
+    { suffix: ["--confirmed-by", "x".repeat(129)], status: 2 },
+    { suffix: ["extra-root"], status: 2 },
+  ];
+
+  for (const { suffix, status } of cases) {
+    const preparation = spawnSync(process.execPath, [prepareCliPath, root, ...suffix], {
+      encoding: "utf8",
+    });
+    const report = runCli([root, reportPath, ...suffix]);
+    assert.deepEqual(
+      [preparation.status, report.status],
+      [status, status],
+      JSON.stringify(suffix),
+    );
+  }
 });
 
 test("CLI validates completed and aborted reports and returns 1 for an invalid report", async (t) => {
