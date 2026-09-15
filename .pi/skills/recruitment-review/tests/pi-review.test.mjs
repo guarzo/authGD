@@ -1,7 +1,17 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import fs, { existsSync } from "node:fs";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import process from "node:process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -38,6 +48,10 @@ async function hostFor(t, options = {}) {
       provider: "fixture",
       contextWindow: 1_000_000,
       maxTokens: 32768,
+    },
+    modelRegistry: {
+      hasConfiguredAuth: () => true,
+      getProviderAuth: async () => undefined,
     },
     getSystemPrompt: () => "Host instructions.",
     getContextUsage: () => ({ tokens: 0, contextWindow: 1_000_000, percent: 0 }),
@@ -98,7 +112,11 @@ async function hostFor(t, options = {}) {
   async function invoke(text) {
     const input = await emit("input", { text, source: "interactive" });
     if (input?.action === "handled") return input;
-    append({ role: "user", content: input?.text ?? text, timestamp: Date.now() });
+    append({
+      role: "user",
+      content: [{ type: "text", text: input?.text ?? text }],
+      timestamp: Date.now(),
+    });
     await emit("before_agent_start", {
       prompt: input?.text ?? text,
       systemPrompt: "Host instructions.",
@@ -537,6 +555,109 @@ test("stale crash workspaces are pruned but live process workspaces survive", as
   }
   await host.emit("session_start", { reason: "startup" });
   assert.deepEqual(await readdir(privateRoot), ["case-live"]);
+});
+
+test("correction diagnostics reach outgoing context with native Pi text-block messages", async (t) => {
+  const host = await hostFor(t);
+  await startCase(host);
+  await host.finish("Not a report.");
+  host.append({
+    role: "user",
+    content: [{ type: "text", text: host.queued[0].content }],
+    timestamp: Date.now(),
+  });
+  const outgoing = JSON.stringify(await host.outgoing());
+  assert.ok(
+    outgoing.includes("INVALID_BUNDLE_MARKER"),
+    "the model must receive the checker's actual correction diagnostics",
+  );
+});
+
+test("missing native authentication stops intake before restricting tools or retaining inputs", async (t) => {
+  const host = await hostFor(t);
+  host.ctx.modelRegistry.hasConfiguredAuth = () => false;
+  const path = await exportFor(host);
+  const result = await host.invoke(`/skill:recruitment-review ${path}\n${discord}`);
+  assert.equal(result?.action, "handled");
+  assert.deepEqual(host.tools(), ["read", "bash", "web_search"]);
+  assert.equal(packetIn(await host.outgoing()), undefined);
+  assert.ok(host.notices.some(({ text }) => /login|authenticat/i.test(text)));
+});
+
+test("failed raw cleanup cannot publish a checked badge and remains tracked for shutdown retry", async (t) => {
+  const host = await hostFor(t);
+  const packet = await startCase(host);
+  const privateRoot = join(host.root, "private");
+  const directory = join(privateRoot, (await readdir(privateRoot))[0]);
+  const original = fs.promises.rm;
+  t.mock.method(fs.promises, "rm", (path, options) => {
+    if (String(path).endsWith("interview.txt"))
+      return Promise.reject(
+        Object.assign(new Error("simulated unlink denial"), { code: "EACCES" }),
+      );
+    return original(path, options);
+  });
+  syncBuiltinESMExports();
+  try {
+    await host.finish(reportFor(packet));
+    assert.ok(
+      !/completed|checked/i.test(host.statuses.get("recruitment-review") ?? ""),
+      "cleanup failure cannot leave a checked badge",
+    );
+    assert.equal(host.receipts.length, 0);
+    assert.ok(
+      host.notices.some(({ text }) => /clean.*fail|could not.*clean|cleanup/i.test(text)),
+    );
+    assert.equal(await readFile(join(directory, "interview.txt"), "utf8"), discord);
+  } finally {
+    fs.promises.rm = original;
+    syncBuiltinESMExports();
+  }
+  await host.emit("session_shutdown", { reason: "quit" });
+  await assert.rejects(stat(directory), { code: "ENOENT" });
+});
+
+test("pre-existing storage must have private permissions and the current POSIX owner", async (t) => {
+  const host = await hostFor(t);
+  const path = await exportFor(host);
+  const root = join(host.root, "private");
+  await mkdir(root, { mode: 0o700 });
+  await chmod(root, 0o777);
+  assert.equal(
+    (await host.invoke(`/skill:recruitment-review ${path}\n${discord}`))?.action,
+    "handled",
+  );
+  assert.deepEqual(await readdir(root), []);
+  await chmod(root, 0o700);
+  const original = fs.promises.lstat;
+  t.mock.method(fs.promises, "lstat", async (file) => {
+    const info = await original(file);
+    if (file !== root) return info;
+    const otherOwner = Object.create(info);
+    otherOwner.uid = (process.getuid?.() ?? 1000) + 1;
+    return otherOwner;
+  });
+  syncBuiltinESMExports();
+  try {
+    assert.equal(
+      (await host.invoke(`/skill:recruitment-review ${path}\n${discord}`))?.action,
+      "handled",
+    );
+    assert.deepEqual(await readdir(root), []);
+  } finally {
+    fs.promises.lstat = original;
+    syncBuiltinESMExports();
+  }
+});
+
+test("configured temporary storage inside a repository cannot receive private review files", async (t) => {
+  const host = await hostFor(t);
+  await writeFile(join(host.root, ".git"), "gitdir: /fixture-only\n");
+  const path = await exportFor(host);
+  const result = await host.invoke(`/skill:recruitment-review ${path}\n${discord}`);
+  assert.equal(result?.action, "handled");
+  assert.deepEqual(await readdir(join(host.root, "private")), []);
+  assert.equal(packetIn(await host.outgoing()), undefined);
 });
 
 test("unrelated commands and lookalike skill names do not start intake", async (t) => {

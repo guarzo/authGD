@@ -6,11 +6,12 @@ import {
   mkdtemp,
   readFile,
   readdir,
+  realpath,
   rm,
   writeFile,
 } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import process from "node:process";
 import { URL } from "node:url";
 import { checkReport } from "./check-report.mjs";
@@ -26,6 +27,8 @@ const INPUT_ERRORS = {
     "The input is not a valid authGD export/prepared packet, or the interview is empty.",
   INVALID_UTF8: "The input is not valid UTF-8 text.",
   UNSAFE_FILE: "Choose a regular file, not a symbolic link or directory.",
+  UNSAFE_WORKSPACE:
+    "Temporary storage must be outside Git, private, and owned by the current user. Use a private OS temporary directory.",
   INVALID_CREDENTIAL_FIELD:
     "The input contains credential-bearing fields. Do not use it for review; choose an authGD evidence download.",
   REVIEW_INPUT_TOO_LARGE:
@@ -95,23 +98,77 @@ export default function registerRecruitmentReview(
   async function close(ctx, state, keepReport = false) {
     const previous = active;
     active = null;
-    ctx.ui.setStatus(STATUS, state ? `Recruitment: ${state}` : undefined);
     if (previous) {
       pi.setActiveTools(previous.tools);
       if (previous.directory) {
-        if (keepReport) {
-          for (const name of ["interview.txt", "packet.json"]) {
-            await rm(join(previous.directory, name), { force: true });
+        // Track before deleting so a failed unlink remains eligible for retry.
+        artifacts.add(previous.directory);
+        try {
+          if (keepReport) {
+            for (const name of ["interview.txt", "packet.json"]) {
+              await rm(join(previous.directory, name), { force: true });
+            }
+          } else {
+            await rm(previous.directory, { recursive: true, force: true });
+            artifacts.delete(previous.directory);
           }
-          artifacts.add(previous.directory);
-        } else await rm(previous.directory, { recursive: true, force: true });
+        } catch {
+          if (!active)
+            ctx.ui.setStatus(STATUS, "Recruitment: failed — temporary cleanup");
+          ctx.ui.notify(
+            "Recruitment temporary cleanup failed. Files remain private and cleanup will be retried on the next review or shutdown.",
+            "error",
+          );
+          return false;
+        }
       }
+    }
+    if (!active) ctx.ui.setStatus(STATUS, state ? `Recruitment: ${state}` : undefined);
+    return true;
+  }
+
+  async function checkRoot() {
+    const info = await lstat(temporaryRoot);
+    if (
+      !info.isDirectory() ||
+      info.isSymbolicLink() ||
+      (typeof process.getuid === "function" &&
+        (info.uid !== process.getuid() || (info.mode & 0o077) !== 0))
+    ) {
+      throw Object.assign(new Error("UNSAFE_WORKSPACE"), { code: "UNSAFE_WORKSPACE" });
+    }
+    // TMPDIR is configurable. Resolve ancestors so even an alias into a Git
+    // checkout cannot turn the private workspace into repository content.
+    let location = await realpath(temporaryRoot);
+    while (true) {
+      try {
+        await lstat(join(location, ".git"));
+        throw Object.assign(new Error("UNSAFE_WORKSPACE"), { code: "UNSAFE_WORKSPACE" });
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+      }
+      const parent = dirname(location);
+      if (parent === location) break;
+      location = parent;
+    }
+  }
+
+  async function authReady(ctx) {
+    if (!ctx.model) return false;
+    try {
+      return (
+        ctx.modelRegistry.hasConfiguredAuth(ctx.model) ||
+        (await ctx.modelRegistry.getProviderAuth(ctx.model.provider)) !== undefined
+      );
+    } catch {
+      return false;
     }
   }
 
   async function pruneStale() {
     let entries;
     try {
+      await checkRoot();
       entries = await readdir(temporaryRoot, { withFileTypes: true });
     } catch (error) {
       if (error.code === "ENOENT") return;
@@ -147,11 +204,24 @@ export default function registerRecruitmentReview(
     }
   }
 
-  async function removeArtifacts() {
+  async function removeArtifacts(ctx) {
+    let success = true;
     for (const directory of artifacts) {
-      await rm(directory, { recursive: true, force: true });
-      artifacts.delete(directory);
+      try {
+        await rm(directory, { recursive: true, force: true });
+        artifacts.delete(directory);
+      } catch {
+        success = false;
+      }
     }
+    if (!success) {
+      ctx.ui.setStatus(STATUS, "Recruitment: failed — temporary cleanup");
+      ctx.ui.notify(
+        "Recruitment temporary cleanup failed. Remaining files are still tracked for cleanup on the next review or shutdown.",
+        "error",
+      );
+    }
+    return success;
   }
 
   function caseEntries(ctx, current) {
@@ -195,8 +265,8 @@ export default function registerRecruitmentReview(
       );
       return { action: "handled" };
     }
-    await close(ctx);
-    await removeArtifacts();
+    if (!(await close(ctx)) || !(await removeArtifacts(ctx)))
+      return { action: "handled" };
     const current = {
       id: randomUUID(),
       tools: pi.getActiveTools(),
@@ -208,6 +278,14 @@ export default function registerRecruitmentReview(
     active = current;
     ctx.ui.setStatus(STATUS, "Recruitment: preparing evidence");
     try {
+      if (!(await authReady(ctx))) {
+        ctx.ui.notify(
+          "Authenticate the selected Pi model with /login, then start the recruitment review again. No review was started.",
+          "error",
+        );
+        await close(ctx, "failed — model authentication");
+        return { action: "handled" };
+      }
       let path = match[1].trim();
       const isPrepared = /^--prepared(?:\s|$)/.test(path);
       if (isPrepared) path = path.slice("--prepared".length).trim();
@@ -266,9 +344,7 @@ export default function registerRecruitmentReview(
         return { action: "handled" };
       }
       await mkdir(temporaryRoot, { recursive: true, mode: 0o700 });
-      const rootStat = await lstat(temporaryRoot);
-      if (!rootStat.isDirectory() || rootStat.isSymbolicLink())
-        throw new Error("UNSAFE_WORKSPACE");
+      await checkRoot();
       await pruneStale();
       current.directory = await mkdtemp(join(temporaryRoot, "case-"));
       if (active !== current) {
@@ -297,6 +373,15 @@ export default function registerRecruitmentReview(
         await rm(current.directory, { recursive: true, force: true });
         return { action: "handled" };
       }
+      if (!(await authReady(ctx))) {
+        ctx.ui.notify(
+          "Pi model authentication changed during intake. Use /login and retry; no review was started.",
+          "error",
+        );
+        await close(ctx, "failed — model authentication");
+        return { action: "handled" };
+      }
+      if (active !== current) return { action: "handled" };
       current.prompt = `Run recruitment review ${current.id} using its complete prepared packet.`;
       current.state = "reviewing";
       pi.setActiveTools([]);
@@ -340,14 +425,13 @@ export default function registerRecruitmentReview(
     }
     const messages = entries
       .map((entry) => entry.message)
-      .filter(
-        (message) =>
-          message.role === "assistant" ||
-          (message.role === "user" && message.content === active.prompt),
-      );
+      .filter((message) => message.role === "assistant");
     const outgoing = [
       { role: "user", content: active.review.packetText, timestamp: Date.now() },
       ...messages,
+      // Inject the owned instruction, not a content-shape comparison against
+      // Pi's user messages (which normally contain text blocks, not strings).
+      { role: "user", content: active.prompt, timestamp: Date.now() },
     ];
     if (
       !fitsContext(
@@ -448,7 +532,8 @@ export default function registerRecruitmentReview(
         mode: 0o600,
       });
       if (active !== current) return;
-      await close(ctx, "completed — canonical draft checked", true);
+      if (!(await close(ctx, "completed — canonical draft checked", true)) || active)
+        return;
       pi.appendEntry(STATUS, receipt);
       ctx.ui.notify(`${CHECKED}. Canonical report: ${reportPath}`, "info");
     } catch {
@@ -483,6 +568,6 @@ export default function registerRecruitmentReview(
   });
   pi.on("session_shutdown", async (_event, ctx) => {
     await close(ctx);
-    await removeArtifacts();
+    await removeArtifacts(ctx);
   });
 }

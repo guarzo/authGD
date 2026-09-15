@@ -459,6 +459,7 @@ try {
     const beforeEvents = nativeEvents.length;
     const beforeEntries = sessionManager.getEntries().length;
     const clarify = !smoke && current.label === "SECOND";
+    const correct = !smoke && current.label === "FIRST";
     let firstRevision;
     let attempt = 0;
     const respond = (context, _options, _state, model) => {
@@ -519,10 +520,23 @@ try {
       }
       modelContexts.push(context);
       attempt++;
-      if (clarify && attempt === 1) {
+      if ((clarify || correct) && attempt === 1) {
         firstRevision = packet.bundle.revision;
         return fauxAssistantMessage(
-          "Clarification needed: Which Discord participant is the applicant?",
+          clarify
+            ? "Clarification needed: Which Discord participant is the applicant?"
+            : "This is not a report.",
+        );
+      }
+      if (correct) {
+        assert.ok(
+          visible.includes("INVALID_BUNDLE_MARKER"),
+          "native correction diagnostics were filtered out",
+        );
+        assert.equal(
+          packet.bundle.revision,
+          firstRevision,
+          "format repair must not change evidence identity",
         );
       }
       if (clarify) {
@@ -557,7 +571,7 @@ try {
       reports.push(report + reportSuffix);
       return fauxAssistantMessage(report);
     };
-    faux.appendResponses(clarify ? [respond, respond] : [respond]);
+    faux.appendResponses(smoke ? [respond] : [respond, respond]);
     await session.prompt("/skill:recruitment-review", { source: "interactive" });
     // sendUserMessage may launch an asynchronous prompt from an input handler.
     // Wait on actual native agent_settled, not just resolution of input preflight.
@@ -607,7 +621,7 @@ try {
     );
     assert.equal(
       modelContexts.length,
-      cases.indexOf(current) + 1 + (clarify ? 1 : 0),
+      (cases.indexOf(current) + 1) * (smoke ? 1 : 2),
       "only the expected clarification and final report calls may run",
     );
     const canonical = session.messages.filter((x) => x.role === "assistant").at(-1);
@@ -670,9 +684,34 @@ try {
   }
   assert.equal(inputCount, 2);
   assert.equal(editorCount, 2);
-  assert.equal(faux.state.callCount, smoke ? 2 : 3);
+  assert.equal(faux.state.callCount, smoke ? 2 : 4);
   assert.equal(clarificationCount, smoke ? 0 : 1);
   assert.deepEqual(await modelRuntime.listCredentials(), []);
+  if (!smoke) {
+    const previousModel = session.agent.state.model;
+    session.agent.state.model = {
+      ...previousModel,
+      provider: "unconfigured-native-probe",
+    };
+    const before = faux.state.callCount;
+    const beforeUI = uiLog.length;
+    await session.prompt(
+      `/skill:recruitment-review ${cases[0].exportPath}\n${cases[0].interview}`,
+      { source: "interactive" },
+    );
+    assert.equal(
+      faux.state.callCount,
+      before,
+      "missing authentication must start no model request",
+    );
+    assert.deepEqual(
+      session.getActiveToolNames(),
+      originalTools,
+      "authentication rejection stranded restricted tools",
+    );
+    assert.match(JSON.stringify(uiLog.slice(beforeUI)), /Authenticate|authentication/);
+    session.agent.state.model = previousModel;
+  }
   assert.equal(
     nativeEvents.filter((x) => x.type === "ui_prompt_start").length,
     smoke ? 4 : 5,
