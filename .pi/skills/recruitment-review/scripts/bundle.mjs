@@ -44,6 +44,8 @@ const SAFE_MESSAGES = {
   UNSAFE_FILE: "A bundle path is not a regular, non-symbolic-link file.",
   INPUT_TOO_LARGE: "The evidence bundle exceeds the 4 MiB input limit.",
   PACKET_TOO_LARGE: "The prepared packet exceeds the 128 KiB packet limit.",
+  REVIEW_INPUT_TOO_LARGE:
+    "Managed review limits are 64 MiB for the export and 1 MiB each for interview and context text.",
   INVALID_CREDENTIAL_FIELD: "A JSON input contains a prohibited credential-bearing key.",
   READ_FAILED: "A required bundle input could not be read.",
 };
@@ -84,7 +86,7 @@ function hasUniqueValues(values) {
   return new Set(values).size === values.length;
 }
 
-function assertNoCredentialKeys(value) {
+export function assertNoCredentialKeys(value) {
   const pending = [value];
   while (pending.length > 0) {
     const current = pending.pop();
@@ -293,17 +295,13 @@ function validateContext(context) {
 }
 
 function validateInterview(interview) {
+  if (!isNonEmptyString(interview)) fail("INVALID_SCHEMA");
+  if (!interview.isWellFormed()) fail("INVALID_UTF8");
   const lines = interview.split("\n");
   if (lines.at(-1) === "") lines.pop();
   const normalized = lines.map((line) =>
     line.endsWith("\r") ? line.slice(0, -1) : line,
   );
-  if (
-    normalized.length === 0 ||
-    normalized.some((line) => !/^[^:\r\n]+:\s*\S/.test(line))
-  ) {
-    fail("INVALID_SCHEMA");
-  }
   return normalized.map((text, index) => ({ line: index + 1, text }));
 }
 
@@ -411,34 +409,18 @@ export function renderPacket(packet) {
   return text;
 }
 
-export async function prepareBundle(root, options) {
+/** Shared schema validation and citation construction, without IO or rendering policy. */
+export function prepareInputs({ manifest, interview, records, context }, options) {
   validateOptions(options);
-  const inspected = await inspectInputs(root);
-  const manifestInput = await readInput(inspected[0], INPUT_LIMIT);
-  const manifest = parseJson(manifestInput.text);
   assertNoCredentialKeys(manifest);
   const manifestState = validateManifest(manifest);
-  const identity = {
-    bundleId: manifest.bundleId,
-    revision: manifest.revision,
-  };
+  const identity = { bundleId: manifest.bundleId, revision: manifest.revision };
 
   try {
-    const inputs = new Map([[manifestInput.name, manifestInput.text]]);
-    let total = manifestInput.byteLength;
-    for (const input of inspected.slice(1)) {
-      const result = await readInput(input, INPUT_LIMIT - total);
-      total += result.byteLength;
-      inputs.set(result.name, result.text);
-    }
-
-    const records = parseJson(inputs.get("records.json"));
-    const context = parseJson(inputs.get("context.json"));
     for (const value of [records, context]) assertNoCredentialKeys(value);
-
     validateRecords(records, manifestState);
     validateContext(context);
-    const interviewLines = validateInterview(inputs.get("interview.txt"));
+    const interviewLines = validateInterview(interview);
     const sourceKinds = new Map(
       manifest.provenance.map((entry) => [entry.id, entry.sourceKind]),
     );
@@ -474,7 +456,6 @@ export async function prepareBundle(root, options) {
       records: preparedRecords,
     };
 
-    renderPacket(packet);
     return {
       packet,
       citationIndex: {
@@ -489,6 +470,42 @@ export async function prepareBundle(root, options) {
     if (error instanceof BundleError) {
       throw new BundleError(error.code, identity);
     }
+    throw error;
+  }
+}
+
+export async function prepareBundle(root, options) {
+  validateOptions(options);
+  const inspected = await inspectInputs(root);
+  const manifestInput = await readInput(inspected[0], INPUT_LIMIT);
+  const manifest = parseJson(manifestInput.text);
+  // Keep early manifest validation: late read/parse errors may carry only a
+  // fully validated identity, and file inspection still precedes all parsing.
+  assertNoCredentialKeys(manifest);
+  validateManifest(manifest);
+  const identity = { bundleId: manifest.bundleId, revision: manifest.revision };
+
+  try {
+    const inputs = new Map([[manifestInput.name, manifestInput.text]]);
+    let total = manifestInput.byteLength;
+    for (const input of inspected.slice(1)) {
+      const result = await readInput(input, INPUT_LIMIT - total);
+      total += result.byteLength;
+      inputs.set(result.name, result.text);
+    }
+    const prepared = prepareInputs(
+      {
+        manifest,
+        interview: inputs.get("interview.txt"),
+        records: parseJson(inputs.get("records.json")),
+        context: parseJson(inputs.get("context.json")),
+      },
+      options,
+    );
+    renderPacket(prepared.packet);
+    return prepared;
+  } catch (error) {
+    if (error instanceof BundleError) throw new BundleError(error.code, identity);
     throw error;
   }
 }

@@ -447,29 +447,50 @@ refresh token but the bounded database write cannot save its replacement, that
 character may need reauthorisation. Collection does not retry that write without
 a timeout or persist credentials in a separate recovery queue.
 
-**External preparation.** Keep the export and interview in a private directory.
-From a repository checkout (the Pi skill is not shipped in the application image):
+**Review in Pi.** Update the repository checkout and load its trusted project
+resources in Pi 0.85.1 or newer (`/reload` after an update). The Pi resources are
+not shipped in the web application image. For each applicant:
 
-```sh
-cd .pi/skills/recruitment-review
-node scripts/import-export.mjs /private/evidence.json \
-  --interview /private/interview.txt \
-  --prepared-by "Recruiter Name" \
-  --out /private/new-bundle \
-  --note "An attributed recruiter note." > /private/packet.json
-```
+1. Invoke `/skill:recruitment-review`.
+2. Provide the authGD evidence download when prompted.
+3. Paste the Discord interview exactly as copied into Pi's multiline editor.
 
-The output bundle directory must be new. The importer creates `manifest.json`,
-`records.json`, `interview.txt`, and `context.json`, validates the result, and
-prints the prepared packet. It never confirms trust on behalf of the recruiter.
-Use the normal preparation command with `--confirmed-by` only after independently
-confirming the organisation-controlled handoff. The existing Pi skill consumes
-the resulting packet; no model call occurs during collection or import.
+Preparation, private working files and report checking happen automatically.
+There are no operator shell commands, required `Speaker: text` labels, manual
+bundles or preparer flags. If the applicant's Discord identity is unclear, Pi
+asks which participant is the applicant without requesting the interview again.
+The adapter uses the current Pi model and isolates the active case's context.
+It does not collect more data or switch providers on its own.
 
-The reviewer's 4 MiB aggregate bundle and 128 KiB rendered packet limits remain.
-A full valid export can exceed them. Import then fails explicitly without
-truncating the source export or publishing a bundle; do not call that a completed
-review. See the skill's `references/input-format.md` for its full contract.
+The result remains a draft requiring human review. A checked indication covers
+the canonical Markdown and its input-bound receipt, not visual substitutions by
+other extensions or the correctness of the model's inferences. Aborted, truncated
+or failed runs never count as completed reviews. A canonical temporary report
+can be copied/saved explicitly before another review or session shutdown removes
+it. Original downloads and explicitly saved copies are never deleted.
+
+Managed intake accepts up to 64 MiB of source and 1 MiB of raw interview/added
+notes. It preflights the complete compact packet against the selected model's
+context capacity, with output headroom; not every accepted download fits every
+model. Capacity failures are explicit, never a partial or silently summarised
+review. The standalone advanced CLI keeps its original 4 MiB/128 KiB limits.
+Existing prepared packets can be supplied with
+`/skill:recruitment-review --prepared /path/packet.json`.
+
+Temporary files have private permissions outside Git. Raw working inputs are
+removed at completion/cancellation. Crash leftovers are cleaned opportunistically
+after 24 hours on later use, excluding live process owners. Pi session storage,
+other extensions and provider retention are separate: approve real-data handling
+before using applicant evidence. Collection and deterministic preparation make
+no model calls; the review uses the operator's existing Pi provider.
+
+For advanced CLI contracts see
+`.pi/skills/recruitment-review/references/input-format.md`. Developers can run
+`npm run test:recruitment-review` for helper/adapter tests and
+`PI_PACKAGE_DIR=/path/to/installed/pi npm run test:recruitment-pi` for native
+Pi 0.85.1 integration with an isolated, scripted offline provider. That native
+probe tests actual context delivery and canonical checking, not semantic model
+quality or a live applicant workflow.
 
 ### Changing the corp share
 

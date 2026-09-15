@@ -15,7 +15,9 @@ Use only the complete prepared packet. This is an evidentiary comparison for a r
 
 ## Claim comparison
 
-Extract material, checkable applicant statements rather than treating interviewer premises as applicant claims. Quote the applicant exactly and cite physical lines as `[interview:L2-L2]` or a necessary range such as `[interview:L3-L5]`.
+Extract material, checkable applicant statements rather than treating interviewer premises as applicant claims. The transcript may be an ordinary Discord paste with standalone names/timestamps, blank lines, quotes and multiline messages. Do not require `Speaker: text`, mistake quoted third-party text for the applicant's claim, or infer authorship from a colon alone. Quote the applicant exactly and cite physical lines as `[interview:L2-L2]` or a necessary range such as `[interview:L3-L5]`.
+
+If applicant identity is genuinely ambiguous during managed Pi review, emit exactly `Clarification needed: Which Discord participant is the applicant?` and stop. The adapter records the recruiter's answer as context and resumes. This is neither a completed report nor a mechanical report failure. Other evidence gaps belong in the report and its follow-up questions.
 
 For every material comparison, use a `### Claim ...` block and include the following labelled fields in order. Labels may be plain (`Evidence:`), bold with the colon inside (`**Evidence:**`), or bold with the colon outside (`**Evidence**:`). Use spaces for indentation. A value may follow on the same line or on continuation lines indented more deeply than its label, but it must be non-empty. A non-blank sibling at the label's indentation or shallower starts separate content and does not satisfy the field:
 
@@ -115,7 +117,7 @@ Assessment status: DRAFT — human recruiter review required; not an admission d
 
 ## No-identity abort diagnostic
 
-When manual invocation lacks a validated packet identity because the packet is missing, preparation failed, or the packet cannot be interpreted safely, return exactly this diagnostic:
+In an explicit unmanaged/no-tools evaluation lacking a validated packet identity because the packet is missing, preparation failed, or the packet cannot be interpreted safely, return exactly this diagnostic. A normal managed invocation without inputs starts guided intake instead; an unloaded adapter is a setup error, not an applicant assessment:
 
 ```markdown
 Bundle: unavailable
