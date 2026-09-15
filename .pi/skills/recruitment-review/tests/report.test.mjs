@@ -366,6 +366,15 @@ test("accepts coverage values on attached continuation and nested Markdown lines
   assert.ok(checkReport(empty, prepared).errors.includes("MISSING_COVERAGE_SNAPSHOT"));
 });
 
+test("does not let a same-level coverage sibling satisfy an empty Snapshot", () => {
+  const report = validReport.replace(
+    "- Snapshot: 2026-09-14T12:00:00Z.",
+    "- Snapshot:\n- Note: Unrelated coverage detail.",
+  );
+
+  assert.deepEqual(checkReport(report, prepared).errors, ["MISSING_COVERAGE_SNAPSHOT"]);
+});
+
 test("does not infer missing coverage fields from bare keywords", () => {
   const report = validReport
     .replace(
@@ -422,6 +431,35 @@ test("requires every labelled claim field to have a nonempty value", () => {
     assert.equal(result.ok, false, field);
     assert.ok(result.errors.includes(expectedError), field);
   }
+});
+
+test("does not let a cited same-level Note satisfy an empty Applicant claim", () => {
+  const report = validReport.replace(
+    "- Applicant claim: “The exchange happened.” [interview:L1-L2]",
+    "- Applicant claim:\n- Note: Unrelated transcript remark. [interview:L1-L2]",
+  );
+
+  assert.deepEqual(checkReport(report, prepared).errors, ["MISSING_APPLICANT_CLAIM"]);
+});
+
+test("does not let a cited shallower Note satisfy empty Evidence", () => {
+  const report = validReport.replace(
+    "- Evidence: A supplied record exists. [record:W001] [context:C001]",
+    "  - Evidence:\n- Note: Unrelated record remark. [record:W001]",
+  );
+
+  assert.deepEqual(checkReport(report, prepared).errors, ["MISSING_CLAIM_EVIDENCE"]);
+});
+
+test("does not let a trailing sibling paragraph satisfy empty alternatives", () => {
+  const report = validReport.replace(
+    "- Plausible alternatives: None apparent from the supplied packet.",
+    "- Plausible alternatives:\nUnrelated closing paragraph.",
+  );
+
+  assert.deepEqual(checkReport(report, prepared).errors, [
+    "MISSING_PLAUSIBLE_ALTERNATIVES",
+  ]);
 });
 
 test("requires every labelled claim field to be present", () => {
@@ -641,6 +679,44 @@ test("requires a citation for each factual material-finding item", () => {
     "### Direct contradictions\n- A factual finding.\n  - Supporting detail. [record:W001]",
   );
   assert.deepEqual(checkReport(continued, prepared), { ok: true, errors: [] });
+});
+
+test("rejects unsupported tables in material findings", () => {
+  const tables = [
+    "| Finding | Evidence |\n| --- | --- |\n| Cited row | [record:W001] |\n| Uncited row | None |",
+    "Finding | Evidence\n:--- | ---:\nCited row | [record:W001]",
+    "| --- |\n| Cited row [record:W001] |",
+  ];
+
+  for (const table of tables) {
+    const report = validReport.replace(
+      "### Direct contradictions\nNone identified within the supplied coverage.",
+      `### Direct contradictions\n${table}`,
+    );
+    assert.deepEqual(checkReport(report, prepared).errors, [
+      "UNSUPPORTED_MATERIAL_FINDINGS_TABLE",
+    ]);
+  }
+});
+
+test("splits blank-separated non-list findings regardless of indentation", () => {
+  const report = validReport.replace(
+    "### Direct contradictions\nNone identified within the supplied coverage.",
+    "### Direct contradictions\nA cited paragraph. [record:W001]\n\n  An uncited separate paragraph.",
+  );
+
+  assert.deepEqual(checkReport(report, prepared).errors, [
+    "MISSING_MATERIAL_FINDING_CITATION",
+  ]);
+});
+
+test("preserves deeper list continuations after blank lines", () => {
+  const report = validReport.replace(
+    "### Direct contradictions\nNone identified within the supplied coverage.",
+    "### Direct contradictions\n- A factual finding.\n\n  Supporting detail. [record:W001]",
+  );
+
+  assert.deepEqual(checkReport(report, prepared), { ok: true, errors: [] });
 });
 
 test("allows only nonempty labelled metadata items without material citations", () => {

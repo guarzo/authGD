@@ -138,12 +138,18 @@ function parseLabelLine(line) {
 
 function fieldValue(lines, markerIndex, initialValue, fieldMarkers) {
   const nextMarker = fieldMarkers.find(({ index }) => index > markerIndex);
-  return [
-    initialValue,
-    ...lines.slice(markerIndex + 1, nextMarker?.index ?? lines.length),
-  ]
-    .join("\n")
-    .trim();
+  const markerIndent = /^\s*/.exec(lines[markerIndex])[0].length;
+  const continuation = [];
+  for (
+    let index = markerIndex + 1;
+    index < (nextMarker?.index ?? lines.length);
+    index += 1
+  ) {
+    const line = lines[index];
+    if (line.trim().length > 0 && /^\s*/.exec(line)[0].length <= markerIndent) break;
+    continuation.push(line);
+  }
+  return [initialValue, ...continuation].join("\n").trim();
 }
 
 function markdownItems(content) {
@@ -165,7 +171,10 @@ function markdownItems(content) {
         text: numbered === null ? bullet[1] : numbered[2],
       };
       items.push(current);
-    } else if (current === null || (afterBlank && !/^\s/.test(line))) {
+    } else if (
+      current === null ||
+      (afterBlank && (current.kind === "paragraph" || !/^\s/.test(line)))
+    ) {
       current = { kind: "paragraph", text: line.trim() };
       items.push(current);
     } else {
@@ -175,6 +184,13 @@ function markdownItems(content) {
   }
 
   return items;
+}
+
+function isTableDelimiterRow(line) {
+  const trimmed = line.trim();
+  if (!trimmed.includes("|")) return false;
+  const cells = trimmed.replace(/^\|/, "").replace(/\|$/, "").split("|");
+  return cells.every((cell) => /^:?-{3,}:?$/.test(cell.trim()));
 }
 
 function validateCoverage(body, errors) {
@@ -318,6 +334,10 @@ function validateMaterialFindings(body, errors) {
       content === "None identified." ||
       content === "None identified within the supplied coverage."
     ) {
+      continue;
+    }
+    if (content.split(/\r?\n/).some(isTableDelimiterRow)) {
+      errors.add("UNSUPPORTED_MATERIAL_FINDINGS_TABLE");
       continue;
     }
 
