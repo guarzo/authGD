@@ -40,7 +40,7 @@ test("an admin downloads evidence without closing the applicant drawer", async (
   });
   await row.locator(".row-toggle").click();
   const button = page.getByRole("button", {
-    name: "Collect recruitment evidence for Applicant",
+    name: "Collect evidence for Applicant",
     exact: true,
   });
   await expect(button).toBeVisible();
@@ -84,7 +84,7 @@ test("a failed collection is visible and can be attempted again", async ({
     .locator(".row-toggle")
     .click();
   const button = page.getByRole("button", {
-    name: "Collect recruitment evidence for Applicant",
+    name: "Collect evidence for Applicant",
     exact: true,
   });
   await button.click();

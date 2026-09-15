@@ -79,7 +79,7 @@ export function RecruitmentDownload({
         type="button"
         className="btn"
         disabled={pending}
-        aria-label={`Collect recruitment evidence for ${identity}`}
+        aria-label={`Collect evidence for ${identity}`}
         onClick={() => {
           void collect();
         }}
