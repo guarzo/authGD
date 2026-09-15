@@ -190,7 +190,7 @@ function isTableDelimiterRow(line) {
   const trimmed = line.trim();
   if (!trimmed.includes("|")) return false;
   const cells = trimmed.replace(/^\|/, "").replace(/\|$/, "").split("|");
-  return cells.every((cell) => /^:?-{3,}:?$/.test(cell.trim()));
+  return cells.every((cell) => /^:?-+:?$/.test(cell.trim()));
 }
 
 function validateCoverage(body, errors) {
@@ -203,18 +203,34 @@ function validateCoverage(body, errors) {
       : [];
   });
 
+  const datasetTableValidity = lines.flatMap((line, index) => {
+    if (
+      !/^\s*\|\s*(?:(?:Dataset|Category)\s*\|\s*Status|Character\s*\|\s*(?:Category|Dataset)\s*\|\s*Status)\s*\|/i.test(
+        line,
+      )
+    ) {
+      return [];
+    }
+    const row = lines[index + 2] ?? "";
+    return [
+      isTableDelimiterRow(lines[index + 1] ?? "") &&
+        row.includes("|") &&
+        !isTableDelimiterRow(row) &&
+        row.replaceAll("|", "").trim().length > 0,
+    ];
+  });
+
   for (const [labels, missingError] of COVERAGE_FIELDS) {
     const hasContent = fieldMarkers.some(
       ({ index, label, value }) =>
         labels.includes(label) &&
         fieldValue(lines, index, value, fieldMarkers).length > 0,
     );
-    const hasDatasetTable =
-      missingError === "MISSING_DATASET_COVERAGE" &&
-      /^\s*\|\s*(?:(?:Dataset|Category)\s*\|\s*Status|Character\s*\|\s*(?:Category|Dataset)\s*\|\s*Status)\s*\|/im.test(
-        body,
-      );
-    if (!hasContent && !hasDatasetTable) errors.add(missingError);
+    if (missingError === "MISSING_DATASET_COVERAGE" && datasetTableValidity.length > 0) {
+      if (!datasetTableValidity.every(Boolean)) errors.add(missingError);
+    } else if (!hasContent) {
+      errors.add(missingError);
+    }
   }
 }
 

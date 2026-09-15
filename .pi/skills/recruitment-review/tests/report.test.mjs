@@ -315,6 +315,53 @@ test("requires every coverage field to have a nonempty value", () => {
   }
 });
 
+test("dataset tables require a delimiter and a nonempty data row", async (t) => {
+  const variants = [
+    ["| Dataset | Status |", "| wallet | complete |"],
+    ["| Category | Status |", "| wallet | complete |"],
+    ["| Character | Category | Status |", "| character-1001 | wallet | complete |"],
+    ["| Character | Dataset | Status |", "| character-1001 | wallet | complete |"],
+  ];
+  const field =
+    "- Dataset coverage: All six categories are present with stated status and history limits.";
+  for (const [header, row] of variants) {
+    const columns = header.split("|").length - 2;
+    const delimiter = `| ${Array(columns).fill("---").join(" | ")} |`;
+    const emptyRow = `| ${Array(columns).fill(" ").join(" | ")} |`;
+    const cases = [
+      ["header only", header],
+      ["delimiter only", `${header}\n${delimiter}`],
+      ["empty row", `${header}\n${delimiter}\n${emptyRow}`],
+      ["missing delimiter", `${header}\n${row}`],
+      ["non-row prose", `${header}\n${delimiter}\nThis is not a table row.`],
+    ];
+    for (const [name, table] of cases) {
+      for (const labelled of [false, true]) {
+        await t.test(`${header} ${name}, labelled=${labelled}`, () => {
+          const replacement = labelled
+            ? `- Dataset coverage:\n${table.replace(/^/gm, "  ")}`
+            : table;
+          assert.deepEqual(
+            checkReport(validReport.replace(field, replacement), prepared).errors,
+            ["MISSING_DATASET_COVERAGE"],
+          );
+        });
+      }
+    }
+    for (const separator of [delimiter, delimiter.replaceAll("---", ":-")]) {
+      await t.test(`${header} accepts complete table ${separator}`, () => {
+        assert.deepEqual(
+          checkReport(
+            validReport.replace(field, `${header}\n${separator}\n${row}`),
+            prepared,
+          ),
+          { ok: true, errors: [] },
+        );
+      });
+    }
+  }
+});
+
 test("accepts both bold coverage-label styles", () => {
   const colonInside = validReport
     .replace("Snapshot:", "**Snapshot:**")
@@ -686,6 +733,12 @@ test("rejects unsupported tables in material findings", () => {
     "| Finding | Evidence |\n| --- | --- |\n| Cited row | [record:W001] |\n| Uncited row | None |",
     "Finding | Evidence\n:--- | ---:\nCited row | [record:W001]",
     "| --- |\n| Cited row [record:W001] |",
+    "| Finding | Evidence |\n| - | - |\n| Cited row | [record:W001] |\n| Uncited row | None |",
+    "| Finding | Evidence |\n|-|-|\n| Cited row | [record:W001] |\n| Uncited row | None |",
+    "| Finding | Evidence |\n| -- | -- |\n| Cited row | [record:W001] |\n| Uncited row | None |",
+    "Finding | Evidence\n:- | -:\nCited row | [record:W001]\nUncited row | None",
+    "| Finding | Evidence |\n| :-: | --: |\n| Cited row | [record:W001] |\n| Uncited row | None |",
+    "| - |\n| Cited row [record:W001] |\n| Uncited row |",
   ];
 
   for (const table of tables) {

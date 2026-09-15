@@ -17,7 +17,7 @@ Use only the complete prepared packet. This is an evidentiary comparison for a r
 
 Extract material, checkable applicant statements rather than treating interviewer premises as applicant claims. Quote the applicant exactly and cite physical lines as `[interview:L2-L2]` or a necessary range such as `[interview:L3-L5]`.
 
-For every material comparison, use a `### Claim ...` block and include the following labelled fields in order. Labels may be plain (`Evidence:`), bold with the colon inside (`**Evidence:**`), or bold with the colon outside (`**Evidence**:`). A value may follow on the same line or on continuation lines indented more deeply than its label, but it must be non-empty. A non-blank sibling at the label's indentation or shallower starts separate content and does not satisfy the field:
+For every material comparison, use a `### Claim ...` block and include the following labelled fields in order. Labels may be plain (`Evidence:`), bold with the colon inside (`**Evidence:**`), or bold with the colon outside (`**Evidence**:`). Use spaces for indentation. A value may follow on the same line or on continuation lines indented more deeply than its label, but it must be non-empty. A non-blank sibling at the label's indentation or shallower starts separate content and does not satisfy the field:
 
 - **Applicant claim:** quote plus interview citation.
 - **Evidence:** every supporting or conflicting record citation; add a context citation only when relevant. If the packet contains no usable record, use exactly `No usable record exists in the supplied packet.` and classify the claim `unknown / not assessable`; do not append a factual conclusion to that absence form. When explicit packet scope metadata is the evidence and no record citation applies, begin the value with `Packet metadata:` followed by the non-empty metadata comparison.
@@ -72,7 +72,7 @@ The bottom line must begin with exactly one of the three listed categories and t
 
 ## Normal report template
 
-Use this form for every interpretable packet, including partial coverage. Replace angle-bracketed prompts; do not keep them in the result. Coverage labels accept the same plain and two bold styles as claim labels, and their values may continue on attached indented or nested Markdown lines.
+Use this form for every interpretable packet, including partial coverage. Replace angle-bracketed prompts; do not keep them in the result. Coverage labels accept the same plain and two bold styles as claim labels, and their values may continue on attached indented or nested Markdown lines. A dataset table must include a recognized dataset/category-and-status header, a delimiter row, and at least one non-empty data row; do not emit a header-only table.
 
 ```markdown
 Bundle: <bundleId>@<revision>
