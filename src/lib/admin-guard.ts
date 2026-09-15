@@ -2,7 +2,7 @@ import { eq } from "drizzle-orm";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { getConfig } from "@/config";
-import { getDb, type Db } from "@/db";
+import { getDb, type Dbx } from "@/db";
 import { account } from "@/db/schema";
 import { accountErrorUrl, loginErrorUrl } from "@/lib/error-redirects";
 import { getSessionAccount } from "@/services/session";
@@ -20,7 +20,7 @@ export type AdminResolution =
 
 /** Testable core: session id → admin resolution. */
 export async function resolveAdmin(
-  db: Db,
+  db: Dbx,
   sessionId: string | undefined,
 ): Promise<AdminResolution> {
   if (!sessionId) return { ok: false, reason: "no-session" };

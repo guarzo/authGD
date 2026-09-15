@@ -60,6 +60,16 @@ function describeScope(scope: string, contactLabel: string): string {
     // only to choose between a current reading and a "last seen" one.
     case "esi-location.read_online.v1":
       return "Whether the character is logged in right now, so a reading left behind by one who has since logged off is shown as where they were last seen, not where they are.";
+    case "esi-wallet.read_character_wallet.v1":
+      return "Wallet journal and market transactions, within EVE's available history.";
+    case "esi-contracts.read_character_contracts.v1":
+      return "Contracts, their items and auction bids, within EVE's available history.";
+    case "esi-assets.read_assets.v1":
+      return "Current assets, not a history of ownership.";
+    case "esi-skills.read_skills.v1":
+      return "Trained skills and skill-point totals.";
+    case "esi-skills.read_skillqueue.v1":
+      return "Current skill queue, not a record of past training.";
     default:
       return "This deployment requests this scope, but authGD has no description for it. Ask whoever runs it what it is for before granting.";
   }
@@ -98,6 +108,16 @@ const SCOPE_GROUPS: { head: string; scopes: string[] }[] = [
   {
     head: "Your running EVE client.",
     scopes: ["esi-ui.open_window.v1"],
+  },
+  {
+    head: "Recruitment evidence: admins can collect and download a snapshot of your linked characters for a recruitment check. Read-only, not continuous monitoring.",
+    scopes: [
+      "esi-wallet.read_character_wallet.v1",
+      "esi-contracts.read_character_contracts.v1",
+      "esi-assets.read_assets.v1",
+      "esi-skills.read_skills.v1",
+      "esi-skills.read_skillqueue.v1",
+    ],
   },
 ];
 

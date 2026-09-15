@@ -107,6 +107,19 @@ Reading payouts requires tier `member` — any status, so a cryo account still s
 the history. Creating and editing them requires an **active** member account,
 which is what keeps someone who has stepped away from moving alliance ISK.
 
+## Recruitment evidence
+
+An admin can open an account under **Members** and choose **Collect recruitment
+evidence**. authGD downloads a one-time ESI snapshot of every linked character:
+corporation history, wallet, contracts, assets, trained skills and skill queue.
+Each category reports its coverage and any missing permissions or collection
+failures. Linked characters are not proof that every alt has been disclosed.
+
+authGD only collects data. Interviews and model-assisted review stay outside the
+application. The existing local recruitment-review tooling imports the download
+with the interview and recruiter notes, without hand-written JSON. See
+[collection, rollout and import instructions](docs/ops.md#recruitment-evidence-collection).
+
 ## Architecture
 
 One repository, one built image, two process groups (`web` and `worker`), plus
@@ -130,8 +143,9 @@ web (Next.js UI + API) ──enqueue──▶ worker (pg-boss jobs)
 - **web** — Next.js 16 App Router. Member pages (login, account, add character,
   link Discord, payouts) and admin pages (accounts, audit log, sync status,
   access lists).
-  OAuth callbacks live in API routes. Web never calls an external service inside
-  a request: it writes its state change and enqueues a job.
+  OAuth callbacks live in API routes. Routine reconciliation writes its state
+  change and enqueues a job. Explicit recruitment evidence downloads perform
+  bounded ESI reads in the web request without storing an evidence archive.
 - **worker** — the same codebase running [pg-boss](https://github.com/timgit/pg-boss):
   scheduled and on-demand jobs with exponential-backoff retries. No Redis.
 - **Postgres 16** — application data, audit history, sessions, *and* the job queue.

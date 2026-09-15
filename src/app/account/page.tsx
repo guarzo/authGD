@@ -1010,7 +1010,7 @@ export default async function AccountPage({
                                               // to a chip.
                                               <a
                                                 className="btn btn--quiet btn--micro"
-                                                href="/auth/eve/link"
+                                                href={`/auth/eve/link?character=${c.id}`}
                                               >
                                                 re-authorize
                                               </a>
@@ -1247,6 +1247,7 @@ export default async function AccountPage({
                                   sighted users already have the row above. */}
                                     <span className="visually-hidden">{c.name}: </span>
                                     <ContactRemedy
+                                      characterId={c.id}
                                       result={c.contactSyncResult}
                                       detail={c.contactSyncDetail}
                                       label={cfg.standings.label}

@@ -31,6 +31,7 @@ import { ConfirmArmScope, ConfirmSubmit } from "@/app/_components/confirm-submit
 import { NoteForm } from "@/app/_components/note-form";
 import { renderedAt } from "@/app/_components/utc-time";
 import { countPendingCached } from "../pending-count";
+import { RecruitmentDownload } from "./recruitment-download";
 import {
   approveAction,
   demoteAdminAction,
@@ -1191,6 +1192,8 @@ function AccountRow({
             </ConfirmingForm>
           </ConfirmGroup>
         </div>
+
+        <RecruitmentDownload accountId={r.accountId} identity={identity} />
 
         <section className="drawer__group">
           <span className="drawer__label">Note</span>

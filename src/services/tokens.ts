@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { Config } from "@/config";
 import type { Db, Dbx } from "@/db";
 import { account, character } from "@/db/schema";
@@ -30,6 +30,21 @@ export type AccessTokenResult =
       detail?: string;
     };
 
+function validateMutationTimeout(timeoutMs: number | undefined) {
+  if (
+    timeoutMs !== undefined &&
+    (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 10_000)
+  )
+    throw new Error("Invalid token mutation timeout");
+}
+
+async function setMutationTimeout(db: Dbx, timeoutMs: number) {
+  validateMutationTimeout(timeoutMs);
+  // Validated internal milliseconds only; SET LOCAL cannot leak into the pool.
+  await db.execute(sql.raw(`set local lock_timeout = '${Math.min(timeoutMs, 5000)}ms'`));
+  await db.execute(sql.raw(`set local statement_timeout = '${timeoutMs}ms'`));
+}
+
 /**
  * Marks the token invalid ONLY if the stored blob is still the one this
  * decision was based on — one conditional transaction, auditing only when the
@@ -41,8 +56,11 @@ export async function invalidateTokenIfUnchanged(
   characterId: number,
   expectedEnc: string,
   audit: { action: string; details?: Record<string, unknown> },
+  mutationTimeoutMs?: number,
 ): Promise<boolean> {
+  validateMutationTimeout(mutationTimeoutMs);
   return fleetLifecycleTransaction(db, async (tx) => {
+    if (mutationTimeoutMs !== undefined) await setMutationTimeout(tx, mutationTimeoutMs);
     await lockFleetSharingMode(tx);
     const old = (await lockFleetIdentityCharacters(tx, [characterId])).get(characterId);
     if (!old || old.refreshTokenEnc !== expectedEnc) return false;
@@ -77,7 +95,9 @@ export async function getFreshAccessToken(
   cfg: Config,
   ch: CharacterTokenRow,
   fetchImpl: typeof fetch = fetch,
+  mutationTimeoutMs?: number,
 ): Promise<AccessTokenResult> {
+  validateMutationTimeout(mutationTimeoutMs);
   if (
     !ch.refreshTokenEnc ||
     ch.tokenStatus === "invalid" ||
@@ -103,10 +123,16 @@ export async function getFreshAccessToken(
   try {
     refreshToken = decryptToken(ch.refreshTokenEnc, cfg.tokenEncryptionKey);
   } catch {
-    const applied = await invalidateTokenIfUnchanged(db, ch.id, ch.refreshTokenEnc, {
-      action: "token.invalidated",
-      details: { reason: "malformed_token_blob" },
-    });
+    const applied = await invalidateTokenIfUnchanged(
+      db,
+      ch.id,
+      ch.refreshTokenEnc,
+      {
+        action: "token.invalidated",
+        details: { reason: "malformed_token_blob" },
+      },
+      mutationTimeoutMs,
+    );
     return applied
       ? { ok: false, reason: "invalid", detail: "malformed_token_blob" }
       : { ok: false, reason: "transient", detail: "concurrent rotation" };
@@ -118,13 +144,25 @@ export async function getFreshAccessToken(
     // row first. A miss means our whole read is stale — report transient and
     // let the next run work from fresh state; never hand out the stale token.
     const tokenEnc = encryptToken(r.refreshToken, cfg.tokenEncryptionKey);
-    const rows = await db
-      .update(character)
-      .set({ refreshTokenEnc: tokenEnc })
-      .where(
-        and(eq(character.id, ch.id), eq(character.refreshTokenEnc, ch.refreshTokenEnc)),
-      )
-      .returning({ id: character.id });
+    const expectedEnc = ch.refreshTokenEnc;
+    const persist = (dbx: Dbx) =>
+      dbx
+        .update(character)
+        .set({ refreshTokenEnc: tokenEnc })
+        .where(and(eq(character.id, ch.id), eq(character.refreshTokenEnc, expectedEnc)))
+        .returning({ id: character.id });
+    // Opt-in for bounded request callers. SSO has already finished: never hold
+    // a transaction over credential rotation, or race a still-running CAS.
+    // A timeout can lose the in-memory replacement and require reauthorisation.
+    // That cost is intentional: an unbounded retry restores the hanging request,
+    // while a durable credential-recovery queue needs its own lifecycle design.
+    const rows =
+      mutationTimeoutMs === undefined
+        ? await persist(db)
+        : await db.transaction(async (tx) => {
+            await setMutationTimeout(tx, mutationTimeoutMs);
+            return persist(tx);
+          });
     if (rows.length === 0) {
       return { ok: false, reason: "transient", detail: "concurrent rotation" };
     }
@@ -137,10 +175,16 @@ export async function getFreshAccessToken(
       // invalid_grant on the OLD blob says nothing about a token another job
       // rotated in the meantime — the conditional update discards the stale
       // decision atomically (no separate read-then-write window).
-      const applied = await invalidateTokenIfUnchanged(db, ch.id, ch.refreshTokenEnc, {
-        action: "token.invalidated",
-        details: { reason: err.oauthError ?? `status_${err.status}` },
-      });
+      const applied = await invalidateTokenIfUnchanged(
+        db,
+        ch.id,
+        ch.refreshTokenEnc,
+        {
+          action: "token.invalidated",
+          details: { reason: err.oauthError ?? `status_${err.status}` },
+        },
+        mutationTimeoutMs,
+      );
       return applied
         ? { ok: false, reason: "invalid", detail: err.oauthError }
         : { ok: false, reason: "transient", detail: "concurrent rotation" };
