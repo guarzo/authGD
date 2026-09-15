@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { TextDecoder } from "node:util";
 import { isSafeId, isUtcTimestamp } from "./syntax.mjs";
 
-const INPUT_LIMIT = 4 * 1024 * 1024;
+export const INPUT_LIMIT = 4 * 1024 * 1024;
 const PACKET_LIMIT = 128 * 1024;
 const FILES = ["manifest.json", "interview.txt", "records.json", "context.json"];
 const CATEGORIES = [
@@ -348,7 +348,7 @@ async function inspectInputs(root) {
   return inspected;
 }
 
-async function readBounded(path, remaining) {
+export async function readBounded(path, remaining) {
   let handle;
   try {
     handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));

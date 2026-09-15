@@ -698,7 +698,82 @@ describe("identity-bound Fleet Read routes", () => {
   });
 });
 
-describe("EVE link route — ?grant= is the only attacker-controllable input", () => {
+describe("EVE link route — allowlisted grants and owned reauthorisation scopes", () => {
+  beforeEach(async () => {
+    await truncateAll(ctx.db);
+    msw.resetHandlers();
+  });
+  it("reauthorisation preserves the selected owned character's optional scopes", async () => {
+    const acc = await seedAccount(ctx.db);
+    const ch = await seedCharacter(ctx.db, getConfig(), {
+      id: 90000001,
+      accountId: acc.id,
+      scopes: ["esi-characters.read_contacts.v1", ACCESS_LISTS_SCOPE],
+    });
+    const sid = await createSession(ctx.db, acc.id);
+    const req = new NextRequest(`http://localhost:3000/auth/eve/link?character=${ch.id}`);
+    req.cookies.set("authgd_session", sid);
+    const res = await linkRoute(req);
+    const authorize = new URL(res.headers.get("location")!);
+    const scopes = authorize.searchParams.get("scope")!.split(" ");
+    expect(scopes).toContain(ACCESS_LISTS_SCOPE);
+    expect(scopes).toContain("esi-characters.read_contacts.v1");
+
+    const jwt = await signToken(ch.id, ch.ownerHash, scopes);
+    msw.use(
+      http.post("https://login.eveonline.com/v2/oauth/token", () =>
+        HttpResponse.json({ access_token: jwt, refresh_token: "reauth-rt" }),
+      ),
+    );
+    const callback = new NextRequest(
+      `http://localhost:3000/auth/eve/callback?code=ok&state=${authorize.searchParams.get("state")}`,
+    );
+    callback.cookies.set("authgd_session", sid);
+    expectRedirect(await callbackRoute(callback), "/account");
+    const [updated] = await ctx.db
+      .select()
+      .from(character)
+      .where(eq(character.id, ch.id));
+    expect(updated.scopes).toContain(ACCESS_LISTS_SCOPE);
+  });
+
+  it("does not look up scopes for another account's character", async () => {
+    const acc = await seedAccount(ctx.db);
+    const other = await seedAccount(ctx.db);
+    const ch = await seedCharacter(ctx.db, getConfig(), {
+      id: 90000001,
+      accountId: other.id,
+      scopes: [ACCESS_LISTS_SCOPE],
+    });
+    const sid = await createSession(ctx.db, acc.id);
+    const req = new NextRequest(`http://localhost:3000/auth/eve/link?character=${ch.id}`);
+    req.cookies.set("authgd_session", sid);
+    expectRedirect(await linkRoute(req), "/account?error=link_failed");
+  });
+
+  it("rejects malformed or repeated reauthorisation targets", async () => {
+    const acc = await seedAccount(ctx.db);
+    // Owned rows make duplicate, nonpositive and rounded-unsafe targets fail
+    // at input validation, rather than coincidentally failing ownership lookup.
+    for (const id of [0, 1, 2, 9007199254740992]) {
+      await seedCharacter(ctx.db, getConfig(), {
+        id,
+        accountId: acc.id,
+        scopes: [ACCESS_LISTS_SCOPE],
+      });
+    }
+    const sid = await createSession(ctx.db, acc.id);
+    for (const query of [
+      "character=0",
+      "character=no",
+      "character=1&character=2",
+      "character=9007199254740993",
+    ]) {
+      const req = new NextRequest(`http://localhost:3000/auth/eve/link?${query}`);
+      req.cookies.set("authgd_session", sid);
+      expectRedirect(await linkRoute(req), "/account?error=link_failed");
+    }
+  });
   it("grant=access-lists asks EVE for the extra scope, alongside the base set", async () => {
     const { createSession } = await import("@/services/session");
     const [acc] = await ctx.db.insert(account).values({}).returning();

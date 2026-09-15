@@ -31,6 +31,7 @@ import { ConfirmArmScope, ConfirmSubmit } from "@/app/_components/confirm-submit
 import { NoteForm } from "@/app/_components/note-form";
 import { renderedAt } from "@/app/_components/utc-time";
 import { countPendingCached } from "../pending-count";
+import { RecruitmentDownload } from "./recruitment-download";
 import {
   approveAction,
   demoteAdminAction,
@@ -1230,6 +1231,7 @@ function AccountRow({
             audit log
           </a>
         </section>
+        <RecruitmentDownload accountId={r.accountId} identity={identity} />
       </div>
 
       <section className="drawer__crew">

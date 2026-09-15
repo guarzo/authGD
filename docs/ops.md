@@ -382,6 +382,95 @@ character already on the ACL.
 | `PAYOUT_CORP_SHARE_PCT` | no (default `10`) | the corp's cut, stamped onto each operation **at creation**. Changing it re-rates new operations only — see below |
 | `SYNC_MODE` | **yes, no default** | `live` \| `dry-run`. `dry-run` suppresses every outbound mutation (see below). Production MUST be `live` |
 
+### Recruitment evidence collection
+
+**Scope and access.** authGD collects evidence; it does not accept interview
+transcripts, call a model, or decide admission. From **Members**, an admin opens
+the applicant's account drawer and chooses **Collect evidence** in the
+**Recruitment evidence** section.
+This starts one collection of all currently linked characters and downloads a
+JSON attachment. Pending accounts are eligible. There is no scheduled member
+sweep and no raw evidence/report archive in Postgres. Audit rows contain only
+actor/target/snapshot identifiers, collection time and coverage/outcome metadata.
+Downloaded copies remain private data under the recruiter's control: arrange
+access, retention/deletion and any external model handling before using them.
+
+**Shared authentication rollout.** Register and add these five read permissions
+to your existing `EVE_SSO_SCOPES`, retaining its other scopes:
+
+```text
+esi-wallet.read_character_wallet.v1
+esi-contracts.read_character_contracts.v1
+esi-assets.read_assets.v1
+esi-skills.read_skills.v1
+esi-skills.read_skillqueue.v1
+```
+
+The complete example set is in `.env.example`; changing that file alone does not
+update a running deployment. Update the EVE application's registered permissions
+and actual deployment configuration, then restart/redeploy the web and worker.
+These are common login permissions, not a separate recruitment grant. Existing
+characters need reauthorisation. Use each character's **re-authorize** link on
+**Your account**, selecting that same character in EVE's picker; the request
+retains its previously granted optional scopes. The ordinary **Link character**
+flow remains available. Scope warnings do not block unrelated jobs whose own
+permissions remain granted. `SYNC_MODE=dry-run` cannot collect private evidence:
+SSO refresh rotates credentials and is intentionally suppressed in that mode.
+
+**Collection semantics.** The collector verifies refreshed token identity and
+ownership before private reads and rechecks the admin session and complete
+character linkage at release. Changed ownership or an unlink/relink rejects the
+export. Each character has explicit coverage for corporation history, wallet
+(journal plus market transactions), contracts (list, items, and auction bids),
+assets, trained skills and skill queue. Public corporation history is labelled
+separately from authenticated reads. Source numeric values are strings to avoid
+rounding amounts and large IDs. Missing consent, upstream failures, partial
+pagination and successfully empty datasets are not interchangeable. The linked
+set does not prove every alt has been disclosed.
+
+Wallet journal history is documented as 30 days. The contract list covers
+contracts no older than 30 days or still in progress. Assets, skills and queue
+are current state, not historical activity. The snapshot notes describe endpoint
+coverage, collection failures and limitations; inspect them before review.
+
+**Operational bounds.** Collection has a 120-second upstream/JWT budget,
+4 MiB per upstream response, 32 MiB combined upstream bytes and 500 upstream
+requests (including token refreshes and JWKS key downloads). A bound produces
+explicit partial/failed coverage, never silent sampling. Collection database
+work uses separate finite lock and statement timeouts, without holding
+transactions open over network calls. Allow sufficient request time in your
+reverse proxy; the browser waits up to 150 seconds. No background evidence store
+is used to extend the request. A proxy/network timeout may prevent delivery even
+if server-side collection finishes; an audit entry is not proof of download.
+The download response uses `Cache-Control: private, no-store`. If SSO rotates a
+refresh token but the bounded database write cannot save its replacement, that
+character may need reauthorisation. Collection does not retry that write without
+a timeout or persist credentials in a separate recovery queue.
+
+**External preparation.** Keep the export and interview in a private directory.
+From a repository checkout (the Pi skill is not shipped in the application image):
+
+```sh
+cd .pi/skills/recruitment-review
+node scripts/import-export.mjs /private/evidence.json \
+  --interview /private/interview.txt \
+  --prepared-by "Recruiter Name" \
+  --out /private/new-bundle \
+  --note "An attributed recruiter note." > /private/packet.json
+```
+
+The output bundle directory must be new. The importer creates `manifest.json`,
+`records.json`, `interview.txt`, and `context.json`, validates the result, and
+prints the prepared packet. It never confirms trust on behalf of the recruiter.
+Use the normal preparation command with `--confirmed-by` only after independently
+confirming the organisation-controlled handoff. The existing Pi skill consumes
+the resulting packet; no model call occurs during collection or import.
+
+The reviewer's 4 MiB aggregate bundle and 128 KiB rendered packet limits remain.
+A full valid export can exceed them. Import then fails explicitly without
+truncating the source export or publishing a bundle; do not call that a completed
+review. See the skill's `references/input-format.md` for its full contract.
+
 ### Changing the corp share
 
 `PAYOUT_CORP_SHARE_PCT` is read once, when an operation is created, and the

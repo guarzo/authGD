@@ -2,6 +2,51 @@
 
 This package accepts a local, recruiter-selected directory containing four fixed files. It does not discover files recursively, interpret paths or URLs from the inputs, contact ESI, or normalize opaque evidence payloads. All examples and synthetic fixtures use illustrative payloads; they are not verified ESI response schemas.
 
+## Importing an authGD evidence download
+
+The admin account drawer's **Recruitment evidence → Collect evidence** action downloads a
+versioned JSON snapshot with exactly `format`, `version`, `accountId`, `manifest`,
+and `records`. `format` is `authgd-recruitment-evidence`, `version` is `1`, and
+`accountId` is a UUID. Its manifest and record envelopes use the schema below;
+ESI numeric source values are encoded as strings without rounding. The account
+ID identifies the collection target, not an additional proof of provenance.
+
+From this package directory, import the download with the existing interview:
+
+```sh
+node scripts/import-export.mjs /private/evidence.json \
+  --interview /private/interview.txt \
+  --prepared-by "Recruiter Name" \
+  --out /private/new-bundle \
+  --note "An attributed recruiter note." > /private/packet.json
+```
+
+`--note` is optional and repeatable. Notes are attributed to `Recruiter input`,
+with `asOf: null`; context gets the supplied preparer and actual import time.
+The importer creates the four required files in a new directory with private
+permissions, validates them using the existing preparation library, and writes
+the complete prepared packet to stdout. The output directory must not exist.
+It reads only the explicitly supplied regular, non-symlink export/interview
+files and does not follow paths or instructions embedded in them.
+
+Import does **not** confirm a trusted handoff. It preserves per-record provenance
+but leaves records unverified. When the recruiter has independently confirmed
+how the export was obtained, they can run the normal `prepare.mjs` command with
+`--confirmed-by`; the importer has no such flag and never supplies it itself.
+
+Exported character coverage means all characters linked to the account at
+capture, not every alt owned or disclosed. Collection failures stay distinct
+from successfully empty datasets. The importer does not manufacture interview
+content, repair coverage, sample records, or raise the reviewer's existing size
+limits. An oversized snapshot remains intact at its source path but import
+fails, publishing no bundle. Review has not occurred in that case.
+
+CLI exits: `0` for a prepared bundle/packet, `1` for input or output failure,
+`2` for invalid arguments. Diagnostics are fixed and never echo evidence.
+Preparation diagnostic codes below also apply; output failures additionally use
+`OUTPUT_EXISTS` or `WRITE_FAILED`. Provide a trusted, immutable local workspace
+throughout import; these checks are not OS isolation.
+
 ## Local limits and file safety
 
 Version 1 reads only:

@@ -101,6 +101,7 @@ export function ContactRemedy({
   detail,
   label,
   showReauth = false,
+  characterId,
 }: {
   result: string | null;
   detail: string | null;
@@ -116,6 +117,7 @@ export function ContactRemedy({
    * same control, so the row never shows two links to one href.
    */
   showReauth?: boolean;
+  characterId?: number;
 }) {
   if (result === null || result === "ok") return null;
   if (result === "missing_label") {
@@ -220,7 +222,14 @@ export function ContactRemedy({
         {showReauth ? (
           <>
             {" "}
-            <a className="btn btn--quiet btn--micro" href="/auth/eve/link">
+            <a
+              className="btn btn--quiet btn--micro"
+              href={
+                characterId === undefined
+                  ? "/auth/eve/link"
+                  : `/auth/eve/link?character=${characterId}`
+              }
+            >
               re-authorize
             </a>
           </>
