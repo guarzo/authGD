@@ -7,7 +7,12 @@ import process from "node:process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
-import { BundleError, prepareBundle, renderPacket } from "../scripts/bundle.mjs";
+import {
+  BundleError,
+  prepareBundle,
+  prepareInputs,
+  renderPacket,
+} from "../scripts/bundle.mjs";
 import { fixtureCases, makeBundle, writeBundle } from "./fixtures.mjs";
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -114,6 +119,129 @@ test("prepares a complete packet without changing opaque evidence", async (t) =>
     contextIds: ["context-1"],
   });
   assert.doesNotThrow(() => JSON.parse(renderPacket(packet)));
+});
+
+test("accepts raw Discord copy with blank lines, headers, emoji and continuation paragraphs", async (t) => {
+  const interview =
+    "Recruiter — Today at 14:00\nWhy join?\n\nPilot 🌙\nA friend invited me.\nAnd I liked the fleet.\n";
+  const root = await preparedRoot(t, { interview });
+  const prepared = await prepareBundle(root, prepareOptions());
+  assert.deepEqual(prepared.packet.interview.lines, [
+    { line: 1, text: "Recruiter — Today at 14:00" },
+    { line: 2, text: "Why join?" },
+    { line: 3, text: "" },
+    { line: 4, text: "Pilot 🌙" },
+    { line: 5, text: "A friend invited me." },
+    { line: 6, text: "And I liked the fleet." },
+  ]);
+  assert.equal(prepared.citationIndex.transcriptLineCount, 6);
+});
+
+function inMemoryInputs(bundle) {
+  return {
+    manifest: bundle["manifest.json"],
+    interview: bundle["interview.txt"],
+    records: bundle["records.json"],
+    context: bundle["context.json"],
+  };
+}
+
+test("shared synchronous preparation preserves the legacy packet and citation index", async (t) => {
+  const bundle = makeBundle({ interview: "Recruiter: Hi.\r\nApplicant: Hello.\r\n" });
+  const root = await temporaryRoot(t);
+  await writeBundle(root, bundle);
+  const original = globalThis.structuredClone(bundle);
+  const prepared = prepareInputs(inMemoryInputs(bundle), prepareOptions());
+  assert.equal(prepared instanceof Promise, false);
+  assert.deepEqual(prepared, await prepareBundle(root, prepareOptions()));
+  assert.deepEqual(bundle, original);
+  assert.deepEqual(prepared.packet.interview.lines, [
+    { line: 1, text: "Recruiter: Hi." },
+    { line: 2, text: "Applicant: Hello." },
+  ]);
+});
+
+test("shared preparation has no legacy source or rendered-packet size policy", () => {
+  const bundle = makeBundle();
+  bundle["records.json"][0].data = { description: "x".repeat(4 * 1024 * 1024 + 1) };
+  const { packet } = prepareInputs(inMemoryInputs(bundle), prepareOptions());
+  assert.deepEqual(packet.records[0].data, bundle["records.json"][0].data);
+  assert.throws(() => renderPacket(packet), { code: "PACKET_TOO_LARGE" });
+});
+
+test("shared preparation validates all schemas and rejects malformed UTF-8 strings", () => {
+  for (const mutate of [
+    (b) => {
+      b["manifest.json"].datasets.pop();
+    },
+    (b) => {
+      b["manifest.json"].provenance[0].sourceKind = "invented";
+    },
+    (b) => {
+      b["records.json"][0].provenanceId = "unknown";
+    },
+    (b) => {
+      b["records.json"].push(b["records.json"][0]);
+    },
+    (b) => {
+      b["context.json"].notes[0].extra = true;
+    },
+    (b) => {
+      b["context.json"].preparedAt = "2026-02-30T00:00:00Z";
+    },
+    (b) => {
+      b["interview.txt"] = " \t\r\n";
+    },
+    (b) => {
+      b["interview.txt"] = null;
+    },
+  ]) {
+    const bundle = makeBundle();
+    mutate(bundle);
+    assert.throws(() => prepareInputs(inMemoryInputs(bundle), prepareOptions()), {
+      code: "INVALID_SCHEMA",
+    });
+  }
+  const bundle = makeBundle({ interview: "Pilot \ud800" });
+  assert.throws(() => prepareInputs(inMemoryInputs(bundle), prepareOptions()), {
+    code: "INVALID_UTF8",
+  });
+  assert.throws(() => prepareInputs(inMemoryInputs(makeBundle()), {}), {
+    code: "INVALID_SCHEMA",
+  });
+  const credential = makeBundle();
+  credential["records.json"][0].data = { nested: [{ Authorization: "secret" }] };
+  assert.throws(() => prepareInputs(inMemoryInputs(credential), prepareOptions()), {
+    code: "INVALID_CREDENTIAL_FIELD",
+  });
+});
+
+test("legacy early failures keep their identity and validation ordering", async (t) => {
+  const root = await preparedRoot(t);
+  const bundle = makeBundle();
+  bundle["manifest.json"].datasets.pop();
+  bundle["context.json"].cookie = "private-sentinel";
+  await writeBundle(root, bundle);
+  await assert.rejects(() => prepareBundle(root, prepareOptions()), {
+    code: "INVALID_SCHEMA",
+    identity: null,
+  });
+  await writeFile(join(root, "interview.txt"), Buffer.alloc(4 * 1024 * 1024 + 1));
+  await assert.rejects(() => prepareBundle(root, prepareOptions()), {
+    code: "INPUT_TOO_LARGE",
+    identity: null,
+  });
+  await assert.rejects(() => prepareBundle(root, {}), {
+    code: "INVALID_SCHEMA",
+    identity: null,
+  });
+  await writeBundle(root, makeBundle());
+  await writeFile(join(root, "interview.txt"), Buffer.from([0xc3, 0x28]));
+  await writeFile(join(root, "records.json"), "malformed");
+  await assert.rejects(() => prepareBundle(root, prepareOptions()), {
+    code: "INVALID_UTF8",
+    identity: { bundleId: "synthetic-review", revision: "r1" },
+  });
 });
 
 test("preserves exact high-precision amount strings through packet serialization", async (t) => {
@@ -435,7 +563,7 @@ test("rejects invalid identities, timestamps, transcript lines, and record paylo
       bundle["manifest.json"].collectedAt = "2026-02-30T12:00:00Z";
     },
     (bundle) => {
-      bundle["interview.txt"] = "not speaker labelled";
+      bundle["interview.txt"] = " \t\r\n\n";
     },
     (bundle) => {
       bundle["records.json"][0].data = [];
@@ -809,8 +937,7 @@ test("CLI preserves validated identity when context validation fails", async (t)
 });
 
 test("CLI preserves validated identity when interview validation fails", async (t) => {
-  const sentinel = "INVALID-INTERVIEW-MUST-NOT-LEAK";
-  const root = await preparedRoot(t, { interview: sentinel });
+  const root = await preparedRoot(t, { interview: " \t\r\n" });
 
   const result = spawnSync(process.execPath, [cliPath, root], { encoding: "utf8" });
 
@@ -818,7 +945,6 @@ test("CLI preserves validated identity when interview validation fails", async (
   assert.equal(result.stdout, "");
   assert.match(result.stderr, /^Bundle: synthetic-review@r1\nReview status: aborted\n/);
   assert.match(result.stderr, /Blocking reason: INVALID_SCHEMA/);
-  assert.equal(result.stderr.includes(sentinel), false);
 });
 
 test("CLI does not derive identity from an invalid manifest", async (t) => {

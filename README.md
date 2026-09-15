@@ -116,9 +116,12 @@ Each category reports its coverage and any missing permissions or collection
 failures. Linked characters are not proof that every alt has been disclosed.
 
 authGD only collects data. Interviews and model-assisted review stay outside the
-application. The existing local recruitment-review tooling imports the download
-with the interview and recruiter notes, without hand-written JSON. See
-[collection, rollout and import instructions](docs/ops.md#recruitment-evidence-collection).
+application. In Pi, invoke **`/skill:recruitment-review`**, provide that download,
+and paste the Discord interview as copied. The project adapter prepares the
+inputs and checks the draft automatically: no shell commands, manual bundles,
+or interview reformatting. It requires Pi 0.85.1+ and trusted project resources.
+The report is a cited draft for human review, not an admission decision. See
+[collection, rollout and review instructions](docs/ops.md#recruitment-evidence-collection).
 
 ## Architecture
 

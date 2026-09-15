@@ -12,15 +12,17 @@ The original 65-call evaluation and its strict 48/65 score remain recorded below
 
 Human recruiter review of every current report is still outstanding. Real-data disclosure, provider handling, retention/deletion, and recruiter-access approvals are also separate prerequisites. Until those human and policy gates are complete, no real-data pilot is approved.
 
-## Ordinary manual invocation
+## Managed invocation and advanced evaluation
 
-After trusting the project and reloading Pi resources, invoke:
+After trusting the project and reloading Pi 0.85.1+ resources, invoke `/skill:recruitment-review`, provide the authGD export and paste the Discord interview as copied. The project adapter handles preparation, case-context isolation and canonical report checking; operator shell preparation is not the ordinary workflow.
+
+For an already-prepared evaluation packet, use:
 
 ```text
-/skill:recruitment-review <prepared-packet-path>
+/skill:recruitment-review --prepared <prepared-packet-path>
 ```
 
-Prepare and validate the bundle externally before invoking the skill. A loaded skill does not restrict tools, network access, or filesystem access; enforce those boundaries in the host when required. Do not provide credentials or real applicant material until the separate approvals are complete.
+The helper and native-Pi integration tests exercise deterministic intake, context delivery and checking with artificial inputs/scripted responses. They are not fresh semantic model evaluation and do not upgrade the historical acceptance status above. A skill document alone is not a sandbox; the managed adapter supplies the active-case tool/context restrictions. Do not provide credentials or real applicant material until the separate approvals are complete.
 
 ## Stronger synthetic evaluation route
 

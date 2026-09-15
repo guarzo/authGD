@@ -43,7 +43,7 @@ async function readInput(path) {
   }
 }
 
-function parseSnapshot(text) {
+export function parseSnapshot(text) {
   let snapshot;
   try {
     snapshot = JSON.parse(text);

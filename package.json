@@ -15,6 +15,7 @@
     "test:watch": "vitest",
     "test:clean": "tsx scripts/drop-test-db.ts",
     "test:recruitment-review": "node --test .pi/skills/recruitment-review/tests/*.test.mjs",
+    "test:recruitment-pi": "node .pi/skills/recruitment-review/tests/native-pi.mjs",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx --env-file-if-exists=.env --env-file-if-exists=.env.local src/db/migrate.ts",
     "db:seed": "tsx --env-file-if-exists=.env --env-file-if-exists=.env.local scripts/seed-dev.ts",
