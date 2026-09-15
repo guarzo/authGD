@@ -1193,8 +1193,6 @@ function AccountRow({
           </ConfirmGroup>
         </div>
 
-        <RecruitmentDownload accountId={r.accountId} identity={identity} />
-
         <section className="drawer__group">
           <span className="drawer__label">Note</span>
           <NoteForm
@@ -1233,6 +1231,7 @@ function AccountRow({
             audit log
           </a>
         </section>
+        <RecruitmentDownload accountId={r.accountId} identity={identity} />
       </div>
 
       <section className="drawer__crew">

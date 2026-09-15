@@ -109,8 +109,8 @@ which is what keeps someone who has stepped away from moving alliance ISK.
 
 ## Recruitment evidence
 
-An admin can open an account under **Members** and choose **Collect recruitment
-evidence**. authGD downloads a one-time ESI snapshot of every linked character:
+An admin can open an account under **Members** and choose **Collect evidence**
+in its **Recruitment evidence** section. authGD downloads a one-time ESI snapshot of every linked character:
 corporation history, wallet, contracts, assets, trained skills and skill queue.
 Each category reports its coverage and any missing permissions or collection
 failures. Linked characters are not proof that every alt has been disclosed.

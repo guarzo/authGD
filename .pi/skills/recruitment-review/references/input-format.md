@@ -4,7 +4,7 @@ This package accepts a local, recruiter-selected directory containing four fixed
 
 ## Importing an authGD evidence download
 
-The admin account drawer's **Collect recruitment evidence** action downloads a
+The admin account drawer's **Recruitment evidence → Collect evidence** action downloads a
 versioned JSON snapshot with exactly `format`, `version`, `accountId`, `manifest`,
 and `records`. `format` is `authgd-recruitment-evidence`, `version` is `1`, and
 `accountId` is a UUID. Its manifest and record envelopes use the schema below;

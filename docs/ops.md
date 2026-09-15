@@ -386,7 +386,8 @@ character already on the ACL.
 
 **Scope and access.** authGD collects evidence; it does not accept interview
 transcripts, call a model, or decide admission. From **Members**, an admin opens
-the applicant's account drawer and chooses **Collect recruitment evidence**.
+the applicant's account drawer and chooses **Collect evidence** in the
+**Recruitment evidence** section.
 This starts one collection of all currently linked characters and downloads a
 JSON attachment. Pending accounts are eligible. There is no scheduled member
 sweep and no raw evidence/report archive in Postgres. Audit rows contain only

@@ -68,9 +68,12 @@ export function RecruitmentDownload({
   return (
     <section className="drawer__group">
       <span className="drawer__label">Recruitment evidence</span>
-      <p className="dim">
-        One-time collection of all linked characters. Downloads private ESI data for
-        review outside authGD.
+      <p className="dim drawer__note">
+        All linked characters.
+        <br />
+        Private ESI download.
+        <br />
+        Review outside authGD.
       </p>
       <button
         type="button"
@@ -81,7 +84,7 @@ export function RecruitmentDownload({
           void collect();
         }}
       >
-        {pending ? "Collecting…" : "Collect recruitment evidence"}
+        {pending ? "Collecting…" : "Collect evidence"}
       </button>
       <Notice tone={failed ? "bad" : "info"}>{message}</Notice>
     </section>
