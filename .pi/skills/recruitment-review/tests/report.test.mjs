@@ -36,7 +36,13 @@ Model: unavailable
 Assessment status: DRAFT — human recruiter review required; not an admission decision
 
 ## Coverage and limitations
-The supplied packet covers the stated scope.
+- Snapshot: 2026-09-14T12:00:00Z.
+- Character scope: Declared and included character-1001.
+- Dataset coverage: All six categories are present with stated status and history limits.
+- Provenance: Synthetic Fixture Generator; illustrative local fixture; synthetic; no transformations.
+- Verification: confirmedBy is fixture-recruiter; records are unverified.
+- Synthetic-only: This report cannot support a real applicant decision.
+- Limitations and unexamined inputs: External sources and original files were not examined.
 
 ## Claim review
 ### Claim 1
@@ -47,13 +53,18 @@ The supplied packet covers the stated scope.
 - Plausible alternatives: None apparent from the supplied packet.
 
 ## Material findings
+### Direct contradictions
+None identified within the supplied coverage.
+### Tensions
+None identified within the supplied coverage.
+### Unknowns and gaps
 None identified within the supplied coverage.
 
 ## Follow-up questions
-1. Please clarify the exchange.
+1. Please clarify the exchange. [interview:L1-L2]
 
 ## Bottom line
-No material inconsistencies found within stated coverage.
+No material inconsistencies found within stated coverage. The supplied comparison contains no identified inconsistency.
 `;
 
 const validAbortedReport = `Bundle: sample@v1
@@ -233,6 +244,300 @@ test("requires all five completed headings exactly once and in order", () => {
   );
 });
 
+test("rejects empty completed sections instead of accepting headings alone", () => {
+  const empty = `Bundle: sample@v1
+Review status: completed
+Skill version: unavailable
+Model: unavailable
+Assessment status: DRAFT — human recruiter review required; not an admission decision
+
+## Coverage and limitations
+
+## Claim review
+
+## Material findings
+
+## Follow-up questions
+
+## Bottom line
+`;
+
+  assert.deepEqual(checkReport(empty, prepared).errors, [
+    "EMPTY_COVERAGE_AND_LIMITATIONS",
+    "EMPTY_CLAIM_REVIEW",
+    "EMPTY_MATERIAL_FINDINGS",
+    "EMPTY_FOLLOW_UP_QUESTIONS",
+    "EMPTY_BOTTOM_LINE",
+  ]);
+});
+
+test("requires every coverage field to have a nonempty value", () => {
+  const cases = [
+    ["- Snapshot: 2026-09-14T12:00:00Z.", "- Snapshot:", "MISSING_COVERAGE_SNAPSHOT"],
+    [
+      "- Character scope: Declared and included character-1001.",
+      "- Character scope:",
+      "MISSING_CHARACTER_SCOPE",
+    ],
+    [
+      "- Dataset coverage: All six categories are present with stated status and history limits.",
+      "- Dataset coverage:",
+      "MISSING_DATASET_COVERAGE",
+    ],
+    [
+      "- Provenance: Synthetic Fixture Generator; illustrative local fixture; synthetic; no transformations.",
+      "- Provenance:",
+      "MISSING_PROVENANCE",
+    ],
+    [
+      "- Verification: confirmedBy is fixture-recruiter; records are unverified.",
+      "- Verification:",
+      "MISSING_RECORD_VERIFICATION",
+    ],
+    [
+      "- Synthetic-only: This report cannot support a real applicant decision.",
+      "- Synthetic-only:",
+      "MISSING_SYNTHETIC_ONLY_STATE",
+    ],
+    [
+      "- Limitations and unexamined inputs: External sources and original files were not examined.",
+      "- Limitations and unexamined inputs:",
+      "MISSING_REVIEW_LIMITATIONS",
+    ],
+  ];
+
+  for (const [field, emptyField, expectedError] of cases) {
+    for (const replacement of [emptyField, ""]) {
+      const result = checkReport(validReport.replace(field, replacement), prepared);
+      assert.equal(result.ok, false, field);
+      assert.ok(result.errors.includes(expectedError), field);
+    }
+  }
+});
+
+test("accepts bold or plain coverage labels", () => {
+  const bold = validReport
+    .replace("Snapshot:", "**Snapshot:**")
+    .replace("Character scope:", "**Character scope:**")
+    .replace("Dataset coverage:", "**Dataset coverage:**")
+    .replace("Provenance:", "**Provenance:**")
+    .replace("Verification:", "**Verification:**")
+    .replace("Synthetic-only:", "**Synthetic-only:**")
+    .replace(
+      "Limitations and unexamined inputs:",
+      "**Limitations and unexamined inputs:**",
+    );
+
+  assert.deepEqual(checkReport(bold, prepared), { ok: true, errors: [] });
+});
+
+test("requires every labelled claim field to have a nonempty value", () => {
+  const cases = [
+    [
+      "- Applicant claim: “The exchange happened.” [interview:L1-L2]",
+      "- Applicant claim:",
+      "MISSING_APPLICANT_CLAIM",
+    ],
+    [
+      "- Evidence: A supplied record exists. [record:W001] [context:C001]",
+      "- Evidence:",
+      "MISSING_CLAIM_EVIDENCE",
+    ],
+    ["- Assessment: supported", "- Assessment:", "MISSING_CLAIM_ASSESSMENT"],
+    [
+      "- Limits: Citation existence does not establish semantic support.",
+      "- Limits:",
+      "MISSING_CLAIM_LIMITS",
+    ],
+    [
+      "- Plausible alternatives: None apparent from the supplied packet.",
+      "- Plausible alternatives:",
+      "MISSING_PLAUSIBLE_ALTERNATIVES",
+    ],
+  ];
+
+  for (const [field, emptyField, expectedError] of cases) {
+    const result = checkReport(validReport.replace(field, emptyField), prepared);
+    assert.equal(result.ok, false, field);
+    assert.ok(result.errors.includes(expectedError), field);
+  }
+});
+
+test("requires every labelled claim field to be present", () => {
+  const cases = [
+    [
+      "- Applicant claim: “The exchange happened.” [interview:L1-L2]\n",
+      "MISSING_APPLICANT_CLAIM",
+    ],
+    [
+      "- Evidence: A supplied record exists. [record:W001] [context:C001]\n",
+      "MISSING_CLAIM_EVIDENCE",
+    ],
+    ["- Assessment: supported\n", "MISSING_CLAIM_ASSESSMENT"],
+    [
+      "- Limits: Citation existence does not establish semantic support.\n",
+      "MISSING_CLAIM_LIMITS",
+    ],
+    [
+      "- Plausible alternatives: None apparent from the supplied packet.\n",
+      "MISSING_PLAUSIBLE_ALTERNATIVES",
+    ],
+  ];
+
+  for (const [field, expectedError] of cases) {
+    const result = checkReport(validReport.replace(field, ""), prepared);
+    assert.equal(result.ok, false, field);
+    assert.ok(result.errors.includes(expectedError), field);
+  }
+});
+
+test("accepts bold or plain claim labels", () => {
+  const bold = validReport
+    .replace("Applicant claim:", "**Applicant claim:**")
+    .replace("Evidence:", "**Evidence:**")
+    .replace("Assessment:", "**Assessment:**")
+    .replace("Limits:", "**Limits:**")
+    .replace("Plausible alternatives:", "**Plausible alternatives:**");
+
+  assert.deepEqual(checkReport(bold, prepared), { ok: true, errors: [] });
+});
+
+test("rejects invalid claim assessments", () => {
+  const result = checkReport(
+    validReport.replace("- Assessment: supported", "- Assessment: likely supported"),
+    prepared,
+  );
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.includes("INVALID_CLAIM_ASSESSMENT"));
+});
+
+test("requires an interview citation on every quoted applicant claim", () => {
+  const result = checkReport(
+    validReport.replace(
+      " “The exchange happened.” [interview:L1-L2]",
+      " “The exchange happened.”",
+    ),
+    prepared,
+  );
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.includes("MISSING_APPLICANT_CITATION"));
+});
+
+test("requires cited evidence unless no usable or applicable record exists", () => {
+  const uncited = checkReport(
+    validReport.replace(
+      "A supplied record exists. [record:W001] [context:C001]",
+      "A supplied record supports the claim.",
+    ),
+    prepared,
+  );
+  assert.equal(uncited.ok, false);
+  assert.ok(uncited.errors.includes("MISSING_EVIDENCE_CITATION"));
+
+  const noUsableRecord = validReport
+    .replace(
+      "A supplied record exists. [record:W001] [context:C001]",
+      "No usable record exists in the supplied packet.",
+    )
+    .replace("- Assessment: supported", "- Assessment: unknown / not assessable");
+  assert.deepEqual(checkReport(noUsableRecord, prepared), { ok: true, errors: [] });
+
+  const noRecordNeeded = validReport.replace(
+    "A supplied record exists. [record:W001] [context:C001]",
+    "The packet scope directly establishes the omission; no event record is relevant to this metadata comparison.",
+  );
+  assert.deepEqual(checkReport(noRecordNeeded, prepared), { ok: true, errors: [] });
+});
+
+test("accepts only a standalone no-material-claims statement instead of a fake claim block", () => {
+  const report = validReport.replace(
+    /### Claim 1[\s\S]*?(?=\n## Material findings)/,
+    "No material checkable applicant claims identified in the supplied interview.",
+  );
+  assert.deepEqual(checkReport(report, prepared), { ok: true, errors: [] });
+
+  const mixed = report.replace(
+    "No material checkable applicant claims identified in the supplied interview.",
+    "No material checkable applicant claims identified in the supplied interview.\nUnlabelled claim content.",
+  );
+  const result = checkReport(mixed, prepared);
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.includes("INVALID_CLAIM_REVIEW"));
+});
+
+test("requires all material-finding subsections with content", () => {
+  const cases = [
+    [
+      "### Direct contradictions\nNone identified within the supplied coverage.\n",
+      "MISSING_DIRECT_CONTRADICTIONS",
+    ],
+    ["### Tensions\nNone identified within the supplied coverage.\n", "MISSING_TENSIONS"],
+    [
+      "### Unknowns and gaps\nNone identified within the supplied coverage.\n",
+      "MISSING_UNKNOWNS_AND_GAPS",
+    ],
+  ];
+
+  for (const [subsection, expectedError] of cases) {
+    for (const replacement of ["", subsection.split("\n")[0] + "\n"]) {
+      const result = checkReport(validReport.replace(subsection, replacement), prepared);
+      assert.equal(result.ok, false, `${expectedError}: ${JSON.stringify(replacement)}`);
+      assert.ok(result.errors.includes(expectedError));
+    }
+  }
+});
+
+test("requires citations for material findings unless absence is explicit", () => {
+  const result = checkReport(
+    validReport.replace(
+      "None identified within the supplied coverage.",
+      "The supplied record creates a direct contradiction.",
+    ),
+    prepared,
+  );
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.includes("MISSING_MATERIAL_FINDING_CITATION"));
+});
+
+test("requires a cited follow-up section or an explicit standalone none-needed statement", () => {
+  const uncited = checkReport(
+    validReport.replace(" [interview:L1-L2]\n\n## Bottom line", "\n\n## Bottom line"),
+    prepared,
+  );
+  assert.equal(uncited.ok, false);
+  assert.ok(uncited.errors.includes("MISSING_FOLLOW_UP_CITATION"));
+
+  const noneNeeded = validReport.replace(
+    "1. Please clarify the exchange. [interview:L1-L2]",
+    "No follow-up questions needed based on the supplied packet.",
+  );
+  assert.deepEqual(checkReport(noneNeeded, prepared), { ok: true, errors: [] });
+
+  const mixed = noneNeeded.replace(
+    "No follow-up questions needed based on the supplied packet.",
+    "No follow-up questions needed based on the supplied packet.\n1. An uncited question?",
+  );
+  assert.equal(checkReport(mixed, prepared).ok, false);
+});
+
+test("requires exactly one permitted bottom-line category and an explanation", () => {
+  for (const bottomLine of [
+    "Likely acceptable. The evidence seems adequate.",
+    "Clarification needed.",
+    "Clarification needed. Insufficient evidence. Both categories apply.",
+  ]) {
+    const result = checkReport(
+      validReport.replace(
+        "No material inconsistencies found within stated coverage. The supplied comparison contains no identified inconsistency.",
+        bottomLine,
+      ),
+      prepared,
+    );
+    assert.equal(result.ok, false, bottomLine);
+    assert.ok(result.errors.includes("INVALID_BOTTOM_LINE"), bottomLine);
+  }
+});
+
 test("rejects reversed and out-of-range transcript ranges with the range code", () => {
   for (const citation of ["[interview:L2-L1]", "[interview:L1-L3]"]) {
     const report = validReport.replace("[interview:L1-L2]", citation);
@@ -324,7 +629,7 @@ test("rejects completed-report sections and citations in an aborted artifact", (
 
 test("does not claim to judge whether cited conclusions are semantically true", () => {
   const semanticallyWrong = validReport.replace(
-    "No material inconsistencies found within stated coverage.",
+    "The supplied comparison contains no identified inconsistency.",
     "The applicant is cleared because this record proves every claim is true.",
   );
   assert.equal(checkReport(semanticallyWrong, prepared).ok, true);
@@ -411,6 +716,27 @@ test("rubric templates materialize to checker-compatible completed and aborted r
       "unavailable",
     )
     .replace(/<actual host-reported model, or unavailable>/g, "unavailable")
+    .replace(
+      "<supported | contradicted | tension | unknown / not assessable>",
+      "supported",
+    )
+    .replace(
+      "<Ranked findings with citations, or “None identified within the supplied coverage.”>",
+      "None identified within the supplied coverage.",
+    )
+    .replace(
+      "<Ranked tensions with citations, or “None identified.”>",
+      "None identified.",
+    )
+    .replace("<Material unknowns and coverage/provenance gaps.>", "None identified.")
+    .replace(
+      "<Highest-priority neutral question tied to a cited finding.>",
+      "Please clarify the exchange. [interview:L1-L2]",
+    )
+    .replace(
+      "<Exactly one: No material inconsistencies found within stated coverage | Clarification needed | Insufficient evidence. Start with that category and then explain why, preserve material gaps, and make no admission recommendation.>",
+      "No material inconsistencies found within stated coverage. Supplied detail.",
+    )
     .replace(/<[^>]+>/g, "Supplied detail")
     .replace("[interview:Lx-Ly]", "[interview:L1-L2]")
     .replace("[record:ID]", "[record:W001]")

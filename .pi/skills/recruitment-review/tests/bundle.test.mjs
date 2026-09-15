@@ -40,6 +40,44 @@ function prepareOptions(overrides = {}) {
   return { evaluation: false, confirmedBy: null, ...overrides };
 }
 
+function assertExpectedCitationTargets(targets, citationIndex) {
+  for (const target of targets) {
+    const interview = /^interview:L([1-9]\d*)-L([1-9]\d*)$/.exec(target);
+    if (interview !== null) {
+      const start = Number(interview[1]);
+      const end = Number(interview[2]);
+      assert.ok(Number.isSafeInteger(start), `${target} has an unsafe start line`);
+      assert.ok(Number.isSafeInteger(end), `${target} has an unsafe end line`);
+      assert.ok(start <= end, `${target} has a reversed interview range`);
+      assert.ok(
+        end <= citationIndex.transcriptLineCount,
+        `${target} exceeds the prepared transcript`,
+      );
+      continue;
+    }
+
+    const record = /^record:([A-Za-z0-9_-]{1,128})$/.exec(target);
+    if (record !== null) {
+      assert.ok(
+        citationIndex.recordIds.includes(record[1]),
+        `${target} is not a prepared record`,
+      );
+      continue;
+    }
+
+    const context = /^context:([A-Za-z0-9_-]{1,128})$/.exec(target);
+    if (context !== null) {
+      assert.ok(
+        citationIndex.contextIds.includes(context[1]),
+        `${target} is not prepared context`,
+      );
+      continue;
+    }
+
+    assert.fail(`${target} is not a supported expected citation target`);
+  }
+}
+
 test("prepares a complete packet without changing opaque evidence", async (t) => {
   const opaqueData = { label: "opaque", nested: { illustrative: true } };
   const bundle = makeBundle();
@@ -587,6 +625,51 @@ test("the fixture catalogue defines all required cases and expectation fields", 
       `${fixture.id} has no useful permitted findings`,
     );
   }
+});
+
+test("completed fixture citation targets resolve against their prepared index", async (t) => {
+  for (const fixture of fixtureCases.filter(
+    ({ expected }) => expected.status === "completed",
+  )) {
+    const root = await temporaryRoot(t);
+    await writeBundle(root, fixture.bundle);
+    const { citationIndex } = await prepareBundle(root, fixture.options);
+
+    assertExpectedCitationTargets(fixture.expected.citations, citationIndex);
+  }
+});
+
+test("fixture citation guard rejects corrupted targets and restores the fixture", async (t) => {
+  const fixture = fixtureCases.find(({ id }) => id === "direct-transfer");
+  assert.ok(fixture);
+  const root = await temporaryRoot(t);
+  await writeBundle(root, fixture.bundle);
+  const { citationIndex } = await prepareBundle(root, fixture.options);
+  const original = fixture.expected.citations[0];
+  const corruptions = [
+    ["interview:L1-L5", /exceeds the prepared transcript/],
+    ["interview:L2-L1", /reversed interview range/],
+    ["interview:L0-L1", /not a supported expected citation target/],
+    ["interview:L1.5-L2", /not a supported expected citation target/],
+    ["interview:L9007199254740993-L9007199254740993", /unsafe start line/],
+    ["record:missing-record", /not a prepared record/],
+    ["context:missing-context", /not prepared context/],
+    ["unknown:anything", /not a supported expected citation target/],
+  ];
+
+  try {
+    for (const [target, expectedMessage] of corruptions) {
+      fixture.expected.citations[0] = target;
+      assert.throws(
+        () => assertExpectedCitationTargets(fixture.expected.citations, citationIndex),
+        expectedMessage,
+        target,
+      );
+    }
+  } finally {
+    fixture.expected.citations[0] = original;
+  }
+  assert.equal(fixture.expected.citations[0], original);
 });
 
 test("fixture expectations never enter prepared packets", async (t) => {

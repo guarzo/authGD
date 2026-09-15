@@ -17,13 +17,15 @@ Use only the complete prepared packet. This is an evidentiary comparison for a r
 
 Extract material, checkable applicant statements rather than treating interviewer premises as applicant claims. Quote the applicant exactly and cite physical lines as `[interview:L2-L2]` or a necessary range such as `[interview:L3-L5]`.
 
-For every material comparison include:
+For every material comparison, use a `### Claim ...` block and include the following labelled fields in order. Labels may be plain or bold Markdown, but every value must be non-empty:
 
 - **Applicant claim:** quote plus interview citation.
-- **Evidence:** every supporting or conflicting record citation; add a context citation only when relevant. If no usable record exists, say so rather than fabricating a citation.
+- **Evidence:** every supporting or conflicting record citation; add a context citation only when relevant. If no usable record exists, say so rather than fabricating a citation. When packet scope metadata establishes the comparison and no record citation is applicable, explicitly say that no record is needed or relevant.
 - **Assessment:** exactly one of `supported`, `contradicted`, `tension`, or `unknown / not assessable`.
 - **Limits:** verification, coverage, attribution, time, semantics, and other limits on the inference.
 - **Plausible alternatives:** reasonable benign explanations supported or left open by the packet.
+
+If the interview contains no material, checkable applicant claim, do not create an empty or invented claim block. Write `No material checkable applicant claims identified in the supplied interview.` in the Claim review section. Human review still determines whether that statement is accurate.
 
 Use the classes narrowly:
 
@@ -62,6 +64,8 @@ Begin with the exact packet identity: `Bundle: <id>@<revision>`. Use only:
 
 Do not use bare IDs, file paths, source record IDs, provenance IDs, footnotes, or invented citations as substitutes. Scope all citations to the current bundle revision. Citation existence does not prove semantic support; the human reviewer must check it.
 
+Each material-finding subsection must contain either findings with relevant citations or an explicit `None identified...` statement. Coverage or provenance observations taken directly from packet metadata do not need an invented record citation. The follow-up section must include citations grounding the factual questions; coverage-repair questions based only on packet metadata do not need invented citations. If no follow-up is warranted, write `No follow-up questions needed based on the supplied packet.` instead of leaving the section empty or inventing a question. The bottom line must begin with exactly one of the three listed categories and then explain why.
+
 ## Normal report template
 
 Use this form for every interpretable packet, including partial coverage. Replace angle-bracketed prompts; do not keep them in the result.
@@ -74,7 +78,13 @@ Model: <actual host-reported model, or unavailable>
 Assessment status: DRAFT — human recruiter review required; not an admission decision
 
 ## Coverage and limitations
-<Snapshot; declared and included characters; every dataset entry's status and history limits for every included character and category; omissions; collector, method, source kind, transformations, confirmedBy, record verification; synthetic-only state; unexamined inputs.>
+- Snapshot: <collection snapshot>
+- Character scope: <declared and included characters and omissions>
+- Dataset coverage: <every dataset entry's status and history limits for every included character and category>
+- Provenance: <collector, method, source kind, and transformations>
+- Verification: <confirmedBy and record verification>
+- Synthetic-only: <synthetic-only state and consequence, when applicable>
+- Limitations and unexamined inputs: <coverage limits and inputs not examined>
 
 ## Claim review
 ### Claim 1
@@ -96,7 +106,7 @@ Assessment status: DRAFT — human recruiter review required; not an admission d
 1. <Highest-priority neutral question tied to a cited finding.>
 
 ## Bottom line
-<Exactly one: No material inconsistencies found within stated coverage | Clarification needed | Insufficient evidence. Explain why, preserve material gaps, and make no admission recommendation.>
+<Exactly one: No material inconsistencies found within stated coverage | Clarification needed | Insufficient evidence. Start with that category and then explain why, preserve material gaps, and make no admission recommendation.>
 ```
 
 ## No-identity abort diagnostic
