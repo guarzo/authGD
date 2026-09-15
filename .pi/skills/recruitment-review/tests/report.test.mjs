@@ -682,6 +682,39 @@ test("accepts only a standalone no-material-claims statement instead of a fake c
   assert.ok(result.errors.includes("INVALID_CLAIM_REVIEW"));
 });
 
+test("absence alternatives use the rubric's exact capitalization", () => {
+  const noClaims =
+    "No material checkable applicant claims identified in the supplied interview.";
+  const noFollowUp = "No follow-up questions needed based on the supplied packet.";
+  const results = [];
+  for (const convert of [(text) => text.toLowerCase(), (text) => text.toUpperCase()]) {
+    results.push(
+      checkReport(
+        validReport.replace(
+          /### Claim 1[\s\S]*?(?=\n## Material findings)/,
+          convert(noClaims),
+        ),
+        prepared,
+      ).errors,
+    );
+    results.push(
+      checkReport(
+        validReport.replace(
+          "1. Please clarify the exchange. [interview:L1-L2]",
+          convert(noFollowUp),
+        ),
+        prepared,
+      ).errors,
+    );
+  }
+  assert.deepEqual(results, [
+    ["INVALID_CLAIM_REVIEW"],
+    ["INVALID_FOLLOW_UP_QUESTIONS"],
+    ["INVALID_CLAIM_REVIEW"],
+    ["INVALID_FOLLOW_UP_QUESTIONS"],
+  ]);
+});
+
 test("requires all material-finding subsections with content", () => {
   const cases = [
     [

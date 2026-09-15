@@ -236,7 +236,7 @@ function validateCoverage(body, errors) {
 
 function validateClaimReview(body, errors) {
   if (
-    /^No material checkable applicant claims identified in the supplied interview\.$/i.test(
+    /^No material checkable applicant claims identified in the supplied interview\.$/.test(
       body,
     )
   ) {
@@ -374,7 +374,7 @@ function validateMaterialFindings(body, errors) {
 }
 
 function validateFollowUpQuestions(body, errors) {
-  if (/^No follow-up questions needed based on the supplied packet\.$/i.test(body)) {
+  if (/^No follow-up questions needed based on the supplied packet\.$/.test(body)) {
     return;
   }
 
