@@ -53,7 +53,7 @@ const COVERAGE_FIELDS = [
     ],
     "MISSING_RECORD_VERIFICATION",
   ],
-  [["Synthetic-only"], "MISSING_SYNTHETIC_ONLY_STATE"],
+  [["Synthetic-only", "Evaluation"], "MISSING_SYNTHETIC_ONLY_STATE"],
   [
     [
       "Limitations and unexamined inputs",
@@ -77,8 +77,6 @@ const CLAIM_FIELDS = [
   ["Limits", "MISSING_CLAIM_LIMITS"],
   ["Plausible alternatives", "MISSING_PLAUSIBLE_ALTERNATIVES"],
 ];
-const CLAIM_FIELD_PATTERN =
-  /^\s*(?:[-*]\s+)?(?:\*\*)?(Applicant claim|Evidence|Assessment|Limits|Plausible alternatives):(?:\*\*)?\s*(.*)$/;
 const ASSESSMENTS = new Set([
   "supported",
   "contradicted",
@@ -129,57 +127,79 @@ function sectionBodies(lines, headings) {
   });
 }
 
-function fieldValue(lines, markerIndex, markerMatch, fieldMarkers) {
+function parseLabelLine(line) {
+  const match =
+    /^\s*(?:[-*]\s+)?(?:(?:\*\*([^:*\n]+):\*\*)|(?:\*\*([^:*\n]+)\*\*:)|([^:*\n]+):)\s*(.*)$/.exec(
+      line,
+    );
+  if (match === null) return null;
+  return { label: (match[1] ?? match[2] ?? match[3]).trim(), value: match[4] };
+}
+
+function fieldValue(lines, markerIndex, initialValue, fieldMarkers) {
   const nextMarker = fieldMarkers.find(({ index }) => index > markerIndex);
   return [
-    markerMatch[2],
+    initialValue,
     ...lines.slice(markerIndex + 1, nextMarker?.index ?? lines.length),
   ]
     .join("\n")
     .trim();
 }
 
-function validateCoverage(body, errors) {
-  const labelledValues = new Map();
-  const unlabelledLines = [];
-  for (const line of body.split(/\r?\n/)) {
-    const match = /^\s*(?:[-*]\s+)?(?:\*\*)?([^:*\n]+):(?:\*\*)?\s*(.*)$/.exec(line);
-    if (match === null) {
-      unlabelledLines.push(line);
-    } else {
-      labelledValues.set(match[1].trim(), match[2].trim());
+function markdownItems(content) {
+  const items = [];
+  let current = null;
+  let afterBlank = false;
+
+  for (const line of content.split(/\r?\n/)) {
+    if (line.trim().length === 0) {
+      afterBlank = true;
+      continue;
     }
+
+    const numbered = /^(\d+)\.\s+(\S.*)$/.exec(line);
+    const bullet = /^[-*]\s+(\S.*)$/.exec(line);
+    if (numbered !== null || bullet !== null) {
+      current = {
+        kind: numbered === null ? "bullet" : "numbered",
+        text: numbered === null ? bullet[1] : numbered[2],
+      };
+      items.push(current);
+    } else if (current === null || (afterBlank && !/^\s/.test(line))) {
+      current = { kind: "paragraph", text: line.trim() };
+      items.push(current);
+    } else {
+      current.text += `\n${line.trim()}`;
+    }
+    afterBlank = false;
   }
 
-  const labelledContent = [...labelledValues.values()].join("\n");
-  const unlabelledContent = unlabelledLines.join("\n");
-  for (const [labels, missingError] of COVERAGE_FIELDS) {
-    const hasContent = labels.some(
-      (label) => (labelledValues.get(label)?.length ?? 0) > 0,
-    );
-    const hasLegacyContent =
-      (missingError === "MISSING_DATASET_COVERAGE" &&
-        /^\s*\|\s*(?:(?:Dataset|Category)\s*\|\s*Status|Character\s*\|\s*(?:Category|Dataset)\s*\|\s*Status)\s*\|/im.test(
-          body,
-        )) ||
-      (missingError === "MISSING_RECORD_VERIFICATION" &&
-        /\b(?:unverified|trusted-handoff)\b/i.test(labelledContent)) ||
-      (missingError === "MISSING_SYNTHETIC_ONLY_STATE" &&
-        /\b(?:syntheticOnly|synthetic-only)\b/i.test(labelledContent)) ||
-      (missingError === "MISSING_REVIEW_LIMITATIONS" &&
-        /\b(?:unexamined|(?:not|was not|were not) (?:independently )?(?:examined|inspected|checked)|not (?:separately )?supplied or (?:examined|inspected)|no [^.\n]{0,100} (?:was|were) examined)\b/i.test(
-          unlabelledContent,
-        ));
-    if (!hasContent && !hasLegacyContent) errors.add(missingError);
-  }
+  return items;
 }
 
-function statesNoRecordCitationIsApplicable(value) {
-  return [
-    /\bno (?:usable|supplied) (?:record(?:s| evidence)?|evidence)\b/i,
-    /\bno (?:transaction|event) record (?:is (?:needed|relevant)|addresses|establishes)\b/i,
-    /\bno record(?:\s+\S+){0,8}\s+is supplied\b/i,
-  ].some((pattern) => pattern.test(value));
+function validateCoverage(body, errors) {
+  const lines = body.split(/\r?\n/);
+  const coverageLabels = new Set(COVERAGE_FIELDS.flatMap(([labels]) => labels));
+  const fieldMarkers = lines.flatMap((line, index) => {
+    const parsed = parseLabelLine(line);
+    return parsed !== null && coverageLabels.has(parsed.label)
+      ? [{ index, ...parsed }]
+      : [];
+  });
+
+  for (const [labels, missingError] of COVERAGE_FIELDS) {
+    const hasContent = fieldMarkers.some(
+      ({ index, label, value }) =>
+        labels.includes(label) &&
+        fieldValue(lines, index, value, fieldMarkers).length > 0,
+    );
+    const hasDatasetTable =
+      missingError === "MISSING_DATASET_COVERAGE" &&
+      /^\s*\|\s*(?:(?:Dataset|Category)\s*\|\s*Status|Character\s*\|\s*(?:Category|Dataset)\s*\|\s*Status)\s*\|/im.test(
+        body,
+      );
+    if (!hasContent && !hasDatasetTable) errors.add(missingError);
+  }
 }
 
 function validateClaimReview(body, errors) {
@@ -204,44 +224,69 @@ function validateClaimReview(body, errors) {
     const end = claimStarts[claimOffset + 1] ?? lines.length;
     const claimLines = lines.slice(start + 1, end);
     const fieldMarkers = claimLines.flatMap((line, index) => {
-      const match = CLAIM_FIELD_PATTERN.exec(line);
-      return match === null ? [] : [{ index, match }];
+      const parsed = parseLabelLine(line);
+      return parsed !== null && CLAIM_FIELDS.some(([field]) => field === parsed.label)
+        ? [{ index, ...parsed }]
+        : [];
     });
 
     let previousIndex = -1;
+    const values = new Map();
     for (const [field, missingError] of CLAIM_FIELDS) {
-      const matches = fieldMarkers.filter(({ match }) => match[1] === field);
+      const matches = fieldMarkers.filter(({ label }) => label === field);
       if (matches.length !== 1) {
         errors.add(matches.length === 0 ? missingError : "DUPLICATE_CLAIM_FIELD");
         continue;
       }
-      const [{ index, match }] = matches;
+      const [{ index, value: initialValue }] = matches;
       if (index <= previousIndex) errors.add("INVALID_CLAIM_FIELD_ORDER");
       previousIndex = index;
-      const value = fieldValue(claimLines, index, match, fieldMarkers);
+      const value = fieldValue(claimLines, index, initialValue, fieldMarkers);
       if (value.length === 0) {
         errors.add(missingError);
-        continue;
+      } else {
+        values.set(field, value);
       }
+    }
 
-      if (field === "Applicant claim") {
-        const { citations, malformed } = scanCitations(value);
-        if (!malformed && !citations.some((citation) => citation.type === "interview")) {
-          errors.add("MISSING_APPLICANT_CITATION");
+    const applicantClaim = values.get("Applicant claim");
+    if (applicantClaim !== undefined) {
+      const { citations, malformed } = scanCitations(applicantClaim);
+      if (!malformed && !citations.some((citation) => citation.type === "interview")) {
+        errors.add("MISSING_APPLICANT_CITATION");
+      }
+    }
+
+    const assessment = values
+      .get("Assessment")
+      ?.replace(/^\*\*(.*?)\*\*$/, "$1")
+      .trim();
+    if (assessment !== undefined && !ASSESSMENTS.has(assessment)) {
+      errors.add("INVALID_CLAIM_ASSESSMENT");
+    }
+
+    const evidence = values.get("Evidence");
+    if (evidence !== undefined) {
+      const { citations, malformed } = scanCitations(evidence);
+      const noUsableRecord =
+        evidence === "No usable record exists in the supplied packet.";
+      const evidenceLines = evidence.split(/\r?\n/);
+      const metadata = parseLabelLine(evidenceLines[0]);
+      const packetMetadata = metadata?.label === "Packet metadata";
+      if (packetMetadata) {
+        const metadataValue = [metadata.value, ...evidenceLines.slice(1)]
+          .join("\n")
+          .trim();
+        if (metadataValue.length === 0) errors.add("EMPTY_PACKET_METADATA_EVIDENCE");
+      } else if (noUsableRecord) {
+        if (assessment !== "unknown / not assessable") {
+          errors.add("INVALID_NO_RECORD_ASSESSMENT");
         }
-      } else if (field === "Evidence") {
-        const { citations, malformed } = scanCitations(value);
-        const noRecordCitationIsApplicable = statesNoRecordCitationIsApplicable(value);
-        if (
-          !malformed &&
-          !noRecordCitationIsApplicable &&
-          !citations.some((citation) => citation.type === "record")
-        ) {
-          errors.add("MISSING_EVIDENCE_CITATION");
-        }
-      } else if (field === "Assessment") {
-        const normalized = value.replace(/^\*\*(.*?)\*\*$/, "$1").trim();
-        if (!ASSESSMENTS.has(normalized)) errors.add("INVALID_CLAIM_ASSESSMENT");
+      } else if (
+        !malformed &&
+        !citations.some((citation) => citation.type === "record")
+      ) {
+        errors.add("MISSING_EVIDENCE_CITATION");
       }
     }
   }
@@ -267,11 +312,27 @@ function validateMaterialFindings(body, errors) {
       .trim();
     if (content.length === 0) {
       errors.add(missingError);
-    } else if (
-      !/^None identified\b/i.test(content) &&
-      scanCitations(content).citations.length === 0
+      continue;
+    }
+    if (
+      content === "None identified." ||
+      content === "None identified within the supplied coverage."
     ) {
-      errors.add("MISSING_MATERIAL_FINDING_CITATION");
+      continue;
+    }
+
+    for (const item of markdownItems(content)) {
+      const itemLines = item.text.split(/\r?\n/);
+      const metadata = parseLabelLine(itemLines[0]);
+      const isMetadata =
+        heading === "### Unknowns and gaps" &&
+        (metadata?.label === "Coverage" || metadata?.label === "Provenance");
+      if (isMetadata) {
+        const value = [metadata.value, ...itemLines.slice(1)].join("\n").trim();
+        if (value.length === 0) errors.add("EMPTY_MATERIAL_METADATA");
+      } else if (scanCitations(item.text).citations.length === 0) {
+        errors.add("MISSING_MATERIAL_FINDING_CITATION");
+      }
     }
   }
 }
@@ -281,30 +342,39 @@ function validateFollowUpQuestions(body, errors) {
     return;
   }
 
-  if (!/^\s*\d+\.\s+\S/m.test(body)) {
-    errors.add("INVALID_FOLLOW_UP_QUESTIONS");
-  } else if (scanCitations(body).citations.length === 0) {
-    errors.add("MISSING_FOLLOW_UP_CITATION");
+  for (const item of markdownItems(body)) {
+    if (item.kind !== "numbered") {
+      errors.add("INVALID_FOLLOW_UP_QUESTIONS");
+      continue;
+    }
+    const itemLines = item.text.split(/\r?\n/);
+    const repair = parseLabelLine(itemLines[0]);
+    if (repair?.label === "Coverage repair") {
+      const value = [repair.value, ...itemLines.slice(1)].join("\n").trim();
+      if (value.length === 0) errors.add("EMPTY_COVERAGE_REPAIR");
+    } else if (scanCitations(item.text).citations.length === 0) {
+      errors.add("MISSING_FOLLOW_UP_CITATION");
+    }
   }
 }
 
 function validateBottomLine(body, errors) {
   const normalized = body.replaceAll("**", "").trim();
-  const occurrences = BOTTOM_LINES.flatMap((category) => {
-    const indexes = [];
-    let start = 0;
-    while ((start = normalized.indexOf(category, start)) !== -1) {
-      indexes.push({ category, index: start });
-      start += category.length;
-    }
-    return indexes;
-  });
-  if (occurrences.length !== 1 || occurrences[0].index !== 0) {
+  const category = BOTTOM_LINES.find(
+    (candidate) =>
+      normalized.startsWith(candidate) &&
+      /^[\s,.:;—-]/.test(normalized.slice(candidate.length, candidate.length + 1)),
+  );
+  if (category === undefined) {
     errors.add("INVALID_BOTTOM_LINE");
     return;
   }
-  const explanation = normalized.slice(occurrences[0].category.length);
-  if (!/^[.:—-]\s*\S/.test(explanation)) errors.add("INVALID_BOTTOM_LINE");
+
+  const explanation = normalized
+    .slice(category.length)
+    .replace(/^[,.:;—-]\s*/, "")
+    .trim();
+  if (explanation.length === 0) errors.add("INVALID_BOTTOM_LINE");
 }
 
 function scanCitations(text) {

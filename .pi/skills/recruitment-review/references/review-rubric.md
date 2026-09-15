@@ -17,10 +17,10 @@ Use only the complete prepared packet. This is an evidentiary comparison for a r
 
 Extract material, checkable applicant statements rather than treating interviewer premises as applicant claims. Quote the applicant exactly and cite physical lines as `[interview:L2-L2]` or a necessary range such as `[interview:L3-L5]`.
 
-For every material comparison, use a `### Claim ...` block and include the following labelled fields in order. Labels may be plain or bold Markdown, but every value must be non-empty:
+For every material comparison, use a `### Claim ...` block and include the following labelled fields in order. Labels may be plain (`Evidence:`), bold with the colon inside (`**Evidence:**`), or bold with the colon outside (`**Evidence**:`). A value may follow on the same line or on attached indented/nested Markdown lines, but it must be non-empty:
 
 - **Applicant claim:** quote plus interview citation.
-- **Evidence:** every supporting or conflicting record citation; add a context citation only when relevant. If no usable record exists, say so rather than fabricating a citation. When packet scope metadata establishes the comparison and no record citation is applicable, explicitly say that no record is needed or relevant.
+- **Evidence:** every supporting or conflicting record citation; add a context citation only when relevant. If the packet contains no usable record, use exactly `No usable record exists in the supplied packet.` and classify the claim `unknown / not assessable`; do not append a factual conclusion to that absence form. When explicit packet scope metadata is the evidence and no record citation applies, begin the value with `Packet metadata:` followed by the non-empty metadata comparison.
 - **Assessment:** exactly one of `supported`, `contradicted`, `tension`, or `unknown / not assessable`.
 - **Limits:** verification, coverage, attribution, time, semantics, and other limits on the inference.
 - **Plausible alternatives:** reasonable benign explanations supported or left open by the packet.
@@ -64,11 +64,15 @@ Begin with the exact packet identity: `Bundle: <id>@<revision>`. Use only:
 
 Do not use bare IDs, file paths, source record IDs, provenance IDs, footnotes, or invented citations as substitutes. Scope all citations to the current bundle revision. Citation existence does not prove semantic support; the human reviewer must check it.
 
-Each material-finding subsection must contain either findings with relevant citations or an explicit `None identified...` statement. Coverage or provenance observations taken directly from packet metadata do not need an invented record citation. The follow-up section must include citations grounding the factual questions; coverage-repair questions based only on packet metadata do not need invented citations. If no follow-up is warranted, write `No follow-up questions needed based on the supplied packet.` instead of leaving the section empty or inventing a question. The bottom line must begin with exactly one of the three listed categories and then explain why.
+Each material-finding subsection must be exactly `None identified.` or `None identified within the supplied coverage.`, or contain discrete findings (Markdown list items are preferred). Every factual item needs its own relevant citation; a citation in another item or a standalone paragraph does not cover it. In Unknowns and gaps only, an uncited packet-metadata item is allowed when it begins with the non-empty structural label `Coverage:` or `Provenance:`. Unknown or unlabelled items still require citations.
+
+Each follow-up is a numbered item and needs its own citation, including citations on attached indented continuation lines. An uncited packet-metadata repair item is allowed only when it begins with the non-empty structural label `Coverage repair:`. If no follow-up is warranted, write exactly `No follow-up questions needed based on the supplied packet.` instead of leaving the section empty or inventing a question.
+
+The bottom line must begin with exactly one of the three listed categories and then provide a non-empty explanation. A comma, punctuation, space, or newline may separate the leading category from the explanation; mentioning category words later in the explanation does not declare another category.
 
 ## Normal report template
 
-Use this form for every interpretable packet, including partial coverage. Replace angle-bracketed prompts; do not keep them in the result.
+Use this form for every interpretable packet, including partial coverage. Replace angle-bracketed prompts; do not keep them in the result. Coverage labels accept the same plain and two bold styles as claim labels, and their values may continue on attached indented or nested Markdown lines.
 
 ```markdown
 Bundle: <bundleId>@<revision>
@@ -100,10 +104,10 @@ Assessment status: DRAFT — human recruiter review required; not an admission d
 ### Tensions
 <Ranked tensions with citations, or “None identified.”>
 ### Unknowns and gaps
-<Material unknowns and coverage/provenance gaps.>
+<Individually cited unknowns; non-empty `Coverage:` or `Provenance:` metadata items; or “None identified.”>
 
 ## Follow-up questions
-1. <Highest-priority neutral question tied to a cited finding.>
+1. <Highest-priority neutral question with its own citation; use a non-empty `Coverage repair:` item only for packet-metadata collection repair.>
 
 ## Bottom line
 <Exactly one: No material inconsistencies found within stated coverage | Clarification needed | Insufficient evidence. Start with that category and then explain why, preserve material gaps, and make no admission recommendation.>
