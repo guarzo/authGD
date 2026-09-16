@@ -28,3 +28,6 @@ tsconfig.json
 
 # Cross-repository byte-authoritative Unicode profile; tests pin its full SHA256.
 /src/core/fleet-combat-v2-profile.json
+
+# Reviewed cross-language wire fixture; preserve the coordinator-approved SHA256.
+/tests/fixtures/fleet-api-v2.json
