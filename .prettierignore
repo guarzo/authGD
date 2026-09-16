@@ -25,3 +25,6 @@ package-lock.json
 # compiler does. Excluding it is the only option that does not churn, and there
 # is nothing to gain from formatting a file no one hand-edits.
 tsconfig.json
+
+# Cross-repository byte-authoritative Unicode profile; tests pin its full SHA256.
+/src/core/fleet-combat-v2-profile.json

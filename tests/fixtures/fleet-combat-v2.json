@@ -1,0 +1,1209 @@
+{
+  "profile_sha256": "036582f29ec5b427cd50397a5504fa4c9a3145e35d15118a64c4eb2f26700868",
+  "derived_limits": {
+    "effect_order": ["SCRAM", "POINT", "NEUT"],
+    "effects_per_row": 3,
+    "observations_per_tackle": 9,
+    "named_per_row": 16,
+    "observations_per_row": 19,
+    "associations_per_attempt": 641,
+    "association_capacity": 39101,
+    "receiver_capacity": 71
+  },
+  "names": [
+    {
+      "id": "scratch-trim-nfc",
+      "input": " e\u0301 ",
+      "normalized": "\u00e9",
+      "valid": false,
+      "key": null,
+      "normalized_key": "\u00e9"
+    },
+    {
+      "id": "scratch-nbsp",
+      "input": "\u00a0Pilot\u00a0",
+      "normalized": "Pilot",
+      "valid": false,
+      "key": null,
+      "normalized_key": "pilot"
+    },
+    {
+      "id": "scratch-internal-double-space",
+      "input": "A  B",
+      "normalized": "A  B",
+      "valid": true,
+      "key": "a  b",
+      "normalized_key": "a  b"
+    },
+    {
+      "id": "scratch-hangul-lvt",
+      "input": "\u1100\u1161\u11a8",
+      "normalized": "\uac01",
+      "valid": false,
+      "key": null,
+      "normalized_key": "\uac01"
+    },
+    {
+      "id": "scratch-empty",
+      "input": "",
+      "normalized": null,
+      "valid": false,
+      "key": null,
+      "normalized_key": null
+    },
+    {
+      "id": "scratch-markup",
+      "input": "<Pilot>",
+      "normalized": null,
+      "valid": false,
+      "key": null,
+      "normalized_key": null
+    },
+    {
+      "id": "scratch-newline",
+      "input": "Pilot\n",
+      "normalized": null,
+      "valid": false,
+      "key": null,
+      "normalized_key": null
+    },
+    {
+      "id": "scratch-zwj",
+      "input": "A\u200dB",
+      "normalized": null,
+      "valid": false,
+      "key": null,
+      "normalized_key": null
+    },
+    {
+      "id": "scratch-line-separator",
+      "input": "A\u2028B",
+      "normalized": null,
+      "valid": false,
+      "key": null,
+      "normalized_key": null
+    },
+    {
+      "id": "scratch-surrogate",
+      "input": "\ud800",
+      "normalized": null,
+      "valid": false,
+      "key": null,
+      "normalized_key": null
+    },
+    {
+      "id": "scratch-private-use",
+      "input": "\ue000",
+      "normalized": null,
+      "valid": false,
+      "key": null,
+      "normalized_key": null
+    },
+    {
+      "id": "scratch-unassigned",
+      "input": "\u0378",
+      "normalized": null,
+      "valid": false,
+      "key": null,
+      "normalized_key": null
+    },
+    {
+      "id": "scratch-65-supplementary",
+      "input": "\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00",
+      "normalized": null,
+      "valid": false,
+      "key": null,
+      "normalized_key": null
+    },
+    {
+      "id": "scratch-raw-cap",
+      "input": "                                                                                                                                                                                                                                                                Pilot",
+      "normalized": null,
+      "valid": false,
+      "key": null,
+      "normalized_key": null
+    },
+    {
+      "id": "scratch-64-supplementary",
+      "input": "\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00",
+      "normalized": "\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00",
+      "valid": true,
+      "key": "\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00",
+      "normalized_key": "\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00"
+    },
+    {
+      "id": "scratch-decomposed-wire",
+      "input": "e\u0301",
+      "normalized": "\u00e9",
+      "valid": false,
+      "key": null,
+      "normalized_key": "\u00e9"
+    },
+    {
+      "id": "scratch-recursive-composition",
+      "input": "A\u030a\u0301",
+      "normalized": "\u01fa",
+      "valid": false,
+      "key": null,
+      "normalized_key": "\u01fb"
+    },
+    {
+      "id": "scratch-sharp-s",
+      "input": "Stra\u00dfe",
+      "normalized": "Stra\u00dfe",
+      "valid": true,
+      "key": "strasse",
+      "normalized_key": "strasse"
+    },
+    {
+      "id": "scratch-sharp-s-equivalent",
+      "input": "STRASSE",
+      "normalized": "STRASSE",
+      "valid": true,
+      "key": "strasse",
+      "normalized_key": "strasse"
+    },
+    {
+      "id": "scratch-sigma",
+      "input": "\u03a3",
+      "normalized": "\u03a3",
+      "valid": true,
+      "key": "\u03c3",
+      "normalized_key": "\u03c3"
+    },
+    {
+      "id": "scratch-final-sigma",
+      "input": "\u03c2",
+      "normalized": "\u03c2",
+      "valid": true,
+      "key": "\u03c3",
+      "normalized_key": "\u03c3"
+    },
+    {
+      "id": "canonical-latin",
+      "input": "\u00e9",
+      "normalized": "\u00e9",
+      "valid": true,
+      "key": "\u00e9",
+      "normalized_key": "\u00e9"
+    },
+    {
+      "id": "reorder-and-compose",
+      "input": "A\u0315\u0300",
+      "normalized": "\u00c0\u0315",
+      "valid": false,
+      "key": null,
+      "normalized_key": "\u00e0\u0315"
+    },
+    {
+      "id": "equal-class-blocking",
+      "input": "A\u0305\u0301",
+      "normalized": "A\u0305\u0301",
+      "valid": true,
+      "key": "a\u0305\u0301",
+      "normalized_key": "a\u0305\u0301"
+    },
+    {
+      "id": "equal-class-stable-order",
+      "input": "x\u0301\u0300",
+      "normalized": "x\u0301\u0300",
+      "valid": true,
+      "key": "x\u0301\u0300",
+      "normalized_key": "x\u0301\u0300"
+    },
+    {
+      "id": "nonblocking-composition",
+      "input": "A\u0327\u030a",
+      "normalized": "\u00c5\u0327",
+      "valid": false,
+      "key": null,
+      "normalized_key": "\u00e5\u0327"
+    },
+    {
+      "id": "leading-nonstarters",
+      "input": "\u0315\u0300A",
+      "normalized": "\u0300\u0315A",
+      "valid": false,
+      "key": null,
+      "normalized_key": "\u0300\u0315a"
+    },
+    {
+      "id": "starter-boundary",
+      "input": "A\u0315B\u0300",
+      "normalized": "A\u0315B\u0300",
+      "valid": true,
+      "key": "a\u0315b\u0300",
+      "normalized_key": "a\u0315b\u0300"
+    },
+    {
+      "id": "recursive-decompose-reorder",
+      "input": "\u01fa\u0323",
+      "normalized": "\u1ea0\u030a\u0301",
+      "valid": false,
+      "key": null,
+      "normalized_key": "\u1ea1\u030a\u0301"
+    },
+    {
+      "id": "singleton-canonical",
+      "input": "\u212b",
+      "normalized": "\u00c5",
+      "valid": false,
+      "key": null,
+      "normalized_key": "\u00e5"
+    },
+    {
+      "id": "composition-exclusion",
+      "input": "\u0958",
+      "normalized": "\u0915\u093c",
+      "valid": false,
+      "key": null,
+      "normalized_key": "\u0915\u093c"
+    },
+    {
+      "id": "composition-exclusion-sequence",
+      "input": "\u0915\u093c",
+      "normalized": "\u0915\u093c",
+      "valid": true,
+      "key": "\u0915\u093c",
+      "normalized_key": "\u0915\u093c"
+    },
+    {
+      "id": "nonstarter-exclusion",
+      "input": "\u0344",
+      "normalized": "\u0308\u0301",
+      "valid": false,
+      "key": null,
+      "normalized_key": "\u0308\u0301"
+    },
+    {
+      "id": "hangul-lv",
+      "input": "\u1100\u1161",
+      "normalized": "\uac00",
+      "valid": false,
+      "key": null,
+      "normalized_key": "\uac00"
+    },
+    {
+      "id": "hangul-lv-plus-t",
+      "input": "\uac00\u11a8",
+      "normalized": "\uac01",
+      "valid": false,
+      "key": null,
+      "normalized_key": "\uac01"
+    },
+    {
+      "id": "hangul-last-syllable",
+      "input": "\u1112\u1175\u11c2",
+      "normalized": "\ud7a3",
+      "valid": false,
+      "key": null,
+      "normalized_key": "\ud7a3"
+    },
+    {
+      "id": "hangul-recursive-decomposition",
+      "input": "\uac01",
+      "normalized": "\uac01",
+      "valid": true,
+      "key": "\uac01",
+      "normalized_key": "\uac01"
+    },
+    {
+      "id": "hangul-blocked-by-mark",
+      "input": "\u1100\u0300\u1161",
+      "normalized": "\u1100\u0300\u1161",
+      "valid": true,
+      "key": "\u1100\u0300\u1161",
+      "normalized_key": "\u1100\u0300\u1161"
+    },
+    {
+      "id": "hangul-empty-tail-not-composable",
+      "input": "\uac00\u11a7",
+      "normalized": "\uac00\u11a7",
+      "valid": true,
+      "key": "\uac00\u11a7",
+      "normalized_key": "\uac00\u11a7"
+    },
+    {
+      "id": "hangul-outside-l-range",
+      "input": "\u1113\u1161",
+      "normalized": "\u1113\u1161",
+      "valid": true,
+      "key": "\u1113\u1161",
+      "normalized_key": "\u1113\u1161"
+    },
+    {
+      "id": "hangul-outside-v-range",
+      "input": "\u1100\u1176",
+      "normalized": "\u1100\u1176",
+      "valid": true,
+      "key": "\u1100\u1176",
+      "normalized_key": "\u1100\u1176"
+    },
+    {
+      "id": "hangul-outside-t-range",
+      "input": "\uac00\u11c3",
+      "normalized": "\uac00\u11c3",
+      "valid": true,
+      "key": "\uac00\u11c3",
+      "normalized_key": "\uac00\u11c3"
+    },
+    {
+      "id": "trim-zs-0020",
+      "input": " Pilot ",
+      "normalized": "Pilot",
+      "valid": false,
+      "key": null,
+      "normalized_key": "pilot"
+    },
+    {
+      "id": "internal-zs-0020",
+      "input": "A B",
+      "normalized": "A B",
+      "valid": true,
+      "key": "a b",
+      "normalized_key": "a b"
+    },
+    {
+      "id": "trim-zs-00a0",
+      "input": "\u00a0Pilot\u00a0",
+      "normalized": "Pilot",
+      "valid": false,
+      "key": null,
+      "normalized_key": "pilot"
+    },
+    {
+      "id": "internal-zs-00a0",
+      "input": "A\u00a0B",
+      "normalized": "A\u00a0B",
+      "valid": true,
+      "key": "a\u00a0b",
+      "normalized_key": "a\u00a0b"
+    },
+    {
+      "id": "trim-zs-1680",
+      "input": "\u1680Pilot\u1680",
+      "normalized": "Pilot",
+      "valid": false,
+      "key": null,
+      "normalized_key": "pilot"
+    },
+    {
+      "id": "internal-zs-1680",
+      "input": "A\u1680B",
+      "normalized": "A\u1680B",
+      "valid": true,
+      "key": "a\u1680b",
+      "normalized_key": "a\u1680b"
+    },
+    {
+      "id": "trim-zs-2000",
+      "input": "\u2000Pilot\u2000",
+      "normalized": "Pilot",
+      "valid": false,
+      "key": null,
+      "normalized_key": "pilot"
+    },
+    {
+      "id": "internal-zs-2000",
+      "input": "A\u2000B",
+      "normalized": "A\u2002B",
+      "valid": false,
+      "key": null,
+      "normalized_key": "a\u2002b"
+    },
+    {
+      "id": "trim-zs-2001",
+      "input": "\u2001Pilot\u2001",
+      "normalized": "Pilot",
+      "valid": false,
+      "key": null,
+      "normalized_key": "pilot"
+    },
+    {
+      "id": "internal-zs-2001",
+      "input": "A\u2001B",
+      "normalized": "A\u2003B",
+      "valid": false,
+      "key": null,
+      "normalized_key": "a\u2003b"
+    },
+    {
+      "id": "trim-zs-2002",
+      "input": "\u2002Pilot\u2002",
+      "normalized": "Pilot",
+      "valid": false,
+      "key": null,
+      "normalized_key": "pilot"
+    },
+    {
+      "id": "internal-zs-2002",
+      "input": "A\u2002B",
+      "normalized": "A\u2002B",
+      "valid": true,
+      "key": "a\u2002b",
+      "normalized_key": "a\u2002b"
+    },
+    {
+      "id": "trim-zs-2003",
+      "input": "\u2003Pilot\u2003",
+      "normalized": "Pilot",
+      "valid": false,
+      "key": null,
+      "normalized_key": "pilot"
+    },
+    {
+      "id": "internal-zs-2003",
+      "input": "A\u2003B",
+      "normalized": "A\u2003B",
+      "valid": true,
+      "key": "a\u2003b",
+      "normalized_key": "a\u2003b"
+    },
+    {
+      "id": "trim-zs-2004",
+      "input": "\u2004Pilot\u2004",
+      "normalized": "Pilot",
+      "valid": false,
+      "key": null,
+      "normalized_key": "pilot"
+    },
+    {
+      "id": "internal-zs-2004",
+      "input": "A\u2004B",
+      "normalized": "A\u2004B",
+      "valid": true,
+      "key": "a\u2004b",
+      "normalized_key": "a\u2004b"
+    },
+    {
+      "id": "trim-zs-2005",
+      "input": "\u2005Pilot\u2005",
+      "normalized": "Pilot",
+      "valid": false,
+      "key": null,
+      "normalized_key": "pilot"
+    },
+    {
+      "id": "internal-zs-2005",
+      "input": "A\u2005B",
+      "normalized": "A\u2005B",
+      "valid": true,
+      "key": "a\u2005b",
+      "normalized_key": "a\u2005b"
+    },
+    {
+      "id": "trim-zs-2006",
+      "input": "\u2006Pilot\u2006",
+      "normalized": "Pilot",
+      "valid": false,
+      "key": null,
+      "normalized_key": "pilot"
+    },
+    {
+      "id": "internal-zs-2006",
+      "input": "A\u2006B",
+      "normalized": "A\u2006B",
+      "valid": true,
+      "key": "a\u2006b",
+      "normalized_key": "a\u2006b"
+    },
+    {
+      "id": "trim-zs-2007",
+      "input": "\u2007Pilot\u2007",
+      "normalized": "Pilot",
+      "valid": false,
+      "key": null,
+      "normalized_key": "pilot"
+    },
+    {
+      "id": "internal-zs-2007",
+      "input": "A\u2007B",
+      "normalized": "A\u2007B",
+      "valid": true,
+      "key": "a\u2007b",
+      "normalized_key": "a\u2007b"
+    },
+    {
+      "id": "trim-zs-2008",
+      "input": "\u2008Pilot\u2008",
+      "normalized": "Pilot",
+      "valid": false,
+      "key": null,
+      "normalized_key": "pilot"
+    },
+    {
+      "id": "internal-zs-2008",
+      "input": "A\u2008B",
+      "normalized": "A\u2008B",
+      "valid": true,
+      "key": "a\u2008b",
+      "normalized_key": "a\u2008b"
+    },
+    {
+      "id": "trim-zs-2009",
+      "input": "\u2009Pilot\u2009",
+      "normalized": "Pilot",
+      "valid": false,
+      "key": null,
+      "normalized_key": "pilot"
+    },
+    {
+      "id": "internal-zs-2009",
+      "input": "A\u2009B",
+      "normalized": "A\u2009B",
+      "valid": true,
+      "key": "a\u2009b",
+      "normalized_key": "a\u2009b"
+    },
+    {
+      "id": "trim-zs-200a",
+      "input": "\u200aPilot\u200a",
+      "normalized": "Pilot",
+      "valid": false,
+      "key": null,
+      "normalized_key": "pilot"
+    },
+    {
+      "id": "internal-zs-200a",
+      "input": "A\u200aB",
+      "normalized": "A\u200aB",
+      "valid": true,
+      "key": "a\u200ab",
+      "normalized_key": "a\u200ab"
+    },
+    {
+      "id": "trim-zs-202f",
+      "input": "\u202fPilot\u202f",
+      "normalized": "Pilot",
+      "valid": false,
+      "key": null,
+      "normalized_key": "pilot"
+    },
+    {
+      "id": "internal-zs-202f",
+      "input": "A\u202fB",
+      "normalized": "A\u202fB",
+      "valid": true,
+      "key": "a\u202fb",
+      "normalized_key": "a\u202fb"
+    },
+    {
+      "id": "trim-zs-205f",
+      "input": "\u205fPilot\u205f",
+      "normalized": "Pilot",
+      "valid": false,
+      "key": null,
+      "normalized_key": "pilot"
+    },
+    {
+      "id": "internal-zs-205f",
+      "input": "A\u205fB",
+      "normalized": "A\u205fB",
+      "valid": true,
+      "key": "a\u205fb",
+      "normalized_key": "a\u205fb"
+    },
+    {
+      "id": "trim-zs-3000",
+      "input": "\u3000Pilot\u3000",
+      "normalized": "Pilot",
+      "valid": false,
+      "key": null,
+      "normalized_key": "pilot"
+    },
+    {
+      "id": "internal-zs-3000",
+      "input": "A\u3000B",
+      "normalized": "A\u3000B",
+      "valid": true,
+      "key": "a\u3000b",
+      "normalized_key": "a\u3000b"
+    },
+    {
+      "id": "all-zs",
+      "input": "\u00a0\u2003 \u3000",
+      "normalized": null,
+      "valid": false,
+      "key": null,
+      "normalized_key": null
+    },
+    {
+      "id": "forbidden-nul",
+      "input": " \u0000Pilot ",
+      "normalized": null,
+      "valid": false,
+      "key": null,
+      "normalized_key": null
+    },
+    {
+      "id": "forbidden-tab",
+      "input": " \tPilot ",
+      "normalized": null,
+      "valid": false,
+      "key": null,
+      "normalized_key": null
+    },
+    {
+      "id": "forbidden-lf",
+      "input": " \nPilot ",
+      "normalized": null,
+      "valid": false,
+      "key": null,
+      "normalized_key": null
+    },
+    {
+      "id": "forbidden-cr",
+      "input": " \rPilot ",
+      "normalized": null,
+      "valid": false,
+      "key": null,
+      "normalized_key": null
+    },
+    {
+      "id": "forbidden-unit-separator",
+      "input": " \u001fPilot ",
+      "normalized": null,
+      "valid": false,
+      "key": null,
+      "normalized_key": null
+    },
+    {
+      "id": "forbidden-del",
+      "input": " \u007fPilot ",
+      "normalized": null,
+      "valid": false,
+      "key": null,
+      "normalized_key": null
+    },
+    {
+      "id": "forbidden-next-line",
+      "input": " \u0085Pilot ",
+      "normalized": null,
+      "valid": false,
+      "key": null,
+      "normalized_key": null
+    },
+    {
+      "id": "forbidden-c1-end",
+      "input": " \u009fPilot ",
+      "normalized": null,
+      "valid": false,
+      "key": null,
+      "normalized_key": null
+    },
+    {
+      "id": "forbidden-soft-hyphen",
+      "input": " \u00adPilot ",
+      "normalized": null,
+      "valid": false,
+      "key": null,
+      "normalized_key": null
+    },
+    {
+      "id": "forbidden-zero-width-space",
+      "input": " \u200bPilot ",
+      "normalized": null,
+      "valid": false,
+      "key": null,
+      "normalized_key": null
+    },
+    {
+      "id": "forbidden-zwnj",
+      "input": " \u200cPilot ",
+      "normalized": null,
+      "valid": false,
+      "key": null,
+      "normalized_key": null
+    },
+    {
+      "id": "forbidden-bidi-override",
+      "input": " \u202ePilot ",
+      "normalized": null,
+      "valid": false,
+      "key": null,
+      "normalized_key": null
+    },
+    {
+      "id": "forbidden-bidi-isolate",
+      "input": " \u2066Pilot ",
+      "normalized": null,
+      "valid": false,
+      "key": null,
+      "normalized_key": null
+    },
+    {
+      "id": "forbidden-bom",
+      "input": " \ufeffPilot ",
+      "normalized": null,
+      "valid": false,
+      "key": null,
+      "normalized_key": null
+    },
+    {
+      "id": "forbidden-paragraph-separator",
+      "input": " \u2029Pilot ",
+      "normalized": null,
+      "valid": false,
+      "key": null,
+      "normalized_key": null
+    },
+    {
+      "id": "forbidden-high-surrogate-end",
+      "input": " \udbffPilot ",
+      "normalized": null,
+      "valid": false,
+      "key": null,
+      "normalized_key": null
+    },
+    {
+      "id": "forbidden-low-surrogate-start",
+      "input": " \udc00Pilot ",
+      "normalized": null,
+      "valid": false,
+      "key": null,
+      "normalized_key": null
+    },
+    {
+      "id": "forbidden-low-surrogate-end",
+      "input": " \udfffPilot ",
+      "normalized": null,
+      "valid": false,
+      "key": null,
+      "normalized_key": null
+    },
+    {
+      "id": "forbidden-private-use-end",
+      "input": " \uf8ffPilot ",
+      "normalized": null,
+      "valid": false,
+      "key": null,
+      "normalized_key": null
+    },
+    {
+      "id": "forbidden-supplementary-private-use",
+      "input": " \udb80\udc00Pilot ",
+      "normalized": null,
+      "valid": false,
+      "key": null,
+      "normalized_key": null
+    },
+    {
+      "id": "forbidden-last-private-use",
+      "input": " \udbff\udffdPilot ",
+      "normalized": null,
+      "valid": false,
+      "key": null,
+      "normalized_key": null
+    },
+    {
+      "id": "forbidden-noncharacter",
+      "input": " \ufdd0Pilot ",
+      "normalized": null,
+      "valid": false,
+      "key": null,
+      "normalized_key": null
+    },
+    {
+      "id": "forbidden-plane-end",
+      "input": " \uffffPilot ",
+      "normalized": null,
+      "valid": false,
+      "key": null,
+      "normalized_key": null
+    },
+    {
+      "id": "forbidden-last-scalar",
+      "input": " \udbff\udfffPilot ",
+      "normalized": null,
+      "valid": false,
+      "key": null,
+      "normalized_key": null
+    },
+    {
+      "id": "forbidden-supplementary-unassigned",
+      "input": " \ud83f\udfffPilot ",
+      "normalized": null,
+      "valid": false,
+      "key": null,
+      "normalized_key": null
+    },
+    {
+      "id": "less-than",
+      "input": "A<B",
+      "normalized": null,
+      "valid": false,
+      "key": null,
+      "normalized_key": null
+    },
+    {
+      "id": "greater-than",
+      "input": "A>B",
+      "normalized": null,
+      "valid": false,
+      "key": null,
+      "normalized_key": null
+    },
+    {
+      "id": "category-range-gap-before-del",
+      "input": "~",
+      "normalized": "~",
+      "valid": true,
+      "key": "~",
+      "normalized_key": "~"
+    },
+    {
+      "id": "category-range-gap-after-c1",
+      "input": "\u00a1",
+      "normalized": "\u00a1",
+      "valid": true,
+      "key": "\u00a1",
+      "normalized_key": "\u00a1"
+    },
+    {
+      "id": "private-range-gap-after",
+      "input": "\uf900",
+      "normalized": "\u8c48",
+      "valid": false,
+      "key": null,
+      "normalized_key": "\u8c48"
+    },
+    {
+      "id": "unicode15-emoji",
+      "input": "\ud83e\udee8",
+      "normalized": "\ud83e\udee8",
+      "valid": true,
+      "key": "\ud83e\udee8",
+      "normalized_key": "\ud83e\udee8"
+    },
+    {
+      "id": "unicode16-emoji",
+      "input": "\ud83e\udee9",
+      "normalized": "\ud83e\udee9",
+      "valid": true,
+      "key": "\ud83e\udee9",
+      "normalized_key": "\ud83e\udee9"
+    },
+    {
+      "id": "unicode16-cyrillic-fold",
+      "input": "\u1c89",
+      "normalized": "\u1c89",
+      "valid": true,
+      "key": "\u1c8a",
+      "normalized_key": "\u1c8a"
+    },
+    {
+      "id": "unicode16-garay-fold",
+      "input": "\ud803\udd50",
+      "normalized": "\ud803\udd50",
+      "valid": true,
+      "key": "\ud803\udd70",
+      "normalized_key": "\ud803\udd70"
+    },
+    {
+      "id": "unicode16-combining-order",
+      "input": "x\ud803\udd69\u0323",
+      "normalized": "x\u0323\ud803\udd69",
+      "valid": false,
+      "key": null,
+      "normalized_key": "x\u0323\ud803\udd69"
+    },
+    {
+      "id": "supplementary-letter-fold",
+      "input": "\ud801\udc00",
+      "normalized": "\ud801\udc00",
+      "valid": true,
+      "key": "\ud801\udc28",
+      "normalized_key": "\ud801\udc28"
+    },
+    {
+      "id": "variation-selector-preserved",
+      "input": "\u2764\ufe0f",
+      "normalized": "\u2764\ufe0f",
+      "valid": true,
+      "key": "\u2764\ufe0f",
+      "normalized_key": "\u2764\ufe0f"
+    },
+    {
+      "id": "one-scalar",
+      "input": "A",
+      "normalized": "A",
+      "valid": true,
+      "key": "a",
+      "normalized_key": "a"
+    },
+    {
+      "id": "64-ascii",
+      "input": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "normalized": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "valid": true,
+      "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "normalized_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "id": "65-ascii",
+      "input": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "normalized": null,
+      "valid": false,
+      "key": null,
+      "normalized_key": null
+    },
+    {
+      "id": "raw-256-trim-before-final",
+      "input": "                                                                                                                                                                                                                                                               A",
+      "normalized": "A",
+      "valid": false,
+      "key": null,
+      "normalized_key": "a"
+    },
+    {
+      "id": "raw-257-before-trim",
+      "input": "                                                                                                                                                                                                                                                                A",
+      "normalized": null,
+      "valid": false,
+      "key": null,
+      "normalized_key": null
+    },
+    {
+      "id": "raw-256-nfc-shrink",
+      "input": "                                                                                                                                e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301",
+      "normalized": "\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9",
+      "valid": false,
+      "key": null,
+      "normalized_key": "\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9"
+    },
+    {
+      "id": "raw-257-nfc-would-fit",
+      "input": "                                                                                                                                 e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301",
+      "normalized": null,
+      "valid": false,
+      "key": null,
+      "normalized_key": null
+    },
+    {
+      "id": "raw-256-multibyte-trim",
+      "input": "\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\u3000\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00",
+      "normalized": "\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00",
+      "valid": false,
+      "key": null,
+      "normalized_key": "\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00"
+    },
+    {
+      "id": "raw-utf8-1024-final-too-wide",
+      "input": "\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00",
+      "normalized": null,
+      "valid": false,
+      "key": null,
+      "normalized_key": null
+    },
+    {
+      "id": "raw-utf8-over-1024",
+      "input": "\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00A",
+      "normalized": null,
+      "valid": false,
+      "key": null,
+      "normalized_key": null
+    },
+    {
+      "id": "final-utf8-255",
+      "input": "\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\u4e00",
+      "normalized": "\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\u4e00",
+      "valid": true,
+      "key": "\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\u4e00",
+      "normalized_key": "\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\u4e00"
+    },
+    {
+      "id": "final-utf8-257",
+      "input": "\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00A",
+      "normalized": null,
+      "valid": false,
+      "key": null,
+      "normalized_key": null
+    },
+    {
+      "id": "nfc-expands-to-64",
+      "input": "\u0344\u0344\u0344\u0344\u0344\u0344\u0344\u0344\u0344\u0344\u0344\u0344\u0344\u0344\u0344\u0344\u0344\u0344\u0344\u0344\u0344\u0344\u0344\u0344\u0344\u0344\u0344\u0344\u0344\u0344\u0344\u0344",
+      "normalized": "\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301",
+      "valid": false,
+      "key": null,
+      "normalized_key": "\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301\u0308\u0301"
+    },
+    {
+      "id": "nfc-expands-past-64",
+      "input": "\u0344\u0344\u0344\u0344\u0344\u0344\u0344\u0344\u0344\u0344\u0344\u0344\u0344\u0344\u0344\u0344\u0344\u0344\u0344\u0344\u0344\u0344\u0344\u0344\u0344\u0344\u0344\u0344\u0344\u0344\u0344\u0344\u0344",
+      "normalized": null,
+      "valid": false,
+      "key": null,
+      "normalized_key": null
+    },
+    {
+      "id": "raw-over64-nfc-fits",
+      "input": "e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301e\u0301",
+      "normalized": "\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9",
+      "valid": false,
+      "key": null,
+      "normalized_key": "\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9"
+    },
+    {
+      "id": "default-capital-i",
+      "input": "I",
+      "normalized": "I",
+      "valid": true,
+      "key": "i",
+      "normalized_key": "i"
+    },
+    {
+      "id": "default-dotted-i",
+      "input": "\u0130",
+      "normalized": "\u0130",
+      "valid": true,
+      "key": "i\u0307",
+      "normalized_key": "i\u0307"
+    },
+    {
+      "id": "default-dotless-i",
+      "input": "\u0131",
+      "normalized": "\u0131",
+      "valid": true,
+      "key": "\u0131",
+      "normalized_key": "\u0131"
+    },
+    {
+      "id": "capital-sharp-s",
+      "input": "\u1e9e",
+      "normalized": "\u1e9e",
+      "valid": true,
+      "key": "ss",
+      "normalized_key": "ss"
+    },
+    {
+      "id": "fold-ligature-only-in-key",
+      "input": "\ufb03",
+      "normalized": "\ufb03",
+      "valid": true,
+      "key": "ffi",
+      "normalized_key": "ffi"
+    },
+    {
+      "id": "postfold-nfc",
+      "input": "\u0390",
+      "normalized": "\u0390",
+      "valid": true,
+      "key": "\u0390",
+      "normalized_key": "\u0390"
+    },
+    {
+      "id": "fold-expands-past-display-scalars",
+      "input": "\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df",
+      "normalized": "\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df\u00df",
+      "valid": true,
+      "key": "ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss",
+      "normalized_key": "ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss"
+    },
+    {
+      "id": "postfold-nfc-at-display-scalar-cap",
+      "input": "\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390",
+      "normalized": "\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390",
+      "valid": true,
+      "key": "\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390",
+      "normalized_key": "\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390\u0390"
+    },
+    {
+      "id": "fold-three-way-expansion",
+      "input": "\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03",
+      "normalized": "\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03\ufb03",
+      "valid": true,
+      "key": "ffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffi",
+      "normalized_key": "ffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffiffi"
+    },
+    {
+      "id": "postfold-nfc-recursive-at-cap",
+      "input": "\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52",
+      "normalized": "\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52",
+      "valid": true,
+      "key": "\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52",
+      "normalized_key": "\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52\u1f52"
+    },
+    {
+      "id": "cherokee-default-uppercase",
+      "input": "\uab70",
+      "normalized": "\uab70",
+      "valid": true,
+      "key": "\u13a0",
+      "normalized_key": "\u13a0"
+    },
+    {
+      "id": "fullwidth-not-nfkc",
+      "input": "\uff21",
+      "normalized": "\uff21",
+      "valid": true,
+      "key": "\uff41",
+      "normalized_key": "\uff41"
+    },
+    {
+      "id": "circled-not-nfkc",
+      "input": "\u2460",
+      "normalized": "\u2460",
+      "valid": true,
+      "key": "\u2460",
+      "normalized_key": "\u2460"
+    },
+    {
+      "id": "quoted-name",
+      "input": "A\"B\\C",
+      "normalized": "A\"B\\C",
+      "valid": true,
+      "key": "a\"b\\c",
+      "normalized_key": "a\"b\\c"
+    },
+    {
+      "id": "nonstring-null",
+      "input": null,
+      "normalized": null,
+      "valid": false,
+      "key": null,
+      "normalized_key": null
+    },
+    {
+      "id": "nonstring-integer",
+      "input": 1,
+      "normalized": null,
+      "valid": false,
+      "key": null,
+      "normalized_key": null
+    },
+    {
+      "id": "nonstring-boolean",
+      "input": true,
+      "normalized": null,
+      "valid": false,
+      "key": null,
+      "normalized_key": null
+    },
+    {
+      "id": "nonstring-array",
+      "input": ["Pilot"],
+      "normalized": null,
+      "valid": false,
+      "key": null,
+      "normalized_key": null
+    },
+    {
+      "id": "nonstring-object",
+      "input": {
+        "name": "Pilot"
+      },
+      "normalized": null,
+      "valid": false,
+      "key": null,
+      "normalized_key": null
+    },
+    {
+      "id": "fold-final-key-over256-bytes",
+      "input": "\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7",
+      "normalized": "\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7\u1fb7",
+      "valid": true,
+      "key": "\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9",
+      "normalized_key": "\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9\u1fb6\u03b9"
+    }
+  ]
+}

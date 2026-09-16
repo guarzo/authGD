@@ -1,0 +1,3 @@
+# Frozen combat profile and shared vectors retain exact cross-repository bytes.
+src/core/fleet-combat-v2-profile.json -text
+tests/fixtures/fleet-combat-v2.json -text
