@@ -11,7 +11,12 @@ import {
   fleetSourceIntent,
   fleetTelemetryRow,
 } from "@/db/schema";
-import { SHARED_CAPABILITY, type SignedFleetCall } from "@/core/fleet-sharing";
+import {
+  SHARED_CAPABILITY,
+  COMBAT_CAPABILITY,
+  validFleetCapabilities,
+  type SignedFleetCall,
+} from "@/core/fleet-sharing";
 import {
   fleetDatabaseNow,
   resolveFleetDeviceKey,
@@ -343,9 +348,27 @@ export function sharedDeviceAllowed(
     s.deviceId === d.id &&
     s.expiresAt > p.now &&
     [d.approvedCapabilities, s.approvedCapabilities, s.acknowledgedCapabilities].every(
-      (caps) => caps.includes(SHARED_CAPABILITY),
+      (caps) => validFleetCapabilities(caps) && caps.includes(SHARED_CAPABILITY),
     ) &&
     (!participation || d.participationEnabled)
+  );
+}
+
+/** Combat is publisher disclosure consent, not receiver/source permission. */
+export function combatPublisherAllowed(
+  p: SharedAdmission,
+  deviceId: string,
+  sessionId: string,
+) {
+  const d = p.devices.find((row) => row.id === deviceId);
+  const s = p.sessions.find((row) => row.id === sessionId);
+  return (
+    sharedDeviceAllowed(p, deviceId, sessionId) &&
+    !!d &&
+    !!s &&
+    [d.approvedCapabilities, s.approvedCapabilities, s.acknowledgedCapabilities].every(
+      (caps) => caps.includes(COMBAT_CAPABILITY),
+    )
   );
 }
 
@@ -372,6 +395,7 @@ export function currentSourceEvidence(p: SharedAdmission, e: Probe["evidence"][n
     !d.revokedAt &&
     d.accountId === s.accountId &&
     p.validKeys.has(d.id) &&
+    validFleetCapabilities(d.approvedCapabilities) &&
     d.approvedCapabilities.includes(SHARED_CAPABILITY) &&
     e.verifiedAt !== null &&
     e.expiresAt !== null &&

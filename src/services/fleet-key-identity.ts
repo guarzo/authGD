@@ -2,6 +2,8 @@ import { eq, gt, sql } from "drizzle-orm";
 import type { DbTx, Dbx } from "@/db";
 import { fleetDevice, fleetDeviceKeyIdentity, fleetSharingGate } from "@/db/schema";
 import { normalizeDevicePublicKeyB64 } from "@/lib/fleet-signature";
+import { IsoDateSchema, SafeCounterSchema } from "@/core/fleet-api-v2";
+import { RelayRefusal } from "@/services/fleet-relay";
 import { logAudit } from "@/services/audit";
 import {
   readFleetKeyIdentityState,
@@ -26,11 +28,20 @@ export async function lockFleetDeviceKey(tx: DbTx, canonicalKey: string): Promis
 }
 
 export async function fleetDatabaseNow(tx: DbTx, now?: Date): Promise<Date> {
-  if (now) return now;
-  const result = await tx.execute<{ now: string }>(sql`select clock_timestamp() as now`);
   // Drizzle's raw execute path preserves the driver's timestamp string, unlike
-  // schema timestamp projections which apply a Date decoder.
-  return new Date(result.rows[0].now);
+  // schema timestamp projections which apply a Date decoder. Date floors to ms.
+  const sampled =
+    now ??
+    new Date(
+      (await tx.execute<{ now: string }>(sql`select clock_timestamp() as now`)).rows[0]
+        .now,
+    );
+  if (
+    !SafeCounterSchema.safeParse(sampled.getTime()).success ||
+    !IsoDateSchema.safeParse(sampled.toISOString()).success
+  )
+    throw new RelayRefusal("service_unavailable");
+  return sampled;
 }
 
 export async function boundFleetRecoveryWaits(tx: DbTx): Promise<void> {

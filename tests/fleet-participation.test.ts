@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import {
   afterAll,
@@ -94,7 +94,12 @@ async function projection(p: Awaited<ReturnType<typeof setup>>) {
     deviceId: p.device.id,
     sessionId,
     fleetId: 123,
-    dps: 10,
+    publicationId: randomUUID(),
+    outgoingDps: 10,
+    incomingDps: null,
+    sampledAtMs: NOW.getTime(),
+    activityOriginMs: NOW.getTime(),
+    effects: [],
     receivedAt: NOW,
     staleAt: at(3000),
     hardExpiresAt: at(10000),
@@ -154,6 +159,10 @@ describe("participation transaction boundaries", () => {
           revision: 3,
           enabled: false,
           expectedGeneration: 1,
+          // Explicit clock seam: gate uses PostgreSQL when no clock is supplied.
+          get now() {
+            return new Date();
+          },
         });
         expect(await waitUntilBlockedBy(ctx.pool, pid)).toBe(true);
         vi.setSystemTime(at(2000));
@@ -352,7 +361,12 @@ describe("explicit per-device participation", () => {
       deviceId: p.device.id,
       sessionId,
       fleetId: 123,
-      dps: 10,
+      publicationId: randomUUID(),
+      outgoingDps: 10,
+      incomingDps: null,
+      sampledAtMs: NOW.getTime(),
+      activityOriginMs: NOW.getTime(),
+      effects: [],
       receivedAt: NOW,
       staleAt: at(3000),
       hardExpiresAt: at(10000),

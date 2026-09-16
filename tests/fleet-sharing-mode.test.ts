@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
@@ -55,9 +55,41 @@ async function legacyFixture() {
       sessionId: paired.sessionId,
       revision: 1,
       now: NOW,
-      rows: [{ characterId: 95998001, dps: 42, ewar: [] }],
+      sampledAtMs: NOW.getTime(),
+      rows: [
+        {
+          characterId: 95998001,
+          outgoingDps: 42,
+          incomingDps: null,
+          activityAgeMs: 0,
+          effects: [],
+        },
+      ],
     }),
-  ).toEqual({ ok: true });
+  ).toEqual({ ok: false, code: "feature_disabled" });
+  // Retained-state lifecycle fixture only. Off cannot publish or serve these
+  // rows; mode drain must still remove them without discarding registrations.
+  const common = {
+    characterId: 95998001,
+    deviceId: paired.device.id,
+    sessionId: createHash("sha256").update(paired.sessionId).digest("base64url"),
+    fleetId: 6200001,
+  };
+  await ctx.db
+    .insert(fleetPublisherLease)
+    .values({ ...common, leaseExpiresAt: new Date(NOW.getTime() + 10000) });
+  await ctx.db.insert(fleetTelemetryRow).values({
+    ...common,
+    publicationId: randomUUID(),
+    outgoingDps: 42,
+    incomingDps: null,
+    sampledAtMs: NOW.getTime(),
+    activityOriginMs: NOW.getTime(),
+    effects: [],
+    receivedAt: NOW,
+    staleAt: new Date(NOW.getTime() + 3000),
+    hardExpiresAt: new Date(NOW.getTime() + 10000),
+  });
   return { ...paired, member };
 }
 
@@ -101,7 +133,10 @@ describe("operator-only fleet sharing cutover", () => {
         revision: 2,
         now: NOW,
       }),
-    ).toMatchObject({ ok: true, rows: [{ dps: 42 }] });
+    ).toEqual({ ok: false, code: "feature_disabled" });
+    expect(await ctx.db.select().from(fleetTelemetryRow)).toMatchObject([
+      { outgoingDps: 42 },
+    ]);
   });
   it("defaults off and drains legacy authority, sessions and rows while retaining registrations", async () => {
     expect(await readFleetSharingMode(ctx.db)).toEqual({
@@ -114,7 +149,10 @@ describe("operator-only fleet sharing cutover", () => {
     await pairDevice(ctx.db, member.id, NOW, [], second);
     expect(
       await readFleetProjection(ctx.db, { sessionId, revision: 2, now: NOW }),
-    ).toMatchObject({ ok: true, rows: [{ dps: 42 }] });
+    ).toEqual({ ok: false, code: "feature_disabled" });
+    expect(await ctx.db.select().from(fleetTelemetryRow)).toMatchObject([
+      { outgoingDps: 42 },
+    ]);
     const ready = await reconcileFleetKeys(ctx.db);
     expect(
       await transitionFleetSharingMode(ctx.db, {
@@ -157,7 +195,16 @@ describe("operator-only fleet sharing cutover", () => {
         sessionId: fresh.sessionId,
         revision: 1,
         now: NOW,
-        rows: [{ characterId: 95998001, dps: 91, ewar: [] }],
+        sampledAtMs: NOW.getTime(),
+        rows: [
+          {
+            characterId: 95998001,
+            outgoingDps: 91,
+            incomingDps: null,
+            activityAgeMs: 0,
+            effects: [],
+          },
+        ],
       }),
     ).toEqual({ ok: false, code: "forbidden" });
     expect(
@@ -200,7 +247,7 @@ describe("operator-only fleet sharing cutover", () => {
     });
   });
 
-  it("waits for a held old-reader session; that retired session cannot select a new row after cutover", async () => {
+  it("waits for a held pre-transition session; that retired session cannot select a new row after cutover", async () => {
     const { device, sessionId, member } = await legacyFixture();
     const ready = await reconcileFleetKeys(ctx.db);
     const key = createHash("sha256").update(sessionId).digest("base64url");
@@ -211,8 +258,9 @@ describe("operator-only fleet sharing cutover", () => {
       const {
         rows: [{ pid }],
       } = await client.query<{ pid: number }>("select pg_backend_pid() as pid");
-      // An old binary knows no mode/advisory lock. Its already-admitted session
-      // lock alone must prevent cutover from committing before its read finishes.
+      // This retained-state fixture holds only the read-side session lock.
+      // The transition must wait even without a mode/advisory lock. Actual
+      // pinned old-reader code is exercised separately on the pre-0025 DB.
       await client.query("select id from fleet_device_session where id = $1 for update", [
         key,
       ]);
@@ -223,9 +271,9 @@ describe("operator-only fleet sharing cutover", () => {
       });
       expect(await waitUntilBlockedBy(ctx.pool, pid)).toBe(true);
       const oldRows = await client.query(
-        "select dps from fleet_telemetry_row where fleet_id = 6200001",
+        "select outgoing_dps from fleet_telemetry_row where fleet_id = 6200001",
       );
-      expect(oldRows.rows).toEqual([{ dps: 42 }]);
+      expect(oldRows.rows).toEqual([{ outgoing_dps: 42 }]);
       expect((await readFleetSharingMode(ctx.db)).enabled).toBe(false);
     } finally {
       await client.query("rollback");
@@ -243,8 +291,12 @@ describe("operator-only fleet sharing cutover", () => {
       fleetId: 6200001,
       deviceId: fresh.device.id,
       sessionId: freshSession.id,
-      dps: 99,
-      ewar: [],
+      publicationId: randomUUID(),
+      outgoingDps: 99,
+      incomingDps: null,
+      sampledAtMs: NOW.getTime(),
+      activityOriginMs: NOW.getTime(),
+      effects: [],
       receivedAt: NOW,
       staleAt: new Date(NOW.getTime() + 3000),
       hardExpiresAt: new Date(NOW.getTime() + 10000),

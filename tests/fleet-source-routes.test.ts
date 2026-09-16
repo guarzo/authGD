@@ -18,7 +18,9 @@ import { FLEET_READ_SCOPE, createEsiClient } from "@/lib/esi/client";
 import { createDiscordClient } from "@/lib/discord/rest";
 import { createWandererClient } from "@/lib/wanderer/client";
 import { transitionFleetSharingMode } from "@/services/fleet-sharing-mode";
-import { acknowledgeFleetCapabilities } from "@/services/fleet-device";
+import { PUT as acknowledgeRoute } from "@/app/api/fleet/v2/device/route";
+import { COMBAT_APPROVAL } from "./helpers/fleet-combat";
+const SNAPSHOT_PATH = "/api/fleet/v2/snapshot";
 import { buildJobHandlers } from "@/worker/handlers";
 import { dispatchOutbox } from "@/worker/dispatcher";
 import { startFleetFixtures } from "../e2e/fleet-fixtures";
@@ -76,9 +78,6 @@ function request(
       "x-fleet-revision": String(revision),
       "x-fleet-body-sha256": hash,
       "x-fleet-signature": signature,
-      ...(method === "GET" && path === "/api/fleet/v1/snapshot"
-        ? { "x-fleet-snapshot-format": "publication-v1" }
-        : {}),
     },
   });
 }
@@ -117,22 +116,23 @@ it("signed route -> committed outbox -> dispatcher -> strict registered handler 
     refreshToken: null,
     tokenStatus: "missing",
   });
-  const receiver = await pairDevice(ctx.db, participant.id, now, [SHARED_CAPABILITY]);
-  expect(
-    (
-      await acknowledgeFleetCapabilities(ctx.db, {
-        sessionId: receiver.sessionId,
-        revision: 1,
-        capabilities: [SHARED_CAPABILITY],
-      })
-    ).ok,
-  ).toBe(true);
-  const p = await pairDevice(ctx.db, owner.id, now, [SHARED_CAPABILITY]);
-  await acknowledgeFleetCapabilities(ctx.db, {
-    sessionId: p.sessionId,
-    revision: 1,
-    capabilities: [SHARED_CAPABILITY],
-  });
+  const receiver = await pairDevice(ctx.db, participant.id, now, COMBAT_APPROVAL);
+  const p = await pairDevice(ctx.db, owner.id, now, COMBAT_APPROVAL);
+  for (const device of [receiver, p])
+    expect(
+      (
+        await acknowledgeRoute(
+          request(
+            device,
+            "PUT",
+            { protocol: 2, capabilities: COMBAT_APPROVAL },
+            1,
+            "",
+            "/api/fleet/v2/device",
+          ),
+        )
+      ).status,
+    ).toBe(200);
   await new Promise((r) => setTimeout(r, 510));
   const sourceId = randomUUID();
   const start = {
@@ -274,7 +274,7 @@ it("signed route -> committed outbox -> dispatcher -> strict registered handler 
     ).toBe(true);
   await new Promise((r) => setTimeout(r, 510));
   const eligibility = await import("@/app/api/fleet/v1/eligibility/route");
-  const snapshot = await import("@/app/api/fleet/v1/snapshot/route");
+  const snapshot = await import("@/app/api/fleet/v2/snapshot/route");
   const own = await eligibility.GET(
     request(receiver, "GET", null, 3, "", "/api/fleet/v1/eligibility"),
   );
@@ -308,33 +308,44 @@ it("signed route -> committed outbox -> dispatcher -> strict registered handler 
     request(
       p,
       "PUT",
-      { protocol: 1, rows: [{ character_id: boss.id, dps: 42, ewar: [] }] },
+      {
+        protocol: 2,
+        sampled_at_ms: Date.now() - 100,
+        rows: [
+          {
+            character_id: boss.id,
+            outgoing_dps: 42,
+            incoming_dps: null,
+            activity_age_ms: 0,
+            effects: [],
+          },
+        ],
+      },
       5,
       "",
-      "/api/fleet/v1/snapshot",
+      SNAPSHOT_PATH,
     ),
   );
   expect(aPut.status).toBe(200);
   expect(aPut.headers.get("cache-control")).toBe("no-store");
   // Eligibility shares the snapshot read bucket and revision, including failures.
   expect(
-    (await snapshot.GET(request(receiver, "GET", null, 4, "", "/api/fleet/v1/snapshot")))
-      .status,
+    (await snapshot.GET(request(receiver, "GET", null, 4, "", SNAPSHOT_PATH))).status,
   ).toBe(429);
   await new Promise((r) => setTimeout(r, 510));
-  const quietRequest = request(receiver, "GET", null, 4, "", "/api/fleet/v1/snapshot");
+  const quietRequest = request(receiver, "GET", null, 4, "", SNAPSHOT_PATH);
   const quiet = await snapshot.GET(quietRequest);
   expect(quiet.status).toBe(200);
-  expect(quiet.headers.get("x-fleet-snapshot-format")).toBe("publication-v1");
+  expect(quiet.headers.has("x-fleet-snapshot-format")).toBe(false);
   const h = quietRequest.headers;
   expect(quiet.headers.get("x-fleet-request-binding")).toBe(
     createHash("sha256")
       .update(
         [
-          "fleet-snapshot-publication-v1",
+          "fleet-api-v2",
           "fleet-v1",
           "GET",
-          "/api/fleet/v1/snapshot",
+          SNAPSHOT_PATH,
           receiver.sessionId,
           h.get("x-fleet-issued-at"),
           "4",
@@ -350,7 +361,8 @@ it("signed route -> committed outbox -> dispatcher -> strict registered handler 
   expect((await quiet.json()).rows).toEqual([
     expect.objectContaining({
       character_id: boss.id,
-      dps: 42,
+      outgoing_dps: 42,
+      incoming_dps: null,
       publication_id: published.publicationId,
     }),
   ]);
@@ -359,15 +371,28 @@ it("signed route -> committed outbox -> dispatcher -> strict registered handler 
       receiver,
       "PUT",
       {
-        protocol: 1,
+        protocol: 2,
+        sampled_at_ms: Date.now() - 100,
         rows: [
-          { character_id: included.id, dps: 7, ewar: [] },
-          { character_id: unmatched.id, dps: 1, ewar: [] },
+          {
+            character_id: included.id,
+            outgoing_dps: 7,
+            incoming_dps: null,
+            activity_age_ms: 0,
+            effects: [],
+          },
+          {
+            character_id: unmatched.id,
+            outgoing_dps: 1,
+            incoming_dps: null,
+            activity_age_ms: 0,
+            effects: [],
+          },
         ],
       },
       5,
       "",
-      "/api/fleet/v1/snapshot",
+      SNAPSHOT_PATH,
     ),
   );
   expect(bad.status).toBe(403);
@@ -376,25 +401,35 @@ it("signed route -> committed outbox -> dispatcher -> strict registered handler 
       receiver,
       "PUT",
       {
-        protocol: 1,
-        rows: [{ character_id: included.id, dps: 77, ewar: ["SCRAM/POINT"] }],
+        protocol: 2,
+        sampled_at_ms: Date.now() - 100,
+        rows: [
+          {
+            character_id: included.id,
+            outgoing_dps: 77,
+            incoming_dps: null,
+            activity_age_ms: 0,
+            effects: [{ kind: "POINT", observations: [{ name: null, age_ms: 0 }] }],
+          },
+        ],
       },
       5,
       "",
-      "/api/fleet/v1/snapshot",
+      SNAPSHOT_PATH,
     ),
   );
   expect(bPut.status).toBe(200);
-  const back = await snapshot.GET(
-    request(p, "GET", null, 6, "", "/api/fleet/v1/snapshot"),
-  );
+  const back = await snapshot.GET(request(p, "GET", null, 6, "", SNAPSHOT_PATH));
   expect(back.status).toBe(200);
   expect((await back.json()).rows).toEqual(
     expect.arrayContaining([
       expect.objectContaining({
         character_id: included.id,
-        dps: 77,
-        ewar: ["SCRAM/POINT"],
+        outgoing_dps: 77,
+        incoming_dps: null,
+        effects: [
+          { kind: "POINT", observations: [{ name: null, age_ms: expect.any(Number) }] },
+        ],
       }),
     ]),
   );
@@ -427,10 +462,10 @@ it("signed route -> committed outbox -> dispatcher -> strict registered handler 
       request(
         receiver,
         "PUT",
-        { protocol: 1, rows: [] },
+        { protocol: 2, sampled_at_ms: 0, rows: [] },
         6,
         "",
-        "/api/fleet/v1/snapshot",
+        SNAPSHOT_PATH,
       ),
     );
     expect(await waitUntilBlockedBy(ctx.pool, pid)).toBe(true);
@@ -449,11 +484,20 @@ it("signed route -> committed outbox -> dispatcher -> strict registered handler 
     SHARED_CAPABILITY,
   ]);
   for (const device of [second, foreign])
-    await acknowledgeFleetCapabilities(ctx.db, {
-      sessionId: device.sessionId,
-      revision: 1,
-      capabilities: [SHARED_CAPABILITY],
-    });
+    expect(
+      (
+        await acknowledgeRoute(
+          request(
+            device,
+            "PUT",
+            { protocol: 2, capabilities: [SHARED_CAPABILITY] },
+            1,
+            "",
+            "/api/fleet/v2/device",
+          ),
+        )
+      ).status,
+    ).toBe(200);
   await new Promise((r) => setTimeout(r, 510));
   const foreignStatus = await GET(request(foreign, "GET", null, 2));
   expect(foreignStatus.status).toBe(200);

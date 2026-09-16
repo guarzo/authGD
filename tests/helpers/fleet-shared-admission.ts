@@ -22,12 +22,16 @@ const getKey = createLocalJWKSet({
 
 /** Real pairing, explicit consent and actual source job/JWT/ESI parser. Only the
  * provider transport is synthetic. No source/evidence/projection fixture writes. */
-export async function sharedAccounts(db: Db) {
+export async function sharedAccounts(
+  db: Db,
+  baseNow = NOW,
+  capabilities = [SHARED_CAPABILITY] as string[],
+) {
   const ready = await reconcileFleetKeys(db);
   await transitionFleetSharingMode(db, {
     enabled: true,
     expectedRevision: ready.revision,
-    now: NOW,
+    now: baseNow,
   });
   const owner = await seedAccount(db, { tier: "member" });
   const participant = await seedAccount(db, { tier: "member", status: "cryo" });
@@ -47,21 +51,35 @@ export async function sharedAccounts(db: Db) {
         tokenStatus: "missing",
       }),
     );
-  const a = await participatingDevice(db, owner.id);
-  const b = await participatingDevice(db, participant.id);
-  const source = await realSource(db, a, boss, 123, [boss.id, alts[0].id, alts[1].id]);
+  const a = await participatingDevice(db, owner.id, baseNow, capabilities);
+  const b = await participatingDevice(db, participant.id, baseNow, capabilities);
+  const source = await realSource(
+    db,
+    a,
+    boss,
+    123,
+    [boss.id, alts[0].id, alts[1].id],
+    2000,
+    baseNow,
+  );
   return { owner, participant, boss, alts, a, b, source };
 }
 
-export async function participatingDevice(db: Db, accountId: string) {
-  const p = await pairDevice(db, accountId, NOW, [SHARED_CAPABILITY]);
+export async function participatingDevice(
+  db: Db,
+  accountId: string,
+  baseNow = NOW,
+  capabilities = [SHARED_CAPABILITY] as string[],
+) {
+  const at = (ms: number) => new Date(baseNow.getTime() + ms);
+  const p = await pairDevice(db, accountId, baseNow, capabilities);
   expect(
     (
       await acknowledgeFleetCapabilities(db, {
         sessionId: p.sessionId,
         revision: 1,
-        now: NOW,
-        capabilities: [SHARED_CAPABILITY],
+        now: baseNow,
+        capabilities,
       })
     ).ok,
   ).toBe(true);
@@ -84,7 +102,9 @@ export async function realSource(
   fleet: number,
   rosterIds: number[],
   observedAt = 2000,
+  baseNow = NOW,
 ) {
+  const at = (ms: number) => new Date(baseNow.getTime() + ms);
   const sourceId = randomUUID();
   expect(
     (
@@ -98,7 +118,7 @@ export async function realSource(
           expectedGeneration: 0,
           characterId: boss.id,
           characterLinkEpoch: boss.fleetLinkEpoch,
-          intentCreatedAt: NOW,
+          intentCreatedAt: baseNow,
         },
       })
     ).ok,

@@ -1,4 +1,4 @@
-import { createHash, sign } from "node:crypto";
+import { createHash, randomUUID, sign } from "node:crypto";
 import { eq } from "drizzle-orm";
 import {
   afterAll,
@@ -271,7 +271,12 @@ describe("registered-key recovery", () => {
       deviceId: paired.device.id,
       sessionId: old.id,
       fleetId: 6100001,
-      dps: 12,
+      publicationId: randomUUID(),
+      outgoingDps: 12,
+      incomingDps: null,
+      sampledAtMs: NOW.getTime(),
+      activityOriginMs: NOW.getTime(),
+      effects: [],
       receivedAt: NOW,
       staleAt: NOW,
       hardExpiresAt: NOW,

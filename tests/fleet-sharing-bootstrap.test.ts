@@ -310,7 +310,12 @@ describe("bounded first-use sharing bootstrap", () => {
           deviceId,
           sessionId: "expired-session",
           fleetId: 123,
-          dps: 42,
+          publicationId: randomUUID(),
+          outgoingDps: 42,
+          incomingDps: null,
+          sampledAtMs: EXPIRED.getTime(),
+          activityOriginMs: EXPIRED.getTime(),
+          effects: [],
           receivedAt: EXPIRED,
           staleAt: EXPIRED,
           hardExpiresAt: EXPIRED,
@@ -1061,9 +1066,18 @@ describe("explicit safe operator disable", () => {
         sessionId: p.paired.sessionId,
         revision: 3,
         now: new Date(NOW.getTime() + 1000),
-        rows: [{ characterId: p.boss.id, dps: 42, ewar: [] }],
+        sampledAtMs: new Date(NOW.getTime() + 1000).getTime(),
+        rows: [
+          {
+            characterId: p.boss.id,
+            outgoingDps: 42,
+            incomingDps: null,
+            activityAgeMs: 0,
+            effects: [],
+          },
+        ],
       }),
-    ).toEqual({ ok: false, code: "invalid_session" });
+    ).toEqual({ ok: false, code: "feature_disabled" });
   });
 
   it.each(["gate", "audit"])(

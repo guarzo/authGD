@@ -11,6 +11,7 @@ import {
   vi,
 } from "vitest";
 import { getDb } from "@/db";
+import * as keyIdentity from "@/services/fleet-key-identity";
 import { fleetDevice, fleetDeviceSession } from "@/db/schema";
 import { SHARED_CAPABILITY } from "@/core/fleet-sharing";
 import { transitionFleetSharingMode } from "@/services/fleet-sharing-mode";
@@ -21,7 +22,7 @@ import { withInjectedPgFault } from "./helpers/pg-fault";
 
 process.env.DATABASE_URL = TEST_URL;
 const { PUT } = await import("@/app/api/fleet/v1/participation/route");
-const { PUT: acknowledge } = await import("@/app/api/fleet/v1/device/route");
+const { PUT: acknowledge } = await import("@/app/api/fleet/v2/device/route");
 const PATH = "/api/fleet/v1/participation";
 const NOW = new Date("2026-09-07T12:00:00Z");
 let ctx: Awaited<ReturnType<typeof setupTestDb>>;
@@ -32,6 +33,11 @@ beforeEach(async () => {
   await truncateAll(ctx.db);
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(NOW);
+  // This framing/cadence fixture supplies one deterministic clock; actual DB
+  // clock/lock anchoring is exercised by fleet-v2-relay and fleet-v2-routes.
+  vi.spyOn(keyIdentity, "fleetDatabaseNow").mockImplementation(
+    async (_tx, now) => now ?? new Date(),
+  );
   const ready = await reconcileFleetKeys(ctx.db);
   await transitionFleetSharingMode(ctx.db, {
     enabled: true,
@@ -39,7 +45,10 @@ beforeEach(async () => {
     now: NOW,
   });
 });
-afterEach(() => vi.useRealTimers());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
 afterAll(() => ctx.cleanup());
 function request(
   p: Awaited<ReturnType<typeof pairDevice>>,
@@ -78,9 +87,9 @@ async function enrolled() {
   const ack = await acknowledge(
     request(
       p,
-      { protocol: 1, capabilities: [SHARED_CAPABILITY] },
+      { protocol: 2, capabilities: [SHARED_CAPABILITY] },
       1,
-      "/api/fleet/v1/device",
+      "/api/fleet/v2/device",
     ),
   );
   expect(ack.status).toBe(200);

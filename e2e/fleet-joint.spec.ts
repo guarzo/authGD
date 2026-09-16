@@ -337,7 +337,8 @@ test("two pinned Python installations pair in real HTTPS browsers and share thro
     // contributes nothing; only explicit fixture consent admits its lease.
     await assertTokenless();
     const fixtureNow = new Date(Date.now() - 2000);
-    const holder = await pairDevice(db, a.id, fixtureNow, [SHARED_CAPABILITY]);
+    const combatApproval = [SHARED_CAPABILITY, "combat-v2"];
+    const holder = await pairDevice(db, a.id, fixtureNow, combatApproval);
     expect(holder.device.participationEnabled).toBe(false);
     expect(await db.select().from(fleetTelemetryRow)).toEqual([]);
     expect(
@@ -346,7 +347,7 @@ test("two pinned Python installations pair in real HTTPS browsers and share thro
           sessionId: holder.sessionId,
           revision: 1,
           now: fixtureNow,
-          capabilities: [SHARED_CAPABILITY],
+          capabilities: combatApproval,
         })
       ).ok,
     ).toBe(true);
@@ -366,9 +367,18 @@ test("two pinned Python installations pair in real HTTPS browsers and share thro
         sessionId: holder.sessionId,
         revision: 3,
         now: new Date(),
-        rows: [{ characterId: aChars[0].id, dps: 9, ewar: [] }],
+        sampledAtMs: Date.now() - 100,
+        rows: [
+          {
+            characterId: aChars[0].id,
+            outgoingDps: 9,
+            incomingDps: null,
+            activityAgeMs: 0,
+            effects: [],
+          },
+        ],
       }),
-    ).toEqual({ ok: true });
+    ).toEqual({ ok: true, json: '{"protocol":2}' });
     await first.command("on");
     await expect
       .poll(
@@ -384,9 +394,10 @@ test("two pinned Python installations pair in real HTTPS browsers and share thro
         sessionId: holder.sessionId,
         revision: 4,
         now: new Date(),
+        sampledAtMs: 0,
         rows: [],
       }),
-    ).toEqual({ ok: true });
+    ).toEqual({ ok: true, json: '{"protocol":2}' });
     await expect
       .poll(async () => (await second.command("status")).remote.length, {
         timeout: 15_000,

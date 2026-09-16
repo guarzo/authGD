@@ -878,13 +878,14 @@ a test database per worktree:
 |---|---|---|
 | `authgd` | `npm run dev`, `npm run worker`, `npm run db:migrate` | none automatic |
 | `authgd_test_<worktree>_<hash>` | `npm test` in that worktree | `TRUNCATE` between every test |
-| `authgd_test` | `npm test` under CI only | `TRUNCATE` between every test |
+| `authgd_test_unit` | unit CI, current schema | `TRUNCATE` between every test |
+| `authgd_test_unit_legacy_migration` | unit CI, pinned pre-combat fixture | pinned migrations and fixture reset |
 
 `npm test` derives its database name from the worktree directory
 (`tests/helpers/test-db-url.ts`), creates it on first run, and migrates it. Two
 worktrees therefore never share a database, and the `TRUNCATE ... CASCADE` the
-suite runs between tests physically cannot reach `authgd`. Run the tests
-freely.
+suite runs between tests physically cannot reach `authgd`. The full suite's
+historical regression additionally requires the explicit pair described below.
 
 Nothing reclaims these databases when a worktree is deleted, so:
 
@@ -892,10 +893,20 @@ Nothing reclaims these databases when a worktree is deleted, so:
 npm run test:clean        # drop this worktree's test database
 ```
 
-**Under CI the shared `authgd_test` is still used**, because the workflow
-stands up its own Postgres service and sets no override. An explicit
-`TEST_DATABASE_URL` also wins over the derived name, and opts that database out
-of both creation and `test:clean` — it is yours, not the harness's.
+**Full Vitest prerequisite:** explicitly set both `TEST_DATABASE_URL` and
+`FLEET_LEGACY_TEST_DATABASE_URL` to separately provisioned, disposable databases
+on the same owned loopback service/port. The main name must be `authgd_test_*`;
+its historical sibling must be that name plus `_legacy_migration`. Explicit
+URLs opt out of automatic creation and `test:clean`. Both immutable authGD refs
+in `tests/helpers/fleet-legacy.ts` must also be available locally.
+
+The **unit CI job** owns a fresh Postgres service: it names `authgd_test_unit`
+explicitly, creates only its new sibling after `npm ci`, fetches both historical
+refs, then runs `npm test`. Helpers migrate the main and pinned pre-combat
+schemas separately under their test locks. Missing prerequisites fail rather
+than skip the old-reader regression. The CI-only create command refuses reuse;
+do not run it against existing local databases or assume local `5433` is yours.
+The separate E2E job and its `authgd_test` default are unchanged.
 
 `npm run test:e2e` does not appear above: it provisions a database of its own,
 in its own container, and never touches either of these. See
@@ -1423,7 +1434,8 @@ Local commands must name the approved disposable database explicitly:
 
 ```bash
 # Set the two absolute Wingman variables on each invocation or in the test shell.
-TEST_DATABASE_URL=postgres://authgd:authgd@localhost:5639/authgd_test NEXT_TELEMETRY_DISABLED=1 npm test
+# Full Vitest requires this separately provisioned pair on the owned service:
+TEST_DATABASE_URL=postgres://authgd:authgd@localhost:5639/authgd_test_unit FLEET_LEGACY_TEST_DATABASE_URL=postgres://authgd:authgd@localhost:5639/authgd_test_unit_legacy_migration NEXT_TELEMETRY_DISABLED=1 npm test
 TEST_DATABASE_URL=postgres://authgd:authgd@localhost:5639/authgd_test NEXT_TELEMETRY_DISABLED=1 E2E_DB_PORT=5639 CI=true npm run test:e2e
 TEST_DATABASE_URL=postgres://authgd:authgd@localhost:5639/authgd_test NEXT_TELEMETRY_DISABLED=1 E2E_DB_PORT=5639 CI=true npm run test:e2e:fleet
 # Separate owned dev-mode proof, still one worker / zero retries:

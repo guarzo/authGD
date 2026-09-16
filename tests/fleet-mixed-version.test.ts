@@ -1,21 +1,15 @@
 import { createHash, randomUUID, sign } from "node:crypto";
 import { sql } from "drizzle-orm";
+import { NextRequest } from "next/server";
+import * as database from "@/db";
+import * as retiredSnapshot from "@/app/api/fleet/v1/snapshot/route";
+import * as retiredDevice from "@/app/api/fleet/v1/device/route";
 import { beforeAll, afterAll, beforeEach, expect, it, vi } from "vitest";
 import { setupTestDb, truncateAll } from "./helpers/db";
 import { seedAccount, seedCharacter } from "./helpers/seed";
 import { testConfig } from "./helpers/config";
-import {
-  fleetKeyPair,
-  pairDevice,
-  reconcileFleetKeys,
-  waitUntilBlockedBy,
-} from "./helpers/fleet-sharing";
-import {
-  participatingDevice,
-  realSource,
-  NOW,
-  at,
-} from "./helpers/fleet-shared-admission";
+import { fleetKeyPair, pairDevice, waitUntilBlockedBy } from "./helpers/fleet-sharing";
+import { NOW, at } from "./helpers/fleet-shared-admission";
 import { loadLegacyFleet, LEGACY_REVISION } from "./helpers/fleet-legacy";
 import { canonicalFleetRequest } from "../src/lib/fleet-signature";
 import { FLEET_READ_SCOPE } from "../src/lib/esi/client";
@@ -24,7 +18,7 @@ import {
   transitionFleetSharingMode,
   readFleetKeyIdentityState,
 } from "../src/services/fleet-sharing-mode";
-import { replaceDeviceProjection } from "../src/services/fleet-relay";
+import { withLegacyFleetFixture } from "./helpers/fleet-legacy-db";
 import {
   startFleetKeyIdentityReconciliation,
   reconcileFleetKeyIdentityBatch,
@@ -35,10 +29,52 @@ import {
   fleetDeviceKeyIdentity,
   fleetEligibility,
   fleetPublisherLease,
-  fleetTelemetryRow,
   fleetSourceIntent,
   outbox,
 } from "../src/db/schema";
+
+const nextMethods = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"] as const;
+for (const [name, handlers] of [
+  ["snapshot", retiredSnapshot],
+  ["device", retiredDevice],
+] as const) {
+  it.each(nextMethods)(
+    `retired v1 ${name} %s rejects before credentials, body reads and all DB work`,
+    async (method) => {
+      const before = await ctx.db.select().from(fleetDeviceSession);
+      const req = new NextRequest(`http://localhost/api/fleet/v1/${name}?ignored=1`, {
+        method,
+      });
+      Object.defineProperty(req, "body", {
+        get() {
+          throw new Error("retired route read body");
+        },
+      });
+      Object.defineProperty(req, "headers", {
+        get() {
+          throw new Error("retired route read credentials");
+        },
+      });
+      const route = (handlers as Record<string, unknown>)[method];
+      expect(typeof route).toBe("function");
+      const dbAccess = vi.spyOn(database, "getDb").mockImplementation(() => {
+        throw new Error("retired route accessed database");
+      });
+      let response: Response;
+      try {
+        response = await (route as (req: NextRequest) => Promise<Response>)(req);
+      } finally {
+        dbAccess.mockRestore();
+      }
+      expect(response.status).toBe(400);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(await response.text()).toBe(
+        method === "HEAD" ? "" : '{"protocol":2,"error":"update_required"}',
+      );
+      expect(await ctx.db.select().from(fleetDeviceSession)).toEqual(before);
+    },
+  );
+}
 
 let ctx: Awaited<ReturnType<typeof setupTestDb>>;
 let old: Awaited<ReturnType<typeof loadLegacyFleet>>;
@@ -155,164 +191,189 @@ it("genuine pinned dispatcher drops new source work while default-off, rather th
 });
 
 it("actual old reader locks block cutover, queued authenticated old read fails after drain, and rollback permits no old access to shared rows", async () => {
-  const owner = await seedAccount(ctx.db, { tier: "member" });
-  const boss = await seedCharacter(ctx.db, testConfig(), {
-    id: 91910001,
-    accountId: owner.id,
-    scopes: [FLEET_READ_SCOPE],
-  });
-  const legacy = await pairDevice(ctx.db, owner.id, NOW);
-  // Compatibility-only legacy state. This cache is NEVER new shared authority.
-  await ctx.db.insert(fleetEligibility).values({
-    characterId: boss.id,
-    accountId: owner.id,
-    fleetId: 6200001,
-    rosterCharacterIds: [boss.id],
-    verifiedAt: NOW,
-    expiresAt: at(60_000),
-    outcomeCode: "ok",
-  });
-  expect(
-    await old.replaceDeviceProjection(ctx.db, {
-      sessionId: legacy.sessionId,
-      revision: 1,
-      now: NOW,
-      rows: [{ characterId: boss.id, dps: 42, ewar: [] }],
-    }),
-  ).toEqual({ ok: true });
-  const ready = await reconcileFleetKeys(ctx.db);
-  const authHeaders = {
-    sessionId: legacy.sessionId,
-    issuedAt: at(1000).toISOString(),
-    revision: 3,
-    bodySha256: createHash("sha256").update("").digest("hex"),
-    signature: "",
-  };
-  const path = "/api/fleet/v1/snapshot";
-  authHeaders.signature = sign(
-    null,
-    canonicalFleetRequest({ protocol: 1, method: "GET", path, ...authHeaders }),
-    legacy.privateKey,
-  ).toString("base64url");
-  const authenticated = await old.authenticateFleetRequest(
-    ctx.db,
-    authHeaders,
-    new Uint8Array(),
-    { method: "GET", path, now: at(1000) },
-  );
-  expect(authenticated.ok).toBe(true);
-  let release!: () => void;
-  const hold = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  let admitted!: (pid: number) => void;
-  const admission = new Promise<number>((resolve) => {
-    admitted = resolve;
-  });
-  const reader = ctx.db.transaction(async (tx) => {
-    const result = await old.readFleetProjection(tx, {
-      sessionId: legacy.sessionId,
-      revision: 2,
-      now: at(500),
+  await withLegacyFleetFixture(async (ctx, historical) => {
+    const {
+      pairDevice,
+      reconcileFleetKeys,
+      participatingDevice,
+      realSource,
+      replaceDeviceProjection,
+      readFleetSharingMode,
+      transitionFleetSharingMode,
+      readFleetKeyIdentityState,
+      fleetTelemetryRow,
+    } = historical;
+    expect(historical.hashes["src/db/schema.ts"]).toMatch(/^[a-f0-9]{64}$/);
+    expect(
+      (await ctx.pool.query<{ name: string }>("select current_database() as name"))
+        .rows[0].name,
+    ).toBe(new URL(process.env.FLEET_LEGACY_TEST_DATABASE_URL!).pathname.slice(1));
+    expect(
+      (
+        await ctx.pool.query<{ column_name: string }>(
+          "select column_name from information_schema.columns where table_name='fleet_telemetry_row' and column_name in ('dps', 'ewar', 'outgoing_dps', 'sampled_at_ms') order by column_name",
+        )
+      ).rows.map((r) => r.column_name),
+    ).toEqual(["dps", "ewar"]);
+    const owner = await seedAccount(ctx.db, { tier: "member" });
+    const boss = await seedCharacter(ctx.db, testConfig(), {
+      id: 91910001,
+      accountId: owner.id,
+      scopes: [FLEET_READ_SCOPE],
     });
-    expect(result).toMatchObject({ ok: true, rows: [{ dps: 42 }] });
-    const pid = await tx.execute<{ pid: number }>(sql`select pg_backend_pid() as pid`);
-    admitted(pid.rows[0].pid);
-    // Preserve the actual reader's locks until the response owner is released.
-    await hold;
-  });
-  const pid = await admission;
-  let cutover: ReturnType<typeof transitionFleetSharingMode> | undefined;
-  let queued: ReturnType<typeof old.readFleetProjection> | undefined;
-  try {
-    cutover = transitionFleetSharingMode(ctx.db, {
-      enabled: true,
-      expectedRevision: ready.revision,
-      now: at(1000),
+    const legacy = await pairDevice(ctx.db, owner.id, NOW);
+    // Compatibility-only legacy state. This cache is NEVER new shared authority.
+    await ctx.db.insert(fleetEligibility).values({
+      characterId: boss.id,
+      accountId: owner.id,
+      fleetId: 6200001,
+      rosterCharacterIds: [boss.id],
+      verifiedAt: NOW,
+      expiresAt: at(60_000),
+      outcomeCode: "ok",
     });
-    expect(await waitUntilBlockedBy(ctx.pool, pid)).toBe(true);
-    expect((await readFleetSharingMode(ctx.db)).enabled).toBe(false);
-    queued = old.readFleetProjection(ctx.db, {
+    expect(
+      await old.replaceDeviceProjection(ctx.db, {
+        sessionId: legacy.sessionId,
+        revision: 1,
+        now: NOW,
+        rows: [{ characterId: boss.id, dps: 42, ewar: [] }],
+      }),
+    ).toEqual({ ok: true });
+    const ready = await reconcileFleetKeys(ctx.db);
+    const authHeaders = {
       sessionId: legacy.sessionId,
+      issuedAt: at(1000).toISOString(),
       revision: 3,
-      now: at(1000),
+      bodySha256: createHash("sha256").update("").digest("hex"),
+      signature: "",
+    };
+    const path = "/api/fleet/v1/snapshot";
+    authHeaders.signature = sign(
+      null,
+      canonicalFleetRequest({ protocol: 1, method: "GET", path, ...authHeaders }),
+      legacy.privateKey,
+    ).toString("base64url");
+    const authenticated = await old.authenticateFleetRequest(
+      ctx.db,
+      authHeaders,
+      new Uint8Array(),
+      { method: "GET", path, now: at(1000) },
+    );
+    expect(authenticated.ok).toBe(true);
+    let release!: () => void;
+    const hold = new Promise<void>((resolve) => {
+      release = resolve;
     });
-    // Queue order is observed in PostgreSQL, not inferred from a sleep.
-    await vi.waitFor(async () => {
-      const waits = await ctx.pool.query<{ n: number }>(
-        "select count(*)::int n from pg_stat_activity where wait_event_type = 'Lock' and datname = current_database()",
-      );
-      expect(waits.rows[0].n).toBeGreaterThanOrEqual(2);
+    let admitted!: (pid: number) => void;
+    const admission = new Promise<number>((resolve) => {
+      admitted = resolve;
     });
-  } finally {
-    release();
-    await reader;
-  }
-  await cutover;
-  expect(await queued).toEqual({ ok: false, code: "forbidden" });
-  expect(await ctx.db.select().from(fleetEligibility)).toEqual([]);
-  expect(await ctx.db.select().from(fleetDeviceSession)).toEqual([]);
-  const current = await participatingDevice(ctx.db, owner.id);
-  await realSource(ctx.db, current, boss, 6200001, [boss.id]);
-  expect(
-    await replaceDeviceProjection(ctx.db, {
-      sessionId: current.sessionId,
-      revision: 4,
-      now: at(2500),
-      rows: [{ characterId: boss.id, dps: 99, ewar: [] }],
-    }),
-  ).toEqual({ ok: true });
-  expect(await ctx.db.select().from(fleetTelemetryRow)).toHaveLength(1);
-  expect(
-    await old.readFleetProjection(ctx.db, {
-      sessionId: legacy.sessionId,
-      revision: 4,
-      now: at(3000),
-    }),
-  ).toEqual({ ok: false, code: "forbidden" });
-  // Even a new capable session cannot make the OLD reader discover authority.
-  expect(
-    await old.readFleetProjection(ctx.db, {
-      sessionId: current.sessionId,
-      revision: 5,
-      now: at(3000),
-    }),
-  ).toEqual({ ok: false, code: "forbidden" });
-  const devices = await ctx.db.select().from(fleetDevice).orderBy(fleetDevice.id);
-  const index = await ctx.db
-    .select()
-    .from(fleetDeviceKeyIdentity)
-    .orderBy(fleetDeviceKeyIdentity.canonicalSpkiB64);
-  await transitionFleetSharingMode(ctx.db, {
-    enabled: false,
-    expectedRevision: ready.revision + 1,
-    now: at(3500),
-  });
-  for (const table of [
-    fleetTelemetryRow,
-    fleetPublisherLease,
-    fleetDeviceSession,
-    fleetEligibility,
-  ])
-    expect(await ctx.db.select().from(table)).toEqual([]);
-  expect(
-    (await ctx.db.select().from(fleetSourceIntent)).every((s) => s.state === "ended"),
-  ).toBe(true);
-  expect(await ctx.db.select().from(fleetDevice).orderBy(fleetDevice.id)).toEqual(
-    devices,
-  );
-  expect(
-    await ctx.db
+    const reader = ctx.db.transaction(async (tx) => {
+      const result = await old.readFleetProjection(tx, {
+        sessionId: legacy.sessionId,
+        revision: 2,
+        now: at(500),
+      });
+      expect(result).toMatchObject({ ok: true, rows: [{ dps: 42 }] });
+      const pid = await tx.execute<{ pid: number }>(sql`select pg_backend_pid() as pid`);
+      admitted(pid.rows[0].pid);
+      // Preserve the actual reader's locks until the response owner is released.
+      await hold;
+    });
+    const pid = await admission;
+    let cutover: ReturnType<typeof transitionFleetSharingMode> | undefined;
+    let queued: ReturnType<typeof old.readFleetProjection> | undefined;
+    try {
+      cutover = transitionFleetSharingMode(ctx.db, {
+        enabled: true,
+        expectedRevision: ready.revision,
+        now: at(1000),
+      });
+      expect(await waitUntilBlockedBy(ctx.pool, pid)).toBe(true);
+      expect((await readFleetSharingMode(ctx.db)).enabled).toBe(false);
+      queued = old.readFleetProjection(ctx.db, {
+        sessionId: legacy.sessionId,
+        revision: 3,
+        now: at(1000),
+      });
+      // Queue order is observed in PostgreSQL, not inferred from a sleep.
+      await vi.waitFor(async () => {
+        const waits = await ctx.pool.query<{ n: number }>(
+          "select count(*)::int n from pg_stat_activity where wait_event_type = 'Lock' and datname = current_database()",
+        );
+        expect(waits.rows[0].n).toBeGreaterThanOrEqual(2);
+      });
+    } finally {
+      release();
+      await reader;
+    }
+    await cutover;
+    expect(await queued).toEqual({ ok: false, code: "forbidden" });
+    expect(await ctx.db.select().from(fleetEligibility)).toEqual([]);
+    expect(await ctx.db.select().from(fleetDeviceSession)).toEqual([]);
+    const current = await participatingDevice(ctx.db, owner.id);
+    await realSource(ctx.db, current, boss, 6200001, [boss.id]);
+    expect(
+      await replaceDeviceProjection(ctx.db, {
+        sessionId: current.sessionId,
+        revision: 4,
+        now: at(2500),
+        rows: [{ characterId: boss.id, dps: 99, ewar: [] }],
+      }),
+    ).toEqual({ ok: true });
+    expect(await ctx.db.select().from(fleetTelemetryRow)).toHaveLength(1);
+    expect(
+      await old.readFleetProjection(ctx.db, {
+        sessionId: legacy.sessionId,
+        revision: 4,
+        now: at(3000),
+      }),
+    ).toEqual({ ok: false, code: "forbidden" });
+    // Even a new capable session cannot make the OLD reader discover authority.
+    expect(
+      await old.readFleetProjection(ctx.db, {
+        sessionId: current.sessionId,
+        revision: 5,
+        now: at(3000),
+      }),
+    ).toEqual({ ok: false, code: "forbidden" });
+    const devices = await ctx.db.select().from(fleetDevice).orderBy(fleetDevice.id);
+    const index = await ctx.db
       .select()
       .from(fleetDeviceKeyIdentity)
-      .orderBy(fleetDeviceKeyIdentity.canonicalSpkiB64),
-  ).toEqual(index);
-  expect((await readFleetKeyIdentityState(ctx.db)).keyIdentityPhase).toBe("ready");
-  expect(
-    await old.readFleetProjection(ctx.db, {
-      sessionId: current.sessionId,
-      revision: 6,
-      now: at(4000),
-    }),
-  ).toEqual({ ok: false, code: "forbidden" });
+      .orderBy(fleetDeviceKeyIdentity.canonicalSpkiB64);
+    await transitionFleetSharingMode(ctx.db, {
+      enabled: false,
+      expectedRevision: ready.revision + 1,
+      now: at(3500),
+    });
+    for (const table of [
+      fleetTelemetryRow,
+      fleetPublisherLease,
+      fleetDeviceSession,
+      fleetEligibility,
+    ])
+      expect(await ctx.db.select().from(table)).toEqual([]);
+    expect(
+      (await ctx.db.select().from(fleetSourceIntent)).every((s) => s.state === "ended"),
+    ).toBe(true);
+    expect(await ctx.db.select().from(fleetDevice).orderBy(fleetDevice.id)).toEqual(
+      devices,
+    );
+    expect(
+      await ctx.db
+        .select()
+        .from(fleetDeviceKeyIdentity)
+        .orderBy(fleetDeviceKeyIdentity.canonicalSpkiB64),
+    ).toEqual(index);
+    expect((await readFleetKeyIdentityState(ctx.db)).keyIdentityPhase).toBe("ready");
+    expect(
+      await old.readFleetProjection(ctx.db, {
+        sessionId: current.sessionId,
+        revision: 6,
+        now: at(4000),
+      }),
+    ).toEqual({ ok: false, code: "forbidden" });
+  });
 });

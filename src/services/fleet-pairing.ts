@@ -511,6 +511,12 @@ export async function completePairing(
       );
     }
 
+    if (
+      !validFleetCapabilities(row.requestedCapabilities) ||
+      (existingDevice && !validFleetCapabilities(existingDevice.approvedCapabilities))
+    )
+      throw new InvalidFleetCapabilitiesError();
+
     await tx
       .update(fleetPairingRequest)
       .set({ consumedAt: now })

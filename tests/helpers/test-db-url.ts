@@ -67,13 +67,13 @@ export function ownsTestDatabase(env: Partial<NodeJS.ProcessEnv>): boolean {
  *
  *   1. An explicit `TEST_DATABASE_URL` always wins — the documented escape
  *      hatch, and it also opts out of creation and cleanup.
- *   2. Under CI, the historical shared database. `.github/workflows/ci.yml`
- *      stands up a Postgres service on host 5433 and sets no override, so this
- *      must stay exactly what it has always been.
+ *   2. Under CI without an override, the historical shared database. The unit
+ *      workflow opts into explicit current/pre-combat URLs; this fallback
+ *      remains for isolated/no-override callers.
  *   3. Otherwise, a database private to this worktree.
  *
- * Rule 2 is load-bearing: making the per-worktree URL unconditional would point
- * CI at a database no one creates. `e2e/env.ts` resolves its URL the same way.
+ * Rule 2 is load-bearing for those no-override callers: a per-worktree URL
+ * would name a database no one creates. `e2e/env.ts` keeps its CI default too.
  */
 export function resolveTestUrl(env: Partial<NodeJS.ProcessEnv>, cwd: string): string {
   if (env.TEST_DATABASE_URL) return env.TEST_DATABASE_URL;

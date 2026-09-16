@@ -17,6 +17,12 @@ import {
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import type { ContactSyncResult } from "@/core/contact-result";
+import { COMBAT_LIMITS } from "../core/fleet-combat-profile";
+
+export type StoredCombatEffect = {
+  kind: "SCRAM" | "POINT" | "NEUT";
+  observations: { name: string | null; origin_ms: number }[];
+};
 
 export const tierEnum = pgEnum("tier", ["member", "associate", "alumni", "pending"]);
 export const accountStatusEnum = pgEnum("account_status", ["active", "cryo"]);
@@ -1064,18 +1070,10 @@ export const fleetPublisherLease = pgTable(
   (t) => [index("fleet_publisher_lease_expires_at_idx").on(t.leaseExpiresAt)],
 );
 
-/**
- * The current sparse remote row for one character — the only thing a reader
- * ever sees. Deliberately narrow: character id, fleet id, DPS, EWAR, and
- * three timestamps. No log content, no target/source, no event time, no
- * fleet name, no system, no ship, no EVE token — an accepted empty publish
- * batch deletes this row immediately, so its mere presence already
- * means "live as of `receivedAt`".
- *
- * `staleAt`/`hardExpiresAt` are stored, not recomputed at read time, so the
- * per-fleet expiry sweep and the filtered read can use a plain index
- * instead of an expression on `receivedAt` — this table's `(fleet_id,
- * hard_expires_at)` index below is exactly that sweep's shape.
+/** Sole current combat publication, never a history or roster. Original sample
+ * and evidence origins survive retransmission; receivedAt cannot renew them.
+ * Forward migration requires empty telemetry — no receipt-time backfill can
+ * invent an original measurement, activity or publication identity.
  */
 export const fleetTelemetryRow = pgTable(
   "fleet_telemetry_row",
@@ -1096,16 +1094,12 @@ export const fleetTelemetryRow = pgTable(
     authorityGeneration: integer("authority_generation"),
     linkEpoch: uuid("link_epoch"),
     participationGeneration: integer("participation_generation"),
-    // Only accepted publications stamp this. Existing rows remain unobserved;
-    // no default/backfill can invent a publication at migration or read time.
-    publicationId: uuid("publication_id"),
-    dps: integer("dps").notNull(),
-    // Only `[]` or `["SCRAM/POINT"]` are meaningful values (`PublishedRow.
-    // ewar`'s union, `src/services/fleet-relay.ts`) — the CHECK constraint below is the only
-    // thing stopping an arbitrary JSON array from being persisted here, since
-    // jsonb has no way to express "array of this one literal, 0 or 1 times"
-    // in its column type.
-    ewar: jsonb("ewar").$type<string[]>().notNull().default([]),
+    publicationId: uuid("publication_id").notNull(),
+    outgoingDps: integer("outgoing_dps"),
+    incomingDps: integer("incoming_dps"),
+    sampledAtMs: bigint("sampled_at_ms", { mode: "number" }).notNull(),
+    activityOriginMs: bigint("activity_origin_ms", { mode: "number" }).notNull(),
+    effects: jsonb("effects").$type<StoredCombatEffect[]>().notNull(),
     receivedAt: timestamp("received_at", { withTimezone: true }).notNull(),
     staleAt: timestamp("stale_at", { withTimezone: true }).notNull(),
     hardExpiresAt: timestamp("hard_expires_at", { withTimezone: true }).notNull(),
@@ -1114,8 +1108,73 @@ export const fleetTelemetryRow = pgTable(
     index("fleet_telemetry_row_hard_expires_at_idx").on(t.hardExpiresAt),
     index("fleet_telemetry_row_fleet_hard_expires_idx").on(t.fleetId, t.hardExpiresAt),
     check(
-      "fleet_telemetry_row_ewar_ck",
-      sql`${t.ewar} = '[]'::jsonb OR ${t.ewar} = '["SCRAM/POINT"]'::jsonb`,
+      "fleet_telemetry_row_dps_ck",
+      sql`
+      (${t.outgoingDps} IS NULL OR ${t.outgoingDps} BETWEEN 0 AND 10000000) AND
+      (${t.incomingDps} IS NULL OR ${t.incomingDps} BETWEEN 0 AND 10000000)`,
+    ),
+    check(
+      "fleet_telemetry_row_origins_ck",
+      sql`
+      ${t.sampledAtMs} BETWEEN 0 AND 9007199254740991 AND
+      ${t.activityOriginMs} BETWEEN 0 AND ${t.sampledAtMs} AND
+      ${t.sampledAtMs} - ${t.activityOriginMs} < ${sql.raw(String(COMBAT_LIMITS.activity_ms))}`,
+    ),
+    check(
+      "fleet_telemetry_row_publication_ck",
+      sql`
+      ${t.publicationId}::text ~ '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'`,
+    ),
+    check(
+      "fleet_telemetry_row_effects_ck",
+      sql`(CASE
+      WHEN jsonb_typeof(${t.effects}) = 'array' THEN
+        jsonb_array_length(${t.effects}) <= ${sql.raw(String(COMBAT_LIMITS.effects_per_row))} AND
+        ${sql.join(
+          Array.from({ length: COMBAT_LIMITS.effects_per_row }, (_, index) => {
+            const effect = sql`(${t.effects}->${sql.raw(String(index))})`;
+            const observations = sql`(${effect}->'observations')`;
+            const previous = sql`(${t.effects}->${sql.raw(String(index - 1))}->>'kind')`;
+            return sql`(${effect} IS NULL OR (CASE WHEN
+            jsonb_typeof(${effect}) = 'object' AND
+            jsonb_typeof(${observations}) = 'array' THEN
+            ${effect} - 'kind' - 'observations' = '{}'::jsonb AND
+            ${effect}->>'kind' IN ('SCRAM', 'POINT', 'NEUT') AND
+            ${index === 0 ? sql`true` : sql`array_position(ARRAY['SCRAM','POINT','NEUT'], ${previous}) < array_position(ARRAY['SCRAM','POINT','NEUT'], ${effect}->>'kind')`} AND
+            jsonb_array_length(${observations}) BETWEEN 1 AND ${sql.raw(String(COMBAT_LIMITS.observations_per_tackle))} AND
+            jsonb_array_length(jsonb_path_query_array(${observations}, '$[*] ? (@.name != null)')) <= ${sql.raw(String(COMBAT_LIMITS.named_per_tackle))} AND
+            (${effect}->>'kind' <> 'NEUT' OR (jsonb_array_length(${observations}) = 1 AND ${observations}->0->'name' = 'null'::jsonb)) AND
+            ${sql.join(
+              Array.from({ length: COMBAT_LIMITS.observations_per_tackle }, (_, i) => {
+                const observation = sql`(${observations}->${sql.raw(String(i))})`;
+                const origin = sql`(${observation}->>'origin_ms')::numeric`;
+                return sql`(${observation} IS NULL OR (CASE WHEN
+                jsonb_typeof(${observation}) = 'object' AND jsonb_typeof(${observation}->'origin_ms') = 'number' THEN
+                ${observation} - 'name' - 'origin_ms' = '{}'::jsonb AND
+                (${observation}->'name' = 'null'::jsonb OR (jsonb_typeof(${observation}->'name') = 'string' AND length(${observation}->>'name') BETWEEN 1 AND ${sql.raw(String(COMBAT_LIMITS.observed_name_scalars))} AND octet_length(${observation}->>'name') <= ${sql.raw(String(COMBAT_LIMITS.observed_name_utf8))})) AND
+                ${origin} = trunc(${origin}) AND ${origin} BETWEEN 0 AND ${t.activityOriginMs} AND
+                ${t.sampledAtMs} - ${origin} < ${sql.raw(String(COMBAT_LIMITS.activity_ms))}
+                ${
+                  i === 0
+                    ? sql``
+                    : sql`AND ${sql.join(
+                        Array.from(
+                          { length: i },
+                          (_, prior) =>
+                            sql`${observation}->'name' <> ${observations}->${sql.raw(String(prior))}->'name'`,
+                        ),
+                        sql` AND `,
+                      )}`
+                }
+                ELSE false END))`;
+              }),
+              sql` AND `,
+            )}
+            ELSE false END))`;
+          }),
+          sql` AND `,
+        )}
+      ELSE false END) IS TRUE`,
     ),
   ],
 );

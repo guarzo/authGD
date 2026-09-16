@@ -15,6 +15,7 @@ import { testConfig } from "./helpers/config";
 import { waitUntilBlockedBy } from "./helpers/fleet-sharing";
 import {
   at,
+  NOW,
   participatingDevice,
   realSource,
   sharedAccounts,
@@ -99,15 +100,24 @@ const cases = losses.flatMap((loss) =>
 it.each(cases)(
   "real PG $kind versus $loss: $order, with a successful real admission baseline",
   async ({ loss, kind, order }) => {
-    const p = await sharedAccounts(ctx.db);
+    const p = await sharedAccounts(ctx.db, NOW, ["shared-source-v1", "combat-v2"]);
     expect(
       await replaceDeviceProjection(ctx.db, {
         sessionId: p.b.sessionId,
         revision: 3,
         now: at(2500),
-        rows: [{ characterId: p.alts[0].id, dps: 77, ewar: [] }],
+        sampledAtMs: at(2500).getTime(),
+        rows: [
+          {
+            characterId: p.alts[0].id,
+            outgoingDps: 77,
+            incomingDps: null,
+            activityAgeMs: 0,
+            effects: [],
+          },
+        ],
       }),
-    ).toEqual({ ok: true });
+    ).toMatchObject({ ok: true });
     const baseline = await readFleetProjection(ctx.db, {
       sessionId: p.a.sessionId,
       revision: 4,
@@ -125,7 +135,16 @@ it.each(cases)(
       kind === "publish"
         ? replaceDeviceProjection(ctx.db, {
             ...call,
-            rows: [{ characterId: p.alts[0].id, dps: 88, ewar: [] }],
+            sampledAtMs: at(3000).getTime(),
+            rows: [
+              {
+                characterId: p.alts[0].id,
+                outgoingDps: 88,
+                incomingDps: null,
+                activityAgeMs: 0,
+                effects: [],
+              },
+            ],
           })
         : kind === "read" || kind === "quiet read"
           ? readFleetProjection(ctx.db, call)
@@ -275,15 +294,24 @@ it("new competing source dependencies after an identity wait release and retry t
 it.each(["publish", "read", "eligibility"] as const)(
   "%s samples source expiry only after the final actual PG lock wait",
   async (kind) => {
-    const p = await sharedAccounts(ctx.db);
+    const p = await sharedAccounts(ctx.db, NOW, ["shared-source-v1", "combat-v2"]);
     expect(
       await replaceDeviceProjection(ctx.db, {
         sessionId: p.b.sessionId,
         revision: 3,
         now: at(2500),
-        rows: [{ characterId: p.alts[0].id, dps: 77, ewar: [] }],
+        sampledAtMs: at(2500).getTime(),
+        rows: [
+          {
+            characterId: p.alts[0].id,
+            outgoingDps: 77,
+            incomingDps: null,
+            activityAgeMs: 0,
+            effects: [],
+          },
+        ],
       }),
-    ).toEqual({ ok: true });
+    ).toMatchObject({ ok: true });
     const before = await ctx.db.select().from(fleetTelemetryRow);
     expect(before[0].publicationId).toMatch(/^[0-9a-f-]{36}$/);
     let now = at(3000);
@@ -314,7 +342,16 @@ it.each(["publish", "read", "eligibility"] as const)(
               get now() {
                 return now;
               },
-              rows: [{ characterId: p.alts[0].id, dps: 88, ewar: [] }],
+              sampledAtMs: at(3000).getTime(),
+              rows: [
+                {
+                  characterId: p.alts[0].id,
+                  outgoingDps: 88,
+                  incomingDps: null,
+                  activityAgeMs: 0,
+                  effects: [],
+                },
+              ],
             })
           : kind === "read"
             ? readFleetProjection(ctx.db, call)

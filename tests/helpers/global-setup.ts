@@ -33,7 +33,7 @@ import { deriveWorktreeDbName, OWNS_TEST_DB } from "./test-db-url";
  * and this constant is fixed and human-chosen rather than derived from any
  * hash, so the two schemes can't be confused with one another either.
  */
-const LOCK_KEY = 0x4155544847444c4bn;
+export const LOCK_KEY = 0x4155544847444c4bn;
 
 /**
  * Best-effort lookup of the container publishing `port`, for the error

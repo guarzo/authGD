@@ -12,7 +12,7 @@ import {
   vi,
 } from "vitest";
 import type { Db } from "@/db";
-import { account, fleetDevice, fleetDeviceSession, fleetEligibility } from "@/db/schema";
+import { account, fleetDevice, fleetDeviceSession } from "@/db/schema";
 import {
   waitUntilBlockedBy,
   pairDevice as pairSharingDevice,
@@ -20,7 +20,6 @@ import {
 import { reconcileFleetKeys } from "./helpers/fleet-sharing";
 import { SHARED_CAPABILITY } from "@/core/fleet-sharing";
 import { transitionFleetSharingMode } from "@/services/fleet-sharing-mode";
-import { FLEET_READ_SCOPE } from "@/lib/esi/client";
 import {
   authenticateFleetRequest,
   extractFleetAuthHeaders,
@@ -39,6 +38,42 @@ import {
 import { setupTestDb, TEST_URL, truncateAll } from "./helpers/db";
 import { seedAccount, seedCharacter } from "./helpers/seed";
 import { testConfig } from "./helpers/config";
+import { combatAccounts } from "./helpers/fleet-combat";
+const SNAPSHOT_PATH = "/api/fleet/v2/snapshot";
+async function currentFleet() {
+  await truncateAll(ctx.db);
+  return combatAccounts(ctx.db, new Date(Date.now() - 3000));
+}
+function snapshotRequest(
+  device: { sessionId: string; privateKey: ReturnType<typeof newKeyPair>["privateKey"] },
+  method: "GET" | "PUT",
+  revision: number,
+  body: unknown = null,
+  query = "",
+) {
+  const raw = new TextEncoder().encode(
+    method === "GET" ? "" : typeof body === "string" ? body : JSON.stringify(body),
+  );
+  return new NextRequest(`http://localhost${SNAPSHOT_PATH}${query}`, {
+    method,
+    headers: signedHeaders({
+      ...device,
+      method,
+      path: SNAPSHOT_PATH,
+      issuedAt: new Date().toISOString(),
+      revision,
+      body: raw,
+    }),
+    ...(method === "PUT" ? { body: raw } : {}),
+  });
+}
+const wireCombatRow = (id: number, dps: number) => ({
+  character_id: id,
+  outgoing_dps: dps,
+  incoming_dps: null,
+  activity_age_ms: 0,
+  effects: [],
+});
 
 // Route modules read config + db lazily via getConfig()/getDb(); set env
 // first, mirroring tests/auth-routes.test.ts.
@@ -68,10 +103,10 @@ const { POST: completeRoute } =
   await import("@/app/api/fleet/v1/pairing-requests/[id]/complete/route");
 const { GET: catalogueRoute } = await import("@/app/api/fleet/v1/catalogue/route");
 const { PUT: snapshotPut, GET: snapshotGet } =
-  await import("@/app/api/fleet/v1/snapshot/route");
+  await import("@/app/api/fleet/v2/snapshot/route");
 const { PUT: sessionRenewRoute } = await import("@/app/api/fleet/v1/session/route");
 const { GET: deviceGet, PUT: devicePut } =
-  await import("@/app/api/fleet/v1/device/route");
+  await import("@/app/api/fleet/v2/device/route");
 
 const cfg = testConfig();
 // Real wall-clock time, deliberately, unlike the fixed literal `NOW` fleet-
@@ -121,26 +156,6 @@ async function pairDevice(db: Db, accountId: string, now: Date) {
     .from(fleetDevice)
     .where(eq(fleetDevice.publicKeySpkiB64, canonicalDevicePublicKeyB64(spki)));
   return { sessionId, privateKey, spki, device };
-}
-
-async function seedEligibleCharacter(
-  db: Db,
-  opts: { characterId: number; accountId: string; fleetId: number; now: Date },
-) {
-  await seedCharacter(db, cfg, {
-    id: opts.characterId,
-    accountId: opts.accountId,
-    scopes: [FLEET_READ_SCOPE],
-  });
-  await db.insert(fleetEligibility).values({
-    characterId: opts.characterId,
-    accountId: opts.accountId,
-    fleetId: opts.fleetId,
-    rosterCharacterIds: [opts.characterId],
-    verifiedAt: opts.now,
-    expiresAt: new Date(opts.now.getTime() + 60_000),
-    outcomeCode: "ok",
-  });
 }
 
 /** Builds the five `X-Fleet-*` headers a real device would sign, over the
@@ -253,7 +268,7 @@ describe("explicit shared device wire contract", () => {
     revision = 1,
     query = "",
   ) {
-    const path = "/api/fleet/v1/device";
+    const path = "/api/fleet/v2/device";
     return new NextRequest(`http://localhost${path}${query}`, {
       method,
       headers: signedHeaders({
@@ -276,7 +291,8 @@ describe("explicit shared device wire contract", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("no-store");
     expect(await res.json()).toEqual({
-      protocol: 1,
+      protocol: 2,
+      server_time_ms: expect.any(Number),
       device_id: paired.device.id,
       session_expires_at: new Date(NOW.getTime() + 30 * 60000).toISOString(),
       feature_enabled: false,
@@ -335,7 +351,7 @@ describe("explicit shared device wire contract", () => {
     const member = await seedAccount(ctx.db, { tier: "member" });
     const paired = await pairSharingDevice(ctx.db, member.id, NOW, [SHARED_CAPABILITY]);
     const body = Buffer.from(
-      JSON.stringify({ protocol: 1, capabilities: [SHARED_CAPABILITY] }),
+      JSON.stringify({ protocol: 2, capabilities: [SHARED_CAPABILITY] }),
     );
     const ack = await devicePut(deviceRequest(paired, "PUT", body));
     expect(ack.status).toBe(200);
@@ -363,25 +379,25 @@ describe("explicit shared device wire contract", () => {
       deviceRequest(
         paired,
         "PUT",
-        Buffer.from(JSON.stringify({ protocol: 1, capabilities: [SHARED_CAPABILITY] })),
+        Buffer.from(JSON.stringify({ protocol: 2, capabilities: [SHARED_CAPABILITY] })),
       ),
     );
     expect(ack.status).toBe(403);
-    expect(await ack.json()).toEqual({ protocol: 1, error: "capability_required" });
+    expect(await ack.json()).toEqual({ protocol: 2, error: "capability_required" });
   });
 
   it.each([
-    { value: { protocol: 1, capabilities: ["unknown"] }, error: "bad_request" },
+    { value: { protocol: 2, capabilities: ["unknown"] }, error: "bad_request" },
     {
-      value: { protocol: 1, capabilities: [SHARED_CAPABILITY, SHARED_CAPABILITY] },
+      value: { protocol: 2, capabilities: [SHARED_CAPABILITY, SHARED_CAPABILITY] },
       error: "bad_request",
     },
     {
-      value: { protocol: 1, capabilities: [], account_id: "forged" },
+      value: { protocol: 2, capabilities: [], account_id: "forged" },
       error: "bad_request",
     },
-    { value: { protocol: 1, capabilities: [], fleet_id: 6200001 }, error: "bad_request" },
-    { value: { protocol: 2, capabilities: [] }, error: "update_required" },
+    { value: { protocol: 2, capabilities: [], fleet_id: 6200001 }, error: "bad_request" },
+    { value: { protocol: 3, capabilities: [] }, error: "update_required" },
   ])("refuses unsigned selectors/unknown schema: $value", async ({ value, error }) => {
     const member = await seedAccount(ctx.db, { tier: "member" });
     const paired = await pairDevice(ctx.db, member.id, NOW);
@@ -389,7 +405,7 @@ describe("explicit shared device wire contract", () => {
       deviceRequest(paired, "PUT", Buffer.from(JSON.stringify(value))),
     );
     expect(result.status).toBe(400);
-    expect(await result.json()).toEqual({ protocol: 1, error });
+    expect(await result.json()).toEqual({ protocol: 2, error });
     const [session] = await ctx.db
       .select()
       .from(fleetDeviceSession)
@@ -414,7 +430,7 @@ describe("explicit shared device wire contract", () => {
     const tampered = deviceRequest(
       paired,
       "PUT",
-      Buffer.from('{"protocol":1,"capabilities":[]}'),
+      Buffer.from('{"protocol":2,"capabilities":[]}'),
     );
     tampered.headers.set("x-fleet-body-sha256", "0".repeat(64));
     const badProof = await devicePut(tampered);
@@ -431,7 +447,7 @@ describe("explicit shared device wire contract", () => {
     const revoked = await deviceGet(deviceRequest(paired, "GET", new Uint8Array()));
     for (const response of [badProof, unknown, expired, revoked]) {
       expect(response.status).toBe(401);
-      expect(await response.json()).toEqual({ protocol: 1, error: "unauthorized" });
+      expect(await response.json()).toEqual({ protocol: 2, error: "unauthorized" });
     }
   });
 });
@@ -919,14 +935,8 @@ describe("GET /api/fleet/v1/catalogue", () => {
   });
 
   it("shares its revision counter and read cadence bucket with GET /snapshot -- a catalogue fetch cannot dodge either by switching endpoints", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "member" });
-    await seedEligibleCharacter(ctx.db, {
-      characterId: 92900041,
-      accountId: acc.id,
-      fleetId: 6300041,
-      now: NOW,
-    });
-    const { sessionId, privateKey } = await pairDevice(ctx.db, acc.id, NOW);
+    const p = await currentFleet();
+    const { sessionId, privateKey } = p.b;
 
     const catalogueRes = await catalogueRoute(
       new NextRequest("http://localhost/api/fleet/v1/catalogue", {
@@ -936,8 +946,8 @@ describe("GET /api/fleet/v1/catalogue", () => {
           method: "GET",
           path: "/api/fleet/v1/catalogue",
           sessionId,
-          issuedAt: NOW.toISOString(),
-          revision: 1,
+          issuedAt: new Date().toISOString(),
+          revision: 3,
           body: new Uint8Array(0),
         }),
       }),
@@ -946,20 +956,7 @@ describe("GET /api/fleet/v1/catalogue", () => {
 
     // A snapshot GET replaying the SAME revision the catalogue fetch just
     // consumed is refused, even on a different endpoint.
-    const snapshotReplay = await snapshotGet(
-      new NextRequest("http://localhost/api/fleet/v1/snapshot", {
-        method: "GET",
-        headers: signedHeaders({
-          privateKey,
-          method: "GET",
-          path: "/api/fleet/v1/snapshot",
-          sessionId,
-          issuedAt: new Date(NOW.getTime() + 600).toISOString(),
-          revision: 1,
-          body: new Uint8Array(0),
-        }),
-      }),
-    );
+    const snapshotReplay = await snapshotGet(snapshotRequest(p.b, "GET", 3));
     expect(snapshotReplay.status).toBe(409);
     expect((await snapshotReplay.json()).error).toBe("revision_replayed");
 
@@ -971,360 +968,164 @@ describe("GET /api/fleet/v1/catalogue", () => {
     // this relies on real elapsed time rather than a fabricated `issuedAt`
     // offset: back-to-back calls with no delay are always well under the
     // 500ms bound.
-    const snapshotTooSoon = await snapshotGet(
-      new NextRequest("http://localhost/api/fleet/v1/snapshot", {
-        method: "GET",
-        headers: signedHeaders({
-          privateKey,
-          method: "GET",
-          path: "/api/fleet/v1/snapshot",
-          sessionId,
-          issuedAt: new Date().toISOString(),
-          revision: 2,
-          body: new Uint8Array(0),
-        }),
-      }),
-    );
+    const snapshotTooSoon = await snapshotGet(snapshotRequest(p.b, "GET", 4));
     expect(snapshotTooSoon.status).toBe(429);
     expect((await snapshotTooSoon.json()).error).toBe("rate_limited");
 
     await new Promise((resolve) => setTimeout(resolve, 600));
-    const snapshotOk = await snapshotGet(
-      new NextRequest("http://localhost/api/fleet/v1/snapshot", {
-        method: "GET",
-        headers: signedHeaders({
-          privateKey,
-          method: "GET",
-          path: "/api/fleet/v1/snapshot",
-          sessionId,
-          issuedAt: new Date().toISOString(),
-          revision: 2,
-          body: new Uint8Array(0),
-        }),
-      }),
-    );
+    const snapshotOk = await snapshotGet(snapshotRequest(p.b, "GET", 4));
     expect(snapshotOk.status).toBe(200);
   });
 });
 
-describe("PUT /api/fleet/v1/snapshot", () => {
-  it("accepts a validly signed batch and relays replaceDeviceProjection's own success", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "member" });
-    const { sessionId, privateKey } = await pairDevice(ctx.db, acc.id, NOW);
-    await seedEligibleCharacter(ctx.db, {
-      characterId: 92900020,
-      accountId: acc.id,
-      fleetId: 6300001,
-      now: NOW,
-    });
-    const bodyObj = {
-      protocol: 1,
-      rows: [{ character_id: 92900020, dps: 1000, ewar: ["SCRAM/POINT"] }],
+describe("PUT /api/fleet/v2/snapshot", () => {
+  it("accepts a validly signed complete batch through real shared source authority", async () => {
+    const p = await currentFleet();
+    const body = {
+      protocol: 2,
+      sampled_at_ms: Date.now() - 100,
+      rows: [
+        {
+          ...wireCombatRow(p.alts[0].id, 1000),
+          effects: [{ kind: "POINT", observations: [{ name: null, age_ms: 0 }] }],
+        },
+      ],
     };
-    const bodyBytes = new TextEncoder().encode(JSON.stringify(bodyObj));
-    const headers = signedHeaders({
-      privateKey,
-      method: "PUT",
-      path: "/api/fleet/v1/snapshot",
-      sessionId,
-      issuedAt: NOW.toISOString(),
-      revision: 1,
-      body: bodyBytes,
-    });
-    const req = new NextRequest("http://localhost/api/fleet/v1/snapshot", {
-      method: "PUT",
-      headers,
-      body: bodyBytes,
-    });
-    const res = await snapshotPut(req);
+    const res = await snapshotPut(snapshotRequest(p.b, "PUT", 3, body));
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ protocol: 1 });
+    expect(await res.json()).toEqual({ protocol: 2 });
   });
-
-  it("rejects a raw body over the size bound as invalid_batch, before authenticating or parsing", async () => {
-    const req = new NextRequest("http://localhost/api/fleet/v1/snapshot", {
-      method: "PUT",
-      headers: {
-        "x-fleet-session": "a".repeat(32),
-        "x-fleet-issued-at": NOW.toISOString(),
-        "x-fleet-revision": "1",
-        "x-fleet-body-sha256": "0".repeat(64),
-        "x-fleet-signature": "a".repeat(86),
-      },
-      body: "x".repeat(9000),
-    });
-    const res = await snapshotPut(req);
+  it("rejects a valid padded body over 512KiB before service admission", async () => {
+    const p = await currentFleet();
+    const before = await ctx.db.select().from(fleetDeviceSession);
+    const raw = '{"protocol":2,"sampled_at_ms":0,"rows":[]}'.padEnd(524289, " ");
+    const res = await snapshotPut(snapshotRequest(p.b, "PUT", 3, raw));
     expect(res.status).toBe(400);
-    expect((await res.json()).error).toBe("invalid_batch");
+    expect((await res.json()).error).toBe("bad_request");
+    expect(await ctx.db.select().from(fleetDeviceSession)).toEqual(before);
   });
-
-  it("rejects unknown fields and duplicate character ids under the strict schema, only after authenticating", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "member" });
-    const { sessionId, privateKey } = await pairDevice(ctx.db, acc.id, NOW);
-
-    const extraFieldBody = new TextEncoder().encode(
-      JSON.stringify({ protocol: 1, rows: [], extra: true }),
-    );
-    const extraFieldRes = await snapshotPut(
-      new NextRequest("http://localhost/api/fleet/v1/snapshot", {
-        method: "PUT",
-        headers: signedHeaders({
-          privateKey,
-          method: "PUT",
-          path: "/api/fleet/v1/snapshot",
-          sessionId,
-          issuedAt: NOW.toISOString(),
-          revision: 1,
-          body: extraFieldBody,
-        }),
-        body: extraFieldBody,
+  it("rejects unknown fields and duplicate character IDs as whole requests", async () => {
+    const p = await currentFleet();
+    const before = await ctx.db.select().from(fleetDeviceSession);
+    const extra = await snapshotPut(
+      snapshotRequest(p.b, "PUT", 3, {
+        protocol: 2,
+        sampled_at_ms: 0,
+        rows: [],
+        extra: true,
       }),
     );
-    expect(extraFieldRes.status).toBe(400);
-    expect((await extraFieldRes.json()).error).toBe("bad_request");
-
-    const dupBody = new TextEncoder().encode(
-      JSON.stringify({
-        protocol: 1,
-        rows: [
-          { character_id: 92900021, dps: 1, ewar: [] },
-          { character_id: 92900021, dps: 2, ewar: [] },
-        ],
+    expect(extra.status).toBe(400);
+    expect((await extra.json()).error).toBe("bad_request");
+    const duplicate = await snapshotPut(
+      snapshotRequest(p.b, "PUT", 4, {
+        protocol: 2,
+        sampled_at_ms: Date.now() - 100,
+        rows: [wireCombatRow(p.alts[0].id, 1), wireCombatRow(p.alts[0].id, 2)],
       }),
     );
-    const dupRes = await snapshotPut(
-      new NextRequest("http://localhost/api/fleet/v1/snapshot", {
-        method: "PUT",
-        headers: signedHeaders({
-          privateKey,
-          method: "PUT",
-          path: "/api/fleet/v1/snapshot",
-          sessionId,
-          issuedAt: NOW.toISOString(),
-          revision: 2,
-          body: dupBody,
-        }),
-        body: dupBody,
-      }),
-    );
-    expect(dupRes.status).toBe(400);
-    expect((await dupRes.json()).error).toBe("bad_request");
+    expect(duplicate.status).toBe(400);
+    expect((await duplicate.json()).error).toBe("bad_request");
+    expect(await ctx.db.select().from(fleetDeviceSession)).toEqual(before);
   });
-
-  it("rejects an unsupported protocol major with update_required, only after authenticating", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "member" });
-    const { sessionId, privateKey } = await pairDevice(ctx.db, acc.id, NOW);
-    const bodyBytes = new TextEncoder().encode(JSON.stringify({ protocol: 2, rows: [] }));
+  it("rejects an unsupported integer protocol as update_required before admission", async () => {
+    const p = await currentFleet();
+    const before = await ctx.db.select().from(fleetDeviceSession);
     const res = await snapshotPut(
-      new NextRequest("http://localhost/api/fleet/v1/snapshot", {
-        method: "PUT",
-        headers: signedHeaders({
-          privateKey,
-          method: "PUT",
-          path: "/api/fleet/v1/snapshot",
-          sessionId,
-          issuedAt: NOW.toISOString(),
-          revision: 1,
-          body: bodyBytes,
-        }),
-        body: bodyBytes,
-      }),
+      snapshotRequest(p.b, "PUT", 3, { protocol: 1, rows: [] }),
     );
     expect(res.status).toBe(400);
     expect((await res.json()).error).toBe("update_required");
+    expect(await ctx.db.select().from(fleetDeviceSession)).toEqual(before);
   });
-
-  it("maps a relay-service refusal (character_not_eligible) to its documented HTTP status", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "member" });
-    const { sessionId, privateKey } = await pairDevice(ctx.db, acc.id, NOW);
-    await seedCharacter(ctx.db, cfg, { id: 92900022, accountId: acc.id }); // linked, not eligible
-
-    const bodyBytes = new TextEncoder().encode(
-      JSON.stringify({
-        protocol: 1,
-        rows: [{ character_id: 92900022, dps: 1, ewar: [] }],
-      }),
-    );
+  it("maps current source not_verified refusal to its documented HTTP status", async () => {
+    const p = await currentFleet();
     const res = await snapshotPut(
-      new NextRequest("http://localhost/api/fleet/v1/snapshot", {
-        method: "PUT",
-        headers: signedHeaders({
-          privateKey,
-          method: "PUT",
-          path: "/api/fleet/v1/snapshot",
-          sessionId,
-          issuedAt: NOW.toISOString(),
-          revision: 1,
-          body: bodyBytes,
-        }),
-        body: bodyBytes,
+      snapshotRequest(p.b, "PUT", 3, {
+        protocol: 2,
+        sampled_at_ms: Date.now() - 100,
+        rows: [wireCombatRow(p.alts[2].id, 1)],
       }),
     );
     expect(res.status).toBe(403);
-    expect((await res.json()).error).toBe("character_not_eligible");
+    expect((await res.json()).error).toBe("not_verified");
   });
-
-  it("refuses an unauthenticated request with 401 unauthorized, never reaching the schema", async () => {
-    const { privateKey: wrongKey } = newKeyPair();
-    const acc = await seedAccount(ctx.db, { tier: "member" });
-    const { sessionId } = await pairDevice(ctx.db, acc.id, NOW);
-    const bodyBytes = new TextEncoder().encode(JSON.stringify({ protocol: 1, rows: [] }));
+  it("refuses a wrong-key signed request as unauthorized without admission", async () => {
+    const p = await currentFleet();
+    const { privateKey } = newKeyPair();
+    const before = await ctx.db.select().from(fleetDeviceSession);
     const res = await snapshotPut(
-      new NextRequest("http://localhost/api/fleet/v1/snapshot", {
-        method: "PUT",
-        headers: signedHeaders({
-          privateKey: wrongKey,
-          method: "PUT",
-          path: "/api/fleet/v1/snapshot",
-          sessionId,
-          issuedAt: NOW.toISOString(),
-          revision: 1,
-          body: bodyBytes,
-        }),
-        body: bodyBytes,
+      snapshotRequest({ ...p.b, privateKey }, "PUT", 3, {
+        protocol: 2,
+        sampled_at_ms: 0,
+        rows: [],
       }),
     );
     expect(res.status).toBe(401);
     expect((await res.json()).error).toBe("unauthorized");
+    expect(await ctx.db.select().from(fleetDeviceSession)).toEqual(before);
   });
-
   it("rejects a signed request carrying a query string", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "member" });
-    const { sessionId, privateKey } = await pairDevice(ctx.db, acc.id, NOW);
-    const bodyBytes = new TextEncoder().encode(JSON.stringify({ protocol: 1, rows: [] }));
+    const p = await currentFleet();
     const res = await snapshotPut(
-      new NextRequest("http://localhost/api/fleet/v1/snapshot?x=1", {
-        method: "PUT",
-        headers: signedHeaders({
-          privateKey,
-          method: "PUT",
-          path: "/api/fleet/v1/snapshot",
-          sessionId,
-          issuedAt: NOW.toISOString(),
-          revision: 1,
-          body: bodyBytes,
-        }),
-        body: bodyBytes,
-      }),
+      snapshotRequest(p.b, "PUT", 3, { protocol: 2, sampled_at_ms: 0, rows: [] }, "?x=1"),
     );
     expect(res.status).toBe(400);
     expect((await res.json()).error).toBe("bad_headers");
   });
 });
 
-describe("GET /api/fleet/v1/snapshot", () => {
+describe("GET /api/fleet/v2/snapshot", () => {
   it("returns the requester's own live fleet rows for a validly signed request", async () => {
-    const publisherAcc = await seedAccount(ctx.db, { tier: "member" });
-    const { sessionId: publisherSession, privateKey: publisherKey } = await pairDevice(
-      ctx.db,
-      publisherAcc.id,
-      NOW,
-    );
-    await seedEligibleCharacter(ctx.db, {
-      characterId: 92900030,
-      accountId: publisherAcc.id,
-      fleetId: 6300010,
-      now: NOW,
-    });
-    const publishBody = new TextEncoder().encode(
-      JSON.stringify({
-        protocol: 1,
-        rows: [{ character_id: 92900030, dps: 500, ewar: [] }],
-      }),
-    );
-    const publishRes = await snapshotPut(
-      new NextRequest("http://localhost/api/fleet/v1/snapshot", {
-        method: "PUT",
-        headers: signedHeaders({
-          privateKey: publisherKey,
-          method: "PUT",
-          path: "/api/fleet/v1/snapshot",
-          sessionId: publisherSession,
-          issuedAt: NOW.toISOString(),
-          revision: 1,
-          body: publishBody,
-        }),
-        body: publishBody,
-      }),
-    );
-    expect(publishRes.status).toBe(200);
-
-    // Route handlers capture real wall-clock time internally (see the NOW
-    // comment above) rather than accepting an injected clock, so this can only
-    // assert a bounded, non-negative age -- not an exact millisecond value.
-    // The exact liveness boundaries (2,999ms/3,000ms/10,000ms) are already
-    // pinned precisely at the service layer in tests/fleet-relay.test.ts,
-    // which controls `now` directly; this only has to prove the route wires
-    // the signed request through to that service and maps its response.
-    const readHeaders = signedHeaders({
-      privateKey: publisherKey,
-      method: "GET",
-      path: "/api/fleet/v1/snapshot",
-      sessionId: publisherSession,
-      issuedAt: new Date().toISOString(),
-      // The prior PUT above already consumed revision 1 on this SAME
-      // session/counter (fleet-relay.ts's shared gateSignedSession) -- this
-      // read must use a strictly greater value or it is refused as a replay.
-      revision: 2,
-      body: new Uint8Array(0),
-    });
-    const res = await snapshotGet(
-      new NextRequest("http://localhost/api/fleet/v1/snapshot", {
-        method: "GET",
-        headers: readHeaders,
-      }),
-    );
+    const p = await currentFleet();
+    const sample = Date.now() - 100;
+    expect(
+      (
+        await snapshotPut(
+          snapshotRequest(p.b, "PUT", 3, {
+            protocol: 2,
+            sampled_at_ms: sample,
+            rows: [wireCombatRow(p.alts[0].id, 500)],
+          }),
+        )
+      ).status,
+    ).toBe(200);
+    // Actual handler/DB clocks here. Exact boundary tests live at the service
+    // seam; this checks the entire real route binding and original-time DTO.
+    const req = snapshotRequest(p.b, "GET", 4);
+    const res = await snapshotGet(req);
     expect(res.status).toBe(200);
+    expect(res.headers.get("x-fleet-request-binding")).toMatch(/^[0-9a-f]{64}$/);
+    expect(res.headers.has("x-fleet-snapshot-format")).toBe(false);
     const body = await res.json();
-    expect(body.protocol).toBe(1);
+    expect(body.protocol).toBe(2);
     expect(body.rows).toHaveLength(1);
     const [seen] = body.rows;
-    expect(seen.character_id).toBe(92900030);
-    expect(typeof seen.character_name).toBe("string");
-    expect(seen.dps).toBe(500);
-    expect(seen.ewar).toEqual([]);
+    expect(seen.character_id).toBe(p.alts[0].id);
+    expect(seen.character_name).toBe(p.alts[0].name);
+    expect(seen.outgoing_dps).toBe(500);
+    expect(seen.incoming_dps).toBeNull();
+    expect(seen.effects).toEqual([]);
     expect(seen.state).toBe("live");
     expect(seen.age_ms).toBeGreaterThanOrEqual(0);
-    expect(seen.age_ms).toBeLessThan(3_000);
+    expect(seen.age_ms).toBeLessThan(3000);
+    expect(seen.age_ms).toBe(body.server_time_ms - sample);
+    expect(seen.activity_age_ms).toBe(body.server_time_ms - sample);
+    expect(seen.publication_id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
   });
-
-  it("refuses an unknown session with 401 unauthorized", async () => {
+  it("refuses a canonical unknown session with 401 unauthorized", async () => {
     const { privateKey } = newKeyPair();
     const res = await snapshotGet(
-      new NextRequest("http://localhost/api/fleet/v1/snapshot", {
-        method: "GET",
-        headers: signedHeaders({
-          privateKey,
-          method: "GET",
-          path: "/api/fleet/v1/snapshot",
-          sessionId: "b".repeat(32),
-          issuedAt: NOW.toISOString(),
-          revision: 1,
-          body: new Uint8Array(0),
-        }),
-      }),
+      snapshotRequest({ privateKey, sessionId: "A".repeat(43) }, "GET", 1),
     );
     expect(res.status).toBe(401);
     expect((await res.json()).error).toBe("unauthorized");
   });
-
   it("rejects a signed request carrying a query string", async () => {
-    const acc = await seedAccount(ctx.db, { tier: "member" });
-    const { sessionId, privateKey } = await pairDevice(ctx.db, acc.id, NOW);
-    const res = await snapshotGet(
-      new NextRequest("http://localhost/api/fleet/v1/snapshot?x=1", {
-        method: "GET",
-        headers: signedHeaders({
-          privateKey,
-          method: "GET",
-          path: "/api/fleet/v1/snapshot",
-          sessionId,
-          issuedAt: NOW.toISOString(),
-          revision: 1,
-          body: new Uint8Array(0),
-        }),
-      }),
-    );
+    const p = await currentFleet();
+    const res = await snapshotGet(snapshotRequest(p.b, "GET", 3, null, "?x=1"));
     expect(res.status).toBe(400);
     expect((await res.json()).error).toBe("bad_headers");
   });

@@ -5,9 +5,12 @@ import {
   SIGNING_SCHEME_VERSION,
   ExistingUuidSchema,
   TokenSchema,
+  FLEET_V2_STATUS_BY_CODE,
+  type FleetV2Code,
 } from "@/core/fleet-api-v2";
 import { readBoundedRequestBody } from "./fleet-request-body";
-import { canonicalFleetRequest } from "./fleet-signature";
+import { canonicalFleetRequest, type FleetAuthHeaders } from "./fleet-signature";
+import { extractFleetV2AuthHeaders } from "./fleet-route-auth";
 
 type InvalidInput = { ok: false; code: "bad_request" };
 type ParsedJson = { ok: true; value: unknown } | InvalidInput;
@@ -120,6 +123,8 @@ export async function readFleetV2Json(
   maxBytes: number,
 ): Promise<{ ok: true; value: unknown; bytes: Uint8Array } | InvalidInput> {
   try {
+    if (!hasIdentityFleetV2Encoding(req.headers))
+      return { ok: false, code: "bad_request" };
     const body = await readBoundedRequestBody(req, maxBytes);
     if (!body.ok) return { ok: false, code: "bad_request" };
     const parsed = parseBoundedFleetV2Json(body.bytes, maxBytes);
@@ -130,8 +135,57 @@ export async function readFleetV2Json(
   }
 }
 
+/** Next passes raw compressed bytes, not a decoded entity. Reject unsupported
+ * encodings instead of pretending their compressed size is the decoded budget. */
+export function hasIdentityFleetV2Encoding(headers: Headers): boolean {
+  const encoding = headers.get("content-encoding");
+  return encoding === null || encoding.toLowerCase() === "identity";
+}
+
+/** Closed errors have no binding or clock anchor. Explicit HEAD handlers avoid
+ * Next's GET fallback, which would otherwise run admission and consume cadence. */
+export function fleetV2Error(
+  code: FleetV2Code,
+  options: { head?: boolean; allow?: string } = {},
+): Response {
+  return new Response(
+    options.head ? null : JSON.stringify({ protocol: API_VERSION, error: code }),
+    {
+      status: FLEET_V2_STATUS_BY_CODE[code],
+      headers: {
+        "Cache-Control": "no-store",
+        "Content-Type": "application/json",
+        ...(options.allow ? { Allow: options.allow } : {}),
+      },
+    },
+  );
+}
+
+/** The service already validated and bounded this exact compact JSON before
+ * commit. Do not parse/re-serialize it at the route (or add format selectors). */
+export function fleetV2Success(json: string, binding: string): Response {
+  return new Response(json, {
+    headers: {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json",
+      "Content-Encoding": "identity",
+      "X-Fleet-Request-Binding": binding,
+    },
+  });
+}
+
+/** NextRequest.url is NextURL's normalized spelling and drops a bare '?'.
+ * Its native Request base retains the original URL (Next 16.3 Node adapter).
+ * Check both, without depending on private NextURL symbols or normalized search. */
+function hasFleetV2Query(req: { url: string }): boolean {
+  return (
+    req.url.includes("?") ||
+    (req instanceof Request && Reflect.get(Request.prototype, "url", req).includes("?"))
+  );
+}
+
 /** Also checks headers: Next's Node adapter can drop GET streams while
- * preserving their framing. Pass the actual URL to retain even a bare '?'.
+ * preserving their framing. Plain request doubles must supply their raw URL.
  */
 export function hasEmptyFleetV2GetFraming(
   req: { headers: Headers; url: string },
@@ -139,11 +193,49 @@ export function hasEmptyFleetV2GetFraming(
 ): boolean {
   const length = req.headers.get("content-length");
   return (
-    !req.url.includes("?") &&
+    !hasFleetV2Query(req) &&
     raw.byteLength === 0 &&
     (length === null || /^0+$/.test(length)) &&
     !req.headers.has("transfer-encoding")
   );
+}
+
+/** Shared framing for signed GET/PUT routes only. No DB/service entry until
+ * headers, exact decoded bytes, version and the closed body schema pass. */
+export async function readFleetV2SignedEnvelope<T>(
+  req: BodyRequest & { url: string },
+  method: "GET" | "PUT",
+  schema: z.ZodType<T>,
+  putBytes: number,
+): Promise<
+  | { ok: true; headers: FleetAuthHeaders; bytes: Uint8Array; body: T | null }
+  | { ok: false; code: FleetV2Code }
+> {
+  if (hasFleetV2Query(req)) return { ok: false, code: "bad_headers" };
+  const headers = extractFleetV2AuthHeaders(req);
+  if (!headers) return { ok: false, code: "bad_headers" };
+  if (!hasIdentityFleetV2Encoding(req.headers)) return { ok: false, code: "bad_request" };
+  if (method === "GET") {
+    if (!hasEmptyFleetV2GetFraming(req, new Uint8Array()))
+      return { ok: false, code: "bad_headers" };
+    try {
+      const raw = await readBoundedRequestBody(req, 0);
+      if (!raw.ok || !hasEmptyFleetV2GetFraming(req, raw.bytes))
+        return { ok: false, code: "bad_headers" };
+      return { ok: true, headers, bytes: raw.bytes, body: null };
+    } catch {
+      // Incoming stream failure supplies neither admission nor a clock anchor.
+      return { ok: false, code: "bad_request" };
+    }
+  }
+  const raw = await readFleetV2Json(req, putBytes);
+  if (!raw.ok) return raw;
+  const version = classifyFleetV2Version(raw.value);
+  if (version !== "ok") return { ok: false, code: version };
+  const body = schema.safeParse(raw.value);
+  return body.success
+    ? { ok: true, headers, bytes: raw.bytes, body: body.data }
+    : { ok: false, code: "bad_request" };
 }
 
 /** Correlation over trusted TLS, NOT authentication or a server signature.

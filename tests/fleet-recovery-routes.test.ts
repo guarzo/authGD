@@ -18,7 +18,7 @@ process.env.APP_BASE_URL = "https://auth.example/app/?ignored=1";
 const { POST: beginRoute } = await import("@/app/api/fleet/v1/recovery-challenges/route");
 const { POST: completeRoute } =
   await import("@/app/api/fleet/v1/recovery-challenges/[id]/complete/route");
-const { GET: deviceRoute } = await import("@/app/api/fleet/v1/device/route");
+const { GET: deviceRoute } = await import("@/app/api/fleet/v2/device/route");
 const { canonicalFleetRequest } = await import("@/lib/fleet-signature");
 
 const PATH = "/api/fleet/v1/recovery-challenges";
@@ -254,7 +254,7 @@ describe("actual key recovery routes", () => {
       canonicalFleetRequest({
         protocol: 1,
         method: "GET",
-        path: "/api/fleet/v1/device",
+        path: "/api/fleet/v2/device",
         sessionId: body.session_id,
         issuedAt,
         revision: 1,
@@ -263,7 +263,7 @@ describe("actual key recovery routes", () => {
       paired.privateKey,
     ).toString("base64url");
     const device = await deviceRoute(
-      new NextRequest("https://auth.example/api/fleet/v1/device", {
+      new NextRequest("https://auth.example/api/fleet/v2/device", {
         headers: {
           "x-fleet-session": body.session_id,
           "x-fleet-issued-at": issuedAt,
