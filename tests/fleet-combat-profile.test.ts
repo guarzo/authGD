@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   COMBAT_LIMITS,
+  isForbiddenScalar,
   normalizeObservedName,
   observedNameKey,
   validateObservedName,
@@ -55,6 +56,72 @@ function runGit(repository: string, ...arguments_: string[]): Buffer {
     timeout: 15000,
   });
 }
+
+describe("frozen forbidden scalar predicate", () => {
+  it.each(
+    [
+      undefined,
+      null,
+      true,
+      false,
+      "65",
+      new Number(65),
+      65n,
+      Symbol("A"),
+      {},
+      [],
+      () => 65,
+      NaN,
+      Infinity,
+      -Infinity,
+      -1,
+      65.5,
+      0x110000,
+    ].map((value) => [value]),
+  )("fails closed on invalid unknown input %s", (value) => {
+    expect(isForbiddenScalar(value)).toBe(true);
+  });
+
+  it.each([
+    [0x0000, true], // Cc, including the lower code-point endpoint.
+    [0x001f, true],
+    [0x0020, false], // Zs is category-safe; this predicate does not trim.
+    [0x003c, false], // Markup policy belongs only to observed names.
+    [0x003e, false],
+    [0x0041, false],
+    [0x007e, false],
+    [0x007f, true],
+    [0x009f, true],
+    [0x00a0, false],
+    [0x0301, false], // Combining marks do not need to be NFC starters.
+    [0x0378, true], // Cn: unassigned in the frozen profile.
+    [0x200b, true], // Cf.
+    [0x200d, true],
+    [0x2027, false],
+    [0x2028, true], // Zl.
+    [0x2029, true], // Zp.
+    [0x202a, true], // Cf immediately after the separators.
+    [0x202f, false],
+    [0xd7a3, false], // Assigned Hangul before the surrogate/private-use spans.
+    [0xd800, true],
+    [0xdfff, true],
+    [0xe000, true],
+    [0xf8ff, true],
+    [0xf900, false],
+    [0x1f600, false], // Assigned astral scalar, not a UTF-16 code unit.
+    [0x20000, false],
+    [0xf0000, true], // Supplementary private use.
+    [0xffffd, true],
+    [0x100000, true],
+    [0x10fffd, true],
+    [0x10ffff, true], // Upper code-point endpoint is a noncharacter.
+    [0x1c89, false], // Unicode-16 additions must not inherit older host categories.
+    [0x1c8a, false],
+    [0x1cc00, false],
+  ] as const)("classifies frozen code point %i as forbidden=%s", (value, expected) => {
+    expect(isForbiddenScalar(value)).toBe(expected);
+  });
+});
 
 describe("shared frozen combat profile", () => {
   it("ignores inherited Git repository routing and config", () => {

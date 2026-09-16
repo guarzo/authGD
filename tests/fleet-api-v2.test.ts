@@ -19,6 +19,10 @@ import {
   PositiveIdSchema,
   CapabilitiesSchema,
   CharacterNameSchema,
+  CatalogueRevisionSchema,
+  CatalogueSchema,
+  CatalogueGetSchema,
+  PairingCompletedSchema,
   CombatPutSchema,
   CombatGetSchema,
   CombatPutSuccessSchema,
@@ -28,6 +32,7 @@ import {
   checkedDateAdd,
   type CombatPut,
   type CombatGet,
+  type Catalogue,
 } from "@/core/fleet-api-v2";
 import {
   classifyFleetV2Version,
@@ -304,6 +309,38 @@ describe("closed v2 wire primitives", () => {
     expect(IsoDateSchema.safeParse(value).success).toBe(false);
   });
 
+  describe("authority date year bounds", () => {
+    it("rejects year zero even when it round-trips through Date", () => {
+      const value = "0000-01-01T00:00:00.000Z";
+      expect(new Date(value).toISOString()).toBe(value);
+      expect(IsoDateSchema.safeParse(value).success).toBe(false);
+      expect(checkedDateAdd(value, 0)).toBeNull();
+    });
+
+    it("refuses additions crossing below year 0001", () => {
+      expect(checkedDateAdd("0001-01-01T00:00:00.000Z", -1)).toBeNull();
+    });
+
+    it("refuses additions crossing above year 9999", () => {
+      expect(checkedDateAdd("9999-12-31T23:59:59.999Z", 1)).toBeNull();
+    });
+
+    it.each([
+      ["0001-01-01T00:00:00.000Z", 0, "0001-01-01T00:00:00.000Z"],
+      ["9999-12-31T23:59:59.999Z", 0, "9999-12-31T23:59:59.999Z"],
+      ["0001-01-01T00:00:00.000Z", 1, "0001-01-01T00:00:00.001Z"],
+      ["0001-01-01T00:00:00.001Z", -1, "0001-01-01T00:00:00.000Z"],
+      ["9999-12-31T23:59:59.999Z", -1, "9999-12-31T23:59:59.998Z"],
+      ["9999-12-31T23:59:59.998Z", 1, "9999-12-31T23:59:59.999Z"],
+    ] as const)(
+      "preserves representable endpoint addition %s + %i",
+      (value, delta, expected) => {
+        expect(IsoDateSchema.parse(value)).toBe(value);
+        expect(checkedDateAdd(value, delta)).toBe(expected);
+      },
+    );
+  });
+
   it("checks date and counter additions without clamping or wrapping", () => {
     expect(IsoDateSchema.parse("2024-02-29T00:00:00.000Z")).toBe(
       "2024-02-29T00:00:00.000Z",
@@ -420,6 +457,209 @@ describe("closed v2 wire primitives", () => {
       expect(CombatGetSchema.safeParse(value).success).toBe(true);
     },
   );
+});
+
+describe("closed catalogue envelopes", () => {
+  const catalogue = (): Catalogue => ({
+    revision: 0,
+    characters: [{ character_id: 1, character_name: "Alpha" }],
+  });
+
+  describe.each(["nested", "standalone", "pairing"] as const)("%s catalogue", (form) => {
+    const schema =
+      form === "nested"
+        ? CatalogueSchema
+        : form === "standalone"
+          ? CatalogueGetSchema
+          : PairingCompletedSchema;
+    const wrap = (value: Catalogue) =>
+      form === "nested"
+        ? value
+        : form === "standalone"
+          ? { protocol: 2, ...value }
+          : { protocol: 2, session_id: token, catalogue: value };
+
+    it.each([
+      0, 2_147_483_647, 2_147_483_648, 3_112_514_310, 3_820_012_610, 4_294_967_295,
+    ])("accepts unsigned catalogue revision %i unchanged", (revision) => {
+      const value = wrap({ ...catalogue(), revision });
+      expect(CatalogueRevisionSchema.parse(revision)).toBe(revision);
+      expect(schema.parse(value)).toEqual(value);
+    });
+
+    it.each([4_294_967_296, -1, 0.5, true, false, "1", null, NaN, Infinity])(
+      "refuses non-uint32 catalogue revision %s",
+      (revision) => {
+        const value = catalogue();
+        Object.assign(value, { revision });
+        expect(CatalogueRevisionSchema.safeParse(revision).success).toBe(false);
+        expect(schema.safeParse(wrap(value)).success).toBe(false);
+      },
+    );
+
+    it("requires every key and refuses extras at every level", () => {
+      const nested = catalogue();
+      const value = wrap(nested);
+      const targets = [
+        value,
+        ...(form === "pairing" ? [nested] : []),
+        nested.characters[0],
+      ];
+      for (const target of targets) {
+        const record = target as unknown as Record<string, unknown>;
+        for (const key of Object.keys(record)) {
+          const previous = record[key];
+          delete record[key];
+          expect(schema.safeParse(value).success, key).toBe(false);
+          record[key] = previous;
+        }
+        record.extra = null;
+        expect(schema.safeParse(value).success).toBe(false);
+        delete record.extra;
+      }
+      if (form !== "nested") {
+        Object.assign(value, { protocol: 1 });
+        expect(schema.safeParse(value).success).toBe(false);
+      }
+    });
+
+    it("accepts empty and 8192 unique characters without imposing sort order", () => {
+      expect(schema.parse(wrap({ revision: 0, characters: [] }))).toEqual(
+        wrap({ revision: 0, characters: [] }),
+      );
+      const value = catalogue();
+      value.characters = Array.from({ length: 8192 }, (_, i) => ({
+        character_id: safeMax - i,
+        character_name: " <Pilot> e\u0301 \u{1c89}\u{1cc00}",
+      }));
+      expect(schema.parse(wrap(value))).toEqual(wrap(value));
+      value.characters.push({ character_id: 1, character_name: "Overflow" });
+      expect(schema.safeParse(wrap(value)).success).toBe(false);
+    });
+
+    it("refuses duplicate IDs even with different valid names", () => {
+      const value = catalogue();
+      value.characters.push({ character_id: 1, character_name: "Different" });
+      expect(schema.safeParse(wrap(value)).success).toBe(false);
+    });
+
+    it.each([0, -1, 0.5, true, "1", safeMax + 1])("refuses invalid ID %s", (id) => {
+      const value = catalogue();
+      Object.assign(value.characters[0], { character_id: id });
+      expect(schema.safeParse(wrap(value)).success).toBe(false);
+    });
+
+    it.each([
+      "",
+      "x".repeat(201),
+      "\u{20000}".repeat(201),
+      "a\n",
+      "\u200d",
+      "\ue000",
+      "\u0378",
+      "\u2028",
+      "\u2029",
+      "\ud800",
+      null,
+    ])("refuses invalid character name %s", (name) => {
+      const value = catalogue();
+      Object.assign(value.characters[0], { character_name: name });
+      expect(schema.safeParse(wrap(value)).success).toBe(false);
+    });
+
+    it("accepts 200 supplementary scalars without trim, NFC or markup rewriting", () => {
+      const value = catalogue();
+      value.characters[0].character_name = "\u{20000}".repeat(200);
+      expect(schema.parse(wrap(value))).toEqual(wrap(value));
+    });
+  });
+
+  it.each([`${token}=`, `${token.slice(0, -1)}9`, null, 32])(
+    "refuses invalid pairing session token %s",
+    (session_id) => {
+      expect(
+        PairingCompletedSchema.safeParse({
+          protocol: 2,
+          session_id,
+          catalogue: catalogue(),
+        }).success,
+      ).toBe(false);
+    },
+  );
+
+  it.each([
+    ["standalone", 1_048_576, 8192],
+    ["pairing", 65_536, 400],
+  ] as const)(
+    "bounds the complete %s DTO at exactly %i UTF-8 bytes",
+    (form, maximum, count) => {
+      const nested = catalogue();
+      nested.characters = Array.from({ length: count }, (_, i) => ({
+        character_id: i + 1,
+        character_name: "x",
+      }));
+      const value =
+        form === "standalone"
+          ? { protocol: 2, ...nested }
+          : { protocol: 2, session_id: token, catalogue: nested };
+      const schema: z.ZodType =
+        form === "standalone" ? CatalogueGetSchema : PairingCompletedSchema;
+      const budget =
+        form === "standalone"
+          ? FLEET_V2_BYTE_LIMITS.catalogueGet.successBytes
+          : FLEET_V2_BYTE_LIMITS.preSessionPost.successBytes;
+      let remaining = maximum - Buffer.byteLength(JSON.stringify(value));
+      for (const character of nested.characters) {
+        const extra = Math.min(199, remaining);
+        character.character_name += "x".repeat(extra);
+        remaining -= extra;
+      }
+      expect(remaining).toBe(0);
+      expect(Buffer.byteLength(JSON.stringify(value))).toBe(maximum);
+      const exact = serializeFleetV2Json(value, schema, budget);
+      expect(exact.ok).toBe(true);
+      if (exact.ok) {
+        expect(Buffer.byteLength(exact.json)).toBe(maximum);
+        expect(JSON.parse(exact.json)).toEqual(value);
+      }
+      nested.characters[count - 1].character_name += "x";
+      expect(schema.safeParse(value).success).toBe(true);
+      expect(Buffer.byteLength(JSON.stringify(value))).toBe(maximum + 1);
+      expect(serializeFleetV2Json(value, schema, budget)).toEqual({
+        ok: false,
+        code: "service_unavailable",
+      });
+    },
+  );
+
+  it("refuses a whole pairing catalogue that fits the standalone budget", () => {
+    const nested = catalogue();
+    nested.characters = Array.from({ length: 100 }, (_, i) => ({
+      character_id: i + 1,
+      character_name: "\u{20000}".repeat(200),
+    }));
+    const standalone = { protocol: 2, ...nested };
+    const pairing = { protocol: 2, session_id: token, catalogue: nested };
+    expect(PairingCompletedSchema.safeParse(pairing).success).toBe(true);
+    expect(Buffer.byteLength(JSON.stringify(pairing))).toBeGreaterThan(65_536);
+    const serialized = serializeFleetV2Json(
+      standalone,
+      CatalogueGetSchema,
+      FLEET_V2_BYTE_LIMITS.catalogueGet.successBytes,
+    );
+    expect(serialized.ok).toBe(true);
+    if (serialized.ok) expect(JSON.parse(serialized.json)).toEqual(standalone);
+    expect(
+      serializeFleetV2Json(
+        pairing,
+        PairingCompletedSchema,
+        FLEET_V2_BYTE_LIMITS.preSessionPost.successBytes,
+      ),
+    ).toEqual({
+      ok: false,
+      code: "service_unavailable",
+    });
+  });
 });
 
 describe("raw JSON and framing", () => {

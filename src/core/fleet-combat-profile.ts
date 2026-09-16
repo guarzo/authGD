@@ -62,6 +62,20 @@ function forbidden(cp: number): boolean {
   return false;
 }
 
+/** Frozen C/Zl/Zp classification only; invalid external code points fail closed.
+ * Length, markup, trim, normalization and folding remain caller-specific policies.
+ */
+export function isForbiddenScalar(value: unknown): boolean {
+  if (
+    typeof value !== "number" ||
+    !Number.isInteger(value) ||
+    value < 0 ||
+    value > 0x10ffff
+  )
+    return true;
+  return forbidden(value);
+}
+
 function decompose(cp: number, output: number[]): void {
   const syllable = cp - S_BASE;
   if (syllable >= 0 && syllable < S_COUNT) {

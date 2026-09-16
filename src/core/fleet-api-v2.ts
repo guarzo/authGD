@@ -1,6 +1,9 @@
 import { z } from "zod";
-import { COMBAT_LIMITS, validateObservedName } from "./fleet-combat-profile";
-import profile from "./fleet-combat-v2-profile.json";
+import {
+  COMBAT_LIMITS,
+  isForbiddenScalar,
+  validateObservedName,
+} from "./fleet-combat-profile";
 
 // API representation and the deployed cryptographic scheme are independent.
 export const API_VERSION = 2 as const;
@@ -80,6 +83,7 @@ export const IsoDateSchema = z
   .regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/)
   .refine(
     (value) => {
+      if (value.startsWith("0000-")) return false;
       const ms = Date.parse(value);
       return Number.isFinite(ms) && new Date(ms).toISOString() === value;
     },
@@ -90,6 +94,9 @@ export const PositiveIdSchema = SafeCounterSchema.min(1);
 export const Int4Schema = SafeCounterSchema.max(2_147_483_647);
 export const PositiveInt4Schema = Int4Schema.min(1);
 export const SourceExpectedGenerationSchema = Int4Schema.max(2_147_483_646);
+// Catalogue revisions are opaque uint32 fingerprints, never signed-request/CAS counters.
+export const CatalogueRevisionSchema = SafeCounterSchema.max(4_294_967_295);
+export type CatalogueRevision = z.infer<typeof CatalogueRevisionSchema>;
 
 /** Callers can pass a lower ceiling to reserve a later terminal increment. */
 export function checkedCounterAdd(
@@ -131,8 +138,7 @@ export const CapabilitiesSchema = z.union([
 export type Capabilities = z.infer<typeof CapabilitiesSchema>;
 
 /** Identity names deliberately do NOT use tackle trim/NFC/markup rules.
- * The profile currently exports observed-name helpers only; category lookup
- * reads its exact frozen table, never host ICU or a second category list.
+ * Only scalar classification is shared with the frozen observed-name foundation.
  */
 export const CharacterNameSchema = z.string().refine(
   (value) => {
@@ -140,22 +146,45 @@ export const CharacterNameSchema = z.string().refine(
     const scalars = Array.from(value);
     if (scalars.length < 1 || scalars.length > COMBAT_LIMITS.character_name_scalars)
       return false;
-    return scalars.every((char) => {
-      const cp = char.codePointAt(0)!;
-      let low = 0;
-      let high = profile.forbidden_ranges.length;
-      while (low < high) {
-        const middle = Math.floor((low + high) / 2);
-        const [start, end] = profile.forbidden_ranges[middle];
-        if (cp < start) high = middle;
-        else if (cp > end) low = middle + 1;
-        else return false;
-      }
-      return true;
-    });
+    return scalars.every((char) => !isForbiddenScalar(char.codePointAt(0)));
   },
   { message: "invalid character display name" },
 );
+
+export const CatalogueSchema = z
+  .object({
+    revision: CatalogueRevisionSchema,
+    characters: z
+      .array(
+        z
+          .object({
+            character_id: PositiveIdSchema,
+            character_name: CharacterNameSchema,
+          })
+          .strict(),
+      )
+      .max(8192)
+      .refine(
+        (characters) =>
+          new Set(characters.map((character) => character.character_id)).size ===
+          characters.length,
+        { message: "duplicate catalogue character" },
+      ),
+  })
+  .strict();
+export type Catalogue = z.infer<typeof CatalogueSchema>;
+export const CatalogueGetSchema = CatalogueSchema.extend({
+  protocol: z.literal(API_VERSION),
+});
+export type CatalogueGet = z.infer<typeof CatalogueGetSchema>;
+export const PairingCompletedSchema = z
+  .object({
+    protocol: z.literal(API_VERSION),
+    session_id: TokenSchema,
+    catalogue: CatalogueSchema,
+  })
+  .strict();
+export type PairingCompleted = z.infer<typeof PairingCompletedSchema>;
 
 const AgeSchema = SafeCounterSchema.max(COMBAT_LIMITS.activity_ms - 1);
 const DpsSchema = SafeCounterSchema.max(10_000_000).nullable();
