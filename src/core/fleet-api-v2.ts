@@ -89,7 +89,8 @@ export const IsoDateSchema = z
     },
     { message: "noncanonical UTC date" },
   );
-export const SafeCounterSchema = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
+export const SafeIntegerSchema = z.number().int().max(Number.MAX_SAFE_INTEGER);
+export const SafeCounterSchema = SafeIntegerSchema.min(0);
 export const PositiveIdSchema = SafeCounterSchema.min(1);
 export const Int4Schema = SafeCounterSchema.max(2_147_483_647);
 export const PositiveInt4Schema = Int4Schema.min(1);
