@@ -42,23 +42,99 @@ const fixture: {
 const digest = (path: URL) =>
   createHash("sha256").update(readFileSync(path)).digest("hex");
 
+function runGit(repository: string, ...arguments_: string[]): Buffer {
+  // cwd alone cannot contain Git when inherited routing/config overrides it.
+  const environment = { ...process.env };
+  for (const key of Object.keys(environment)) {
+    if (key.toUpperCase().startsWith("GIT_")) delete environment[key];
+  }
+  return execFileSync("git", arguments_, {
+    cwd: repository,
+    env: environment,
+    stdio: "pipe",
+    timeout: 15000,
+  });
+}
+
 describe("shared frozen combat profile", () => {
+  it("ignores inherited Git repository routing and config", () => {
+    const sandbox = mkdtempSync(join(tmpdir(), "fleet-combat-git-env-"));
+    const inherited = process.env;
+    const cleanEnvironment = { ...inherited };
+    for (const key of Object.keys(cleanEnvironment)) {
+      if (key.toUpperCase().startsWith("GIT_")) delete cleanEnvironment[key];
+    }
+    // Setup is independent of the runner under test. Even RED can only
+    // mutate this disposable caller, never an inherited real Git directory.
+    const setupGit = (repository: string, ...arguments_: string[]) =>
+      execFileSync("git", arguments_, {
+        cwd: repository,
+        env: cleanEnvironment,
+        stdio: "pipe",
+        timeout: 15000,
+      });
+    try {
+      const caller = join(sandbox, "caller");
+      const target = join(sandbox, "target");
+      for (const repository of [caller, target]) {
+        mkdirSync(repository);
+        setupGit(repository, "init", "--quiet");
+        writeFileSync(join(repository, "probe.txt"), "original\n");
+        setupGit(repository, "add", "--", "probe.txt");
+      }
+      const snapshot = () =>
+        Object.fromEntries(
+          ["config", "index"].map((name) => [
+            name,
+            createHash("sha256")
+              .update(readFileSync(join(caller, ".git", name)))
+              .digest("hex"),
+          ]),
+        );
+      const saved = snapshot();
+      writeFileSync(join(caller, "probe.txt"), "caller change\n");
+      writeFileSync(join(target, "probe.txt"), "target change\n");
+      let configuration: string;
+      try {
+        process.env = {
+          ...cleanEnvironment,
+          GIT_DIR: join(caller, ".git"),
+          GIT_COMMON_DIR: join(caller, ".git"),
+          GIT_WORK_TREE: caller,
+          GIT_INDEX_FILE: join(caller, ".git/index"),
+          GIT_OBJECT_DIRECTORY: join(caller, ".git/objects"),
+          GIT_CONFIG_COUNT: "1",
+          GIT_CONFIG_KEY_0: "polish.injected",
+          GIT_CONFIG_VALUE_0: "poison",
+        };
+        runGit(target, "config", "--local", "polish.marker", "target");
+        runGit(target, "add", "--", "probe.txt");
+        configuration = runGit(target, "config", "--list").toString();
+      } finally {
+        // Restore before assertions/failure reporting or any other test runs.
+        process.env = inherited;
+      }
+      expect(snapshot()).toEqual(saved);
+      expect(configuration).not.toContain("polish.injected=poison");
+      expect(
+        setupGit(target, "config", "--local", "--get", "polish.marker").toString().trim(),
+      ).toBe("target");
+      expect(setupGit(target, "show", ":probe.txt").toString()).toBe("target change\n");
+    } finally {
+      rmSync(sandbox, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     "src/core/fleet-combat-v2-profile.json",
     "tests/fixtures/fleet-combat-v2.json",
   ])("preserves exact bytes through autocrlf checkout: %s", (relative) => {
     const repository = mkdtempSync(join(tmpdir(), "fleet-combat-checkout-"));
     try {
-      const git = (...arguments_: string[]) =>
-        execFileSync("git", arguments_, {
-          cwd: repository,
-          stdio: "pipe",
-          timeout: 15000,
-        });
       // Exercise actual checkout conversion without touching this checkout,
       // its index/config, or any commits.
-      git("init", "--quiet");
-      git("config", "--local", "core.autocrlf", "true");
+      runGit(repository, "init", "--quiet");
+      runGit(repository, "config", "--local", "core.autocrlf", "true");
       const root = fileURLToPath(new URL("../", import.meta.url));
       const attributes = join(root, ".gitattributes");
       if (existsSync(attributes))
@@ -69,10 +145,10 @@ describe("shared frozen combat profile", () => {
       writeFileSync(destination, original);
       const control = join(repository, "unprotected.json");
       writeFileSync(control, '{"control":true}\n');
-      git("add", "--all");
+      runGit(repository, "add", "--all");
       unlinkSync(destination);
       unlinkSync(control);
-      git("checkout-index", "--all", "--force");
+      runGit(repository, "checkout-index", "--all", "--force");
       // Conversion must be active; a broad JSON exemption must not hide it.
       expect(readFileSync(control, "utf8")).toBe('{"control":true}\r\n');
       expect(createHash("sha256").update(readFileSync(destination)).digest("hex")).toBe(
