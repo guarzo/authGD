@@ -56,12 +56,13 @@ async function setup() {
           revision: ++revision,
           now: at(revision * 500),
           command: {
+            protocol: 2,
             operation: "start",
-            sourceId,
-            expectedGeneration: 0,
-            characterId: boss.id,
-            characterLinkEpoch: boss.fleetLinkEpoch,
-            intentCreatedAt: NOW,
+            source_id: sourceId,
+            expected_generation: 0,
+            character_id: boss.id,
+            character_link_epoch: boss.fleetLinkEpoch,
+            intent_created_at: NOW.toISOString(),
           },
         })
       ).ok,

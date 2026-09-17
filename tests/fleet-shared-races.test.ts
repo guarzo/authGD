@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { eq } from "drizzle-orm";
 import { character, fleetTelemetryRow } from "@/db/schema";
@@ -61,9 +62,13 @@ async function invalidate(p: Fixture, loss: Loss) {
           revision: 20,
           now: at(3500),
           command: {
+            protocol: 2,
             operation: "stop",
-            sourceId: p.source.sourceId,
-            expectedGeneration: 1,
+            request_id: randomUUID(),
+            intent_created_at: at(3500).toISOString(),
+            source_id: p.source.sourceId,
+            expected_generation: 1,
+            expected_automatic: null,
           },
         })
       ).ok,

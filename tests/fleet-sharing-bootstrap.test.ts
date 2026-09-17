@@ -10,6 +10,9 @@ import {
   auditLog,
   character,
   fleetAccessCheckGate,
+  fleetAutomaticCandidate,
+  fleetAutomaticConsent,
+  fleetAutomaticReceipt,
   fleetDevice,
   fleetDeviceKeyIdentity,
   fleetDeviceSession,
@@ -90,6 +93,9 @@ const emptyCounts = {
   fleet_publisher_lease: 0,
   fleet_telemetry_row: 0,
   fleet_eligibility: 0,
+  fleet_automatic_consent: 0,
+  fleet_automatic_receipt: 0,
+  fleet_automatic_candidate: 0,
 };
 async function snapshot() {
   const tables = Object.values(schema).filter((t) => is(t, PgTable));
@@ -177,6 +183,7 @@ describe("bounded first-use sharing bootstrap", () => {
       current: initial,
       firstUseCounts: emptyCounts,
     });
+    expect("firstUseCounts" in dry && dry.firstUseCounts).toEqual(emptyCounts);
     const protectedNames = Object.values(schema)
       .filter((t) => is(t, PgTable))
       .map(getTableName)
@@ -236,6 +243,9 @@ describe("bounded first-use sharing bootstrap", () => {
     "fleet_publisher_lease",
     "fleet_telemetry_row",
     "fleet_eligibility",
+    "fleet_automatic_consent",
+    "fleet_automatic_receipt",
+    "fleet_automatic_candidate",
   ])(
     "refuses retained/stale/orphan data in %s and reports actual counts",
     async (name) => {
@@ -329,9 +339,69 @@ describe("bounded first-use sharing bootstrap", () => {
           expiresAt: EXPIRED,
           outcomeCode: "ok",
         });
+      // Retained closed control state, not inferred approval or live authority.
+      // Attribution and candidate bindings deliberately survive without a device,
+      // consent or source row, so each table must independently block first use.
+      if (name === "fleet_automatic_consent")
+        await ctx.db.insert(fleetAutomaticConsent).values({
+          accountId: owner.id,
+          generation: 1,
+          revision: 2,
+          enabled: false,
+          approvingDeviceId: deviceId,
+          approvedAt: EXPIRED,
+          disabledAt: EXPIRED,
+          closedReason: "explicit_off",
+          nextReconcileAt: EXPIRED,
+        });
+      if (name === "fleet_automatic_receipt") {
+        const requestId = randomUUID();
+        const expiresAt = new Date(EXPIRED.getTime() + 86400000);
+        await ctx.db.insert(fleetAutomaticReceipt).values({
+          accountId: owner.id,
+          requestId,
+          expiresAt,
+          receipt: {
+            kind: "automatic",
+            command: {
+              protocol: 2,
+              request_id: requestId,
+              intent_created_at: EXPIRED.toISOString(),
+              enabled: false,
+              expected_generation: 1,
+              expected_revision: 1,
+            },
+            accepted_at: EXPIRED.toISOString(),
+            expires_at: expiresAt.toISOString(),
+            result: {
+              generation: 1,
+              revision: 2,
+              enabled: false,
+              approving_device_id: deviceId,
+              approved_at: EXPIRED.toISOString(),
+              disabled_at: EXPIRED.toISOString(),
+              closed_reason: "explicit_off",
+            },
+          },
+        });
+      }
+      if (name === "fleet_automatic_candidate")
+        await ctx.db.insert(fleetAutomaticCandidate).values({
+          accountId: owner.id,
+          characterId: boss.id,
+          consentGeneration: 1,
+          candidateGeneration: 1,
+          ownerHash: boss.ownerHash,
+          linkEpoch: boss.fleetLinkEpoch,
+          nextAttemptAt: EXPIRED,
+        });
       const before = await snapshot();
       const countedName = name === "conflicted_key" ? "fleet_device_key_identity" : name;
-      expect(await runFleetSharingMode(ctx.db, options(false))).toMatchObject({
+      const dry = await runFleetSharingMode(ctx.db, options(false));
+      await expect(runFleetSharingMode(ctx.db, options())).rejects.toThrow(
+        "first_use_empty_state_required",
+      );
+      expect(dry).toMatchObject({
         releaseReady: false,
         refusal: "first_use_empty_state_required",
         firstUseCounts: {
@@ -341,9 +411,6 @@ describe("bounded first-use sharing bootstrap", () => {
           [countedName]: 1,
         },
       });
-      await expect(runFleetSharingMode(ctx.db, options())).rejects.toThrow(
-        "first_use_empty_state_required",
-      );
       expect(await snapshot()).toEqual(before);
     },
   );
@@ -695,6 +762,37 @@ describe("first-use serialization", () => {
       ]);
       expect(await readFleetKeyIdentityState(ctx.db)).toEqual(initial);
       expect(await ctx.db.select().from(fleetDevice)).toHaveLength(1);
+    } finally {
+      await client.query("rollback");
+      client.release();
+      await Promise.allSettled([operation]);
+    }
+  });
+
+  it.each(
+    [fleetAutomaticConsent, fleetAutomaticReceipt, fleetAutomaticCandidate].map(
+      getTableName,
+    ),
+  )("waits for a mode-free writer lock on %s before first use", async (name) => {
+    const client = await ctx.pool.connect();
+    let operation: Promise<unknown> | undefined;
+    try {
+      await client.query("begin");
+      const {
+        rows: [{ pid }],
+      } = await client.query<{ pid: number }>("select pg_backend_pid() as pid");
+      await client.query(`lock table ${name} in row exclusive mode`);
+      operation = Promise.allSettled([runFleetSharingMode(ctx.db, options())]);
+      expect(await waitUntilBlockedBy(ctx.pool, pid)).toBe(true);
+      expect(await ctx.db.select().from(fleetSharingGate)).toEqual([]);
+      expect(await ctx.db.select().from(auditLog)).toEqual([]);
+      await client.query("commit");
+      expect(await operation).toMatchObject([
+        {
+          status: "fulfilled",
+          value: { enabled: true, revision: 1, keyIdentityPhase: "ready" },
+        },
+      ]);
     } finally {
       await client.query("rollback");
       client.release();

@@ -2,6 +2,7 @@ import { and, eq, isNotNull, ne, sql } from "drizzle-orm";
 import type { Db, DbTx } from "@/db";
 import {
   character,
+  fleetAutomaticConsent,
   fleetDevice,
   fleetPublisherLease,
   fleetTelemetryRow,
@@ -11,7 +12,11 @@ import {
 } from "@/db/schema";
 import { SHARED_CAPABILITY } from "@/core/fleet-sharing";
 import type { deriveFleetEvidenceWindow } from "@/core/fleet-freshness";
-import { fleetDatabaseNow } from "@/services/fleet-key-identity";
+import {
+  fleetDatabaseNow,
+  resolveFleetDeviceKey,
+  FleetDeviceKeyUnavailableError,
+} from "@/services/fleet-key-identity";
 import {
   FleetLifecycleRetry,
   fleetLifecycleTransaction,
@@ -49,7 +54,16 @@ type Clock = (() => Date) | undefined;
 function selectors(rows: Source[]) {
   return JSON.stringify(
     rows
-      .map((s) => [s.id, s.accountId, s.bossCharacterId, s.bossLinkEpoch, s.fleetId])
+      .map((s) => [
+        s.id,
+        s.accountId,
+        s.deviceId,
+        s.bossCharacterId,
+        s.bossLinkEpoch,
+        s.fleetId,
+        s.automaticConsentAccountId,
+        s.automaticConsentGeneration,
+      ])
       .sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
   );
 }
@@ -129,7 +143,33 @@ async function prepare(tx: DbTx, id: string, fleetId?: number, linkedIds: number
     ? identities.get(source.bossCharacterId)
     : undefined;
   const owner = source?.accountId ? accounts.get(source.accountId) : undefined;
-  return { source, authority, boss, device, owner, mode, identities, locked };
+  const [automaticConsent] = source?.automaticConsentAccountId
+    ? await tx
+        .select()
+        .from(fleetAutomaticConsent)
+        .where(eq(fleetAutomaticConsent.accountId, source.automaticConsentAccountId))
+    : [];
+  let validDeviceKey = false;
+  if (device && mode.keyIdentityPhase === "ready") {
+    try {
+      const key = await resolveFleetDeviceKey(tx, device.publicKeySpkiB64, mode);
+      validDeviceKey = !key.unavailable && key.device?.id === device.id;
+    } catch (err) {
+      if (!(err instanceof FleetDeviceKeyUnavailableError)) throw err;
+    }
+  }
+  return {
+    source,
+    authority,
+    boss,
+    device,
+    owner,
+    mode,
+    identities,
+    locked,
+    automaticConsent,
+    validDeviceKey,
+  };
 }
 type Prepared = Awaited<ReturnType<typeof prepare>>;
 function consentLoss(p: Prepared): string | null {
@@ -146,11 +186,22 @@ function consentLoss(p: Prepared): string | null {
   if (owner?.tier !== "member") return "member_lost";
   if (
     !device ||
+    !p.validDeviceKey ||
     device.revokedAt ||
     device.accountId !== s.accountId ||
     !device.approvedCapabilities.includes(SHARED_CAPABILITY)
   )
     return "device_revoked";
+  // Automatic approval outlives sessions, but never its account generation or
+  // approver. Re-read under the account lock on EVERY pre/postflight.
+  if (
+    s.automaticConsentAccountId !== null &&
+    (s.automaticConsentAccountId !== s.accountId ||
+      !p.automaticConsent?.enabled ||
+      p.automaticConsent.generation !== s.automaticConsentGeneration ||
+      p.automaticConsent.approvingDeviceId !== device.id)
+  )
+    return "stopped";
   if (!hasUsableFleetRead(boss)) return "fleet_read_invalid";
   return null;
 }
@@ -225,6 +276,10 @@ export async function claimFleetSourceFetch(
       (s.fetchClaimExpiresAt && s.fetchClaimExpiresAt > now)
     )
       return null;
+    if (s.fetchGeneration >= 2_147_483_646) {
+      await end(tx, p, "ended", now);
+      return null;
+    }
     const claimExpiresAt = new Date(now.getTime() + FLEET_FETCH_CLAIM_MS);
     await tx
       .update(fleetSourceIntent)
@@ -322,6 +377,10 @@ export async function maintainFleetSource(
       p.authority?.sourceGeneration === s.generation &&
       p.authority.expiresAt !== null &&
       p.authority.expiresAt <= now;
+    if (claimExpired && s.fetchGeneration >= 2_147_483_646) {
+      await end(tx, p, "ended", now);
+      return 0;
+    }
     if (claimExpired || evidenceExpired) {
       await tx
         .update(fleetSourceAuthority)
@@ -524,6 +583,12 @@ export async function commitFleetSourceObservation(
     );
     if (!links.some((ch) => ch.characterId === s.bossCharacterId)) return;
     const replacement = a.sourceId !== s.id || a.sourceGeneration !== s.generation;
+    // Leave the final int4 increment available for withdrawal. Empty exhausted
+    // slots are durable fences, never reset or repaired by positive work.
+    if (a.authorityGeneration + (replacement ? 1 : 0) > 2_147_483_646) {
+      await end(tx, p, "ended", now);
+      return;
+    }
     const displaced = p.locked.sources.filter(
       (old) => old.id !== s.id && old.fleetId === s.fleetId && old.activatedAt !== null,
     );

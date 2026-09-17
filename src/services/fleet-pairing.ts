@@ -13,6 +13,7 @@ import {
   lockFleetAccounts,
   lockFleetLifecycle,
 } from "@/services/fleet-lifecycle";
+import { revokeFleetAutomaticApproval } from "@/services/fleet-automatic";
 import { validFleetCapabilities } from "@/core/fleet-sharing";
 import {
   API_VERSION,
@@ -786,7 +787,7 @@ export async function revokeFleetDevice(
   dbx: Db,
   deviceId: string,
   actorAccountId: string,
-  now: Date,
+  testNow?: Date,
 ): Promise<void> {
   try {
     await fleetLifecycleTransaction(dbx, async (tx) => {
@@ -796,8 +797,17 @@ export async function revokeFleetDevice(
         .from(fleetDevice)
         .where(eq(fleetDevice.id, deviceId));
       if (!probe) throw new DeviceNotFoundError(`no fleet device ${deviceId}`);
-      await lockFleetAccounts(tx, [probe.accountId]);
-      const lifecycle = await lockFleetLifecycle(tx, { deviceIds: [deviceId] });
+      const lifecycle = await revokeFleetAutomaticApproval(
+        tx,
+        probe.accountId,
+        // PostgreSQL UUID equality accepts mixed case; in-memory closure and
+        // source selectors must use the canonical identity it resolved.
+        probe.id,
+        testNow,
+      );
+      // Production time is sampled after selector/account/device waits; the
+      // optional explicit clock remains only for deterministic service tests.
+      const now = await fleetDatabaseNow(tx, testNow);
       const [device] = await tx
         .select({ id: fleetDevice.id })
         .from(fleetDevice)

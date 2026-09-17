@@ -4,6 +4,7 @@ import type { DbTx } from "@/db";
 import {
   account,
   character,
+  fleetAutomaticConsent,
   fleetDevice,
   fleetDeviceSession,
   fleetPublisherLease,
@@ -212,6 +213,15 @@ async function probe(tx: DbTx, call: SignedFleetCall, kind: Kind, submitted: num
           .limit(budget.remaining + 1),
       )
     : [];
+  const automaticConsents = accountIds.length
+    ? budget.take(
+        await tx
+          .select()
+          .from(fleetAutomaticConsent)
+          .where(inArray(fleetAutomaticConsent.accountId, accountIds))
+          .limit(budget.remaining + 1),
+      )
+    : [];
   const sessionIds = unique([
     sessionId,
     ...rows.map((r) => r.sessionId),
@@ -235,6 +245,7 @@ async function probe(tx: DbTx, call: SignedFleetCall, kind: Kind, submitted: num
     identities,
     devices,
     accounts,
+    automaticConsents,
     sessions,
     identityIds,
     accountIds,
@@ -374,7 +385,22 @@ export function combatPublisherAllowed(
 
 /** Source consent outlives its initiating session and does NOT imply device
  * participation. Only the boss needs a usable Fleet Read credential. */
-export function currentSourceEvidence(p: SharedAdmission, e: Probe["evidence"][number]) {
+export function currentSourceEvidence(
+  p: Pick<
+    SharedAdmission,
+    | "sources"
+    | "identities"
+    | "devices"
+    | "accounts"
+    | "automaticConsents"
+    | "validKeys"
+    | "now"
+  >,
+  e: Pick<
+    Probe["evidence"][number],
+    "sourceId" | "sourceGeneration" | "fleetId" | "verifiedAt" | "expiresAt"
+  >,
+) {
   const s = p.sources.find((source) => source.id === e.sourceId);
   const boss = p.identities.find((ch) => ch.id === s?.bossCharacterId);
   const d = p.devices.find((device) => device.id === s?.deviceId);
@@ -384,6 +410,15 @@ export function currentSourceEvidence(p: SharedAdmission, e: Probe["evidence"][n
     s.activatedAt !== null &&
     s.activatedAt <= p.now &&
     s.generation === e.sourceGeneration &&
+    (s.automaticConsentAccountId === null ||
+      (s.automaticConsentAccountId === s.accountId &&
+        p.automaticConsents.some(
+          (c) =>
+            c.accountId === s.accountId &&
+            c.enabled &&
+            c.generation === s.automaticConsentGeneration &&
+            c.approvingDeviceId === s.deviceId,
+        ))) &&
     s.fleetId === e.fleetId &&
     !!boss &&
     boss.accountId === s.accountId &&

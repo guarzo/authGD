@@ -1,6 +1,9 @@
 import { count, eq, getTableName, sql } from "drizzle-orm";
 import type { DbTx, Dbx } from "@/db";
 import {
+  fleetAutomaticCandidate,
+  fleetAutomaticConsent,
+  fleetAutomaticReceipt,
   fleetDevice,
   fleetDeviceKeyIdentity,
   fleetDeviceSession,
@@ -146,6 +149,9 @@ const FIRST_USE_TABLES = [
   fleetPublisherLease,
   fleetTelemetryRow,
   fleetEligibility,
+  fleetAutomaticConsent,
+  fleetAutomaticReceipt,
+  fleetAutomaticCandidate,
 ];
 
 /** Empty-index initialization, NOT reconciliation. No fabricated quiescence,

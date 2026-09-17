@@ -9,6 +9,7 @@ import {
   character,
   contactSyncState,
   discordLink,
+  fleetSourceIntent,
   payoutOperation,
   payoutParticipant,
   payoutPayment,
@@ -435,11 +436,22 @@ async function mergeAccountInto(
   targetId: string,
   characterId: number,
 ): Promise<void> {
+  // Account deletion clears private receipt payloads even on naturally/explicitly
+  // ended tombstones. Include their locks now, not after the lifecycle device phase.
+  const retained = await dbx
+    .select({ id: fleetSourceIntent.id })
+    .from(fleetSourceIntent)
+    .where(eq(fleetSourceIntent.accountId, sourceId));
   const locked = await lockFleetLifecycle(dbx, {
     accountIds: [sourceId],
     characterIds: [characterId],
+    sourceIds: retained.map((s) => s.id),
   });
   await invalidateFleetSources(dbx, locked, "account_merged", targetId);
+  await dbx
+    .update(fleetSourceIntent)
+    .set({ stopReceipt: null })
+    .where(eq(fleetSourceIntent.accountId, sourceId));
   await dbx
     .update(account)
     .set({ mainCharacterId: null })

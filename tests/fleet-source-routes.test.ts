@@ -52,6 +52,33 @@ afterAll(async () => {
   await fixture.close();
   await ctx.cleanup();
 });
+// The production bucket uses post-lock PostgreSQL time, not Node's timer clock.
+// Observe its condition without retrying any service/HTTP operation. The deadline
+// only bounds a stalled test; it never authorizes a call before the bucket is ready.
+async function waitForReadCadence(...devices: Awaited<ReturnType<typeof pairDevice>>[]) {
+  const deadline = performance.now() + 5000;
+  while (true) {
+    const { rows } = await ctx.pool.query<{
+      now: Date;
+      last_read_at: Date | null;
+    }>(
+      "select clock_timestamp() as now, last_read_at from fleet_device_session where device_id = any($1::uuid[])",
+      [devices.map((device) => device.device.id)],
+    );
+    expect(rows).toHaveLength(devices.length);
+    const remaining = Math.max(
+      ...rows.map((row) =>
+        row.last_read_at === null
+          ? 0
+          : 500 - (row.now.getTime() - row.last_read_at.getTime()),
+      ),
+    );
+    if (remaining <= 0) return;
+    if (performance.now() >= deadline)
+      throw new Error(`database read cadence stalled: ${remaining}ms remaining`);
+    await new Promise((resolve) => setTimeout(resolve, Math.min(remaining, 50)));
+  }
+}
 function request(
   p: Awaited<ReturnType<typeof pairDevice>>,
   method: "GET" | "PUT",
@@ -134,17 +161,18 @@ it("source service -> committed outbox -> dispatcher -> strict registered handle
         )
       ).status,
     ).toBe(200);
-  await new Promise((r) => setTimeout(r, 510));
+  await waitForReadCadence(p);
   const sourceId = randomUUID();
-  // Source HTTP is intentionally retired until the receipt-control slice. Keep
-  // the worker/authorization guard on the actual existing service, not a v1 adapter.
+  // Keep worker/authorization guards on the actual v2 service; independent
+  // route-control tests exercise request-bound HTTP handlers without a server.
   const start: SourceCommand = {
+    protocol: 2,
     operation: "start",
-    sourceId,
-    expectedGeneration: 0,
-    characterId: boss.id,
-    characterLinkEpoch: boss.fleetLinkEpoch,
-    intentCreatedAt: new Date(),
+    source_id: sourceId,
+    expected_generation: 0,
+    character_id: boss.id,
+    character_link_epoch: boss.fleetLinkEpoch,
+    intent_created_at: new Date().toISOString(),
   };
   await fixture.client.scenario({
     characters: [
@@ -181,9 +209,13 @@ it("source service -> committed outbox -> dispatcher -> strict registered handle
   const denied = await controlFleetSource(ctx.db, {
     sessionId: p.sessionId,
     revision: 2,
-    command: { ...start, characterId: alt.id, characterLinkEpoch: alt.fleetLinkEpoch },
+    command: { ...start, character_id: alt.id, character_link_epoch: alt.fleetLinkEpoch },
   });
   expect(denied).toEqual({ ok: false, code: "fleet_read_required" });
+  const beforeStart = await ctx.db
+    .select()
+    .from(fleetDeviceSession)
+    .where(eq(fleetDeviceSession.deviceId, p.device.id));
   const response = await controlFleetSource(ctx.db, {
     sessionId: p.sessionId,
     revision: 2,
@@ -191,8 +223,22 @@ it("source service -> committed outbox -> dispatcher -> strict registered handle
   });
   expect(response).toMatchObject({
     ok: true,
-    value: { sourceId, generation: 1, state: "pending" },
+    value: {
+      protocol: 2,
+      source: { source_id: sourceId, generation: 1, state: "pending", automatic: null },
+    },
   });
+  const [startedSession] = await ctx.db
+    .select()
+    .from(fleetDeviceSession)
+    .where(eq(fleetDeviceSession.deviceId, p.device.id));
+  expect(startedSession.lastRevision).toBe(2);
+  expect(
+    startedSession.lastReadAt!.getTime() - beforeStart[0].lastReadAt!.getTime(),
+  ).toBeGreaterThanOrEqual(500);
+  expect((await ctx.db.select().from(fleetSourceIntent))[0].nextFetchAt).toEqual(
+    startedSession.lastReadAt,
+  );
   expect((await fixture.client.snapshot()).requests).toEqual([]);
   expect(await ctx.db.select().from(outbox)).toHaveLength(1);
   const jwks = await fixture.client.provider({
@@ -242,23 +288,52 @@ it("source service -> committed outbox -> dispatcher -> strict registered handle
     { characterId: alt.id, linkEpoch: alt.fleetLinkEpoch },
     { characterId: included.id, linkEpoch: included.fleetLinkEpoch },
   ]);
-  await new Promise((r) => setTimeout(r, 510));
+  const [afterWorkerSession] = await ctx.db
+    .select()
+    .from(fleetDeviceSession)
+    .where(eq(fleetDeviceSession.deviceId, p.device.id));
+  expect(afterWorkerSession).toEqual(startedSession);
+  // A 510ms Node sleep did not prove 500ms on the admission clock. Exercise
+  // the exact boundary through the existing service seam, after the real job,
+  // without changing source authority, bypassing admission, or retrying failures.
+  const lastReadAt = startedSession.lastReadAt!.getTime();
+  expect(
+    await readFleetSourceState(ctx.db, {
+      sessionId: p.sessionId,
+      revision: 3,
+      now: new Date(lastReadAt + 499),
+    }),
+  ).toEqual({ ok: false, code: "rate_limited" });
+  expect(
+    await ctx.db
+      .select()
+      .from(fleetDeviceSession)
+      .where(eq(fleetDeviceSession.deviceId, p.device.id)),
+  ).toEqual([startedSession]);
+  const catalogueNow = new Date(lastReadAt + 500);
   const status = await readFleetSourceState(ctx.db, {
     sessionId: p.sessionId,
     revision: 3,
+    now: catalogueNow,
   });
   if (!status.ok) throw new Error(status.code);
+  expect(
+    await ctx.db
+      .select()
+      .from(fleetDeviceSession)
+      .where(eq(fleetDeviceSession.deviceId, p.device.id)),
+  ).toEqual([{ ...startedSession, lastRevision: 3, lastReadAt: catalogueNow }]);
   expect(status.value.characters).toContainEqual({
-    characterId: alt.id,
-    characterName: alt.name,
-    characterLinkEpoch: alt.fleetLinkEpoch,
-    hasFleetRead: false,
-    tokenUsable: false,
+    character_id: alt.id,
+    character_name: alt.name,
+    character_link_epoch: alt.fleetLinkEpoch,
+    has_fleet_read: false,
+    token_usable: false,
   });
   expect(JSON.stringify(status.value)).not.toMatch(
     /fleetId|ownerHash|tokenEnc|accessToken/,
   );
-  await new Promise((r) => setTimeout(r, 510));
+  await waitForReadCadence(p, receiver);
   const extra = { ...start, fleetId: 123 };
   expect(
     await controlFleetSource(ctx.db, {
@@ -266,7 +341,7 @@ it("source service -> committed outbox -> dispatcher -> strict registered handle
       revision: 4,
       command: extra,
     }),
-  ).toEqual({ ok: false, code: "invalid_intent" });
+  ).toEqual({ ok: false, code: "bad_request" });
   // Raw old-route selector/method refusal is covered exhaustively by retirement tests.
   // Real signed routes in both directions after the actual outbox/worker proof.
   // The quiet participant owns neither a lease nor any Fleet Read token.
@@ -284,7 +359,7 @@ it("source service -> committed outbox -> dispatcher -> strict registered handle
         })
       ).ok,
     ).toBe(true);
-  await new Promise((r) => setTimeout(r, 510));
+  await waitForReadCadence(receiver);
   const eligibility = await import("@/app/api/fleet/v2/eligibility/route");
   const snapshot = await import("@/app/api/fleet/v2/snapshot/route");
   const own = await eligibility.GET(
@@ -344,7 +419,7 @@ it("source service -> committed outbox -> dispatcher -> strict registered handle
   expect(
     (await snapshot.GET(request(receiver, "GET", null, 4, "", SNAPSHOT_PATH))).status,
   ).toBe(429);
-  await new Promise((r) => setTimeout(r, 510));
+  await waitForReadCadence(receiver);
   const quietRequest = request(receiver, "GET", null, 4, "", SNAPSHOT_PATH);
   const quiet = await snapshot.GET(quietRequest);
   expect(quiet.status).toBe(200);
@@ -510,7 +585,7 @@ it("source service -> committed outbox -> dispatcher -> strict registered handle
         )
       ).status,
     ).toBe(200);
-  await new Promise((r) => setTimeout(r, 510));
+  await waitForReadCadence(foreign, second);
   const foreignStatus = await readFleetSourceState(ctx.db, {
     sessionId: foreign.sessionId,
     revision: 2,
@@ -522,9 +597,9 @@ it("source service -> committed outbox -> dispatcher -> strict registered handle
   });
   if (!secondStatus.ok) throw new Error(secondStatus.code);
   expect(secondStatus.value.sources).toContainEqual(
-    expect.objectContaining({ sourceId, state: "active" }),
+    expect.objectContaining({ source_id: sourceId, state: "active" }),
   );
-  await new Promise((r) => setTimeout(r, 510));
+  await waitForReadCadence(foreign, second);
   expect(
     await controlFleetSource(ctx.db, {
       sessionId: foreign.sessionId,
@@ -532,7 +607,15 @@ it("source service -> committed outbox -> dispatcher -> strict registered handle
       command: start,
     }),
   ).toEqual({ ok: false, code: "forbidden" });
-  const stop: SourceCommand = { operation: "stop", sourceId, expectedGeneration: 1 };
+  const stop: SourceCommand = {
+    protocol: 2,
+    operation: "stop",
+    request_id: randomUUID(),
+    intent_created_at: new Date().toISOString(),
+    source_id: sourceId,
+    expected_generation: 1,
+    expected_automatic: null,
+  };
   expect(
     await controlFleetSource(ctx.db, {
       sessionId: foreign.sessionId,
@@ -545,7 +628,7 @@ it("source service -> committed outbox -> dispatcher -> strict registered handle
     revision: 3,
     command: stop,
   });
-  expect(stopped).toMatchObject({ ok: true, value: { state: "ended" } });
+  expect(stopped).toMatchObject({ ok: true, value: { source: { state: "ended" } } });
   expect((await ctx.db.select().from(fleetSourceIntent))[0].deviceId).toBe(p.device.id);
   expect((await ctx.db.select().from(fleetSourceAuthority))[0].sourceId).toBeNull();
   await fixture.client.assertClean();
