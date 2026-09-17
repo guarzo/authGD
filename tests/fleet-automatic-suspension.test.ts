@@ -184,7 +184,7 @@ async function claim(p: Awaited<ReturnType<typeof setup>>) {
   return value!;
 }
 // Detached stage witnesses test the settlement port, NOT cryptographic proof or
-// real HTTP provenance. S3 owns their trusted construction and real bind.
+// real HTTP provenance. The automatic-worker suite exercises that trusted path.
 function token(claim: AutomaticClaim): AutomaticToken {
   return {
     admission: "admitted",
@@ -452,6 +452,13 @@ it.each([
   const p = await setup();
   const c = await claim(p);
   const t = token(c);
+  const bound =
+    kind === "bound-rejected"
+      ? await automatic.bindFleetAutomaticDiscovery(ctx.db, t, 123, at(10000), () =>
+          at(3000),
+        )
+      : null;
+  if (kind === "bound-rejected") expect(bound).not.toBeNull();
   const bad: unknown =
     kind === "positive-rejected"
       ? { cause: "esi_membership_unauthorized", token: { ...t, admission: "rejected" } }
@@ -460,13 +467,7 @@ it.each([
         : kind === "bound-rejected"
           ? {
               cause: "esi_roster_unauthorized",
-              bound: {
-                token: { ...t, admission: "rejected" },
-                fleetId: 123,
-                linkedCharacters: [],
-                expectedAuthorityGeneration: 0,
-                membershipRetryAt: at(10000),
-              },
+              bound: { ...bound, token: { ...t, admission: "rejected" } },
             }
           : kind === "wrong-stage"
             ? { cause: "esi_roster_unauthorized", token: t }

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { and, eq, gt, inArray, lte, or, sql } from "drizzle-orm";
+import { and, eq, gt, inArray, isNotNull, lte, ne, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { Db, DbTx } from "@/db";
 import {
@@ -89,6 +89,7 @@ import {
   hasUsableFleetRead,
   invalidateFleetSources,
   lockFleetAccounts,
+  lockFleetAuthoritySlots,
   lockFleetIdentityCharacters,
   lockFleetLifecycle,
 } from "@/services/fleet-lifecycle";
@@ -100,16 +101,10 @@ import {
   sampleFleetSessionAdmission,
 } from "@/services/fleet-relay";
 import { currentSourceEvidence } from "@/services/fleet-shared-admission";
-
-/** Exact future port, deliberately no fake runtime bind until its real owner
- * implements predecessor/authority preparation. The compile proof uses this type. */
-export type BindFleetAutomaticDiscovery = (
-  db: Db,
-  token: AutomaticToken,
-  fleetId: number,
-  membershipRetryAt: Date,
-  clock?: () => Date,
-) => Promise<AutomaticBound | null>;
+import {
+  FleetLinkSnapshotOverflow,
+  MAX_FLEET_LINK_SNAPSHOT,
+} from "@/services/fleet-source-observation";
 
 const AutomaticTaskInput = z
   .object({
@@ -276,7 +271,7 @@ async function signedActor(tx: DbTx, raw: string) {
 /** Account sources, candidates and actor-device OR selections all contribute
  * dependencies before ANY identity/account lock. Relay publishers can belong to
  * another account; include them without turning them into mutation selectors. */
-type ControlTarget = { sourceId?: string; characterId?: number };
+type ControlTarget = { sourceId?: string; characterId?: number; fleetId?: number };
 async function probeControl(
   tx: DbTx,
   accountId: string,
@@ -291,6 +286,13 @@ async function probeControl(
         eq(fleetSourceIntent.accountId, accountId),
         target.sourceId ? eq(fleetSourceIntent.id, target.sourceId) : undefined,
         actorDeviceId ? eq(fleetSourceIntent.deviceId, actorDeviceId) : undefined,
+        target.fleetId === undefined
+          ? undefined
+          : and(
+              eq(fleetSourceIntent.fleetId, target.fleetId),
+              isNotNull(fleetSourceIntent.activatedAt),
+              ne(fleetSourceIntent.state, "ended"),
+            ),
       ),
     );
   const candidates = await tx
@@ -305,12 +307,24 @@ async function probeControl(
     ...sources.map((s) => s.id),
     ...(target.sourceId ? [target.sourceId] : []),
   ]);
-  const authorities = sourceIds.length
-    ? await tx
-        .select()
-        .from(fleetSourceAuthority)
-        .where(inArray(fleetSourceAuthority.sourceId, sourceIds))
-    : [];
+  const authorities =
+    sourceIds.length || target.fleetId !== undefined
+      ? await tx
+          .select()
+          .from(fleetSourceAuthority)
+          .where(
+            or(
+              sourceIds.length
+                ? inArray(fleetSourceAuthority.sourceId, sourceIds)
+                : undefined,
+              target.fleetId === undefined
+                ? undefined
+                : eq(fleetSourceAuthority.fleetId, target.fleetId),
+            ),
+          )
+      : [];
+  if (authorities.some((a) => a.sourceId && !sourceIds.includes(a.sourceId)))
+    throw new FleetLifecycleRetry();
   const relayPredicate = (t: typeof fleetTelemetryRow | typeof fleetPublisherLease) =>
     or(
       sourceIds.length ? inArray(t.sourceId, sourceIds) : undefined,
@@ -414,6 +428,16 @@ async function prepareControl(
     : [];
   if (browser && (!browserSession || browserSession.accountId !== accountId))
     throw new RelayRefusal("unauthorized");
+  if (target.fleetId !== undefined) {
+    // Include empty/discovered slots BEFORE any source/device wait. Paused
+    // predecessors still contribute every earlier identity/account selector.
+    await lockFleetAuthoritySlots(tx, [
+      target.fleetId,
+      ...p.sources.flatMap((s) => (s.fleetId === null ? [] : [s.fleetId])),
+      ...p.authorities.map((a) => a.fleetId),
+    ]);
+    await recheck();
+  }
   const locked = await lockFleetLifecycle(tx, {
     sourceIds: p.sourceIds,
     deviceIds: actorId ? [actorId] : [],
@@ -481,7 +505,11 @@ async function prepareSigned(
 /** Candidate-only transactions reuse the complete control probe, including all
  * boss/approver/sibling dependencies, but never mutate any source or authority.
  * Keys precede identities/accounts; changed earlier selectors retry OUTSIDE Tx. */
-async function prepareAutomaticDiscovery(tx: DbTx, task: AutomaticTask) {
+async function prepareAutomaticDiscovery(
+  tx: DbTx,
+  task: AutomaticTask,
+  fleetId?: number,
+) {
   const mode = await lockFleetSharingMode(tx);
   if (!mode.enabled || mode.keyIdentityPhase !== "ready") return null;
   const [consentProbe] = await tx
@@ -509,7 +537,7 @@ async function prepareAutomaticDiscovery(tx: DbTx, task: AutomaticTask) {
     task.accountId,
     { kind: "device", deviceId: deviceProbe.id },
     undefined,
-    { characterId: task.characterId },
+    { characterId: task.characterId, fleetId },
   );
   const [consent] = await tx
     .select()
@@ -680,6 +708,48 @@ export async function claimFleetAutomaticDiscovery(
       boss: p.boss,
       claimGeneration,
       claimExpiresAt,
+    };
+  });
+}
+
+/** Pre-roster binding only. No source intent or authority owner is allocated. */
+export async function bindFleetAutomaticDiscovery(
+  db: Db,
+  token: AutomaticToken,
+  fleetId: number,
+  membershipRetryAt: Date,
+  clock?: () => Date,
+): Promise<AutomaticBound | null> {
+  if (
+    !AutomaticTokenInput.safeParse(token).success ||
+    !PositiveIdSchema.safeParse(fleetId).success ||
+    !internalDate.safeParse(membershipRetryAt).success
+  )
+    return null;
+  const detached = structuredClone(token);
+  const retryAt = new Date(membershipRetryAt);
+  return fleetLifecycleTransaction(db, async (tx) => {
+    const p = await prepareAutomaticDiscovery(tx, detached.claim.task, fleetId);
+    if (!p) return null;
+    const links = await tx
+      .select({ characterId: character.id, linkEpoch: character.fleetLinkEpoch })
+      .from(character)
+      .orderBy(character.id)
+      .limit(MAX_FLEET_LINK_SNAPSHOT + 1);
+    if (links.length > MAX_FLEET_LINK_SNAPSHOT) throw new FleetLinkSnapshotOverflow();
+    const now = await fleetDatabaseNow(tx, clock?.());
+    if (!currentAutomaticToken(p, detached, now)) return null;
+    await tx.insert(fleetSourceAuthority).values({ fleetId }).onConflictDoNothing();
+    const [authority] = await tx
+      .select()
+      .from(fleetSourceAuthority)
+      .where(eq(fleetSourceAuthority.fleetId, fleetId));
+    return {
+      token: detached,
+      fleetId,
+      linkedCharacters: links,
+      expectedAuthorityGeneration: authority.authorityGeneration,
+      membershipRetryAt: retryAt,
     };
   });
 }

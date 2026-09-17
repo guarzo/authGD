@@ -7,13 +7,12 @@ import type {
   AutomaticVerified,
   AutomaticCommit,
 } from "@/core/fleet-automatic";
-import type { BindFleetAutomaticDiscovery } from "@/services/fleet-automatic";
+import { bindFleetAutomaticDiscovery as bind } from "@/services/fleet-automatic";
 
-/** Compile only; no fake bind implementation or runtime positive authority.
- * The actual future bind port's parameter, not a parallel lookalike, is checked. */
+/** Compile only; rejected evidence must fail against the ACTUAL runtime bind.
+ * Positive commit remains a future port, never a fabricated runtime owner. */
 export function automaticAdmissionTypeproof(
   db: Db,
-  bind: BindFleetAutomaticDiscovery,
   admitted: AutomaticToken,
   rejected: AutomaticRejectedToken,
   verified: AutomaticVerified,

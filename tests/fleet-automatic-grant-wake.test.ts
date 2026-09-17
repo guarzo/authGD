@@ -29,6 +29,7 @@ import {
 import type { AutomaticAuthLossProof, AutomaticTask } from "@/core/fleet-automatic";
 import { automaticCandidateAdmissible } from "@/core/fleet-automatic";
 import { runTokenHealthJob } from "@/jobs/token-health";
+import { attemptClaimedFleetAutomaticDiscovery } from "@/jobs/fleet-automatic";
 import { FLEET_READ_SCOPE } from "@/lib/esi/client";
 import { decryptToken } from "@/lib/crypto";
 import { verifyEveAccessToken } from "@/lib/esi/sso";
@@ -924,40 +925,59 @@ it.each(["failure", "reauth"] as const)(
     const input = await accepted();
     const before = await outside();
     const held = holdCommit(ctx.db);
-    const failure = (db: Db) =>
-      automatic.settleFleetAutomaticAuthorizationLoss(db, p.proof, at(120000), () =>
-        at(3000),
-      );
-    const reauth = (db: Db) =>
-      lifecycle.fleetLifecycleTransaction(db, (tx) => handleEveLogin(tx, cfg, input));
-    const a = first === "failure" ? failure(held.db) : reauth(held.db);
-    let b: Promise<unknown> | undefined;
+    const tokenReady = deferred<void>();
+    const verify = deferred<void>();
+    // Real refresh CAS and crypto verification construct the rejection. Pause
+    // only JWK delivery so both commit orders use the same actual old token.
+    const failure = attemptClaimedFleetAutomaticDiscovery(
+      {
+        db: first === "failure" ? held.db : ctx.db,
+        cfg,
+        now: () => at(3000),
+        fetchImpl: refreshFetch(await sign([])),
+        getKey: async (...args) => {
+          tokenReady.resolve();
+          await verify.promise;
+          return jwks(...args);
+        },
+      },
+      p.claim,
+    );
+    let reauth: Promise<unknown> | undefined;
     try {
-      const pid = await Promise.race([
-        held.ready,
-        a.then(() => {
-          throw new Error("writer completed without its commit barrier");
-        }),
-      ]);
-      b = first === "failure" ? reauth(ctx.db) : failure(ctx.db);
+      await tokenReady.promise;
+      if (first === "failure") verify.resolve();
+      else
+        reauth = lifecycle.fleetLifecycleTransaction(held.db, (tx) =>
+          handleEveLogin(tx, cfg, input),
+        );
+      const pid = await held.ready;
+      if (first === "failure")
+        reauth = lifecycle.fleetLifecycleTransaction(ctx.db, (tx) =>
+          handleEveLogin(tx, cfg, input),
+        );
+      else verify.resolve();
       expect(await waitUntilBlockedBy(ctx.pool, pid)).toBe(true);
-      // The uncommitted first writer is not visible to independent readers.
       expect(await candidate()).toEqual(old);
       held.release();
-      const results = await Promise.all([a, b]);
-      expect(results[first === "failure" ? 0 : 1]).toBe(
-        first === "failure" ? "suspended" : "fenced",
-      );
-      expect(await candidate()).toEqual(
-        first === "failure" ? { ...woken(old), nextAttemptAt: at(120000) } : old,
-      );
+      expect(await failure).toEqual({
+        result: first === "failure" ? "suspended" : "fenced",
+      });
+      await reauth;
+      if (first === "failure") {
+        const after = await candidate();
+        expect(after).toEqual({ ...woken(old), nextAttemptAt: after.nextAttemptAt });
+        expect(after.nextAttemptAt.getTime()).toBeGreaterThanOrEqual(at(33000).getTime());
+        expect(after.nextAttemptAt.getTime()).toBeLessThanOrEqual(at(36000).getTime());
+      } else expect(await candidate()).toEqual(old);
       expect(
         decryptToken((await bossRow()).refreshTokenEnc!, cfg.tokenEncryptionKey),
       ).toBe("accepted-reauth");
       expect(await outside()).toEqual(before);
     } finally {
+      verify.resolve();
       held.release();
-      await Promise.allSettled([a, ...(b ? [b] : [])]);
+      await Promise.allSettled([failure, ...(reauth ? [reauth] : [])]);
     }
   },
 );
