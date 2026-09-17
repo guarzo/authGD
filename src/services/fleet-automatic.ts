@@ -14,10 +14,13 @@ import {
   fleetSourceAuthority,
   fleetSourceIntent,
   fleetTelemetryRow,
+  outbox,
   session,
 } from "@/db/schema";
 import {
   AutomaticCommandSchema,
+  AutomaticTaskSchema,
+  reconcileAutomaticCandidateBinding,
   AutomaticGetSchema,
   AutomaticOffSchema,
   AutomaticReceiptSchema,
@@ -111,16 +114,9 @@ import {
   applyFleetAuthorityProof,
   FleetAuthorityProofRefusal,
 } from "@/services/fleet-source-observation";
+import { enqueueSync } from "@/services/outbox";
 
-const AutomaticTaskInput = z
-  .object({
-    accountId: ExistingUuidSchema,
-    characterId: PositiveIdSchema,
-    consentGeneration: PositiveIdSchema,
-    candidateGeneration: PositiveIdSchema,
-    reservationId: UuidV4Schema,
-  })
-  .strict();
+const AutomaticTaskInput = AutomaticTaskSchema;
 const internalDate = z
   .date()
   .refine((d) => d.getTime() >= 0 && IsoDateSchema.safeParse(d.toISOString()).success);
@@ -680,6 +676,289 @@ function candidateKey(task: AutomaticTask) {
     eq(fleetAutomaticCandidate.accountId, task.accountId),
     eq(fleetAutomaticCandidate.characterId, task.characterId),
   );
+}
+
+/** Discard only obsolete automatic delivery inputs, including rows inserted late
+ * after their reservation was superseded. Text comparisons avoid trusting jsonb
+ * casts; the current candidate/lease is the sole authority, not outbox age.
+ * This bounded prune also runs when consent is Off or the account is gone. */
+async function pruneAutomaticOutbox(db: Db, now: Date): Promise<void> {
+  await db.execute(sql`delete from ${outbox} where ${outbox.id} in (
+    select o.id from outbox o where o.dispatched_at is null
+      and o.payload->>'kind' = 'fleet-automatic'
+      and not exists (
+        select 1 from fleet_automatic_candidate c
+        where c.account_id::text = o.payload->>'accountId'
+          and c.character_id::text = o.payload->>'characterId'
+          and c.consent_generation::text = o.payload->>'consentGeneration'
+          and c.candidate_generation::text = o.payload->>'candidateGeneration'
+          and c.reservation_id::text = o.payload->>'reservationId'
+          and c.enqueue_until > ${now}
+      ) order by o.id limit 100 for update skip locked
+  )`);
+}
+async function automaticCatalogue(tx: DbTx, accountId: string) {
+  return tx
+    .select()
+    .from(character)
+    .where(eq(character.accountId, accountId))
+    .orderBy(character.id)
+    .limit(257);
+}
+async function reserveAutomaticAccount(
+  tx: DbTx,
+  accountId: string,
+  limit: number,
+  clock?: () => Date,
+): Promise<{ considered: number; reserved: number }> {
+  const empty = { considered: 0, reserved: 0 };
+  const mode = await lockFleetSharingMode(tx);
+  const [probe] = await tx
+    .select()
+    .from(fleetAutomaticConsent)
+    .where(eq(fleetAutomaticConsent.accountId, accountId));
+  if (!probe?.enabled) return empty;
+  const catalogue = await automaticCatalogue(tx, accountId);
+  const [deviceProbe] = await tx
+    .select()
+    .from(fleetDevice)
+    .where(eq(fleetDevice.id, probe.approvingDeviceId));
+  let canonicalKey: string | null = null;
+  if (deviceProbe && mode.keyIdentityPhase === "ready") {
+    try {
+      const key = await resolveFleetDeviceKey(tx, deviceProbe.publicKeySpkiB64, mode);
+      if (!key.unavailable && key.device?.id === deviceProbe.id) {
+        canonicalKey = key.canonicalKey;
+        await lockFleetDeviceKey(tx, canonicalKey);
+      }
+    } catch (err) {
+      if (!(err instanceof FleetDeviceKeyUnavailableError)) throw err;
+    }
+  }
+  const p = await prepareControl(
+    tx,
+    accountId,
+    { kind: "device", deviceId: probe.approvingDeviceId },
+    undefined,
+    { linkedIds: catalogue.length <= 256 ? catalogue.map((c) => c.id) : [] },
+  );
+  const [consent] = await tx
+    .select()
+    .from(fleetAutomaticConsent)
+    .where(eq(fleetAutomaticConsent.accountId, accountId));
+  if (consent && consent.approvingDeviceId !== probe.approvingDeviceId)
+    throw new FleetLifecycleRetry();
+  const current = await automaticCatalogue(tx, accountId);
+  // Account serialization prevents new links after this recheck. A newly linked
+  // character before the account wait must acquire its earlier identity selector
+  // on a fresh transaction, not be silently admitted from the old catalogue.
+  const bindings = (rows: typeof catalogue) =>
+    JSON.stringify(rows.map((c) => [c.id, c.ownerHash, c.fleetLinkEpoch]));
+  if (bindings(catalogue) !== bindings(current)) throw new FleetLifecycleRetry();
+  const [device] = await tx
+    .select()
+    .from(fleetDevice)
+    .where(eq(fleetDevice.id, probe.approvingDeviceId));
+  let validKey = false;
+  if (device && canonicalKey !== null) {
+    try {
+      const key = await resolveFleetDeviceKey(tx, device.publicKeySpkiB64, mode);
+      validKey =
+        !key.unavailable &&
+        key.device?.id === device.id &&
+        key.canonicalKey === canonicalKey;
+    } catch (err) {
+      if (!(err instanceof FleetDeviceKeyUnavailableError)) throw err;
+    }
+  }
+  const now = await fleetDatabaseNow(tx, clock?.());
+  if (!consent?.enabled || consent.nextReconcileAt > now) return empty;
+  const retry = checkedDateAdd(now.toISOString(), 30000);
+  const soon = checkedDateAdd(now.toISOString(), 500);
+  if (!retry || !soon) return empty;
+  const advance = async (
+    nextReconcileAt: Date,
+    candidateCursor = consent.candidateCursor,
+  ) => {
+    await tx
+      .update(fleetAutomaticConsent)
+      .set({ nextReconcileAt, candidateCursor })
+      .where(eq(fleetAutomaticConsent.accountId, accountId));
+  };
+  if (
+    !mode.enabled ||
+    mode.keyIdentityPhase !== "ready" ||
+    !validKey ||
+    p.accounts.get(accountId)?.tier !== "member" ||
+    !device ||
+    device.revokedAt ||
+    device.accountId !== accountId ||
+    !validFleetCapabilities(device.approvedCapabilities) ||
+    !device.approvedCapabilities.includes(SHARED_CAPABILITY) ||
+    current.length > 256
+  ) {
+    await advance(new Date(retry));
+    return empty;
+  }
+  const retained = await tx
+    .select()
+    .from(fleetAutomaticCandidate)
+    .where(eq(fleetAutomaticCandidate.accountId, accountId));
+  const byId = new Map(retained.map((c) => [c.characterId, c]));
+  const remaining = current.filter((c) => c.id > (consent.candidateCursor ?? 0));
+  const considered = remaining.slice(0, limit);
+  let reserved = 0;
+  let nextReconcileAt = new Date(retry);
+  for (const boss of considered) {
+    const old = byId.get(boss.id);
+    // Retained removed-character rows are not spare slots: deletion/recreation
+    // would pardon exhausted counters and old same-binding authorization loss.
+    if (!old && byId.size >= 256) continue;
+    let c = old
+      ? reconcileAutomaticCandidateBinding(old, boss, consent.generation)
+      : {
+          accountId,
+          characterId: boss.id,
+          consentGeneration: consent.generation,
+          candidateGeneration: 1,
+          ownerHash: boss.ownerHash,
+          linkEpoch: boss.fleetLinkEpoch,
+          nextAttemptAt: now,
+          failureCount: 0,
+          lastOutcome: null,
+          claimGeneration: 0,
+          ...clearDiscoveryCallbacks,
+        };
+    if (!c) continue;
+    const live = p.prepared.locked.sources.find(
+      (s) =>
+        s.state !== "ended" &&
+        s.accountId === accountId &&
+        s.deviceId === device.id &&
+        s.automaticConsentAccountId === accountId &&
+        s.automaticConsentGeneration === consent.generation &&
+        s.bossCharacterId === boss.id &&
+        s.bossOwnerHash === boss.ownerHash &&
+        s.bossLinkEpoch === boss.fleetLinkEpoch,
+    );
+    if (isAutomaticCandidateSuspended(c, boss)) {
+      c = { ...c, ...clearDiscoveryCallbacks };
+    } else if (
+      c.candidateGeneration >= Number.MAX_SAFE_INTEGER ||
+      c.claimGeneration >= Number.MAX_SAFE_INTEGER - 1
+    ) {
+      c = { ...c, ...clearDiscoveryCallbacks, lastOutcome: "capacity_limited" };
+    } else if (live) {
+      c = { ...c, ...clearDiscoveryCallbacks, sourceId: live.id };
+    } else {
+      // A terminal/purged pointer cannot revive a source. Callback recovery keeps
+      // both monotonic counters but the next reservation always gets a new UUID.
+      c = { ...c, sourceId: null };
+      if (c.enqueueUntil && c.enqueueUntil <= now)
+        c = { ...c, reservationId: null, enqueueUntil: null };
+      if (c.claimExpiresAt && c.claimExpiresAt <= now)
+        c = { ...c, claimReservationId: null, claimExpiresAt: null };
+      if (!hasUsableFleetRead(boss)) {
+        c = {
+          ...c,
+          ...clearDiscoveryCallbacks,
+          lastOutcome: "waiting_for_grant",
+          nextAttemptAt: new Date(Math.max(c.nextAttemptAt.getTime(), Date.parse(retry))),
+        };
+      } else if (
+        c.reservationId === null &&
+        c.claimReservationId === null &&
+        automaticCandidateAdmissible(c, boss, consent.generation, now)
+      ) {
+        const until = checkedDateAdd(now.toISOString(), 10000);
+        if (until) {
+          const reservationId = randomUUID();
+          c = { ...c, reservationId, enqueueUntil: new Date(until) };
+          await enqueueSync(tx, {
+            kind: "fleet-automatic",
+            accountId,
+            characterId: boss.id,
+            consentGeneration: c.consentGeneration,
+            candidateGeneration: c.candidateGeneration,
+            reservationId,
+          });
+          reserved++;
+        }
+      }
+      const due = c.enqueueUntil ?? c.claimExpiresAt ?? c.nextAttemptAt;
+      if (due > now && due < nextReconcileAt) nextReconcileAt = due;
+    }
+    if (old)
+      await tx
+        .update(fleetAutomaticCandidate)
+        .set(c)
+        .where(
+          and(
+            eq(fleetAutomaticCandidate.accountId, accountId),
+            eq(fleetAutomaticCandidate.characterId, boss.id),
+          ),
+        );
+    else await tx.insert(fleetAutomaticCandidate).values(c);
+    byId.set(boss.id, c);
+  }
+  // Partial scans resume promptly from the persisted cursor. Blocked rows count
+  // too; neither an old failed character nor an ineligible account owns the head.
+  const partial = considered.length < remaining.length;
+  if (partial) nextReconcileAt = new Date(soon);
+  else {
+    // Finishing a sweep resets the cursor, not the candidates. Fold retained
+    // timers (including earlier batches) without repeating eligibility work.
+    // Wrapping mid-batch would keep a >99-character no-grant account permanently
+    // on the 500ms partial-scan path instead of its required 30s rescan.
+    const currentIds = new Set(current.map((boss) => boss.id));
+    for (const c of byId.values()) {
+      if (!currentIds.has(c.characterId)) continue;
+      const callback = c.enqueueUntil ?? c.claimExpiresAt;
+      const due =
+        callback && callback <= now ? new Date(soon) : (callback ?? c.nextAttemptAt);
+      if (due > now && due < nextReconcileAt) nextReconcileAt = due;
+    }
+  }
+  await advance(
+    nextReconcileAt,
+    partial ? (considered.at(-1)?.id ?? consent.candidateCursor) : null,
+  );
+  return { considered: considered.length, reserved };
+}
+
+/** Persistence only — no provider, queue callback, job or scheduler activation.
+ * One tick spends at most 100 total account/candidate considerations, not 100
+ * successes per account. The due order and candidate cursor survive restarts. */
+export async function reserveDueFleetAutomatic(
+  db: Db,
+  clock?: () => Date,
+): Promise<number> {
+  const now = await db.transaction((tx) => fleetDatabaseNow(tx, clock?.()));
+  await pruneAutomaticOutbox(db, now);
+  const due = await db
+    .select({ accountId: fleetAutomaticConsent.accountId })
+    .from(fleetAutomaticConsent)
+    .where(
+      and(
+        eq(fleetAutomaticConsent.enabled, true),
+        lte(fleetAutomaticConsent.nextReconcileAt, now),
+      ),
+    )
+    .orderBy(fleetAutomaticConsent.nextReconcileAt, fleetAutomaticConsent.accountId)
+    .limit(100);
+  const share = Math.max(1, Math.floor(100 / Math.max(1, due.length)) - 1);
+  let budget = 100;
+  let reserved = 0;
+  for (const row of due) {
+    if (budget === 0) break;
+    budget--;
+    const result = await fleetLifecycleTransaction(db, (tx) =>
+      reserveAutomaticAccount(tx, row.accountId, Math.min(budget, share), clock),
+    );
+    budget -= result.considered;
+    reserved += result.reserved;
+  }
+  return reserved;
 }
 
 export async function claimFleetAutomaticDiscovery(
@@ -1537,13 +1816,18 @@ async function statusFor(
     .limit(257);
   if (
     grants.length > 256 ||
+    (facts.candidates.length >= 256 &&
+      grants.some((boss) => !facts.candidates.some((c) => c.characterId === boss.id))) ||
     facts.sources.filter((s) => s.state !== "ended").length >= 16 ||
     facts.sources.length >= 256 ||
-    candidates.some(
+    candidates.some((c) => c.lastOutcome === "capacity_limited") ||
+    // Exhausted retained task identities cannot be rebound into a newer consent.
+    // Filtering by consent first would hide capacity immediately after reOn.
+    facts.candidates.some(
       (c) =>
-        c.lastOutcome === "capacity_limited" ||
-        c.candidateGeneration === Number.MAX_SAFE_INTEGER ||
-        c.claimGeneration >= Number.MAX_SAFE_INTEGER - 1,
+        grants.some((boss) => boss.id === c.characterId) &&
+        (c.candidateGeneration === Number.MAX_SAFE_INTEGER ||
+          c.claimGeneration >= Number.MAX_SAFE_INTEGER - 1),
     )
   )
     return blocked("capacity_limited", "wait");

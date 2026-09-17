@@ -1,9 +1,12 @@
 import { z } from "zod";
 import type { outbox } from "@/db/schema";
+import type { AutomaticOutbox } from "@/core/fleet-automatic";
 import { isJobType, type JobType } from "@/core/schedules";
 
-/** Derived from the schema's payload column so the two can never drift. */
-export type OutboxPayload = typeof outbox.$inferSelect.payload;
+/** Existing payloads retain their schema-derived type. Automatic persistence is
+ * a strict service-boundary extension of the same jsonb column, not a migration
+ * or dispatch mapping; its job conversion belongs to the next runtime phase. */
+export type OutboxPayload = typeof outbox.$inferSelect.payload | AutomaticOutbox;
 
 /**
  * One job an outbox payload targets, plus whatever scoping the send needs.

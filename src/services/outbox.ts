@@ -1,6 +1,7 @@
 import { and, inArray, isNull, min, sql } from "drizzle-orm";
 import type { Dbx } from "@/db";
 import type { OutboxPayload } from "@/core/dispatch-plan";
+import { AutomaticOutboxSchema } from "@/core/fleet-automatic";
 import { outbox } from "@/db/schema";
 
 /** The one declaration lives in `@/core/dispatch-plan`; re-exported here so
@@ -8,7 +9,15 @@ import { outbox } from "@/db/schema";
 export type { OutboxPayload };
 
 export async function enqueueSync(dbx: Dbx, payload: OutboxPayload): Promise<void> {
-  await dbx.insert(outbox).values({ payload });
+  if (payload.kind === "fleet-automatic") {
+    const parsed = AutomaticOutboxSchema.safeParse(payload);
+    if (!parsed.success) throw new Error("fleet_automatic_payload_invalid");
+    // Parameterized JSON uses the existing column without changing its deployed
+    // schema. Credentials/extra fields are refused, never silently stripped.
+    await dbx
+      .insert(outbox)
+      .values({ payload: sql`${JSON.stringify(parsed.data)}::jsonb` });
+  } else await dbx.insert(outbox).values({ payload });
 }
 
 /**
@@ -28,6 +37,9 @@ export async function takeUndispatched(
     .where(
       and(
         isNull(outbox.dispatchedAt),
+        // P2 persists only. Existing dispatchers must not drop/ack future work
+        // before P3 supplies the complete positive job and retained owner.
+        sql`${outbox.payload}->>'kind' is distinct from 'fleet-automatic'`,
         scope === "all"
           ? undefined
           : scope === "fleet-source"

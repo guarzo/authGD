@@ -26,13 +26,20 @@ import { safeParseFleetV2Dto } from "./fleet-v2-validation";
 type Boss = Readonly<typeof character.$inferSelect>;
 type Candidate = Readonly<typeof fleetAutomaticCandidate.$inferSelect>;
 type Binding = Pick<Boss, "accountId" | "id" | "ownerHash" | "fleetLinkEpoch">;
-export type AutomaticTask = Readonly<{
-  accountId: string;
-  characterId: number;
-  consentGeneration: number;
-  candidateGeneration: number;
-  reservationId: string;
-}>;
+export const AutomaticTaskSchema = z
+  .object({
+    accountId: ExistingUuidSchema,
+    characterId: PositiveIdSchema,
+    consentGeneration: PositiveIdSchema,
+    candidateGeneration: PositiveIdSchema,
+    reservationId: UuidV4Schema,
+  })
+  .strict();
+export type AutomaticTask = Readonly<z.infer<typeof AutomaticTaskSchema>>;
+export const AutomaticOutboxSchema = AutomaticTaskSchema.extend({
+  kind: z.literal("fleet-automatic"),
+}).strict();
+export type AutomaticOutbox = Readonly<z.infer<typeof AutomaticOutboxSchema>>;
 export type AutomaticClaim = Readonly<{
   task: AutomaticTask;
   consentRevision: number;
@@ -123,7 +130,7 @@ const clearedAutomaticCallbacks = {
   claimExpiresAt: null,
   sourceId: null,
 };
-/** Future bounded scanner component only: no persistence, allocation or dispatch.
+/** Pure binding transition; the bounded scanner persists it under account locks.
  * Consent-only reconciliation must not recycle a failed grant or exhausted task. */
 export function reconcileAutomaticCandidateBinding(
   candidate: Candidate,
@@ -150,7 +157,7 @@ export function reconcileAutomaticCandidateBinding(
     ...(sameIdentity ? {} : { lastOutcome: null, failureCount: 0 }),
   };
 }
-/** Per-candidate half of admission, shared by claim and the future scanner.
+/** Per-candidate half of admission, shared by claim and the bounded scanner.
  * The transaction owner additionally proves mode, Member, grant and approver. */
 export function automaticCandidateAdmissible(
   candidate: Candidate,
