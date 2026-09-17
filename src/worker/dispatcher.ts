@@ -47,6 +47,27 @@ function sendFor(job: PlannedJob): {
 } {
   const queue = job.jobType;
   switch (job.scope) {
+    case "automatic": {
+      const {
+        accountId,
+        characterId,
+        consentGeneration,
+        candidateGeneration,
+        reservationId,
+      } = job;
+      return {
+        queue,
+        data: {
+          jobType: queue,
+          accountId,
+          characterId,
+          consentGeneration,
+          candidateGeneration,
+          reservationId,
+        },
+        singletonKey: `fleet-automatic:${accountId}:${characterId}:${consentGeneration}:${candidateGeneration}:${reservationId}`,
+      };
+    }
     case "source":
       return {
         queue,

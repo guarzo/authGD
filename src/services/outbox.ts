@@ -1,4 +1,4 @@
-import { and, inArray, isNull, min, sql } from "drizzle-orm";
+import { and, inArray, isNull, min, notInArray, sql, type SQL } from "drizzle-orm";
 import type { Dbx } from "@/db";
 import type { OutboxPayload } from "@/core/dispatch-plan";
 import { AutomaticOutboxSchema } from "@/core/fleet-automatic";
@@ -31,26 +31,50 @@ export async function takeUndispatched(
   limit = 100,
   scope: "all" | "scheduled" | "fleet-source" = "all",
 ): Promise<Array<{ id: number; payload: OutboxPayload }>> {
-  const rows = await dbx
-    .select()
-    .from(outbox)
-    .where(
-      and(
-        isNull(outbox.dispatchedAt),
-        // P2 persists only. Existing dispatchers must not drop/ack future work
-        // before P3 supplies the complete positive job and retained owner.
-        sql`${outbox.payload}->>'kind' is distinct from 'fleet-automatic'`,
-        scope === "all"
-          ? undefined
-          : scope === "fleet-source"
-            ? sql`${outbox.payload}->>'kind' = 'fleet-source'`
-            : sql`${outbox.payload}->>'kind' is distinct from 'fleet-source'`,
-      ),
-    )
-    .orderBy(outbox.id)
-    .limit(limit)
-    .for("update", { skipLocked: true });
-  return rows.map((r) => ({ id: r.id, payload: r.payload }));
+  if (limit <= 0) return [];
+  const active = sql`${outbox.payload}->>'kind' = 'fleet-source'`;
+  const automatic = sql`${outbox.payload}->>'kind' = 'fleet-automatic'`;
+  const scheduled = sql`${outbox.payload}->>'kind' is distinct from 'fleet-source' and ${outbox.payload}->>'kind' is distinct from 'fleet-automatic'`;
+  const allowed =
+    scope === "all"
+      ? undefined
+      : scope === "scheduled"
+        ? scheduled
+        : sql`(${active} or ${automatic})`;
+  const rows: Array<{ id: number; payload: OutboxPayload }> = [];
+  const take = async (count: number, filter?: SQL) => {
+    if (count <= 0) return;
+    rows.push(
+      ...(await dbx
+        .select({ id: outbox.id, payload: outbox.payload })
+        .from(outbox)
+        .where(
+          and(
+            isNull(outbox.dispatchedAt),
+            filter,
+            rows.length
+              ? notInArray(
+                  outbox.id,
+                  rows.map((r) => r.id),
+                )
+              : undefined,
+          ),
+        )
+        .orderBy(outbox.id)
+        .limit(count)
+        .for("update", { skipLocked: true })),
+    );
+  };
+  if (scope !== "scheduled") {
+    // Reserve progress BEFORE oldest-first fill. Separate queue callbacks alone
+    // cannot help a source behind 100 older discovery rows in this table.
+    const share = Math.floor(limit / (scope === "all" ? 3 : 2));
+    await take(Math.max(1, share), active);
+    await take(Math.min(share, limit - rows.length), automatic);
+    if (scope === "all") await take(Math.min(share, limit - rows.length), scheduled);
+  }
+  await take(limit - rows.length, allowed);
+  return rows;
 }
 
 export type UndispatchedRow = {

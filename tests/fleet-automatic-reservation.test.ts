@@ -1238,7 +1238,7 @@ it.each(["extra", "fraction", "boolean", "unsafe", "uuid", "zero"] as const)(
 );
 
 it.each(["all", "scheduled", "fleet-source"] as const)(
-  "P2 automatic persistence stays unconsumed by existing %s dispatcher while manual work proceeds",
+  "P3 %s dispatch includes complete automatic tasks only in fleet scopes while manual work proceeds",
   async (scope) => {
     const p = await enroll();
     await reserve(p.now);
@@ -1249,8 +1249,14 @@ it.each(["all", "scheduled", "fleet-source"] as const)(
     });
     await enqueueSync(ctx.db, { kind: "all" });
     const send = vi.fn().mockResolvedValue("id");
-    expect(await dispatchOutbox(ctx.db, send, scope)).toBe(scope === "all" ? 2 : 1);
-    expect(send.mock.calls.every(([queue]) => queue !== "fleet-automatic")).toBe(true);
-    expect((await automaticOutbox())[0].dispatchedAt).toBeNull();
+    expect(await dispatchOutbox(ctx.db, send, scope)).toBe(
+      scope === "all" ? 3 : scope === "scheduled" ? 1 : 2,
+    );
+    expect(send.mock.calls.some(([queue]) => queue === "fleet-automatic")).toBe(
+      scope !== "scheduled",
+    );
+    expect((await automaticOutbox())[0].dispatchedAt === null).toBe(
+      scope === "scheduled",
+    );
   },
 );

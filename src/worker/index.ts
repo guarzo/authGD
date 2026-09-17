@@ -10,11 +10,9 @@ import { startDispatcher } from "@/worker/dispatcher";
 import {
   createFleetSourceOwner,
   startFleetSourceScheduler,
+  runFleetSourceTick,
+  startFleetAutomaticWork,
 } from "@/worker/fleet-source-scheduler";
-import {
-  cleanupFleetSources,
-  reserveDueFleetSources,
-} from "@/services/fleet-source-maintenance";
 import { buildJobHandlers } from "@/worker/handlers";
 import { QUEUES, createQueues, scheduleJobs } from "@/worker/queues";
 
@@ -67,14 +65,15 @@ async function main(): Promise<void> {
   });
   // pg-boss v10 handlers receive an ARRAY of jobs.
   for (const [queue, handler] of Object.entries(handlers)) {
-    const owned = queue === QUEUES.fleetSource ? sourceOwner.wrap(handler) : handler;
-    await boss.work(
-      queue,
-      queue === QUEUES.fleetSource ? { pollingIntervalSeconds: 0.5 } : {},
-      async (jobs) => {
-        for (const job of jobs) await owned(job.data);
-      },
-    );
+    if (queue === QUEUES.fleetAutomatic) {
+      await startFleetAutomaticWork(boss, sourceOwner, handler);
+      continue;
+    }
+    const fleet = queue === QUEUES.fleetSource;
+    const owned = fleet ? sourceOwner.wrap(handler) : handler;
+    await boss.work(queue, fleet ? { pollingIntervalSeconds: 0.5 } : {}, async (jobs) => {
+      for (const job of jobs) await owned(job.data);
+    });
   }
 
   // Ops alerting (spec: Error handling): a job landing here exhausted its
@@ -105,10 +104,12 @@ async function main(): Promise<void> {
   ) => boss.send(queue, data, options);
   const stopDispatcher = startDispatcher(db, send, 2000, "scheduled");
   const stopSourceDispatcher = startDispatcher(db, send, 500, "fleet-source");
-  const stopSourceScheduler = startFleetSourceScheduler(async () => {
-    await cleanupFleetSources(db);
-    await reserveDueFleetSources(db);
-  });
+  const stopSourceScheduler = startFleetSourceScheduler(() =>
+    runFleetSourceTick(
+      { db, cfg, esi, signal: sourceOwner.signal },
+      sourceOwner.canDiscover,
+    ),
+  );
 
   let shuttingDown = false;
   const shutdown = async (): Promise<void> => {
@@ -122,6 +123,7 @@ async function main(): Promise<void> {
       // Stop admitting source work before draining, but leave BOTH resource
       // pools open until the original callback's credential CAS has settled.
       await boss.offWork(QUEUES.fleetSource);
+      await boss.offWork(QUEUES.fleetAutomatic);
       await sourceOwner.drain();
       await boss.stop({ graceful: true, wait: true });
       await pool.end();

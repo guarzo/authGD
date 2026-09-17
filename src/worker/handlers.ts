@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { AutomaticJobSchema } from "@/core/fleet-automatic";
+import { runFleetAutomaticJob } from "@/jobs/fleet-automatic";
 import type { Config } from "@/config";
 import type { Db } from "@/db";
 import { runAccessListsJob } from "@/jobs/access-lists";
@@ -83,6 +85,27 @@ export function buildJobHandlers(
 ): Record<string, (data: unknown) => Promise<void>> {
   const memory = deps.fleetSource?.memory ?? createFleetSourceMemory();
   return {
+    [QUEUES.fleetAutomatic]: async (data) => {
+      const parsed = AutomaticJobSchema.safeParse(data);
+      if (!parsed.success) throw new Error("fleet_automatic_payload_invalid");
+      const {
+        accountId,
+        characterId,
+        consentGeneration,
+        candidateGeneration,
+        reservationId,
+      } = parsed.data;
+      await runFleetAutomaticJob(
+        {
+          db: deps.db,
+          cfg: deps.cfg,
+          fetchImpl: deps.fetchImpl,
+          ...deps.fleetSource,
+          memory,
+        },
+        { accountId, characterId, consentGeneration, candidateGeneration, reservationId },
+      );
+    },
     [QUEUES.fleetSource]: async (data) => {
       const parsed = z
         .object({

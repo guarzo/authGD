@@ -1,11 +1,14 @@
 import { z } from "zod";
 import type { outbox } from "@/db/schema";
-import type { AutomaticOutbox } from "@/core/fleet-automatic";
+import {
+  AutomaticOutboxSchema,
+  type AutomaticOutbox,
+  type AutomaticJob,
+} from "@/core/fleet-automatic";
 import { isJobType, type JobType } from "@/core/schedules";
 
 /** Existing payloads retain their schema-derived type. Automatic persistence is
- * a strict service-boundary extension of the same jsonb column, not a migration
- * or dispatch mapping; its job conversion belongs to the next runtime phase. */
+ * a strict service-boundary extension of the same jsonb column, not a migration. */
 export type OutboxPayload = typeof outbox.$inferSelect.payload | AutomaticOutbox;
 
 /**
@@ -26,6 +29,7 @@ export type OutboxPayload = typeof outbox.$inferSelect.payload | AutomaticOutbox
  * `sendFor`'s switch exhaustively checkable.
  */
 export type PlannedJob =
+  | (AutomaticJob & { scope: "automatic" })
   | { scope: "source"; jobType: "fleet-source"; sourceId: string; generation: number }
   | { scope: "global"; jobType: JobType }
   | { scope: "account"; jobType: JobType; accountId: string }
@@ -48,6 +52,28 @@ export function jobsFor(payload: OutboxPayload): PlannedJob[] {
   if (raw === null || typeof raw !== "object" || !("kind" in raw)) return [];
 
   switch (payload.kind) {
+    case "fleet-automatic": {
+      const parsed = AutomaticOutboxSchema.safeParse(payload);
+      if (!parsed.success) return [];
+      const {
+        accountId,
+        characterId,
+        consentGeneration,
+        candidateGeneration,
+        reservationId,
+      } = parsed.data;
+      return [
+        {
+          scope: "automatic",
+          jobType: "fleet-automatic",
+          accountId,
+          characterId,
+          consentGeneration,
+          candidateGeneration,
+          reservationId,
+        },
+      ];
+    }
     case "fleet-source": {
       const parsed = z
         .object({

@@ -4,6 +4,7 @@ import type {
   AutomaticClaim,
   AutomaticRetryFailure,
   AutomaticToken,
+  AutomaticTask,
   AutomaticVerified,
 } from "@/core/fleet-automatic";
 import {
@@ -13,6 +14,8 @@ import {
 } from "@/core/fleet-freshness";
 import {
   bindFleetAutomaticDiscovery,
+  claimFleetAutomaticDiscovery,
+  commitFleetAutomaticDiscovery,
   settleFleetAutomaticAuthorizationLoss,
   settleFleetAutomaticDiscovery,
 } from "@/services/fleet-automatic";
@@ -32,7 +35,31 @@ export type FleetAutomaticAttempt =
     }
   | { readonly result: "suspended" | "fenced" | "settled" };
 
-/** Bounded claimed-attempt phase, NOT a queue job. A future owner must consume
+/** The queue callback owns claim, upstream, and final commit as one original
+ * promise. In particular, UNCOMMITTED is never a successful queue completion. */
+export async function runFleetAutomaticJob(
+  deps: FleetSourceDeps,
+  task: AutomaticTask,
+): Promise<void> {
+  try {
+    if (deps.signal?.aborted) return;
+    const claim = await claimFleetAutomaticDiscovery(deps.db, task, deps.now);
+    if (!claim) return;
+    const result = await attemptClaimedFleetAutomaticDiscovery(deps, claim);
+    if (result.result === "UNCOMMITTED")
+      await commitFleetAutomaticDiscovery(
+        deps.db,
+        result.bound,
+        result.verified,
+        deps.now,
+      );
+  } catch {
+    // Queue output must never serialize DB parameters, tokens or provider text.
+    throw new Error("fleet_automatic_job_failed");
+  }
+}
+
+/** Bounded claimed-attempt phase, NOT a queue job. The full job consumes
  * UNCOMMITTED through the guarded positive commit. No scheduler, source intent,
  * positive authority, reservation or outbox is created here. "settled" means the
  * guarded retry port completed; it does not claim a stale callback changed rows. */

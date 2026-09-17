@@ -40,6 +40,10 @@ export const AutomaticOutboxSchema = AutomaticTaskSchema.extend({
   kind: z.literal("fleet-automatic"),
 }).strict();
 export type AutomaticOutbox = Readonly<z.infer<typeof AutomaticOutboxSchema>>;
+export const AutomaticJobSchema = AutomaticTaskSchema.extend({
+  jobType: z.literal("fleet-automatic"),
+}).strict();
+export type AutomaticJob = Readonly<z.infer<typeof AutomaticJobSchema>>;
 export type AutomaticClaim = Readonly<{
   task: AutomaticTask;
   consentRevision: number;
