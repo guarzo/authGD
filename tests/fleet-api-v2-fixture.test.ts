@@ -4,6 +4,23 @@ import { afterAll, describe, expect, it } from "vitest";
 import type { z } from "zod";
 import { safeParseFleetV2Dto } from "@/core/fleet-v2-validation";
 import {
+  AutomaticGetSchema,
+  AutomaticResultSchema,
+  ReceiptGetSchema,
+  SourcesGetSchema,
+  SourceStartSchema,
+  SourceStopSchema,
+  SourceStartResultSchema,
+  SourceStopResultSchema,
+  AutomaticCommandSchema,
+  SourceViewSchema,
+  AutomaticStatusSchema,
+  ConsentSchema,
+  parseAutomaticResult,
+  parseSourceStartResult,
+  parseSourceStopResult,
+} from "@/core/fleet-automatic";
+import {
   CatalogueGetSchema,
   CatalogueRevisionSchema,
   pairingBegunSchema,
@@ -50,6 +67,7 @@ import { pairingChallengePreimage } from "@/services/fleet-pairing";
 import {
   fixtureField,
   materializeCodec,
+  materializeCommand,
   materializeList,
   type CodecVector,
   type FixturePath,
@@ -125,6 +143,18 @@ const fixture = JSON.parse(fixtureBytes.toString("utf8")) as Fixture;
 const originalFixture = structuredClone(fixture);
 
 const schemas: Record<string, z.ZodType> = {
+  automatic_get: AutomaticGetSchema,
+  automatic_result: AutomaticResultSchema,
+  receipt_get: ReceiptGetSchema,
+  sources: SourcesGetSchema,
+  source_start: SourceStartSchema,
+  source_stop: SourceStopSchema,
+  source_start_result: SourceStartResultSchema,
+  source_stop_result: SourceStopResultSchema,
+  automatic_command: AutomaticCommandSchema,
+  source: SourceViewSchema,
+  status: AutomaticStatusSchema,
+  consent: ConsentSchema,
   catalogue: CatalogueGetSchema,
   pairing_completed: PairingCompletedSchema,
   pairing_begun: pairingBegunSchema("https://relay.example.test"),
@@ -143,23 +173,11 @@ const schemas: Record<string, z.ZodType> = {
   error: FleetV2ErrorSchema,
   integer: SafeIntegerSchema,
 };
-// No acceptance tests are registered for these families: the v2 DTO/context
-// helpers do not exist yet. Counts are derived in fixture-execution-report.md.
-const unimplemented = [
-  "automatic_get",
-  "automatic_result",
-  "receipt_get",
-  "sources",
-  "source_start",
-  "source_stop",
-  "source_start_result",
-  "source_stop_result",
-  "automatic_command",
-  "source",
-  "status",
-  "consent",
-];
-const supported = (vector: { decoder: string }) => Object.hasOwn(schemas, vector.decoder);
+const contextParsers = {
+  automatic_result: parseAutomaticResult,
+  source_start_result: parseSourceStartResult,
+  source_stop_result: parseSourceStopResult,
+};
 const vectorGroups = [fixture.codec_vectors, fixture.raw_vectors, fixture.list_vectors];
 const allFamilies = new Set([
   ...vectorGroups.flatMap((group) => group.map((vector) => vector.decoder)),
@@ -192,10 +210,17 @@ function assertDto(
     expect?: unknown;
   },
   value: unknown,
+  command?: unknown,
 ): void {
   const schema = schemas[vector.decoder];
   if (!schema) throw new Error(`No implemented decoder: ${vector.decoder}`);
-  const result = safeParseFleetV2Dto(schema, value);
+  const contextParser = contextParsers[vector.decoder as keyof typeof contextParsers];
+  if (command !== undefined && !contextParser)
+    throw new Error(`No context validator: ${vector.decoder}`);
+  const result =
+    command === undefined
+      ? safeParseFleetV2Dto(schema, value)
+      : contextParser(value, command);
   expect(result.success, result.success ? "accepted DTO" : result.error.message).toBe(
     vector.accept,
   );
@@ -238,20 +263,18 @@ function decodeRaw(vector: RawVector) {
 it("pins the approved fixture bytes", () => {
   expect(sha256(fixtureBytes)).toBe(approvedSha256);
 });
-it("exhaustively dispatches implemented families or explicitly manifests unimplemented DTOs", () => {
-  const manifest = [...Object.keys(schemas), ...unimplemented];
+it("exhaustively dispatches every fixture family and command context", () => {
+  const manifest = Object.keys(schemas);
   expect(new Set(manifest).size).toBe(manifest.length);
   expect(manifest.sort()).toEqual([...allFamilies].sort());
   expect(Object.keys(rawBudgets).sort()).toEqual(
     [...new Set(fixture.raw_vectors.map((v) => v.decoder))].sort(),
   );
-  for (const vector of fixture.codec_vectors.filter(supported)) {
-    // Context-bearing schemas must be implemented before adding their family.
-    expect(vector.command, vector.name).toBeUndefined();
-    expect(vector.command_set, vector.name).toBeUndefined();
-  }
-  for (const vector of fixture.raw_vectors.filter((v) => !supported(v))) {
-    expect(vector.decoded_fields?.length, vector.name).toBeGreaterThan(0);
+  for (const vector of fixture.codec_vectors) {
+    if (vector.command !== undefined || vector.command_set !== undefined) {
+      expect(Object.hasOwn(contextParsers, vector.decoder), vector.name).toBe(true);
+      expect(materializeCommand(vector), vector.name).toBeDefined();
+    }
   }
 });
 
@@ -262,28 +285,23 @@ afterAll(() => {
 });
 
 describe("approved codec vectors through the combined production DTO boundary", () => {
-  it.each(fixture.codec_vectors.filter(supported))("$name", (vector) => {
-    assertDto(vector, materializeCodec(fixture.valid, vector));
+  it.each(fixture.codec_vectors)("$name", (vector) => {
+    assertDto(
+      vector,
+      materializeCodec(fixture.valid, vector),
+      materializeCommand(vector),
+    );
   });
 });
 describe("approved raw vectors: exact decoder then production DTO", () => {
-  it.each(fixture.raw_vectors.filter(supported))("$name", (vector) => {
+  it.each(fixture.raw_vectors)("$name", (vector) => {
     const parsed = decodeRaw(vector);
     if (parsed.ok) assertDto(vector, parsed.value);
     else expect(vector.accept).toBe(false);
   });
 });
-describe("raw decoding only — source_stop DTO acceptance remains unimplemented", () => {
-  it.each(fixture.raw_vectors.filter((vector) => !supported(vector)))(
-    "$name (decoded_fields only)",
-    (vector) => {
-      const parsed = decodeRaw(vector);
-      expect(parsed.ok).toBe(true);
-    },
-  );
-});
 describe("approved list recipes through the combined production DTO boundary", () => {
-  it.each(fixture.list_vectors.filter(supported))(
+  it.each(fixture.list_vectors)(
     "$name",
     (vector) => {
       assertDto(vector, materializeList(fixture.valid, vector));

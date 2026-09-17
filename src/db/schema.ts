@@ -13,11 +13,22 @@ import {
   text,
   timestamp,
   unique,
+  uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import type { ContactSyncResult } from "@/core/contact-result";
 import { COMBAT_LIMITS } from "../core/fleet-combat-profile";
+import type {
+  AutomaticReceipt,
+  SourceStopReceipt,
+  Consent,
+} from "../core/fleet-automatic";
+import {
+  fleetAutomaticReceiptCheck,
+  fleetFiniteDate,
+  fleetStopReceiptCheck,
+} from "./fleet-automatic-checks";
 
 export type StoredCombatEffect = {
   kind: "SCRAM" | "POINT" | "NEUT";
@@ -893,6 +904,153 @@ export const fleetDeviceSession = pgTable(
   (t) => [index("fleet_device_session_expires_at_idx").on(t.expiresAt)],
 );
 
+/** Positive saved consent only. No row is the exact virtual generation/revision
+ * zero Off — pairing, grants and manual sources never backfill approval. Enabled
+ * consent itself owns the terminal receipt reservation; there is no quota counter
+ * to drift. Approval attribution is retained even after device revocation/deletion.
+ * The control transaction must preserve it within a generation under account lock.
+ */
+export const fleetAutomaticConsent = pgTable(
+  "fleet_automatic_consent",
+  {
+    accountId: uuid("account_id")
+      .primaryKey()
+      .references(() => account.id, { onDelete: "cascade" }),
+    generation: bigint("generation", { mode: "number" }).notNull(),
+    revision: bigint("revision", { mode: "number" }).notNull(),
+    enabled: boolean("enabled").notNull(),
+    approvingDeviceId: uuid("approving_device_id").notNull(),
+    approvedAt: timestamp("approved_at", { withTimezone: true }).notNull(),
+    disabledAt: timestamp("disabled_at", { withTimezone: true }),
+    closedReason: text("closed_reason").$type<Consent["closed_reason"]>(),
+    nextReconcileAt: timestamp("next_reconcile_at", { withTimezone: true }).notNull(),
+    candidateCursor: bigint("candidate_cursor", { mode: "number" }),
+  },
+  (t) => [
+    index("fleet_automatic_consent_due_idx")
+      .on(t.nextReconcileAt, t.accountId)
+      .where(sql`${t.enabled}`),
+    check(
+      "fleet_automatic_consent_counters_ck",
+      sql`${t.generation} BETWEEN 1 AND 9007199254740991 AND ${t.revision} BETWEEN ${t.generation} AND 9007199254740991 AND (NOT ${t.enabled} OR ${t.revision} < 9007199254740991)`,
+    ),
+    check(
+      "fleet_automatic_consent_state_ck",
+      sql`((${t.enabled} AND ${t.disabledAt} IS NULL AND ${t.closedReason} IS NULL) OR (NOT ${t.enabled} AND ${t.disabledAt} IS NOT NULL AND ${t.disabledAt} >= ${t.approvedAt} AND ${t.closedReason} IS NOT NULL AND ${t.closedReason} IN ('explicit_off', 'source_stop', 'approver_revoked'))) IS TRUE`,
+    ),
+    check(
+      "fleet_automatic_consent_dates_ck",
+      sql`${fleetFiniteDate(sql`${t.approvedAt}`)} AND ${fleetFiniteDate(sql`${t.nextReconcileAt}`)} AND (${t.disabledAt} IS NULL OR ${fleetFiniteDate(sql`${t.disabledAt}`)})`,
+    ),
+    check(
+      "fleet_automatic_consent_cursor_ck",
+      sql`${t.candidateCursor} IS NULL OR ${t.candidateCursor} BETWEEN 1 AND 9007199254740991`,
+    ),
+  ],
+);
+
+/** Immutable historical receipt; indexed expiry is checked against the payload.
+ * Account serialization (next slice) owns H+R<=256 and cross-store UUID identity;
+ * neither a row CHECK nor a JSON $type can enforce those transaction invariants.
+ */
+export const fleetAutomaticReceipt = pgTable(
+  "fleet_automatic_receipt",
+  {
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => account.id, { onDelete: "cascade" }),
+    requestId: uuid("request_id").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    receipt: jsonb("receipt").$type<AutomaticReceipt>().notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.accountId, t.requestId] }),
+    index("fleet_automatic_receipt_expiry_idx").on(t.expiresAt),
+    check(
+      "fleet_automatic_receipt_payload_ck",
+      fleetAutomaticReceiptCheck(
+        sql`${t.receipt}`,
+        sql`${t.requestId}`,
+        sql`${t.expiresAt}`,
+      ),
+    ),
+  ],
+);
+
+/** Storage only — no scheduler, reservation writer, outbox kind or job is added.
+ * Retained candidate/claim counters cannot be recycled by a later consent. A
+ * terminal Gmax row is valid only without an outstanding reservation or claim.
+ * Source pointers and immutable owner/link bindings are rechecked by the future
+ * account-serialized runtime owner, never inferred from a cascading source FK.
+ */
+export const fleetAutomaticCandidate = pgTable(
+  "fleet_automatic_candidate",
+  {
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => account.id, { onDelete: "cascade" }),
+    characterId: bigint("character_id", { mode: "number" }).notNull(),
+    consentGeneration: bigint("consent_generation", { mode: "number" }).notNull(),
+    candidateGeneration: bigint("candidate_generation", { mode: "number" }).notNull(),
+    ownerHash: text("owner_hash").notNull(),
+    linkEpoch: uuid("link_epoch").notNull(),
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).notNull(),
+    failureCount: integer("failure_count").notNull().default(0),
+    lastOutcome: text("last_outcome").$type<
+      | "not_in_fleet"
+      | "not_boss"
+      | "fleet_read_invalid"
+      | "identity_changed"
+      | "service_unavailable"
+      | "untrustworthy_evidence"
+      | "timed_out"
+      | "capacity_limited"
+      | "verified"
+      | "waiting_for_grant"
+    >(),
+    reservationId: uuid("reservation_id"),
+    enqueueUntil: timestamp("enqueue_until", { withTimezone: true }),
+    claimReservationId: uuid("claim_reservation_id"),
+    claimGeneration: bigint("claim_generation", { mode: "number" }).notNull().default(0),
+    claimExpiresAt: timestamp("claim_expires_at", { withTimezone: true }),
+    sourceId: uuid("source_id"),
+  },
+  (t) => [
+    primaryKey({ columns: [t.accountId, t.characterId] }),
+    index("fleet_automatic_candidate_due_idx").on(
+      t.nextAttemptAt,
+      t.accountId,
+      t.characterId,
+    ),
+    check(
+      "fleet_automatic_candidate_counters_ck",
+      sql`${t.characterId} BETWEEN 1 AND 9007199254740991 AND ${t.consentGeneration} BETWEEN 1 AND 9007199254740991 AND ${t.candidateGeneration} BETWEEN 1 AND 9007199254740991 AND ${t.claimGeneration} BETWEEN 0 AND 9007199254740991 AND ${t.failureCount} BETWEEN 0 AND 6`,
+    ),
+    check(
+      "fleet_automatic_candidate_outcome_ck",
+      sql`${t.lastOutcome} IS NULL OR ${t.lastOutcome} IN ('not_in_fleet', 'not_boss', 'fleet_read_invalid', 'identity_changed', 'service_unavailable', 'untrustworthy_evidence', 'timed_out', 'capacity_limited', 'verified', 'waiting_for_grant')`,
+    ),
+    check(
+      "fleet_automatic_candidate_reservation_ck",
+      sql`(${t.reservationId} IS NULL) = (${t.enqueueUntil} IS NULL) AND (${t.claimReservationId} IS NULL) = (${t.claimExpiresAt} IS NULL) AND (${t.reservationId} IS NULL OR ${t.claimReservationId} IS NULL) AND (${t.claimReservationId} IS NULL OR ${t.claimGeneration} > 0) AND ((${t.reservationId} IS NULL AND ${t.claimReservationId} IS NULL) OR (${t.candidateGeneration} < 9007199254740991 AND ${t.claimGeneration} < 9007199254740991))`,
+    ),
+    check(
+      "fleet_automatic_candidate_uuid_ck",
+      sql`${sql.join(
+        [t.reservationId, t.claimReservationId, t.sourceId].map(
+          (column) =>
+            sql`(${column} IS NULL OR ${column}::text ~ '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$')`,
+        ),
+        sql` AND `,
+      )}`,
+    ),
+    check(
+      "fleet_automatic_candidate_dates_ck",
+      sql`${fleetFiniteDate(sql`${t.nextAttemptAt}`)} AND (${t.enqueueUntil} IS NULL OR ${fleetFiniteDate(sql`${t.enqueueUntil}`)}) AND (${t.claimExpiresAt} IS NULL OR ${fleetFiniteDate(sql`${t.claimExpiresAt}`)})`,
+    ),
+  ],
+);
+
 /** Immutable consent bindings intentionally have NO cascading FKs. Ended intents
  * are retry fences, including after character/account/device deletion. A later
  * Start must still bound intentCreatedAt after retention cleanup (Task 4).
@@ -906,6 +1064,12 @@ export const fleetSourceIntent = pgTable(
     bossCharacterId: bigint("boss_character_id", { mode: "number" }),
     bossOwnerHash: text("boss_owner_hash"),
     bossLinkEpoch: uuid("boss_link_epoch"),
+    automaticConsentAccountId: uuid("automatic_consent_account_id"),
+    automaticConsentGeneration: bigint("automatic_consent_generation", {
+      mode: "number",
+    }),
+    stopReceipt: jsonb("stop_receipt").$type<SourceStopReceipt>(),
+    explicitlyStopped: boolean("explicitly_stopped").notNull().default(false),
     generation: integer("generation").notNull().default(1),
     state: text("state").$type<"pending" | "active" | "paused" | "ended">().notNull(),
     intentCreatedAt: timestamp("intent_created_at", { withTimezone: true }).notNull(),
@@ -925,6 +1089,40 @@ export const fleetSourceIntent = pgTable(
     retainUntil: timestamp("retain_until", { withTimezone: true }).notNull(),
   },
   (t) => [
+    uniqueIndex("fleet_source_intent_automatic_live_uq")
+      .on(t.accountId, t.automaticConsentGeneration, t.bossCharacterId, t.bossLinkEpoch)
+      .where(sql`${t.automaticConsentGeneration} IS NOT NULL AND ${t.state} <> 'ended'`),
+    check(
+      "fleet_source_intent_automatic_binding_ck",
+      sql`((${t.automaticConsentAccountId} IS NULL AND ${t.automaticConsentGeneration} IS NULL) OR (${t.automaticConsentAccountId} IS NOT NULL AND ${t.automaticConsentGeneration} IS NOT NULL AND ${t.automaticConsentAccountId} = ${t.accountId} AND ${t.automaticConsentGeneration} BETWEEN 1 AND 9007199254740991)) IS TRUE`,
+    ),
+    check(
+      "fleet_source_intent_stop_receipt_ck",
+      sql`(NOT ${t.explicitlyStopped} OR ${t.state} = 'ended') AND (${t.stopReceipt} IS NULL OR (${t.explicitlyStopped} AND ${fleetStopReceiptCheck(sql`${t.stopReceipt}`, sql`${t.id}`, sql`${t.generation}`, sql`${t.automaticConsentGeneration}`, sql`${t.retainUntil}`)}))`,
+    ),
+    // Do not rewrite legacy manual retention during an additive storage slice.
+    // New automatic/explicit-Stop records must carry the full retention floor.
+    check(
+      "fleet_source_intent_control_retention_ck",
+      sql`(${t.automaticConsentGeneration} IS NULL AND NOT ${t.explicitlyStopped}) OR (${t.retainUntil} >= ${t.intentExpiresAt} + interval '24 hours' AND (${t.endedAt} IS NULL OR ${t.retainUntil} >= ${t.endedAt} + interval '24 hours'))`,
+    ),
+    check(
+      "fleet_source_intent_finite_dates_ck",
+      sql`${sql.join(
+        [
+          t.intentCreatedAt,
+          t.intentExpiresAt,
+          t.activatedAt,
+          t.lastAttemptAt,
+          t.nextFetchAt,
+          t.fetchClaimExpiresAt,
+          t.enqueueUntil,
+          t.endedAt,
+          t.retainUntil,
+        ].map((column) => sql`(${column} IS NULL OR ${fleetFiniteDate(sql`${column}`)})`),
+        sql` AND `,
+      )}`,
+    ),
     index("fleet_source_intent_account_idx").on(t.accountId),
     index("fleet_source_intent_boss_idx").on(t.bossCharacterId),
     index("fleet_source_intent_device_idx").on(t.deviceId),
@@ -945,7 +1143,7 @@ export const fleetSourceIntent = pgTable(
     ),
     check(
       "fleet_source_intent_generation_ck",
-      sql`${t.generation} > 0 and ${t.fetchGeneration} >= 0`,
+      sql`${t.generation} > 0 and ${t.fetchGeneration} >= 0 AND (${t.state} = 'ended' OR (${t.generation} <= 2147483646 AND ${t.fetchGeneration} <= 2147483646))`,
     ),
     check(
       "fleet_source_intent_identity_ck",

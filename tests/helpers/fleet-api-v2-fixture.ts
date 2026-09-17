@@ -38,6 +38,26 @@ export function materializeCodec(
   return value;
 }
 
+/** Original request context is independent of mutations to the response. Apply
+ * command_set last, on a detached clone, exactly as the approved recipe specifies. */
+export function materializeCommand(vector: CodecVector): unknown {
+  if (vector.command === undefined) {
+    if (vector.command_set !== undefined)
+      throw new Error(`Missing command: ${vector.name}`);
+    return undefined;
+  }
+  return materializeCodec(
+    {},
+    {
+      name: vector.name,
+      decoder: vector.decoder,
+      accept: vector.accept,
+      input: vector.command,
+      set: vector.command_set,
+    },
+  );
+}
+
 export type ListVector = {
   name: string;
   decoder: string;
