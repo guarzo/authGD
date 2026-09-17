@@ -1,7 +1,8 @@
 import { createHash, sign } from "node:crypto";
 import { NextRequest } from "next/server";
 import { autoImplementMethods } from "next/dist/server/route-modules/app-route/helpers/auto-implement-methods";
-import { afterAll, beforeAll, beforeEach, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import * as database from "@/db";
 import { fleetDeviceSession, fleetTelemetryRow } from "@/db/schema";
 import { canonicalFleetRequest } from "@/lib/fleet-signature";
 import { acknowledgeFleetCapabilities } from "@/services/fleet-device";
@@ -134,6 +135,31 @@ it("literal v2 signed PUT/GET exchanges complete combat with exactly bound compa
     json.server_time_ms - stored.activityOriginMs,
   );
 });
+
+it.each(["row", "effect", "observation"])(
+  "v2 snapshot rejects nested prototype key on %s before admission",
+  async (level) => {
+    const p = await prepared();
+    const value = bodyFor(p.alts[0].id);
+    const row = value.rows[0];
+    const target =
+      level === "row"
+        ? row
+        : level === "effect"
+          ? row.effects[0]
+          : row.effects[0].observations[0];
+    Object.defineProperty(target, "__proto__", { value: null, enumerable: true });
+    const raw = Buffer.from(
+      JSON.stringify(value).replace('"__proto__"', '"\\u005f_proto__"'),
+    );
+    const before = await ctx.db.select().from(fleetDeviceSession);
+    const response = await snapshot.PUT(request(p.b, "PUT", path, raw).req);
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ protocol: 2, error: "bad_request" });
+    expect(await ctx.db.select().from(fleetDeviceSession)).toEqual(before);
+    expect(await ctx.db.select().from(fleetTelemetryRow)).toEqual([]);
+  },
+);
 
 it("v2 device returns independent arrays and exactly its committed DB sample, for GET and ack", async () => {
   const p = await prepared();
@@ -316,6 +342,91 @@ for (const [name, routes] of [
   ["snapshot", snapshot],
   ["device", device],
 ] as const) {
+  for (const method of ["GET", "PUT"] as const) {
+    it.each(["getDb", "auth pool", "service transaction"] as const)(
+      `v2 ${name} ${method} closes unexpected %s failures as 503`,
+      async (stage) => {
+        const p = await prepared();
+        const before = await ctx.db.select().from(fleetDeviceSession);
+        const raw =
+          method === "GET"
+            ? Buffer.alloc(0)
+            : Buffer.from(
+                name === "snapshot"
+                  ? '{"protocol":2,"sampled_at_ms":0,"rows":[]}'
+                  : '{"protocol":2,"capabilities":["shared-source-v1","combat-v2"]}',
+              );
+        const call = request(p.b, method, `/api/fleet/v2/${name}`, raw);
+        const fault = new Error(`private ${stage} failure must not leak`);
+        const db = vi.spyOn(database, "getDb").mockReturnValue(ctx.db);
+        const query = vi.spyOn(ctx.pool, "query");
+        const transaction = vi.spyOn(ctx.db, "transaction");
+        if (stage === "getDb")
+          db.mockImplementation(() => {
+            throw fault;
+          });
+        if (stage === "auth pool")
+          query.mockImplementation(() => {
+            throw fault;
+          });
+        if (stage === "service transaction") transaction.mockRejectedValue(fault);
+        try {
+          // Real framing, authentication and service code; inject only the
+          // failing database boundary, never a canned auth or service result.
+          const response = await routes[method](call.req);
+          expect(response.status).toBe(503);
+          expect(await response.text()).toBe(
+            '{"protocol":2,"error":"service_unavailable"}',
+          );
+          expect(response.headers.get("cache-control")).toBe("no-store");
+          expect(response.headers.get("content-type")).toBe("application/json");
+          expect(response.headers.has("x-fleet-request-binding")).toBe(false);
+          expect(db).toHaveBeenCalledTimes(1);
+          if (stage !== "getDb") expect(query).toHaveBeenCalled();
+          expect(transaction).toHaveBeenCalledTimes(
+            stage === "service transaction" ? 1 : 0,
+          );
+        } finally {
+          transaction.mockRestore();
+          query.mockRestore();
+          db.mockRestore();
+        }
+        expect(await ctx.db.select().from(fleetDeviceSession)).toEqual(before);
+        expect(await ctx.db.select().from(fleetTelemetryRow)).toEqual([]);
+      },
+    );
+    it.each(["malformed headers", "body refusal"] as const)(
+      `v2 ${name} ${method} retains %s before even a failing getDb`,
+      async (kind) => {
+        const p = await prepared();
+        const raw =
+          method === "GET"
+            ? Buffer.alloc(0)
+            : Buffer.from(kind === "body refusal" ? "{" : '{"protocol":2}');
+        const call = request(p.b, method, `/api/fleet/v2/${name}`, raw);
+        if (kind === "malformed headers") call.req.headers.delete("x-fleet-signature");
+        else if (method === "GET") call.req.headers.set("content-length", "1");
+        const db = vi.spyOn(database, "getDb").mockImplementation(() => {
+          throw new Error("malformed request reached DB");
+        });
+        try {
+          const response = await routes[method](call.req);
+          expect(response.status).toBe(400);
+          expect(await response.json()).toEqual({
+            protocol: 2,
+            error:
+              kind === "malformed headers" || method === "GET"
+                ? "bad_headers"
+                : "bad_request",
+          });
+          expect(response.headers.get("cache-control")).toBe("no-store");
+          expect(db).not.toHaveBeenCalled();
+        } finally {
+          db.mockRestore();
+        }
+      },
+    );
+  }
   it.each(["POST", "PATCH", "DELETE", "HEAD", "OPTIONS"] as const)(
     `installed Next method dispatch: v2 ${name} %s is closed 405 with exact Allow and no admission`,
     async (method) => {

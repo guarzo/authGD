@@ -329,3 +329,167 @@ export const ControlDeviceSchema = z
   })
   .strict();
 export type ControlDevice = z.infer<typeof ControlDeviceSchema>;
+
+export const SessionRenewSchema = z.object({ protocol: z.literal(API_VERSION) }).strict();
+export const SessionRenewedSchema = SessionRenewSchema.extend({
+  expires_at: IsoDateSchema,
+});
+export const ParticipationSchema = z
+  .object({ enabled: z.boolean(), generation: Int4Schema })
+  .strict();
+export const ParticipationPutSchema = z
+  .object({
+    protocol: z.literal(API_VERSION),
+    enabled: z.boolean(),
+    expected_generation: SourceExpectedGenerationSchema,
+  })
+  .strict();
+export const ParticipationResultSchema = z
+  .object({
+    protocol: z.literal(API_VERSION),
+    participation: ParticipationSchema,
+  })
+  .strict();
+export const EligibilityGetSchema = z
+  .object({
+    protocol: z.literal(API_VERSION),
+    participation_generation: Int4Schema,
+    state: z.enum(["ready", "participation_off", "not_verified"]),
+    characters: z
+      .array(
+        z
+          .object({
+            character_id: PositiveIdSchema,
+            source_id: ExistingUuidSchema,
+            source_generation: PositiveInt4Schema,
+            authority_generation: Int4Schema,
+            expires_at: IsoDateSchema,
+          })
+          .strict(),
+      )
+      .max(8192)
+      .refine(
+        (rows) => new Set(rows.map((row) => row.character_id)).size === rows.length,
+      ),
+  })
+  .strict();
+
+// Encoding is canonical; DER/Ed25519 acceptance remains the existing crypto gate.
+export const PublicKeySpkiSchema = z
+  .string()
+  .regex(/^[A-Za-z0-9_-]{1,120}$/)
+  .refine((value) => {
+    const remainder = value.length % 4;
+    return (
+      remainder !== 1 &&
+      (remainder === 0 ||
+        (remainder === 2 ? /[AQgw]$/ : /[AEIMQUYcgkosw048]$/).test(value))
+    );
+  });
+export const ProofSignatureSchema = z.string().regex(/^[A-Za-z0-9_-]{85}[AQgw]$/);
+export const PairingBeginSchema = z
+  .object({
+    protocol: z.literal(API_VERSION),
+    public_key_spki_b64url: PublicKeySpkiSchema,
+    requested_capabilities: CapabilitiesSchema,
+  })
+  .strict();
+export const PairingCompleteSchema = z
+  .object({
+    protocol: z.literal(API_VERSION),
+    completion_signature: ProofSignatureSchema,
+  })
+  .strict();
+
+/** Both server output validation and client/fixture decoding use the configured
+ * origin, never an incoming Host header. Relative links resolve only after this gate. */
+export function pairingBegunSchema(canonicalOrigin?: string) {
+  const approvalUrl = z
+    .string()
+    .min(1)
+    .max(2048)
+    .refine((value) => {
+      if (/[\s\\\\]/u.test(value) || value.startsWith("//")) return false;
+      // The server emits a relative link; consumers resolve it against their
+      // configured HTTPS origin, never a response-supplied origin.
+      if (canonicalOrigin === undefined) return value.startsWith("/");
+      try {
+        const origin = new URL(canonicalOrigin);
+        const url = new URL(value, canonicalOrigin);
+        return (
+          origin.protocol === "https:" &&
+          origin.origin === canonicalOrigin &&
+          url.protocol === "https:" &&
+          url.origin === canonicalOrigin &&
+          !url.username &&
+          !url.password
+        );
+      } catch {
+        return false;
+      }
+    })
+    .transform((value) =>
+      canonicalOrigin === undefined ? value : new URL(value, canonicalOrigin).href,
+    );
+  return z
+    .object({
+      protocol: z.literal(API_VERSION),
+      pairing_id: ExistingUuidSchema,
+      approval_url: approvalUrl,
+      expires_at: IsoDateSchema,
+    })
+    .strict();
+}
+export const RecoveryBeginSchema = z
+  .object({
+    protocol: z.literal(API_VERSION),
+    public_key_spki_b64url: PublicKeySpkiSchema,
+    request_id: TokenSchema,
+    issued_at: IsoDateSchema,
+    initiation_signature: ProofSignatureSchema,
+  })
+  .strict();
+export const RecoveryCompleteSchema = z
+  .object({
+    protocol: z.literal(API_VERSION),
+    nonce: TokenSchema,
+    recovery_signature: ProofSignatureSchema,
+  })
+  .strict();
+export const RecoveryBegunSchema = z
+  .object({
+    protocol: z.literal(API_VERSION),
+    challenge_id: ExistingUuidSchema,
+    request_id: TokenSchema,
+    nonce: TokenSchema,
+    expires_at: IsoDateSchema,
+  })
+  .strict();
+export const RecoveryReconnectedSchema = z
+  .object({
+    protocol: z.literal(API_VERSION),
+    result: z.literal("reconnected"),
+    device_id: ExistingUuidSchema,
+    session_id: TokenSchema,
+    session_expires_at: IsoDateSchema,
+    approved_capabilities: CapabilitiesSchema,
+    participation: ParticipationSchema,
+  })
+  .strict();
+export const RecoveryRetrySchema = z
+  .object({
+    protocol: z.literal(API_VERSION),
+    result: z.enum(["account_ineligible", "retry_later"]),
+    retry_after_ms: PositiveInt4Schema.max(86_400_000),
+  })
+  .strict();
+export const RecoveryCompletedSchema = z.union([
+  RecoveryReconnectedSchema,
+  RecoveryRetrySchema,
+  z
+    .object({
+      protocol: z.literal(API_VERSION),
+      result: z.enum(["device_revoked", "device_key_conflict"]),
+    })
+    .strict(),
+]);

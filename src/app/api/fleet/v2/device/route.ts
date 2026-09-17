@@ -21,29 +21,34 @@ async function handle(req: NextRequest, method: "GET" | "PUT") {
     method,
     DeviceAckSchema,
     FLEET_V2_BYTE_LIMITS.devicePut.requestBytes,
+    PATH,
   );
   if (!envelope.ok) return fleetV2Error(envelope.code);
-  const { headers, bytes, body } = envelope;
-  const db = getDb();
-  const auth = await authenticateFleetRequest(db, headers, bytes, {
-    method,
-    path: PATH,
-    now: new Date(),
-  });
-  if (!auth.ok) return fleetV2Error(auth.code);
-  const call = { sessionId: auth.auth.sessionId, revision: headers.revision };
-  const result =
-    method === "GET"
-      ? await readFleetDeviceState(db, call)
-      : await acknowledgeFleetCapabilities(db, {
-          ...call,
-          capabilities: body!.capabilities,
-        });
-  if (!result.ok) return fleetV2Error(result.code);
-  return fleetV2Success(
-    result.json,
-    fleetV2RequestBinding({ method, path: PATH, ...headers }),
-  );
+  try {
+    const { headers, bytes, body } = envelope;
+    const db = getDb();
+    const auth = await authenticateFleetRequest(db, headers, bytes, {
+      method,
+      path: PATH,
+      now: new Date(),
+    });
+    if (!auth.ok) return fleetV2Error(auth.code);
+    const call = { sessionId: auth.auth.sessionId, revision: headers.revision };
+    const result =
+      method === "GET"
+        ? await readFleetDeviceState(db, call)
+        : await acknowledgeFleetCapabilities(db, {
+            ...call,
+            capabilities: body!.capabilities,
+          });
+    if (!result.ok) return fleetV2Error(result.code);
+    return fleetV2Success(
+      result.json,
+      fleetV2RequestBinding({ method, path: PATH, ...headers }),
+    );
+  } catch {
+    return fleetV2Error("service_unavailable");
+  }
 }
 export function GET(req: NextRequest) {
   return handle(req, "GET");

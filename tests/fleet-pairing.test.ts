@@ -1075,6 +1075,10 @@ describe("renewFleetDeviceSession", () => {
     expect(result).toEqual({
       ok: true,
       expiresAt: new Date(renewAt.getTime() + DEVICE_SESSION_TTL_MS),
+      json: JSON.stringify({
+        protocol: 2,
+        expires_at: new Date(renewAt.getTime() + DEVICE_SESSION_TTL_MS).toISOString(),
+      }),
     });
 
     const [sessionAfter] = await ctx.db

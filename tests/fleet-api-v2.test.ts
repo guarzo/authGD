@@ -1,6 +1,7 @@
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
+import { safeParseFleetV2Dto } from "@/core/fleet-v2-validation";
 import {
   API_VERSION,
   SIGNING_SCHEME_VERSION,
@@ -120,6 +121,72 @@ function maximumPut(): CombatPut {
     })),
   };
 }
+
+describe("complete DTO boundary rejects prototype keys without rewriting names", () => {
+  it.each(['{"protocol":2,"__proto__":null}', '{"protocol":2,"\\u005f_proto__":{}}'])(
+    "rejects a single own key in %s before output serialization",
+    (text) => {
+      expect(
+        serializeFleetV2Json(JSON.parse(text), CombatPutSuccessSchema, 1024),
+      ).toEqual({
+        ok: false,
+        code: "service_unavailable",
+      });
+    },
+  );
+  it("rejects nested own keys in otherwise valid combat DTOs", () => {
+    const value = put();
+    Object.defineProperty(value.rows[0].effects[0].observations[0], "__proto__", {
+      value: null,
+      enumerable: true,
+    });
+    expect(serializeFleetV2Json(value, CombatPutSchema, 524288)).toEqual({
+      ok: false,
+      code: "service_unavailable",
+    });
+  });
+  it("retains __proto__ observed string values and shared DTO references", () => {
+    const value = put();
+    value.rows[0].effects[0].observations[0].name = "__proto__";
+    const shared = { text: "__proto__" };
+    const schema = z
+      .object({
+        a: z.object({ text: z.string() }).strict(),
+        b: z.object({ text: z.string() }).strict(),
+      })
+      .strict();
+    expect(serializeFleetV2Json({ a: shared, b: shared }, schema, 1024)).toEqual({
+      ok: true,
+      json: '{"a":{"text":"__proto__"},"b":{"text":"__proto__"}}',
+    });
+    const output = serializeFleetV2Json(value, CombatPutSchema, 524288);
+    expect(output.ok).toBe(true);
+    if (output.ok)
+      expect(JSON.parse(output.json).rows[0].effects[0].observations[0].name).toBe(
+        "__proto__",
+      );
+  });
+  it("walks deeply shared structured input once per node, preserving aliases", () => {
+    let value: unknown = { name: "__proto__" };
+    for (let i = 0; i < 20000; i++) value = { a: value, b: value };
+    const result = safeParseFleetV2Dto(z.unknown(), value);
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data).toBe(value);
+  });
+  it("rejects a prototype key hidden on a shared descendant, including non-enumerable keys", () => {
+    const child = {};
+    Object.defineProperty(child, "__proto__", { value: null });
+    expect(safeParseFleetV2Dto(z.unknown(), { a: child, b: child }).success).toBe(false);
+  });
+  it("refuses cyclic structured input rather than throwing or traversing forever", () => {
+    const value: { next?: unknown } = {};
+    value.next = value;
+    expect(serializeFleetV2Json(value, z.unknown(), 1024)).toEqual({
+      ok: false,
+      code: "service_unavailable",
+    });
+  });
+});
 
 const device = () => ({
   protocol: 2,

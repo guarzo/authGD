@@ -1,4 +1,22 @@
 import { expect, it } from "vitest";
+import { createHash } from "node:crypto";
+import {
+  loadPreCombatFleet,
+  pinnedSource,
+  PRE_COMBAT_REVISION,
+} from "./helpers/fleet-legacy";
+it("pins historical fixture helpers as well as production so current API2 assertions cannot leak into the old backend", async () => {
+  const old = await loadPreCombatFleet();
+  for (const path of [
+    "tests/helpers/fleet-sharing.ts",
+    "tests/helpers/fleet-shared-admission.ts",
+    "tests/helpers/seed.ts",
+    "tests/helpers/config.ts",
+  ])
+    expect(old.hashes[path], path).toBe(
+      createHash("sha256").update(pinnedSource(PRE_COMBAT_REVISION, path)).digest("hex"),
+    );
+});
 import {
   legacyFixtureUrls,
   legacyFixtureProvisionPlan as provisionPlan,

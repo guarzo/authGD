@@ -60,6 +60,18 @@ it("eligibility discloses only own matching IDs and provenance, without requirin
         expiresAt: at(12000),
       })),
     },
+    json: JSON.stringify({
+      protocol: 2,
+      participation_generation: 1,
+      state: "ready",
+      characters: p.alts.slice(0, 2).map((ch) => ({
+        character_id: ch.id,
+        source_id: p.source.sourceId,
+        source_generation: 1,
+        authority_generation: 1,
+        expires_at: at(12000).toISOString(),
+      })),
+    }),
   });
 });
 
@@ -455,6 +467,7 @@ it("whole-batch invalidity and global lease conflict preserve prior rows, leases
   ).toEqual({
     ok: true,
     value: { state: "participation_off", participationGeneration: 2, characters: [] },
+    json: '{"protocol":2,"participation_generation":2,"state":"participation_off","characters":[]}',
   });
   expect(
     (

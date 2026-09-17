@@ -33,7 +33,8 @@ import {
   waitUntilBlockedBy,
 } from "./helpers/fleet-sharing";
 process.env.DATABASE_URL = TEST_URL;
-const { GET, PUT } = await import("@/app/api/fleet/v1/sources/route");
+import { controlFleetSource, readFleetSourceState } from "@/services/fleet-source";
+import type { SourceCommand } from "@/services/fleet-source";
 let ctx: Awaited<ReturnType<typeof setupTestDb>>;
 let fixture: Awaited<ReturnType<typeof startFleetFixtures>>;
 beforeAll(async () => {
@@ -57,7 +58,7 @@ function request(
   body: unknown,
   revision: number,
   query = "",
-  path = "/api/fleet/v1/sources",
+  path = SNAPSHOT_PATH,
 ) {
   const text = method === "GET" ? "" : JSON.stringify(body);
   const hash = createHash("sha256").update(text).digest("hex");
@@ -81,7 +82,7 @@ function request(
     },
   });
 }
-it("signed route -> committed outbox -> dispatcher -> strict registered handler -> actual job/parser, with zero request-side provider calls", async () => {
+it("source service -> committed outbox -> dispatcher -> strict registered handler -> actual job/parser, then real API2 eligibility/relay routes", async () => {
   const ready = await reconcileFleetKeys(ctx.db);
   await transitionFleetSharingMode(ctx.db, {
     enabled: true,
@@ -135,14 +136,15 @@ it("signed route -> committed outbox -> dispatcher -> strict registered handler 
     ).toBe(200);
   await new Promise((r) => setTimeout(r, 510));
   const sourceId = randomUUID();
-  const start = {
-    protocol: 1,
+  // Source HTTP is intentionally retired until the receipt-control slice. Keep
+  // the worker/authorization guard on the actual existing service, not a v1 adapter.
+  const start: SourceCommand = {
     operation: "start",
-    source_id: sourceId,
-    expected_generation: 0,
-    character_id: boss.id,
-    character_link_epoch: boss.fleetLinkEpoch,
-    intent_created_at: new Date().toISOString(),
+    sourceId,
+    expectedGeneration: 0,
+    characterId: boss.id,
+    characterLinkEpoch: boss.fleetLinkEpoch,
+    intentCreatedAt: new Date(),
   };
   await fixture.client.scenario({
     characters: [
@@ -176,21 +178,20 @@ it("signed route -> committed outbox -> dispatcher -> strict registered handler 
       },
     },
   });
-  const denied = await PUT(
-    request(
-      p,
-      "PUT",
-      { ...start, character_id: alt.id, character_link_epoch: alt.fleetLinkEpoch },
-      2,
-    ),
-  );
-  expect(denied.status).toBe(403);
-  expect(await denied.json()).toEqual({ protocol: 1, error: "fleet_read_required" });
-  const response = await PUT(request(p, "PUT", start, 2));
-  expect(response.status).toBe(200);
-  expect(await response.json()).toMatchObject({
-    protocol: 1,
-    source: { source_id: sourceId, generation: 1, state: "pending" },
+  const denied = await controlFleetSource(ctx.db, {
+    sessionId: p.sessionId,
+    revision: 2,
+    command: { ...start, characterId: alt.id, characterLinkEpoch: alt.fleetLinkEpoch },
+  });
+  expect(denied).toEqual({ ok: false, code: "fleet_read_required" });
+  const response = await controlFleetSource(ctx.db, {
+    sessionId: p.sessionId,
+    revision: 2,
+    command: start,
+  });
+  expect(response).toMatchObject({
+    ok: true,
+    value: { sourceId, generation: 1, state: "pending" },
   });
   expect((await fixture.client.snapshot()).requests).toEqual([]);
   expect(await ctx.db.select().from(outbox)).toHaveLength(1);
@@ -242,20 +243,31 @@ it("signed route -> committed outbox -> dispatcher -> strict registered handler 
     { characterId: included.id, linkEpoch: included.fleetLinkEpoch },
   ]);
   await new Promise((r) => setTimeout(r, 510));
-  const status = await GET(request(p, "GET", null, 3));
-  expect(status.status).toBe(200);
-  const dto = await status.json();
-  expect(dto.characters).toContainEqual({
-    character_id: alt.id,
-    character_name: alt.name,
-    character_link_epoch: alt.fleetLinkEpoch,
-    has_fleet_read: false,
-    token_usable: false,
+  const status = await readFleetSourceState(ctx.db, {
+    sessionId: p.sessionId,
+    revision: 3,
   });
-  expect(JSON.stringify(dto)).not.toMatch(/fleet_id|owner_hash|token_enc|access_token/);
+  if (!status.ok) throw new Error(status.code);
+  expect(status.value.characters).toContainEqual({
+    characterId: alt.id,
+    characterName: alt.name,
+    characterLinkEpoch: alt.fleetLinkEpoch,
+    hasFleetRead: false,
+    tokenUsable: false,
+  });
+  expect(JSON.stringify(status.value)).not.toMatch(
+    /fleetId|ownerHash|tokenEnc|accessToken/,
+  );
   await new Promise((r) => setTimeout(r, 510));
-  expect((await PUT(request(p, "PUT", { ...start, fleet_id: 123 }, 4))).status).toBe(400);
-  expect((await GET(request(p, "GET", null, 4, "?source_id=123"))).status).toBe(400);
+  const extra = { ...start, fleetId: 123 };
+  expect(
+    await controlFleetSource(ctx.db, {
+      sessionId: p.sessionId,
+      revision: 4,
+      command: extra,
+    }),
+  ).toEqual({ ok: false, code: "invalid_intent" });
+  // Raw old-route selector/method refusal is covered exhaustively by retirement tests.
   // Real signed routes in both directions after the actual outbox/worker proof.
   // The quiet participant owns neither a lease nor any Fleet Read token.
   for (const [device, revision] of [
@@ -273,16 +285,16 @@ it("signed route -> committed outbox -> dispatcher -> strict registered handler 
       ).ok,
     ).toBe(true);
   await new Promise((r) => setTimeout(r, 510));
-  const eligibility = await import("@/app/api/fleet/v1/eligibility/route");
+  const eligibility = await import("@/app/api/fleet/v2/eligibility/route");
   const snapshot = await import("@/app/api/fleet/v2/snapshot/route");
   const own = await eligibility.GET(
-    request(receiver, "GET", null, 3, "", "/api/fleet/v1/eligibility"),
+    request(receiver, "GET", null, 3, "", "/api/fleet/v2/eligibility"),
   );
   expect(own.status).toBe(200);
   expect(own.headers.get("cache-control")).toBe("no-store");
   const ownDto = await own.json();
   expect(ownDto).toMatchObject({
-    protocol: 1,
+    protocol: 2,
     participation_generation: 1,
     state: "ready",
     characters: [
@@ -300,7 +312,7 @@ it("signed route -> committed outbox -> dispatcher -> strict registered handler 
   expect(
     (
       await eligibility.GET(
-        request(receiver, "GET", null, 4, "?fleet_id=123", "/api/fleet/v1/eligibility"),
+        request(receiver, "GET", null, 4, "?fleet_id=123", "/api/fleet/v2/eligibility"),
       )
     ).status,
   ).toBe(400);
@@ -499,38 +511,41 @@ it("signed route -> committed outbox -> dispatcher -> strict registered handler 
       ).status,
     ).toBe(200);
   await new Promise((r) => setTimeout(r, 510));
-  const foreignStatus = await GET(request(foreign, "GET", null, 2));
-  expect(foreignStatus.status).toBe(200);
-  expect((await foreignStatus.json()).sources).toEqual([]);
-  const secondStatus = await GET(request(second, "GET", null, 2));
-  expect(secondStatus.status).toBe(200);
-  expect((await secondStatus.json()).sources).toContainEqual(
-    expect.objectContaining({ source_id: sourceId, state: "active" }),
+  const foreignStatus = await readFleetSourceState(ctx.db, {
+    sessionId: foreign.sessionId,
+    revision: 2,
+  });
+  expect(foreignStatus).toMatchObject({ ok: true, value: { sources: [] } });
+  const secondStatus = await readFleetSourceState(ctx.db, {
+    sessionId: second.sessionId,
+    revision: 2,
+  });
+  if (!secondStatus.ok) throw new Error(secondStatus.code);
+  expect(secondStatus.value.sources).toContainEqual(
+    expect.objectContaining({ sourceId, state: "active" }),
   );
   await new Promise((r) => setTimeout(r, 510));
-  expect((await PUT(request(foreign, "PUT", start, 3))).status).toBe(403);
   expect(
-    (
-      await PUT(
-        request(
-          foreign,
-          "PUT",
-          { protocol: 1, operation: "stop", source_id: sourceId, expected_generation: 1 },
-          3,
-        ),
-      )
-    ).status,
-  ).toBe(403);
-  const stopped = await PUT(
-    request(
-      second,
-      "PUT",
-      { protocol: 1, operation: "stop", source_id: sourceId, expected_generation: 1 },
-      3,
-    ),
-  );
-  expect(stopped.status).toBe(200);
-  expect((await stopped.json()).source.state).toBe("ended");
+    await controlFleetSource(ctx.db, {
+      sessionId: foreign.sessionId,
+      revision: 3,
+      command: start,
+    }),
+  ).toEqual({ ok: false, code: "forbidden" });
+  const stop: SourceCommand = { operation: "stop", sourceId, expectedGeneration: 1 };
+  expect(
+    await controlFleetSource(ctx.db, {
+      sessionId: foreign.sessionId,
+      revision: 3,
+      command: stop,
+    }),
+  ).toEqual({ ok: false, code: "forbidden" });
+  const stopped = await controlFleetSource(ctx.db, {
+    sessionId: second.sessionId,
+    revision: 3,
+    command: stop,
+  });
+  expect(stopped).toMatchObject({ ok: true, value: { state: "ended" } });
   expect((await ctx.db.select().from(fleetSourceIntent))[0].deviceId).toBe(p.device.id);
   expect((await ctx.db.select().from(fleetSourceAuthority))[0].sourceId).toBeNull();
   await fixture.client.assertClean();

@@ -125,6 +125,7 @@ it.each(["different-account", "same-owner", "revoked-alias"])(
       expect(await completeFleetRecovery(ctx.db, recoveryCompletion(k, c, NOW))).toEqual({
         ok: true,
         value: { result: "device_key_conflict" },
+        json: '{"protocol":2,"result":"device_key_conflict"}',
       });
     }
     expect(await ctx.db.select().from(fleetDevice).orderBy(fleetDevice.id)).toEqual(
@@ -150,6 +151,7 @@ it("resolves alias-only revoked registration as revoked, never as a fresh key", 
   expect(await completeFleetRecovery(ctx.db, recoveryCompletion(keys, c, NOW))).toEqual({
     ok: true,
     value: { result: "device_revoked" },
+    json: '{"protocol":2,"result":"device_revoked"}',
   });
   await expect(
     beginPairing(ctx.db, { publicKeySpki: keys.publicKeySpki }),

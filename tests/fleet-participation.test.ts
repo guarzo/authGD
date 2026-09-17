@@ -170,7 +170,11 @@ describe("participation transaction boundaries", () => {
         expect(await pending).toEqual(
           expired
             ? { ok: false, code: "unauthorized" }
-            : { ok: true, value: { enabled: false, generation: 2 } },
+            : {
+                ok: true,
+                value: { enabled: false, generation: 2 },
+                json: '{"protocol":2,"participation":{"enabled":false,"generation":2}}',
+              },
         );
         const [session] = await ctx.db.select().from(fleetDeviceSession);
         expect(session.lastReadAt).toEqual(at(expired ? 500 : 2000));
@@ -225,7 +229,11 @@ describe("explicit per-device participation", () => {
         enabled: true,
         expectedGeneration: 0,
       }),
-    ).toEqual({ ok: true, value: { enabled: true, generation: 1 } });
+    ).toEqual({
+      ok: true,
+      value: { enabled: true, generation: 1 },
+      json: '{"protocol":2,"participation":{"enabled":true,"generation":1}}',
+    });
     expect(
       await setFleetParticipation(ctx.db, {
         sessionId: second.sessionId,
@@ -234,7 +242,11 @@ describe("explicit per-device participation", () => {
         enabled: false,
         expectedGeneration: 1,
       }),
-    ).toEqual({ ok: true, value: { enabled: false, generation: 2 } });
+    ).toEqual({
+      ok: true,
+      value: { enabled: false, generation: 2 },
+      json: '{"protocol":2,"participation":{"enabled":false,"generation":2}}',
+    });
     expect(
       await setFleetParticipation(ctx.db, {
         sessionId: p.sessionId,
@@ -252,7 +264,11 @@ describe("explicit per-device participation", () => {
         enabled: false,
         expectedGeneration: 2,
       }),
-    ).toEqual({ ok: true, value: { enabled: false, generation: 3 } });
+    ).toEqual({
+      ok: true,
+      value: { enabled: false, generation: 3 },
+      json: '{"protocol":2,"participation":{"enabled":false,"generation":3}}',
+    });
     expect(await ctx.db.select().from(fleetDeviceSession)).toHaveLength(2);
     expect(
       await readFleetDeviceState(ctx.db, {

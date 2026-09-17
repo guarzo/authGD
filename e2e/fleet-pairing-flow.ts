@@ -1,4 +1,4 @@
-import { generateKeyPairSync, sign } from "node:crypto";
+import { generateKeyPairSync, randomBytes, sign } from "node:crypto";
 import { eq } from "drizzle-orm";
 import type { BrowserContext, Page } from "@playwright/test";
 import { test, expect } from "./fleet-browser";
@@ -32,10 +32,11 @@ async function pairedDevice(
   const spki = publicKey.export({ type: "spki", format: "der" });
   async function begin(requestedCapabilities: string[] = []) {
     const response = await context.request.post(
-      `${BASE_URL}/api/fleet/v1/pairing-requests`,
+      `${BASE_URL}/api/fleet/v2/pairing-requests`,
       {
+        headers: { "X-Fleet-Attempt": randomBytes(32).toString("base64url") },
         data: {
-          protocol: 1,
+          protocol: 2,
           public_key_spki_b64url: spki.toString("base64url"),
           requested_capabilities: requestedCapabilities,
         },
@@ -48,10 +49,11 @@ async function pairedDevice(
   }
   async function complete(id: string) {
     return context.request.post(
-      `${BASE_URL}/api/fleet/v1/pairing-requests/${id}/complete`,
+      `${BASE_URL}/api/fleet/v2/pairing-requests/${id}/complete`,
       {
+        headers: { "X-Fleet-Attempt": randomBytes(32).toString("base64url") },
         data: {
-          protocol: 1,
+          protocol: 2,
           completion_signature: sign(
             null,
             pairingChallengePreimage(id),
@@ -140,7 +142,7 @@ for (const approval of ["unapproved", "approved", "stale approval"] as const) {
       expect(request.requestedCapabilities).toEqual([]);
       const refused = await f.complete(id);
       expect(refused.status()).toBe(409);
-      expect(await refused.json()).toEqual({ protocol: 1, error: "not_completable" });
+      expect(await refused.json()).toEqual({ protocol: 2, error: "not_completable" });
       const [unchanged] = await db
         .select()
         .from(fleetPairingRequest)

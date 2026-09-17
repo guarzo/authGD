@@ -311,9 +311,9 @@ test("signed HTTP source Start, worker authority and two-account shared snapshot
         (
           await send(
             "PUT",
-            "/api/fleet/v1/participation",
+            "/api/fleet/v2/participation",
             {
-              protocol: 1,
+              protocol: 2,
               enabled: true,
               expected_generation: 0,
             },
@@ -322,7 +322,7 @@ test("signed HTTP source Start, worker authority and two-account shared snapshot
         ).status(),
       ).toBe(200);
     await new Promise((r) => setTimeout(r, 510));
-    const eligibility = await send("GET", "/api/fleet/v1/eligibility", undefined, b);
+    const eligibility = await send("GET", "/api/fleet/v2/eligibility", undefined, b);
     expect(eligibility.status()).toBe(200);
     const view = (await eligibility.json()) as {
       state: string;

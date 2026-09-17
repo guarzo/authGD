@@ -10,6 +10,7 @@ import {
 } from "@/db/schema";
 import {
   API_VERSION,
+  CatalogueGetSchema,
   CombatGetSchema,
   CombatPutSchema,
   CombatPutSuccessSchema,
@@ -53,28 +54,6 @@ import {
  * Expiry pruning needs only the last level, never the reverse of this order.
  */
 
-// Remaining v1 control routes are retired by the following framing slice. This
-// constant is not the representation/version of this module's combat payload.
-export const FLEET_RELAY_PROTOCOL = 1;
-export const FLEET_RELAY_STATUS_BY_CODE: Readonly<Record<string, number>> = {
-  invalid_session: 401,
-  invalid_batch: 400,
-  character_not_linked: 403,
-  character_not_eligible: 403,
-  lease_conflict: 409,
-  revision_replayed: 409,
-  rate_limited: 429,
-  forbidden: 403,
-  not_eligible: 403,
-  try_again: 503,
-  unauthorized: 401,
-  feature_disabled: 503,
-  capability_required: 403,
-  fleet_read_required: 403,
-  conflict: 409,
-  invalid_intent: 400,
-  service_unavailable: 503,
-};
 const MIN_REQUEST_INTERVAL_MS = 500;
 const RELAY_CHARACTER_LOCK_CLASS = 2;
 export class RelayRefusal extends Error {
@@ -219,7 +198,7 @@ export async function gateSignedSession(
   args: SignedFleetCall & {
     invalidSessionCode: string;
     cadence: "publish" | "read";
-    /** V2 device opts into DB anchors; other control families migrate separately. */
+    /** Basic/device v2 admission uses post-lock DB time. Source control migrates separately. */
     databaseClock?: boolean;
   },
 ): Promise<{
@@ -588,31 +567,47 @@ export async function readFleetProjection(
   }
 }
 
-/** Catalogue retains the existing read cadence and session gate. Its v2 framing
- * and complete-output contract are the next serialized integration slice. */
+/** Catalogue retains the shared cadence/revision lane; complete output is
+ * validated inside its transaction, never truncated to fit a successful reply. */
 export async function readDeviceCatalogueForSession(
   dbx: Dbx,
   args: SignedFleetCall,
-): Promise<{ ok: true; catalogue: DeviceCatalogue } | { ok: false; code: string }> {
+): Promise<
+  { ok: true; catalogue: DeviceCatalogue; json: string } | { ok: false; code: string }
+> {
   try {
-    const catalogue = await dbx.transaction(async (tx) => {
+    const result = await dbx.transaction(async (tx) => {
       const { session, device, now } = await gateSignedSession(tx, {
         ...args,
         invalidSessionCode: "forbidden",
         cadence: "read",
+        databaseClock: true,
       });
       const catalogue = await buildDeviceCatalogue(tx, device.accountId);
+      const output = serializeFleetV2Json(
+        {
+          protocol: API_VERSION,
+          revision: catalogue.revision,
+          characters: catalogue.characters.map((c) => ({
+            character_id: c.characterId,
+            character_name: c.characterName,
+          })),
+        },
+        CatalogueGetSchema,
+        FLEET_V2_BYTE_LIMITS.catalogueGet.successBytes,
+      );
+      if (!output.ok) throw new RelayRefusal(output.code);
       await commitSessionCadence(tx, session.id, {
         revision: args.revision,
         now,
         cadence: "read",
       });
-      return catalogue;
+      return { catalogue, json: output.json };
     });
-    return { ok: true, catalogue };
+    return { ok: true, ...result };
   } catch (err) {
     if (err instanceof RelayRefusal) return { ok: false, code: err.code };
-    if (isRetryableRelayError(err)) return { ok: false, code: "try_again" };
+    if (isRetryableRelayError(err)) return { ok: false, code: "service_unavailable" };
     throw err;
   }
 }

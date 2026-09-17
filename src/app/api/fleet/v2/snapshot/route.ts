@@ -19,43 +19,48 @@ async function handle(req: NextRequest, method: "GET" | "PUT") {
     method,
     CombatPutSchema,
     FLEET_V2_BYTE_LIMITS.snapshotPut.requestBytes,
+    PATH,
   );
   if (!envelope.ok) return fleetV2Error(envelope.code);
-  const { headers, bytes, body } = envelope;
-  const db = getDb();
-  const auth = await authenticateFleetRequest(db, headers, bytes, {
-    method,
-    path: PATH,
-    now: new Date(),
-  });
-  if (!auth.ok) return fleetV2Error(auth.code);
-  const call = { sessionId: auth.auth.sessionId, revision: headers.revision };
-  // Preflight time is NOT forwarded: service samples DB time after all locks.
-  const result =
-    method === "GET"
-      ? await readFleetProjection(db, call)
-      : await replaceDeviceProjection(db, {
-          ...call,
-          sampledAtMs: body!.sampled_at_ms,
-          rows: body!.rows.map((row) => ({
-            characterId: row.character_id,
-            outgoingDps: row.outgoing_dps,
-            incomingDps: row.incoming_dps,
-            activityAgeMs: row.activity_age_ms,
-            effects: row.effects.map((effect) => ({
-              kind: effect.kind,
-              observations: effect.observations.map((o) => ({
-                name: o.name,
-                ageMs: o.age_ms,
+  try {
+    const { headers, bytes, body } = envelope;
+    const db = getDb();
+    const auth = await authenticateFleetRequest(db, headers, bytes, {
+      method,
+      path: PATH,
+      now: new Date(),
+    });
+    if (!auth.ok) return fleetV2Error(auth.code);
+    const call = { sessionId: auth.auth.sessionId, revision: headers.revision };
+    // Preflight time is NOT forwarded: service samples DB time after all locks.
+    const result =
+      method === "GET"
+        ? await readFleetProjection(db, call)
+        : await replaceDeviceProjection(db, {
+            ...call,
+            sampledAtMs: body!.sampled_at_ms,
+            rows: body!.rows.map((row) => ({
+              characterId: row.character_id,
+              outgoingDps: row.outgoing_dps,
+              incomingDps: row.incoming_dps,
+              activityAgeMs: row.activity_age_ms,
+              effects: row.effects.map((effect) => ({
+                kind: effect.kind,
+                observations: effect.observations.map((o) => ({
+                  name: o.name,
+                  ageMs: o.age_ms,
+                })),
               })),
             })),
-          })),
-        });
-  if (!result.ok) return fleetV2Error(result.code);
-  return fleetV2Success(
-    result.json,
-    fleetV2RequestBinding({ method, path: PATH, ...headers }),
-  );
+          });
+    if (!result.ok) return fleetV2Error(result.code);
+    return fleetV2Success(
+      result.json,
+      fleetV2RequestBinding({ method, path: PATH, ...headers }),
+    );
+  } catch {
+    return fleetV2Error("service_unavailable");
+  }
 }
 export function GET(req: NextRequest) {
   return handle(req, "GET");

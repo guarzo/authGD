@@ -65,6 +65,12 @@ async function bundlePinned(
       {
         name: "pinned-legacy-source",
         setup(builder) {
+          // Entry fixture helpers must be pinned too: resolving only their @/
+          // imports mixes evolving current assertions with historical services.
+          builder.onResolve({ filter: /^\.\/tests\/helpers\// }, (args) => ({
+            path: `${args.path.slice(2)}.ts`,
+            namespace: "legacy",
+          }));
           builder.onResolve({ filter: /^@\// }, (args) => ({
             path: `src/${args.path.slice(2)}.ts`,
             namespace: "legacy",
@@ -76,7 +82,7 @@ async function bundlePinned(
             namespace: "legacy",
           }));
           builder.onLoad({ filter: /.*/, namespace: "legacy" }, (args) => {
-            if (!/^src\/[\w/.-]+\.ts$/.test(args.path))
+            if (!/^(?:src|tests\/helpers)\/[\w/.-]+\.ts$/.test(args.path))
               throw new Error("invalid old source path");
             const contents = pinnedSource(revision, args.path);
             hashes[args.path] = createHash("sha256").update(contents).digest("hex");
@@ -112,7 +118,7 @@ export async function loadLegacyFleet() {
 }
 /** Only the existing historical regression uses this pre-0025 backend. The
  * current relay suites still execute current production code on the main DB.
- * Fixture helpers resolve EVERY @/ import through this same immutable pin. */
+ * Fixture helpers and their transitive imports resolve through the same pin. */
 export async function loadPreCombatFleet() {
   const { loaded, hashes } = await bundlePinned(
     PRE_COMBAT_REVISION,

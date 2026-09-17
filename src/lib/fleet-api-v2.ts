@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { z } from "zod";
+import { safeParseFleetV2Dto } from "@/core/fleet-v2-validation";
 import {
   API_VERSION,
   SIGNING_SCHEME_VERSION,
@@ -142,6 +143,20 @@ export function hasIdentityFleetV2Encoding(headers: Headers): boolean {
   return encoding === null || encoding.toLowerCase() === "identity";
 }
 
+/** Internal historical refusals never broaden the closed wire dictionary. */
+export function closedFleetV2Code(code: string): FleetV2Code {
+  const legacy: Record<string, FleetV2Code> = {
+    invalid_session: "unauthorized",
+    not_eligible: "forbidden",
+    try_again: "service_unavailable",
+  };
+  return Object.hasOwn(legacy, code)
+    ? legacy[code]
+    : Object.hasOwn(FLEET_V2_STATUS_BY_CODE, code)
+      ? (code as FleetV2Code)
+      : "service_unavailable";
+}
+
 /** Closed errors have no binding or clock anchor. Explicit HEAD handlers avoid
  * Next's GET fallback, which would otherwise run admission and consume cadence. */
 export function fleetV2Error(
@@ -177,7 +192,7 @@ export function fleetV2Success(json: string, binding: string): Response {
 /** NextRequest.url is NextURL's normalized spelling and drops a bare '?'.
  * Its native Request base retains the original URL (Next 16.3 Node adapter).
  * Check both, without depending on private NextURL symbols or normalized search. */
-function hasFleetV2Query(req: { url: string }): boolean {
+export function hasFleetV2Query(req: { url: string }): boolean {
   return (
     req.url.includes("?") ||
     (req instanceof Request && Reflect.get(Request.prototype, "url", req).includes("?"))
@@ -207,10 +222,12 @@ export async function readFleetV2SignedEnvelope<T>(
   method: "GET" | "PUT",
   schema: z.ZodType<T>,
   putBytes: number,
+  path: string,
 ): Promise<
   | { ok: true; headers: FleetAuthHeaders; bytes: Uint8Array; body: T | null }
   | { ok: false; code: FleetV2Code }
 > {
+  if (new URL(req.url).pathname !== path) return { ok: false, code: "bad_request" };
   if (hasFleetV2Query(req)) return { ok: false, code: "bad_headers" };
   const headers = extractFleetV2AuthHeaders(req);
   if (!headers) return { ok: false, code: "bad_headers" };
@@ -232,7 +249,7 @@ export async function readFleetV2SignedEnvelope<T>(
   if (!raw.ok) return raw;
   const version = classifyFleetV2Version(raw.value);
   if (version !== "ok") return { ok: false, code: version };
-  const body = schema.safeParse(raw.value);
+  const body = safeParseFleetV2Dto(schema, raw.value);
   return body.success
     ? { ok: true, headers, bytes: raw.bytes, body: body.data }
     : { ok: false, code: "bad_request" };
@@ -308,7 +325,7 @@ export function serializeFleetV2Json<T>(
   schema: z.ZodType<T>,
   maxBytes: number,
 ): { ok: true; json: string } | { ok: false; code: "service_unavailable" } {
-  const parsed = schema.safeParse(value);
+  const parsed = safeParseFleetV2Dto(schema, value);
   if (!parsed.success) return { ok: false, code: "service_unavailable" };
   const json = JSON.stringify(parsed.data);
   if (Buffer.byteLength(json, "utf8") > maxBytes)

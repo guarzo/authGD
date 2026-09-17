@@ -91,7 +91,11 @@ export async function participatingDevice(
       enabled: true,
       expectedGeneration: 0,
     }),
-  ).toEqual({ ok: true, value: { enabled: true, generation: 1 } });
+  ).toEqual({
+    ok: true,
+    value: { enabled: true, generation: 1 },
+    json: '{"protocol":2,"participation":{"enabled":true,"generation":1}}',
+  });
   return p;
 }
 

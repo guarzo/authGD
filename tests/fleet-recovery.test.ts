@@ -349,6 +349,13 @@ describe("registered-key recovery", () => {
         requestId: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
         nonce: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
         expiresAt: new Date(NOW.getTime() + 120000),
+        json: JSON.stringify({
+          protocol: 2,
+          challenge_id: c.challengeId,
+          request_id: c.requestId,
+          nonce: c.nonce,
+          expires_at: new Date(NOW.getTime() + 120000).toISOString(),
+        }),
       });
       expect(
         await completeFleetRecovery(ctx.db, {
@@ -377,6 +384,7 @@ describe("registered-key recovery", () => {
     expect(await completeFleetRecovery(ctx.db, proof)).toEqual({
       ok: true,
       value: { result: "device_revoked" },
+      json: '{"protocol":2,"result":"device_revoked"}',
     });
     expect(await completeFleetRecovery(ctx.db, proof)).toEqual({
       ok: false,
@@ -399,6 +407,7 @@ describe("registered-key recovery", () => {
     expect(await completeFleetRecovery(ctx.db, proof)).toEqual({
       ok: true,
       value: { result: "account_ineligible", retryAfterMs: 60000 },
+      json: '{"protocol":2,"result":"account_ineligible","retry_after_ms":60000}',
     });
     expect(await completeFleetRecovery(ctx.db, proof)).toEqual({
       ok: false,
@@ -542,6 +551,7 @@ describe("registered-key recovery", () => {
     expect(result).toEqual({
       ok: true,
       value: { result: "retry_later", retryAfterMs: 1000 },
+      json: '{"protocol":2,"result":"retry_later","retry_after_ms":1000}',
     });
     expect(await ctx.db.select().from(fleetDeviceSession)).toEqual(before);
     expect(await completeFleetRecovery(ctx.db, proof)).toEqual({
@@ -667,6 +677,7 @@ describe("registered-key recovery", () => {
       expect(await pending).toEqual({
         ok: true,
         value: { result: "account_ineligible", retryAfterMs: 60000 },
+        json: '{"protocol":2,"result":"account_ineligible","retry_after_ms":60000}',
       });
       const [device] = await ctx.db.select().from(fleetDevice);
       expect(device.revokedAt).toBeNull();
@@ -719,7 +730,11 @@ describe("registered-key recovery", () => {
       pending = completeFleetRecovery(ctx.db, proof);
       expect(await waitUntilBlockedBy(ctx.pool, pid)).toBe(true);
       await client.query("commit");
-      expect(await pending).toEqual({ ok: true, value: { result: "device_revoked" } });
+      expect(await pending).toEqual({
+        ok: true,
+        value: { result: "device_revoked" },
+        json: '{"protocol":2,"result":"device_revoked"}',
+      });
     } finally {
       await client.query("rollback");
       client.release();

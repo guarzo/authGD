@@ -2,9 +2,17 @@ import { createHash, createPrivateKey, createPublicKey, sign, verify } from "nod
 import { readFileSync } from "node:fs";
 import { afterAll, describe, expect, it } from "vitest";
 import type { z } from "zod";
+import { safeParseFleetV2Dto } from "@/core/fleet-v2-validation";
 import {
   CatalogueGetSchema,
   CatalogueRevisionSchema,
+  pairingBegunSchema,
+  ParticipationResultSchema,
+  EligibilityGetSchema,
+  RecoveryBegunSchema,
+  RecoveryReconnectedSchema,
+  RecoveryRetrySchema,
+  SessionRenewedSchema,
   CombatEffectSchema,
   CombatGetSchema,
   CombatPutSchema,
@@ -119,6 +127,13 @@ const originalFixture = structuredClone(fixture);
 const schemas: Record<string, z.ZodType> = {
   catalogue: CatalogueGetSchema,
   pairing_completed: PairingCompletedSchema,
+  pairing_begun: pairingBegunSchema("https://relay.example.test"),
+  participation: ParticipationResultSchema,
+  eligibility: EligibilityGetSchema,
+  recovery_challenge: RecoveryBegunSchema,
+  recovery_reconnected: RecoveryReconnectedSchema,
+  recovery_retry: RecoveryRetrySchema,
+  session: SessionRenewedSchema,
   device: ControlDeviceSchema,
   combat_put: CombatPutSchema,
   combat_get: CombatGetSchema,
@@ -131,12 +146,6 @@ const schemas: Record<string, z.ZodType> = {
 // No acceptance tests are registered for these families: the v2 DTO/context
 // helpers do not exist yet. Counts are derived in fixture-execution-report.md.
 const unimplemented = [
-  "pairing_begun",
-  "participation",
-  "eligibility",
-  "recovery_challenge",
-  "recovery_reconnected",
-  "recovery_retry",
   "automatic_get",
   "automatic_result",
   "receipt_get",
@@ -145,7 +154,6 @@ const unimplemented = [
   "source_stop",
   "source_start_result",
   "source_stop_result",
-  "session",
   "automatic_command",
   "source",
   "status",
@@ -187,14 +195,18 @@ function assertDto(
 ): void {
   const schema = schemas[vector.decoder];
   if (!schema) throw new Error(`No implemented decoder: ${vector.decoder}`);
-  const result = schema.safeParse(value);
+  const result = safeParseFleetV2Dto(schema, value);
   expect(result.success, result.success ? "accepted DTO" : result.error.message).toBe(
     vector.accept,
   );
   if (result.success && Object.hasOwn(vector, "expect")) {
     // Error acceptance is a valid closed error envelope, not operation success.
     const decoded =
-      vector.decoder === "error" ? (result.data as { error: string }).error : result.data;
+      vector.decoder === "error"
+        ? (result.data as { error: string }).error
+        : vector.decoder === "participation"
+          ? (result.data as { participation: unknown }).participation
+          : result.data;
     expectField(fixtureField(decoded, vector.expect_path ?? []), vector.expect);
   }
 }
@@ -249,7 +261,7 @@ afterAll(() => {
   expect(sha256(readFileSync(fixtureUrl))).toBe(approvedSha256);
 });
 
-describe("approved codec vectors through production schemas", () => {
+describe("approved codec vectors through the combined production DTO boundary", () => {
   it.each(fixture.codec_vectors.filter(supported))("$name", (vector) => {
     assertDto(vector, materializeCodec(fixture.valid, vector));
   });
@@ -270,7 +282,7 @@ describe("raw decoding only — source_stop DTO acceptance remains unimplemented
     },
   );
 });
-describe("approved list recipes through production schemas", () => {
+describe("approved list recipes through the combined production DTO boundary", () => {
   it.each(fixture.list_vectors.filter(supported))(
     "$name",
     (vector) => {
