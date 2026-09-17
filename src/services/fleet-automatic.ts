@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { and, eq, gt, inArray, isNotNull, lte, ne, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { Db, DbTx } from "@/db";
@@ -40,6 +40,8 @@ import {
   type AutomaticToken,
   type AutomaticRejectedToken,
   type AutomaticBound,
+  type AutomaticVerified,
+  type AutomaticCommit,
   type AutomaticAuthLossProof,
   type AutomaticRetryFailure,
   type AutomaticCommand,
@@ -85,6 +87,8 @@ import {
 } from "@/services/fleet-key-identity";
 import {
   FleetLifecycleRetry,
+  FLEET_SOURCE_INTENT_TTL_MS,
+  FLEET_SOURCE_TOMBSTONE_RETENTION_MS,
   fleetLifecycleTransaction,
   hasUsableFleetRead,
   invalidateFleetSources,
@@ -104,6 +108,8 @@ import { currentSourceEvidence } from "@/services/fleet-shared-admission";
 import {
   FleetLinkSnapshotOverflow,
   MAX_FLEET_LINK_SNAPSHOT,
+  applyFleetAuthorityProof,
+  FleetAuthorityProofRefusal,
 } from "@/services/fleet-source-observation";
 
 const AutomaticTaskInput = z
@@ -165,6 +171,19 @@ const AutomaticBoundInput = z
       .max(8192),
     expectedAuthorityGeneration: SafeCounterSchema.max(2147483647),
     membershipRetryAt: internalDate,
+  })
+  .strict();
+const AutomaticVerifiedInput = z
+  .object({
+    evidence: z
+      .object({
+        observedAt: internalDate,
+        expiresAt: internalDate,
+        nextFetchAt: internalDate,
+      })
+      .strict(),
+    memberIds: z.array(PositiveIdSchema),
+    nextFetchAt: internalDate,
   })
   .strict();
 const AutomaticAuthLossInput = z.discriminatedUnion("cause", [
@@ -271,7 +290,12 @@ async function signedActor(tx: DbTx, raw: string) {
 /** Account sources, candidates and actor-device OR selections all contribute
  * dependencies before ANY identity/account lock. Relay publishers can belong to
  * another account; include them without turning them into mutation selectors. */
-type ControlTarget = { sourceId?: string; characterId?: number; fleetId?: number };
+type ControlTarget = {
+  sourceId?: string;
+  characterId?: number;
+  fleetId?: number;
+  linkedIds?: readonly number[];
+};
 async function probeControl(
   tx: DbTx,
   accountId: string,
@@ -349,6 +373,7 @@ async function probeControl(
     ? await tx.select().from(fleetDevice).where(inArray(fleetDevice.id, deviceIds))
     : [];
   const identityIds = unique([
+    ...(target.linkedIds ?? []),
     ...(target.characterId ? [target.characterId] : []),
     ...sources.map((s) => s.bossCharacterId).filter(present),
     ...candidates.map((c) => c.characterId),
@@ -502,13 +527,16 @@ async function prepareSigned(
   return { ...p, actor, mode, now };
 }
 
-/** Candidate-only transactions reuse the complete control probe, including all
- * boss/approver/sibling dependencies, but never mutate any source or authority.
+/** Discovery preparation reuses the complete control probe, including all
+ * boss/approver/sibling dependencies, without allocating a source or authority.
+ * Positive commit also supplies its prospective source and captured roster IDs.
  * Keys precede identities/accounts; changed earlier selectors retry OUTSIDE Tx. */
 async function prepareAutomaticDiscovery(
   tx: DbTx,
   task: AutomaticTask,
   fleetId?: number,
+  sourceId?: string,
+  linkedIds?: readonly number[],
 ) {
   const mode = await lockFleetSharingMode(tx);
   if (!mode.enabled || mode.keyIdentityPhase !== "ready") return null;
@@ -537,7 +565,7 @@ async function prepareAutomaticDiscovery(
     task.accountId,
     { kind: "device", deviceId: deviceProbe.id },
     undefined,
-    { characterId: task.characterId, fleetId },
+    { characterId: task.characterId, fleetId, sourceId, linkedIds },
   );
   const [consent] = await tx
     .select()
@@ -594,7 +622,16 @@ async function prepareAutomaticDiscovery(
     isAutomaticCandidateSuspended(candidate, boss)
   )
     return null;
-  return { candidate, consent, boss, device };
+  return {
+    candidate,
+    consent,
+    boss,
+    device,
+    mode,
+    owner: p.accounts.get(task.accountId)!,
+    identities: new Map(p.identities.map((ch) => [ch.id, ch])),
+    locked: p.prepared.locked,
+  };
 }
 type PreparedDiscovery = NonNullable<
   Awaited<ReturnType<typeof prepareAutomaticDiscovery>>
@@ -752,6 +789,267 @@ export async function bindFleetAutomaticDiscovery(
       membershipRetryAt: retryAt,
     };
   });
+}
+
+/** Rejected positive work releases only its exact outstanding callback. This
+ * deliberately does not require JWT/grant/claim freshness: expiry or revoked
+ * admission must still relinquish old work, never rewrite a newer delivery/latch.
+ * Runs separately so a typed proof refusal has already rolled back its source. */
+async function settleAutomaticCommit(
+  db: Db,
+  claim: AutomaticClaim,
+  result: "fenced" | "capacity_limited" | "authority_changed",
+  nextFetchAt: Date | null,
+  clock?: () => Date,
+): Promise<void> {
+  await fleetLifecycleTransaction(db, async (tx) => {
+    await lockFleetSharingMode(tx);
+    await lockFleetIdentityCharacters(tx, [claim.task.characterId]);
+    const owners = await lockFleetAccounts(tx, [claim.task.accountId]);
+    if (!owners.has(claim.task.accountId)) return;
+    const [c] = await tx
+      .select()
+      .from(fleetAutomaticCandidate)
+      .where(candidateKey(claim.task));
+    if (
+      !c ||
+      c.consentGeneration !== claim.task.consentGeneration ||
+      c.candidateGeneration !== claim.task.candidateGeneration ||
+      c.ownerHash !== claim.boss.ownerHash ||
+      c.linkEpoch !== claim.boss.fleetLinkEpoch ||
+      c.claimGeneration !== claim.claimGeneration ||
+      c.claimReservationId !== claim.task.reservationId ||
+      c.claimExpiresAt?.getTime() !== claim.claimExpiresAt.getTime() ||
+      c.reservationId !== null ||
+      c.enqueueUntil !== null ||
+      c.sourceId !== null
+    )
+      return;
+    const now = await fleetDatabaseNow(tx, clock?.());
+    const schedule =
+      result === "capacity_limited"
+        ? {
+            ...automaticRetrySchedule(c, "capacity_limited", nextFetchAt, now),
+            lastOutcome: "capacity_limited" as const,
+          }
+        : result === "authority_changed"
+          ? {
+              nextAttemptAt: new Date(
+                Math.max(
+                  c.nextAttemptAt.getTime(),
+                  nextFetchAt?.getTime() ?? 0,
+                  now.getTime() + 5000,
+                ),
+              ),
+            }
+          : {};
+    // No newer consent or suspended state may inherit this callback's schedule.
+    const [consent] = await tx
+      .select()
+      .from(fleetAutomaticConsent)
+      .where(eq(fleetAutomaticConsent.accountId, claim.task.accountId));
+    const current =
+      consent?.enabled &&
+      consent.generation === claim.task.consentGeneration &&
+      consent.revision === claim.consentRevision &&
+      consent.approvingDeviceId === claim.approverDeviceId &&
+      c.lastOutcome !== "fleet_read_invalid" &&
+      c.lastOutcome !== "identity_changed";
+    await tx
+      .update(fleetAutomaticCandidate)
+      .set({ ...clearDiscoveryCallbacks, ...(current ? schedule : {}) })
+      .where(candidateKey(claim.task));
+  });
+}
+
+/** Consumes the bounded upstream's real UNCOMMITTED continuation. Prospective
+ * identity is advisory-locked before devices, but no Source exists until every
+ * admission/proof/capacity guard passes. There is still no scheduler/job here. */
+export async function commitFleetAutomaticDiscovery(
+  db: Db,
+  bound: AutomaticBound,
+  verified: AutomaticVerified,
+  clock?: () => Date,
+): Promise<AutomaticCommit> {
+  if (!AutomaticBoundInput.safeParse(bound).success) {
+    // A malformed positive witness grants no authority, but a recognizable
+    // current claim must still be released. Never import its unvalidated pacing.
+    const claim = bound?.token?.claim;
+    if (AutomaticClaimInput.safeParse(claim).success)
+      await settleAutomaticCommit(db, structuredClone(claim), "fenced", null, clock);
+    return { result: "fenced" };
+  }
+  const captured = structuredClone(bound);
+  const claim = captured.token.claim;
+  if (!AutomaticVerifiedInput.safeParse(verified).success) {
+    await settleAutomaticCommit(db, claim, "fenced", captured.membershipRetryAt, clock);
+    return { result: "fenced" };
+  }
+  const proof = structuredClone(verified);
+  const retained = captured.linkedCharacters.filter((ch) =>
+    proof.memberIds.includes(ch.characterId),
+  );
+  const sourceId = randomUUID();
+  let result: AutomaticCommit;
+  try {
+    result = await fleetLifecycleTransaction(db, async (tx): Promise<AutomaticCommit> => {
+      const p = await prepareAutomaticDiscovery(
+        tx,
+        claim.task,
+        captured.fleetId,
+        sourceId,
+        retained.map((ch) => ch.characterId),
+      );
+      if (!p) return { result: "fenced" };
+      const [authority] = await tx
+        .select()
+        .from(fleetSourceAuthority)
+        .where(eq(fleetSourceAuthority.fleetId, captured.fleetId));
+      const now = await fleetDatabaseNow(tx, clock?.());
+      if (
+        !currentAutomaticToken(p, captured.token, now) ||
+        proof.evidence.observedAt > now ||
+        proof.evidence.expiresAt <= now ||
+        retained.length > 256 ||
+        !retained.some(
+          (ch) => ch.characterId === p.boss.id && ch.linkEpoch === p.boss.fleetLinkEpoch,
+        )
+      )
+        return { result: "fenced" };
+      const sameBinding = p.locked.sources.find(
+        (s) =>
+          s.accountId === claim.task.accountId &&
+          s.automaticConsentAccountId === claim.task.accountId &&
+          s.automaticConsentGeneration === claim.task.consentGeneration &&
+          s.deviceId === claim.approverDeviceId &&
+          s.bossCharacterId === p.boss.id &&
+          s.bossOwnerHash === p.boss.ownerHash &&
+          s.bossLinkEpoch === p.boss.fleetLinkEpoch,
+      );
+      if (sameBinding) {
+        // The active source owner alone refreshes a live binding. A different
+        // fleet must finish that source before a new UUID can be admitted.
+        if (sameBinding.fleetId !== captured.fleetId) return { result: "fenced" };
+        await tx
+          .update(fleetAutomaticCandidate)
+          .set({
+            ...clearDiscoveryCallbacks,
+            sourceId: sameBinding.id,
+            failureCount: 0,
+            lastOutcome: "verified",
+          })
+          .where(candidateKey(claim.task));
+        return {
+          result: "reused",
+          sourceId: sameBinding.id,
+          sourceGeneration: sameBinding.generation,
+        };
+      }
+      if (
+        !authority ||
+        authority.authorityGeneration !== captured.expectedAuthorityGeneration ||
+        (authority.verifiedAt !== null &&
+          authority.verifiedAt >= proof.evidence.observedAt)
+      )
+        return { result: "authority_changed" };
+      const owned = await tx
+        .select()
+        .from(fleetSourceIntent)
+        .where(eq(fleetSourceIntent.accountId, claim.task.accountId));
+      if (
+        owned.length >= 256 ||
+        owned.filter((s) => s.state !== "ended").length >= 16 ||
+        authority.authorityGeneration >= 2147483646 ||
+        p.locked.sources.some(
+          (s) =>
+            s.fleetId === captured.fleetId &&
+            s.activatedAt !== null &&
+            (s.generation >= 2147483647 || s.fetchGeneration >= 2147483647),
+        )
+      )
+        return { result: "capacity_limited" };
+      const intentExpiresAt = checkedDateAdd(
+        now.toISOString(),
+        FLEET_SOURCE_INTENT_TTL_MS,
+      );
+      const retainUntil =
+        intentExpiresAt &&
+        checkedDateAdd(intentExpiresAt, FLEET_SOURCE_TOMBSTONE_RETENTION_MS);
+      if (!intentExpiresAt || !retainUntil) return { result: "fenced" };
+      const [source] = await tx
+        .insert(fleetSourceIntent)
+        .values({
+          id: sourceId,
+          accountId: claim.task.accountId,
+          deviceId: claim.approverDeviceId,
+          bossCharacterId: p.boss.id,
+          bossOwnerHash: p.boss.ownerHash,
+          bossLinkEpoch: p.boss.fleetLinkEpoch,
+          automaticConsentAccountId: claim.task.accountId,
+          automaticConsentGeneration: claim.task.consentGeneration,
+          generation: 1,
+          fetchGeneration: 0,
+          state: "active",
+          latestOutcome: "verified",
+          fleetId: captured.fleetId,
+          intentCreatedAt: now,
+          intentExpiresAt: new Date(intentExpiresAt),
+          activatedAt: now,
+          lastAttemptAt: now,
+          nextFetchAt: proof.nextFetchAt,
+          fetchClaimExpiresAt: null,
+          enqueueUntil: null,
+          endedAt: null,
+          terminalReason: null,
+          retainUntil: new Date(retainUntil),
+          stopReceipt: null,
+          explicitlyStopped: false,
+        })
+        .returning();
+      await applyFleetAuthorityProof(
+        tx,
+        {
+          source,
+          authority,
+          boss: p.boss,
+          device: p.device,
+          owner: p.owner,
+          mode: p.mode,
+          identities: p.identities,
+          locked: { ...p.locked, sources: [...p.locked.sources, source] },
+        },
+        {
+          expectedAuthorityGeneration: captured.expectedAuthorityGeneration,
+          evidence: proof.evidence,
+          linkedCharacters: retained,
+          nextFetchAt: proof.nextFetchAt,
+        },
+        now,
+      );
+      await tx
+        .update(fleetAutomaticCandidate)
+        .set({
+          ...clearDiscoveryCallbacks,
+          sourceId: source.id,
+          failureCount: 0,
+          lastOutcome: "verified",
+        })
+        .where(candidateKey(claim.task));
+      return {
+        result: "created",
+        sourceId: source.id,
+        sourceGeneration: source.generation,
+      };
+    });
+  } catch (err) {
+    if (!(err instanceof FleetAuthorityProofRefusal)) throw err;
+    result = {
+      result: err.reason === "authority_changed" ? "authority_changed" : "fenced",
+    };
+  }
+  if (result.result !== "created" && result.result !== "reused")
+    await settleAutomaticCommit(db, claim, result.result, proof.nextFetchAt, clock);
+  return result;
 }
 
 export async function settleFleetAutomaticAuthorizationLoss(
