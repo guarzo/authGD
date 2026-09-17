@@ -187,6 +187,60 @@ export function hasUsableFleetRead(
   );
 }
 
+type Boss = typeof character.$inferSelect;
+export type AutomaticGrantWakeReason =
+  "accepted_reauthorization" | "verified_fleet_read_restored";
+
+/** Trusted accepted-grant writer port: caller owns mode/identity/account locks.
+ * Before/after are actual persisted rows; scope restoration additionally needs
+ * the caller's verified current subject/owner and winning settled-blob CAS.
+ * Never starts consent/work or reconciles a binding. Retained pacing and exhausted
+ * counters survive the wake, including while consent is Off. */
+export async function wakeFleetAutomaticGrantCandidate(
+  tx: DbTx,
+  before: Boss,
+  after: Boss,
+  reason: AutomaticGrantWakeReason,
+  now: Date,
+): Promise<void> {
+  if (
+    !Number.isFinite(now.getTime()) ||
+    before.accountId !== after.accountId ||
+    before.id !== after.id ||
+    before.ownerHash !== after.ownerHash ||
+    before.fleetLinkEpoch !== after.fleetLinkEpoch ||
+    !hasUsableFleetRead(after) ||
+    (reason !== "accepted_reauthorization" &&
+      reason !== "verified_fleet_read_restored") ||
+    (reason === "verified_fleet_read_restored" &&
+      before.scopes.includes(FLEET_READ_SCOPE))
+  )
+    return;
+  await tx
+    .update(fleetAutomaticCandidate)
+    .set({
+      lastOutcome: null,
+      failureCount: 0,
+      reservationId: null,
+      enqueueUntil: null,
+      claimReservationId: null,
+      claimExpiresAt: null,
+      sourceId: null,
+    })
+    .where(
+      and(
+        eq(fleetAutomaticCandidate.accountId, after.accountId),
+        eq(fleetAutomaticCandidate.characterId, after.id),
+        eq(fleetAutomaticCandidate.ownerHash, after.ownerHash),
+        eq(fleetAutomaticCandidate.linkEpoch, after.fleetLinkEpoch),
+        inArray(fleetAutomaticCandidate.lastOutcome, [
+          "fleet_read_invalid",
+          "identity_changed",
+        ]),
+      ),
+    );
+}
+
 export type FleetLifecycleSelectors = {
   accountIds?: readonly string[];
   /** Grant/token loss: end these bosses' sources, not their participation. */

@@ -25,7 +25,9 @@ import {
   invalidateFleetSources,
   lockFleetLifecycle,
   prepareFleetCharacterMutation,
+  wakeFleetAutomaticGrantCandidate,
 } from "@/services/fleet-lifecycle";
+import { fleetDatabaseNow } from "@/services/fleet-key-identity";
 
 // Identity lifecycle entries start with prepareFleetCharacterMutation: mode,
 // possible merge keys/requests, character identity, sorted accounts and browser
@@ -110,6 +112,8 @@ async function reauthCharacter(
   sourceAlreadyEnded = false,
 ) {
   const fields = tokenFields(cfg, ch);
+  // prepareFleetCharacterMutation already owns this row's identity/account locks.
+  // Re-read after a possible merge so the before-state is the actual current row.
   const [old] = await dbx
     .select()
     .from(character)
@@ -129,10 +133,18 @@ async function reauthCharacter(
       accountId,
     );
   }
-  await dbx
+  const [updated] = await dbx
     .update(character)
     .set({ ...fields, ...(identityChanged ? { fleetLinkEpoch: randomUUID() } : {}) })
-    .where(eq(character.id, ch.characterId));
+    .where(eq(character.id, ch.characterId))
+    .returning();
+  await wakeFleetAutomaticGrantCandidate(
+    dbx,
+    old,
+    updated,
+    "accepted_reauthorization",
+    await fleetDatabaseNow(dbx),
+  );
   // A fresh, fully-scoped token retires whatever token-fault verdict is sitting
   // on contact_sync_state — otherwise /account keeps telling the member their
   // token is dead, with a re-auth link, until the sync enqueued below actually
