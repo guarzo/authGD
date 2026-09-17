@@ -1,4 +1,10 @@
+import { createHash } from "node:crypto";
 import { z } from "zod";
+import type { character, fleetAutomaticCandidate } from "@/db/schema";
+import {
+  FLEET_CONSERVATIVE_PROBE_MS,
+  type deriveFleetEvidenceWindow,
+} from "./fleet-freshness";
 import {
   API_VERSION,
   CharacterNameSchema,
@@ -14,6 +20,222 @@ import {
   checkedDateAdd,
 } from "./fleet-api-v2";
 import { safeParseFleetV2Dto } from "./fleet-v2-validation";
+
+// Detached in-process witnesses, never wire/queue credentials. Admission is a
+// provenance guard; the trusted upstream owner must still verify JWTs and origin.
+type Boss = Readonly<typeof character.$inferSelect>;
+type Candidate = Readonly<typeof fleetAutomaticCandidate.$inferSelect>;
+type Binding = Pick<Boss, "accountId" | "id" | "ownerHash" | "fleetLinkEpoch">;
+export type AutomaticTask = Readonly<{
+  accountId: string;
+  characterId: number;
+  consentGeneration: number;
+  candidateGeneration: number;
+  reservationId: string;
+}>;
+export type AutomaticClaim = Readonly<{
+  task: AutomaticTask;
+  consentRevision: number;
+  approverDeviceId: string;
+  boss: Boss;
+  claimGeneration: number;
+  claimExpiresAt: Date;
+}>;
+export type AutomaticToken = Readonly<{
+  admission: "admitted";
+  claim: AutomaticClaim;
+  settledTokenEnc: string;
+  accessTokenExpiresAt: Date;
+}>;
+export type AutomaticBound = Readonly<{
+  token: AutomaticToken;
+  fleetId: number;
+  linkedCharacters: readonly Readonly<{ characterId: number; linkEpoch: string }>[];
+  expectedAuthorityGeneration: number;
+  membershipRetryAt: Date;
+}>;
+export type AutomaticVerified = Readonly<{
+  evidence: Readonly<NonNullable<ReturnType<typeof deriveFleetEvidenceWindow>>>;
+  memberIds: readonly number[];
+  nextFetchAt: Date;
+}>;
+export type AutomaticFailure = Readonly<{
+  outcome:
+    | "not_in_fleet"
+    | "not_boss"
+    | "fleet_read_invalid"
+    | "identity_changed"
+    | "service_unavailable"
+    | "untrustworthy_evidence"
+    | "timed_out"
+    | "capacity_limited";
+  nextAttemptAt: Date | null;
+}>;
+export type AutomaticCommit =
+  | Readonly<{ result: "created" | "reused"; sourceId: string; sourceGeneration: number }>
+  | Readonly<{ result: "fenced" | "capacity_limited" | "authority_changed" }>;
+export type AutomaticRejectedToken = Readonly<{
+  admission: "rejected";
+  claim: AutomaticClaim;
+  settledTokenEnc: string;
+  accessTokenExpiresAt: Date;
+}>;
+export type AutomaticAuthLossProof =
+  | Readonly<{
+      cause:
+        | "verified_scope_missing"
+        | "verified_subject_mismatch"
+        | "verified_owner_mismatch";
+      rejected: AutomaticRejectedToken;
+    }>
+  | Readonly<{ cause: "esi_membership_unauthorized"; token: AutomaticToken }>
+  | Readonly<{ cause: "esi_roster_unauthorized"; bound: AutomaticBound }>;
+export type AutomaticRetryFailure = Omit<AutomaticFailure, "outcome"> &
+  Readonly<{
+    outcome: Exclude<
+      AutomaticFailure["outcome"],
+      "fleet_read_invalid" | "identity_changed"
+    >;
+  }>;
+
+function sameAutomaticIdentity(candidate: Candidate, boss: Binding): boolean {
+  return (
+    candidate.accountId === boss.accountId &&
+    candidate.characterId === boss.id &&
+    candidate.ownerHash === boss.ownerHash &&
+    candidate.linkEpoch === boss.fleetLinkEpoch
+  );
+}
+export function isAutomaticCandidateSuspended(
+  candidate: Candidate,
+  boss: Binding,
+): boolean {
+  return (
+    sameAutomaticIdentity(candidate, boss) &&
+    (candidate.lastOutcome === "fleet_read_invalid" ||
+      candidate.lastOutcome === "identity_changed")
+  );
+}
+const clearedAutomaticCallbacks = {
+  reservationId: null,
+  enqueueUntil: null,
+  claimReservationId: null,
+  claimExpiresAt: null,
+  sourceId: null,
+};
+/** Future bounded scanner component only: no persistence, allocation or dispatch.
+ * Consent-only reconciliation must not recycle a failed grant or exhausted task. */
+export function reconcileAutomaticCandidateBinding(
+  candidate: Candidate,
+  boss: Binding,
+  consentGeneration: number,
+): Candidate | null {
+  if (
+    !PositiveIdSchema.safeParse(consentGeneration).success ||
+    candidate.accountId !== boss.accountId ||
+    candidate.characterId !== boss.id
+  )
+    return null;
+  const sameIdentity = sameAutomaticIdentity(candidate, boss);
+  if (sameIdentity && candidate.consentGeneration === consentGeneration) return candidate;
+  const generation = checkedCounterAdd(candidate.candidateGeneration, 1);
+  if (generation === null) return { ...candidate, ...clearedAutomaticCallbacks };
+  return {
+    ...candidate,
+    ...clearedAutomaticCallbacks,
+    candidateGeneration: generation,
+    consentGeneration,
+    ownerHash: boss.ownerHash,
+    linkEpoch: boss.fleetLinkEpoch,
+    ...(sameIdentity ? {} : { lastOutcome: null, failureCount: 0 }),
+  };
+}
+/** Per-candidate half of admission, shared by claim and the future scanner.
+ * The transaction owner additionally proves mode, Member, grant and approver. */
+export function automaticCandidateAdmissible(
+  candidate: Candidate,
+  boss: Binding,
+  consentGeneration: number,
+  now: Date,
+): boolean {
+  return (
+    sameAutomaticIdentity(candidate, boss) &&
+    candidate.consentGeneration === consentGeneration &&
+    !isAutomaticCandidateSuspended(candidate, boss) &&
+    candidate.candidateGeneration < Number.MAX_SAFE_INTEGER &&
+    candidate.claimGeneration < Number.MAX_SAFE_INTEGER - 1 &&
+    candidate.sourceId === null &&
+    candidate.nextAttemptAt <= now &&
+    (candidate.claimExpiresAt === null || candidate.claimExpiresAt <= now)
+  );
+}
+function automaticJitter(
+  candidate: Pick<
+    Candidate,
+    "accountId" | "characterId" | "consentGeneration" | "claimGeneration"
+  >,
+): number {
+  return (
+    createHash("sha256")
+      .update(
+        [
+          "fleet-automatic-jitter-v2",
+          candidate.accountId,
+          String(candidate.characterId),
+          String(candidate.consentGeneration),
+          String(candidate.claimGeneration),
+        ].join("\n"),
+        "utf8",
+      )
+      .digest()
+      .readUInt32BE(0) % 3001
+  );
+}
+/** Invalid supplied pacing is not freshness; preserve the existing conservative
+ * probe boundary as well as every independently valid lower bound. */
+export function automaticRetrySchedule(
+  candidate: Pick<
+    Candidate,
+    | "accountId"
+    | "characterId"
+    | "consentGeneration"
+    | "claimGeneration"
+    | "failureCount"
+    | "nextAttemptAt"
+  >,
+  outcome: AutomaticFailure["outcome"],
+  supplied: Date | null,
+  now: Date,
+): { failureCount: number; nextAttemptAt: Date } {
+  const suspended = outcome === "fleet_read_invalid" || outcome === "identity_changed";
+  const healthy = outcome === "not_in_fleet" || outcome === "not_boss";
+  const failureCount = suspended
+    ? candidate.failureCount
+    : healthy
+      ? 0
+      : Math.min(6, candidate.failureCount + 1);
+  const delay =
+    suspended || healthy || outcome === "capacity_limited"
+      ? 30000
+      : Math.min(900000, 30000 * 2 ** (failureCount - 1));
+  const validSupplied =
+    supplied instanceof Date &&
+    Number.isFinite(supplied.getTime()) &&
+    IsoDateSchema.safeParse(supplied.toISOString()).success;
+  return {
+    failureCount,
+    nextAttemptAt: new Date(
+      Math.max(
+        candidate.nextAttemptAt.getTime(),
+        now.getTime() + delay + automaticJitter(candidate),
+        validSupplied ? supplied.getTime() : 0,
+        supplied !== null && !validSupplied
+          ? now.getTime() + FLEET_CONSERVATIVE_PROBE_MS
+          : 0,
+      ),
+    ),
+  };
+}
 
 export const AUTOMATIC_RECEIPT_TTL_MS = 86_400_000;
 export const AUTOMATIC_INTENT_TTL_MS = 60_000;
