@@ -53,6 +53,24 @@ that environment from the unchanged lock with hashes; do not borrow the running
 application's credentials or profile. No system/browser trust-store changes are
 needed.
 
+## Regular-suite evidence is separate
+
+The complete regular Vitest suite passed **4,936 tests in 190 files**, with no
+skips, after provisioning `authgd_test_fleet_v2_joint` and its distinct
+`_legacy_migration` sibling inside the same owned 55463 container. Its existing
+historical transport/lifecycle checks require Wingman `911ae540` and a separate
+locked environment, plus a production Next build. They are historical fixture
+regressions, **not** current-client v2 journey acceptance or a v1 fallback.
+See [the regular-suite prerequisites](ops.md#reproducing-the-joint-synthetic-proof).
+The new current-client gate above instead pins the current integration checkout.
+
+The Next build used the existing local-only font response fixture and disabled
+telemetry. An isolated `npm ci` installation from the unchanged lock was needed
+because Turbopack rejects the original shared node_modules symlink. Full ESLint
+and typecheck also passed. No production backend or migration changes were made
+for this integration harness; one historical test now selects only its shared
+state column instead of asking the pre-combat schema for newer consent columns.
+
 ## Clock evidence and remaining acceptance
 
 A Windows-client run on Wingman `3363da55` and authGD `e1ac22c` observed relay T
