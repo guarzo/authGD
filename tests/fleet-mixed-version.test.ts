@@ -355,8 +355,12 @@ it("actual old reader locks block cutover, queued authenticated old read fails a
       fleetEligibility,
     ])
       expect(await ctx.db.select().from(table)).toEqual([]);
+    // The pinned DB predates automatic-consent columns. Inspect the shared
+    // state column rather than projecting the current schema into that fixture.
     expect(
-      (await ctx.db.select().from(fleetSourceIntent)).every((s) => s.state === "ended"),
+      (
+        await ctx.db.select({ state: fleetSourceIntent.state }).from(fleetSourceIntent)
+      ).every((s) => s.state === "ended"),
     ).toBe(true);
     expect(await ctx.db.select().from(fleetDevice).orderBy(fleetDevice.id)).toEqual(
       devices,
