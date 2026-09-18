@@ -1,9 +1,16 @@
 # Current Wingman v2 joint gate
 
-**Status: not accepted on the current development host.** The gate is implemented
-and fails rather than skipping or weakening the clock checks. Real relay UTC
-steps have produced `clock_inconsistent` with both Linux and Windows clients.
-A green desktop unit suite is not a substitute for this gate.
+**Status: opt-in and environment-blocked on the current development host.** The
+user approved retaining this separately configured test without requiring a green
+run on this WSL host before local completion or opening draft PRs. It is not part
+of the regular Vitest suite, and remains failing rather than being silently
+skipped or weakening the clock checks. This decision is not a passing end-to-end
+result: a green regular suite does not prove this particular journey.
+
+A read-only probe reproduced WSL clock-rate errors and wall-clock steps without
+Wingman; Windows precise clocks stayed aligned and all 2,400 database timestamp
+conversions agreed. Further WSL repair is outside the application change. Keep
+production timing protections and deterministic timing regressions unchanged.
 
 ## What runs
 
@@ -63,6 +70,11 @@ locked environment, plus a production Next build. They are historical fixture
 regressions, **not** current-client v2 journey acceptance or a v1 fallback.
 See [the regular-suite prerequisites](ops.md#reproducing-the-joint-synthetic-proof).
 The new current-client gate above instead pins the current integration checkout.
+
+The fresh pre-publication repeat passed **4,936 tests in 190 files, no skips,
+1067.59s** on unchanged source/test head `a157543` plus acceptance documentation.
+Full ESLint, typecheck and repository-wide Prettier checks passed again. The
+current-client journey was not rerun or relabelled as passing.
 
 The Next build used the existing local-only font response fixture and disabled
 telemetry. An isolated `npm ci` installation from the unchanged lock was needed
