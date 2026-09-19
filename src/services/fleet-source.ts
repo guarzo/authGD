@@ -1,52 +1,56 @@
-import { createHash } from "node:crypto";
 import { and, eq, ne } from "drizzle-orm";
 import { z } from "zod";
 import type { Db, DbTx } from "@/db";
+import { character, fleetSourceIntent } from "@/db/schema";
 import {
-  character,
-  fleetDevice,
-  fleetDeviceSession,
-  fleetSourceIntent,
-} from "@/db/schema";
-import {
-  SHARED_CAPABILITY,
-  type SignedFleetCall,
-  type FleetReply,
-  type FleetCode,
-} from "@/core/fleet-sharing";
+  SourceStartSchema,
+  SourceStopSchema,
+  SourceStartResultSchema,
+  SourceStopResultSchema,
+  SourceStopReceiptSchema,
+  SourcesGetSchema,
+  parseSourceStartResult,
+  parseSourceStopResult,
+  AUTOMATIC_INTENT_TTL_MS,
+  AUTOMATIC_RECEIPT_TTL_MS,
+  type SourceStart,
+  type SourceStop,
+  type SourceView,
+  type SourceStartResult,
+  type SourceStopResult,
+  type SourceStopReceipt,
+  type SourcesGet,
+} from "@/core/fleet-automatic";
+import { FLEET_V2_BYTE_LIMITS, checkedDateAdd } from "@/core/fleet-api-v2";
+import { safeParseFleetV2Dto } from "@/core/fleet-v2-validation";
+import type { SignedFleetCall, FleetReply, FleetCode } from "@/core/fleet-sharing";
 import { FLEET_READ_SCOPE } from "@/lib/esi/client";
+import { serializeFleetV2Json } from "@/lib/fleet-api-v2";
 import { logAudit } from "@/services/audit";
-import { fleetDatabaseNow } from "@/services/fleet-key-identity";
 import {
   fleetLifecycleTransaction,
+  FleetLifecycleRetry,
   hasUsableFleetRead,
   invalidateFleetSources,
-  lockFleetAccounts,
-  lockFleetIdentityCharacters,
-  lockFleetLifecycle,
   FLEET_SOURCE_INTENT_TTL_MS,
   FLEET_SOURCE_TOMBSTONE_RETENTION_MS,
 } from "@/services/fleet-lifecycle";
-import { lockFleetSharingMode } from "@/services/fleet-sharing-mode";
+import {
+  prepareFleetSourceControl,
+  requireFleetSourceWork,
+  findFleetControlReceipt,
+  closeFleetAutomaticForSourceStop,
+  readFleetSourceAutomaticStatus,
+} from "@/services/fleet-automatic";
 import {
   commitSessionCadence,
-  gateSignedSession,
   isRetryableRelayError,
   RelayRefusal,
-  sampleFleetSessionAdmission,
 } from "@/services/fleet-relay";
 import { enqueueSync } from "@/services/outbox";
 
-export type SourceCommand =
-  | {
-      operation: "start";
-      sourceId: string;
-      expectedGeneration: 0;
-      characterId: number;
-      characterLinkEpoch: string;
-      intentCreatedAt: Date;
-    }
-  | { operation: "stop"; sourceId: string; expectedGeneration: number };
+export type SourceCommand = SourceStart | SourceStop;
+export const SourceCommandSchema = z.union([SourceStartSchema, SourceStopSchema]);
 // Terminal lifecycle reasons remain private. Unknown historical reasons collapse
 // to ended, never leak database/provider messages through the closed DTO.
 const REASONS = [
@@ -66,313 +70,361 @@ const REASONS = [
   "timed_out",
   "ended",
 ] as const;
-export type SourceReason = (typeof REASONS)[number];
-export type SourceView = {
-  sourceId: string;
-  generation: number;
-  characterId: number | null;
-  state: "pending" | "active" | "paused" | "ended";
-  reason: SourceReason | null;
-  pendingExpiresAt: Date | null;
-};
-export type SourceStateView = {
-  sources: SourceView[];
-  characters: {
-    characterId: number;
-    characterName: string;
-    characterLinkEpoch: string;
-    hasFleetRead: boolean;
-    tokenUsable: boolean;
-  }[];
-};
-const commandSchema = z.discriminatedUnion("operation", [
-  z
-    .object({
-      operation: z.literal("start"),
-      sourceId: z.uuid(),
-      expectedGeneration: z.literal(0),
-      characterId: z.number().int().positive(),
-      characterLinkEpoch: z.uuid(),
-      intentCreatedAt: z.date(),
-    })
-    .strict(),
-  z
-    .object({
-      operation: z.literal("stop"),
-      sourceId: z.uuid(),
-      expectedGeneration: z.number().int().min(0).max(2_147_483_646),
-    })
-    .strict(),
-]);
+type Source = typeof fleetSourceIntent.$inferSelect;
+type Prepared = Awaited<ReturnType<typeof prepareFleetSourceControl>>;
 /** Per-account caps include every device: cycling device IDs cannot evade storage
  * limits. Retained fences count, while identical retries need no new capacity. */
 export const MAX_LIVE_FLEET_SOURCES = 16;
 export const MAX_RETAINED_FLEET_INTENTS = 256;
 export const MAX_SOURCE_CONTROL_CHARACTERS = 256;
-export function sourceView(source: typeof fleetSourceIntent.$inferSelect): SourceView {
+export function sourceView(source: Source): SourceView {
   const reason =
     source.terminalReason ??
     (source.latestOutcome === "verified" ? null : source.latestOutcome);
   return {
-    sourceId: source.id,
+    source_id: source.id,
     generation: source.generation,
-    characterId: source.bossCharacterId,
+    character_id: source.bossCharacterId,
     state: source.state,
     reason:
       reason === null
         ? null
-        : REASONS.includes(reason as SourceReason)
-          ? (reason as SourceReason)
+        : REASONS.includes(reason as (typeof REASONS)[number])
+          ? (reason as (typeof REASONS)[number])
           : "ended",
-    pendingExpiresAt:
+    pending_expires_at:
       source.state !== "ended" && source.activatedAt === null
-        ? source.intentExpiresAt
+        ? source.intentExpiresAt.toISOString()
         : null,
+    automatic:
+      source.automaticConsentGeneration === null
+        ? null
+        : { consent_generation: source.automaticConsentGeneration },
   };
 }
-async function actorProbe(tx: DbTx, sessionId: string) {
-  const key = createHash("sha256").update(sessionId).digest("base64url");
-  const [probe] = await tx
-    .select({ accountId: fleetDevice.accountId, deviceId: fleetDevice.id })
-    .from(fleetDeviceSession)
-    .innerJoin(fleetDevice, eq(fleetDevice.id, fleetDeviceSession.deviceId))
-    .where(eq(fleetDeviceSession.id, key));
-  if (!probe) throw new RelayRefusal("unauthorized");
-  return probe;
-}
-async function gateControl(
-  tx: DbTx,
-  call: SignedFleetCall,
-  probe: Awaited<ReturnType<typeof actorProbe>>,
-  tier?: string,
-) {
-  const gate = await gateSignedSession(tx, {
-    ...call,
-    cadence: "read",
-    invalidSessionCode: "unauthorized",
-  });
-  if (gate.device.id !== probe.deviceId || gate.device.accountId !== probe.accountId)
-    throw new RelayRefusal("unauthorized");
-  if (tier !== "member") throw new RelayRefusal("forbidden");
-  if (
-    ![
-      gate.device.approvedCapabilities,
-      gate.session.approvedCapabilities,
-      gate.session.acknowledgedCapabilities,
-    ].every((c) => c.includes(SHARED_CAPABILITY))
-  )
-    throw new RelayRefusal("capability_required");
-  return gate;
-}
-async function reply<T>(work: () => Promise<T>): Promise<FleetReply<T>> {
+type SourceReply<T> =
+  | (Extract<FleetReply<T>, { ok: true }> & { json: string })
+  | Extract<FleetReply<T>, { ok: false }>;
+async function reply<T>(
+  work: () => Promise<{ value: T; json: string }>,
+): Promise<SourceReply<T>> {
   try {
-    return { ok: true, value: await work() };
+    return { ok: true, ...(await work()) };
   } catch (err) {
     if (err instanceof RelayRefusal) return { ok: false, code: err.code as FleetCode };
-    if (isRetryableRelayError(err)) return { ok: false, code: "service_unavailable" };
+    if (err instanceof FleetLifecycleRetry || isRetryableRelayError(err))
+      return { ok: false, code: "service_unavailable" };
     throw err;
   }
+}
+function dateAfter(date: Date, ms: number) {
+  const value = checkedDateAdd(date.toISOString(), ms);
+  if (!value) throw new RelayRefusal("service_unavailable");
+  return new Date(value);
+}
+function fresh(command: SourceCommand, now: Date) {
+  const age = now.getTime() - Date.parse(command.intent_created_at);
+  if (age < 0 || age >= AUTOMATIC_INTENT_TTL_MS) throw new RelayRefusal("invalid_intent");
+}
+async function capacity(tx: DbTx, accountId: string, live: boolean) {
+  const retained = await tx
+    .select({ id: fleetSourceIntent.id })
+    .from(fleetSourceIntent)
+    .where(
+      and(
+        eq(fleetSourceIntent.accountId, accountId),
+        live ? ne(fleetSourceIntent.state, "ended") : undefined,
+      ),
+    )
+    .limit(live ? MAX_LIVE_FLEET_SOURCES : MAX_RETAINED_FLEET_INTENTS);
+  if (retained.length >= (live ? MAX_LIVE_FLEET_SOURCES : MAX_RETAINED_FLEET_INTENTS))
+    throw new RelayRefusal("rate_limited");
+}
+async function start(
+  tx: DbTx,
+  p: Prepared,
+  command: SourceStart,
+  old?: Source,
+): Promise<SourceStartResult> {
+  fresh(command, p.now);
+  requireFleetSourceWork(p);
+  if (old && old.accountId !== p.accountId) throw new RelayRefusal("forbidden");
+  const boss = p.identities.find((c) => c.id === command.character_id);
+  if (
+    !boss ||
+    boss.accountId !== p.accountId ||
+    boss.fleetLinkEpoch.toLowerCase() !== command.character_link_epoch.toLowerCase()
+  )
+    throw new RelayRefusal("forbidden");
+  if (!hasUsableFleetRead(boss)) throw new RelayRefusal("fleet_read_required");
+  const created = new Date(command.intent_created_at);
+  if (old) {
+    if (
+      old.automaticConsentAccountId !== null ||
+      old.state === "ended" ||
+      old.bossCharacterId !== boss.id ||
+      old.bossOwnerHash !== boss.ownerHash ||
+      old.bossLinkEpoch !== boss.fleetLinkEpoch ||
+      old.intentCreatedAt.getTime() !== created.getTime()
+    )
+      throw new RelayRefusal("conflict");
+    return { protocol: 2, source: sourceView(old) };
+  }
+  await capacity(tx, p.accountId, false);
+  await capacity(tx, p.accountId, true);
+  const expires = dateAfter(created, FLEET_SOURCE_INTENT_TTL_MS);
+  const [source] = await tx
+    .insert(fleetSourceIntent)
+    .values({
+      id: command.source_id.toLowerCase(),
+      accountId: p.accountId,
+      deviceId: p.deviceId,
+      bossCharacterId: boss.id,
+      bossOwnerHash: boss.ownerHash,
+      bossLinkEpoch: boss.fleetLinkEpoch,
+      generation: 1,
+      state: "pending",
+      intentCreatedAt: created,
+      intentExpiresAt: expires,
+      nextFetchAt: p.now,
+      retainUntil: dateAfter(expires, FLEET_SOURCE_TOMBSTONE_RETENTION_MS),
+    })
+    .returning();
+  await logAudit(tx, {
+    actor: p.accountId,
+    action: "fleet_source.started",
+    target: source.id,
+    details: { deviceId: p.deviceId, reason: "requested" },
+  });
+  await enqueueSync(tx, {
+    kind: "fleet-source",
+    sourceId: source.id,
+    generation: source.generation,
+  });
+  return { protocol: 2, source: sourceView(source) };
+}
+async function stop(
+  tx: DbTx,
+  p: Prepared,
+  command: SourceStop,
+  old?: Source,
+): Promise<SourceStopResult> {
+  const retained = await findFleetControlReceipt(
+    tx,
+    p.accountId,
+    command.request_id,
+    p.now,
+  );
+  if (retained) {
+    if (retained.kind !== "source_stop") throw new RelayRefusal("request_id_conflict");
+    const value: SourceStopResult = {
+      protocol: 2,
+      request_id: command.request_id,
+      result: "replayed",
+      receipt: retained,
+      source: retained.source,
+      automatic_effect: retained.automatic_effect,
+      status: await readFleetSourceAutomaticStatus(tx, p),
+    };
+    // The production contextual validator compares every normalized field,
+    // including case-insensitive ExistingUuid identities, before stale CAS/age.
+    if (!parseSourceStopResult(value, command).success)
+      throw new RelayRefusal("request_id_conflict");
+    return value;
+  }
+  fresh(command, p.now);
+  if (old && old.accountId !== p.accountId) throw new RelayRefusal("forbidden");
+  if (
+    old
+      ? old.generation !== command.expected_generation ||
+        old.automaticConsentGeneration !==
+          (command.expected_automatic?.consent_generation ?? null)
+      : command.expected_generation !== 0 || command.expected_automatic !== null
+  )
+    throw new RelayRefusal("conflict");
+  // Close CURRENT generation before an ended-source early return. A natural end
+  // is not explicit opt-out and cannot consume this source's reserved receipt.
+  let source = old;
+  if (!source) {
+    await capacity(tx, p.accountId, false);
+    const expires = dateAfter(p.now, FLEET_SOURCE_INTENT_TTL_MS);
+    [source] = await tx
+      .insert(fleetSourceIntent)
+      .values({
+        id: command.source_id.toLowerCase(),
+        accountId: p.accountId,
+        deviceId: p.deviceId,
+        generation: 1,
+        state: "ended",
+        intentCreatedAt: p.now,
+        intentExpiresAt: expires,
+        endedAt: p.now,
+        terminalReason: "stopped",
+        retainUntil: dateAfter(expires, FLEET_SOURCE_TOMBSTONE_RETENTION_MS),
+      })
+      .returning();
+  }
+  // Check the new receipt's terminal horizon before lifecycle withdrawal adds
+  // the same retention interval. A correlated no-op allocates no new horizon.
+  if (!source.explicitlyStopped) dateAfter(p.now, AUTOMATIC_RECEIPT_TTL_MS);
+  const automatic = await closeFleetAutomaticForSourceStop(tx, p, source);
+  if (source.explicitlyStopped) {
+    if (source.state !== "ended" || automatic.effect === "disabled_current")
+      throw new RelayRefusal("service_unavailable");
+    return {
+      protocol: 2,
+      request_id: command.request_id,
+      result: "already_stopped",
+      receipt: null,
+      source: sourceView(source),
+      automatic_effect: automatic.effect,
+      status: await readFleetSourceAutomaticStatus(tx, p),
+    };
+  }
+  if (source.state !== "ended" && automatic.effect !== "disabled_current") {
+    await invalidateFleetSources(
+      tx,
+      {
+        ...p.locked,
+        sources: p.locked.sources.filter((s) => s.id === source.id),
+        selectors: { sourceIds: [source.id] },
+      },
+      "stopped",
+      p.accountId,
+      p.now,
+    );
+  }
+  const [ended] = await tx
+    .select()
+    .from(fleetSourceIntent)
+    .where(eq(fleetSourceIntent.id, source.id));
+  const receipt: SourceStopReceipt = {
+    kind: "source_stop",
+    command,
+    accepted_at: p.now.toISOString(),
+    expires_at: dateAfter(p.now, AUTOMATIC_RECEIPT_TTL_MS).toISOString(),
+    source: sourceView(ended),
+    automatic_effect: old ? automatic.effect : "unknown_cancelled",
+    consent: automatic.consent,
+  };
+  if (!serializeFleetV2Json(receipt, SourceStopReceiptSchema, 2048).ok)
+    throw new RelayRefusal("service_unavailable");
+  await tx
+    .update(fleetSourceIntent)
+    .set({
+      stopReceipt: receipt,
+      explicitlyStopped: true,
+      retainUntil: new Date(
+        Math.max(
+          ended.retainUntil.getTime(),
+          dateAfter(ended.intentExpiresAt, FLEET_SOURCE_TOMBSTONE_RETENTION_MS).getTime(),
+          dateAfter(ended.endedAt!, FLEET_SOURCE_TOMBSTONE_RETENTION_MS).getTime(),
+          Date.parse(receipt.expires_at),
+        ),
+      ),
+    })
+    .where(eq(fleetSourceIntent.id, ended.id));
+  await logAudit(tx, {
+    actor: p.accountId,
+    action: "fleet_source.stopped",
+    target: ended.id,
+    details: { deviceId: p.deviceId, effect: receipt.automatic_effect },
+  });
+  return {
+    protocol: 2,
+    request_id: command.request_id,
+    result: "applied",
+    receipt,
+    source: receipt.source,
+    automatic_effect: receipt.automatic_effect,
+    status: await readFleetSourceAutomaticStatus(tx, p),
+  };
 }
 export async function controlFleetSource(
   db: Db,
   call: SignedFleetCall & { command: SourceCommand },
-): Promise<FleetReply<SourceView>> {
-  const parsed = commandSchema.safeParse(call.command);
-  if (!parsed.success) return { ok: false, code: "invalid_intent" };
-  const command = parsed.data;
+): Promise<SourceReply<SourceStartResult | SourceStopResult>> {
+  const parsed = safeParseFleetV2Dto(SourceCommandSchema, call.command);
+  if (!parsed.success || Buffer.byteLength(JSON.stringify(parsed.data), "utf8") > 2048)
+    return { ok: false, code: "bad_request" };
   return reply(() =>
     fleetLifecycleTransaction(db, async (tx) => {
-      const mode = await lockFleetSharingMode(tx);
-      if (!mode.enabled || mode.keyIdentityPhase !== "ready")
-        throw new RelayRefusal("feature_disabled");
-      const probe = await actorProbe(tx, call.sessionId);
-      const identities = await lockFleetIdentityCharacters(
-        tx,
-        command.operation === "start" ? [command.characterId] : [],
-      );
-      const owner = (await lockFleetAccounts(tx, [probe.accountId])).get(probe.accountId);
-      // Prepare the actor device as well as existing source devices BEFORE the
-      // shared gate, including Stop's absent-ID cancellation fence.
-      const locked = await lockFleetLifecycle(tx, {
-        sourceIds: [command.sourceId],
-        deviceIds: [probe.deviceId],
-      });
-      const gate = await gateControl(tx, call, probe, owner?.tier);
-      const now = await fleetDatabaseNow(tx, call.now);
+      const command = parsed.data;
+      const p = await prepareFleetSourceControl(tx, call, command);
       const [old] = await tx
         .select()
         .from(fleetSourceIntent)
-        .where(eq(fleetSourceIntent.id, command.sourceId));
-      // Account-owned controls never transfer the initiating device attribution.
-      if (old && old.accountId !== probe.accountId) throw new RelayRefusal("forbidden");
-      const finish = async (source: typeof fleetSourceIntent.$inferSelect) => {
-        const admitted = sampleFleetSessionAdmission(gate.session, {
-          ...call,
-          cadence: "read",
-          invalidSessionCode: "unauthorized",
-        });
-        await commitSessionCadence(tx, gate.session.id, {
-          revision: call.revision,
-          now: admitted,
-          cadence: "read",
-        });
-        return sourceView(source);
-      };
-      if (command.operation === "start") {
-        const created = command.intentCreatedAt.getTime();
-        if (
-          created > now.getTime() ||
-          now.getTime() >= created + FLEET_SOURCE_INTENT_TTL_MS
-        )
-          throw new RelayRefusal("invalid_intent");
-        const boss = identities.get(command.characterId);
-        if (
-          !boss ||
-          boss.accountId !== probe.accountId ||
-          boss.fleetLinkEpoch !== command.characterLinkEpoch
-        )
-          throw new RelayRefusal("forbidden");
-        if (!hasUsableFleetRead(boss)) throw new RelayRefusal("fleet_read_required");
-        if (old) {
-          if (
-            old.state === "ended" ||
-            old.bossCharacterId !== boss.id ||
-            old.bossOwnerHash !== boss.ownerHash ||
-            old.bossLinkEpoch !== boss.fleetLinkEpoch ||
-            old.intentCreatedAt.getTime() !== created
-          )
-            throw new RelayRefusal("conflict");
-          return finish(old);
-        }
-      } else if (old) {
-        if (old.generation !== command.expectedGeneration)
-          throw new RelayRefusal("conflict");
-        if (old.state === "ended") return finish(old);
-        await invalidateFleetSources(
-          tx,
-          {
-            ...locked,
-            sources: locked.sources.filter((s) => s.id === old.id),
-            selectors: { sourceIds: [old.id] },
-          },
-          "stopped",
-          probe.accountId,
-          now,
-        );
-        const [ended] = await tx
-          .select()
-          .from(fleetSourceIntent)
-          .where(eq(fleetSourceIntent.id, old.id));
-        return finish(ended);
-      } else if (command.expectedGeneration !== 0) throw new RelayRefusal("conflict");
-      const retained = await tx
-        .select({ id: fleetSourceIntent.id })
-        .from(fleetSourceIntent)
-        .where(eq(fleetSourceIntent.accountId, probe.accountId))
-        .limit(MAX_RETAINED_FLEET_INTENTS);
-      if (retained.length >= MAX_RETAINED_FLEET_INTENTS)
-        throw new RelayRefusal("rate_limited");
-      if (command.operation === "start") {
-        const live = await tx
-          .select({ id: fleetSourceIntent.id })
-          .from(fleetSourceIntent)
-          .where(
-            and(
-              eq(fleetSourceIntent.accountId, probe.accountId),
-              ne(fleetSourceIntent.state, "ended"),
-            ),
-          )
-          .limit(MAX_LIVE_FLEET_SOURCES);
-        if (live.length >= MAX_LIVE_FLEET_SOURCES) throw new RelayRefusal("rate_limited");
-      }
-      const boss =
-        command.operation === "start" ? identities.get(command.characterId)! : null;
-      const created = command.operation === "start" ? command.intentCreatedAt : now;
-      const expires = new Date(created.getTime() + FLEET_SOURCE_INTENT_TTL_MS);
-      const [source] = await tx
-        .insert(fleetSourceIntent)
-        .values({
-          id: command.sourceId,
-          accountId: probe.accountId,
-          deviceId: probe.deviceId,
-          bossCharacterId: boss?.id ?? null,
-          bossOwnerHash: boss?.ownerHash ?? null,
-          bossLinkEpoch: boss?.fleetLinkEpoch ?? null,
-          generation: 1,
-          state: boss ? "pending" : "ended",
-          intentCreatedAt: created,
-          intentExpiresAt: expires,
-          nextFetchAt: boss ? now : null,
-          endedAt: boss ? null : now,
-          terminalReason: boss ? null : "stopped",
-          retainUntil: new Date(expires.getTime() + FLEET_SOURCE_TOMBSTONE_RETENTION_MS),
-        })
-        .returning();
-      await logAudit(tx, {
-        actor: probe.accountId,
-        action: boss ? "fleet_source.started" : "fleet_source.ended",
-        target: source.id,
-        details: { deviceId: probe.deviceId, reason: boss ? "requested" : "stopped" },
+        .where(eq(fleetSourceIntent.id, command.source_id));
+      const value =
+        command.operation === "start"
+          ? await start(tx, p, command, old)
+          : await stop(tx, p, command, old);
+      const validated =
+        command.operation === "start"
+          ? parseSourceStartResult(value, command)
+          : parseSourceStopResult(value, command);
+      if (!validated.success) throw new RelayRefusal("service_unavailable");
+      const serialized = serializeFleetV2Json(
+        value,
+        z.union([SourceStartResultSchema, SourceStopResultSchema]),
+        FLEET_V2_BYTE_LIMITS.sourcesPut.successBytes,
+      );
+      if (!serialized.ok) throw new RelayRefusal("service_unavailable");
+      await commitSessionCadence(tx, p.session.id, {
+        revision: call.revision,
+        now: p.now,
+        cadence: "read",
       });
-      if (boss)
-        await enqueueSync(tx, {
-          kind: "fleet-source",
-          sourceId: source.id,
-          generation: source.generation,
-        });
-      return finish(source);
+      return { value, json: serialized.json };
     }),
   );
 }
 export async function readFleetSourceState(
   db: Db,
   call: SignedFleetCall,
-): Promise<FleetReply<SourceStateView>> {
+): Promise<SourceReply<SourcesGet>> {
   return reply(() =>
     fleetLifecycleTransaction(db, async (tx) => {
-      const mode = await lockFleetSharingMode(tx);
-      if (!mode.enabled || mode.keyIdentityPhase !== "ready")
-        throw new RelayRefusal("feature_disabled");
-      const probe = await actorProbe(tx, call.sessionId);
-      const owner = (await lockFleetAccounts(tx, [probe.accountId])).get(probe.accountId);
-      const gate = await gateControl(tx, call, probe, owner?.tier);
+      const p = await prepareFleetSourceControl(tx, call);
+      requireFleetSourceWork(p);
       const sources = await tx
         .select()
         .from(fleetSourceIntent)
-        .where(eq(fleetSourceIntent.accountId, probe.accountId))
+        .where(eq(fleetSourceIntent.accountId, p.accountId))
         .orderBy(fleetSourceIntent.id)
-        .limit(MAX_RETAINED_FLEET_INTENTS);
+        .limit(MAX_RETAINED_FLEET_INTENTS + 1);
       const characters = await tx
         .select()
         .from(character)
-        .where(eq(character.accountId, probe.accountId))
+        .where(eq(character.accountId, p.accountId))
         .orderBy(character.id)
         .limit(MAX_SOURCE_CONTROL_CHARACTERS + 1);
-      if (characters.length > MAX_SOURCE_CONTROL_CHARACTERS)
-        throw new RelayRefusal("service_unavailable");
-      const now = sampleFleetSessionAdmission(gate.session, {
-        ...call,
-        cadence: "read",
-        invalidSessionCode: "unauthorized",
-      });
-      await commitSessionCadence(tx, gate.session.id, {
-        revision: call.revision,
-        now,
-        cadence: "read",
-      });
-      return {
+      const value: SourcesGet = {
+        protocol: 2,
         sources: sources.map(sourceView),
         characters: characters.map((ch) => ({
-          characterId: ch.id,
-          characterName: ch.name,
-          characterLinkEpoch: ch.fleetLinkEpoch,
-          hasFleetRead: ch.scopes.includes(FLEET_READ_SCOPE),
-          tokenUsable:
+          character_id: ch.id,
+          character_name: ch.name,
+          character_link_epoch: ch.fleetLinkEpoch,
+          has_fleet_read: ch.scopes.includes(FLEET_READ_SCOPE),
+          token_usable:
             !!ch.refreshTokenEnc &&
             ch.tokenStatus !== "invalid" &&
             ch.tokenStatus !== "missing",
         })),
       };
+      const serialized = serializeFleetV2Json(
+        value,
+        SourcesGetSchema,
+        FLEET_V2_BYTE_LIMITS.sourcesGet.successBytes,
+      );
+      if (!serialized.ok) throw new RelayRefusal("service_unavailable");
+      await commitSessionCadence(tx, p.session.id, {
+        revision: call.revision,
+        now: p.now,
+        cadence: "read",
+      });
+      return { value, json: serialized.json };
     }),
   );
 }

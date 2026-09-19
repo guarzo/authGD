@@ -1,7 +1,9 @@
 import { and, eq, isNotNull, ne, sql } from "drizzle-orm";
 import type { Db, DbTx } from "@/db";
 import {
+  account,
   character,
+  fleetAutomaticConsent,
   fleetDevice,
   fleetPublisherLease,
   fleetTelemetryRow,
@@ -11,7 +13,11 @@ import {
 } from "@/db/schema";
 import { SHARED_CAPABILITY } from "@/core/fleet-sharing";
 import type { deriveFleetEvidenceWindow } from "@/core/fleet-freshness";
-import { fleetDatabaseNow } from "@/services/fleet-key-identity";
+import {
+  fleetDatabaseNow,
+  resolveFleetDeviceKey,
+  FleetDeviceKeyUnavailableError,
+} from "@/services/fleet-key-identity";
 import {
   FleetLifecycleRetry,
   fleetLifecycleTransaction,
@@ -49,7 +55,16 @@ type Clock = (() => Date) | undefined;
 function selectors(rows: Source[]) {
   return JSON.stringify(
     rows
-      .map((s) => [s.id, s.accountId, s.bossCharacterId, s.bossLinkEpoch, s.fleetId])
+      .map((s) => [
+        s.id,
+        s.accountId,
+        s.deviceId,
+        s.bossCharacterId,
+        s.bossLinkEpoch,
+        s.fleetId,
+        s.automaticConsentAccountId,
+        s.automaticConsentGeneration,
+      ])
       .sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
   );
 }
@@ -129,7 +144,33 @@ async function prepare(tx: DbTx, id: string, fleetId?: number, linkedIds: number
     ? identities.get(source.bossCharacterId)
     : undefined;
   const owner = source?.accountId ? accounts.get(source.accountId) : undefined;
-  return { source, authority, boss, device, owner, mode, identities, locked };
+  const [automaticConsent] = source?.automaticConsentAccountId
+    ? await tx
+        .select()
+        .from(fleetAutomaticConsent)
+        .where(eq(fleetAutomaticConsent.accountId, source.automaticConsentAccountId))
+    : [];
+  let validDeviceKey = false;
+  if (device && mode.keyIdentityPhase === "ready") {
+    try {
+      const key = await resolveFleetDeviceKey(tx, device.publicKeySpkiB64, mode);
+      validDeviceKey = !key.unavailable && key.device?.id === device.id;
+    } catch (err) {
+      if (!(err instanceof FleetDeviceKeyUnavailableError)) throw err;
+    }
+  }
+  return {
+    source,
+    authority,
+    boss,
+    device,
+    owner,
+    mode,
+    identities,
+    locked,
+    automaticConsent,
+    validDeviceKey,
+  };
 }
 type Prepared = Awaited<ReturnType<typeof prepare>>;
 function consentLoss(p: Prepared): string | null {
@@ -146,11 +187,22 @@ function consentLoss(p: Prepared): string | null {
   if (owner?.tier !== "member") return "member_lost";
   if (
     !device ||
+    !p.validDeviceKey ||
     device.revokedAt ||
     device.accountId !== s.accountId ||
     !device.approvedCapabilities.includes(SHARED_CAPABILITY)
   )
     return "device_revoked";
+  // Automatic approval outlives sessions, but never its account generation or
+  // approver. Re-read under the account lock on EVERY pre/postflight.
+  if (
+    s.automaticConsentAccountId !== null &&
+    (s.automaticConsentAccountId !== s.accountId ||
+      !p.automaticConsent?.enabled ||
+      p.automaticConsent.generation !== s.automaticConsentGeneration ||
+      p.automaticConsent.approvingDeviceId !== device.id)
+  )
+    return "stopped";
   if (!hasUsableFleetRead(boss)) return "fleet_read_invalid";
   return null;
 }
@@ -225,6 +277,10 @@ export async function claimFleetSourceFetch(
       (s.fetchClaimExpiresAt && s.fetchClaimExpiresAt > now)
     )
       return null;
+    if (s.fetchGeneration >= 2_147_483_646) {
+      await end(tx, p, "ended", now);
+      return null;
+    }
     const claimExpiresAt = new Date(now.getTime() + FLEET_FETCH_CLAIM_MS);
     await tx
       .update(fleetSourceIntent)
@@ -322,6 +378,10 @@ export async function maintainFleetSource(
       p.authority?.sourceGeneration === s.generation &&
       p.authority.expiresAt !== null &&
       p.authority.expiresAt <= now;
+    if (claimExpired && s.fetchGeneration >= 2_147_483_646) {
+      await end(tx, p, "ended", now);
+      return 0;
+    }
     if (claimExpired || evidenceExpired) {
       await tx
         .update(fleetSourceAuthority)
@@ -396,6 +456,123 @@ export type FleetSourceObservation =
       nextFetchAt: Date | null;
       terminal?: "not_in_fleet" | "boss_lost" | "fleet_read_invalid" | "identity_changed";
     };
+export type PreparedFleetAuthority = {
+  source: Source;
+  authority: typeof fleetSourceAuthority.$inferSelect;
+  boss: typeof character.$inferSelect;
+  device: typeof fleetDevice.$inferSelect;
+  owner: typeof account.$inferSelect;
+  mode: Awaited<ReturnType<typeof lockFleetSharingMode>>;
+  identities: Map<number, typeof character.$inferSelect>;
+  locked: Awaited<ReturnType<typeof lockFleetLifecycle>>;
+};
+export type PreparedFleetProof = {
+  expectedAuthorityGeneration: number;
+  evidence: NonNullable<ReturnType<typeof deriveFleetEvidenceWindow>>;
+  linkedCharacters: readonly Link[];
+  nextFetchAt: Date;
+};
+export class FleetAuthorityProofRefusal extends Error {
+  constructor(readonly reason: "authority_changed" | "untrustworthy_evidence") {
+    super(reason);
+  }
+}
+
+/** Transaction-only positive writer. Each caller owns its distinct admission,
+ * token/claim and counter-capacity gates. Never acquire an earlier lock here:
+ * newly discovered selectors require the caller's whole transaction to retry. */
+export async function applyFleetAuthorityProof(
+  tx: DbTx,
+  prepared: PreparedFleetAuthority,
+  proof: PreparedFleetProof,
+  now: Date,
+): Promise<void> {
+  const { source: s, authority: a, locked, identities } = prepared;
+  const current = await sourceSet(tx, s.id, s.fleetId ?? undefined);
+  if (
+    s.fleetId === null ||
+    a.fleetId !== s.fleetId ||
+    !current.source ||
+    current.rows.some(
+      (row) =>
+        !locked.sources.some((held) => held.id === row.id) ||
+        (row.deviceId !== null && !locked.deviceIds.includes(row.deviceId)),
+    ) ||
+    (a.sourceId !== null && !locked.sources.some((held) => held.id === a.sourceId))
+  )
+    throw new FleetLifecycleRetry();
+  // A deleted captured link is legitimately absent. An existing identity not
+  // in the prepared map was never locked and cannot be adopted at this level.
+  for (const link of proof.linkedCharacters) {
+    if (identities.has(link.characterId)) continue;
+    const [present] = await tx
+      .select({ id: character.id })
+      .from(character)
+      .where(eq(character.id, link.characterId));
+    if (present) throw new FleetLifecycleRetry();
+  }
+  if (
+    a.authorityGeneration !== proof.expectedAuthorityGeneration ||
+    (a.verifiedAt !== null && a.verifiedAt >= proof.evidence.observedAt)
+  )
+    throw new FleetAuthorityProofRefusal("authority_changed");
+  const links = proof.linkedCharacters.filter(
+    (ch) => identities.get(ch.characterId)?.fleetLinkEpoch === ch.linkEpoch,
+  );
+  if (
+    !Number.isFinite(now.getTime()) ||
+    !Number.isFinite(proof.evidence.observedAt.getTime()) ||
+    !Number.isFinite(proof.evidence.expiresAt.getTime()) ||
+    proof.evidence.observedAt > now ||
+    proof.evidence.expiresAt <= now ||
+    proof.linkedCharacters.length > 256 ||
+    !links.some((ch) => ch.characterId === s.bossCharacterId)
+  )
+    throw new FleetAuthorityProofRefusal("untrustworthy_evidence");
+  const displaced = locked.sources.filter(
+    (old) =>
+      old.id !== s.id &&
+      old.fleetId === s.fleetId &&
+      old.activatedAt !== null &&
+      old.state !== "ended",
+  );
+  if (displaced.length)
+    await invalidateFleetSources(
+      tx,
+      {
+        ...locked,
+        sources: displaced,
+        selectors: { sourceIds: displaced.map((old) => old.id) },
+      },
+      "superseded",
+      "system",
+      now,
+    );
+  const replacement = a.sourceId !== s.id || a.sourceGeneration !== s.generation;
+  await tx
+    .update(fleetSourceAuthority)
+    .set({
+      sourceId: s.id,
+      sourceGeneration: s.generation,
+      authorityGeneration: a.authorityGeneration + (replacement ? 1 : 0),
+      linkedCharacters: links,
+      verifiedAt: proof.evidence.observedAt,
+      expiresAt: proof.evidence.expiresAt,
+    })
+    .where(eq(fleetSourceAuthority.fleetId, s.fleetId));
+  await tx
+    .update(fleetSourceIntent)
+    .set({
+      state: "active",
+      activatedAt: s.activatedAt ?? now,
+      latestOutcome: "verified",
+      fetchClaimExpiresAt: null,
+      enqueueUntil: null,
+      nextFetchAt: proof.nextFetchAt,
+    })
+    .where(eq(fleetSourceIntent.id, s.id));
+}
+
 export async function commitFleetSourceObservation(
   db: Db,
   ticket: FleetFetchTicket,
@@ -502,60 +679,59 @@ export async function commitFleetSourceObservation(
       !a
     )
       return;
+    const replacement = a.sourceId !== s.id || a.sourceGeneration !== s.generation;
+    // Capacity is a caller admission decision, not a third proof refusal. Keep
+    // the existing CAS/freshness precedence and reserve the last int4 for withdrawal.
     if (
-      a.authorityGeneration !== ticket.expectedAuthorityGeneration ||
-      (a.verifiedAt && a.verifiedAt >= observation.evidence.observedAt)
+      a.authorityGeneration === ticket.expectedAuthorityGeneration &&
+      (!a.verifiedAt || a.verifiedAt < observation.evidence.observedAt) &&
+      retained.some(
+        (ch) =>
+          ch.characterId === s.bossCharacterId &&
+          p.identities.get(ch.characterId)?.fleetLinkEpoch === ch.linkEpoch,
+      ) &&
+      a.authorityGeneration + (replacement ? 1 : 0) > 2_147_483_646
     ) {
-      // A cached replay whose origin-based target already passed must not
-      // turn the half-second dispatcher tick into a provider polling loop.
-      await tx
-        .update(fleetSourceIntent)
-        .set({
-          fetchClaimExpiresAt: null,
-          nextFetchAt: new Date(
-            Math.max(observation.nextFetchAt.getTime(), now.getTime() + 5000),
-          ),
-        })
-        .where(eq(fleetSourceIntent.id, s.id));
+      await end(tx, p, "ended", now);
       return;
     }
-    const links = retained.filter(
-      (ch) => p.identities.get(ch.characterId)?.fleetLinkEpoch === ch.linkEpoch,
-    );
-    if (!links.some((ch) => ch.characterId === s.bossCharacterId)) return;
-    const replacement = a.sourceId !== s.id || a.sourceGeneration !== s.generation;
-    const displaced = p.locked.sources.filter(
-      (old) => old.id !== s.id && old.fleetId === s.fleetId && old.activatedAt !== null,
-    );
-    if (displaced.length)
-      await end(
+    try {
+      await applyFleetAuthorityProof(
         tx,
-        p,
-        "superseded",
+        {
+          source: s,
+          authority: a,
+          boss: p.boss!,
+          device: p.device,
+          owner: p.owner!,
+          mode: p.mode,
+          identities: p.identities,
+          locked: p.locked,
+        },
+        {
+          expectedAuthorityGeneration: ticket.expectedAuthorityGeneration!,
+          evidence: observation.evidence,
+          linkedCharacters: retained,
+          nextFetchAt: observation.nextFetchAt,
+        },
         now,
-        displaced.map((old) => old.id),
       );
-    await tx
-      .update(fleetSourceAuthority)
-      .set({
-        sourceId: s.id,
-        sourceGeneration: s.generation,
-        authorityGeneration: a.authorityGeneration + (replacement ? 1 : 0),
-        linkedCharacters: links,
-        verifiedAt: observation.evidence.observedAt,
-        expiresAt: observation.evidence.expiresAt,
-      })
-      .where(eq(fleetSourceAuthority.fleetId, ticket.fleetId));
-    await tx
-      .update(fleetSourceIntent)
-      .set({
-        state: "active",
-        activatedAt: s.activatedAt ?? now,
-        latestOutcome: "verified",
-        fetchClaimExpiresAt: null,
-        enqueueUntil: null,
-        nextFetchAt: observation.nextFetchAt,
-      })
-      .where(eq(fleetSourceIntent.id, s.id));
+    } catch (err) {
+      if (!(err instanceof FleetAuthorityProofRefusal)) throw err;
+      if (err.reason === "authority_changed") {
+        // A cached replay cannot turn the half-second tick into a polling loop.
+        await tx
+          .update(fleetSourceIntent)
+          .set({
+            fetchClaimExpiresAt: null,
+            nextFetchAt: new Date(
+              Math.max(observation.nextFetchAt.getTime(), now.getTime() + 5000),
+            ),
+          })
+          .where(eq(fleetSourceIntent.id, s.id));
+      }
+      // Other manual failures were handled above; losing the captured boss link
+      // retains the existing no-op, never withdraws a different source's proof.
+    }
   });
 }

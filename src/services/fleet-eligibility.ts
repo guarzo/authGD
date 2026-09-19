@@ -1,6 +1,12 @@
 import { createHash } from "node:crypto";
 import { and, eq, gt } from "drizzle-orm";
 import type { Db, Dbx } from "@/db";
+import {
+  API_VERSION,
+  EligibilityGetSchema,
+  FLEET_V2_BYTE_LIMITS,
+} from "@/core/fleet-api-v2";
+import { serializeFleetV2Json } from "@/lib/fleet-api-v2";
 import type { FleetCode, FleetReply, SignedFleetCall } from "@/core/fleet-sharing";
 import {
   fleetLifecycleTransaction,
@@ -68,9 +74,12 @@ export function sharedCharacterEligibility(
 export async function readDeviceEligibility(
   db: Db,
   call: SignedFleetCall,
-): Promise<FleetReply<EligibilityView>> {
+): Promise<
+  | (Extract<FleetReply<EligibilityView>, { ok: true }> & { json: string })
+  | Extract<FleetReply<EligibilityView>, { ok: false }>
+> {
   try {
-    const value = await fleetLifecycleTransaction(db, async (tx) => {
+    const result = await fleetLifecycleTransaction(db, async (tx) => {
       const p = await prepareSharedAdmission(tx, call, "eligibility");
       const d = p.actor.device;
       const eligible = sharedCharacterEligibility(p);
@@ -92,12 +101,7 @@ export async function readDeviceEligibility(
             })
             .sort((a, b) => a.characterId - b.characterId)
         : [];
-      await commitSessionCadence(tx, p.actor.session.id, {
-        revision: call.revision,
-        now: p.now,
-        cadence: "read",
-      });
-      return {
+      const value = {
         participationGeneration: d.participationGeneration,
         state: !d.participationEnabled
           ? ("participation_off" as const)
@@ -106,8 +110,31 @@ export async function readDeviceEligibility(
             : ("not_verified" as const),
         characters,
       };
+      const output = serializeFleetV2Json(
+        {
+          protocol: API_VERSION,
+          participation_generation: value.participationGeneration,
+          state: value.state,
+          characters: characters.map((c) => ({
+            character_id: c.characterId,
+            source_id: c.sourceId,
+            source_generation: c.sourceGeneration,
+            authority_generation: c.authorityGeneration,
+            expires_at: c.expiresAt.toISOString(),
+          })),
+        },
+        EligibilityGetSchema,
+        FLEET_V2_BYTE_LIMITS.eligibilityGet.successBytes,
+      );
+      if (!output.ok) throw new RelayRefusal(output.code);
+      await commitSessionCadence(tx, p.actor.session.id, {
+        revision: call.revision,
+        now: p.now,
+        cadence: "read",
+      });
+      return { value, json: output.json };
     });
-    return { ok: true, value };
+    return { ok: true, ...result };
   } catch (err) {
     if (err instanceof RelayRefusal) return { ok: false, code: err.code as FleetCode };
     if (err instanceof FleetLifecycleRetry || isRetryableRelayError(err))

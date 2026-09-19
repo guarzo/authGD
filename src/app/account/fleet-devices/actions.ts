@@ -3,7 +3,7 @@
 import { and, eq, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { z } from "zod";
 import { getConfig } from "@/config";
 import { getDb } from "@/db";
@@ -11,6 +11,57 @@ import { fleetDevice } from "@/db/schema";
 import { fleetDevicesErrorUrl, loginErrorUrl } from "@/lib/error-redirects";
 import { RelayContentionError, revokeFleetDevice } from "@/services/fleet-pairing";
 import { getSessionAccount } from "@/services/session";
+import { AutomaticOffSchema, type BrowserOffReply } from "@/core/fleet-automatic";
+import { safeParseFleetV2Dto } from "@/core/fleet-v2-validation";
+import { turnOffFleetAutomaticForBrowser } from "@/services/fleet-automatic";
+
+/** Off-only Server Action; no desktop correlation.
+ * Next's Origin/Host POST check remains enabled; canonical configured origin is
+ * an additional requirement, never inferred from forwarded proxy headers. */
+export async function turnOffFleetAutomaticAction(
+  input: unknown,
+  expectedAccountId?: string,
+): Promise<BrowserOffReply> {
+  const parsed = safeParseFleetV2Dto(AutomaticOffSchema, input);
+  if (!parsed.success)
+    return { ok: false, request_id: null, error: "bad_request", status: null };
+  const denied: BrowserOffReply = {
+    ok: false,
+    request_id: parsed.data.request_id,
+    error: "unauthorized",
+    status: null,
+  };
+  let cfg: ReturnType<typeof getConfig>;
+  try {
+    cfg = getConfig();
+    const configured = new URL(cfg.appBaseUrl).origin;
+    const origin = (await headers()).get("origin");
+    if (
+      configured === "null" ||
+      !origin ||
+      origin !== configured ||
+      new URL(origin).origin !== origin
+    )
+      return denied;
+  } catch {
+    // A missing/malformed configured origin or request header fails closed,
+    // before authentication or any control service admission.
+    return denied;
+  }
+  const accountId = await requireAccount();
+  // The rendered page captures this selector in a server closure. It can only
+  // restrict the cookie-derived authority, never select a different account.
+  if (expectedAccountId !== undefined && expectedAccountId !== accountId) return denied;
+  const browserSessionId = (await cookies()).get(cfg.sessionCookieName)?.value;
+  if (!browserSessionId) return denied;
+  const result = await turnOffFleetAutomaticForBrowser(
+    getDb(),
+    { accountId, browserSessionId },
+    parsed.data,
+  );
+  if (result.ok) revalidatePath("/account/fleet-devices");
+  return result;
+}
 
 /**
  * Same session gate `account/actions.ts`'s own `requireAccount` uses,
@@ -100,7 +151,7 @@ export async function revokeFleetDeviceAction(deviceId: string): Promise<void> {
   if (owned.length === 0) redirect(fleetDevicesErrorUrl("stale_device"));
 
   try {
-    await revokeFleetDevice(db, parsedId.data, accountId, new Date());
+    await revokeFleetDevice(db, parsedId.data, accountId);
   } catch (err) {
     if (err instanceof RelayContentionError) {
       redirect(fleetDevicesErrorUrl("relay_contention"));

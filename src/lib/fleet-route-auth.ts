@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { eq } from "drizzle-orm";
 import type { Dbx } from "@/db";
+import { TokenSchema, IsoDateSchema, Int4Schema } from "@/core/fleet-api-v2";
 import { fleetDevice, fleetDeviceSession } from "@/db/schema";
 import {
   decodeDevicePublicKeyB64,
@@ -80,6 +81,38 @@ export function extractFleetAuthHeaders(req: {
   const revision = Number(revisionRaw);
   if (!Number.isSafeInteger(revision)) return null;
   return { sessionId, issuedAt, revision, bodySha256, signature };
+}
+
+/** API2 tightens the header boundary without changing the deployed signing
+ * scheme or its golden vectors. Fetch comma-joins duplicates; all five exact
+ * encodings reject them before any key/session lookup. No negotiation headers. */
+export function extractFleetV2AuthHeaders(req: {
+  headers: Headers;
+}): FleetAuthHeaders | null {
+  const allowed = new Set([
+    SESSION_HEADER,
+    ISSUED_AT_HEADER,
+    REVISION_HEADER,
+    BODY_SHA256_HEADER,
+    SIGNATURE_HEADER,
+  ]);
+  if (
+    [...req.headers.keys()].some(
+      (name) => name.startsWith("x-fleet-") && !allowed.has(name),
+    )
+  )
+    return null;
+  const headers = extractFleetAuthHeaders(req);
+  if (
+    !headers ||
+    !TokenSchema.safeParse(headers.sessionId).success ||
+    !IsoDateSchema.safeParse(headers.issuedAt).success ||
+    !Int4Schema.safeParse(headers.revision).success ||
+    !/^[0-9a-f]{64}$/.test(headers.bodySha256) ||
+    !/^[A-Za-z0-9_-]{85}[AQgw]$/.test(headers.signature)
+  )
+    return null;
+  return headers;
 }
 
 // Mirrors fleet-signature.ts's own SESSION_ID_RE — a cheap, pure pre-check so

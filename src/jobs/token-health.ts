@@ -3,6 +3,7 @@ import type { JWTVerifyGetKey } from "jose";
 import type { Config } from "@/config";
 import type { Db } from "@/db";
 import { character } from "@/db/schema";
+import { FLEET_READ_SCOPE } from "@/lib/esi/client";
 import { EveSsoError, verifyEveAccessToken } from "@/lib/esi/sso";
 import { reclaimTransferredCharacter } from "@/services/accounts";
 import { logAudit } from "@/services/audit";
@@ -15,7 +16,9 @@ import {
   lockFleetAccounts,
   lockFleetIdentityCharacters,
   lockFleetLifecycle,
+  wakeFleetAutomaticGrantCandidate,
 } from "@/services/fleet-lifecycle";
+import { fleetDatabaseNow } from "@/services/fleet-key-identity";
 import { lockFleetSharingMode } from "@/services/fleet-sharing-mode";
 
 export async function runTokenHealthJob(deps: {
@@ -133,8 +136,25 @@ export async function runTokenHealthJob(deps: {
           .where(
             and(eq(character.id, ch.id), eq(character.refreshTokenEnc, token.tokenEnc)),
           )
-          .returning({ id: character.id });
+          .returning();
         if (!statusRows.length) return "stale";
+        // Scope labels alone are not discovery authorization. Only the real CAS
+        // winner with a verified CURRENT subject/owner and an actual restored
+        // grant enters the wake path; ordinary rotation/status health is unchanged.
+        if (
+          old.id === identity.characterId &&
+          old.ownerHash === identity.ownerHash &&
+          !old.scopes.includes(FLEET_READ_SCOPE) &&
+          hasUsableFleetRead(statusRows[0])
+        ) {
+          await wakeFleetAutomaticGrantCandidate(
+            tx,
+            old,
+            statusRows[0],
+            "verified_fleet_read_restored",
+            await fleetDatabaseNow(tx),
+          );
+        }
         if (nextStatus === "needs_reauth" && old.tokenStatus !== "needs_reauth") {
           await logAudit(tx, {
             actor: "system",

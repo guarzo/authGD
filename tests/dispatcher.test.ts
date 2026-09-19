@@ -201,9 +201,11 @@ describe("dispatchOutbox", () => {
   it("drops an unknown-kind row without wedging its siblings in the batch", async () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      await ctx.db
-        .insert(outbox)
-        .values({ payload: { kind: "from-the-future" } as unknown as OutboxPayload });
+      await ctx.db.insert(outbox).values({
+        payload: {
+          kind: "from-the-future",
+        } as unknown as typeof outbox.$inferSelect.payload,
+      });
       await enqueueSync(ctx.db, { kind: "discord-user", discordUserId: "u9" });
       const { sent, send } = collector();
       // Both rows claimed; the bad one contributes no sends but is still

@@ -11,6 +11,7 @@ import {
   vi,
 } from "vitest";
 import { getDb } from "@/db";
+import * as keyIdentity from "@/services/fleet-key-identity";
 import { fleetDevice, fleetDeviceSession } from "@/db/schema";
 import { SHARED_CAPABILITY } from "@/core/fleet-sharing";
 import { transitionFleetSharingMode } from "@/services/fleet-sharing-mode";
@@ -18,11 +19,10 @@ import { pairDevice, reconcileFleetKeys } from "./helpers/fleet-sharing";
 import { setupTestDb, TEST_URL, truncateAll } from "./helpers/db";
 import { seedAccount } from "./helpers/seed";
 import { withInjectedPgFault } from "./helpers/pg-fault";
-
+import { PUT } from "@/app/api/fleet/v2/participation/route";
+import { PUT as acknowledge } from "@/app/api/fleet/v2/device/route";
 process.env.DATABASE_URL = TEST_URL;
-const { PUT } = await import("@/app/api/fleet/v1/participation/route");
-const { PUT: acknowledge } = await import("@/app/api/fleet/v1/device/route");
-const PATH = "/api/fleet/v1/participation";
+const PATH = "/api/fleet/v2/participation";
 const NOW = new Date("2026-09-07T12:00:00Z");
 let ctx: Awaited<ReturnType<typeof setupTestDb>>;
 beforeAll(async () => {
@@ -32,6 +32,10 @@ beforeEach(async () => {
   await truncateAll(ctx.db);
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(NOW);
+  // Explicit framing/cadence clock only; real DB-time lock races are separate.
+  vi.spyOn(keyIdentity, "fleetDatabaseNow").mockImplementation(
+    async (_tx, now) => now ?? new Date(),
+  );
   const ready = await reconcileFleetKeys(ctx.db);
   await transitionFleetSharingMode(ctx.db, {
     enabled: true,
@@ -39,7 +43,10 @@ beforeEach(async () => {
     now: NOW,
   });
 });
-afterEach(() => vi.useRealTimers());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
 afterAll(() => ctx.cleanup());
 function request(
   p: Awaited<ReturnType<typeof pairDevice>>,
@@ -52,7 +59,7 @@ function request(
   const text = typeof body === "string" ? body : JSON.stringify(body);
   const hash = createHash("sha256").update(text).digest("hex");
   const issued = new Date().toISOString();
-  // Independent literal V1 signing, not the production canonical builder.
+  // Independent literal signing1, even though the API path/envelope is now v2.
   const signature = sign(
     null,
     Buffer.from(
@@ -73,44 +80,51 @@ function request(
   });
 }
 async function enrolled() {
-  const owner = await seedAccount(ctx.db, { tier: "member" });
-  const p = await pairDevice(ctx.db, owner.id, NOW, [SHARED_CAPABILITY]);
-  const ack = await acknowledge(
-    request(
-      p,
-      { protocol: 1, capabilities: [SHARED_CAPABILITY] },
-      1,
-      "/api/fleet/v1/device",
-    ),
+  const p = await pairDevice(
+    ctx.db,
+    (await seedAccount(ctx.db, { tier: "member" })).id,
+    NOW,
+    [SHARED_CAPABILITY],
   );
-  expect(ack.status).toBe(200);
+  expect(
+    (
+      await acknowledge(
+        request(
+          p,
+          { protocol: 2, capabilities: [SHARED_CAPABILITY] },
+          1,
+          "/api/fleet/v2/device",
+        ),
+      )
+    ).status,
+  ).toBe(200);
   vi.setSystemTime(new Date(NOW.getTime() + 500));
   return p;
 }
-
 describe("real signed participation PUT", () => {
   it("requires real acknowledgment, returns only participation, and rejects stale generations without consuming revision", async () => {
     const p = await enrolled();
     const on = await PUT(
-      request(p, { protocol: 1, enabled: true, expected_generation: 0 }, 2),
+      request(p, { protocol: 2, enabled: true, expected_generation: 0 }, 2),
     );
     expect(on.status).toBe(200);
     expect(on.headers.get("cache-control")).toBe("no-store");
+    expect(on.headers.get("x-fleet-request-binding")).toMatch(/^[a-f0-9]{64}$/);
     expect(await on.json()).toEqual({
-      protocol: 1,
+      protocol: 2,
       participation: { enabled: true, generation: 1 },
     });
     vi.setSystemTime(new Date(NOW.getTime() + 1000));
     const stale = await PUT(
-      request(p, { protocol: 1, enabled: false, expected_generation: 0 }, 3),
+      request(p, { protocol: 2, enabled: false, expected_generation: 0 }, 3),
     );
     expect(stale.status).toBe(409);
-    expect(await stale.json()).toEqual({ protocol: 1, error: "conflict" });
+    expect(await stale.json()).toEqual({ protocol: 2, error: "conflict" });
     const off = await PUT(
-      request(p, { protocol: 1, enabled: false, expected_generation: 1 }, 3),
+      request(p, { protocol: 2, enabled: false, expected_generation: 1 }, 3),
     );
     expect(await off.json()).toEqual({
-      protocol: 1,
+      protocol: 2,
       participation: { enabled: false, generation: 2 },
     });
     expect(await ctx.db.select().from(fleetDeviceSession)).toHaveLength(1);
@@ -118,23 +132,21 @@ describe("real signed participation PUT", () => {
   it("rejects unknown/query selectors, malformed, oversized and future-protocol bodies atomically", async () => {
     const p = await enrolled();
     for (const body of [
-      { protocol: 1, enabled: true, expected_generation: 0, source_id: "client-chosen" },
-      { protocol: 1, enabled: true, expected_generation: -1 },
-      { protocol: 1, enabled: true, expected_generation: 0.1 },
-      { protocol: 1, enabled: "yes", expected_generation: 0 },
-      { protocol: 1, enabled: true },
+      { protocol: 2, enabled: true, expected_generation: 0, source_id: "client-chosen" },
+      { protocol: 2, enabled: true, expected_generation: -1 },
+      { protocol: 2, enabled: true, expected_generation: 0.1 },
+      { protocol: 2, enabled: "yes", expected_generation: 0 },
+      { protocol: 2, enabled: true },
       "{",
       " ".repeat(1025),
-    ]) {
-      const res = await PUT(request(p, body, 2));
-      expect(res.status).toBe(400);
-    }
+    ])
+      expect((await PUT(request(p, body, 2))).status).toBe(400);
     expect(
       (
         await PUT(
           request(
             p,
-            { protocol: 1, enabled: true, expected_generation: 0 },
+            { protocol: 2, enabled: true, expected_generation: 0 },
             2,
             PATH,
             "?fleet=123",
@@ -143,9 +155,9 @@ describe("real signed participation PUT", () => {
       ).status,
     ).toBe(400);
     const future = await PUT(
-      request(p, { protocol: 2, enabled: true, expected_generation: 0 }, 2),
+      request(p, { protocol: 3, enabled: true, expected_generation: 0 }, 2),
     );
-    expect(await future.json()).toEqual({ protocol: 1, error: "update_required" });
+    expect(await future.json()).toEqual({ protocol: 2, error: "update_required" });
     expect((await ctx.db.select().from(fleetDevice))[0].participationGeneration).toBe(0);
     expect((await ctx.db.select().from(fleetDeviceSession))[0].lastRevision).toBe(1);
   });
@@ -157,16 +169,30 @@ describe("real signed participation PUT", () => {
       NOW,
       [SHARED_CAPABILITY],
     );
-    const body = { protocol: 1, enabled: true, expected_generation: 0 };
+    const body = { protocol: 2, enabled: true, expected_generation: 0 };
     expect((await PUT(request(p, body, 2, PATH, "", other.privateKey))).status).toBe(401);
-    expect((await PUT(request(p, body, 2, "/api/fleet/v1/device"))).status).toBe(401);
+    const wrongPath = request(p, body, 2, "/api/fleet/v2/device");
+    // Nonliteral URLs now fail framing before auth. Keep the separate signature
+    // regression on the actual participation URL, signed for device instead.
+    expect((await PUT(wrongPath)).status).toBe(400);
+    expect(
+      (
+        await PUT(
+          new NextRequest(`https://auth.example${PATH}`, {
+            method: "PUT",
+            body: JSON.stringify(body),
+            headers: wrongPath.headers,
+          }),
+        )
+      ).status,
+    ).toBe(401);
     const res = await withInjectedPgFault(
       getDb().$client,
       { matchSql: /insert into "audit_log"/i, code: "40001" },
       () => PUT(request(p, body, 2)),
     );
     expect(res.status).toBe(503);
-    expect(await res.json()).toEqual({ protocol: 1, error: "service_unavailable" });
+    expect(await res.json()).toEqual({ protocol: 2, error: "service_unavailable" });
     expect(
       (await ctx.db.select().from(fleetDeviceSession)).every((s) => s.lastRevision <= 1),
     ).toBe(true);

@@ -176,6 +176,27 @@
       "when": 1788911391615,
       "tag": "0024_fleet_publication_id",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1789580628727,
+      "tag": "0025_lonely_omega_red",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1789605341754,
+      "tag": "0026_spotty_deadpool",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1789606765697,
+      "tag": "0027_premium_mephisto",
+      "breakpoints": true
     }
   ]
 }

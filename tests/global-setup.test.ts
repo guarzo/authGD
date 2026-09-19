@@ -134,8 +134,8 @@ describe("resolveTestUrl", () => {
     ).toBe("postgres://u:p@example:5432/mine");
   });
 
-  // CI stands up a shared Postgres service and sets no override. Changing this
-  // would point CI at a database nothing creates.
+  // Preserve the historical fallback for isolated/no-override callers. The
+  // unit workflow now opts into explicit current/pre-combat URLs.
   it("uses the historical shared database under CI", () => {
     expect(resolveTestUrl({ CI: "true" }, "/worktrees/x")).toBe(
       "postgres://authgd:authgd@localhost:5433/authgd_test",

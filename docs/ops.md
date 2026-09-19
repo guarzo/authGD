@@ -878,13 +878,14 @@ a test database per worktree:
 |---|---|---|
 | `authgd` | `npm run dev`, `npm run worker`, `npm run db:migrate` | none automatic |
 | `authgd_test_<worktree>_<hash>` | `npm test` in that worktree | `TRUNCATE` between every test |
-| `authgd_test` | `npm test` under CI only | `TRUNCATE` between every test |
+| `authgd_test_unit` | unit CI, current schema | `TRUNCATE` between every test |
+| `authgd_test_unit_legacy_migration` | unit CI, pinned pre-combat fixture | pinned migrations and fixture reset |
 
 `npm test` derives its database name from the worktree directory
 (`tests/helpers/test-db-url.ts`), creates it on first run, and migrates it. Two
 worktrees therefore never share a database, and the `TRUNCATE ... CASCADE` the
-suite runs between tests physically cannot reach `authgd`. Run the tests
-freely.
+suite runs between tests physically cannot reach `authgd`. The full suite's
+historical regression additionally requires the explicit pair described below.
 
 Nothing reclaims these databases when a worktree is deleted, so:
 
@@ -892,10 +893,20 @@ Nothing reclaims these databases when a worktree is deleted, so:
 npm run test:clean        # drop this worktree's test database
 ```
 
-**Under CI the shared `authgd_test` is still used**, because the workflow
-stands up its own Postgres service and sets no override. An explicit
-`TEST_DATABASE_URL` also wins over the derived name, and opts that database out
-of both creation and `test:clean` — it is yours, not the harness's.
+**Full Vitest prerequisite:** explicitly set both `TEST_DATABASE_URL` and
+`FLEET_LEGACY_TEST_DATABASE_URL` to separately provisioned, disposable databases
+on the same owned loopback service/port. The main name must be `authgd_test_*`;
+its historical sibling must be that name plus `_legacy_migration`. Explicit
+URLs opt out of automatic creation and `test:clean`. Both immutable authGD refs
+in `tests/helpers/fleet-legacy.ts` must also be available locally.
+
+The **unit CI job** owns a fresh Postgres service: it names `authgd_test_unit`
+explicitly, creates only its new sibling after `npm ci`, fetches both historical
+refs, then runs `npm test`. Helpers migrate the main and pinned pre-combat
+schemas separately under their test locks. Missing prerequisites fail rather
+than skip the old-reader regression. The CI-only create command refuses reuse;
+do not run it against existing local databases or assume local `5433` is yours.
+The separate E2E job and its `authgd_test` default are unchanged.
 
 `npm run test:e2e` does not appear above: it provisions a database of its own,
 in its own container, and never touches either of these. See
@@ -1419,11 +1430,21 @@ an actual successful run against that exact pin before claiming hosted
 verification. Consult the current PR checks rather than inferring success from
 an older pin's results.
 
+That pin is pre-v2: against the current backend its pairing/recovery must be
+refused without creating sessions, changing key identity or publishing telemetry.
+The former Task10 sharing-success journey belongs to pre-cutover history, not
+current-client acceptance. `fleet-source-flow.ts` separately exercises signed
+API2 source/control/combat traffic through real outbox/pg-boss and synthetic
+providers. The positive current-desktop journey remains the explicit opt-in
+[current-client gate](fleet-current-client-verification.md); these retirement
+checks neither replace it nor waive its clock fences.
+
 Local commands must name the approved disposable database explicitly:
 
 ```bash
 # Set the two absolute Wingman variables on each invocation or in the test shell.
-TEST_DATABASE_URL=postgres://authgd:authgd@localhost:5639/authgd_test NEXT_TELEMETRY_DISABLED=1 npm test
+# Full Vitest requires this separately provisioned pair on the owned service:
+TEST_DATABASE_URL=postgres://authgd:authgd@localhost:5639/authgd_test_unit FLEET_LEGACY_TEST_DATABASE_URL=postgres://authgd:authgd@localhost:5639/authgd_test_unit_legacy_migration NEXT_TELEMETRY_DISABLED=1 npm test
 TEST_DATABASE_URL=postgres://authgd:authgd@localhost:5639/authgd_test NEXT_TELEMETRY_DISABLED=1 E2E_DB_PORT=5639 CI=true npm run test:e2e
 TEST_DATABASE_URL=postgres://authgd:authgd@localhost:5639/authgd_test NEXT_TELEMETRY_DISABLED=1 E2E_DB_PORT=5639 CI=true npm run test:e2e:fleet
 # Separate owned dev-mode proof, still one worker / zero retries:
@@ -1462,10 +1483,12 @@ focus, resize chrome, DPI and monitor behavior need Wingman's native-seam tests
 and the separate Windows acceptance pass. Do not change a platform flag or
 replace production admission to manufacture that evidence.
 
-The two installations are Linux synthetic roots using the existing key-protection
-injection seam, **not installed Windows applications and not DPAPI or live EVE
-proof**. Source work goes through actual fleet-only outbox/pg-boss dispatch and
-strict job handlers against bounded fake SSO/JWT/ESI providers. The real worker
-and transient API/store path handle receiving; only synthetic local telemetry is
-submitted. The optional third service-paired device is a lease-conflict fixture,
-not a shortcut for either installation's real browser approval.
+The two pinned installations are Linux synthetic roots using the existing
+key-protection injection seam, **not installed Windows applications and not
+DPAPI or live EVE proof**. They exercise rejection of old clients, including an
+attempt to enable participation and produce local telemetry without gaining a
+session or publishing a row. The separate API2 source test uses explicit shared
+and combat capability approval fixtures, then actual signed HTTP, fleet-only
+outbox/pg-boss and strict job handlers against bounded fake SSO/JWT/ESI providers.
+It is protocol/backend integration evidence, not a current desktop restart,
+future-fleet or live-provider acceptance result.

@@ -124,6 +124,7 @@ describe("fleet browser harness isolation", () => {
     expect(normal.testIgnore).toEqual([
       "**/fleet-access.spec.ts",
       "**/fleet-joint.spec.ts",
+      "**/fleet-current-v2.test.ts",
     ]);
     vi.resetModules();
     vi.stubEnv("E2E_FLEET_INTEGRATIONS", "1");

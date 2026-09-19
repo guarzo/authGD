@@ -25,13 +25,13 @@ import {
 } from "@/services/fleet-eligibility";
 import { readFleetProjection, replaceDeviceProjection } from "@/services/fleet-relay";
 import { setupTestDb, truncateAll } from "./helpers/db";
+import { at, NOW, realSource } from "./helpers/fleet-shared-admission";
 import {
-  at,
-  NOW,
-  participatingDevice,
-  realSource,
-  sharedAccounts,
-} from "./helpers/fleet-shared-admission";
+  combatAccounts as sharedAccounts,
+  combatDevice as participatingDevice,
+  combatRow,
+  POINT,
+} from "./helpers/fleet-combat";
 let ctx: Awaited<ReturnType<typeof setupTestDb>>;
 beforeAll(async () => {
   ctx = await setupTestDb();
@@ -60,6 +60,18 @@ it("eligibility discloses only own matching IDs and provenance, without requirin
         expiresAt: at(12000),
       })),
     },
+    json: JSON.stringify({
+      protocol: 2,
+      participation_generation: 1,
+      state: "ready",
+      characters: p.alts.slice(0, 2).map((ch) => ({
+        character_id: ch.id,
+        source_id: p.source.sourceId,
+        source_generation: 1,
+        authority_generation: 1,
+        expires_at: at(12000).toISOString(),
+      })),
+    }),
   });
 });
 
@@ -95,9 +107,10 @@ it("real boss authority admits an ungranted second account and a quiet receiver,
       sessionId: p.a.sessionId,
       revision: 4,
       now: at(2500),
-      rows: [{ characterId: p.boss.id, dps: 42, ewar: [] }],
+      sampledAtMs: at(2500).getTime(),
+      rows: [combatRow(p.boss.id, 42)],
     }),
-  ).toEqual({ ok: true });
+  ).toEqual({ ok: true, json: '{"protocol":2}' });
   expect(
     await readFleetProjection(ctx.db, {
       sessionId: p.b.sessionId,
@@ -110,8 +123,10 @@ it("real boss authority admits an ungranted second account and a quiet receiver,
       {
         characterId: p.boss.id,
         characterName: p.boss.name,
-        dps: 42,
-        ewar: [],
+        outgoingDps: 42,
+        incomingDps: null,
+        activityAgeMs: 0,
+        effects: [],
         state: "live",
         ageMs: 0,
       },
@@ -122,9 +137,10 @@ it("real boss authority admits an ungranted second account and a quiet receiver,
       sessionId: p.b.sessionId,
       revision: 4,
       now: at(3000),
-      rows: [{ characterId: p.alts[0].id, dps: 77, ewar: ["SCRAM/POINT"] }],
+      sampledAtMs: at(3000).getTime(),
+      rows: [combatRow(p.alts[0].id, 77, POINT)],
     }),
-  ).toEqual({ ok: true });
+  ).toEqual({ ok: true, json: '{"protocol":2}' });
   const read = await readFleetProjection(ctx.db, {
     sessionId: p.a.sessionId,
     revision: 5,
@@ -152,16 +168,17 @@ it("real boss authority admits an ungranted second account and a quiet receiver,
   expect(await ctx.db.select().from(fleetEligibility)).toEqual([]);
 });
 
-async function admitted() {
+async function admitted(sampledAtMs = at(2500).getTime()) {
   const p = await sharedAccounts(ctx.db);
   expect(
     await replaceDeviceProjection(ctx.db, {
       sessionId: p.b.sessionId,
       revision: 3,
       now: at(2500),
-      rows: [{ characterId: p.alts[0].id, dps: 77, ewar: ["SCRAM/POINT"] }],
+      sampledAtMs,
+      rows: [combatRow(p.alts[0].id, 77, POINT)],
     }),
-  ).toEqual({ ok: true });
+  ).toEqual({ ok: true, json: '{"protocol":2}' });
   const read = await readFleetProjection(ctx.db, {
     sessionId: p.a.sessionId,
     revision: 4,
@@ -393,29 +410,16 @@ it("whole-batch invalidity and global lease conflict preserve prior rows, leases
     sessions: await ctx.db.select().from(fleetDeviceSession),
   };
   for (const [device, rows, code] of [
-    [
-      p.b,
-      [
-        { characterId: p.alts[1].id, dps: 2, ewar: [] },
-        { characterId: p.alts[2].id, dps: 1, ewar: [] },
-      ],
-      "character_not_eligible",
-    ],
-    [p.b, [{ characterId: p.boss.id, dps: 1, ewar: [] }], "character_not_linked"],
-    [
-      other,
-      [
-        { characterId: p.alts[1].id, dps: 2, ewar: [] },
-        { characterId: p.alts[0].id, dps: 1, ewar: [] },
-      ],
-      "lease_conflict",
-    ],
+    [p.b, [combatRow(p.alts[1].id, 2), combatRow(p.alts[2].id, 1)], "not_verified"],
+    [p.b, [combatRow(p.boss.id, 1)], "forbidden"],
+    [other, [combatRow(p.alts[1].id, 2), combatRow(p.alts[0].id, 1)], "conflict"],
   ] as const)
     expect(
       await replaceDeviceProjection(ctx.db, {
         sessionId: device.sessionId,
         revision: 4,
         now: at(3000),
+        sampledAtMs: at(3000).getTime(),
         rows,
       }),
     ).toEqual({ ok: false, code });
@@ -427,9 +431,10 @@ it("whole-batch invalidity and global lease conflict preserve prior rows, leases
       sessionId: p.b.sessionId,
       revision: 4,
       now: at(3000),
-      rows: [{ characterId: p.alts[1].id, dps: 0, ewar: [] }],
+      sampledAtMs: at(3000).getTime(),
+      rows: [combatRow(p.alts[1].id, 0)],
     }),
-  ).toEqual({ ok: true });
+  ).toEqual({ ok: true, json: '{"protocol":2}' });
   expect(
     (await ctx.db.select().from(fleetTelemetryRow)).map((r) => r.characterId),
   ).toEqual([p.alts[1].id]);
@@ -449,9 +454,10 @@ it("whole-batch invalidity and global lease conflict preserve prior rows, leases
       sessionId: p.b.sessionId,
       revision: 6,
       now: at(4000),
+      sampledAtMs: 0,
       rows: [],
     }),
-  ).toEqual({ ok: true });
+  ).toEqual({ ok: true, json: '{"protocol":2}' });
   expect(
     await readDeviceEligibility(ctx.db, {
       sessionId: p.b.sessionId,
@@ -461,6 +467,7 @@ it("whole-batch invalidity and global lease conflict preserve prior rows, leases
   ).toEqual({
     ok: true,
     value: { state: "participation_off", participationGeneration: 2, characters: [] },
+    json: '{"protocol":2,"participation_generation":2,"state":"participation_off","characters":[]}',
   });
   expect(
     (
@@ -474,9 +481,11 @@ it("whole-batch invalidity and global lease conflict preserve prior rows, leases
 });
 
 it.each([2999, 3000, 9999, 10000])(
-  "original receive age %sms, independent of refreshed source evidence",
+  "original sample age %sms, independent of refreshed source evidence",
   async (ageMs) => {
-    const p = await admitted();
+    // Initial source authority ends at 12000; align the sample's 10s boundary
+    // with it so a shorter authority lease cannot mask transport expiry.
+    const p = await admitted(at(2000).getTime());
     if (ageMs >= 4500) {
       p.source.setNow(7000);
       await p.source.run();
@@ -484,7 +493,7 @@ it.each([2999, 3000, 9999, 10000])(
     const read = await readFleetProjection(ctx.db, {
       sessionId: p.a.sessionId,
       revision: 5,
-      now: at(2500 + ageMs),
+      now: at(2000 + ageMs),
     });
     expect(read).toMatchObject({
       ok: true,
@@ -552,9 +561,10 @@ it("multi-fleet quiet receiver reads the flat union and withholds ambiguous IDs 
       sessionId: p.b.sessionId,
       revision: 4,
       now: at(3000),
-      rows: [{ characterId: p.alts[1].id, dps: 1, ewar: [] }],
+      sampledAtMs: at(3000).getTime(),
+      rows: [combatRow(p.alts[1].id, 1)],
     }),
-  ).toEqual({ ok: false, code: "character_not_eligible" });
+  ).toEqual({ ok: false, code: "not_verified" });
   p.source.setRosterIds([p.boss.id, p.alts[0].id]);
   p.source.setNow(7000);
   await p.source.run();
@@ -567,9 +577,10 @@ it("multi-fleet quiet receiver reads the flat union and withholds ambiguous IDs 
         sessionId: device.sessionId,
         revision: 4,
         now: at(7500),
-        rows: [{ characterId: id, dps: 1, ewar: [] }],
+        sampledAtMs: at(7500).getTime(),
+        rows: [combatRow(id, 1)],
       }),
-    ).toEqual({ ok: true });
+    ).toEqual({ ok: true, json: '{"protocol":2}' });
   const union = await readFleetProjection(ctx.db, {
     sessionId: p.b.sessionId,
     revision: 4,
@@ -640,6 +651,7 @@ it.each([{ capabilities: [] }, { capabilities: [SHARED_CAPABILITY] }])(
           sessionId: fresh.sessionId,
           revision: 1,
           now: at(2500),
+          sampledAtMs: 0,
           rows: [],
         })
       ).ok,
@@ -673,6 +685,7 @@ it("8192 plus sentinel ownership overflow refuses atomically rather than silentl
       sessionId: p.b.sessionId,
       revision: 4,
       now: at(3000),
+      sampledAtMs: 0,
       rows: [],
     }),
   ).toEqual({ ok: false, code: "service_unavailable" });
@@ -717,11 +730,10 @@ it("read union exceeds both 32-row publication and 256-pair per-source bounds wi
         sessionId: device.sessionId,
         revision: 3,
         now: at(7500),
-        rows: chars
-          .slice(i, i + 32)
-          .map((ch) => ({ characterId: ch.id, dps: 10_000_000, ewar: [] })),
+        sampledAtMs: at(7500).getTime(),
+        rows: chars.slice(i, i + 32).map((ch) => combatRow(ch.id, 10_000_000)),
       }),
-    ).toEqual({ ok: true });
+    ).toEqual({ ok: true, json: '{"protocol":2}' });
   }
   const union = await readFleetProjection(ctx.db, {
     sessionId: p.b.sessionId,
@@ -761,16 +773,17 @@ it("a real worker handover changes authority generations; old admitted provenanc
       sessionId: p.b.sessionId,
       revision: 4,
       now: at(3500),
-      rows: [{ characterId: p.alts[0].id, dps: 88, ewar: [] }],
+      sampledAtMs: at(3500).getTime(),
+      rows: [combatRow(p.alts[0].id, 88)],
     }),
-  ).toEqual({ ok: true });
+  ).toEqual({ ok: true, json: '{"protocol":2}' });
   expect(
     await readFleetProjection(ctx.db, {
       sessionId: c.sessionId,
       revision: 4,
       now: at(3500),
     }),
-  ).toMatchObject({ ok: true, rows: [{ dps: 88 }] });
+  ).toMatchObject({ ok: true, rows: [{ outgoingDps: 88 }] });
   // Explicit negative ABA mutation: replay retained OLD admission, never positive proof.
   await ctx.db.update(fleetTelemetryRow).set(oldRow);
   await ctx.db.update(fleetPublisherLease).set(oldLease);
@@ -823,9 +836,10 @@ it("a PostgreSQL-triggered serialization fault between lease and row writes roll
       sessionId: p.b.sessionId,
       revision: 4,
       now: at(3000),
-      rows: [{ characterId: p.alts[1].id, dps: 88, ewar: [] }],
+      sampledAtMs: at(3000).getTime(),
+      rows: [combatRow(p.alts[1].id, 88)],
     });
-    expect(result).toEqual({ ok: false, code: "try_again" });
+    expect(result).toEqual({ ok: false, code: "service_unavailable" });
   } finally {
     await ctx.pool.query(
       "drop trigger if exists task5_relay_fault on fleet_telemetry_row",

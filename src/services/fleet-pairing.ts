@@ -13,7 +13,17 @@ import {
   lockFleetAccounts,
   lockFleetLifecycle,
 } from "@/services/fleet-lifecycle";
+import { revokeFleetAutomaticApproval } from "@/services/fleet-automatic";
 import { validFleetCapabilities } from "@/core/fleet-sharing";
+import {
+  API_VERSION,
+  pairingBegunSchema,
+  PairingCompletedSchema,
+  SessionRenewedSchema,
+  FLEET_V2_BYTE_LIMITS,
+  checkedDateAdd,
+} from "@/core/fleet-api-v2";
+import { serializeFleetV2Json } from "@/lib/fleet-api-v2";
 import {
   FleetSharingDisabledError,
   lockFleetSharingMode,
@@ -193,7 +203,7 @@ function verifyCompletionProof(
 export async function beginPairing(
   dbx: Dbx,
   args: { publicKeySpki: Uint8Array; now?: Date; requestedCapabilities?: string[] },
-): Promise<{ pairingId: string; approvalUrl: string }> {
+): Promise<{ pairingId: string; approvalUrl: string; expiresAt: Date; json: string }> {
   if (!isEd25519SpkiPublicKey(args.publicKeySpki)) {
     throw new InvalidDevicePublicKeyError(
       "candidate device public key is not valid Ed25519 SPKI DER",
@@ -216,7 +226,6 @@ export async function beginPairing(
     if (mode.keyIdentityPhase === "ready") await lockFleetDeviceKey(tx, canonicalKey);
     if (requestedCapabilities.length > 0 && !mode.enabled)
       throw new FleetSharingDisabledError();
-    const now = args.now ?? new Date();
     const resolution = await resolveFleetDeviceKey(tx, canonicalKey, mode);
     if (resolution.unavailable) throw new FleetDeviceKeyUnavailableError();
     const existingDevice = resolution.device;
@@ -226,16 +235,31 @@ export async function beginPairing(
       );
     }
 
+    const now = await fleetDatabaseNow(tx, args.now);
     const pairingId = randomUUID();
+    const approvalUrl = `/fleet/pair/${pairingId}`;
+    const expiry = checkedDateAdd(now.toISOString(), PAIRING_REQUEST_TTL_MS);
+    const output = serializeFleetV2Json(
+      {
+        protocol: API_VERSION,
+        pairing_id: pairingId,
+        approval_url: approvalUrl,
+        expires_at: expiry,
+      },
+      pairingBegunSchema(),
+      FLEET_V2_BYTE_LIMITS.preSessionPost.successBytes,
+    );
+    if (!output.ok || !expiry) throw new RelayRefusal("service_unavailable");
+    const expiresAt = new Date(expiry);
     await tx.insert(fleetPairingRequest).values({
       id: pairingId,
       publicKeySpkiB64: canonicalKey,
       challengeDigest: challengeDigestFor(pairingId),
-      expiresAt: new Date(now.getTime() + PAIRING_REQUEST_TTL_MS),
+      expiresAt,
       requestedCapabilities,
     });
 
-    return { pairingId, approvalUrl: `/fleet/pair/${pairingId}` };
+    return { pairingId, approvalUrl, expiresAt, json: output.json };
   });
 }
 
@@ -415,7 +439,7 @@ export async function approvePairing(
 export async function completePairing(
   dbx: Dbx,
   args: { pairingId: string; completionSignature: string; now?: Date },
-): Promise<{ sessionId: string; catalogue: DeviceCatalogue }> {
+): Promise<{ sessionId: string; catalogue: DeviceCatalogue; json: string }> {
   return dbx.transaction(async (tx) => {
     const mode = await lockFleetSharingMode(tx);
     const row = await lockPairingRequest(tx, mode, args.pairingId);
@@ -475,7 +499,7 @@ export async function completePairing(
       if (current.unavailable || current.device?.id !== existingDevice?.id)
         throw new FleetDeviceKeyUnavailableError();
     }
-    const now = args.now ?? new Date();
+    const now = await fleetDatabaseNow(tx, args.now);
     if (row.expiresAt.getTime() <= now.getTime()) {
       throw new PairingExpiredError(
         `fleet pairing request ${args.pairingId} has expired`,
@@ -510,6 +534,34 @@ export async function completePairing(
         "completion signature does not prove possession of the pairing request's key",
       );
     }
+
+    if (
+      !validFleetCapabilities(row.requestedCapabilities) ||
+      (existingDevice && !validFleetCapabilities(existingDevice.approvedCapabilities))
+    )
+      throw new InvalidFleetCapabilitiesError();
+
+    // No pairing/device/session authority is written until the complete response
+    // fits the stricter pre-session budget. A local random token is not issuance.
+    const catalogue = await buildDeviceCatalogue(tx, approvedAccountId);
+    const rawSessionId = randomBytes(32).toString("base64url");
+    const expiresAt = checkedDateAdd(now.toISOString(), DEVICE_SESSION_TTL_MS);
+    const output = serializeFleetV2Json(
+      {
+        protocol: API_VERSION,
+        session_id: rawSessionId,
+        catalogue: {
+          revision: catalogue.revision,
+          characters: catalogue.characters.map((c) => ({
+            character_id: c.characterId,
+            character_name: c.characterName,
+          })),
+        },
+      },
+      PairingCompletedSchema,
+      FLEET_V2_BYTE_LIMITS.preSessionPost.successBytes,
+    );
+    if (!output.ok || !expiresAt) throw new RelayRefusal("service_unavailable");
 
     await tx
       .update(fleetPairingRequest)
@@ -553,11 +605,10 @@ export async function completePairing(
       .set({ approvedDeviceId: deviceId })
       .where(eq(fleetPairingRequest.id, args.pairingId));
 
-    const rawSessionId = randomBytes(32).toString("base64url");
     await tx.insert(fleetDeviceSession).values({
       id: hashOpaqueValue(rawSessionId),
       deviceId,
-      expiresAt: new Date(now.getTime() + DEVICE_SESSION_TTL_MS),
+      expiresAt: new Date(expiresAt),
       // Initial/updated pairing grants only the scope the browser saw for THIS
       // request. Recovery later snapshots the device grant after key proof.
       approvedCapabilities: row.requestedCapabilities,
@@ -584,9 +635,7 @@ export async function completePairing(
       target: deviceId,
     });
 
-    const catalogue = await buildDeviceCatalogue(tx, approvedAccountId);
-
-    return { sessionId: rawSessionId, catalogue };
+    return { sessionId: rawSessionId, catalogue, json: output.json };
   });
 }
 
@@ -612,6 +661,7 @@ export async function completePairing(
 export async function deleteFleetRelayStateForDevice(
   tx: DbTx,
   deviceId: string,
+  beforeDelete?: () => Promise<void>,
 ): Promise<void> {
   const sessions = await tx
     .select({ id: fleetDeviceSession.id })
@@ -638,6 +688,9 @@ export async function deleteFleetRelayStateForDevice(
     await lockFleetCharactersAscending(tx, characterIds);
   }
 
+  // Recovery validates its complete issuance response after these waits but
+  // before destroying the old lane. Revocation needs no response preparation.
+  await beforeDelete?.();
   await tx.delete(fleetTelemetryRow).where(eq(fleetTelemetryRow.deviceId, deviceId));
   await tx.delete(fleetPublisherLease).where(eq(fleetPublisherLease.deviceId, deviceId));
   if (sessions.length > 0) {
@@ -734,7 +787,7 @@ export async function revokeFleetDevice(
   dbx: Db,
   deviceId: string,
   actorAccountId: string,
-  now: Date,
+  testNow?: Date,
 ): Promise<void> {
   try {
     await fleetLifecycleTransaction(dbx, async (tx) => {
@@ -744,8 +797,17 @@ export async function revokeFleetDevice(
         .from(fleetDevice)
         .where(eq(fleetDevice.id, deviceId));
       if (!probe) throw new DeviceNotFoundError(`no fleet device ${deviceId}`);
-      await lockFleetAccounts(tx, [probe.accountId]);
-      const lifecycle = await lockFleetLifecycle(tx, { deviceIds: [deviceId] });
+      const lifecycle = await revokeFleetAutomaticApproval(
+        tx,
+        probe.accountId,
+        // PostgreSQL UUID equality accepts mixed case; in-memory closure and
+        // source selectors must use the canonical identity it resolved.
+        probe.id,
+        testNow,
+      );
+      // Production time is sampled after selector/account/device waits; the
+      // optional explicit clock remains only for deterministic service tests.
+      const now = await fleetDatabaseNow(tx, testNow);
       const [device] = await tx
         .select({ id: fleetDevice.id })
         .from(fleetDevice)
@@ -933,15 +995,16 @@ export async function revokeFleetRelayForAccount(
 export async function renewFleetDeviceSession(
   dbx: Dbx,
   args: { sessionId: string; revision: number; now?: Date },
-): Promise<{ ok: true; expiresAt: Date } | { ok: false; code: string }> {
+): Promise<{ ok: true; expiresAt: Date; json: string } | { ok: false; code: string }> {
   try {
-    const expiresAt = await dbx.transaction(async (tx) => {
+    const result = await dbx.transaction(async (tx) => {
       const { session, device, now } = await gateSignedSession(tx, {
         sessionId: args.sessionId,
         revision: args.revision,
         now: args.now,
         invalidSessionCode: "invalid_session",
         cadence: "read",
+        databaseClock: true,
       });
 
       const [acc] = await tx
@@ -952,7 +1015,14 @@ export async function renewFleetDeviceSession(
         throw new RelayRefusal("not_eligible");
       }
 
-      const newExpiresAt = new Date(now.getTime() + DEVICE_SESSION_TTL_MS);
+      const expiry = checkedDateAdd(now.toISOString(), DEVICE_SESSION_TTL_MS);
+      const output = serializeFleetV2Json(
+        { protocol: API_VERSION, expires_at: expiry },
+        SessionRenewedSchema,
+        FLEET_V2_BYTE_LIMITS.sessionPut.successBytes,
+      );
+      if (!output.ok || !expiry) throw new RelayRefusal("service_unavailable");
+      const newExpiresAt = new Date(expiry);
       await commitSessionCadence(tx, session.id, {
         revision: args.revision,
         now,
@@ -962,12 +1032,12 @@ export async function renewFleetDeviceSession(
         .update(fleetDeviceSession)
         .set({ expiresAt: newExpiresAt })
         .where(eq(fleetDeviceSession.id, session.id));
-      return newExpiresAt;
+      return { expiresAt: newExpiresAt, json: output.json };
     });
-    return { ok: true, expiresAt };
+    return { ok: true, ...result };
   } catch (err) {
     if (err instanceof RelayRefusal) return { ok: false, code: err.code };
-    if (isRetryableRelayError(err)) return { ok: false, code: "try_again" };
+    if (isRetryableRelayError(err)) return { ok: false, code: "service_unavailable" };
     throw err;
   }
 }

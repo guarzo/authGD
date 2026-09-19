@@ -5,7 +5,6 @@ import {
   account,
   auditLog,
   character,
-  fleetEligibility,
   fleetPairingRequest,
   fleetPublisherLease,
   fleetTelemetryRow,
@@ -68,6 +67,7 @@ import { createSession } from "@/services/session";
 import { setupTestDb, truncateAll } from "./helpers/db";
 import { testConfig } from "./helpers/config";
 import { seedAccount, seedCharacter } from "./helpers/seed";
+import { combatAccounts, combatRow } from "./helpers/fleet-combat";
 
 let ctx: Awaited<ReturnType<typeof setupTestDb>>;
 const cfg = testConfig();
@@ -144,7 +144,7 @@ async function sourceFixture(
   }
   return { owner, boss, paired, source };
 }
-async function expectEnded(id: string) {
+async function expectEnded(id: string, generations = { fetch: 1, authority: 8 }) {
   const [source] = await ctx.db
     .select()
     .from(fleetSourceIntent)
@@ -152,7 +152,7 @@ async function expectEnded(id: string) {
   expect(source).toMatchObject({
     state: "ended",
     generation: 2,
-    fetchGeneration: 1,
+    fetchGeneration: generations.fetch,
     endedAt: expect.any(Date),
     terminalReason: expect.any(String),
   });
@@ -164,7 +164,7 @@ async function expectEnded(id: string) {
   expect(authority).toMatchObject({
     sourceId: null,
     sourceGeneration: null,
-    authorityGeneration: 8,
+    authorityGeneration: generations.authority,
     linkedCharacters: [],
     verifiedAt: null,
     expiresAt: null,
@@ -817,7 +817,12 @@ describe("source isolation, loss aggregation and rollback", () => {
       };
       await ctx.db.insert(fleetTelemetryRow).values({
         ...common,
-        dps: 42,
+        publicationId: randomUUID(),
+        outgoingDps: 42,
+        incomingDps: null,
+        sampledAtMs: NOW.getTime(),
+        activityOriginMs: NOW.getTime(),
+        effects: [],
         receivedAt: NOW,
         staleAt: new Date(NOW.getTime() + 3000),
         hardExpiresAt: new Date(NOW.getTime() + 10000),
@@ -975,7 +980,7 @@ describe("source isolation, loss aggregation and rollback", () => {
   });
 });
 
-describe("PostgreSQL lifecycle overlap (not positive shared admission)", () => {
+describe("PostgreSQL lifecycle overlap (retained fixtures and current publication)", () => {
   it("retries the actual outer merge transaction when an approved request appears after its key probe", async () => {
     const p = await sourceFixture({ shared: true });
     const target = await seedAccount(ctx.db, { tier: "member" });
@@ -1009,18 +1014,16 @@ describe("PostgreSQL lifecycle overlap (not positive shared admission)", () => {
       await pending;
     }
   });
-  it("legacy publication takes character-FK-compatible identity locks before its device; unlink then removes its committed projection", async () => {
-    const p = await sourceFixture();
+  it("current combat publication takes identity locks before its device; unlink then removes its committed projection", async () => {
+    const fixture = await combatAccounts(ctx.db, NOW);
+    const p = { ...fixture, paired: fixture.a, source: { id: fixture.source.sourceId } };
+    expect(await ctx.db.select().from(fleetSourceIntent)).toMatchObject([
+      { generation: 1, fetchGeneration: 1 },
+    ]);
+    expect(await ctx.db.select().from(fleetSourceAuthority)).toMatchObject([
+      { authorityGeneration: 1 },
+    ]);
     await seedCharacter(ctx.db, cfg, { id: 99002, accountId: p.owner.id, main: true });
-    await ctx.db.insert(fleetEligibility).values({
-      characterId: p.boss.id,
-      accountId: p.owner.id,
-      fleetId: 123,
-      rosterCharacterIds: [p.boss.id],
-      verifiedAt: NOW,
-      expiresAt: new Date(NOW.getTime() + 60000),
-      outcomeCode: "ok",
-    });
     const client = await ctx.pool.connect();
     let publish: ReturnType<typeof replaceDeviceProjection> | undefined;
     let unlink: Promise<unknown> | undefined;
@@ -1034,9 +1037,10 @@ describe("PostgreSQL lifecycle overlap (not positive shared admission)", () => {
       ]);
       publish = replaceDeviceProjection(ctx.db, {
         sessionId: p.paired.sessionId,
-        revision: 1,
-        now: NOW,
-        rows: [{ characterId: p.boss.id, dps: 42, ewar: [] }],
+        revision: 4,
+        now: new Date(NOW.getTime() + 2500),
+        sampledAtMs: NOW.getTime() + 2500,
+        rows: [combatRow(p.boss.id, 42)],
       });
       expect(await waitUntilBlockedBy(ctx.pool, pid)).toBe(true);
       // With the prelude, publish holds character before waiting on device.
@@ -1049,11 +1053,11 @@ describe("PostgreSQL lifecycle overlap (not positive shared admission)", () => {
       );
       expect(await waitUntilBlockedBy(ctx.pool, rows[0].pid)).toBe(true);
       await client.query("commit");
-      expect(await publish).toEqual({ ok: true });
+      expect(await publish).toEqual({ ok: true, json: '{"protocol":2}' });
       expect(await unlink).toEqual({ ok: true });
       expect(await ctx.db.select().from(fleetTelemetryRow)).toEqual([]);
       expect(await ctx.db.select().from(fleetPublisherLease)).toEqual([]);
-      await expectEnded(p.source.id);
+      await expectEnded(p.source.id, { fetch: 2, authority: 2 });
     } finally {
       await client.query("rollback");
       client.release();
