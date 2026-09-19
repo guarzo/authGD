@@ -20,7 +20,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it.each(["cleanup", "sources"] as const)(
+it.each(["cleanup", "sources", "automatic"] as const)(
   "a failed %s phase still admits the independent remaining work",
   async (failed) => {
     const order: string[] = [];
@@ -32,7 +32,8 @@ it.each(["cleanup", "sources"] as const)(
       });
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     await runFleetSourceTick({ db: {} } as FleetSourceDeps, () => true);
-    expect(order).toEqual(["cleanup", "sources", "automatic"]);
+    order.push("dispatch"); // The current-client owner dispatches after maintenance.
+    expect(order).toEqual(["cleanup", "sources", "automatic", "dispatch"]);
     expect(errors).toHaveBeenCalledTimes(1);
     expect(JSON.stringify(errors.mock.calls)).not.toContain("private backend detail");
   },

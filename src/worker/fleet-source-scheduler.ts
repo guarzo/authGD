@@ -32,7 +32,11 @@ export async function runFleetSourceTick(
     canDiscover() &&
     (deps.esi?.getFleetRetryAt(now) ?? 0) <= now
   )
-    await reserveDueFleetAutomatic(deps.db, deps.now);
+    try {
+      await reserveDueFleetAutomatic(deps.db, deps.now);
+    } catch {
+      console.error("fleet_automatic_reservation_failed");
+    }
 }
 
 /** Worker-owned non-cron loop: immediate startup catch-up, bounded batches,
