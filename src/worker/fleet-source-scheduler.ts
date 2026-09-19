@@ -14,8 +14,18 @@ export async function runFleetSourceTick(
   deps: FleetSourceDeps,
   canDiscover: () => boolean,
 ): Promise<void> {
-  await cleanupFleetSources(deps.db, deps.now);
-  await reserveDueFleetSources(deps.db, deps.now);
+  // Phase-level failure (including the initial query) cannot starve another
+  // independently paced lane. The outer owner still serializes/drains ticks.
+  try {
+    await cleanupFleetSources(deps.db, deps.now);
+  } catch {
+    console.error("fleet_source_cleanup_failed");
+  }
+  try {
+    await reserveDueFleetSources(deps.db, deps.now);
+  } catch {
+    console.error("fleet_source_reservation_failed");
+  }
   const now = (deps.now?.() ?? new Date()).getTime();
   if (
     !deps.signal?.aborted &&

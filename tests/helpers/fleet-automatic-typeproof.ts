@@ -10,7 +10,7 @@ import type {
 import { bindFleetAutomaticDiscovery as bind } from "@/services/fleet-automatic";
 
 /** Compile only; rejected evidence must fail against the ACTUAL runtime bind.
- * Positive commit remains a future port, never a fabricated runtime owner. */
+ * The positive port requires verified evidence, never a fabricated runtime owner. */
 export function automaticAdmissionTypeproof(
   db: Db,
   admitted: AutomaticToken,

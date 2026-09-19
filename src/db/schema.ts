@@ -950,7 +950,7 @@ export const fleetAutomaticConsent = pgTable(
 );
 
 /** Immutable historical receipt; indexed expiry is checked against the payload.
- * Account serialization (next slice) owns H+R<=256 and cross-store UUID identity;
+ * Account serialization in services/fleet-automatic owns H+R<=256 and cross-store UUID identity;
  * neither a row CHECK nor a JSON $type can enforce those transaction invariants.
  */
 export const fleetAutomaticReceipt = pgTable(
@@ -977,10 +977,9 @@ export const fleetAutomaticReceipt = pgTable(
   ],
 );
 
-/** Storage only — no scheduler, reservation writer, outbox kind or job is added.
- * Retained candidate/claim counters cannot be recycled by a later consent. A
- * terminal Gmax row is valid only without an outstanding reservation or claim.
- * Source pointers and immutable owner/link bindings are rechecked by the future
+/** Reservation/discovery jobs retain candidate/claim counters across consent.
+ * A terminal Gmax row is valid only without an outstanding reservation or claim.
+ * Source pointers and immutable owner/link bindings are rechecked by the
  * account-serialized runtime owner, never inferred from a cascading source FK.
  */
 export const fleetAutomaticCandidate = pgTable(

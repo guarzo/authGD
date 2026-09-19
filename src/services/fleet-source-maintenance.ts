@@ -36,7 +36,17 @@ export async function reserveDueFleetSources(
     .orderBy(fleetSourceIntent.nextFetchAt, fleetSourceIntent.id)
     .limit(100);
   let count = 0;
-  for (const s of candidates) count += await maintainFleetSource(db, s.id, true, clock);
+  let failed = 0;
+  for (const s of candidates) {
+    try {
+      count += await maintainFleetSource(db, s.id, true, clock);
+    } catch {
+      // Each source owns its transaction; rollback keeps this row retryable
+      // without discarding the healthy suffix or recording a false success.
+      failed += 1;
+    }
+  }
+  if (failed) console.error("fleet_source_reservation_rows_failed", failed);
   return count;
 }
 /** Independent of readers, success and admission mode. Per pass: at most 100
@@ -69,7 +79,18 @@ export async function cleanupFleetSources(db: Db, clock?: () => Date): Promise<n
     )
     .orderBy(fleetSourceIntent.id)
     .limit(100);
-  for (const source of candidates) await maintainFleetSource(db, source.id, false, clock);
+  let maintained = 0;
+  let failed = 0;
+  for (const source of candidates) {
+    try {
+      await maintainFleetSource(db, source.id, false, clock);
+      maintained += 1;
+    } catch {
+      // Aggregate only a count: SQL/provider context must not enter the log.
+      failed += 1;
+    }
+  }
+  if (failed) console.error("fleet_source_cleanup_rows_failed", failed);
   const tombstones = await purgeExpiredFleetSourceIntents(db, clock?.());
   const relay = await db.transaction(async (tx) => {
     const before = await fleetDatabaseNow(tx, clock?.());
@@ -98,5 +119,5 @@ export async function cleanupFleetSources(db: Db, clock?: () => Date): Promise<n
       );
     return ids.length;
   });
-  return candidates.length + tombstones + relay;
+  return maintained + tombstones + relay;
 }
