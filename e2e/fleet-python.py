@@ -100,7 +100,7 @@ from wingman.fleetsharing.worker import FleetSharingWorker
 # Closed bootstrap regressions; never accept a general URL/HTTP executor.
 probe = os.environ.get("FLEET_PROBE")
 if probe and probe != "page-identity":
-    if probe == "legacy-recovery":
+    if probe in ("legacy-recovery", "legacy-retirement"):
         import secrets
         from dataclasses import replace
         from datetime import UTC, datetime
@@ -121,6 +121,24 @@ if probe and probe != "page-identity":
         )
         state_module.save(root / "fleet.json", saved)
         client = FleetRelayClient(origin)
+        if probe == "legacy-retirement":
+            from wingman.fleetsharing.client import FleetRelayError
+
+            statuses = []
+            for _ in range(2):
+                try:
+                    client.begin_recovery(
+                        private_key=private_key,
+                        request_id=pending_recovery.request_id,
+                        issued_at=pending_recovery.issued_at,
+                    )
+                except FleetRelayError as error:
+                    assert error.status == 400, "expected v1 retirement, not transport failure"
+                    statuses.append(error.status)
+                else:
+                    raise AssertionError("retired v1 recovery admitted")
+            print(json.dumps({"retired": True, "statuses": statuses, "denials": len(denials)}), flush=True)
+            sys.exit(0)
         first = client.begin_recovery(
             private_key=private_key,
             request_id=pending_recovery.request_id,

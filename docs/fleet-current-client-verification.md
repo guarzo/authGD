@@ -83,6 +83,38 @@ and typecheck also passed. No production backend or migration changes were made
 for this integration harness; one historical test now selects only its shared
 state column instead of asking the pre-combat schema for newer consent columns.
 
+## Published-review correction evidence
+
+The account/devices page now exposes automatic Off independently of destructive
+device revocation. Non-Members retain an account-page **Fleet controls** link;
+tier loss cannot hide the withdrawal path. The control preserves its original
+UUID/time/CAS and account-bound action across response loss and route refresh.
+A stale account tab is refused, and replaying an older Off cannot cancel a newer
+On. The browser tests also retain a real paired device/session unchanged by Off.
+
+Source maintenance isolates failed rows and phases while preserving the existing
+serialized owner and discovery shutdown/backoff gates. Current maintained source
+integration uses full API2 DTOs/correlation and explicit shared/combat approval.
+Pinned pre-v2 clients now have actual refusal tests, not obsolete success
+expectations. Their pin is unchanged; the former positive journey remains in
+pre-cutover Git history. None of this replaces the opt-in journey above.
+
+The final ordinary Playwright run passed **451 tests, 3.5m**; the complete
+maintained integration profile passed **25 tests, 1.2m**, with no retries/skips.
+The production Next build, ESLint, typecheck and full Prettier check passed.
+Focused maintenance/browser tests and the actual pg-boss reservation/runtime
+module passed, including the retained-owner 30s expiry test at unchanged budgets.
+
+Repeated full local runs exposed premature five-second *test* deadlines around
+complete Python/TLS fixtures, followed by cleanup/listener races. The affected
+probe-containing cases now allow their existing ten-second child watchdog plus
+five seconds for fixture setup/teardown; all nine fixture tests passed afterward.
+This changes no production HTTP deadline, clock margin or retry policy. Separate
+reservation/runtime test timeouts were not widened; both complete modules passed
+unchanged in isolation. Original failures are retained, not relabelled green.
+The historical 4,936 totals above are pre-correction evidence; current full-suite
+results belong to the exact correction head's PR checks/verification report.
+
 ## Clock evidence and remaining acceptance
 
 A Windows-client run on Wingman `3363da55` and authGD `e1ac22c` observed relay T

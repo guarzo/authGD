@@ -1430,6 +1430,15 @@ an actual successful run against that exact pin before claiming hosted
 verification. Consult the current PR checks rather than inferring success from
 an older pin's results.
 
+That pin is pre-v2: against the current backend its pairing/recovery must be
+refused without creating sessions, changing key identity or publishing telemetry.
+The former Task10 sharing-success journey belongs to pre-cutover history, not
+current-client acceptance. `fleet-source-flow.ts` separately exercises signed
+API2 source/control/combat traffic through real outbox/pg-boss and synthetic
+providers. The positive current-desktop journey remains the explicit opt-in
+[current-client gate](fleet-current-client-verification.md); these retirement
+checks neither replace it nor waive its clock fences.
+
 Local commands must name the approved disposable database explicitly:
 
 ```bash
@@ -1474,10 +1483,12 @@ focus, resize chrome, DPI and monitor behavior need Wingman's native-seam tests
 and the separate Windows acceptance pass. Do not change a platform flag or
 replace production admission to manufacture that evidence.
 
-The two installations are Linux synthetic roots using the existing key-protection
-injection seam, **not installed Windows applications and not DPAPI or live EVE
-proof**. Source work goes through actual fleet-only outbox/pg-boss dispatch and
-strict job handlers against bounded fake SSO/JWT/ESI providers. The real worker
-and transient API/store path handle receiving; only synthetic local telemetry is
-submitted. The optional third service-paired device is a lease-conflict fixture,
-not a shortcut for either installation's real browser approval.
+The two pinned installations are Linux synthetic roots using the existing
+key-protection injection seam, **not installed Windows applications and not
+DPAPI or live EVE proof**. They exercise rejection of old clients, including an
+attempt to enable participation and produce local telemetry without gaining a
+session or publishing a row. The separate API2 source test uses explicit shared
+and combat capability approval fixtures, then actual signed HTTP, fleet-only
+outbox/pg-boss and strict job handlers against bounded fake SSO/JWT/ESI providers.
+It is protocol/backend integration evidence, not a current desktop restart,
+future-fleet or live-provider acceptance result.

@@ -21,7 +21,7 @@ import {
   fleetSourceIntent,
   outbox,
 } from "../src/db/schema";
-import { SHARED_CAPABILITY } from "../src/core/fleet-sharing";
+import { COMBAT_CAPABILITY, SHARED_CAPABILITY } from "../src/core/fleet-sharing";
 import { FLEET_READ_SCOPE, createEsiClient } from "../src/lib/esi/client";
 import { encryptToken } from "../src/lib/crypto";
 import { createDiscordClient } from "../src/lib/discord/rest";
@@ -95,7 +95,8 @@ test("signed HTTP source Start, worker authority and two-account shared snapshot
       APP_BASE_URL: BASE_URL,
       SYNC_MODE: "live",
     });
-    const pair = await pairDevice(db, acc.id, new Date(), [SHARED_CAPABILITY]);
+    const capabilities = [SHARED_CAPABILITY, COMBAT_CAPABILITY];
+    const pair = await pairDevice(db, acc.id, new Date(), capabilities);
     const participant = await seedMember(db, {
       name: "Quiet Member",
       tier: "member",
@@ -111,7 +112,7 @@ test("signed HTTP source Start, worker authority and two-account shared snapshot
       .update(character)
       .set({ tokenStatus: "missing" })
       .where(eq(character.accountId, participant.id));
-    const b = await pairDevice(db, participant.id, new Date(), [SHARED_CAPABILITY]);
+    const b = await pairDevice(db, participant.id, new Date(), capabilities);
     const revisions = new Map<string, number>();
     const send = async (
       method: "GET" | "PUT",
@@ -136,7 +137,7 @@ test("signed HTTP source Start, worker authority and two-account shared snapshot
       const signature = sign(null, Buffer.from(canonical), device.privateKey).toString(
         "base64url",
       );
-      const publication = method === "GET" && path === "/api/fleet/v1/snapshot";
+      const publication = method === "GET" && path === "/api/fleet/v2/snapshot";
       const response = await context.request.fetch(`${BASE_URL}${path}`, {
         method,
         ...(body === undefined ? {} : { data: text }),
@@ -146,17 +147,16 @@ test("signed HTTP source Start, worker authority and two-account shared snapshot
           "x-fleet-revision": String(n),
           "x-fleet-body-sha256": hash,
           "x-fleet-signature": signature,
-          ...(publication ? { "x-fleet-snapshot-format": "publication-v1" } : {}),
         },
       });
-      if (publication && response.status() === 200) {
-        expect(response.headers()["x-fleet-snapshot-format"]).toBe("publication-v1");
+      if (response.status() === 200) {
+        expect(response.headers()["x-fleet-snapshot-format"]).toBeUndefined();
         expect(response.headers()["x-fleet-request-binding"]).toBe(
           createHash("sha256")
-            .update("fleet-snapshot-publication-v1\n" + canonical)
+            .update("fleet-api-v2\n" + canonical)
             .digest("hex"),
         );
-        for (const row of (await response.json()).rows)
+        for (const row of publication ? (await response.json()).rows : [])
           expect(row.publication_id).toMatch(
             /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
           );
@@ -165,20 +165,15 @@ test("signed HTTP source Start, worker authority and two-account shared snapshot
     };
     expect(
       (
-        await send("PUT", "/api/fleet/v1/device", {
-          protocol: 1,
-          capabilities: [SHARED_CAPABILITY],
+        await send("PUT", "/api/fleet/v2/device", {
+          protocol: 2,
+          capabilities,
         })
       ).status(),
     ).toBe(200);
     expect(
       (
-        await send(
-          "PUT",
-          "/api/fleet/v1/device",
-          { protocol: 1, capabilities: [SHARED_CAPABILITY] },
-          b,
-        )
+        await send("PUT", "/api/fleet/v2/device", { protocol: 2, capabilities }, b)
       ).status(),
     ).toBe(200);
     await fleet.scenario({
@@ -212,8 +207,8 @@ test("signed HTTP source Start, worker authority and two-account shared snapshot
       .where(eq(character.id, anchor.id));
     await new Promise((r) => setTimeout(r, 510));
     const sourceId = randomUUID();
-    const started = await send("PUT", "/api/fleet/v1/sources", {
-      protocol: 1,
+    const started = await send("PUT", "/api/fleet/v2/sources", {
+      protocol: 2,
       operation: "start",
       source_id: sourceId,
       expected_generation: 0,
@@ -293,7 +288,7 @@ test("signed HTTP source Start, worker authority and two-account shared snapshot
       [anchor.id, alt.id, bChars[0].id, bChars[1].id].sort(),
     );
     expect(authority.expiresAt!.getTime() - authority.verifiedAt!.getTime()).toBe(10000);
-    const status = await send("GET", "/api/fleet/v1/sources");
+    const status = await send("GET", "/api/fleet/v2/sources");
     expect(status.status()).toBe(200);
     const dto = await status.json();
     expect(dto.characters).toContainEqual({
@@ -336,36 +331,73 @@ test("signed HTTP source Start, worker authority and two-account shared snapshot
     expect(JSON.stringify(view)).not.toMatch(/fleet_id|character_name|roster/);
     expect(
       (
-        await send("PUT", "/api/fleet/v1/snapshot", {
-          protocol: 1,
-          rows: [{ character_id: anchor.id, dps: 42, ewar: [] }],
+        await send("PUT", "/api/fleet/v2/snapshot", {
+          protocol: 2,
+          sampled_at_ms: Date.now(),
+          rows: [
+            {
+              character_id: anchor.id,
+              outgoing_dps: 42,
+              incoming_dps: 14,
+              activity_age_ms: 0,
+              effects: [],
+            },
+          ],
         })
       ).status(),
     ).toBe(200);
     await new Promise((r) => setTimeout(r, 510));
-    const quiet = await send("GET", "/api/fleet/v1/snapshot", undefined, b);
+    const quiet = await send("GET", "/api/fleet/v2/snapshot", undefined, b);
     expect(quiet.status()).toBe(200);
     expect((await quiet.json()).rows).toEqual([
-      expect.objectContaining({ character_id: anchor.id, dps: 42 }),
+      expect.objectContaining({
+        character_id: anchor.id,
+        outgoing_dps: 42,
+        incoming_dps: 14,
+      }),
     ]);
     expect(
       (
         await send(
           "PUT",
-          "/api/fleet/v1/snapshot",
+          "/api/fleet/v2/snapshot",
           {
-            protocol: 1,
-            rows: [{ character_id: bChars[1].id, dps: 77, ewar: ["SCRAM/POINT"] }],
+            protocol: 2,
+            sampled_at_ms: Date.now(),
+            rows: [
+              {
+                character_id: bChars[1].id,
+                outgoing_dps: 77,
+                incoming_dps: null,
+                activity_age_ms: 0,
+                effects: [
+                  {
+                    kind: "POINT",
+                    observations: [{ name: "Fixture Tackler", age_ms: 0 }],
+                  },
+                ],
+              },
+            ],
           },
           b,
         )
       ).status(),
     ).toBe(200);
-    const back = await send("GET", "/api/fleet/v1/snapshot");
+    const back = await send("GET", "/api/fleet/v2/snapshot");
     expect(back.status()).toBe(200);
     expect((await back.json()).rows).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ character_id: bChars[1].id, dps: 77 }),
+        expect.objectContaining({
+          character_id: bChars[1].id,
+          outgoing_dps: 77,
+          incoming_dps: null,
+          effects: [
+            {
+              kind: "POINT",
+              observations: [expect.objectContaining({ name: "Fixture Tackler" })],
+            },
+          ],
+        }),
       ]),
     );
     // A real Node HTTP peer can attach GET bytes which Fetch clients prohibit.
@@ -382,7 +414,7 @@ test("signed HTTP source Start, worker authority and two-account shared snapshot
       const canonical = [
         "fleet-v1",
         "GET",
-        "/api/fleet/v1/snapshot",
+        "/api/fleet/v2/snapshot",
         pair.sessionId,
         issued,
         String(n),
@@ -400,7 +432,7 @@ test("signed HTTP source Start, worker authority and two-account shared snapshot
       });
       return {
         response: await getFleetHttp(
-          `${FLEET_UPSTREAM_URL}/api/fleet/v1/snapshot`,
+          `${FLEET_UPSTREAM_URL}/api/fleet/v2/snapshot`,
           headers,
           framing,
           bytes,
@@ -429,41 +461,54 @@ test("signed HTTP source Start, worker authority and two-account shared snapshot
         const before = await retainedRelay();
         const { response } = await framedSnapshot(publication, framing, "{}");
         expect(response.status).toBe(400);
-        expect(JSON.parse(response.body)).toEqual({ protocol: 1, error: "bad_headers" });
+        expect(JSON.parse(response.body)).toEqual({ protocol: 2, error: "bad_headers" });
         expect(response.headers["x-fleet-snapshot-format"]).toBeUndefined();
         expect(response.headers["x-fleet-request-binding"]).toBeUndefined();
         expect(await retainedRelay()).toEqual(before);
       }
       for (const framing of [[], ["Content-Length", "0"]]) {
         await new Promise((r) => setTimeout(r, 510));
+        const before = await retainedRelay();
         const { response, canonical } = await framedSnapshot(publication, framing);
-        expect(response.status).toBe(200);
-        const rows = (JSON.parse(response.body) as { rows: Record<string, unknown>[] })
-          .rows;
-        expect(rows.length).toBeGreaterThan(0);
+        expect(response.headers["x-fleet-snapshot-format"]).toBeUndefined();
         if (publication) {
-          expect(response.headers["x-fleet-snapshot-format"]).toBe("publication-v1");
+          // v2 has one response format. The former v1 selector must fail before
+          // authentication/cadence effects, not silently select a legacy view.
+          expect(response.status).toBe(400);
+          expect(JSON.parse(response.body)).toEqual({
+            protocol: 2,
+            error: "bad_headers",
+          });
+          expect(response.headers["x-fleet-request-binding"]).toBeUndefined();
+          expect(await retainedRelay()).toEqual(before);
+        } else {
+          expect(response.status).toBe(200);
           expect(response.headers["x-fleet-request-binding"]).toBe(
             createHash("sha256")
-              .update("fleet-snapshot-publication-v1\n" + canonical)
+              .update("fleet-api-v2\n" + canonical)
               .digest("hex"),
           );
-          for (const row of rows)
+          const value = JSON.parse(response.body);
+          expect(value.protocol).toBe(2);
+          expect(Number.isSafeInteger(value.server_time_ms)).toBe(true);
+          const rows = value.rows as Record<string, unknown>[];
+          expect(rows.length).toBeGreaterThan(0);
+          for (const row of rows) {
             expect(row.publication_id).toMatch(
               /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
             );
-        } else {
-          expect(response.headers["x-fleet-snapshot-format"]).toBeUndefined();
-          expect(response.headers["x-fleet-request-binding"]).toBeUndefined();
-          for (const row of rows)
             expect(Object.keys(row).sort()).toEqual([
+              "activity_age_ms",
               "age_ms",
               "character_id",
               "character_name",
-              "dps",
-              "ewar",
+              "effects",
+              "incoming_dps",
+              "outgoing_dps",
+              "publication_id",
               "state",
             ]);
+          }
         }
       }
     }
@@ -479,11 +524,14 @@ test("signed HTTP source Start, worker authority and two-account shared snapshot
       ),
     ).toBe(true);
     await new Promise((r) => setTimeout(r, 510));
-    const stopped = await send("PUT", "/api/fleet/v1/sources", {
-      protocol: 1,
+    const stopped = await send("PUT", "/api/fleet/v2/sources", {
+      protocol: 2,
       operation: "stop",
       source_id: sourceId,
       expected_generation: 1,
+      expected_automatic: null,
+      request_id: randomUUID(),
+      intent_created_at: new Date().toISOString(),
     });
     expect(stopped.status()).toBe(200);
     expect((await db.select().from(fleetSourceAuthority))[0].sourceId).toBeNull();
