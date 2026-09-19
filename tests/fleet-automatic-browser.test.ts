@@ -101,6 +101,17 @@ it("browser Off works with no fleet sessions, non-Member, disabled mode and dele
     result: "replayed",
   });
 });
+it("a rendered account binding cannot turn Off another subsequently signed-in account", async () => {
+  const p = await setup();
+  expect(await turnOffFleetAutomaticAction(p.command, randomUUID())).toEqual({
+    ok: false,
+    request_id: p.command.request_id,
+    error: "unauthorized",
+    status: null,
+  });
+  expect((await ctx.db.select().from(fleetAutomaticConsent))[0].enabled).toBe(true);
+  expect(await ctx.db.select().from(fleetAutomaticReceipt)).toHaveLength(0);
+});
 it.each([
   null,
   "null",

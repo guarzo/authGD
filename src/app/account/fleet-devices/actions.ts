@@ -15,11 +15,12 @@ import { AutomaticOffSchema, type BrowserOffReply } from "@/core/fleet-automatic
 import { safeParseFleetV2Dto } from "@/core/fleet-v2-validation";
 import { turnOffFleetAutomaticForBrowser } from "@/services/fleet-automatic";
 
-/** Off-only Server Action; no render/navigation wiring or desktop correlation.
+/** Off-only Server Action; no desktop correlation.
  * Next's Origin/Host POST check remains enabled; canonical configured origin is
  * an additional requirement, never inferred from forwarded proxy headers. */
 export async function turnOffFleetAutomaticAction(
   input: unknown,
+  expectedAccountId?: string,
 ): Promise<BrowserOffReply> {
   const parsed = safeParseFleetV2Dto(AutomaticOffSchema, input);
   if (!parsed.success)
@@ -48,6 +49,9 @@ export async function turnOffFleetAutomaticAction(
     return denied;
   }
   const accountId = await requireAccount();
+  // The rendered page captures this selector in a server closure. It can only
+  // restrict the cookie-derived authority, never select a different account.
+  if (expectedAccountId !== undefined && expectedAccountId !== accountId) return denied;
   const browserSessionId = (await cookies()).get(cfg.sessionCookieName)?.value;
   if (!browserSessionId) return denied;
   const result = await turnOffFleetAutomaticForBrowser(
