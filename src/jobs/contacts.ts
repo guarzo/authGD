@@ -65,198 +65,218 @@ async function recordResult(
 }
 
 export async function runContactsJob(deps: {
+  onRunFinished?: () => void;
   db: Db;
   cfg: Config;
   esi: ContactsEsi;
   fetchImpl?: typeof fetch;
 }): Promise<JobResult> {
   const { db, cfg, esi } = deps;
-  return runJob(db, "contacts", async () => {
-    const members = await getMemberCharacters(db);
-    const desiredAll = members.map((c) => c.characterId);
-    const counts = {
-      targets: 0,
-      added: 0,
-      updated: 0,
-      removed: 0,
-      skipped: 0,
-      failed: 0,
-    };
-    let transientFailures = 0;
-    const errors: string[] = [];
+  return runJob(
+    db,
+    "contacts",
+    async () => {
+      const members = await getMemberCharacters(db);
+      const desiredAll = members.map((c) => c.characterId);
+      const counts = {
+        targets: 0,
+        added: 0,
+        updated: 0,
+        removed: 0,
+        skipped: 0,
+        failed: 0,
+        concurrentRotation: 0,
+        refreshFailed: 0,
+      };
+      let transientFailures = 0;
+      const errors: string[] = [];
 
-    for (const target of members) {
-      if (!canPushContacts(target)) {
-        counts.skipped++;
-        // Persist WHY, so the member/admin pages can show remediation.
-        const deadToken =
-          !target.refreshTokenEnc ||
-          target.tokenStatus === "invalid" ||
-          target.tokenStatus === "missing";
-        await recordResult(
-          db,
-          target.characterId,
-          deadToken ? "token_invalid" : "missing_scope",
-          false,
-        );
-        continue;
-      }
-      counts.targets++;
-      const token = await getFreshAccessToken(
-        db,
-        cfg,
-        {
-          id: target.characterId,
-          refreshTokenEnc: target.refreshTokenEnc,
-          tokenStatus: target.tokenStatus,
-        },
-        deps.fetchImpl,
-      );
-      if (!token.ok) {
-        if (token.reason === "dry_run") {
-          // The guard refused the refresh, so there is no access token and no
-          // way to read contacts — this character is skipped, not failed, and
-          // MUST NOT be recorded as synced.
-          counts.targets--;
+      for (const target of members) {
+        if (!canPushContacts(target)) {
           counts.skipped++;
-          await recordResult(db, target.characterId, "dry_run", false);
-        } else if (token.reason === "transient") {
-          transientFailures++;
-          await recordResult(db, target.characterId, "token_refresh_failed", false);
-        } else {
-          counts.failed++;
-          await recordResult(db, target.characterId, "token_invalid", false);
-        }
-        continue;
-      }
-      try {
-        // Labels first: ESI cannot create labels, so a missing label is a
-        // user-remediation state — record it and skip ALL writes (spec job 2).
-        const labels = await esi.getContactLabels(target.characterId, token.accessToken);
-        const match = matchContactLabel(labels, cfg.standings.label);
-        if (match.kind === "ambiguous" || match.kind === "absent") {
-          counts.skipped++;
-          // Only ambiguity is refused now. diffContacts DELETES every contact
-          // under the matched label that leaves the desired set, and with two
-          // fold-equal labels there is no single label that authority can be
-          // bound to, so the safe move is still to write nothing.
+          // Persist WHY, so the member/admin pages can show remediation.
+          const deadToken =
+            !target.refreshTokenEnc ||
+            target.tokenStatus === "invalid" ||
+            target.tokenStatus === "missing";
           await recordResult(
             db,
             target.characterId,
-            match.kind === "ambiguous" ? "label_mismatch" : "missing_label",
+            deadToken ? "token_invalid" : "missing_scope",
             false,
-            match.kind === "ambiguous" ? encodeLabelCandidates(match.candidates) : null,
           );
           continue;
         }
-        // Read ALL pages before any destructive diff; getAllContacts rejects
-        // on any page failure, aborting this character's reconciliation.
-        const contacts = await esi.getAllContacts(target.characterId, token.accessToken);
-        const diff = diffContacts({
-          desiredIds: desiredAll.filter((id) => id !== target.characterId),
-          standing: cfg.standings.value,
-          labelId: match.labelId,
-          contacts,
-        });
-        // Add/edit failures (e.g. ESI 400-rejecting a since-biomassed desired
-        // id) must not block removal: removals are tried separately below,
-        // regardless of whether this step failed.
-        let stepErr: unknown = null;
-        try {
-          if (diff.add.length > 0) {
-            await esi.addContacts(
-              target.characterId,
-              token.accessToken,
-              diff.add,
-              cfg.standings.value,
-              [match.labelId],
-            );
-          }
-          // Group takeovers by their preserved label set — PUT replaces
-          // label_ids wholesale, so each distinct union is its own call.
-          const groups = new Map<string, { labelIds: number[]; ids: number[] }>();
-          for (const u of diff.update) {
-            const sortedLabelIds = [...u.labelIds].sort((a, b) => a - b);
-            const key = sortedLabelIds.join(",");
-            const g = groups.get(key) ?? { labelIds: sortedLabelIds, ids: [] };
-            g.ids.push(u.contactId);
-            groups.set(key, g);
-          }
-          for (const g of groups.values()) {
-            await esi.editContacts(
-              target.characterId,
-              token.accessToken,
-              g.ids,
-              cfg.standings.value,
-              g.labelIds,
-            );
-          }
-          counts.added += diff.add.length;
-          counts.updated += diff.update.length;
-        } catch (err) {
-          stepErr = err;
-        }
-
-        try {
-          if (diff.remove.length > 0) {
-            await esi.deleteContacts(target.characterId, token.accessToken, diff.remove);
-          }
-          counts.removed += diff.remove.length;
-        } catch (err) {
-          stepErr ??= err; // report the add/edit failure first if both failed
-        }
-
-        // stepErr is the `unknown` captured from one of the two blocks above,
-        // rethrown so the original failure reaches the outer handler unwrapped.
-        // eslint-disable-next-line @typescript-eslint/only-throw-error -- deliberate rethrow of a caught unknown captured across two try/catch blocks; the rule's allowRethrowing option only covers `throw` directly inside a catch.
-        if (stepErr) throw stepErr;
-
-        // Record WHICH label authGD took over. On an exact match that is the
-        // configured value by construction, but a loose match varies per
-        // character — and this is the one sync job with no audit writes.
-        await recordResult(
+        counts.targets++;
+        const token = await getFreshAccessToken(
           db,
-          target.characterId,
-          "ok",
-          true,
-          match.kind === "loose" ? match.labelName : null,
+          cfg,
+          {
+            id: target.characterId,
+            refreshTokenEnc: target.refreshTokenEnc,
+            tokenStatus: target.tokenStatus,
+          },
+          deps.fetchImpl,
         );
-      } catch (err) {
-        const needsReauth = err instanceof EsiError && err.kind === "needs_reauth";
-        const transient = err instanceof EsiError ? err.kind === "transient" : true;
-        if (needsReauth) {
-          counts.failed++;
-          // CAS on the blob our refresh just stored: if the row rotated
-          // or was reclaimed since, this stale decision must not touch it.
-          await db
-            .update(character)
-            .set({ tokenStatus: "needs_reauth" })
-            .where(
-              and(
-                eq(character.id, target.characterId),
-                eq(character.refreshTokenEnc, token.tokenEnc),
-              ),
-            );
-          await recordResult(db, target.characterId, "needs_reauth", false);
-        } else {
-          if (transient) transientFailures++;
-          else counts.failed++;
-          await recordResult(db, target.characterId, "sync_failed", false);
+        if (!token.ok) {
+          if (token.reason === "dry_run") {
+            // The guard refused the refresh, so there is no access token and no
+            // way to read contacts — this character is skipped, not failed, and
+            // MUST NOT be recorded as synced.
+            counts.targets--;
+            counts.skipped++;
+            await recordResult(db, target.characterId, "dry_run", false);
+          } else if (token.reason === "transient") {
+            transientFailures++;
+            if (token.detail === "concurrent rotation") counts.concurrentRotation++;
+            else counts.refreshFailed++;
+            await recordResult(db, target.characterId, "token_refresh_failed", false);
+          } else {
+            counts.failed++;
+            await recordResult(db, target.characterId, "token_invalid", false);
+          }
+          continue;
         }
-        errors.push(
-          `${target.characterId}: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
-    }
+        try {
+          // Labels first: ESI cannot create labels, so a missing label is a
+          // user-remediation state — record it and skip ALL writes (spec job 2).
+          const labels = await esi.getContactLabels(
+            target.characterId,
+            token.accessToken,
+          );
+          const match = matchContactLabel(labels, cfg.standings.label);
+          if (match.kind === "ambiguous" || match.kind === "absent") {
+            counts.skipped++;
+            // Only ambiguity is refused now. diffContacts DELETES every contact
+            // under the matched label that leaves the desired set, and with two
+            // fold-equal labels there is no single label that authority can be
+            // bound to, so the safe move is still to write nothing.
+            await recordResult(
+              db,
+              target.characterId,
+              match.kind === "ambiguous" ? "label_mismatch" : "missing_label",
+              false,
+              match.kind === "ambiguous" ? encodeLabelCandidates(match.candidates) : null,
+            );
+            continue;
+          }
+          // Read ALL pages before any destructive diff; getAllContacts rejects
+          // on any page failure, aborting this character's reconciliation.
+          const contacts = await esi.getAllContacts(
+            target.characterId,
+            token.accessToken,
+          );
+          const diff = diffContacts({
+            desiredIds: desiredAll.filter((id) => id !== target.characterId),
+            standing: cfg.standings.value,
+            labelId: match.labelId,
+            contacts,
+          });
+          // Add/edit failures (e.g. ESI 400-rejecting a since-biomassed desired
+          // id) must not block removal: removals are tried separately below,
+          // regardless of whether this step failed.
+          let stepErr: unknown = null;
+          try {
+            if (diff.add.length > 0) {
+              await esi.addContacts(
+                target.characterId,
+                token.accessToken,
+                diff.add,
+                cfg.standings.value,
+                [match.labelId],
+              );
+            }
+            // Group takeovers by their preserved label set — PUT replaces
+            // label_ids wholesale, so each distinct union is its own call.
+            const groups = new Map<string, { labelIds: number[]; ids: number[] }>();
+            for (const u of diff.update) {
+              const sortedLabelIds = [...u.labelIds].sort((a, b) => a - b);
+              const key = sortedLabelIds.join(",");
+              const g = groups.get(key) ?? { labelIds: sortedLabelIds, ids: [] };
+              g.ids.push(u.contactId);
+              groups.set(key, g);
+            }
+            for (const g of groups.values()) {
+              await esi.editContacts(
+                target.characterId,
+                token.accessToken,
+                g.ids,
+                cfg.standings.value,
+                g.labelIds,
+              );
+            }
+            counts.added += diff.add.length;
+            counts.updated += diff.update.length;
+          } catch (err) {
+            stepErr = err;
+          }
 
-    if (transientFailures > 0 || counts.failed > 0) {
-      return {
-        status: "partial",
-        errorSummary: errors.slice(0, 5).join("; ") || "token failures",
-        counts,
-        retry: transientFailures > 0,
-      };
-    }
-    return { status: "ok", counts };
-  });
+          try {
+            if (diff.remove.length > 0) {
+              await esi.deleteContacts(
+                target.characterId,
+                token.accessToken,
+                diff.remove,
+              );
+            }
+            counts.removed += diff.remove.length;
+          } catch (err) {
+            stepErr ??= err; // report the add/edit failure first if both failed
+          }
+
+          // stepErr is the `unknown` captured from one of the two blocks above,
+          // rethrown so the original failure reaches the outer handler unwrapped.
+          // eslint-disable-next-line @typescript-eslint/only-throw-error -- deliberate rethrow of a caught unknown captured across two try/catch blocks; the rule's allowRethrowing option only covers `throw` directly inside a catch.
+          if (stepErr) throw stepErr;
+
+          // Record WHICH label authGD took over. On an exact match that is the
+          // configured value by construction, but a loose match varies per
+          // character — and this is the one sync job with no audit writes.
+          await recordResult(
+            db,
+            target.characterId,
+            "ok",
+            true,
+            match.kind === "loose" ? match.labelName : null,
+          );
+        } catch (err) {
+          const needsReauth = err instanceof EsiError && err.kind === "needs_reauth";
+          const transient = err instanceof EsiError ? err.kind === "transient" : true;
+          if (needsReauth) {
+            counts.failed++;
+            // CAS on the blob our refresh just stored: if the row rotated
+            // or was reclaimed since, this stale decision must not touch it.
+            await db
+              .update(character)
+              .set({ tokenStatus: "needs_reauth" })
+              .where(
+                and(
+                  eq(character.id, target.characterId),
+                  eq(character.refreshTokenEnc, token.tokenEnc),
+                ),
+              );
+            await recordResult(db, target.characterId, "needs_reauth", false);
+          } else {
+            if (transient) transientFailures++;
+            else counts.failed++;
+            await recordResult(db, target.characterId, "sync_failed", false);
+          }
+          errors.push(
+            `${target.characterId}: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
+
+      if (transientFailures > 0 || counts.failed > 0) {
+        return {
+          status: "partial",
+          errorSummary: errors.slice(0, 5).join("; ") || "token failures",
+          counts,
+          retry: transientFailures > 0,
+        };
+      }
+      return { status: "ok", counts };
+    },
+    deps.onRunFinished,
+  );
 }

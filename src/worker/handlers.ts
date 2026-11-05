@@ -60,6 +60,7 @@ const structureEventsSchema = z
   .strict();
 
 export type JobDeps = {
+  onRunFinished?: () => void;
   db: Db;
   cfg: Config;
   esi: Pick<EsiClient, "postAffiliation"> &

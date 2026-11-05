@@ -12,6 +12,14 @@ export type JobResult = {
 
 export class JobRetryError extends Error {}
 
+function notifyFinished(onRunFinished?: () => void): void {
+  try {
+    onRunFinished?.();
+  } catch {
+    console.error("sync completion notification failed");
+  }
+}
+
 export async function startSyncRun(dbx: Dbx, jobType: string): Promise<number> {
   const [row] = await dbx.insert(syncRun).values({ jobType }).returning();
   return row.id;
@@ -49,6 +57,7 @@ export async function runJob(
   db: Db,
   jobType: string,
   fn: () => Promise<JobResult>,
+  onRunFinished?: () => void,
 ): Promise<JobResult> {
   const id = await startSyncRun(db, jobType);
   let result: JobResult;
@@ -59,9 +68,11 @@ export async function runJob(
       status: "failed",
       errorSummary: err instanceof Error ? err.message : String(err),
     });
+    notifyFinished(onRunFinished);
     throw err;
   }
   await finishSyncRun(db, id, result);
+  notifyFinished(onRunFinished);
   if (result.retry) {
     throw new JobRetryError(`${jobType}: ${result.errorSummary ?? "transient failures"}`);
   }

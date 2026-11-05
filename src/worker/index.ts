@@ -4,6 +4,7 @@ import { getConfig } from "@/config";
 import { createDb } from "@/db";
 import { createDiscordClient } from "@/lib/discord/rest";
 import { createEsiClient } from "@/lib/esi/client";
+import { createProgressNotifier } from "@/lib/healthcheck-progress";
 import { postOpsWebhookOrThrow, postOpsWebhookUrl } from "@/lib/ops-webhook";
 import { createWandererClient } from "@/lib/wanderer/client";
 import { startDispatcher } from "@/worker/dispatcher";
@@ -56,6 +57,7 @@ async function main(): Promise<void> {
     syncMode: cfg.syncMode,
   });
   const handlers = buildJobHandlers({
+    onRunFinished: createProgressNotifier(cfg),
     db,
     fleetSource: { signal: sourceOwner.signal, esi },
     cfg,

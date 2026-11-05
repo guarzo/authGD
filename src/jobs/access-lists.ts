@@ -34,101 +34,107 @@ type Counts = {
 };
 
 export async function runAccessListsJob(deps: {
+  onRunFinished?: () => void;
   db: Db;
   cfg: Config;
   esi: AccessListsEsi;
   fetchImpl?: typeof fetch;
 }): Promise<JobResult> {
   const { db, cfg, esi } = deps;
-  return runJob(db, "access-lists", async () => {
-    const counts: Counts = {
-      lists: 0,
-      watched: 0,
-      read: 0,
-      failed: 0,
-      skipped: 0,
-      noHolder: 0,
-      scopeMissing: 0,
-      holderChanged: 0,
-      named: 0,
-      namesResolved: 0,
-    };
+  return runJob(
+    db,
+    "access-lists",
+    async () => {
+      const counts: Counts = {
+        lists: 0,
+        watched: 0,
+        read: 0,
+        failed: 0,
+        skipped: 0,
+        noHolder: 0,
+        scopeMissing: 0,
+        holderChanged: 0,
+        named: 0,
+        namesResolved: 0,
+      };
 
-    // 1. No holder. An unconfigured optional feature must not paint
-    //    /admin/sync red — the monitor page explains the missing designation.
-    const holder = await getHolder(db);
-    if (!holder) {
-      counts.noHolder = 1;
-      return { status: "ok", counts };
-    }
-
-    const [row] = await db
-      .select({
-        id: character.id,
-        refreshTokenEnc: character.refreshTokenEnc,
-        tokenStatus: character.tokenStatus,
-        scopes: character.scopes,
-      })
-      .from(character)
-      .where(eq(character.id, holder.characterId));
-    if (!row) {
-      // The holder FK cascades, so a missing character row means the
-      // designation was deleted concurrently. Same state as no holder.
-      counts.noHolder = 1;
-      return { status: "ok", counts };
-    }
-
-    // 2. Scope, from the PERSISTED grant and before any ESI call: calling
-    //    anyway would spend a refresh-token rotation to earn a certain 403.
-    if (!row.scopes.includes(ACCESS_LISTS_SCOPE)) {
-      counts.scopeMissing = 1;
-      return { status: "ok", counts };
-    }
-
-    // 3. Token. getFreshAccessToken has FOUR outcomes and performs its own
-    //    invalidation CAS internally (src/services/tokens.ts:92-98,126-133),
-    //    so this job must not repeat it.
-    const token = await getFreshAccessToken(
-      db,
-      cfg,
-      {
-        id: row.id,
-        refreshTokenEnc: row.refreshTokenEnc,
-        tokenStatus: row.tokenStatus,
-      },
-      deps.fetchImpl,
-    );
-    if (!token.ok) {
-      if (token.reason === "dry_run") {
-        counts.skipped = 1;
+      // 1. No holder. An unconfigured optional feature must not paint
+      //    /admin/sync red — the monitor page explains the missing designation.
+      const holder = await getHolder(db);
+      if (!holder) {
+        counts.noHolder = 1;
         return { status: "ok", counts };
       }
-      if (token.reason === "transient") {
+
+      const [row] = await db
+        .select({
+          id: character.id,
+          refreshTokenEnc: character.refreshTokenEnc,
+          tokenStatus: character.tokenStatus,
+          scopes: character.scopes,
+        })
+        .from(character)
+        .where(eq(character.id, holder.characterId));
+      if (!row) {
+        // The holder FK cascades, so a missing character row means the
+        // designation was deleted concurrently. Same state as no holder.
+        counts.noHolder = 1;
+        return { status: "ok", counts };
+      }
+
+      // 2. Scope, from the PERSISTED grant and before any ESI call: calling
+      //    anyway would spend a refresh-token rotation to earn a certain 403.
+      if (!row.scopes.includes(ACCESS_LISTS_SCOPE)) {
+        counts.scopeMissing = 1;
+        return { status: "ok", counts };
+      }
+
+      // 3. Token. getFreshAccessToken has FOUR outcomes and performs its own
+      //    invalidation CAS internally (src/services/tokens.ts:92-98,126-133),
+      //    so this job must not repeat it.
+      const token = await getFreshAccessToken(
+        db,
+        cfg,
+        {
+          id: row.id,
+          refreshTokenEnc: row.refreshTokenEnc,
+          tokenStatus: row.tokenStatus,
+        },
+        deps.fetchImpl,
+      );
+      if (!token.ok) {
+        if (token.reason === "dry_run") {
+          counts.skipped = 1;
+          return { status: "ok", counts };
+        }
+        if (token.reason === "transient") {
+          return {
+            status: "failed",
+            errorSummary: `token refresh failed: ${token.detail ?? "transient"}`,
+            counts,
+            retry: true,
+          };
+        }
+        // no_token / invalid: no read can succeed until the character
+        // re-authenticates. The page renders the dark-monitor state; retrying
+        // would only loop.
         return {
           status: "failed",
-          errorSummary: `token refresh failed: ${token.detail ?? "transient"}`,
+          errorSummary: `holder token ${token.reason}`,
           counts,
-          retry: true,
         };
       }
-      // no_token / invalid: no read can succeed until the character
-      // re-authenticates. The page renders the dark-monitor state; retrying
-      // would only loop.
-      return {
-        status: "failed",
-        errorSummary: `holder token ${token.reason}`,
-        counts,
-      };
-    }
 
-    return runReads({
-      db,
-      esi,
-      counts,
-      characterId: row.id,
-      accessToken: token.accessToken,
-    });
-  });
+      return runReads({
+        db,
+        esi,
+        counts,
+        characterId: row.id,
+        accessToken: token.accessToken,
+      });
+    },
+    deps.onRunFinished,
+  );
 }
 
 /**

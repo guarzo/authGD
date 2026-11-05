@@ -1,6 +1,7 @@
-import { eq } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { character, contactSyncState } from "@/db/schema";
+import { character, contactSyncState, syncRun } from "@/db/schema";
+import { encryptToken } from "@/lib/crypto";
 import { canPushContacts, runContactsJob, type ContactsEsi } from "@/jobs/contacts";
 import { EsiError, type EsiContact } from "@/lib/esi/client";
 import { JobRetryError } from "@/services/sync-run";
@@ -70,6 +71,102 @@ const labeled = (contactId: number, standing = 5): EsiContact => ({
   contactType: "character",
   standing,
   labelIds: [LABEL_ID],
+});
+
+describe("contacts refresh diagnostics", () => {
+  it.each(["contention", "other"] as const)(
+    "persists safe %s counters without changing member state or losing history",
+    async (failure) => {
+      const acc = await seedAccount(ctx.db, { tier: "member" });
+      await seedCharacter(ctx.db, cfg, { id: 1, accountId: acc.id, main: true });
+      const sentinel = "sensitive-refresh-token-must-not-be-stored";
+      const replacement = encryptToken(
+        "rotated-by-another-writer",
+        cfg.tokenEncryptionKey,
+      );
+      const fetchImpl = (async () => {
+        if (failure === "other") throw new Error(sentinel);
+        await ctx.db
+          .update(character)
+          .set({ refreshTokenEnc: replacement })
+          .where(eq(character.id, 1));
+        return new Response(
+          JSON.stringify({ access_token: "at", refresh_token: "new-refresh" }),
+        );
+      }) as typeof fetch;
+      const { esi } = fakeEsi({});
+      await expect(
+        runContactsJob({ db: ctx.db, cfg, esi, fetchImpl }),
+      ).rejects.toBeInstanceOf(JobRetryError);
+      const [failedRun] = await ctx.db
+        .select()
+        .from(syncRun)
+        .orderBy(desc(syncRun.id))
+        .limit(1);
+      expect(failedRun.status).toBe("partial");
+      expect(failedRun.counts).toMatchObject(
+        failure === "contention"
+          ? { concurrentRotation: 1, refreshFailed: 0 }
+          : { concurrentRotation: 0, refreshFailed: 1 },
+      );
+      const state = await lastResult(1);
+      expect(state.lastResult).toBe("token_refresh_failed");
+      expect(state.lastDetail).toBeNull();
+      const [ch] = await ctx.db.select().from(character).where(eq(character.id, 1));
+      expect(ch.tokenStatus).toBe("valid");
+      if (failure === "contention") expect(ch.refreshTokenEnc).toBe(replacement);
+      expect(JSON.stringify({ failedRun, state })).not.toContain(sentinel);
+
+      await runContactsJob({ db: ctx.db, cfg, esi, fetchImpl: okToken });
+      const [latest] = await ctx.db
+        .select()
+        .from(syncRun)
+        .orderBy(desc(syncRun.id))
+        .limit(1);
+      expect(latest.counts).toMatchObject({ concurrentRotation: 0, refreshFailed: 0 });
+      expect((await lastResult(1)).lastResult).toBe("ok");
+      const [retained] = await ctx.db
+        .select()
+        .from(syncRun)
+        .where(eq(syncRun.id, failedRun.id));
+      expect(retained.counts).toEqual(failedRun.counts);
+    },
+  );
+
+  it.each(["success", "dry-run", "missing", "invalid", "permanent", "esi"] as const)(
+    "does not count %s as a transient token-refresh failure",
+    async (mode) => {
+      const acc = await seedAccount(ctx.db, { tier: "member" });
+      await seedCharacter(ctx.db, cfg, {
+        id: 1,
+        accountId: acc.id,
+        main: true,
+        ...(mode === "missing" ? { refreshToken: null } : {}),
+        ...(mode === "invalid" ? { tokenStatus: "invalid" as const } : {}),
+      });
+      const { esi } = fakeEsi(mode === "esi" ? { contacts: { 1: "fail" } } : {});
+      const work = runContactsJob({
+        db: ctx.db,
+        cfg: mode === "dry-run" ? testConfig({ SYNC_MODE: "dry-run" }) : cfg,
+        esi,
+        fetchImpl:
+          mode === "permanent"
+            ? async () =>
+                new Response(JSON.stringify({ error: "invalid_grant" }), {
+                  status: 400,
+                })
+            : okToken,
+      });
+      if (mode === "esi") await expect(work).rejects.toBeInstanceOf(JobRetryError);
+      else await work;
+      const [run] = await ctx.db
+        .select()
+        .from(syncRun)
+        .orderBy(desc(syncRun.id))
+        .limit(1);
+      expect(run.counts).toMatchObject({ concurrentRotation: 0, refreshFailed: 0 });
+    },
+  );
 });
 
 describe("canPushContacts", () => {
