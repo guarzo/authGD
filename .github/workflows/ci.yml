@@ -70,6 +70,9 @@ jobs:
   unit:
     name: Unit tests
     runs-on: ubuntu-latest
+    env:
+      TEST_DATABASE_URL: postgres://authgd:authgd@127.0.0.1:5433/authgd_test_unit
+      FLEET_LEGACY_TEST_DATABASE_URL: postgres://authgd:authgd@127.0.0.1:5433/authgd_test_unit_legacy_migration
 
     services:
       postgres:
@@ -77,19 +80,14 @@ jobs:
         env:
           POSTGRES_USER: authgd
           POSTGRES_PASSWORD: authgd
-          # docker-compose.dev.yml creates authgd_test via an init script, which
-          # a service container cannot mount. Naming the database directly is
-          # equivalent for CI, which never needs the non-test `authgd` database.
-          POSTGRES_DB: authgd_test
-        # Host 5433 matches docker-compose.dev.yml, so the TEST_DATABASE_URL
-        # default baked into tests/helpers/db.ts is correct with no env
-        # override. This job and `e2e` each get their own service container on
-        # this port, which is what lets them share the default and still never
-        # touch the same rows — the reason they were once a single job.
+          # This job owns a fresh service. Only the current-schema DB is made
+          # by postgres init; the isolated pre-combat sibling is created below.
+          POSTGRES_DB: authgd_test_unit
+        # The e2e job has its own service container on the same isolated port.
         ports:
           - 5433:5432
         options: >-
-          --health-cmd "pg_isready -U authgd -d authgd_test"
+          --health-cmd "pg_isready -U authgd -d authgd_test_unit"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
@@ -102,9 +100,29 @@ jobs:
           cache: npm
       - run: npm ci
 
+      - name: Provision isolated legacy fixture database
+        run: |
+          node --import tsx -e '
+            const { Client } = require("pg");
+            const { legacyFixtureProvisionPlan } = require("./tests/helpers/fleet-legacy-db.ts");
+            async function provision() {
+              const plan = legacyFixtureProvisionPlan(process.env);
+              const client = new Client({ connectionString: plan.connectionString, connectionTimeoutMillis: 3000 });
+              try {
+                await client.connect();
+                await client.query(plan.sql);
+              } finally {
+                await client.end();
+              }
+            }
+            provision().catch((error) => { console.error(error); process.exitCode = 1; });
+          '
+
       - uses: ./.github/actions/fleet-proof-prerequisites
       - name: Fetch pinned pre-feature reader for the mixed-version rehearsal
         run: git fetch --no-tags origin 62b2c6cd8d5ad7cc346ad4f96205e96e19f3e07d
+      - name: Fetch published pre-combat backend for the historical fixture
+        run: git fetch --no-tags origin 123a4d2547e2a93fefd1044645fedff1ad581b8b
 
       # Runner lifecycle tests launch real Chromium and `next start` under CI.
       # This job has neither the e2e job's browsers nor the build job's .next.
@@ -113,7 +131,8 @@ jobs:
       - name: Build
         run: npm run build
 
-      # No migrate step: tests/helpers/db.ts migrates in setupTestDb().
+      # Each helper migrates its own DB: current schema in setupTestDb(),
+      # pinned pre-0025 schema only in the isolated historical fixture.
       - name: Unit tests
         run: npm test
 

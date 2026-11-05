@@ -34,22 +34,25 @@ beforeAll(async () => {
 });
 beforeEach(() => truncateAll(ctx.db));
 afterAll(() => ctx.cleanup());
-async function seeded() {
-  const ready = await reconcileFleetKeys(ctx.db);
-  await transitionFleetSharingMode(ctx.db, {
-    enabled: true,
-    expectedRevision: ready.revision,
-    now: NOW,
-  });
+async function seeded(characterId = 99001, initialize = true, fleetId = 123) {
+  if (initialize) {
+    const ready = await reconcileFleetKeys(ctx.db);
+    await transitionFleetSharingMode(ctx.db, {
+      enabled: true,
+      expectedRevision: ready.revision,
+      now: NOW,
+    });
+  }
   const owner = await seedAccount(ctx.db, { tier: "member" });
   const boss = await seedCharacter(
     ctx.db,
     { ...(await import("./helpers/config")).testConfig() },
-    { id: 99001, accountId: owner.id, scopes: [FLEET_READ_SCOPE] },
+    { id: characterId, accountId: owner.id, scopes: [FLEET_READ_SCOPE] },
   );
   const device = await pairDevice(ctx.db, owner.id, NOW, [SHARED_CAPABILITY]);
   const source = await seedLifecycleSource(ctx.db, {
     boss,
+    fleetId,
     deviceId: device.device.id,
     now: NOW,
   });
@@ -126,7 +129,12 @@ describe("bounded source scheduling and cleanup (lifecycle fixtures, not provide
         deviceId: source.deviceId!,
         sessionId: session.id,
         fleetId: 123,
-        dps: 1,
+        publicationId: randomUUID(),
+        outgoingDps: 1,
+        incomingDps: null,
+        sampledAtMs: NOW.getTime(),
+        activityOriginMs: NOW.getTime(),
+        effects: [],
         receivedAt: NOW,
         staleAt: at(3000),
         hardExpiresAt: at(10000),
@@ -150,6 +158,51 @@ describe("bounded source scheduling and cleanup (lifecycle fixtures, not provide
     expect(await ctx.db.select().from(fleetTelemetryRow)).toHaveLength(0);
     expect(await ctx.db.select().from(fleetPublisherLease)).toHaveLength(0);
   });
+  it.each(["cleanup", "reserve"])(
+    "a failed %s row does not discard healthy work or falsely count success",
+    async (phase) => {
+      await seeded();
+      await seeded(99002, false, 124);
+      const before = await ctx.db
+        .select()
+        .from(fleetSourceIntent)
+        .orderBy(fleetSourceIntent.id);
+      const failure = vi
+        .spyOn(ctx.db, "transaction")
+        .mockRejectedValueOnce(new Error("private database context"));
+      const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const count =
+          phase === "cleanup"
+            ? await cleanupFleetSources(ctx.db, () => at(10000))
+            : await reserveDueFleetSources(ctx.db, () => NOW);
+        expect(count).toBe(1);
+        const after = await ctx.db
+          .select()
+          .from(fleetSourceIntent)
+          .orderBy(fleetSourceIntent.id);
+        expect(after[0]).toEqual(before[0]); // Rollback leaves the failed row retryable.
+        if (phase === "cleanup") expect(after[1].state).toBe("paused");
+        else
+          expect((await ctx.db.select().from(outbox)).map((row) => row.payload)).toEqual([
+            { kind: "fleet-source", sourceId: before[1].id, generation: 1 },
+          ]);
+        expect(errors).toHaveBeenCalledTimes(1);
+        expect(JSON.stringify(errors.mock.calls)).not.toContain(
+          "private database context",
+        );
+        // The next pass can process the previously failed row normally.
+        expect(
+          phase === "cleanup"
+            ? await cleanupFleetSources(ctx.db, () => at(10000))
+            : await reserveDueFleetSources(ctx.db, () => NOW),
+        ).toBe(1);
+      } finally {
+        failure.mockRestore();
+        errors.mockRestore();
+      }
+    },
+  );
   it("startup catches up immediately, never overlaps, and stop waits for the owned tick", async () => {
     let release!: () => void;
     const held = new Promise<void>((r) => {

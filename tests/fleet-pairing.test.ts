@@ -1,5 +1,6 @@
 import {
   createPublicKey,
+  randomUUID,
   generateKeyPairSync,
   sign as ed25519Sign,
   verify as ed25519Verify,
@@ -857,8 +858,12 @@ describe("revokeFleetDevice", () => {
       fleetId: 5200001,
       deviceId: device.id,
       sessionId: session.id,
-      dps: 100,
-      ewar: [],
+      publicationId: randomUUID(),
+      outgoingDps: 100,
+      incomingDps: null,
+      sampledAtMs: NOW.getTime(),
+      activityOriginMs: NOW.getTime(),
+      effects: [],
       receivedAt: NOW,
       staleAt: new Date(NOW.getTime() + 3_000),
       hardExpiresAt: new Date(NOW.getTime() + 10_000),
@@ -1050,8 +1055,12 @@ describe("renewFleetDeviceSession", () => {
       fleetId: 5200010,
       deviceId: deviceRow.id,
       sessionId: sessionBefore.id,
-      dps: 250,
-      ewar: [],
+      publicationId: randomUUID(),
+      outgoingDps: 250,
+      incomingDps: null,
+      sampledAtMs: NOW.getTime(),
+      activityOriginMs: NOW.getTime(),
+      effects: [],
       receivedAt: NOW,
       staleAt: new Date(NOW.getTime() + 3_000),
       hardExpiresAt: new Date(NOW.getTime() + 10_000),
@@ -1066,6 +1075,10 @@ describe("renewFleetDeviceSession", () => {
     expect(result).toEqual({
       ok: true,
       expiresAt: new Date(renewAt.getTime() + DEVICE_SESSION_TTL_MS),
+      json: JSON.stringify({
+        protocol: 2,
+        expires_at: new Date(renewAt.getTime() + DEVICE_SESSION_TTL_MS).toISOString(),
+      }),
     });
 
     const [sessionAfter] = await ctx.db

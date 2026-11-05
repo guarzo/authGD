@@ -1,5 +1,12 @@
 import { createHash, sign } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { sql } from "drizzle-orm";
+import type { CombatRow } from "@/core/fleet-api-v2";
+import {
+  combatAccounts as sharedAccounts,
+  combatDevice as participatingDevice,
+  combatRow,
+} from "./helpers/fleet-combat";
 import { once } from "node:events";
 import { createServer } from "node:http";
 import { NodeNextRequest } from "next/dist/server/base-http/node";
@@ -12,6 +19,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vite
 import {
   fleetDeviceSession,
   fleetEligibility,
+  fleetSharingGate,
   fleetPublisherLease,
   fleetTelemetryRow,
 } from "@/db/schema";
@@ -21,21 +29,13 @@ import {
   readFleetSharingMode,
   transitionFleetSharingMode,
 } from "@/services/fleet-sharing-mode";
-import { FLEET_READ_SCOPE } from "@/lib/esi/client";
 import { setupTestDb, TEST_URL, truncateAll } from "./helpers/db";
-import { seedAccount, seedCharacter } from "./helpers/seed";
-import { testConfig } from "./helpers/config";
-import {
-  at,
-  NOW,
-  participatingDevice,
-  sharedAccounts,
-} from "./helpers/fleet-shared-admission";
+import { at } from "./helpers/fleet-shared-admission";
 import { pairDevice, waitUntilBlockedBy } from "./helpers/fleet-sharing";
 
 process.env.DATABASE_URL = TEST_URL;
-const { GET, PUT } = await import("@/app/api/fleet/v1/snapshot/route");
-const PATH = "/api/fleet/v1/snapshot";
+const { GET, PUT } = await import("@/app/api/fleet/v2/snapshot/route");
+const PATH = "/api/fleet/v2/snapshot";
 const UUID4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 let ctx: Awaited<ReturnType<typeof setupTestDb>>;
 beforeAll(async () => {
@@ -61,14 +61,18 @@ function request(
   p: Awaited<ReturnType<typeof pairDevice>>,
   revision: number,
   opts: {
-    rows?: { character_id: number; dps: number; ewar: string[] }[];
     format?: string | null;
     issuedAt?: string;
-  } = {},
+  } & (
+    | { rows: CombatRow[]; sampledAtMs: number }
+    | { rows?: undefined; sampledAtMs?: undefined }
+  ) = {},
 ) {
   const method = opts.rows ? "PUT" : "GET";
   const body = opts.rows
-    ? Buffer.from(JSON.stringify({ protocol: 1, rows: opts.rows }))
+    ? Buffer.from(
+        JSON.stringify({ protocol: 2, sampled_at_ms: opts.sampledAtMs, rows: opts.rows }),
+      )
     : Buffer.alloc(0);
   const issuedAt = opts.issuedAt ?? new Date().toISOString();
   const bodySha256 = createHash("sha256").update(body).digest("hex");
@@ -88,8 +92,8 @@ function request(
     "X-Fleet-Body-SHA256": bodySha256,
     "X-Fleet-Signature": sign(null, canonical, p.privateKey).toString("base64url"),
   });
-  if (opts.format !== null && method === "GET")
-    headers.set("X-Fleet-Snapshot-Format", opts.format ?? "publication-v1");
+  if (opts.format !== undefined && opts.format !== null && method === "GET")
+    headers.set("X-Fleet-Snapshot-Format", opts.format);
   return new NextRequest(`https://relay.test${PATH}`, {
     method,
     headers,
@@ -111,10 +115,10 @@ function expectBinding(response: Response, req: NextRequest) {
   ].join("\n");
   expect(response.headers.get("x-fleet-request-binding")).toBe(
     createHash("sha256")
-      .update("fleet-snapshot-publication-v1\n" + canonical)
+      .update("fleet-api-v2\n" + canonical)
       .digest("hex"),
   );
-  expect(response.headers.get("x-fleet-snapshot-format")).toBe("publication-v1");
+  expect(response.headers.has("x-fleet-snapshot-format")).toBe(false);
   expect(response.headers.get("cache-control")).toBe("no-store");
 }
 function noExtension(response: Response) {
@@ -137,70 +141,74 @@ async function retained() {
       .orderBy(fleetDeviceSession.id),
   };
 }
-async function legacy() {
-  const account = await seedAccount(ctx.db, { tier: "member" });
-  const ch = await seedCharacter(ctx.db, testConfig(), {
-    id: 90000001,
-    accountId: account.id,
-    scopes: [FLEET_READ_SCOPE],
-  });
-  // Legacy compatibility ONLY. Shared evidence below always runs realSource.
-  await ctx.db.insert(fleetEligibility).values({
-    characterId: ch.id,
-    accountId: account.id,
-    fleetId: 123,
-    rosterCharacterIds: [ch.id],
-    verifiedAt: NOW,
-    expiresAt: at(60000),
-    outcomeCode: "ok",
-  });
-  const device = await pairDevice(ctx.db, account.id, NOW);
-  const rows = [{ character_id: ch.id, dps: 77, ewar: [] }];
-  expect((await PUT(request(device, 1, { rows }))).status).toBe(200);
+const wireRow = (id: number): CombatRow => ({
+  character_id: id,
+  outgoing_dps: 77,
+  incoming_dps: null,
+  activity_age_ms: 0,
+  effects: [],
+});
+async function publishedFixture() {
+  const p = await sharedAccounts(ctx.db);
+  const device = p.b;
+  const ch = p.alts[0];
+  const rows = [wireRow(ch.id)];
+  expect(
+    (await PUT(request(device, 3, { sampledAtMs: at(2500).getTime(), rows }))).status,
+  ).toBe(200);
   return { device, ch, rows };
 }
 
-it("stamps the unchanged legacy PUT but preserves exact old JSON and read identity", async () => {
-  const { device, ch, rows } = await legacy();
+it("required v2 combat preserves exact closed JSON, original sample and read identity", async () => {
+  const { device, ch, rows } = await publishedFixture();
   const before = await retained();
   expect(before.rows[0].publicationId).toMatch(UUID4);
-  const response = await GET(request(device, 2, { format: null }));
+  const req = request(device, 4);
+  const response = await GET(req);
   expect(response.status).toBe(200);
-  noExtension(response);
+  expectBinding(response, req);
   expect(await response.json()).toEqual({
-    protocol: 1,
+    protocol: 2,
+    server_time_ms: at(2500).getTime(),
     rows: [
       {
         character_id: ch.id,
         character_name: ch.name,
-        dps: 77,
-        ewar: [],
+        outgoing_dps: 77,
+        incoming_dps: null,
+        activity_age_ms: 0,
+        effects: [],
         state: "live",
         age_ms: 0,
+        publication_id: before.rows[0].publicationId,
       },
     ],
   });
   expect((await retained()).rows).toEqual(before.rows);
   vi.setSystemTime(at(3000));
-  expect((await PUT(request(device, 3, { rows }))).status).toBe(200);
+  expect(
+    (await PUT(request(device, 5, { sampledAtMs: at(2500).getTime(), rows }))).status,
+  ).toBe(200);
   expect((await retained()).rows[0].publicationId).not.toBe(before.rows[0].publicationId);
+  expect((await retained()).rows[0].sampledAtMs).toBe(at(2500).getTime());
 });
 
-it("disabled opt-in refuses before legacy gate/pruning/cadence and leaves every retained value untouched", async () => {
-  const { device } = await legacy();
+it("disabled shared gate refuses before pruning/cadence and leaves every retained value untouched", async () => {
+  const { device } = await publishedFixture();
+  // Negative retained-state fixture: disable admission without running cleanup.
+  await ctx.db.update(fleetSharingGate).set({ enabled: false });
   vi.setSystemTime(at(13000)); // An admitted legacy read would now prune this row.
   const before = await retained();
-  const req = request(device, 2);
+  const req = request(device, 4);
   const response = await GET(req);
   expect(response.status).toBe(503);
   noExtension(response);
-  expect(await response.json()).toEqual({ protocol: 1, error: "feature_disabled" });
+  expect(await response.json()).toEqual({ protocol: 2, error: "feature_disabled" });
   expect(await retained()).toEqual(before);
   expect(
     await readFleetProjection(ctx.db, {
       sessionId: device.sessionId,
       revision: 1,
-      requireSharedMode: true,
       now: at(13000),
     }),
   ).toEqual({ ok: false, code: "feature_disabled" });
@@ -208,34 +216,37 @@ it("disabled opt-in refuses before legacy gate/pruning/cadence and leaves every 
 });
 
 it.each([
-  ["publication-v2", "update_required"],
-  ["PUBLICATION-V1", "update_required"],
+  ["publication-v2", "bad_headers"],
+  ["PUBLICATION-V1", "bad_headers"],
   ["", "bad_headers"],
   ["publication-v1, publication-v1", "bad_headers"],
   ["publication v1", "bad_headers"],
   ["publication-v1;foo", "bad_headers"],
-])("negotiation %j fails closed without consuming revision", async (format, code) => {
-  const { device } = await legacy();
-  const before = await retained();
-  const response = await GET(request(device, 2, { format }));
-  expect(response.status).toBe(400);
-  noExtension(response);
-  expect(await response.json()).toEqual({ protocol: 1, error: code });
-  expect(await retained()).toEqual(before);
-});
+])(
+  "legacy format header %j fails closed without consuming revision",
+  async (format, code) => {
+    const { device } = await publishedFixture();
+    const before = await retained();
+    const response = await GET(request(device, 4, { format }));
+    expect(response.status).toBe(400);
+    noExtension(response);
+    expect(await response.json()).toEqual({ protocol: 2, error: code });
+    expect(await retained()).toEqual(before);
+  },
+);
 
 it("duplicate request header lines and unsigned selectors are rejected, authentication still precedes success", async () => {
-  const { device } = await legacy();
+  const { device } = await publishedFixture();
   const before = await retained();
-  const duplicate = request(device, 2);
-  duplicate.headers.append("x-fleet-snapshot-format", "publication-v1");
+  const duplicate = request(device, 4);
+  duplicate.headers.append("x-fleet-session", device.sessionId);
   expect((await GET(duplicate)).status).toBe(400);
-  const query = request(device, 2);
+  const query = request(device, 4);
   const selected = new NextRequest(query.url + "?fleet_id=123", {
     headers: query.headers,
   });
   expect((await GET(selected)).status).toBe(400);
-  const tampered = request(device, 2);
+  const tampered = request(device, 4);
   tampered.headers.set("x-fleet-signature", "A".repeat(86));
   const denied = await GET(tampered);
   expect(denied.status).toBe(401);
@@ -305,9 +316,7 @@ it.each([false, true])(
   "real Node/installed Next adapter refuses body framing without read mutations (publication=%s)",
   async (publication) => {
     const p = publication ? await sharedAccounts(ctx.db) : null;
-    const req = p
-      ? request(p.a, 4)
-      : request((await legacy()).device, 2, { format: null });
+    const req = p ? request(p.a, 4) : request((await publishedFixture()).device, 4);
     // Intentionally EMPTY digest and valid EMPTY-body signature with wire bytes.
     expect(req.headers.get("x-fleet-body-sha256")).toBe(
       "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
@@ -327,7 +336,7 @@ it.each([false, true])(
         },
       ]);
       expect(response.status).toBe(400);
-      expect(JSON.parse(response.body)).toEqual({ protocol: 1, error: "bad_headers" });
+      expect(JSON.parse(response.body)).toEqual({ protocol: 2, error: "bad_headers" });
       expect(response.headers["x-fleet-snapshot-format"]).toBeUndefined();
       expect(response.headers["x-fleet-request-binding"]).toBeUndefined();
       expect(await retained()).toEqual(before);
@@ -339,12 +348,10 @@ it.each([false, true])(
   "real Node/installed Next adapter preserves absent/zero-length framing (publication=%s)",
   async (publication) => {
     const p = publication ? await sharedAccounts(ctx.db) : null;
-    const device = p ? p.a : (await legacy()).device;
-    let revision = p ? 4 : 2;
+    const device = p ? p.a : (await publishedFixture()).device;
+    let revision = 4;
     for (const framing of [[], ["Content-Length", "0"], ["Content-Length", "00"]]) {
-      const req = request(device, revision++, {
-        format: publication ? "publication-v1" : null,
-      });
+      const req = request(device, revision++);
       const { response, observations } = await throughNodeAdapter(req, framing);
       expect(observations).toEqual([
         {
@@ -355,33 +362,39 @@ it.each([false, true])(
         },
       ]);
       expect(response.status).toBe(200);
-      if (publication)
-        expectBinding(
-          new Response(response.body, {
-            headers: response.headers as Record<string, string>,
-          }),
-          req,
-        );
-      else {
-        expect(response.headers["x-fleet-snapshot-format"]).toBeUndefined();
-        expect(response.headers["x-fleet-request-binding"]).toBeUndefined();
-        const payload = JSON.parse(response.body) as { rows: Record<string, unknown>[] };
+      expectBinding(
+        new Response(response.body, {
+          headers: response.headers as Record<string, string>,
+        }),
+        req,
+      );
+      const payload = JSON.parse(response.body) as {
+        protocol: number;
+        server_time_ms: number;
+        rows: Record<string, unknown>[];
+      };
+      expect(payload.protocol).toBe(2);
+      expect(payload.server_time_ms).toBe(Date.now());
+      expect(payload.rows).toHaveLength(publication ? 0 : 1);
+      if (!publication)
         expect(Object.keys(payload.rows[0]).sort()).toEqual([
+          "activity_age_ms",
           "age_ms",
           "character_id",
           "character_name",
-          "dps",
-          "ewar",
+          "effects",
+          "incoming_dps",
+          "outgoing_dps",
+          "publication_id",
           "state",
         ]);
-      }
       vi.setSystemTime(new Date(Date.now() + 500));
     }
   },
 );
 
 it("real Node framing parser rejects malformed/duplicate length before invoking the adapter", async () => {
-  const req = request((await legacy()).device, 2, { format: null });
+  const req = request((await publishedFixture()).device, 4);
   const before = await retained();
   for (const framing of [
     ["Content-Length", "-1"],
@@ -399,7 +412,7 @@ it("real Node framing parser rejects malformed/duplicate length before invoking 
 });
 
 it("refuses transfer framing even for an empty chunk sequence or duplicate transfer lines", async () => {
-  const req = request((await legacy()).device, 2, { format: null });
+  const req = request((await publishedFixture()).device, 4);
   const before = await retained();
   for (const framing of [
     ["Transfer-Encoding", "chunked"],
@@ -415,7 +428,7 @@ it("refuses transfer framing even for an empty chunk sequence or duplicate trans
       },
     ]);
     expect(response.status).toBe(400);
-    expect(JSON.parse(response.body)).toEqual({ protocol: 1, error: "bad_headers" });
+    expect(JSON.parse(response.body)).toEqual({ protocol: 2, error: "bad_headers" });
     expect(await retained()).toEqual(before);
   }
 });
@@ -423,27 +436,35 @@ it("refuses transfer framing even for an empty chunk sequence or duplicate trans
 it("real source worker authority admits signed shared PUT/GET, rotates equal metrics independently, and never stamps on read", async () => {
   const p = await sharedAccounts(ctx.db);
   expect(await ctx.db.select().from(fleetEligibility)).toEqual([]);
-  const rows = p.alts
-    .slice(0, 2)
-    .map((ch) => ({ character_id: ch.id, dps: 77, ewar: [] }));
-  expect((await PUT(request(p.b, 3, { rows }))).status).toBe(200);
+  const rows = p.alts.slice(0, 2).map((ch) => wireRow(ch.id));
+  expect(
+    (await PUT(request(p.b, 3, { rows, sampledAtMs: at(2500).getTime() }))).status,
+  ).toBe(200);
   const first = await retained();
   expect(first.rows).toHaveLength(2);
   for (const row of first.rows) expect(row.publicationId).toMatch(UUID4);
   expect(new Set(first.rows.map((r) => r.publicationId)).size).toBe(2);
-  const req = request(p.a, 4, { issuedAt: "2026-09-07T12:00:02.500+00:00" });
-  req.headers.set("X-Fleet-Request-Binding", "0".repeat(64)); // Not an authority input.
+  const noncanonical = request(p.a, 4, { issuedAt: "2026-09-07T12:00:02.500+00:00" });
+  expect((await GET(noncanonical)).status).toBe(400);
+  const forged = request(p.a, 4);
+  forged.headers.set("X-Fleet-Request-Binding", "0".repeat(64));
+  expect((await GET(forged)).status).toBe(400);
+  expect(await retained()).toEqual(first);
+  const req = request(p.a, 4);
   const response = await GET(req);
   expect(response.status).toBe(200);
   expectBinding(response, req);
   const json = await response.json();
   expect(json).toEqual({
-    protocol: 1,
+    protocol: 2,
+    server_time_ms: at(2500).getTime(),
     rows: first.rows.map((r, i) => ({
       character_id: r.characterId,
       character_name: p.alts[i].name,
-      dps: 77,
-      ewar: [],
+      outgoing_dps: 77,
+      incoming_dps: null,
+      activity_age_ms: 0,
+      effects: [],
       state: "live",
       age_ms: 0,
       publication_id: r.publicationId,
@@ -459,20 +480,28 @@ it("real source worker authority admits signed shared PUT/GET, rotates equal met
       (await again.json()) as { rows: { age_ms: number; publication_id: string }[] }
     ).rows.map((r) => [r.age_ms, r.publication_id]),
   ).toEqual(first.rows.map((r) => [500, r.publicationId]));
-  expect((await PUT(request(p.b, 4, { rows }))).status).toBe(200);
+  expect(
+    (await PUT(request(p.b, 4, { rows, sampledAtMs: at(2500).getTime() }))).status,
+  ).toBe(200);
   const second = await retained();
   expect(new Set([...first.rows, ...second.rows].map((r) => r.publicationId)).size).toBe(
     4,
   );
   vi.setSystemTime(at(3500));
-  expect((await PUT(request(p.b, 5, { rows: [] }))).status).toBe(200);
+  expect((await PUT(request(p.b, 5, { rows: [], sampledAtMs: 0 }))).status).toBe(200);
   const emptyReq = request(p.a, 6);
   const empty = await GET(emptyReq);
   expect(empty.status).toBe(200);
   expectBinding(empty, emptyReq);
-  expect(await empty.json()).toEqual({ protocol: 1, rows: [] });
+  expect(await empty.json()).toEqual({
+    protocol: 2,
+    server_time_ms: at(3500).getTime(),
+    rows: [],
+  });
   vi.setSystemTime(at(4000));
-  expect((await PUT(request(p.b, 6, { rows }))).status).toBe(200);
+  expect(
+    (await PUT(request(p.b, 6, { rows, sampledAtMs: at(2500).getTime() }))).status,
+  ).toBe(200);
   const third = await retained();
   expect(
     new Set([...first.rows, ...second.rows, ...third.rows].map((r) => r.publicationId))
@@ -480,12 +509,12 @@ it("real source worker authority admits signed shared PUT/GET, rotates equal met
   ).toBe(6);
 });
 
-it("nullable migration has no default/backfill/index and negotiated serialization alone withholds unstamped rows", async () => {
+it("required publication identity has no default/backfill/index and cannot admit unstamped rows", async () => {
   const column = await ctx.pool.query(
     "select is_nullable, column_default, data_type from information_schema.columns where table_name = 'fleet_telemetry_row' and column_name = 'publication_id'",
   );
   expect(column.rows).toEqual([
-    { is_nullable: "YES", column_default: null, data_type: "uuid" },
+    { is_nullable: "NO", column_default: null, data_type: "uuid" },
   ]);
   const indexes = await ctx.pool.query<{ indexdef: string }>(
     "select indexdef from pg_indexes where tablename = 'fleet_telemetry_row'",
@@ -495,29 +524,42 @@ it("nullable migration has no default/backfill/index and negotiated serializatio
   expect(
     (
       await PUT(
-        request(p.b, 3, { rows: [{ character_id: p.alts[0].id, dps: 77, ewar: [] }] }),
+        request(p.b, 3, {
+          sampledAtMs: at(2500).getTime(),
+          rows: [wireRow(p.alts[0].id)],
+        }),
       )
     ).status,
   ).toBe(200);
-  // Simulate retained pre-migration payload, not eligibility or a fabricated write ID.
-  await ctx.db.update(fleetTelemetryRow).set({ publicationId: null });
   const before = await retained();
+  // The former nullable compatibility state is now rejected by the real DB.
+  await expect(
+    ctx.db.update(fleetTelemetryRow).set({ publicationId: sql`null` }),
+  ).rejects.toMatchObject({ cause: { code: "23502" } });
+  expect(await retained()).toEqual(before);
   const req = request(p.a, 4);
   const response = await GET(req);
   expect(response.status).toBe(200);
   expectBinding(response, req);
-  expect(await response.json()).toEqual({ protocol: 1, rows: [] });
+  expect(await response.json()).toMatchObject({
+    protocol: 2,
+    rows: [{ publication_id: before.rows[0].publicationId }],
+  });
   vi.setSystemTime(at(3000));
-  const legacyResponse = await GET(request(p.a, 5, { format: null }));
-  noExtension(legacyResponse);
-  const json = (await legacyResponse.json()) as { rows: Record<string, unknown>[] };
+  const secondReq = request(p.a, 5);
+  const secondResponse = await GET(secondReq);
+  expectBinding(secondResponse, secondReq);
+  const json = (await secondResponse.json()) as { rows: Record<string, unknown>[] };
   expect(json.rows).toHaveLength(1);
   expect(Object.keys(json.rows[0]).sort()).toEqual([
+    "activity_age_ms",
     "age_ms",
     "character_id",
     "character_name",
-    "dps",
-    "ewar",
+    "effects",
+    "incoming_dps",
+    "outgoing_dps",
+    "publication_id",
     "state",
   ]);
   expect((await retained()).rows).toEqual(before.rows);
@@ -527,36 +569,41 @@ it("nullable migration has no default/backfill/index and negotiated serializatio
 it("atomic ownership/eligibility/lease/cadence/replay refusals preserve prior IDs, leases and revisions", async () => {
   const p = await sharedAccounts(ctx.db);
   const rival = await participatingDevice(ctx.db, p.participant.id);
-  const rows = p.alts
-    .slice(0, 2)
-    .map((ch) => ({ characterId: ch.id, dps: 77, ewar: [] as const }));
+  const rows = p.alts.slice(0, 2).map((ch) => combatRow(ch.id, 77));
   expect(
     await replaceDeviceProjection(ctx.db, {
       sessionId: p.b.sessionId,
       revision: 3,
       rows,
       now: at(2500),
+      sampledAtMs: at(2500).getTime(),
     }),
-  ).toEqual({ ok: true });
+  ).toEqual({ ok: true, json: '{"protocol":2}' });
   const before = await retained();
   for (const args of [
     {
       sessionId: p.b.sessionId,
       revision: 4,
-      rows: [...rows, { characterId: p.boss.id, dps: 0, ewar: [] as const }],
+      rows: [...rows, combatRow(p.boss.id, 0)],
     },
     {
       sessionId: p.b.sessionId,
       revision: 4,
-      rows: [...rows, { characterId: p.alts[2].id, dps: 0, ewar: [] as const }],
+      rows: [...rows, combatRow(p.alts[2].id, 0)],
     },
     { sessionId: rival.sessionId, revision: 3, rows },
     { sessionId: p.b.sessionId, revision: 3, rows },
     { sessionId: p.b.sessionId, revision: 4, rows: [rows[0], rows[0]] },
   ]) {
-    expect((await replaceDeviceProjection(ctx.db, { ...args, now: at(3000) })).ok).toBe(
-      false,
-    );
+    expect(
+      (
+        await replaceDeviceProjection(ctx.db, {
+          ...args,
+          now: at(3000),
+          sampledAtMs: at(3000).getTime(),
+        })
+      ).ok,
+    ).toBe(false);
     expect(await retained()).toEqual(before);
   }
   expect(
@@ -565,6 +612,7 @@ it("atomic ownership/eligibility/lease/cadence/replay refusals preserve prior ID
       revision: 4,
       rows,
       now: at(2600),
+      sampledAtMs: at(2600).getTime(),
     }),
   ).toEqual({ ok: false, code: "rate_limited" });
   expect(await retained()).toEqual(before);
@@ -572,17 +620,16 @@ it("atomic ownership/eligibility/lease/cadence/replay refusals preserve prior ID
 
 it("outer retry rolls back private candidate IDs and retries the complete publication", async () => {
   const p = await sharedAccounts(ctx.db);
-  const rows = p.alts
-    .slice(0, 2)
-    .map((ch) => ({ characterId: ch.id, dps: 77, ewar: [] as const }));
+  const rows = p.alts.slice(0, 2).map((ch) => combatRow(ch.id, 77));
   expect(
     await replaceDeviceProjection(ctx.db, {
       sessionId: p.b.sessionId,
       revision: 3,
       rows,
       now: at(2500),
+      sampledAtMs: at(2500).getTime(),
     }),
-  ).toEqual({ ok: true });
+  ).toEqual({ ok: true, json: '{"protocol":2}' });
   const before = await retained();
   const original = ctx.db.transaction.bind(ctx.db);
   let candidates: (string | null)[] = [];
@@ -607,8 +654,9 @@ it("outer retry rolls back private candidate IDs and retries the complete public
       revision: 4,
       rows,
       now: at(3000),
+      sampledAtMs: at(3000).getTime(),
     }),
-  ).toEqual({ ok: true });
+  ).toEqual({ ok: true, json: '{"protocol":2}' });
   const after = await retained();
   expect(candidates).toHaveLength(2);
   expect(
@@ -653,7 +701,10 @@ it.each(["read first", "disable first"] as const)(
     expect(
       (
         await PUT(
-          request(p.b, 3, { rows: [{ character_id: p.alts[0].id, dps: 77, ewar: [] }] }),
+          request(p.b, 3, {
+            sampledAtMs: at(2500).getTime(),
+            rows: [wireRow(p.alts[0].id)],
+          }),
         )
       ).status,
     ).toBe(200);
@@ -666,7 +717,6 @@ it.each(["read first", "disable first"] as const)(
       readFleetProjection(ctx.db, {
         sessionId: p.a.sessionId,
         revision: 4,
-        requireSharedMode: true,
         now: at(2500),
       });
     const drain = () =>

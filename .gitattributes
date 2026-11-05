@@ -1,0 +1,5 @@
+# Frozen combat profile and shared vectors retain exact cross-repository bytes.
+src/core/fleet-combat-v2-profile.json -text
+tests/fixtures/fleet-combat-v2.json -text
+# Reviewed wire vectors are distributed byte-for-byte from Wingman.
+tests/fixtures/fleet-api-v2.json -text

@@ -23,7 +23,10 @@ import {
 } from "@/lib/error-redirects";
 import { listFleetDevicesForAccount } from "@/services/fleet-pairing";
 import { getSessionAccount } from "@/services/session";
-import { revokeFleetDeviceAction } from "./actions";
+import { revokeFleetDeviceAction, turnOffFleetAutomaticAction } from "./actions";
+import { readFleetAutomaticForBrowser } from "@/services/fleet-automatic";
+import type { AutomaticOff } from "@/core/fleet-automatic";
+import { AutomaticOffControl } from "./automatic-off";
 import { fleetDevicesConfirmation } from "./view";
 
 // Reads the session cookie and hits the DB on every request, same reasoning
@@ -59,19 +62,30 @@ export default async function FleetDevicesPage({
   const sid = (await cookies()).get(cfg.sessionCookieName)?.value;
   const sess = sid ? await getSessionAccount(getDb(), sid) : null;
   // Same "expired vs. never had one" distinction account/page.tsx draws.
-  if (!sess) redirect(sid ? loginErrorUrl("session_expired") : "/login");
+  if (!sid || !sess) redirect(sid ? loginErrorUrl("session_expired") : "/login");
 
   const { error, done, at } = await searchParams;
   const db = getDb();
   // `tier`/`isAdmin` alone, not the much heavier `getAccountView` join
   // account/page.tsx needs for its own manifest — this page only needs
   // enough to compute which nav items the shell offers (`navFor`).
-  const [[acc], devices] = await Promise.all([
+  const accountId = sess.accountId;
+  async function offAction(command: AutomaticOff) {
+    "use server";
+    // Capture the rendered account, not its cookie. A later sign-in cannot
+    // silently reinterpret this tab's Off as a choice for another account.
+    return turnOffFleetAutomaticAction(command, accountId);
+  }
+  const [[acc], devices, automatic] = await Promise.all([
     db
       .select({ tier: account.tier, isAdmin: account.isAdmin })
       .from(account)
       .where(eq(account.id, sess.accountId)),
     listFleetDevicesForAccount(db, sess.accountId),
+    readFleetAutomaticForBrowser(db, { accountId, browserSessionId: sid }).catch(() => {
+      console.error("fleet_automatic_browser_read_failed");
+      return null;
+    }),
   ]);
   const nav = navFor({
     canReadPayouts: acc?.tier === "member",
@@ -101,6 +115,7 @@ export default async function FleetDevicesPage({
             arrive. */}
         <Notice tone="bad">{message}</Notice>
         <ConfirmNotice text={confirmation} at={at} />
+        <AutomaticOffControl key={accountId} initial={automatic} offAction={offAction} />
 
         {devices.length === 0 ? (
           <p className="dim">

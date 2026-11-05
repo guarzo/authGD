@@ -93,12 +93,13 @@ async function setup(id = 99001, fleet = 123, initialize = true) {
         revision: 2,
         now: at(500),
         command: {
+          protocol: 2,
           operation: "start",
-          sourceId,
-          expectedGeneration: 0,
-          characterId: boss.id,
-          characterLinkEpoch: boss.fleetLinkEpoch,
-          intentCreatedAt: NOW,
+          source_id: sourceId,
+          expected_generation: 0,
+          character_id: boss.id,
+          character_link_epoch: boss.fleetLinkEpoch,
+          intent_created_at: NOW.toISOString(),
         },
       })
     ).ok,
@@ -517,9 +518,13 @@ describe("actual source job and ESI parser (synthetic provider only)", () => {
                 revision: 3,
                 now: at(1500),
                 command: {
+                  protocol: 2,
                   operation: "stop",
-                  sourceId: p.sourceId,
-                  expectedGeneration: 1,
+                  request_id: randomUUID(),
+                  intent_created_at: at(1500).toISOString(),
+                  source_id: p.sourceId,
+                  expected_generation: 1,
+                  expected_automatic: null,
                 },
               })
             ).ok,
@@ -704,9 +709,13 @@ describe("actual source job and ESI parser (synthetic provider only)", () => {
                   revision: 3,
                   now: at(6500),
                   command: {
+                    protocol: 2,
                     operation: "stop",
-                    sourceId: p.sourceId,
-                    expectedGeneration: 1,
+                    request_id: randomUUID(),
+                    intent_created_at: at(6500).toISOString(),
+                    source_id: p.sourceId,
+                    expected_generation: 1,
+                    expected_automatic: null,
                   },
                 })
               ).ok,
@@ -1930,7 +1939,15 @@ describe("actual source job and ESI parser (synthetic provider only)", () => {
             sessionId: p.sessionId,
             revision: 3,
             now: at(1500),
-            command: { operation: "stop", sourceId: p.sourceId, expectedGeneration: 1 },
+            command: {
+              protocol: 2,
+              operation: "stop",
+              request_id: randomUUID(),
+              intent_created_at: at(1500).toISOString(),
+              source_id: p.sourceId,
+              expected_generation: 1,
+              expected_automatic: null,
+            },
           })
         ).ok,
       ).toBe(true);

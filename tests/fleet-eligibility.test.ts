@@ -1,5 +1,11 @@
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import {
+  CatalogueGetSchema,
+  PairingCompletedSchema,
+  Int4Schema,
+  SourceExpectedGenerationSchema,
+} from "@/core/fleet-api-v2";
 import type { Db } from "@/db";
 import { character, fleetEligibility } from "@/db/schema";
 import { FLEET_READ_SCOPE } from "@/lib/esi/client";
@@ -41,7 +47,32 @@ async function seedEligibility(
   });
 }
 
+function expectV2Catalogue(catalogue: Awaited<ReturnType<typeof buildDeviceCatalogue>>) {
+  const nested = {
+    revision: catalogue.revision,
+    characters: catalogue.characters.map((c) => ({
+      character_id: c.characterId,
+      character_name: c.characterName,
+    })),
+  };
+  const standalone = { protocol: 2, ...nested };
+  const pairing = { protocol: 2, session_id: "A".repeat(43), catalogue: nested };
+  expect(CatalogueGetSchema.parse(standalone)).toEqual(standalone);
+  expect(PairingCompletedSchema.parse(pairing)).toEqual(pairing);
+}
+
 describe("buildDeviceCatalogue", () => {
+  it("preserves the empty catalogue's unsigned fingerprint in both v2 forms", async () => {
+    const acc = await seedAccount(ctx.db, { tier: "member" });
+    const catalogue = await buildDeviceCatalogue(ctx.db, acc.id);
+    expect(catalogue).toEqual({ revision: 3_820_012_610, characters: [] });
+    expectV2Catalogue(catalogue);
+    expect(Int4Schema.safeParse(catalogue.revision).success).toBe(false);
+    expect(SourceExpectedGenerationSchema.safeParse(catalogue.revision).success).toBe(
+      false,
+    );
+  });
+
   it("includes only the account's own linked characters, ordered by id", async () => {
     const acc = await seedAccount(ctx.db, { tier: "member" });
     const other = await seedAccount(ctx.db, { tier: "member" });
@@ -50,11 +81,25 @@ describe("buildDeviceCatalogue", () => {
       accountId: acc.id,
       name: "Bravo",
     });
-    await seedCharacter(ctx.db, cfg, {
+    // Reuse the required Alpha ID without losing this case's reverse insertion order.
+    const singleAccount = await seedAccount(ctx.db, { tier: "member" });
+    const alpha = await seedCharacter(ctx.db, cfg, {
       id: 92100001,
-      accountId: acc.id,
+      accountId: singleAccount.id,
       name: "Alpha",
     });
+    const single = await buildDeviceCatalogue(ctx.db, singleAccount.id);
+    expect(single).toEqual({
+      revision: 3_112_514_310,
+      characters: [{ characterId: 92100001, characterName: "Alpha" }],
+    });
+    expectV2Catalogue(single);
+    expect(Int4Schema.safeParse(single.revision).success).toBe(false);
+    expect(SourceExpectedGenerationSchema.safeParse(single.revision).success).toBe(false);
+    await ctx.db
+      .update(character)
+      .set({ accountId: acc.id })
+      .where(eq(character.id, alpha.id));
     await seedCharacter(ctx.db, cfg, {
       id: 92100099,
       accountId: other.id,
@@ -62,6 +107,7 @@ describe("buildDeviceCatalogue", () => {
     });
 
     const catalogue = await buildDeviceCatalogue(ctx.db, acc.id);
+    expectV2Catalogue(catalogue);
     expect(catalogue.characters).toEqual([
       { characterId: 92100001, characterName: "Alpha" },
       { characterId: 92100002, characterName: "Bravo" },

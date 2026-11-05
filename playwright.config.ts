@@ -49,7 +49,14 @@ export default defineConfig({
   testDir: "e2e",
   ...(FLEET_INTEGRATIONS
     ? { testMatch: ["**/fleet-access.spec.ts", "**/fleet-joint.spec.ts"] }
-    : { testIgnore: ["**/fleet-access.spec.ts", "**/fleet-joint.spec.ts"] }),
+    : {
+        testIgnore: [
+          "**/fleet-access.spec.ts",
+          "**/fleet-joint.spec.ts",
+          // This opt-in journey belongs to vitest.fleet-current.config.ts.
+          "**/fleet-current-v2.test.ts",
+        ],
+      }),
   workers: 1, // shared test database — never parallelize
   // Zero, deliberately, and it is the setting most likely to be "fixed" by
   // someone staring at a red CI run. Do not raise it.

@@ -65,12 +65,13 @@ async function enroll(id: number) {
         revision: 2,
         now: at(500),
         command: {
+          protocol: 2,
           operation: "start",
-          sourceId,
-          expectedGeneration: 0,
-          characterId: boss.id,
-          characterLinkEpoch: boss.fleetLinkEpoch,
-          intentCreatedAt: at(0),
+          source_id: sourceId,
+          expected_generation: 0,
+          character_id: boss.id,
+          character_link_epoch: boss.fleetLinkEpoch,
+          intent_created_at: at(0).toISOString(),
         },
       })
     ).ok,

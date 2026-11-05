@@ -17,26 +17,27 @@ afterAll(async () => {
 });
 
 describe("worker queues", () => {
-  it("source cadence is neither cron nor generic 60-second retry, including after startup repair", async () => {
-    await boss.updateQueue(QUEUES.fleetSource, {
-      name: QUEUES.fleetSource,
-      retryLimit: 5,
-      retryDelay: 60,
-      retryBackoff: true,
-    });
-    await createQueues(boss);
-    expect(await boss.getQueue(QUEUES.fleetSource)).toMatchObject({
-      retryLimit: 0,
-      retryDelay: 0,
-      retryBackoff: false,
-      expireInSeconds: 30,
-      retentionMinutes: 1,
-    });
-    await scheduleJobs(boss);
-    expect((await boss.getSchedules()).some((s) => s.name === QUEUES.fleetSource)).toBe(
-      false,
-    );
-  });
+  it.each([QUEUES.fleetSource, QUEUES.fleetAutomatic])(
+    "%s cadence is neither cron nor generic 60-second retry, including after startup repair",
+    async (queue) => {
+      await boss.updateQueue(queue, {
+        name: queue,
+        retryLimit: 5,
+        retryDelay: 60,
+        retryBackoff: true,
+      });
+      await createQueues(boss);
+      expect(await boss.getQueue(queue)).toMatchObject({
+        retryLimit: 0,
+        retryDelay: 0,
+        retryBackoff: false,
+        expireInSeconds: 30,
+        retentionMinutes: 1,
+      });
+      await scheduleJobs(boss);
+      expect((await boss.getSchedules()).some((s) => s.name === queue)).toBe(false);
+    },
+  );
   it("coalesces duplicate sends via singletonKey", async () => {
     const key = `test-${Date.now()}`; // unique per run: pg-boss state persists
     const first = await boss.send(

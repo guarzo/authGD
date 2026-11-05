@@ -78,12 +78,13 @@ test("shared capability consent names roster management and keeps participation 
   const pairingId = await seedPendingPairing([SHARED_CAPABILITY]);
   await page.goto(`/fleet/pair/${pairingId}`);
   await expect(
-    page.getByText(/managing roster verification through an eligible fleet boss/),
+    page.getByText(/manage roster verification through an eligible fleet boss/),
   ).toBeVisible();
   await expect(
-    page.getByText(/Participation is a separate, default-off choice in Wingman/),
+    page.getByText(/Pairing does not turn on participation or automatic verification/),
   ).toBeVisible();
-  await expect(page.getByText(/Wingman build with Fleet sharing controls/)).toBeVisible();
+  // Shared-only approval must not imply the additional combat disclosure.
+  await expect(page.getByText(/publish incoming and outgoing DPS/)).toHaveCount(0);
   await page.getByRole("button", { name: "Approve" }).click();
   await expect(
     page.getByText("Approved. Waiting for the desktop app to finish pairing."),

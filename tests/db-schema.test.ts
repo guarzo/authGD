@@ -1,5 +1,5 @@
 import { eq, sql } from "drizzle-orm";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -427,24 +427,29 @@ describe("fleet relay schema", () => {
         fleetId: 5000001,
         deviceId: device.id,
         sessionId: session.id,
-        dps: 1234,
-        ewar: ["SCRAM/POINT"],
+        publicationId: randomUUID(),
+        outgoingDps: 1234,
+        incomingDps: null,
+        sampledAtMs: now.getTime(),
+        activityOriginMs: now.getTime(),
+        effects: [
+          { kind: "POINT", observations: [{ name: null, origin_ms: now.getTime() }] },
+        ],
         receivedAt: now,
         staleAt: new Date(now.getTime() + 3_000),
         hardExpiresAt: new Date(now.getTime() + 10_000),
       })
       .returning();
 
-    // No log content, combat actor/target text, event timestamp, fleet name,
-    // system, ship or EVE token. Nullable consent provenance is permitted for
-    // cleanup, but a legacy insert never fabricates shared admission evidence.
+    // Sole combat payload, no raw logs/targets/roster/credentials. This schema
+    // fixture's absent consent provenance permits cleanup, never admission.
     expect(row).toMatchObject({
       sourceId: null,
       sourceGeneration: null,
       authorityGeneration: null,
       linkEpoch: null,
       participationGeneration: null,
-      publicationId: null,
+      publicationId: expect.stringMatching(/^[0-9a-f-]{36}$/),
     });
     expect(Object.keys(row).sort()).toEqual(
       [
@@ -452,8 +457,11 @@ describe("fleet relay schema", () => {
         "fleetId",
         "deviceId",
         "sessionId",
-        "dps",
-        "ewar",
+        "outgoingDps",
+        "incomingDps",
+        "sampledAtMs",
+        "activityOriginMs",
+        "effects",
         "receivedAt",
         "staleAt",
         "hardExpiresAt",
@@ -489,7 +497,7 @@ describe("fleet relay schema", () => {
     ).rejects.toThrow();
   });
 
-  it('permits ewar to be exactly [] or ["SCRAM/POINT"], and rejects any other JSON', async () => {
+  it("permits closed combat effects and rejects unknown or duplicate kinds", async () => {
     const acc = await seedAccount(ctx.db);
     const [device] = await ctx.db
       .insert(fleetDevice)
@@ -508,26 +516,33 @@ describe("fleet relay schema", () => {
       .returning();
 
     const now = new Date("2026-09-04T12:00:00.000Z");
-    const insertWithEwar = async (characterId: number, ewar: string[]) => {
+    const insertWithEffects = async (characterId: number, kinds: string[]) => {
       const ch = await seedCharacter(ctx.db, cfg, { id: characterId, accountId: acc.id });
       return ctx.db.insert(fleetTelemetryRow).values({
         characterId: ch.id,
         fleetId: 5000002,
         deviceId: device.id,
         sessionId: session.id,
-        dps: 0,
-        ewar,
+        publicationId: randomUUID(),
+        outgoingDps: 0,
+        incomingDps: null,
+        sampledAtMs: now.getTime(),
+        activityOriginMs: now.getTime(),
+        effects: kinds.map((kind) => ({
+          kind,
+          observations: [{ name: null, origin_ms: now.getTime() }],
+        })) as typeof fleetTelemetryRow.$inferInsert.effects,
         receivedAt: now,
         staleAt: new Date(now.getTime() + 3_000),
         hardExpiresAt: new Date(now.getTime() + 10_000),
       });
     };
 
-    await expect(insertWithEwar(91500010, [])).resolves.toBeDefined();
-    await expect(insertWithEwar(91500011, ["SCRAM/POINT"])).resolves.toBeDefined();
-    await expect(insertWithEwar(91500012, ["WARP_SCRAMBLE"])).rejects.toThrow();
+    await expect(insertWithEffects(91500010, [])).resolves.toBeDefined();
     await expect(
-      insertWithEwar(91500013, ["SCRAM/POINT", "SCRAM/POINT"]),
-    ).rejects.toThrow();
+      insertWithEffects(91500011, ["SCRAM", "POINT", "NEUT"]),
+    ).resolves.toBeDefined();
+    await expect(insertWithEffects(91500012, ["WARP_SCRAMBLE"])).rejects.toThrow();
+    await expect(insertWithEffects(91500013, ["POINT", "POINT"])).rejects.toThrow();
   });
 });

@@ -52,12 +52,13 @@ async function setup() {
     capabilities: [SHARED_CAPABILITY],
   });
   const command = {
+    protocol: 2 as const,
     operation: "start" as const,
-    sourceId: randomUUID(),
-    expectedGeneration: 0 as const,
-    characterId: boss.id,
-    characterLinkEpoch: boss.fleetLinkEpoch,
-    intentCreatedAt: NOW,
+    source_id: randomUUID(),
+    expected_generation: 0 as const,
+    character_id: boss.id,
+    character_link_epoch: boss.fleetLinkEpoch,
+    intent_created_at: NOW.toISOString(),
   };
   return { owner, boss, ...p, command };
 }
@@ -73,7 +74,7 @@ describe("source-only signed-session controls", () => {
             now: at(500 + 500 * i),
             command: {
               ...p.command,
-              sourceId: i === 0 ? p.command.sourceId : randomUUID(),
+              source_id: i === 0 ? p.command.source_id : randomUUID(),
             },
           })
         ).ok,
@@ -93,7 +94,7 @@ describe("source-only signed-session controls", () => {
         sessionId: p.sessionId,
         revision: 19,
         now: at(9000),
-        command: { ...p.command, sourceId: randomUUID() },
+        command: { ...p.command, source_id: randomUUID() },
       }),
     ).toEqual({ ok: false, code: "rate_limited" });
     expect(await ctx.db.select().from(fleetSourceIntent)).toHaveLength(16);
@@ -128,18 +129,22 @@ describe("source-only signed-session controls", () => {
     expect(await controlFleetSource(ctx.db, call)).toMatchObject({
       ok: true,
       value: {
-        sourceId: p.command.sourceId,
-        generation: 1,
-        state: "pending",
-        pendingExpiresAt: at(60000),
+        protocol: 2,
+        source: {
+          source_id: p.command.source_id,
+          generation: 1,
+          state: "pending",
+          pending_expires_at: at(60000).toISOString(),
+          automatic: null,
+        },
       },
     });
     expect(
       await controlFleetSource(ctx.db, { ...call, revision: 3, now: at(1000) }),
-    ).toMatchObject({ ok: true, value: { generation: 1 } });
+    ).toMatchObject({ ok: true, value: { source: { generation: 1 } } });
     expect(await ctx.db.select().from(fleetSourceIntent)).toHaveLength(1);
     expect((await ctx.db.select().from(outbox)).map((r) => r.payload)).toEqual([
-      { kind: "fleet-source", sourceId: p.command.sourceId, generation: 1 },
+      { kind: "fleet-source", sourceId: p.command.source_id, generation: 1 },
     ]);
     expect(
       (await ctx.db.select().from(auditLog)).filter(
@@ -158,10 +163,10 @@ describe("source-only signed-session controls", () => {
       value: {
         characters: [
           {
-            characterId: p.boss.id,
-            characterLinkEpoch: p.boss.fleetLinkEpoch,
-            hasFleetRead: true,
-            tokenUsable: true,
+            character_id: p.boss.id,
+            character_link_epoch: p.boss.fleetLinkEpoch,
+            has_fleet_read: true,
+            token_usable: true,
           },
         ],
         sources: [{ state: "pending" }],
@@ -191,7 +196,7 @@ describe("source-only signed-session controls", () => {
         now: at(1000),
         command: p.command,
       }),
-    ).toMatchObject({ ok: true, value: { generation: 1, state: "pending" } });
+    ).toMatchObject({ ok: true, value: { source: { generation: 1, state: "pending" } } });
     expect(await ctx.db.select().from(fleetSourceIntent)).toEqual([before]);
     expect(await ctx.db.select().from(outbox)).toHaveLength(1);
     expect(
@@ -231,15 +236,23 @@ describe("source-only signed-session controls", () => {
   });
   it("rejects expired/future first intents even with no retained tombstone", async () => {
     const p = await setup();
-    for (const intentCreatedAt of [at(-60000), at(1000), new Date(NaN)])
+    for (const intent_created_at of [at(-60000).toISOString(), at(1000).toISOString()])
       expect(
         await controlFleetSource(ctx.db, {
           sessionId: p.sessionId,
           revision: 2,
           now: at(500),
-          command: { ...p.command, intentCreatedAt },
+          command: { ...p.command, intent_created_at },
         }),
       ).toEqual({ ok: false, code: "invalid_intent" });
+    expect(
+      await controlFleetSource(ctx.db, {
+        sessionId: p.sessionId,
+        revision: 2,
+        now: at(500),
+        command: { ...p.command, intent_created_at: "not-a-date" },
+      }),
+    ).toEqual({ ok: false, code: "bad_request" });
     expect(await ctx.db.select().from(fleetSourceIntent)).toHaveLength(0);
   });
   it("Stop-before-Start creates an attributed cancellation fence with 24-hour retention", async () => {
@@ -248,9 +261,23 @@ describe("source-only signed-session controls", () => {
       sessionId: p.sessionId,
       revision: 2,
       now: at(500),
-      command: { operation: "stop", sourceId: p.command.sourceId, expectedGeneration: 0 },
+      command: {
+        protocol: 2,
+        operation: "stop",
+        request_id: randomUUID(),
+        intent_created_at: NOW.toISOString(),
+        source_id: p.command.source_id,
+        expected_generation: 0,
+        expected_automatic: null,
+      },
     });
-    expect(stopped).toMatchObject({ ok: true, value: { state: "ended", generation: 1 } });
+    expect(stopped).toMatchObject({
+      ok: true,
+      value: {
+        source: { state: "ended", generation: 1 },
+        automatic_effect: "unknown_cancelled",
+      },
+    });
     expect(
       await controlFleetSource(ctx.db, {
         sessionId: p.sessionId,

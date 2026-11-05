@@ -1,6 +1,13 @@
 import { createHash } from "node:crypto";
 import { eq } from "drizzle-orm";
 import type { Dbx } from "@/db";
+import {
+  API_VERSION,
+  ParticipationResultSchema,
+  FLEET_V2_BYTE_LIMITS,
+} from "@/core/fleet-api-v2";
+import { serializeFleetV2Json } from "@/lib/fleet-api-v2";
+import { fleetDatabaseNow } from "@/services/fleet-key-identity";
 import { fleetDevice, fleetDeviceSession } from "@/db/schema";
 import {
   SHARED_CAPABILITY,
@@ -28,7 +35,10 @@ import {
 export async function setFleetParticipation(
   dbx: Dbx,
   call: SignedFleetCall & { enabled: boolean; expectedGeneration: number },
-): Promise<FleetReply<Participation>> {
+): Promise<
+  | (Extract<FleetReply<Participation>, { ok: true }> & { json: string })
+  | Extract<FleetReply<Participation>, { ok: false }>
+> {
   if (
     typeof call.enabled !== "boolean" ||
     !Number.isSafeInteger(call.expectedGeneration) ||
@@ -37,7 +47,7 @@ export async function setFleetParticipation(
   )
     return { ok: false, code: "invalid_intent" };
   try {
-    const value = await dbx.transaction(async (tx) => {
+    const result = await dbx.transaction(async (tx) => {
       const mode = await lockFleetSharingMode(tx);
       if (!mode.enabled || mode.keyIdentityPhase !== "ready")
         throw new RelayRefusal("feature_disabled");
@@ -53,6 +63,7 @@ export async function setFleetParticipation(
         ...call,
         cadence: "read",
         invalidSessionCode: "unauthorized",
+        databaseClock: true,
       });
       if (device.id !== probe.deviceId || device.accountId !== probe.accountId)
         throw new RelayRefusal("unauthorized");
@@ -67,16 +78,23 @@ export async function setFleetParticipation(
         throw new RelayRefusal("capability_required");
       if (device.participationGeneration !== call.expectedGeneration)
         throw new RelayRefusal("conflict");
-      if (!call.enabled) await withdrawFleetDeviceProjection(tx, device.id);
-      const now = sampleFleetSessionAdmission(session, {
-        ...call,
-        cadence: "read",
-        invalidSessionCode: "unauthorized",
-      });
       const participation = {
         enabled: call.enabled,
         generation: device.participationGeneration + 1,
       };
+      const output = serializeFleetV2Json(
+        { protocol: API_VERSION, participation },
+        ParticipationResultSchema,
+        FLEET_V2_BYTE_LIMITS.participationPut.successBytes,
+      );
+      if (!output.ok) throw new RelayRefusal(output.code);
+      if (!call.enabled) await withdrawFleetDeviceProjection(tx, device.id);
+      const now = sampleFleetSessionAdmission(session, {
+        ...call,
+        now: await fleetDatabaseNow(tx, call.now),
+        cadence: "read",
+        invalidSessionCode: "unauthorized",
+      });
       await tx
         .update(fleetDevice)
         .set({
@@ -95,9 +113,9 @@ export async function setFleetParticipation(
         now,
         cadence: "read",
       });
-      return participation;
+      return { value: participation, json: output.json };
     });
-    return { ok: true, value };
+    return { ok: true, ...result };
   } catch (err) {
     if (err instanceof RelayRefusal) return { ok: false, code: err.code as FleetCode };
     if (isRetryableRelayError(err)) return { ok: false, code: "service_unavailable" };

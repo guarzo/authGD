@@ -12,6 +12,12 @@ import { pinnedWingmanRoot } from "../e2e/fleet-run";
 import { withFleetResources } from "../e2e/fleet-resources";
 import { WORKTREE_ROOT } from "../e2e/env";
 
+const PYTHON_CHILD_TIMEOUT_MS = 10_000;
+// A whole fixture includes CA/pin setup and teardown around this child. Its
+// test budget must not expire first and let the next test race owned listeners.
+// Neither value changes the production relay's five-second full-call limit.
+const PYTHON_FIXTURE_TIMEOUT_MS = PYTHON_CHILD_TIMEOUT_MS + 5_000;
+
 async function closeServer(server: Server) {
   server.closeAllConnections();
   if (server.listening)
@@ -74,7 +80,7 @@ async function probePython(
       stderr = true;
     });
     own(
-      setTimeout(() => child.kill("SIGKILL"), 10_000),
+      setTimeout(() => child.kill("SIGKILL"), PYTHON_CHILD_TIMEOUT_MS),
       clearTimeout,
     );
     const [code] = await once(child, "close");
@@ -93,32 +99,36 @@ async function probePython(
 
 /** HTTPS is the logical identity, not a relaxed production client origin. */
 describe("joint fleet fixture boundary", () => {
-  it("stages and reveals the factory-created Fleet page, checks Linux fallback, and refuses every stale page callback", async () => {
-    let removedRoot = "";
-    await withFleetResources(async (own) => {
-      const trust = own(createFleetTrust(), (trust) => trust.close());
-      removedRoot = trust.root;
-      expect(await probePython(trust, "page-identity")).toEqual({
-        identity: "verified",
-        denials: 0,
-        native_resize: false,
-        native_activation: false,
-        callbacks: [
-          "fleet_bar_snapshot",
-          "fleet_bar_ready",
-          "fit_fleet_bar_height",
-          "save_fleet_bar_pos",
-          "settle_fleet_bar_resize",
-          "reset_fleet_bar_page_width",
-          "hide_fleet_bar",
-          "activate_fleet_bar",
-          "deactivate_fleet_bar",
-        ],
-        position_phases: ["begin", "end"],
+  it(
+    "stages and reveals the factory-created Fleet page, checks Linux fallback, and refuses every stale page callback",
+    async () => {
+      let removedRoot = "";
+      await withFleetResources(async (own) => {
+        const trust = own(createFleetTrust(), (trust) => trust.close());
+        removedRoot = trust.root;
+        expect(await probePython(trust, "page-identity")).toEqual({
+          identity: "verified",
+          denials: 0,
+          native_resize: false,
+          native_activation: false,
+          callbacks: [
+            "fleet_bar_snapshot",
+            "fleet_bar_ready",
+            "fit_fleet_bar_height",
+            "save_fleet_bar_pos",
+            "settle_fleet_bar_resize",
+            "reset_fleet_bar_page_width",
+            "hide_fleet_bar",
+            "activate_fleet_bar",
+            "deactivate_fleet_bar",
+          ],
+          position_phases: ["begin", "end"],
+        });
       });
-    });
-    expect(existsSync(removedRoot)).toBe(false);
-  });
+      expect(existsSync(removedRoot)).toBe(false);
+    },
+    PYTHON_FIXTURE_TIMEOUT_MS,
+  );
   it("verifies fixture CA and hostname, preserves signed bytes/cookies and refuses redirects", async () => {
     let removedRoot = "";
     const send = (host: string, ca?: Buffer) =>
@@ -279,43 +289,48 @@ describe("joint fleet fixture boundary", () => {
         expect(escaped, "denied TCP/UDP reached its destination").toBe(0);
       });
     },
+    PYTHON_FIXTURE_TIMEOUT_MS,
   );
-  it("Python's production signed client refuses redirects without touching their fixture target", async () => {
-    await withFleetResources(async (own) => {
-      const trust = own(createFleetTrust(), (trust) => trust.close());
-      let redirected = 0;
-      let signed = 0;
-      const upstream = own(
-        createServer((req, res) => {
-          if (req.url === "/redirect-target") {
-            redirected++;
+  it(
+    "Python's production signed client refuses redirects without touching their fixture target",
+    async () => {
+      await withFleetResources(async (own) => {
+        const trust = own(createFleetTrust(), (trust) => trust.close());
+        let redirected = 0;
+        let signed = 0;
+        const upstream = own(
+          createServer((req, res) => {
+            if (req.url === "/redirect-target") {
+              redirected++;
+              res.end();
+              return;
+            }
+            if (req.headers["x-fleet-signature"] && req.headers["x-fleet-session"])
+              signed++;
+            res.writeHead(307, { location: "https://localhost:3988/redirect-target" });
             res.end();
-            return;
-          }
-          if (req.headers["x-fleet-signature"] && req.headers["x-fleet-session"])
-            signed++;
-          res.writeHead(307, { location: "https://localhost:3988/redirect-target" });
-          res.end();
-        }),
-        closeServer,
-      );
-      own(
-        await startFleetTls({
-          appUrl: "https://localhost:3988",
-          upstreamUrl: await listen(upstream),
-          cert: trust.cert,
-          key: trust.key,
-        }),
-        (front) => front.close(),
-      );
-      expect(await probePython(trust, "signed-redirect")).toEqual({
-        redirect: "refused",
-        denials: 0,
+          }),
+          closeServer,
+        );
+        own(
+          await startFleetTls({
+            appUrl: "https://localhost:3988",
+            upstreamUrl: await listen(upstream),
+            cert: trust.cert,
+            key: trust.key,
+          }),
+          (front) => front.close(),
+        );
+        expect(await probePython(trust, "signed-redirect")).toEqual({
+          redirect: "refused",
+          denials: 0,
+        });
+        expect(signed).toBe(1);
+        expect(redirected).toBe(0);
       });
-      expect(signed).toBe(1);
-      expect(redirected).toBe(0);
-    });
-  });
+    },
+    PYTHON_FIXTURE_TIMEOUT_MS,
+  );
   it("an occupied front port releases owned startup resources, not the external holder", async () => {
     const holder = createServer((_req, res) => res.end());
     let trustRoot = "";

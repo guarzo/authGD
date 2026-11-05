@@ -14,6 +14,7 @@ export const QUEUES = {
   structures: "structures",
   structureEvents: "structure-events",
   fleetSource: "fleet-source",
+  fleetAutomatic: "fleet-automatic",
   deadLetter: "ops-dead-letter",
 } as const;
 
@@ -76,19 +77,25 @@ export async function createQueues(boss: PgBoss): Promise<void> {
   }
   // Source cadence/recovery belongs to the persisted due scheduler, never the
   // generic 60-second retry policy or a cron/admin rerun. No error-body DLQ.
-  const sourceOptions = {
-    name: QUEUES.fleetSource,
-    policy: "short" as const,
-    retryLimit: 0,
-    retryDelay: 0,
-    retryBackoff: false,
-    expireInSeconds: 30,
-    retentionMinutes: 1,
-  };
-  await boss.createQueue(QUEUES.fleetSource, sourceOptions);
-  await boss.updateQueue(QUEUES.fleetSource, sourceOptions);
-  if ((await boss.getQueue(QUEUES.fleetSource))?.deadLetter)
-    throw new Error("fleet_source_queue_has_dead_letter");
+  for (const name of [QUEUES.fleetSource, QUEUES.fleetAutomatic]) {
+    const sourceOptions = {
+      name,
+      policy: "short" as const,
+      retryLimit: 0,
+      retryDelay: 0,
+      retryBackoff: false,
+      expireInSeconds: 30,
+      retentionMinutes: 1,
+    };
+    await boss.createQueue(name, sourceOptions);
+    await boss.updateQueue(name, sourceOptions);
+    if ((await boss.getQueue(name))?.deadLetter)
+      throw new Error(
+        name === QUEUES.fleetSource
+          ? "fleet_source_queue_has_dead_letter"
+          : "fleet_automatic_queue_has_dead_letter",
+      );
+  }
   for (const name of SCHEDULED_QUEUES) {
     // policy "short": singletonKey uniqueness only exists under this policy
     // (pg-boss job_i1 partial index) — standard queues ignore singletonKey.

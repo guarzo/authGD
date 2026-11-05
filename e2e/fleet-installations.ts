@@ -257,7 +257,7 @@ export async function startFleetWorker(
 }
 
 /** Separate legacy/conflict fixture, never seeds either journey installation. */
-export async function runLegacyRecoveryProbe(privateKey: Buffer) {
+export async function runLegacyRecoveryProbe(privateKey: Buffer, retired = false) {
   const wingman = pinnedWingmanRoot();
   const python = process.env.E2E_WINGMAN_PYTHON;
   const trust = process.env.E2E_FLEET_TLS_ROOT;
@@ -278,7 +278,7 @@ export async function runLegacyRecoveryProbe(privateKey: Buffer) {
           E2E_WINGMAN_ROOT: wingman,
           FLEET_INSTALL_ROOT: root,
           FLEET_ORIGIN: BASE_URL,
-          FLEET_PROBE: "legacy-recovery",
+          FLEET_PROBE: retired ? "legacy-retirement" : "legacy-recovery",
           SSL_CERT_FILE: join(trust, "ca.pem"),
           SSL_CERT_DIR: join(trust, "empty-ca"),
           LOCALAPPDATA: root,
@@ -317,11 +317,13 @@ export async function runLegacyRecoveryProbe(privateKey: Buffer) {
       if (oversized) throw new Error("[fleet-e2e] oversized Python probe");
       if (code !== 0 || stderr)
         throw new Error("[fleet-e2e] legacy recovery probe failed");
-      return JSON.parse(Buffer.concat(output, bytes).toString("utf8")) as {
-        idempotent: boolean;
-        result: string;
-        fresh_key_required: boolean;
-      };
+      return JSON.parse(Buffer.concat(output, bytes).toString("utf8")) as
+        | {
+            idempotent: boolean;
+            result: string;
+            fresh_key_required: boolean;
+          }
+        | { retired: true; statuses: number[]; denials: number };
     } finally {
       clearTimeout(timeout);
     }

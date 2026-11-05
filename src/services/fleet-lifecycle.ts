@@ -3,6 +3,8 @@ import type { Db, DbTx, Dbx } from "@/db";
 import {
   account,
   character,
+  fleetAutomaticCandidate,
+  fleetAutomaticConsent,
   fleetDevice,
   fleetDeviceSession,
   fleetPairingRequest,
@@ -183,6 +185,60 @@ export function hasUsableFleetRead(
     ch.tokenStatus !== "missing" &&
     ch.scopes.includes(FLEET_READ_SCOPE)
   );
+}
+
+type Boss = typeof character.$inferSelect;
+export type AutomaticGrantWakeReason =
+  "accepted_reauthorization" | "verified_fleet_read_restored";
+
+/** Trusted accepted-grant writer port: caller owns mode/identity/account locks.
+ * Before/after are actual persisted rows; scope restoration additionally needs
+ * the caller's verified current subject/owner and winning settled-blob CAS.
+ * Never starts consent/work or reconciles a binding. Retained pacing and exhausted
+ * counters survive the wake, including while consent is Off. */
+export async function wakeFleetAutomaticGrantCandidate(
+  tx: DbTx,
+  before: Boss,
+  after: Boss,
+  reason: AutomaticGrantWakeReason,
+  now: Date,
+): Promise<void> {
+  if (
+    !Number.isFinite(now.getTime()) ||
+    before.accountId !== after.accountId ||
+    before.id !== after.id ||
+    before.ownerHash !== after.ownerHash ||
+    before.fleetLinkEpoch !== after.fleetLinkEpoch ||
+    !hasUsableFleetRead(after) ||
+    (reason !== "accepted_reauthorization" &&
+      reason !== "verified_fleet_read_restored") ||
+    (reason === "verified_fleet_read_restored" &&
+      before.scopes.includes(FLEET_READ_SCOPE))
+  )
+    return;
+  await tx
+    .update(fleetAutomaticCandidate)
+    .set({
+      lastOutcome: null,
+      failureCount: 0,
+      reservationId: null,
+      enqueueUntil: null,
+      claimReservationId: null,
+      claimExpiresAt: null,
+      sourceId: null,
+    })
+    .where(
+      and(
+        eq(fleetAutomaticCandidate.accountId, after.accountId),
+        eq(fleetAutomaticCandidate.characterId, after.id),
+        eq(fleetAutomaticCandidate.ownerHash, after.ownerHash),
+        eq(fleetAutomaticCandidate.linkEpoch, after.fleetLinkEpoch),
+        inArray(fleetAutomaticCandidate.lastOutcome, [
+          "fleet_read_invalid",
+          "identity_changed",
+        ]),
+      ),
+    );
 }
 
 export type FleetLifecycleSelectors = {
@@ -458,6 +514,50 @@ export async function invalidateFleetSources(
   testNow?: Date,
 ) {
   const now = await fleetDatabaseNow(tx, testNow);
+  // Durable callback identity is cleared at the EXISTING loss seam, including
+  // accounts with no source yet. Quick restoration cannot revive an old claim.
+  // Candidate counters/bindings remain retained; only discovery may advance a
+  // binding, and it may never recycle an exhausted counter.
+  const selectors = locked.selectors;
+  const characterIds = [
+    ...(selectors.characterIds ?? []),
+    ...(selectors.bossCharacterIds ?? []),
+  ];
+  const candidatePredicate = or(
+    selectors.accountIds?.length
+      ? inArray(fleetAutomaticCandidate.accountId, [...selectors.accountIds])
+      : undefined,
+    characterIds.length
+      ? inArray(fleetAutomaticCandidate.characterId, characterIds)
+      : undefined,
+    locked.sources.length
+      ? inArray(
+          fleetAutomaticCandidate.sourceId,
+          locked.sources.map((s) => s.id),
+        )
+      : undefined,
+    selectors.deviceIds?.length
+      ? inArray(
+          fleetAutomaticCandidate.accountId,
+          tx
+            .select({ id: fleetAutomaticConsent.accountId })
+            .from(fleetAutomaticConsent)
+            .where(
+              inArray(fleetAutomaticConsent.approvingDeviceId, [...selectors.deviceIds]),
+            ),
+        )
+      : undefined,
+  );
+  await tx
+    .update(fleetAutomaticCandidate)
+    .set({
+      reservationId: null,
+      enqueueUntil: null,
+      claimReservationId: null,
+      claimExpiresAt: null,
+      sourceId: null,
+    })
+    .where(selectors.all ? undefined : (candidatePredicate ?? sql`false`));
   for (const source of locked.sources) {
     await tx
       .update(fleetSourceAuthority)
@@ -482,6 +582,8 @@ export async function invalidateFleetSources(
         generation: source.generation + 1,
         fetchGeneration: source.fetchGeneration + 1,
         nextFetchAt: null,
+        fetchClaimExpiresAt: null,
+        enqueueUntil: null,
         endedAt: now,
         terminalReason: reason,
         retainUntil: new Date(

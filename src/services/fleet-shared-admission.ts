@@ -4,6 +4,7 @@ import type { DbTx } from "@/db";
 import {
   account,
   character,
+  fleetAutomaticConsent,
   fleetDevice,
   fleetDeviceSession,
   fleetPublisherLease,
@@ -11,7 +12,12 @@ import {
   fleetSourceIntent,
   fleetTelemetryRow,
 } from "@/db/schema";
-import { SHARED_CAPABILITY, type SignedFleetCall } from "@/core/fleet-sharing";
+import {
+  SHARED_CAPABILITY,
+  COMBAT_CAPABILITY,
+  validFleetCapabilities,
+  type SignedFleetCall,
+} from "@/core/fleet-sharing";
 import {
   fleetDatabaseNow,
   resolveFleetDeviceKey,
@@ -207,6 +213,15 @@ async function probe(tx: DbTx, call: SignedFleetCall, kind: Kind, submitted: num
           .limit(budget.remaining + 1),
       )
     : [];
+  const automaticConsents = accountIds.length
+    ? budget.take(
+        await tx
+          .select()
+          .from(fleetAutomaticConsent)
+          .where(inArray(fleetAutomaticConsent.accountId, accountIds))
+          .limit(budget.remaining + 1),
+      )
+    : [];
   const sessionIds = unique([
     sessionId,
     ...rows.map((r) => r.sessionId),
@@ -230,6 +245,7 @@ async function probe(tx: DbTx, call: SignedFleetCall, kind: Kind, submitted: num
     identities,
     devices,
     accounts,
+    automaticConsents,
     sessions,
     identityIds,
     accountIds,
@@ -343,15 +359,48 @@ export function sharedDeviceAllowed(
     s.deviceId === d.id &&
     s.expiresAt > p.now &&
     [d.approvedCapabilities, s.approvedCapabilities, s.acknowledgedCapabilities].every(
-      (caps) => caps.includes(SHARED_CAPABILITY),
+      (caps) => validFleetCapabilities(caps) && caps.includes(SHARED_CAPABILITY),
     ) &&
     (!participation || d.participationEnabled)
   );
 }
 
+/** Combat is publisher disclosure consent, not receiver/source permission. */
+export function combatPublisherAllowed(
+  p: SharedAdmission,
+  deviceId: string,
+  sessionId: string,
+) {
+  const d = p.devices.find((row) => row.id === deviceId);
+  const s = p.sessions.find((row) => row.id === sessionId);
+  return (
+    sharedDeviceAllowed(p, deviceId, sessionId) &&
+    !!d &&
+    !!s &&
+    [d.approvedCapabilities, s.approvedCapabilities, s.acknowledgedCapabilities].every(
+      (caps) => caps.includes(COMBAT_CAPABILITY),
+    )
+  );
+}
+
 /** Source consent outlives its initiating session and does NOT imply device
  * participation. Only the boss needs a usable Fleet Read credential. */
-export function currentSourceEvidence(p: SharedAdmission, e: Probe["evidence"][number]) {
+export function currentSourceEvidence(
+  p: Pick<
+    SharedAdmission,
+    | "sources"
+    | "identities"
+    | "devices"
+    | "accounts"
+    | "automaticConsents"
+    | "validKeys"
+    | "now"
+  >,
+  e: Pick<
+    Probe["evidence"][number],
+    "sourceId" | "sourceGeneration" | "fleetId" | "verifiedAt" | "expiresAt"
+  >,
+) {
   const s = p.sources.find((source) => source.id === e.sourceId);
   const boss = p.identities.find((ch) => ch.id === s?.bossCharacterId);
   const d = p.devices.find((device) => device.id === s?.deviceId);
@@ -361,6 +410,15 @@ export function currentSourceEvidence(p: SharedAdmission, e: Probe["evidence"][n
     s.activatedAt !== null &&
     s.activatedAt <= p.now &&
     s.generation === e.sourceGeneration &&
+    (s.automaticConsentAccountId === null ||
+      (s.automaticConsentAccountId === s.accountId &&
+        p.automaticConsents.some(
+          (c) =>
+            c.accountId === s.accountId &&
+            c.enabled &&
+            c.generation === s.automaticConsentGeneration &&
+            c.approvingDeviceId === s.deviceId,
+        ))) &&
     s.fleetId === e.fleetId &&
     !!boss &&
     boss.accountId === s.accountId &&
@@ -372,6 +430,7 @@ export function currentSourceEvidence(p: SharedAdmission, e: Probe["evidence"][n
     !d.revokedAt &&
     d.accountId === s.accountId &&
     p.validKeys.has(d.id) &&
+    validFleetCapabilities(d.approvedCapabilities) &&
     d.approvedCapabilities.includes(SHARED_CAPABILITY) &&
     e.verifiedAt !== null &&
     e.expiresAt !== null &&

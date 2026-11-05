@@ -1,49 +1,64 @@
-import { NextResponse, type NextRequest } from "next/server";
-import { z } from "zod";
-import type { FleetCode } from "@/core/fleet-sharing";
-import { readBoundedRequestBody } from "@/lib/fleet-request-body";
+import type { NextRequest } from "next/server";
+import type { z } from "zod";
+import { safeParseFleetV2Dto } from "@/core/fleet-v2-validation";
+import { getConfig } from "@/config";
+import { ExistingUuidSchema, FLEET_V2_BYTE_LIMITS } from "@/core/fleet-api-v2";
+import {
+  classifyFleetV2Version,
+  extractFleetV2Attempt,
+  fleetV2Error,
+  fleetV2PreSessionBinding,
+  hasFleetV2Query,
+  readFleetV2Json,
+} from "@/lib/fleet-api-v2";
 
-export function recoveryJson(body: object, status = 200) {
-  return NextResponse.json(
-    { protocol: 1, ...body },
-    { status, headers: { "Cache-Control": "no-store" } },
-  );
-}
-
-export function recoveryError(code: FleetCode) {
-  const status =
-    code === "rate_limited"
-      ? 429
-      : code === "feature_disabled" || code === "service_unavailable"
-        ? 503
-        : 401;
-  return recoveryJson({ error: code }, status);
-}
-
-/** Same 2KiB streaming bound/public-key wire alphabet as pairing. Strict bodies
- * are the only selectors; neither query nor caller Host/Origin chooses authority. */
-export async function readRecoveryEnvelope<T>(
+/** All four pre-session POSTs share framing, not proof or intent identity.
+ * The configured origin is independent of Host/Origin/forwarded headers. */
+export async function readFleetV2PreSessionEnvelope<T>(
   req: NextRequest,
   schema: z.ZodType<T>,
-): Promise<{ value: T } | { response: NextResponse }> {
-  if (req.nextUrl.search !== "")
-    return { response: recoveryJson({ error: "bad_request" }, 400) };
-  let parsed: unknown;
-  try {
-    const body = await readBoundedRequestBody(req, 2048);
-    if (!body.ok) return { response: recoveryJson({ error: "bad_request" }, 400) };
-    parsed = JSON.parse(new TextDecoder().decode(body.bytes));
-  } catch {
-    return { response: recoveryJson({ error: "bad_request" }, 400) };
-  }
+  path: string,
+  completionId?: string,
+): Promise<{ value: T; binding: string } | { response: Response }> {
+  if (completionId !== undefined && !ExistingUuidSchema.safeParse(completionId).success)
+    return { response: fleetV2Error("not_found") };
+  if (req.method !== "POST")
+    return {
+      response: fleetV2Error("method_not_allowed", {
+        allow: "POST",
+        head: req.method === "HEAD",
+      }),
+    };
+  if (hasFleetV2Query(req) || new URL(req.url).pathname !== path)
+    return { response: fleetV2Error("bad_request") };
+  const attempt = extractFleetV2Attempt(req.headers);
   if (
-    parsed !== null &&
-    typeof parsed === "object" &&
-    "protocol" in parsed &&
-    parsed.protocol !== 1
+    !attempt ||
+    [...req.headers.keys()].some(
+      (name) => name.startsWith("x-fleet-") && name !== "x-fleet-attempt",
+    )
   )
-    return { response: recoveryJson({ error: "update_required" }, 400) };
-  const result = schema.safeParse(parsed);
-  if (!result.success) return { response: recoveryJson({ error: "bad_request" }, 400) };
-  return { value: result.data };
+    return { response: fleetV2Error("bad_request") };
+  const raw = await readFleetV2Json(
+    req,
+    FLEET_V2_BYTE_LIMITS.preSessionPost.requestBytes,
+  );
+  if (!raw.ok) return { response: fleetV2Error(raw.code) };
+  const version = classifyFleetV2Version(raw.value);
+  if (version !== "ok") return { response: fleetV2Error(version) };
+  const body = safeParseFleetV2Dto(schema, raw.value);
+  if (!body.success) return { response: fleetV2Error("bad_request") };
+  try {
+    const binding = fleetV2PreSessionBinding({
+      origin: new URL(getConfig().appBaseUrl).origin,
+      path,
+      attempt,
+      rawBody: raw.bytes,
+    });
+    if (!binding) return { response: fleetV2Error("service_unavailable") };
+    return { value: body.data, binding };
+  } catch {
+    // Configuration is not a proof outcome, and must not become a Next HTML error.
+    return { response: fleetV2Error("service_unavailable") };
+  }
 }

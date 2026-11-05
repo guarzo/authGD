@@ -80,7 +80,12 @@ export async function seedLifecycleProjection(
     .insert(fleetTelemetryRow)
     .values({
       ...common,
-      dps: 42,
+      publicationId: randomUUID(),
+      outgoingDps: 42,
+      incomingDps: null,
+      sampledAtMs: now.getTime(),
+      activityOriginMs: now.getTime(),
+      effects: [],
       receivedAt: now,
       staleAt: new Date(now.getTime() + 3000),
       hardExpiresAt: new Date(now.getTime() + 10000),

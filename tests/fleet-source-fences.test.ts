@@ -56,12 +56,13 @@ async function setup() {
           revision: ++revision,
           now: at(revision * 500),
           command: {
+            protocol: 2,
             operation: "start",
-            sourceId,
-            expectedGeneration: 0,
-            characterId: boss.id,
-            characterLinkEpoch: boss.fleetLinkEpoch,
-            intentCreatedAt: NOW,
+            source_id: sourceId,
+            expected_generation: 0,
+            character_id: boss.id,
+            character_link_epoch: boss.fleetLinkEpoch,
+            intent_created_at: NOW.toISOString(),
           },
         })
       ).ok,
@@ -121,6 +122,29 @@ it.each([null, new Date(NaN)])(
     expect((await ctx.db.select().from(fleetSourceAuthority))[0].sourceId).toBeNull();
   },
 );
+it("a missing captured boss epoch remains a manual no-op even at authority capacity", async () => {
+  const p = await setup();
+  // Empty counter fence only. The altered detached epoch isolates the manual
+  // refusal precedence; this is not provider-derived positive authority.
+  await ctx.db
+    .insert(fleetSourceAuthority)
+    .values({ fleetId: 123, authorityGeneration: 2147483646 });
+  const ticket = await p.claim(p.id);
+  ticket.linkedCharacters = [{ characterId: p.boss.id, linkEpoch: randomUUID() }];
+  const before = await ctx.db.select().from(fleetSourceIntent);
+  await commitFleetSourceObservation(
+    ctx.db,
+    ticket,
+    p.boss.refreshTokenEnc!,
+    p.success(1000),
+    () => at(1000),
+  );
+  expect(await ctx.db.select().from(fleetSourceIntent)).toEqual(before);
+  expect((await ctx.db.select().from(fleetSourceAuthority))[0]).toMatchObject({
+    sourceId: null,
+    authorityGeneration: 2147483646,
+  });
+});
 it("an unexpired claim prevents duplicate source fetch admission", async () => {
   const p = await setup();
   await p.claim(p.id);

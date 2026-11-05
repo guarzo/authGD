@@ -1,7 +1,15 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { and, count, eq, gt, sql } from "drizzle-orm";
+import { and, count, eq, gt, inArray, sql } from "drizzle-orm";
 import type { Dbx } from "@/db";
 import type { FleetReply, RecoveryResult } from "@/core/fleet-sharing";
+import {
+  API_VERSION,
+  RecoveryBegunSchema,
+  RecoveryCompletedSchema,
+  FLEET_V2_BYTE_LIMITS,
+  checkedDateAdd,
+} from "@/core/fleet-api-v2";
+import { serializeFleetV2Json } from "@/lib/fleet-api-v2";
 import { getConfig } from "@/config";
 import {
   account,
@@ -37,6 +45,65 @@ const CLEANUP_BATCH = 100;
 const digest = (raw: string) => createHash("sha256").update(raw).digest("base64url");
 const origin = () => new URL(getConfig().appBaseUrl).origin;
 
+class RecoveryOutputUnavailable extends Error {
+  constructor() {
+    super("service_unavailable");
+  }
+}
+type RecoveryReply =
+  | (Extract<FleetReply<RecoveryResult>, { ok: true }> & { json: string })
+  | Extract<FleetReply<RecoveryResult>, { ok: false }>;
+function completed(value: RecoveryResult): Extract<RecoveryReply, { ok: true }> {
+  const wire =
+    value.result === "reconnected"
+      ? {
+          protocol: API_VERSION,
+          result: value.result,
+          device_id: value.deviceId,
+          session_id: value.sessionId,
+          session_expires_at: value.sessionExpiresAt.toISOString(),
+          approved_capabilities: value.approvedCapabilities,
+          participation: value.participation,
+        }
+      : value.result === "device_revoked" || value.result === "device_key_conflict"
+        ? {
+            protocol: API_VERSION,
+            result: value.result,
+          }
+        : {
+            protocol: API_VERSION,
+            result: value.result,
+            retry_after_ms: value.retryAfterMs,
+          };
+  const output = serializeFleetV2Json(
+    wire,
+    RecoveryCompletedSchema,
+    FLEET_V2_BYTE_LIMITS.preSessionPost.successBytes,
+  );
+  if (!output.ok) throw new RecoveryOutputUnavailable();
+  return { ok: true, value, json: output.json };
+}
+function begun(value: {
+  challengeId: string;
+  requestId: string;
+  nonce: string;
+  expiresAt: Date;
+}) {
+  const output = serializeFleetV2Json(
+    {
+      protocol: API_VERSION,
+      challenge_id: value.challengeId,
+      request_id: value.requestId,
+      nonce: value.nonce,
+      expires_at: value.expiresAt.toISOString(),
+    },
+    RecoveryBegunSchema,
+    FLEET_V2_BYTE_LIMITS.preSessionPost.successBytes,
+  );
+  if (!output.ok) throw new RecoveryOutputUnavailable();
+  return { ...value, json: output.json };
+}
+
 /** Nonce secrecy is not authorization. A random server UUID plus this fixed
  * preimage reproduces an idempotent response without storing plaintext nonce. */
 function recoveryNonce(challengeId: string, requestId: string, key: string): string {
@@ -71,13 +138,18 @@ export async function beginFleetRecovery(
     initiationSignature: string;
     now?: Date;
   },
-): Promise<{ challengeId: string; nonce: string; expiresAt: Date; requestId: string }> {
+): Promise<{
+  challengeId: string;
+  nonce: string;
+  expiresAt: Date;
+  requestId: string;
+  json: string;
+}> {
   const canonicalKey = normalizeDevicePublicKeyB64(args.publicKeySpki);
   // Verify before any registry lookup, identity lock or quota work. Arbitrary
   // public keys (even legitimately signed unknown keys) reserve no capacity.
   if (
     !canonicalKey ||
-    !recoveryInitiationFresh(args.issuedAt, args.now ?? new Date()) ||
     !verifyRecoveryInitiation(
       {
         canonicalOrigin: origin(),
@@ -123,14 +195,20 @@ export async function beginFleetRecovery(
         prior.expiresAt.getTime() <= now.getTime()
       )
         throw new RelayRefusal("unauthorized");
-      return {
+      return begun({
         challengeId: prior.id,
         nonce: recoveryNonce(prior.id, args.requestId, canonicalKey),
         expiresAt: prior.expiresAt,
         requestId: args.requestId,
-      };
+      });
     }
-    await purgeExpiredFleetRecovery(tx, now);
+    // Select and retain the same bounded SKIP LOCKED cleanup set, but defer
+    // deletion until the actual post-query response is validated. Quota counts
+    // the exact post-cleanup population without writing ahead of output admission.
+    const expired = await tx.execute<{ id: string }>(sql`
+      select id from fleet_recovery_challenge where expires_at <= ${now}
+      order by expires_at, id limit ${CLEANUP_BATCH} for update skip locked
+    `);
     const [global] = await tx.select({ n: count() }).from(fleetRecoveryChallenge);
     const [key] = await tx
       .select({ n: count() })
@@ -141,7 +219,10 @@ export async function beginFleetRecovery(
           gt(fleetRecoveryChallenge.expiresAt, now),
         ),
       );
-    if (global.n >= MAX_CHALLENGES || key.n >= MAX_CHALLENGES_PER_KEY)
+    if (
+      global.n - expired.rows.length >= MAX_CHALLENGES ||
+      key.n >= MAX_CHALLENGES_PER_KEY
+    )
       throw new RelayRefusal("rate_limited");
     // Cleanup/queries may wait too. No stale captured proof can insert after its
     // exclusive deadline, even if it passed initial validation before contention.
@@ -150,7 +231,17 @@ export async function beginFleetRecovery(
       throw new RelayRefusal("unauthorized");
     const challengeId = randomUUID();
     const nonce = recoveryNonce(challengeId, args.requestId, canonicalKey);
-    const expiresAt = new Date(issuedNow.getTime() + RECOVERY_TTL_MS);
+    const expiry = checkedDateAdd(issuedNow.toISOString(), RECOVERY_TTL_MS);
+    if (!expiry) throw new RecoveryOutputUnavailable();
+    const expiresAt = new Date(expiry);
+    const response = begun({ challengeId, nonce, expiresAt, requestId: args.requestId });
+    if (expired.rows.length)
+      await tx.delete(fleetRecoveryChallenge).where(
+        inArray(
+          fleetRecoveryChallenge.id,
+          expired.rows.map((row) => row.id),
+        ),
+      );
     await tx.insert(fleetRecoveryChallenge).values({
       id: challengeId,
       publicKeySpkiB64: canonicalKey,
@@ -160,7 +251,7 @@ export async function beginFleetRecovery(
       createdAt: issuedNow,
       expiresAt,
     });
-    return { challengeId, nonce, expiresAt, requestId: args.requestId };
+    return response;
   });
 }
 
@@ -201,7 +292,7 @@ function provesChallenge(
 export async function completeFleetRecovery(
   dbx: Dbx,
   args: Completion,
-): Promise<FleetReply<RecoveryResult>> {
+): Promise<RecoveryReply> {
   const unauthorized = { ok: false, code: "unauthorized" } as const;
   if (
     !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
@@ -209,7 +300,7 @@ export async function completeFleetRecovery(
     )
   )
     return unauthorized;
-  return dbx.transaction(async (tx): Promise<FleetReply<RecoveryResult>> => {
+  return dbx.transaction(async (tx): Promise<RecoveryReply> => {
     await boundFleetRecoveryWaits(tx);
     const [snapshot] = await tx
       .select()
@@ -232,100 +323,101 @@ export async function completeFleetRecovery(
       challenge.expiresAt.getTime() <= proofNow.getTime()
     )
       return unauthorized;
+    // Even fallback output must be closed/bounded before the proof is consumed.
+    const retry = completed({ result: "retry_later", retryAfterMs: 1000 });
+    let reply: RecoveryReply;
+    try {
+      reply = await tx.transaction(async (issuance): Promise<RecoveryReply> => {
+        const [identity] = await issuance
+          .select()
+          .from(fleetDeviceKeyIdentity)
+          .where(eq(fleetDeviceKeyIdentity.canonicalSpkiB64, challenge.publicKeySpkiB64));
+        if (identity?.conflicted) return completed({ result: "device_key_conflict" });
+        if (!identity?.deviceId) return unauthorized;
+        const [selector] = await issuance
+          .select({ accountId: fleetDevice.accountId })
+          .from(fleetDevice)
+          .where(eq(fleetDevice.id, identity.deviceId));
+        if (!selector) return unauthorized;
+        const [owner] = await issuance
+          .select({ tier: account.tier })
+          .from(account)
+          .where(eq(account.id, selector.accountId))
+          .for("update");
+        const [device] = await issuance
+          .select()
+          .from(fleetDevice)
+          .where(eq(fleetDevice.id, identity.deviceId))
+          .for("update");
+        const [current] = await issuance
+          .select()
+          .from(fleetDeviceKeyIdentity)
+          .where(eq(fleetDeviceKeyIdentity.canonicalSpkiB64, challenge.publicKeySpkiB64));
+        const now = await fleetDatabaseNow(issuance, args.now);
+        if (
+          challenge.expiresAt.getTime() <= now.getTime() ||
+          !device ||
+          !current ||
+          current.conflicted ||
+          current.deviceId !== device.id ||
+          device.accountId !== selector.accountId
+        )
+          return unauthorized;
+        if (device.revokedAt !== null) return completed({ result: "device_revoked" });
+        if (owner?.tier !== "member")
+          return completed({ result: "account_ineligible", retryAfterMs: 60000 });
+        const sessionId = randomBytes(32).toString("base64url");
+        let response: Extract<RecoveryReply, { ok: true }> | undefined;
+        let sessionExpiresAt: Date | undefined;
+        await deleteFleetRelayStateForDevice(issuance, device.id, async () => {
+          const issuedAt = await fleetDatabaseNow(issuance, args.now);
+          if (challenge.expiresAt.getTime() <= issuedAt.getTime())
+            throw new RelayRefusal("unauthorized");
+          const expiry = checkedDateAdd(issuedAt.toISOString(), DEVICE_SESSION_TTL_MS);
+          if (!expiry) throw new RecoveryOutputUnavailable();
+          sessionExpiresAt = new Date(expiry);
+          response = completed({
+            result: "reconnected",
+            deviceId: device.id,
+            sessionId,
+            sessionExpiresAt,
+            approvedCapabilities: device.approvedCapabilities,
+            participation: {
+              enabled: device.participationEnabled,
+              generation: device.participationGeneration,
+            },
+          });
+        });
+        await issuance.insert(fleetDeviceSession).values({
+          id: digest(sessionId),
+          deviceId: device.id,
+          expiresAt: sessionExpiresAt!,
+          approvedCapabilities: device.approvedCapabilities,
+        });
+        await logAudit(issuance, {
+          actor: device.accountId,
+          action: "fleet_device.session_recovered",
+          target: device.id,
+        });
+        return response!;
+      });
+    } catch (err) {
+      // Infrastructure/clock and output failures cannot promise consumption.
+      // Only actual authentication/expiry refusals may consume as unauthorized.
+      if (err instanceof RecoveryOutputUnavailable || isTimeout(err)) throw err;
+      if (err instanceof RelayRefusal) {
+        if (err.code !== "unauthorized") throw err;
+        reply = unauthorized;
+      } else {
+        if (!isRetryableRelayError(err)) console.error("fleet recovery issuance failed");
+        reply = retry;
+      }
+    }
     await tx
       .update(fleetRecoveryChallenge)
       .set({ consumedAt: proofNow })
       .where(eq(fleetRecoveryChallenge.id, challenge.id));
-    try {
-      return await tx.transaction(
-        async (issuance): Promise<FleetReply<RecoveryResult>> => {
-          const [identity] = await issuance
-            .select()
-            .from(fleetDeviceKeyIdentity)
-            .where(
-              eq(fleetDeviceKeyIdentity.canonicalSpkiB64, challenge.publicKeySpkiB64),
-            );
-          if (identity?.conflicted)
-            return { ok: true, value: { result: "device_key_conflict" } };
-          if (!identity?.deviceId) return unauthorized;
-          const [selector] = await issuance
-            .select({ accountId: fleetDevice.accountId })
-            .from(fleetDevice)
-            .where(eq(fleetDevice.id, identity.deviceId));
-          if (!selector) return unauthorized;
-          const [owner] = await issuance
-            .select({ tier: account.tier })
-            .from(account)
-            .where(eq(account.id, selector.accountId))
-            .for("update");
-          const [device] = await issuance
-            .select()
-            .from(fleetDevice)
-            .where(eq(fleetDevice.id, identity.deviceId))
-            .for("update");
-          const [current] = await issuance
-            .select()
-            .from(fleetDeviceKeyIdentity)
-            .where(
-              eq(fleetDeviceKeyIdentity.canonicalSpkiB64, challenge.publicKeySpkiB64),
-            );
-          const now = await fleetDatabaseNow(issuance, args.now);
-          if (
-            challenge.expiresAt.getTime() <= now.getTime() ||
-            !device ||
-            !current ||
-            current.conflicted ||
-            current.deviceId !== device.id ||
-            device.accountId !== selector.accountId
-          )
-            return unauthorized;
-          if (device.revokedAt !== null)
-            return { ok: true, value: { result: "device_revoked" } };
-          if (owner?.tier !== "member")
-            return {
-              ok: true,
-              value: { result: "account_ineligible", retryAfterMs: 60000 },
-            };
-          await deleteFleetRelayStateForDevice(issuance, device.id);
-          const issuedAt = await fleetDatabaseNow(issuance, args.now);
-          if (challenge.expiresAt.getTime() <= issuedAt.getTime())
-            throw new RelayRefusal("unauthorized");
-          const sessionId = randomBytes(32).toString("base64url");
-          const sessionExpiresAt = new Date(issuedAt.getTime() + DEVICE_SESSION_TTL_MS);
-          await issuance.insert(fleetDeviceSession).values({
-            id: digest(sessionId),
-            deviceId: device.id,
-            expiresAt: sessionExpiresAt,
-            approvedCapabilities: device.approvedCapabilities,
-          });
-          await logAudit(issuance, {
-            actor: device.accountId,
-            action: "fleet_device.session_recovered",
-            target: device.id,
-          });
-          return {
-            ok: true,
-            value: {
-              result: "reconnected",
-              deviceId: device.id,
-              sessionId,
-              sessionExpiresAt,
-              approvedCapabilities: device.approvedCapabilities,
-              participation: {
-                enabled: device.participationEnabled,
-                generation: device.participationGeneration,
-              },
-            },
-          };
-        },
-      );
-    } catch (err) {
-      if (err instanceof RelayRefusal) return unauthorized;
-      // A timeout is transport-retry, not a claimed durable proof outcome.
-      if (isTimeout(err)) throw err;
-      if (!isRetryableRelayError(err)) console.error("fleet recovery issuance failed");
-      return { ok: true, value: { result: "retry_later", retryAfterMs: 1000 } };
-    }
+    return reply;
   });
 }
 

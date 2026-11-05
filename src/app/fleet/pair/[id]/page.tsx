@@ -4,7 +4,7 @@ import { redirect } from "next/navigation";
 import { eq } from "drizzle-orm";
 import type { Metadata } from "next";
 import { getConfig } from "@/config";
-import { SHARED_CAPABILITY } from "@/core/fleet-sharing";
+import { SHARED_CAPABILITY, COMBAT_CAPABILITY } from "@/core/fleet-sharing";
 import { readFleetKeyIdentityState } from "@/services/fleet-sharing-mode";
 import {
   FleetDeviceKeyUnavailableError,
@@ -152,6 +152,7 @@ export default async function FleetPairPage({
   }
 
   const requestsSharing = row?.requestedCapabilities.includes(SHARED_CAPABILITY) ?? false;
+  const requestsCombat = row?.requestedCapabilities.includes(COMBAT_CAPABILITY) ?? false;
   const sharingDisabled = requestsSharing && !mode.enabled;
   const state = derivePairingState({
     row,
@@ -215,22 +216,26 @@ export default async function FleetPairPage({
         {state === "pending" && row && (
           <>
             <p className="dim">
-              A device is requesting to pair with your account for fleet sharing.
-              Approving lets it publish and read sparse DPS and{" "}
-              <span className="mono">SCRAM/POINT</span> for your linked characters, only
-              while you are both in the same ESI-verified fleet.
+              A Wingman device is requesting access to your linked character identities.
+              Approve only if its key fingerprint matches the device you are pairing.
             </p>
             {requestsSharing && (
               <p>
-                This request also asks for shared fleet capabilities: managing roster
-                verification through an eligible fleet boss on your account, and sharing
-                telemetry with other participating accounts in that verified fleet.
-                Pairing does not start roster verification or turn on participation.
-                Participation is a separate, default-off choice in Wingman. In a Wingman
-                build with Fleet sharing controls, use Settings › Previews to choose
-                sharing On or Off and explicitly Start or Stop verification.
+                This request also asks to manage roster verification through an eligible
+                fleet boss on your account and read shared telemetry in that verified
+                fleet.
               </p>
             )}
+            {requestsCombat && (
+              <p>
+                This request asks to publish incoming and outgoing DPS, recent activity,
+                <span className="mono"> POINT/SCRAM/NEUT</span> effects and observed
+                tackle-source names for your linked characters to participating accounts
+                in the same verified fleet. These names are unverified log labels, not
+                verified character identities.
+              </p>
+            )}
+            <p>Pairing does not turn on participation or automatic verification.</p>
             <dl className="facts">
               <dt>Key fingerprint</dt>
               <dd className="mono">{fingerprint(row.publicKeySpkiB64)}</dd>

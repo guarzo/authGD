@@ -318,6 +318,9 @@ describe("explicit shared fleet capability consent", () => {
       pending = readFleetDeviceState(ctx.db, {
         sessionId: paired.sessionId,
         revision: 1,
+        get now() {
+          return new Date();
+        },
       });
       expect(await waitUntilBlockedBy(ctx.pool, pid)).toBe(true);
       vi.setSystemTime(later);
@@ -332,6 +335,7 @@ describe("explicit shared fleet capability consent", () => {
         await readDeviceCatalogueForSession(ctx.db, {
           sessionId: paired.sessionId,
           revision: 2,
+          now: new Date(),
         }),
       ).toEqual({ ok: false, code: "rate_limited" });
     } finally {

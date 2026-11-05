@@ -415,11 +415,7 @@ export default async function AccountPage({
               line inside the head. The h2 that grouped them is not replaced:
               two facts are not a section, and the labels below carry the
               naming the heading was doing by proximity. */}
-          <div
-            className={
-              view.tier === "member" ? "page__meta page__meta--fleet" : "page__meta"
-            }
-          >
+          <div className="page__meta page__meta--fleet">
             <div className="page__meta-item" data-field="tier">
               {/* Visually hidden because the approved layout puts the token on
                   its own — but `StandingTier` renders "Testers", a word that
@@ -546,12 +542,18 @@ export default async function AccountPage({
                   </a>
                 )}
               </div>
-              {/* Beside account setup, not another row above the dense manifest. */}
-              {view.tier === "member" && (
-                <a className="account-fleet-link" href="/account/fleet-sharing">
-                  Fleet sharing
-                </a>
-              )}
+              {/* Beside account setup, not another row above the dense manifest.
+                  Tier loss must not hide device revocation or automatic Off. */}
+              <a
+                className="account-fleet-link"
+                href={
+                  view.tier === "member"
+                    ? "/account/fleet-sharing"
+                    : "/account/fleet-devices"
+                }
+              >
+                {view.tier === "member" ? "Fleet sharing" : "Fleet controls"}
+              </a>
               {view.discordLinked && (
                 // Last in the outer row: revealing this must not enlarge the
                 // Discord item, wrap it below the tier, and disarm its button.

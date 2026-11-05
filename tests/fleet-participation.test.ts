@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import {
   afterAll,
@@ -94,7 +94,12 @@ async function projection(p: Awaited<ReturnType<typeof setup>>) {
     deviceId: p.device.id,
     sessionId,
     fleetId: 123,
-    dps: 10,
+    publicationId: randomUUID(),
+    outgoingDps: 10,
+    incomingDps: null,
+    sampledAtMs: NOW.getTime(),
+    activityOriginMs: NOW.getTime(),
+    effects: [],
     receivedAt: NOW,
     staleAt: at(3000),
     hardExpiresAt: at(10000),
@@ -154,6 +159,10 @@ describe("participation transaction boundaries", () => {
           revision: 3,
           enabled: false,
           expectedGeneration: 1,
+          // Explicit clock seam: gate uses PostgreSQL when no clock is supplied.
+          get now() {
+            return new Date();
+          },
         });
         expect(await waitUntilBlockedBy(ctx.pool, pid)).toBe(true);
         vi.setSystemTime(at(2000));
@@ -161,7 +170,11 @@ describe("participation transaction boundaries", () => {
         expect(await pending).toEqual(
           expired
             ? { ok: false, code: "unauthorized" }
-            : { ok: true, value: { enabled: false, generation: 2 } },
+            : {
+                ok: true,
+                value: { enabled: false, generation: 2 },
+                json: '{"protocol":2,"participation":{"enabled":false,"generation":2}}',
+              },
         );
         const [session] = await ctx.db.select().from(fleetDeviceSession);
         expect(session.lastReadAt).toEqual(at(expired ? 500 : 2000));
@@ -216,7 +229,11 @@ describe("explicit per-device participation", () => {
         enabled: true,
         expectedGeneration: 0,
       }),
-    ).toEqual({ ok: true, value: { enabled: true, generation: 1 } });
+    ).toEqual({
+      ok: true,
+      value: { enabled: true, generation: 1 },
+      json: '{"protocol":2,"participation":{"enabled":true,"generation":1}}',
+    });
     expect(
       await setFleetParticipation(ctx.db, {
         sessionId: second.sessionId,
@@ -225,7 +242,11 @@ describe("explicit per-device participation", () => {
         enabled: false,
         expectedGeneration: 1,
       }),
-    ).toEqual({ ok: true, value: { enabled: false, generation: 2 } });
+    ).toEqual({
+      ok: true,
+      value: { enabled: false, generation: 2 },
+      json: '{"protocol":2,"participation":{"enabled":false,"generation":2}}',
+    });
     expect(
       await setFleetParticipation(ctx.db, {
         sessionId: p.sessionId,
@@ -243,7 +264,11 @@ describe("explicit per-device participation", () => {
         enabled: false,
         expectedGeneration: 2,
       }),
-    ).toEqual({ ok: true, value: { enabled: false, generation: 3 } });
+    ).toEqual({
+      ok: true,
+      value: { enabled: false, generation: 3 },
+      json: '{"protocol":2,"participation":{"enabled":false,"generation":3}}',
+    });
     expect(await ctx.db.select().from(fleetDeviceSession)).toHaveLength(2);
     expect(
       await readFleetDeviceState(ctx.db, {
@@ -352,7 +377,12 @@ describe("explicit per-device participation", () => {
       deviceId: p.device.id,
       sessionId,
       fleetId: 123,
-      dps: 10,
+      publicationId: randomUUID(),
+      outgoingDps: 10,
+      incomingDps: null,
+      sampledAtMs: NOW.getTime(),
+      activityOriginMs: NOW.getTime(),
+      effects: [],
       receivedAt: NOW,
       staleAt: at(3000),
       hardExpiresAt: at(10000),
