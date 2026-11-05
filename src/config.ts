@@ -72,6 +72,7 @@ const envSchema = z.object({
   DISCORD_ROLE_ID_ASSOCIATE: z.string().min(1),
   DISCORD_ROLE_ID_ALUMNI: z.string().min(1),
   DISCORD_OPS_WEBHOOK_URL: z.string().url().optional().or(z.literal("")),
+  HEALTHCHECK_PROGRESS_URL: z.string().url().optional().or(z.literal("")),
   DISCORD_STRUCTURE_WEBHOOK_URL: z.string().url().optional().or(z.literal("")),
   // A BARE snowflake, never `<@&id>` — the poster wraps it in the mention
   // syntax itself. Stricter than the sibling DISCORD_ROLE_ID_* vars (which are
@@ -186,6 +187,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     standings: { label: e.STANDINGS_LABEL, value: e.STANDINGS_VALUE },
     esiContact: e.ESI_CONTACT,
     syncMode: e.SYNC_MODE,
+    healthcheckProgressUrl: e.HEALTHCHECK_PROGRESS_URL || undefined,
     payoutCorpSharePct: e.PAYOUT_CORP_SHARE_PCT,
     tierLabels: {
       member: e.TIER_LABEL_MEMBER,

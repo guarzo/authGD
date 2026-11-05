@@ -97,6 +97,80 @@ Notes:
 - Detection is not instant. A dead worker surfaces up to 90 minutes after its
   last run, plus your monitor's poll interval.
 
+### Healthchecks: worker progress alerts
+
+Set the optional secret `HEALTHCHECK_PROGRESS_URL` to a
+[Healthchecks ping URL](https://healthchecks.io/docs/). Healthchecks receives
+pings; it does not poll the public health endpoint. The worker sends a bodyless
+GET after an ordinary sync run's terminal result is saved. Partial and failed
+results count as progress, including recorded failures that will be retried.
+A failed start or terminal database write sends no ping. Fleet-source processing
+is not part of this signal.
+
+Configure one check with a **15-minute period and 75-minute grace**: it goes Down
+after 90 minutes without a received completion ping. Connect Discord and/or email
+notifications, and test that they reach an operator. This detects a crashed,
+boot-failing, database-disconnected or completely stalled worker; a job that
+never finishes cannot keep the check green by merely starting. It does **not**
+prove every queue is healthy or jobs succeeded: another completing queue can
+mask a stuck queue. Use admin sync outcomes and the existing ops alerts for that.
+
+The URL is optional; missing/empty disables delivery. Dry-run never sends pings.
+Only the worker enables notification, not web requests or release commands.
+Delivery uses a five-second timeout, refuses redirects, sends no diagnostic
+payload and logs only a fixed failure message. It does not delay jobs, retry
+delivery, flush on shutdown, or restart Fly machines. One lost ping during a
+restart is covered by grace. Keep the public health endpoints and GitHub probe
+as separate evidence; this check does not exercise public DNS or TLS.
+
+**Activate separately from code review/deployment authorization:**
+
+1. Create a disposable check with a short period/grace. Send it one ping, let it
+   go Down and confirm notification delivery, then ping again and confirm Up.
+   Do not stop production to perform this test. Protect even disposable URLs.
+2. Create the production check with the period/grace above and attach the tested
+   notification integration. Treat its complete ping URL as a secret: do not
+   paste it into source, chat, logs, command arguments or shell history.
+3. In a trusted Bash terminal with tracing disabled, stage the secret through
+   stdin (the prompt input is hidden; the command does not print the value):
+
+   ```bash
+   set +x
+   read -rs -p 'Healthchecks ping URL: ' healthcheck_url; printf '\n'
+   printf 'HEALTHCHECK_PROGRESS_URL=%s\n' "$healthcheck_url" | fly secrets import --stage
+   unset healthcheck_url
+   ```
+
+   Run from the intended app's checkout, or supply its explicit `--app`.
+   Staging does not restart machines; activate it with a separately authorized
+   deployment. Prefer the hosted service's HTTPS URL; a self-hosted HTTP URL
+   exposes the check credential to its transport.
+4. After activation, verify a real worker completion reaches the production
+   check, then confirm subsequent check-ins. A New check with no first ping
+   is not evidence that monitoring works. Startup alone never sends a ping.
+
+### Contacts refresh diagnostics
+
+Each contacts run records two counters in its existing `sync_run.counts`:
+
+- `concurrentRotation`: a refresh attempt detected that the stored credential
+  changed before its conditional update. Another refresh, reauthorization, or
+  transfer can cause this; it is not proof of a particular race or caller.
+- `refreshFailed`: other transient token-refresh failures. It does not by itself
+  prove an SSO outage or rule out concurrency.
+
+The counters retain evidence per run and appear through the admin sync page's
+existing generic count columns/raw counts. Zero-only columns stay hidden.
+They cover transient **token refresh** failures, not subsequent transient ESI
+failures, so their sum need not equal all transient trouble in the run. Some
+credential races can instead surface as invalid tokens and escape these counts.
+Historical causes cannot be reconstructed: evidence starts with runs after
+this code is deployed.
+
+No raw refresh-error messages, tokens, or character identifiers are added to
+these diagnostics or sent to Healthchecks. Existing member warnings, token
+statuses, retry behavior, and contact-sync state are unchanged.
+
 ### Job schedules
 
 All UTC; pg-boss is given no timezone. The one definition is `JOB_CRON` in
@@ -677,8 +751,9 @@ having only one.
    Suppressed when `SYNC_MODE=dry-run`, so a laptop never pages ops.
 2. **Job failure after retries** — the dead-letter handler, unchanged.
 3. **Silent death** (OOM-killed, wedged, restarts exhausted) — nothing inside
-   the process can report this, so `/api/health/sync` going stale is the only
-   signal, and something outside Fly has to be looking at it.
+   the process can report this. A configured Healthchecks progress check alerts
+   on missing completion pings; otherwise something outside Fly must notice
+   `/api/health/sync` going stale. See [Healthchecks](#healthchecks-worker-progress-alerts).
 
 Only ZodError detail is forwarded to Discord, because it names *variables* and
 never values. Any other error sends a fixed summary and the full text goes to

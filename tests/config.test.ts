@@ -39,6 +39,24 @@ describe("loadConfig", () => {
     expect(c.standings.value).toBe(5);
   });
 
+  it("loads an optional progress URL using the existing webhook URL policy", () => {
+    expect(loadConfig(validEnv).healthcheckProgressUrl).toBeUndefined();
+    expect(
+      loadConfig({ ...validEnv, HEALTHCHECK_PROGRESS_URL: "" }).healthcheckProgressUrl,
+    ).toBeUndefined();
+    for (const url of [
+      "https://hc-ping.example/secret",
+      "http://monitor.example/check",
+    ]) {
+      expect(
+        loadConfig({ ...validEnv, HEALTHCHECK_PROGRESS_URL: url }).healthcheckProgressUrl,
+      ).toBe(url);
+    }
+    expect(() =>
+      loadConfig({ ...validEnv, HEALTHCHECK_PROGRESS_URL: "not a URL" }),
+    ).toThrow(/HEALTHCHECK_PROGRESS_URL/);
+  });
+
   it("rejects a short encryption key", () => {
     expect(() => loadConfig({ ...validEnv, TOKEN_ENCRYPTION_KEY: "c2hvcnQ=" })).toThrow(
       /TOKEN_ENCRYPTION_KEY/,

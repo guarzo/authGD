@@ -14,6 +14,22 @@ function run(counts: Record<string, number> | null): RunLike {
   return { startedAt: null, finishedAt: null, counts };
 }
 
+describe("contacts diagnostic count presentation", () => {
+  it("hides zero counters and does not mistake recorded refresh trouble for no change", () => {
+    const quiet = { concurrentRotation: 0, refreshFailed: 0 };
+    expect(countColumns("contacts", [run(quiet)])).toEqual([]);
+    expect(isNoChange(quiet)).toBe(true);
+    const trouble = { concurrentRotation: 2, refreshFailed: 1 };
+    expect(countColumns("contacts", [run(quiet), run(trouble)])).toEqual([
+      "concurrentRotation",
+      "refreshFailed",
+    ]);
+    expect(isNoChange(trouble)).toBe(false);
+    expect(humanizeKey("concurrentRotation")).toBe("concurrent rotation");
+    expect(humanizeKey("refreshFailed")).toBe("refresh failed");
+  });
+});
+
 describe("countColumns", () => {
   it("gives a column only to counters that moved somewhere in the window", () => {
     const cols = countColumns("token-health", [
