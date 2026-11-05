@@ -416,7 +416,13 @@ test("a held old roster released after changing anchor cannot replace the new se
   } finally {
     await fleet.release("old-anchor");
   }
-  await (await response).finished();
+  const oldRequest = (await response).request();
+  // Unmounting the old form can abort its response after headers arrive.
+  // Playwright's response.finished() never settles for that failure path.
+  await expect
+    .poll(() => oldRequest.failure() !== null || oldRequest.timing().responseEnd >= 0)
+    .toBe(true);
+  expect([null, "net::ERR_ABORTED"]).toContain(oldRequest.failure()?.errorText ?? null);
   await expect(page.getByLabel("Fleet boss character")).toHaveValue(String(f.main.id));
   await visibleStatus(page, "Not checked");
   await expect(result(page).getByRole("listitem")).toHaveCount(0);
