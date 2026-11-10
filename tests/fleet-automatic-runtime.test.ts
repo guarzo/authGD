@@ -1352,14 +1352,15 @@ it("continuous finite 50-character discovery cohort actually claims every candid
         );
         expect(new Set(tokens).size).toBe(50);
         expect(peakOriginals).toBe(1);
+        // A fetch claim precedes the roster request and guarded authority commit.
         await until(
           async () =>
-            (
+            ((
               await ctx.db
                 .select()
-                .from(fleetSourceIntent)
-                .where(eq(fleetSourceIntent.id, source.id))
-            )[0].fetchGeneration > 0,
+                .from(fleetSourceAuthority)
+                .where(eq(fleetSourceAuthority.sourceId, source.id))
+            )[0]?.verifiedAt?.getTime() ?? 0) > at(2000).getTime(),
         );
         const [updated] = await ctx.db
           .select()
