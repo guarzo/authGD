@@ -76,9 +76,13 @@ const stamp = (d: Date) => d.toISOString().replace("T", " ").slice(0, 19);
  * renders instead of a shape regex that any timestamp would satisfy.
  */
 async function seedRuns() {
+  const wandererStartedAt = ago(4 * MIN);
   const seeded = {
     membership: { startedAt: ago(5 * MIN), finishedAt: ago(5 * MIN - 1200) },
-    wanderer: { startedAt: ago(4 * MIN), finishedAt: ago(4 * MIN - 900) },
+    wanderer: {
+      startedAt: wandererStartedAt,
+      finishedAt: new Date(wandererStartedAt.getTime() + 900),
+    },
     purge: { startedAt: ago(2 * MIN), finishedAt: ago(2 * MIN - 300) },
   };
   await db.insert(syncRun).values([
@@ -1367,13 +1371,17 @@ test("consecutive identical runs collapse to one row; an in-flight run never joi
   context,
 }) => {
   await asAdmin(context);
-  const finished = Array.from({ length: 4 }, (_, i) => ({
-    jobType: "purge",
-    startedAt: ago((10 - i) * MIN),
-    finishedAt: ago((10 - i) * MIN - 500),
-    status: "ok" as const,
-    counts: { sessions: 0, oauthTransactions: 0, outbox: 0 },
-  }));
+  const finished = Array.from({ length: 4 }, (_, i) => {
+    const startedAt = ago((10 - i) * MIN);
+    // Two ago() calls can straddle a millisecond; keep the duration exact.
+    return {
+      jobType: "purge",
+      startedAt,
+      finishedAt: new Date(startedAt.getTime() + 500),
+      status: "ok" as const,
+      counts: { sessions: 0, oauthTransactions: 0, outbox: 0 },
+    };
+  });
   await db.insert(syncRun).values([
     ...finished,
     // Newest row: still running, identical shape aside from finishedAt/status
