@@ -68,12 +68,14 @@ export async function installFleetInterception() {
       const url = new URL(request.url);
       if (url.href === checkUrl)
         return HttpResponse.json({ intercepted: connection.token });
-      // Next 16 devtools lazily fetch version metadata when HMR connects. Keep
-      // its explicit optional asset offline; do not allow registry passthrough.
+      // Next devtools fetch optional version and advisory metadata. Keep it
+      // unavailable offline, not a successful clean audit or registry passthrough.
       if (
         process.env.NODE_ENV === "development" &&
-        request.method === "GET" &&
-        url.href === "https://registry.npmjs.org/-/package/next/dist-tags"
+        ((request.method === "GET" &&
+          url.href === "https://registry.npmjs.org/-/package/next/dist-tags") ||
+          (request.method === "POST" &&
+            url.href === "https://registry.npmjs.org/-/npm/v1/security/advisories/bulk"))
       )
         return new HttpResponse(null, { status: 503 });
       if (

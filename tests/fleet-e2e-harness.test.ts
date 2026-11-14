@@ -211,6 +211,203 @@ describe("fleet browser harness isolation", () => {
     await f.client.assertClean();
   }, 30_000);
 
+  it("returns offline 503s for exact Next registry metadata requests only in development", async () => {
+    const f = await fixture();
+    const env = fleetEnvironment({ databaseUrl, appUrl, fixture: f.connection });
+    const result = await child(env, "next-registry");
+    expect(result, result.output).toMatchObject({ code: 0 });
+    const records = result.output
+      .split("\n")
+      .filter((line) => line.startsWith("FLEET_NEXT_REGISTRY_RESULTS="))
+      .map((line): unknown =>
+        JSON.parse(line.slice("FLEET_NEXT_REGISTRY_RESULTS=".length)),
+      );
+    expect(records).toEqual([
+      [
+        {
+          transport: "fetch",
+          method: "POST",
+          url: "https://registry.npmjs.org/-/npm/v1/security/advisories/bulk",
+          status: 503,
+          body: "",
+        },
+        {
+          transport: "https",
+          method: "POST",
+          url: "https://registry.npmjs.org/-/npm/v1/security/advisories/bulk",
+          status: 503,
+          body: "",
+        },
+        {
+          transport: "fetch",
+          method: "GET",
+          url: "https://registry.npmjs.org/-/package/next/dist-tags",
+          status: 503,
+          body: "",
+        },
+      ],
+    ]);
+    expect((await f.client.snapshot()).violations).toEqual([]);
+    await f.client.assertClean();
+  });
+
+  it("refuses exact Next registry metadata requests in production with an ordered ledger", async () => {
+    const f = await fixture();
+    const env = fleetEnvironment({
+      databaseUrl,
+      appUrl,
+      fixture: f.connection,
+      mode: "start",
+    });
+    const result = await child(env, "next-registry");
+    expect(result, result.output).toMatchObject({ code: 0 });
+    const records = result.output
+      .split("\n")
+      .filter((line) => line.startsWith("FLEET_NEXT_REGISTRY_RESULTS="))
+      .map((line): unknown =>
+        JSON.parse(line.slice("FLEET_NEXT_REGISTRY_RESULTS=".length)),
+      );
+    expect(records).toEqual([
+      [
+        {
+          transport: "fetch",
+          method: "POST",
+          url: "https://registry.npmjs.org/-/npm/v1/security/advisories/bulk",
+          refused: true,
+        },
+        {
+          transport: "https",
+          method: "POST",
+          url: "https://registry.npmjs.org/-/npm/v1/security/advisories/bulk",
+          refused: true,
+        },
+        {
+          transport: "fetch",
+          method: "GET",
+          url: "https://registry.npmjs.org/-/package/next/dist-tags",
+          refused: true,
+        },
+      ],
+    ]);
+    expect((await f.client.snapshot()).violations).toEqual([
+      {
+        source: "server-http",
+        destination: "https://registry.npmjs.org/-/npm/v1/security/advisories/bulk",
+      },
+      {
+        source: "server-http",
+        destination: "https://registry.npmjs.org/-/npm/v1/security/advisories/bulk",
+      },
+      {
+        source: "server-http",
+        destination: "https://registry.npmjs.org/-/package/next/dist-tags",
+      },
+    ]);
+    await expect(f.client.assertClean()).rejects.toThrow(/egress/i);
+  });
+
+  it("refuses Next registry method and URL lookalikes in development with an ordered ledger", async () => {
+    const f = await fixture();
+    const env = fleetEnvironment({ databaseUrl, appUrl, fixture: f.connection });
+    const result = await child(env, "next-registry-denied");
+    expect(result, result.output).toMatchObject({ code: 0 });
+    const records = result.output
+      .split("\n")
+      .filter((line) => line.startsWith("FLEET_NEXT_REGISTRY_RESULTS="))
+      .map((line): unknown =>
+        JSON.parse(line.slice("FLEET_NEXT_REGISTRY_RESULTS=".length)),
+      );
+    expect(records).toEqual([
+      [
+        {
+          transport: "fetch",
+          method: "GET",
+          url: "https://registry.npmjs.org/-/npm/v1/security/advisories/bulk",
+          refused: true,
+        },
+        {
+          transport: "fetch",
+          method: "PUT",
+          url: "https://registry.npmjs.org/-/npm/v1/security/advisories/bulk",
+          refused: true,
+        },
+        {
+          transport: "fetch",
+          method: "POST",
+          url: "https://registry.npmjs.org/-/npm/v1/security/advisories/bulk/",
+          refused: true,
+        },
+        {
+          transport: "fetch",
+          method: "POST",
+          url: "https://registry.npmjs.org/-/npm/v1/security/advisories/bulk?probe=lookalike",
+          refused: true,
+        },
+        {
+          transport: "fetch",
+          method: "POST",
+          url: "http://registry.npmjs.org/-/npm/v1/security/advisories/bulk",
+          refused: true,
+        },
+        {
+          transport: "fetch",
+          method: "POST",
+          url: "https://registry.npmjs.org.example.com/-/npm/v1/security/advisories/bulk",
+          refused: true,
+        },
+        {
+          transport: "fetch",
+          method: "POST",
+          url: "https://registry.npmjs.org:8443/-/npm/v1/security/advisories/bulk",
+          refused: true,
+        },
+        {
+          transport: "fetch",
+          method: "POST",
+          url: "https://registry.npmjs.org/-/package/next/dist-tags",
+          refused: true,
+        },
+      ],
+    ]);
+    // Query redaction intentionally leaves duplicate destinations in order.
+    expect((await f.client.snapshot()).violations).toEqual([
+      {
+        source: "server-http",
+        destination: "https://registry.npmjs.org/-/npm/v1/security/advisories/bulk",
+      },
+      {
+        source: "server-http",
+        destination: "https://registry.npmjs.org/-/npm/v1/security/advisories/bulk",
+      },
+      {
+        source: "server-http",
+        destination: "https://registry.npmjs.org/-/npm/v1/security/advisories/bulk/",
+      },
+      {
+        source: "server-http",
+        destination: "https://registry.npmjs.org/-/npm/v1/security/advisories/bulk",
+      },
+      {
+        source: "server-http",
+        destination: "http://registry.npmjs.org/-/npm/v1/security/advisories/bulk",
+      },
+      {
+        source: "server-http",
+        destination:
+          "https://registry.npmjs.org.example.com/-/npm/v1/security/advisories/bulk",
+      },
+      {
+        source: "server-http",
+        destination: "https://registry.npmjs.org:8443/-/npm/v1/security/advisories/bulk",
+      },
+      {
+        source: "server-http",
+        destination: "https://registry.npmjs.org/-/package/next/dist-tags",
+      },
+    ]);
+    await expect(f.client.assertClean()).rejects.toThrow(/egress/i);
+  });
+
   it("records denied fetch, HTTP and raw socket attempts even when the child catches each error; no connection reaches the destination", async () => {
     let connections = 0;
     const destination = createServer();
